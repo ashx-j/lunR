@@ -139,7 +139,7 @@ function renderChat(container: Container): string {
 
 describe("InteractiveMode.renderSessionEntries", () => {
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	test("keeps unresolved rendered tool calls registered for live completion events", async () => {

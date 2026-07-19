@@ -17,7 +17,7 @@ describe("issue #3217 scoped model ordering", () => {
 	const harnesses: Harness[] = [];
 
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	beforeEach(() => {

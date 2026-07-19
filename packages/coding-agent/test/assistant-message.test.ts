@@ -34,7 +34,7 @@ function createAssistantMessage(
 
 describe("AssistantMessageComponent", () => {
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const component = new AssistantMessageComponent(createAssistantMessage([{ type: "text", text: "hello" }]));
 		const lines = component.render(40);
@@ -45,7 +45,7 @@ describe("AssistantMessageComponent", () => {
 	});
 
 	test("does not add OSC 133 zone markers when assistant message contains tool calls", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([
@@ -61,7 +61,7 @@ describe("AssistantMessageComponent", () => {
 	});
 
 	test("renders length stops as visible errors", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], { stopReason: "length" }),
@@ -75,7 +75,7 @@ describe("AssistantMessageComponent", () => {
 	});
 
 	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([
@@ -93,7 +93,7 @@ describe("AssistantMessageComponent", () => {
 	});
 
 	test("uses configured output padding for text and thinking", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([
@@ -117,7 +117,7 @@ describe("AssistantMessageComponent", () => {
 	});
 
 	test("uses configured output padding for user messages", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const paddedComponent = new UserMessageComponent("hello", undefined, 1);
 		const paddedLines = paddedComponent.render(40).map((line) => stripAnsi(line));

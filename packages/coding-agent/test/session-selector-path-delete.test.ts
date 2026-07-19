@@ -103,7 +103,7 @@ describe("session selector path/delete interactions", () => {
 
 	beforeAll(() => {
 		// session selector uses the global theme instance
-		initTheme("dark");
+		initTheme("moon");
 	});
 	it("does not treat Ctrl+Backspace as delete when search query is non-empty", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];

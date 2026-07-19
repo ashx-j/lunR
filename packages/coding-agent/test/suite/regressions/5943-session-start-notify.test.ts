@@ -250,7 +250,7 @@ function createLoadedResourcesContext(): LoadedResourcesContext {
 
 describe("regression #5943: session_start transient UI", () => {
 	it("renders loaded resources before restored messages without stale entries", () => {
-		initTheme("dark", false);
+		initTheme("moon", false);
 		const context = createLoadedResourcesContext();
 		const root = new Container();
 		root.addChild(context.loadedResourcesContainer);
@@ -445,7 +445,7 @@ describe("regression #5943: session_start transient UI", () => {
 	});
 
 	it("refreshes hideThinkingBlock before rebuilding chat during reload", async () => {
-		initTheme("dark", false);
+		initTheme("moon", false);
 		const events: string[] = [];
 		let context: ReloadCommandContext;
 		context = createReloadCommandContext({
@@ -469,7 +469,7 @@ describe("regression #5943: session_start transient UI", () => {
 	});
 
 	it("keeps the reload blocker focused until async reload completes", async () => {
-		initTheme("dark", false);
+		initTheme("moon", false);
 		const editor = {};
 		let focused: unknown;
 		let chatRestored = false;

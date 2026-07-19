@@ -73,7 +73,7 @@ type ExtensionFixture = {
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(() => {
 		// showStatus uses the global theme instance
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	test("coalesces immediately-sequential status messages", () => {
@@ -143,9 +143,9 @@ describe("InteractiveMode.setToolsExpanded", () => {
 
 describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	test("persists theme changes to settings manager", () => {
-		initTheme("dark");
+		initTheme("moon");
 
-		let currentTheme = "dark";
+		let currentTheme = "moon";
 		const settingsManager = {
 			getTheme: vi.fn(() => currentTheme),
 			setTheme: vi.fn((theme: string) => {
@@ -166,20 +166,20 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 		};
 
 		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
-		const result = uiContext.setTheme("light");
+		const result = uiContext.setTheme("custom");
 
 		expect(result.success).toBe(true);
-		expect(fakeThis.themeController.setThemeName).toHaveBeenCalledWith("light");
-		expect(settingsManager.setTheme).toHaveBeenCalledWith("light");
-		expect(currentTheme).toBe("light");
+		expect(fakeThis.themeController.setThemeName).toHaveBeenCalledWith("custom");
+		expect(settingsManager.setTheme).toHaveBeenCalledWith("custom");
+		expect(currentTheme).toBe("custom");
 		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
 	});
 
 	test("does not persist invalid theme names", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const settingsManager = {
-			getTheme: vi.fn(() => "dark"),
+			getTheme: vi.fn(() => "moon"),
 			setTheme: vi.fn(),
 		};
 		const fakeThis: any = {
@@ -204,7 +204,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 
 describe("InteractiveMode.showExtensionCustom", () => {
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	test("overlay custom UI reclaims input after non-overlay custom UI closes", async () => {
@@ -482,7 +482,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 });
 describe("InteractiveMode.showLoadedResources", () => {
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	function createShowLoadedResourcesThis(options: {
