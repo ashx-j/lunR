@@ -27,6 +27,13 @@ const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const OFFICIAL_APP_NAME = "pi";
 const OFFICIAL_CONFIG_DIR_NAME = ".pi";
 
+// lunR distribution identity (from piConfig.name/configDir in package.json).
+// Accepted alongside the upstream pi identity so first-time setup still runs for lunR.
+// NOTE: OFFICIAL_PACKAGE_NAME is still the upstream pi package name; revisit this
+// whole check when the package scope is renamed (see AGENTS.md deferred tasks).
+const LUNR_APP_NAME = "lunr";
+const LUNR_CONFIG_DIR_NAME = ".lunr";
+
 interface DistributionMetadata {
 	packageName: string;
 	appName: string;
@@ -36,8 +43,8 @@ interface DistributionMetadata {
 function isOfficialDistribution({ packageName, appName, configDirName }: DistributionMetadata): boolean {
 	return (
 		packageName === OFFICIAL_PACKAGE_NAME &&
-		appName === OFFICIAL_APP_NAME &&
-		configDirName === OFFICIAL_CONFIG_DIR_NAME
+		((appName === OFFICIAL_APP_NAME && configDirName === OFFICIAL_CONFIG_DIR_NAME) ||
+			(appName === LUNR_APP_NAME && configDirName === LUNR_CONFIG_DIR_NAME))
 	);
 }
 

@@ -492,8 +492,11 @@ export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
-export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
-export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
+// NOTE: pinned to PI_* on purpose. These env var names are an external contract;
+// deriving them from APP_NAME would silently rename them to LUNR_* now that
+// piConfig.name is "lunr". Renaming is deferred (see AGENTS.md deferred tasks).
+export const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
+export const ENV_SESSION_DIR = "PI_CODING_AGENT_SESSION_DIR";
 
 export function expandTildePath(path: string): string {
 	return normalizePath(path);
