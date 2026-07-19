@@ -87,6 +87,7 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
+import { getPlanUsage } from "../../core/usage-service.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -135,6 +136,7 @@ import {
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
+import { renderUsageBox, type UsageSessionRow } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -2702,6 +2704,11 @@ export class InteractiveMode {
 			if (text === "/session") {
 				this.handleSessionCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/usage") {
+				this.editor.setText("");
+				await this.handleUsageCommand();
 				return;
 			}
 			if (text === "/changelog") {
@@ -6077,6 +6084,39 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
+		this.ui.requestRender();
+	}
+
+	// lunr: /usage — session token totals, context window bar, and subscription
+	// plan usage (when the current provider has a usage adapter).
+	private async handleUsageCommand(): Promise<void> {
+		const entries = this.sessionManager.getEntries();
+
+		// Aggregate token usage per provider/model actually used.
+		const perModelMap = new Map<string, UsageSessionRow>();
+		for (const entry of entries) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			const message = entry.message;
+			const usage = message.usage;
+			const key = `${message.provider}/${message.responseModel ?? message.model}`;
+			let row = perModelMap.get(key);
+			if (!row) {
+				row = { model: key, input: 0, output: 0, total: 0 };
+				perModelMap.set(key, row);
+			}
+			row.input += usage.input + usage.cacheRead + usage.cacheWrite;
+			row.output += usage.output;
+			row.total += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		}
+		const sessionRows = Array.from(perModelMap.values()).sort((a, b) => b.total - a.total);
+
+		const context = this.session.getContextUsage();
+		const provider = this.session.model?.provider;
+		const plan = provider ? await getPlanUsage(provider, this.session.modelRuntime) : undefined;
+
+		const lines = renderUsageBox({ sessionRows, context, plan }, this.ui.terminal.columns);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
 	}
 

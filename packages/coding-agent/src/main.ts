@@ -53,6 +53,7 @@ import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -794,6 +795,10 @@ export async function main(args: string[], options?: MainOptions) {
 	// Point the model-tier bridge at the live runtime settings manager so /settings
 	// changes take effect without a restart.
 	registerModelTierBridge(settingsManager);
+
+	// lunr: expose the plan-usage service to builtin extensions (ashxj-tui footer
+	// limit bar) via the global bridge — read live at render/event time.
+	registerUsageServiceBridge(modelRuntime);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

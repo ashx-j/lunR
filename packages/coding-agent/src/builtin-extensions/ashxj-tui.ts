@@ -161,6 +161,97 @@ interface FooterComponentLike {
 }
 
 // ---------------------------------------------------------------------------
+// lunr: plan-usage (subscription limit bar) state.
+//
+// Reads lunR core's usage-service bridge (Symbol.for("@lunr/usage-service"),
+// registered from main.ts) instead of importing core code — same pattern as
+// plan-2's model-tiers bridge. Fetches are fire-and-forget from the footer
+// render path, deduped by an in-flight flag and a 5-minute local refresh
+// window layered on the service's own 5-minute cache. No new timers.
+// ---------------------------------------------------------------------------
+
+interface PlanUsageWindowLike {
+	label: string;
+	usedPercent: number;
+	resetsAt?: number;
+}
+
+interface PlanUsageLike {
+	provider: string;
+	planLabel?: string;
+	windows: PlanUsageWindowLike[];
+}
+
+interface UsageServiceBridgeLike {
+	getPlanUsage(providerId: string): Promise<PlanUsageLike | undefined>;
+	isOAuthProvider(providerId: string): boolean;
+}
+
+const PLAN_USAGE_REFRESH_MS = 5 * 60 * 1000;
+
+let planUsage: PlanUsageLike | undefined;
+let planUsageProvider: string | undefined;
+let planUsageFetchedAt = 0;
+let planUsageInFlight = false;
+
+function getUsageServiceBridge(): UsageServiceBridgeLike | undefined {
+	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/usage-service")] as
+		| UsageServiceBridgeLike
+		| undefined;
+}
+
+/** Whether the current model's provider is OAuth/subscription-authenticated. */
+function isOAuthSession(ctx: ExtensionContextLike): boolean {
+	const bridge = getUsageServiceBridge();
+	const provider = ctx.model?.provider;
+	return !!bridge && !!provider && bridge.isOAuthProvider(provider);
+}
+
+/** Kick a plan-usage fetch when stale; re-renders the footer on resolve. */
+function ensurePlanUsage(ctx: ExtensionContextLike, onResolved: () => void): void {
+	const bridge = getUsageServiceBridge();
+	const provider = ctx.model?.provider;
+	if (!bridge || !provider || !bridge.isOAuthProvider(provider)) {
+		planUsage = undefined;
+		planUsageProvider = provider;
+		return;
+	}
+	const fresh = planUsageProvider === provider && Date.now() - planUsageFetchedAt < PLAN_USAGE_REFRESH_MS;
+	if (fresh || planUsageInFlight) return;
+	planUsageProvider = provider;
+	planUsageInFlight = true;
+	bridge
+		.getPlanUsage(provider)
+		.then((usage) => {
+			planUsage = usage;
+		})
+		.catch(() => {
+			planUsage = undefined;
+		})
+		.finally(() => {
+			planUsageFetchedAt = Date.now();
+			planUsageInFlight = false;
+			onResolved();
+		});
+}
+
+/** The window that resets soonest — the one that throttles the user first. */
+function shortestWindow(windows: PlanUsageWindowLike[]): PlanUsageWindowLike {
+	return windows.reduce((a, b) => ((a.resetsAt ?? Infinity) <= (b.resetsAt ?? Infinity) ? a : b));
+}
+
+/** Compact reset countdown for the footer: `2h51m`, `6d21h`, `45m`, `now`. */
+function formatResetCompact(resetsAt: number | undefined): string {
+	if (resetsAt === undefined) return "?";
+	const diff = resetsAt - Date.now();
+	if (diff <= 0) return "now";
+	const minutes = Math.floor(diff / 60000);
+	if (minutes >= 24 * 60) return `${Math.floor(minutes / (24 * 60))}d${Math.floor((minutes % (24 * 60)) / 60)}h`;
+	if (minutes >= 60) return `${Math.floor(minutes / 60)}h${minutes % 60}m`;
+	return `${Math.max(1, minutes)}m`;
+}
+
+// ---------------------------------------------------------------------------
 // Display-width helpers (ANSI-aware; CJK-aware)
 //
 // The editor (`Editor.render`) word-wraps to the given width using grapheme
@@ -540,7 +631,24 @@ function renderStatsLine(
 	parts.push(color(theme, "dim", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`));
 
 	// 4) Cost: $cost.
-	parts.push(color(theme, "dim", `$${totals.cost.toFixed(3)}`));
+	// lunr: subscription limit bar — for OAuth/subscription providers replace the
+	// cost meter with the shortest plan window (`5h 71%·rst 2h51m`); when no
+	// adapter data is available (or no adapter exists, e.g. anthropic) drop the
+	// segment entirely. API-key/pay-per-token providers keep `$x.xxx`.
+	if (isOAuthSession(ctx)) {
+		if (planUsage && planUsage.windows.length > 0) {
+			const window = shortestWindow(planUsage.windows);
+			parts.push(
+				color(
+					theme,
+					"dim",
+					`${window.label} ${Math.round(window.usedPercent)}%·rst ${formatResetCompact(window.resetsAt)}`,
+				),
+			);
+		}
+	} else {
+		parts.push(color(theme, "dim", `$${totals.cost.toFixed(3)}`));
+	}
 
 	let line = parts.join(sep);
 	if (displayWidth(line) > width) {
@@ -595,6 +703,15 @@ function installFooter(
 			},
 			render(width: number): string[] {
 				if (disposed) return [];
+				// lunr: keep the plan-usage snapshot fresh (5-min cache; refetches at
+				// most once per window, re-renders on resolve — no timers).
+				ensurePlanUsage(ctx, () => {
+					try {
+						tui.requestRender();
+					} catch {
+						/* ignore */
+					}
+				});
 				return renderStatsLine(width, ctx, _theme, _footerData);
 			},
 		};
@@ -638,6 +755,10 @@ export default function (pi: ExtensionAPI): void {
 			/* ignore */
 		}
 		renderRequestor = undefined;
+		// lunr: drop plan-usage state with the session
+		planUsage = undefined;
+		planUsageProvider = undefined;
+		planUsageFetchedAt = 0;
 	});
 
 	// Re-render triggers: model/provider + effort (chip), and token/cost/context
