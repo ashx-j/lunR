@@ -21,6 +21,9 @@ import piWebAccess from "./pi-web-access/index.ts";
 import piLspExtension from "./pi-lsp-extension/src/index.ts";
 import piMcpAdapter from "./pi-mcp-adapter/index.ts";
 
+// lunR-native extensions
+import lunrLocalProviders from "./lunr-local-providers/index.ts";
+
 // narumiruna extensions (pi-goal kept: plan 2's /goal footer indicator patches it)
 import narumirunaGoal from "./narumiruna-pi-goal/src/goal.ts";
 
@@ -53,4 +56,6 @@ export const builtinExtensions: InlineExtension[] = [
 	ext("narumiruna-pi-goal", narumirunaGoal),
 	// context-mode
 	ext("context-mode", contextMode),
+	// lunR-native
+	ext("lunr-local-providers", lunrLocalProviders),
 ];

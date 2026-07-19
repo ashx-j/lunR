@@ -179,3 +179,31 @@ Undone turns REAPPEAR after restart — session JSONL is append-only and navigat
 - Codex adapter labels windows from `limit_window_seconds` (Weekly/5h) rather than hardcoding, so additional rate-limit buckets would also label sanely (only the primary `codex` snapshot is rendered, though).
 - Plan section header shows the plan label when known: `Plan usage (plus)`.
 - Footer refetch is render-driven (checks a 5-min local timestamp on each footer render) instead of model_select-only — model_select alone would never refresh on session start or over time; renders are frequent enough and the service cache dedupes the network.
+
+## 2026-07-19 — Phase 8: one-click local providers (Ollama, LM Studio)
+
+### What changed
+- **`packages/coding-agent/src/builtin-extensions/lunr-local-providers/local-servers.ts`** (new, lunR-native, NO `@ts-nocheck`): pure, runtime-import-free probing/normalization — `LocalServerSpec` + `OLLAMA_LOCAL` (`http://localhost:11434/v1`, dummy key `"ollama"`, fallback `GET /api/tags`) and `LM_STUDIO` (`http://localhost:1234/v1`, dummy key `"local"`); `extractModelIds` normalizes OpenAI `{data:[{id}]}`, Ollama `{models:[{name}]}`, string entries, deduped; `fetchJson` (hard timeout, never throws); `fetchLocalModelIds` (`/v1/models` → `/api/tags` fallback → null when unreachable); `toModelConfig` defaults (32k ctx, 8k maxTokens, zero cost, `["text"]`, non-reasoning).
+- **`builtin-extensions/lunr-local-providers/index.ts`** (new): registers both providers via `pi.registerProvider` with `api: "openai-completions"`, an empty initial model list, `refreshModels` that re-probes localhost (never throws; offline → `[]` → provider unavailable), and an `oauth` block used as a keyless-credential mechanism (see Wiring choices). One-click login: probe (3s) → unreachable throws `"... not detected on localhost:<port> — start it and retry."`; reachable-but-empty throws a "no models, load one and retry" error; success stores `{refresh, access, expires: 2100-01-01}` via the standard `Models.login` → `CredentialStore.modify` persistence path, sets a `justLoggedIn` flag consumed by the next refresh to poll the availability snapshot (100ms, 5s cap, `unref`'d) and `pi.setModel(first)` only when the current model is undefined or the `unknown` placeholder (mirrors `completeProviderAuthentication`). `session_start`/`model_select` keep a `lastCtx` fresh for the auto-select.
+- **`builtin-extensions/index.ts`**: `ext("lunr-local-providers", lunrLocalProviders)` — hidden from the startup Extensions list by the existing `<inline:` path filter.
+
+### Wiring choices
+- **Dummy credential via the extension `oauth` config, NOT `AuthStorage.modify` directly.** `composeApiKeyAuth` gives oauth-only extension providers no fabricated API-key prompt, so /login shows "Ollama (local)"/"LM Studio (local)" under "Sign in with an account" and selecting one runs our prompt-free `login(callbacks)` — a genuine one-click flow inside the stock dialogs (failure surfaces as `Failed to login to <name>: <probe message>`). `Models.login` itself persists the returned credential through `CredentialStore.modify`, so no direct AuthStorage touch was needed; `getApiKey()` returns the dummy key for requests; `refreshToken` is identity; `expires` is far-future so no refresh is ever attempted. Omitting a literal `apiKey` from the provider config keeps the provider unconfigured (unavailable) until login, exactly matching the plan's offline/unavailable requirement.
+- **`refreshModels` probes even when `context.allowNetwork` is false** — localhost connection-refused fails in ~ms, so the registration-time offline refresh (`registerProvider` → `refresh({allowNetwork:false})`) still populates models for a returning logged-in user. No persistent models-store usage; the list is re-probed on every refresh.
+- **Auto-select is poll-based from the extension** because `defaultModelPerProvider` only covers `KnownProvider`s, so `completeProviderAuthentication` cannot select for us (it shows its "no default model" note when the previous model was the `unknown` placeholder; our poll then selects the first model — acceptable minor UX overlap).
+
+### Known quirk (documented, not fixed)
+- Ollama tool-calling over the OpenAI-compatible `/v1` endpoint can break streaming for some models — noted in the extension file header.
+
+### Verification
+- Build: agent → coding-agent → orchestrator clean (exit 0). `ai` not rebuilt.
+- `npx biome check packages/` — clean (810 files).
+- `npx lunr --version` — 0.80.10; dist contains `builtin-extensions/lunr-local-providers/{index,local-servers}.js`.
+- Harness (plain node + mock `http` server against dist, kept at `.pi-subagents/test-local-providers.mjs`, untracked): 9/9 PASS — `/v1/models` listed; `/v1/models` 404 → `/api/tags` fallback normalized; normalization edge cases (dedupe, string entries, garbage); `toModelConfig` defaults; server down → null in 2ms (no hang); blackhole server → null after the 400ms test timeout. No circular-import issue: `local-servers.ts` has type-only barrel imports (erased), so the dist module loads standalone.
+- Full coding-agent suite: Test Files 88 failed | 87 passed | 2 skipped (177); Tests 56 failed | 1008 passed | 21 skipped (1085) — byte-identical to the Phase 7 baseline. No NEW failures.
+- Live verification PENDING: no real Ollama/LM Studio install here — the actual /login → probe → credential → auto-select path against a live server is untested (logic covered by harness + code-path recon only).
+
+### Deviations from plan
+- Plan said save the dummy credential "via `AuthStorage.modify` (or whatever the provider-auth API exposes)" — used the oauth login flow, where `Models.login` performs the store write itself (cleaner; no core imports in the extension).
+- Plan said "auto-select first model (mirror `completeProviderAuthentication`)" — auto-select only fires when no real model is active (the mirror's exact condition), via a short availability poll from the extension rather than inside the core login completion.
+- `maxTokens` 8192 (plan specified only 32k ctx / zero cost / text modalities).
