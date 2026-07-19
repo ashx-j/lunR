@@ -12,21 +12,18 @@ const GAP = 4;
 const MIN_DETAILS_WIDTH = 24;
 
 /**
- * Startup boot screen: moon ASCII art on the left, CLI details on the right,
- * compact keybinding hints below. Falls back to details-only when the terminal
- * is too narrow for the art. Art lines are never wrapped.
+ * Startup boot screen: moon ASCII art on the left, CLI details on the right.
+ * Falls back to details-only when the terminal is too narrow for the art.
+ * Art lines are never wrapped.
  */
 export class BootScreenComponent implements Component {
 	/** Pre-styled first line of the details column (logo + version). */
 	private readonly header: string;
 	private readonly rows: BootScreenRow[];
-	/** Pre-styled hint/onboarding lines rendered below the two columns. */
-	private readonly footerLines: string[];
 
-	constructor(header: string, rows: BootScreenRow[], footerLines: string[]) {
+	constructor(header: string, rows: BootScreenRow[]) {
 		this.header = header;
 		this.rows = rows;
-		this.footerLines = footerLines;
 	}
 
 	invalidate(): void {
@@ -62,7 +59,6 @@ export class BootScreenComponent implements Component {
 		} else {
 			lines.push(...details);
 		}
-		lines.push(...this.footerLines);
 		return lines;
 	}
 }

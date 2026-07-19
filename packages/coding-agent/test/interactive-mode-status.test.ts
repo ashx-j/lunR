@@ -668,9 +668,23 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 	}
 
-	test("shows a compact resource listing by default", () => {
+	test("does not show the resource listing by default", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+		});
+
+		expect(fakeThis.loadedResourcesContainer.children).toHaveLength(0);
+	});
+
+	test("shows a compact resource listing in verbose mode", () => {
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: false,
+			verbose: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
@@ -687,6 +701,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("shows full resource listing when expanded", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			toolOutputExpanded: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
@@ -722,6 +737,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("abbreviates extensions in compact listing", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions: [{ path: "/tmp/extensions/answer.ts" }, { path: "/tmp/extensions/btw.ts" }],
 		});
 
@@ -738,6 +754,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("captures mixed extension layouts in compact output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions: createExtensionFixtures(),
 			useRealScopeGroups: true,
 		});
@@ -784,6 +801,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -812,6 +830,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -840,6 +859,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -877,6 +897,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -914,6 +935,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -951,6 +973,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -979,6 +1002,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -1007,6 +1031,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -1022,6 +1047,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("captures mixed extension layouts in expanded output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			toolOutputExpanded: true,
 			extensions: createExtensionFixtures(),
 			useRealScopeGroups: true,
@@ -1054,6 +1080,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			cwd,
 			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],
 		});
@@ -1073,6 +1100,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			toolOutputExpanded: true,
 			cwd,
 			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],

@@ -111,7 +111,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
+import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
@@ -781,18 +781,6 @@ export class InteractiveMode {
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
 			const header = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
 
-			// Build startup instructions using keybinding hint helpers
-			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
-
-			const compactInstructions = [
-				hint("app.interrupt", "interrupt"),
-				rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
-				rawKeyHint("/", "commands"),
-				rawKeyHint("!", "bash"),
-				hint("app.tools.expand", "more"),
-			].join(theme.fg("muted", " · "));
-			const onboarding = theme.fg("dim", `Ask ${APP_NAME} how to use or extend it.`);
-
 			const model = this.session.model;
 			const bootRows: BootScreenRow[] = [
 				{ label: "model", value: model ? `${model.id} (${model.provider})` : "none" },
@@ -801,7 +789,11 @@ export class InteractiveMode {
 				{ label: "config", value: getAgentDir() },
 				{ label: "theme", value: getThemeName() },
 			];
-			this.builtInHeader = new BootScreenComponent(header, bootRows, [compactInstructions, onboarding]);
+			const skillsCount = this.session.resourceLoader.getSkills().skills.length;
+			if (skillsCount > 0) {
+				bootRows.push({ label: "skills", value: String(skillsCount) });
+			}
+			this.builtInHeader = new BootScreenComponent(header, bootRows);
 
 			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
@@ -1435,7 +1427,9 @@ export class InteractiveMode {
 		// Resource rendering is idempotent; chat clears no longer clear this separate container.
 		this.loadedResourcesContainer.clear();
 
-		const showListing = options?.force || this.options.verbose || !this.settingsManager.getQuietStartup();
+		// lunr: startup/reload render nothing by default; the [Context]/[Skills]/etc. listing
+		// only appears with --verbose (or an explicit force). Diagnostics still surface below.
+		const showListing = options?.force || this.options.verbose;
 		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
 		if (!showListing && !showDiagnostics) {
 			return;
