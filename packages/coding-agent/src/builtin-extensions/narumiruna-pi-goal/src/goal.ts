@@ -64,6 +64,8 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	// Bind per-factory runtime operations once so event orchestration stays concise
 	// without reintroducing module-global mutable state.
 	const clearCompletionStatusTimer = runtime.clearCompletionStatusTimer.bind(runtime);
+	// lunr: footer refresh timer cleanup
+	const clearStatusRefreshTimer = runtime.clearStatusRefreshTimer.bind(runtime);
 	const clearContinuationTracking = runtime.clearContinuationTracking.bind(runtime);
 	const clearPendingGoalPrompts = runtime.clearPendingGoalPrompts.bind(runtime);
 	const clearGoalRecovery = runtime.clearGoalRecovery.bind(runtime);
@@ -448,6 +450,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		clearCompletionStatusTimer();
+		clearStatusRefreshTimer(); // lunr
 		clearContinuationTracking();
 		clearPendingGoalPrompts();
 		runtime.agentRunGoalId = undefined;
@@ -571,6 +574,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queueFrozen = false;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
+		clearStatusRefreshTimer(); // lunr
 	});
 
 	pi.on("session_before_compact", (event, ctx) => {
