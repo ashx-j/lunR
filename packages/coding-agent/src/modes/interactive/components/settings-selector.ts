@@ -254,7 +254,7 @@ function defaultAutomaticThemes(
 	if (autoTheme) return autoTheme;
 
 	const currentFixedTheme = currentThemeSetting.includes("/") ? undefined : currentThemeSetting;
-	const themeName = preferredTheme(availableThemes, currentFixedTheme, "dark");
+	const themeName = preferredTheme(availableThemes, currentFixedTheme, "moon");
 	return { lightTheme: themeName, darkTheme: themeName };
 }
 
@@ -292,7 +292,7 @@ class ThemeSubmenu extends Container {
 		this.singleTheme = preferredTheme(
 			availableThemes,
 			fixedTheme ?? (autoTheme ? this.getActiveAutomaticTheme() : undefined),
-			"dark",
+			"moon",
 		);
 
 		if (this.mode === "automatic") {
