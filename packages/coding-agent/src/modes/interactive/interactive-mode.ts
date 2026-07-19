@@ -222,6 +222,17 @@ const INIT_EXISTING_FILE_INSTRUCTIONS = {
 		"An AGENTS.md already exists — keep the existing content and only add missing sections; do not rewrite what is already there.",
 } as const;
 
+function buildSwarmPrompt(task: string): string {
+	return `[SWARM MODE] Task: ${task}
+Act as an orchestrator. 1) Decompose into 3-8 independent subtasks. 2) Launch them
+in ONE parallel subagent call (async:false), picking an agent + model tier per
+subtask (prefer scout for exploration, worker for implementation, reviewer for
+verification). 3) Synthesize the results and report. Rules: max 8 concurrent
+subagents; no nested fan-out; if a subtask fails, retry once with the heavy tier
+before giving up on it; keep your final report under 100 lines with per-subtask
+status.`;
+}
+
 function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
 }
@@ -400,6 +411,9 @@ export class InteractiveMode {
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
+
+	// Track whether a /swarm orchestration turn is in flight (footer status)
+	private swarmMode = false;
 
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
@@ -2731,6 +2745,12 @@ export class InteractiveMode {
 				await this.handleInitCommand();
 				return;
 			}
+			if (text === "/swarm" || text.startsWith("/swarm ")) {
+				const task = text.startsWith("/swarm ") ? text.slice(7).trim() : "";
+				this.editor.setText("");
+				await this.handleSwarmCommand(task);
+				return;
+			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
@@ -3077,6 +3097,11 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+
+				if (this.swarmMode) {
+					this.swarmMode = false;
+					this.setExtensionStatus("swarm", undefined);
+				}
 
 				this.ui.requestRender();
 				break;
@@ -5384,6 +5409,27 @@ export class InteractiveMode {
 
 		await this.session.sendUserMessage(prompt);
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
+	}
+
+	private async handleSwarmCommand(task: string): Promise<void> {
+		if (task.length === 0) {
+			if (this.swarmMode) {
+				this.showStatus("Swarm mode is active — run /subagents-fleet to monitor the fleet.");
+			} else {
+				this.showStatus(
+					"Usage: /swarm <task> — decomposes the task across parallel subagents. Monitor with /subagents-fleet.",
+				);
+			}
+			return;
+		}
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /swarm.");
+			return;
+		}
+
+		this.swarmMode = true;
+		this.setExtensionStatus("swarm", "swarm ● active");
+		await this.session.sendUserMessage(buildSwarmPrompt(task));
 	}
 
 	private async handleReloadCommand(): Promise<void> {
