@@ -1,7 +1,7 @@
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
-import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import { getTextOutput as getRenderedTextOutput, toolStatusDot } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 
@@ -132,8 +132,13 @@ export class ToolExecutionComponent extends Container {
 		};
 	}
 
+	private getStatusDot(): string {
+		const state = this.isPartial ? "pending" : this.result?.isError ? "error" : "success";
+		return toolStatusDot(state, theme);
+	}
+
 	private createCallFallback(): Component {
-		return new Text(theme.fg("toolTitle", theme.bold(this.toolName)), 0, 0);
+		return new Text(`${this.getStatusDot()} ${theme.fg("toolTitle", theme.bold(this.toolName))}`, 0, 0);
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -363,7 +368,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private formatToolExecution(): string {
-		let text = theme.fg("toolTitle", theme.bold(this.toolName));
+		let text = `${this.getStatusDot()} ${theme.fg("toolTitle", theme.bold(this.toolName))}`;
 		const content = JSON.stringify(this.args, null, 2);
 		if (content) {
 			text += `\n\n${content}`;

@@ -72,6 +72,21 @@ export function invalidArgText(theme: Theme): string {
 	return theme.fg("error", "[invalid arg]");
 }
 
+export type ToolStatusDotState = "pending" | "success" | "error";
+
+/**
+ * Colored status dot used as the sole state indicator on tool titles (moon theme:
+ * backgrounds stay neutral). Pending = muted, success = green, error = red.
+ */
+export function toolStatusDot(state: ToolStatusDotState, theme: Theme): string {
+	return theme.fg(state === "pending" ? "muted" : state, "●");
+}
+
+/** Derive the status dot from a render context (partial → pending, error → error, else success). */
+export function toolStatusDotFromContext(context: { isPartial: boolean; isError: boolean }, theme: Theme): string {
+	return toolStatusDot(context.isPartial ? "pending" : context.isError ? "error" : "success", theme);
+}
+
 export function renderToolPath(
 	rawPath: string | null,
 	theme: Theme,

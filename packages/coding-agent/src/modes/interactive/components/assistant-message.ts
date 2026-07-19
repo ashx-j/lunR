@@ -95,12 +95,18 @@ export class AssistantMessageComponent extends Container {
 		}
 
 		// Render content in order
+		let isFirstTextBlock = true;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme));
+				// lunr: leading ● marks the first text block (never thinking blocks). Kept
+				// uncolored so it renders in the default text color (white in moon theme).
+				const trimmed = content.text.trim();
+				const text = isFirstTextBlock ? `● ${trimmed}` : trimmed;
+				isFirstTextBlock = false;
+				this.contentContainer.addChild(new Markdown(text, this.outputPad, 0, this.markdownTheme));
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {

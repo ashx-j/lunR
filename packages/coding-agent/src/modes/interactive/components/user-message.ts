@@ -29,9 +29,12 @@ export class UserMessageComponent extends Container {
 	private rebuild(): void {
 		this.clear();
 		const contentBox = new Box(this.outputPad, 1, (content: string) => theme.bg("userMessageBg", content));
+		// lunr: leading ● marks the first line of a user message. Kept uncolored in the
+		// markdown source so the message's own text color applies (white in moon theme);
+		// embedding ANSI here would strip the text color from the rest of the paragraph.
 		contentBox.addChild(
 			new Markdown(
-				this.text,
+				`● ${this.text}`,
 				0,
 				0,
 				this.markdownTheme,

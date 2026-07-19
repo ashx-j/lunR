@@ -68,3 +68,28 @@
 ### Deviations from plan
 - Multi-mode result rows drop the `Step N`/`Agent N/M` label entirely (plan's row format doesn't include it); chain ordering is still conveyed by row order. Pending rows keep the label since they have no task text.
 - Live runtime verification of an actual subagent run (foreground/async/fanout under `npx lunr`) NOT performed — requires a live model + pty. Path-existence verified statically against dist instead. **Pending: one interactive `/subagents` smoke run.**
+
+## 2026-07-19 — Phase 4: Dot-only status coloring + message dots
+
+### What changed
+- `packages/coding-agent/src/core/tools/render-utils.ts`: new `toolStatusDot(state, theme)` ("pending"→muted, "success"→success/green, "error"→error/red, glyph `●`) and `toolStatusDotFromContext({isPartial,isError}, theme)` helper (structural typing, no import of extensions/types).
+- `packages/coding-agent/src/modes/interactive/components/tool-execution.ts` (plan said `core/tools/tool-execution.ts` — the file actually lives here): new `getStatusDot()` (isPartial→pending, result.isError→error, else success); dot prepended in `createCallFallback()` and `formatToolExecution()`.
+- Built-in renderers, dot prepended to the renderCall title line via `toolStatusDotFromContext(context, theme)`: `core/tools/bash.ts`, `read.ts` (both normal and compact-classification titles), `write.ts`, `grep.ts`, `find.ts`, `ls.ts`. `edit.ts` (renderShell "self"): `buildEditCallComponent` takes a new `dotState` param, computed at both call sites (renderCall + renderResult rebuild). renderResult bodies render no title line, so no dot there.
+- `modes/interactive/components/user-message.ts` `rebuild()`: markdown source now prefixed with a plain `● `.
+- `modes/interactive/components/assistant-message.ts` `updateContent()`: first non-empty TEXT block (never thinking blocks) prefixed with plain `● ` via an `isFirstTextBlock` flag.
+- Tests updated (intended-change expectations, minimal): `test/assistant-message.test.ts` — the two padding tests now expect the dot (`" ● hello"` padded / `"● hello"` unpadded; `" ● hello"` for the assistant padding case).
+
+### User/assistant dot approach (plan asked to record the choice)
+Plain, uncolored `● ` prefix in the markdown source for BOTH components — NOT `theme.fg("brightWhite", "● ")` (that token doesn't exist; closest is `accent` = brightWhite in moon), and NOT a separate leading Text line. Reason: Markdown applies its per-token text color around whole runs, and `theme.fg()` resets with `\x1b[39m` without reopening the outer color — an embedded colored dot would silently strip userMessageText from the rest of the paragraph. The plain prefix renders the dot in the message's own text color: userMessageText (white in moon) for user messages, terminal default (white on black) for assistant messages. Verified in the render harness: colors intact, dot on first line, thinking blocks undotted. Known edge case: a message whose first line is a markdown construct (`# heading`, `- list`) now renders that first line as literal text after the dot.
+
+### Verification
+- Build: agent → coding-agent → orchestrator compile clean (exit 0). `ai` not rebuilt (live-catalog drift issue avoided).
+- `npx biome check packages/` — clean (800 files; one import-sort auto-fix in edit.ts).
+- Render smoke harness (tsx, deleted after use): user message `● hello…` white-on-bg; assistant first text block dotted, thinking + later blocks not; bash pending = gray dot; read success = green dot; read error = red dot; generic fallback (unknown tool) = green dot. ANSI inspected raw — no color bleed after dots.
+- Tests: coding-agent vitest — Test Files 88 failed | 85 passed | 2 skipped (175); Tests 56 failed | 982 passed | 21 skipped (1059). Byte-identical to the Phase 1-3 baseline — no NEW failures. Targeted rerun of the 4 touched render test files (assistant-message, user-message, tool-execution-component, edit-tool-no-full-redraw): 4 files / 33 tests, all pass.
+
+### Deviations from plan
+- `tool-execution.ts` path correction (modes/interactive/components/, not core/tools/).
+- `toolStatusDot` takes `theme` as a param (matches render-utils.ts conventions) instead of closing over a module theme.
+- Message dots are plain-text prefixes, not `theme.fg("brightWhite", …)` — see approach note above.
+- Live `npx lunr` TUI verification not performed (no pty) — render harness only.
