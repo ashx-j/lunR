@@ -45,3 +45,26 @@
 ### Deviations from plan
 - Art regeneration was a no-op (md and generated ts already in sync from `87b0a98`); confirmed mechanically rather than blindly rewriting.
 - Interactive `npx lunr` TUI verification not performed (no pty in this session) — static render harness only.
+
+## 2026-07-19 — Phase 3: Subagent extension-path fix + simplified subagent view
+
+### What changed
+- **3a (fix):** pi-subagents built child-process extension/script paths from `import.meta.url` with hardcoded `.ts` filenames; the bake-in compiles to `dist/` `.js` only, so every subagent run died with "Extension path does not exist". Fixed all three sites with an existence check — use the `.ts` when present (upstream dev), else the compiled `.js` sibling (`// lunr:` marked):
+  - `packages/coding-agent/src/builtin-extensions/pi-subagents/src/runs/shared/pi-args.ts` (~:17-27): new `resolveRuntimeScriptPath(basePathWithoutExt)` helper (fs.existsSync `.ts` → else `.js`); `PROMPT_RUNTIME_EXTENSION_PATH` and `FANOUT_CHILD_EXTENSION_PATH` now resolve through it.
+  - `packages/coding-agent/src/builtin-extensions/pi-subagents/src/runs/background/async-execution.ts` (~:400): `runnerTsPath` + existsSync ternary falls back to `subagent-runner.js` (still spawned via jiti, which loads plain `.js` fine).
+- **3b (simplified collapsed view):** `packages/coding-agent/src/builtin-extensions/pi-subagents/src/tui/render.ts` (`// lunr:` marked):
+  - New `taskSummaryText(task, 60)` helper: first line of `r.task`, whitespace collapsed, ellipsis at ~60 chars.
+  - `renderSingleCompact`: row is now `<glyph> <task summary> · <agent> · <stats via formatProgressStats>` (model badge and turns stat dropped per the new format). Running rows keep the dim `⎿` activity + live-status lines. Deleted: `liveDetailHintText()` line, both `output: artifactPaths` lines, the `full output:` truncation-artifact line. `session:` line and output preview kept (not in the deletion list).
+  - `renderMultiCompact` per-result rows: same new format (`glyph · task summary · agent · stats`), `Step N`/`Agent N/M` row label dropped from result rows (pending rows keep it — no task available yet). Deleted: `liveDetailHintText()` line, `extractOutputTarget` `output:` line, per-row `artifactPaths` `output:` line, and the trailing `artifacts:` footer line. Multi header row unchanged.
+  - Expanded views and the async-jobs widget untouched (still use `liveDetailHintText`/`extractOutputTarget`/`modelThinkingBadge` — all helpers remain referenced).
+
+### Verification
+- Build: coding-agent rebuild clean (exit 0); orchestrator rebuild clean (exit 0). Did not touch agent/ai/tui dists.
+- dist contains the fix: `resolveRuntimeScriptPath` in `dist/.../pi-args.js`, `runnerTsPath` ternary in `dist/.../async-execution.js`, `taskSummaryText` in `dist/.../render.js`. All three fallback targets exist in dist (`subagent-prompt-runtime.js`, `extension/fanout-child.js`, `background/subagent-runner.js`) — verified via a node existence-check script replicating the fallback logic against dist paths.
+- `npx biome check packages/` — clean (800 files).
+- Tests: coding-agent vitest — Test Files 88 failed | 85 passed | 2 skipped (175); Tests 56 failed | 982 passed | 21 skipped (1059). Byte-identical to the Phase 1/2 baseline — no NEW failures.
+- Render smoke harness (node against dist, importing `dist/main.js` first to dodge the known ashxj-tui circular import): single-done, single-running, and multi (done/failed) collapsed renders all show `glyph task-summary · agent · N tool uses · tokens · runtime`, keep the `⎿` activity/error lines, and contain no "Press … for live detail" hint and no output/artifact paths. All assertions passed; harness deleted after use.
+
+### Deviations from plan
+- Multi-mode result rows drop the `Step N`/`Agent N/M` label entirely (plan's row format doesn't include it); chain ordering is still conveyed by row order. Pending rows keep the label since they have no task text.
+- Live runtime verification of an actual subagent run (foreground/async/fanout under `npx lunr`) NOT performed — requires a live model + pty. Path-existence verified statically against dist instead. **Pending: one interactive `/subagents` smoke run.**

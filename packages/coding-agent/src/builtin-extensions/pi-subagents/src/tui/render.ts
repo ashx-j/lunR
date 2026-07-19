@@ -267,6 +267,14 @@ function firstOutputLine(text: string): string {
 	return text.split("\n").find((line) => line.trim())?.trim() ?? "";
 }
 
+// lunr: first line of the task with whitespace collapsed, capped at ~60 chars,
+// for the simplified collapsed subagent rows.
+function taskSummaryText(task: string | undefined, max = 60): string {
+	const first = (task ?? "").split("\n")[0]?.replace(/\s+/g, " ").trim() ?? "";
+	if (first.length <= max) return first;
+	return `${first.slice(0, max - 1)}…`;
+}
+
 function resultStatusLine(result: Details["results"][number], output: string): string {
 	if (result.detached) return result.detachedReason ? `Detached: ${result.detachedReason}` : "Detached";
 	if (result.stopped) return "Stopped";
@@ -1291,14 +1299,11 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const progress = r.progress || r.progressSummary;
 	const isRunning = r.progress?.status === "running";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
-	const stats = statJoin(theme, [
-		r.usage?.turns ? `⟳ ${r.usage.turns}` : "",
-		formatProgressStats(theme, progress),
-	]);
+	// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
+	const stats = formatProgressStats(theme, progress);
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	const modelDisplay = modelThinkingBadge(theme, r.model);
-	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, frame)} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelDisplay}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, frame)} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
 
 	if (isRunning && r.progress) {
 		const progressSnapshotNow = snapshotNowForProgress(r.progress);
@@ -1306,8 +1311,6 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 		c.addChild(new Text(truncLine(theme.fg("dim", `  ⎿  ${activity}`), width), 0, 0));
 		const liveStatus = buildLiveStatusLine(r.progress, progressSnapshotNow);
 		if (liveStatus && liveStatus !== activity) c.addChild(new Text(truncLine(theme.fg("dim", `     ${liveStatus}`), width), 0, 0));
-		c.addChild(new Text(truncLine(theme.fg("accent", `  ${liveDetailHintText()}`), width), 0, 0));
-		if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `  output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 		return c;
 	}
 
@@ -1317,8 +1320,6 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 		c.addChild(new Text(truncLine(theme.fg("dim", `     ${preview}`), width), 0, 0));
 	}
 	if (r.sessionFile) c.addChild(new Text(truncLine(theme.fg("dim", `  session: ${shortenPath(r.sessionFile)}`), width), 0, 0));
-	if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `  output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
-	if (r.truncation?.artifactPath) c.addChild(new Text(truncLine(theme.fg("dim", `  full output: ${shortenPath(r.truncation.artifactPath)}`), width), 0, 0));
 	return c;
 }
 
@@ -1396,25 +1397,19 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
-		const stepNumber = r.progress?.index !== undefined ? r.progress.index + 1 : progressFromArray?.index !== undefined ? progressFromArray.index + 1 : i + 1;
 		const stepStats = formatProgressStats(theme, rProg);
 		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), frame);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
-		const stepLabel = resultRowLabel(d, multiLabel, i, stepNumber);
-		const line = `${glyph} ${stepLabel}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
+		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
+		const line = `${glyph} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
 		c.addChild(new Text(truncLine(`  ${line}`, width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const activity = compactCurrentActivity(rProg);
 			c.addChild(new Text(truncLine(theme.fg("dim", `    ⎿  ${activity}`), width), 0, 0));
-			c.addChild(new Text(truncLine(theme.fg("accent", `    ${liveDetailHintText()}`), width), 0, 0));
 		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
 		}
-		const outputTarget = extractOutputTarget(r.task);
-		if (outputTarget) c.addChild(new Text(truncLine(theme.fg("dim", `    output: ${outputTarget}`), width), 0, 0));
-		if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `    output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 	}
-	if (d.artifacts) c.addChild(new Text(truncLine(theme.fg("dim", `  artifacts: ${shortenPath(d.artifacts.dir)}`), width), 0, 0));
 	return c;
 }
 
