@@ -43,6 +43,7 @@ import { spawn, spawnSync } from "child_process";
 import {
 	APP_NAME,
 	APP_TITLE,
+	appendDebugLog,
 	CONFIG_DIR_NAME,
 	getAgentDir,
 	getAuthPath,
@@ -433,6 +434,9 @@ export class InteractiveMode {
 
 	// Track whether a /research deep-research turn is in flight (footer status)
 	private researchMode = false;
+
+	// lunr: one-shot guard for the session auto-name LLM call (first assistant response)
+	private autoNameTriggered = false;
 
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
@@ -2686,7 +2690,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/name" || text.startsWith("/name ")) {
+			if (text === "/name" || text.startsWith("/name ") || text === "/title" || text.startsWith("/title ")) {
 				this.handleNameCommand(text);
 				this.editor.setText("");
 				return;
@@ -2780,7 +2784,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/resume") {
+			if (text === "/resume" || text === "/sessions") {
 				this.showSessionSelector();
 				this.editor.setText("");
 				return;
@@ -3126,6 +3130,8 @@ export class InteractiveMode {
 					this.researchMode = false;
 					this.setExtensionStatus("research", undefined);
 				}
+
+				this.maybeAutoNameSession();
 
 				this.ui.requestRender();
 				break;
@@ -4237,6 +4243,7 @@ export class InteractiveMode {
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
 					smoothStreaming: this.settingsManager.getSmoothStreaming(),
+					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
@@ -4324,6 +4331,9 @@ export class InteractiveMode {
 					},
 					onSmoothStreamingChange: (enabled) => {
 						this.settingsManager.setSmoothStreaming(enabled);
+					},
+					onSessionRetentionDaysChange: (days) => {
+						this.settingsManager.setSessionRetentionDays(days);
 					},
 					onDefaultProjectTrustChange: (defaultProjectTrust) => {
 						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
@@ -5808,7 +5818,7 @@ export class InteractiveMode {
 	}
 
 	private handleNameCommand(text: string): void {
-		const name = text.replace(/^\/name\s*/, "").trim();
+		const name = text.replace(/^\/(?:name|title)\s*/, "").trim();
 		if (!name) {
 			const currentName = this.sessionManager.getSessionName();
 			if (currentName) {
@@ -5829,6 +5839,61 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	/**
+	 * lunr: fire-and-forget session auto-naming. After the FIRST assistant response in an
+	 * unnamed session, asks the model for a short title derived from the first user message.
+	 * Uses the light tier model when model tiers are enabled; otherwise the session model.
+	 * Never blocks the UI; failures are swallowed to the debug log. Skipped entirely when
+	 * the user has already named the session (via /name, /title, or --name).
+	 */
+	private maybeAutoNameSession(): void {
+		if (this.autoNameTriggered) return;
+		if (this.sessionManager.getSessionName()) return;
+		const userMessages = this.session.getUserMessagesForForking();
+		if (userMessages.length === 0) return; // No real turn yet; try again on the next agent_end.
+		if (userMessages.length > 1) {
+			// Resumed/older unnamed session — only auto-name fresh sessions.
+			this.autoNameTriggered = true;
+			return;
+		}
+		this.autoNameTriggered = true;
+		void this.generateSessionTitle(userMessages[0].text);
+	}
+
+	private async generateSessionTitle(firstUserText: string): Promise<void> {
+		try {
+			let model = this.session.model;
+			if (this.settingsManager.getModelTiersEnabled()) {
+				const tierModel = this.resolveModelReference(this.settingsManager.getTierModel("light"));
+				if (tierModel) {
+					model = tierModel;
+				}
+			}
+			if (!model) return;
+			const prompt =
+				"Generate a title of at most 6 words summarizing this request. " +
+				"Reply with the title only — no quotes, no trailing punctuation, no prefix.\n\n" +
+				`Request:\n${firstUserText.slice(0, 2000)}`;
+			const response = await this.session.modelRuntime.complete(model, {
+				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+			});
+			let title = response.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join(" ")
+				.replace(/\s+/g, " ")
+				.trim();
+			title = title.replace(/^["'`]+|["'`.!?]+$/g, "").trim();
+			if (!title) return;
+			if (this.sessionManager.getSessionName()) return; // User named it while the request was in flight.
+			this.session.setSessionName(title);
+		} catch (error) {
+			appendDebugLog(
+				`auto-name: title generation failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 
 	private handleSessionCommand(): void {

@@ -82,6 +82,7 @@ export interface SettingsConfig {
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
 	smoothStreaming: boolean;
+	sessionRetentionDays: number;
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
@@ -115,6 +116,7 @@ export interface SettingsCallbacks {
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
 	onSmoothStreamingChange: (enabled: boolean) => void;
+	onSessionRetentionDaysChange: (days: number) => void;
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
@@ -651,6 +653,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "session-retention-days",
+				label: "Session retention",
+				description: "Auto-delete session files older than N days at launch (0 = keep forever)",
+				currentValue: String(config.sessionRetentionDays),
+				values: ["0", "7", "14", "30", "60", "90", "365"],
+			},
+			{
 				id: "install-telemetry",
 				label: "Install telemetry",
 				description: "Send an anonymous version/update ping after changelog-detected updates",
@@ -898,6 +907,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "session-retention-days":
+						callbacks.onSessionRetentionDaysChange(parseInt(newValue, 10));
 						break;
 					case "install-telemetry":
 						callbacks.onEnableInstallTelemetryChange(newValue === "true");

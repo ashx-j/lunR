@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readFileSync, realpathSync } from "fs";
+import { accessSync, appendFileSync, constants, existsSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
@@ -566,4 +566,17 @@ export function getSessionsDir(): string {
 /** Get path to debug log file */
 export function getDebugLogPath(): string {
 	return join(getAgentDir(), `${APP_NAME}-debug.log`);
+}
+
+/**
+ * Append a line to the debug log file. Never throws — debug logging must not
+ * break the calling code path. Used for background operations (session
+ * retention pruning, auto-naming) that must not print to the interactive UI.
+ */
+export function appendDebugLog(message: string): void {
+	try {
+		appendFileSync(getDebugLogPath(), `[${new Date().toISOString()}] ${message}\n`);
+	} catch {
+		// Ignore: debug logging is best-effort only.
+	}
 }

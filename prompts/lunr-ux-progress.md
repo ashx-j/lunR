@@ -93,3 +93,25 @@ Plain, uncolored `● ` prefix in the markdown source for BOTH components — NO
 - `toolStatusDot` takes `theme` as a param (matches render-utils.ts conventions) instead of closing over a module theme.
 - Message dots are plain-text prefixes, not `theme.fg("brightWhite", …)` — see approach note above.
 - Live `npx lunr` TUI verification not performed (no pty) — render harness only.
+
+## 2026-07-19 — Phase 5: Session management (auto-name, /title, /sessions, retention)
+
+### What changed
+- `/title <name>` — alias sharing `handleNameCommand` (regex now `/^\/(?:name|title)\s*/`); dispatch merged into the `/name` branch; `BUILTIN_SLASH_COMMANDS` entry added. `/name` unchanged.
+- Auto-name — `InteractiveMode.autoNameTriggered` one-shot guard; `maybeAutoNameSession()` called at `agent_end` (after the swarm/research status blocks). Fires only when the session is unnamed AND has exactly one user message (fresh sessions only; resumed unnamed sessions with history are skipped and never retried). `generateSessionTitle()` picks light tier model via `resolveModelReference(settingsManager.getTierModel("light"))` when `getModelTiersEnabled()`, else `this.session.model`; one-shot `session.modelRuntime.complete(model, { messages: [...] })` with a ≤6-word title prompt (first user text truncated to 2000 chars); title text collapsed, quotes/trailing punctuation stripped; re-checks `getSessionName()` after the await so a mid-flight user `/name` wins; then `session.setSessionName(title)`. Fire-and-forget; errors swallowed to the debug log.
+- `/sessions` — merged into the `/resume` dispatch branch, opens the existing `SessionSelectorComponent` via `showSessionSelector()`; selection resumes through `handleResumeSession` → `runtimeHost.switchSession` (the same in-process path `/resume` uses).
+- Retention — new `core/session-retention.ts`: `pruneOldSessions(root, days, { excludeFile, now })` deletes `.jsonl` older than `days` at depth 0 (flat custom `--session-dir` layout) and depth 1 (`--<cwd>--/` project layout); per-file errors swallowed; `excludeFile` never deleted (case-insensitive compare on win32); `days <= 0` no-op. Called from `main.ts` right after `createSessionManager` for `getSessionsDir()` (+ custom `sessionDir` when set), wrapped in try/catch; deletions logged via new `appendDebugLog()` in `config.ts` (appends to `~/.lunr/agent/lunr-debug.log`, never throws).
+- Setting — `sessionRetentionDays` (default 30, 0 = keep forever) in `Settings` + `getSessionRetentionDays()`/`setSessionRetentionDays()` (invalid values fall back to 30); numeric /settings row "Session retention" (values 0/7/14/30/60/90/365) next to "Smooth streaming".
+- Test — new `test/session-retention.test.ts` (6 tests: old-vs-new in project subdir, flat layout, non-jsonl ignored, excludeFile kept, retention 0 keeps all, missing root no-throw) using mkdtemp + utimesSync.
+
+### Verification
+- Build: agent → coding-agent → orchestrator clean (exit 0; tsgo re-run after biome autofixes also clean). `ai` not rebuilt.
+- `npx biome check packages/` — clean (802 files; 2 noImplicitAnyLet fixes + import-sort/line-wrap autofixes applied).
+- Tests: coding-agent vitest — Test Files 88 failed | 86 passed | 2 skipped (176); Tests 56 failed | 988 passed | 21 skipped (1065). Identical to baseline (88/56) plus the 6 new retention tests (982→988, 175→176 files). No NEW failures.
+- Retention logic verified by the unit tests (temp sessions dir, real mtimes) — serves as the tsx-harness equivalent. Auto-name LLM call verified statically only (needs a live model); wiring reviewed: `agent_end` → `maybeAutoNameSession` → `modelRuntime.complete` → `setSessionName`.
+
+### Deviations from plan
+- "Debug-log deletions only" implemented via a new `appendDebugLog()` helper in `config.ts` (there is no existing debug logger in core; `/debug` writes a snapshot file, not a log). Same helper used for auto-name error swallowing.
+- Retention scan covers both the default sessions root AND a custom `sessionDir` (flat layout) — plan only said "sessions root"; custom dirs would otherwise never be pruned.
+- Auto-name additionally skips resumed unnamed sessions that already have >1 user message (plan said "first assistant response in an unnamed session") — avoids surprise renames of old sessions.
+- Live interactive verification (auto-title after turn 1, /sessions picker in a pty) NOT performed — no live model/pty. Static + unit verification only.

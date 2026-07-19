@@ -133,6 +133,7 @@ export interface Settings {
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
 	modelTiers?: ModelTiersSettings;
+	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -914,6 +915,20 @@ export class SettingsManager {
 	setSmoothStreaming(enabled: boolean): void {
 		this.globalSettings.smoothStreaming = enabled;
 		this.markModified("smoothStreaming");
+		this.save();
+	}
+
+	getSessionRetentionDays(): number {
+		const value = this.settings.sessionRetentionDays;
+		if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+			return Math.floor(value);
+		}
+		return 30;
+	}
+
+	setSessionRetentionDays(days: number): void {
+		this.globalSettings.sessionRetentionDays = Math.max(0, Math.floor(days));
+		this.markModified("sessionRetentionDays");
 		this.save();
 	}
 

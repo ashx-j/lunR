@@ -16,7 +16,16 @@ import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import {
+	APP_NAME,
+	appendDebugLog,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	getPackageDir,
+	getSessionsDir,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -40,6 +49,7 @@ import {
 	type SessionCwdIssue,
 } from "./core/session-cwd.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
+import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
@@ -603,6 +613,33 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager.appendSessionInfo(name);
 	}
 	time("createSessionManager");
+
+	// lunr: session retention — delete session files older than sessionRetentionDays
+	// (default 30; 0 = keep forever). Best-effort: per-file errors are swallowed,
+	// deletions go to the debug log only, and the active session file is never deleted.
+	try {
+		const retentionDays = startupSettingsManager.getSessionRetentionDays();
+		if (retentionDays > 0) {
+			const activeSessionFile = sessionManager.getSessionFile();
+			const { deleted } = await pruneOldSessions(getSessionsDir(), retentionDays, {
+				excludeFile: activeSessionFile,
+			});
+			// Also cover a custom session dir (--session-dir / settings), which is a flat
+			// .jsonl directory outside the default sessions root.
+			if (sessionDir) {
+				const extra = await pruneOldSessions(sessionDir, retentionDays, { excludeFile: activeSessionFile });
+				deleted.push(...extra.deleted);
+			}
+			if (deleted.length > 0) {
+				appendDebugLog(
+					`session-retention: deleted ${deleted.length} file(s):\n${deleted.map((p) => `  ${p}`).join("\n")}`,
+				);
+			}
+		}
+	} catch (error) {
+		appendDebugLog(`session-retention: prune failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	time("pruneOldSessions");
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
