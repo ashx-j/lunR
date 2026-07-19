@@ -76,6 +76,7 @@ export interface SettingsConfig {
 	outputPad: 0 | 1;
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
+	smoothStreaming: boolean;
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
@@ -107,6 +108,7 @@ export interface SettingsCallbacks {
 	onOutputPadChange: (padding: 0 | 1) => void;
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
+	onSmoothStreamingChange: (enabled: boolean) => void;
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
@@ -546,6 +548,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "smooth-streaming",
+				label: "Smooth streaming",
+				description: "Reveal responses character by character",
+				currentValue: config.smoothStreaming ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "install-telemetry",
 				label: "Install telemetry",
 				description: "Send an anonymous version/update ping after changelog-detected updates",
@@ -782,6 +791,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "true");
+						break;
+					case "smooth-streaming":
+						callbacks.onSmoothStreamingChange(newValue === "true");
 						break;
 					case "install-telemetry":
 						callbacks.onEnableInstallTelemetryChange(newValue === "true");

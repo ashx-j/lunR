@@ -137,6 +137,7 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { countMessageGraphemes, sliceMessageContent } from "./smooth-streaming.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -372,6 +373,13 @@ export class InteractiveMode {
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
+
+	// Smooth streaming state (smoothStreaming setting): the streaming component
+	// reveals the target message grapheme by grapheme on a timer instead of
+	// flashing whole chunks.
+	private streamingTargetMessage: AssistantMessage | undefined = undefined;
+	private streamingDisplayedLength = 0;
+	private smoothStreamingTimer: NodeJS.Timeout | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -1727,6 +1735,7 @@ export class InteractiveMode {
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
+		this.stopSmoothStreaming();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
@@ -2797,6 +2806,50 @@ export class InteractiveMode {
 		};
 	}
 
+	/** Smooth streaming tick rate (ms) and base reveal speed (graphemes per tick). */
+	private static readonly SMOOTH_STREAMING_TICK_MS = 20;
+	private static readonly SMOOTH_STREAMING_BASE_GRAPHEMES_PER_TICK = 4;
+
+	private startSmoothStreaming(): void {
+		if (this.smoothStreamingTimer) return;
+		this.smoothStreamingTimer = setInterval(() => {
+			this.advanceSmoothStreaming();
+		}, InteractiveMode.SMOOTH_STREAMING_TICK_MS);
+		// Never keep the process alive just to finish a reveal animation.
+		this.smoothStreamingTimer.unref?.();
+	}
+
+	private advanceSmoothStreaming(): void {
+		const target = this.streamingTargetMessage;
+		if (!this.streamingComponent || !target) {
+			this.stopSmoothStreaming();
+			return;
+		}
+		const total = countMessageGraphemes(target);
+		if (this.streamingDisplayedLength >= total) return;
+		// Catch-up acceleration: the further the display lags behind the model,
+		// the more graphemes each tick reveals.
+		const backlog = total - this.streamingDisplayedLength;
+		this.streamingDisplayedLength += Math.max(
+			InteractiveMode.SMOOTH_STREAMING_BASE_GRAPHEMES_PER_TICK,
+			Math.ceil(backlog / 8),
+		);
+		if (this.streamingDisplayedLength > total) {
+			this.streamingDisplayedLength = total;
+		}
+		this.streamingComponent.updateContent(sliceMessageContent(target, this.streamingDisplayedLength));
+		this.ui.requestRender();
+	}
+
+	private stopSmoothStreaming(): void {
+		if (this.smoothStreamingTimer) {
+			clearInterval(this.smoothStreamingTimer);
+			this.smoothStreamingTimer = undefined;
+		}
+		this.streamingTargetMessage = undefined;
+		this.streamingDisplayedLength = 0;
+	}
+
 	private subscribeToAgent(): void {
 		this.unsubscribe = this.session.subscribe(async (event) => {
 			await this.handleEvent(event);
@@ -2864,6 +2917,7 @@ export class InteractiveMode {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
+					this.stopSmoothStreaming();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
@@ -2876,6 +2930,8 @@ export class InteractiveMode {
 						this.outputPad,
 					);
 					this.streamingMessage = event.message;
+					this.streamingTargetMessage = event.message;
+					this.streamingDisplayedLength = 0;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage);
 					this.ui.requestRender();
@@ -2885,7 +2941,14 @@ export class InteractiveMode {
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingTargetMessage = event.message;
+					if (this.settingsManager.getSmoothStreaming()) {
+						// Smooth streaming: only track the target here; the timer
+						// reveals it grapheme by grapheme.
+						this.startSmoothStreaming();
+					} else {
+						this.streamingComponent.updateContent(this.streamingMessage);
+					}
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -2920,6 +2983,8 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
+					// Stop the reveal timer and render the full message immediately.
+					this.stopSmoothStreaming();
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
@@ -3005,6 +3070,7 @@ export class InteractiveMode {
 					this.ui.terminal.setProgress(false);
 				}
 				this.clearStatusIndicator("working");
+				this.stopSmoothStreaming();
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
@@ -3477,6 +3543,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.stopSmoothStreaming();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -4120,6 +4187,7 @@ export class InteractiveMode {
 					outputPad: this.settingsManager.getOutputPad(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					smoothStreaming: this.settingsManager.getSmoothStreaming(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
@@ -4203,6 +4271,9 @@ export class InteractiveMode {
 					},
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
+					},
+					onSmoothStreamingChange: (enabled) => {
+						this.settingsManager.setSmoothStreaming(enabled);
 					},
 					onDefaultProjectTrustChange: (defaultProjectTrust) => {
 						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
