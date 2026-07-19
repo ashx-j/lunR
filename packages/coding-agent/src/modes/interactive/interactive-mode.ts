@@ -207,6 +207,20 @@ function isDeadTerminalError(error: unknown): boolean {
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
 	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
 
+const INIT_PROMPT = `Analyze this codebase and write a starter AGENTS.md in the project root.
+Scan: package manifests, directory layout, build/test/lint scripts, CI config,
+existing README/docs. Include only: project purpose (one paragraph), build &
+test commands, code style/conventions found, directory map, and agent rules
+(safety: no secrets in commits, no destructive commands without confirmation).
+Keep it under 150 lines. Facts only — if something is unknown, omit it. After
+writing the file, reply with a 5-line summary of what you detected.`;
+
+const INIT_EXISTING_FILE_INSTRUCTIONS = {
+	overwrite: "An AGENTS.md already exists — replace it entirely with the new content.",
+	append:
+		"An AGENTS.md already exists — keep the existing content and only add missing sections; do not rewrite what is already there.",
+} as const;
+
 function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
 }
@@ -2701,6 +2715,11 @@ export class InteractiveMode {
 			if (text === "/reload") {
 				this.editor.setText("");
 				await this.handleReloadCommand();
+				return;
+			}
+			if (text === "/init") {
+				this.editor.setText("");
+				await this.handleInitCommand();
 				return;
 			}
 			if (text === "/debug") {
@@ -5232,6 +5251,34 @@ export class InteractiveMode {
 	// =========================================================================
 	// Command handlers
 	// =========================================================================
+
+	private async handleInitCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /init.");
+			return;
+		}
+
+		let prompt = INIT_PROMPT;
+		const agentsMdPath = path.join(this.sessionManager.getCwd(), "AGENTS.md");
+		if (fs.existsSync(agentsMdPath)) {
+			const choice = await this.showExtensionSelector("AGENTS.md already exists in this project.", [
+				"Cancel",
+				"Overwrite",
+				"Append",
+			]);
+			if (choice === "Overwrite") {
+				prompt = `${INIT_PROMPT}\n${INIT_EXISTING_FILE_INSTRUCTIONS.overwrite}`;
+			} else if (choice === "Append") {
+				prompt = `${INIT_PROMPT}\n${INIT_EXISTING_FILE_INSTRUCTIONS.append}`;
+			} else {
+				this.showStatus("Init cancelled");
+				return;
+			}
+		}
+
+		await this.session.sendUserMessage(prompt);
+		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
+	}
 
 	private async handleReloadCommand(): Promise<void> {
 		if (this.session.isStreaming) {
