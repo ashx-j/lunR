@@ -4191,6 +4191,7 @@ export class InteractiveMode {
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
+					modelTiers: this.settingsManager.getModelTiers(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4332,6 +4333,32 @@ export class InteractiveMode {
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
 					},
+					onModelTiersEnabledChange: (enabled) => {
+						this.settingsManager.setModelTiersEnabled(enabled);
+					},
+					onModelTierModelChange: (tier, model) => {
+						this.settingsManager.setTierModel(tier, model);
+					},
+					createModelTierPicker: (_tier, currentModelRef, done) => {
+						const selector = new ModelSelectorComponent(
+							this.ui,
+							this.resolveModelReference(currentModelRef),
+							this.settingsManager,
+							this.session.modelRuntime,
+							this.session.scopedModels,
+							(model) => {
+								done(`${model.provider}/${model.id}`);
+								this.ui.requestRender();
+							},
+							() => {
+								done();
+								this.ui.requestRender();
+							},
+							undefined,
+							{ persistDefault: false },
+						);
+						return selector;
+					},
 					onCancel: () => {
 						done();
 						this.ui.requestRender();
@@ -4369,6 +4396,14 @@ export class InteractiveMode {
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
 		const models = await this.getModelCandidates();
 		return findExactModelReferenceMatch(searchTerm, models);
+	}
+
+	/** Resolve a "provider/model" settings string to a runtime model, if it still exists. */
+	private resolveModelReference(reference: string | undefined): Model<any> | undefined {
+		if (!reference) return undefined;
+		const slashIndex = reference.indexOf("/");
+		if (slashIndex <= 0 || slashIndex === reference.length - 1) return undefined;
+		return this.session.modelRuntime.getModel(reference.slice(0, slashIndex), reference.slice(slashIndex + 1));
 	}
 
 	private async getModelCandidates(): Promise<Model<any>[]> {

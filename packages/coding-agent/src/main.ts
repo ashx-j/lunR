@@ -29,6 +29,7 @@ import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
+import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -557,6 +558,11 @@ export async function main(args: string[], options?: MainOptions) {
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
+	// Register the model-tier bridge before extensions load so pi-subagents can read
+	// tier settings when building its tool description. Re-pointed to the runtime
+	// settings manager below once services exist.
+	registerModelTierBridge(startupSettingsManager);
+
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
@@ -747,6 +753,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+
+	// Point the model-tier bridge at the live runtime settings manager so /settings
+	// changes take effect without a restart.
+	registerModelTierBridge(settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

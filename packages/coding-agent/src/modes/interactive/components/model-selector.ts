@@ -29,6 +29,11 @@ interface ScopedModelItem {
 
 type ModelScope = "all" | "scoped";
 
+export interface ModelSelectorOptions {
+	/** Save the selection as the default model in settings (default: true). */
+	persistDefault?: boolean;
+}
+
 /**
  * Component that renders a model selector with search
  */
@@ -66,6 +71,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private readonly refreshAbortController = new AbortController();
 	private refreshTimeout?: ReturnType<typeof setTimeout>;
 	private closed = false;
+	private readonly persistDefault: boolean;
 
 	constructor(
 		tui: TUI,
@@ -76,8 +82,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		onSelect: (model: Model<any>) => void,
 		onCancel: () => void,
 		initialSearchInput?: string,
+		options?: ModelSelectorOptions,
 	) {
 		super();
+
+		this.persistDefault = options?.persistDefault ?? true;
 
 		this.tui = tui;
 		this.currentModel = currentModel;
@@ -351,7 +360,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private handleSelect(model: Model<any>): void {
 		this.close();
 		// Save as new default
-		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		if (this.persistDefault) {
+			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		}
 		this.onSelectCallback(model);
 	}
 

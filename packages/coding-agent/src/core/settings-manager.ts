@@ -44,6 +44,15 @@ export interface ImageSettings {
 	blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
+export type ModelTierName = "light" | "standard" | "heavy";
+
+export interface ModelTiersSettings {
+	enabled?: boolean; // default: false - route subagents to per-tier models
+	light?: string; // provider/model string (same format as /model)
+	standard?: string;
+	heavy?: string;
+}
+
 export interface ThinkingBudgetsSettings {
 	minimal?: number;
 	low?: number;
@@ -123,6 +132,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
+	modelTiers?: ModelTiersSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -1240,6 +1250,36 @@ export class SettingsManager {
 	setWarnings(warnings: WarningSettings): void {
 		this.globalSettings.warnings = { ...warnings };
 		this.markModified("warnings");
+		this.save();
+	}
+
+	getModelTiers(): ModelTiersSettings {
+		return { ...(this.settings.modelTiers ?? {}) };
+	}
+
+	getModelTiersEnabled(): boolean {
+		return this.settings.modelTiers?.enabled ?? false;
+	}
+
+	setModelTiersEnabled(enabled: boolean): void {
+		if (!this.globalSettings.modelTiers) {
+			this.globalSettings.modelTiers = {};
+		}
+		this.globalSettings.modelTiers.enabled = enabled;
+		this.markModified("modelTiers", "enabled");
+		this.save();
+	}
+
+	getTierModel(tier: ModelTierName): string | undefined {
+		return this.settings.modelTiers?.[tier];
+	}
+
+	setTierModel(tier: ModelTierName, model: string): void {
+		if (!this.globalSettings.modelTiers) {
+			this.globalSettings.modelTiers = {};
+		}
+		this.globalSettings.modelTiers[tier] = model;
+		this.markModified("modelTiers", tier);
 		this.save();
 	}
 }

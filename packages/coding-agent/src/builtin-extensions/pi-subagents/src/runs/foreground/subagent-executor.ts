@@ -16,7 +16,7 @@ import { clearPendingForegroundControlNotices } from "../../extension/control-no
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate } from "../shared/model-fallback.ts";
+import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveTierModelOverride } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
 import { recordRun } from "../shared/run-history.ts";
@@ -2063,7 +2063,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
-		const modelOverride = resolveEffectiveSubagentModel(params.model as string | undefined, a.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
+		// lunr: model tiers — explicit model wins; otherwise resolve params.tier via the tier bridge.
+		const modelOverride = resolveEffectiveSubagentModel((params.model as string | undefined) ?? resolveTierModelOverride(params.tier), a.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
@@ -2606,8 +2607,9 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		...(skillOverrides[index] !== undefined ? { skills: skillOverrides[index] } : {}),
 		...(task.model !== undefined ? { model: task.model } : {}),
 	}));
-	const modelOverrides: (string | undefined)[] = tasks.map((_, i) =>
-		resolveEffectiveSubagentModel(behaviorOverrides[i]?.model, agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope }),
+	const modelOverrides: (string | undefined)[] = tasks.map((task, i) =>
+		// lunr: model tiers — explicit per-task model wins; otherwise resolve task.tier via the tier bridge.
+		resolveEffectiveSubagentModel(behaviorOverrides[i]?.model ?? resolveTierModelOverride(task.tier), agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope }),
 	);
 
 	if (params.clarify === true && ctx.hasUI) {
@@ -2928,8 +2930,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const currentProvider = ctx.model?.provider;
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let task = params.task ?? "";
+	// lunr: model tiers — explicit model wins; otherwise resolve params.tier via the tier bridge.
 	let modelOverride: string | undefined = resolveEffectiveSubagentModel(
-		params.model as string | undefined,
+		(params.model as string | undefined) ?? resolveTierModelOverride(params.tier),
 		agentConfig.model,
 		ctx.model,
 		availableModels,

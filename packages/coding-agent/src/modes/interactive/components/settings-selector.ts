@@ -13,7 +13,12 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
-import type { DefaultProjectTrust, WarningSettings } from "../../../core/settings-manager.ts";
+import type {
+	DefaultProjectTrust,
+	ModelTierName,
+	ModelTiersSettings,
+	WarningSettings,
+} from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -81,6 +86,7 @@ export interface SettingsConfig {
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
 	warnings: WarningSettings;
+	modelTiers: ModelTiersSettings;
 }
 
 export interface SettingsCallbacks {
@@ -113,6 +119,14 @@ export interface SettingsCallbacks {
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
+	onModelTiersEnabledChange: (enabled: boolean) => void;
+	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
+	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
+	createModelTierPicker: (
+		tier: ModelTierName,
+		currentModel: string | undefined,
+		done: (selectedValue?: string) => void,
+	) => Component;
 	onCancel: () => void;
 }
 
@@ -151,6 +165,88 @@ class WarningSettingsSubmenu extends Container {
 				}
 			},
 			onCancel,
+		);
+
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+const MODEL_TIER_ROWS: { tier: ModelTierName; label: string; description: string }[] = [
+	{
+		tier: "light",
+		label: "Light tier model",
+		description: "Cheap/fast model for simple subagent tasks (lookups, formatting)",
+	},
+	{
+		tier: "standard",
+		label: "Standard tier model",
+		description: "Mid-tier model for typical coding subagent tasks",
+	},
+	{
+		tier: "heavy",
+		label: "Heavy tier model",
+		description: "Strongest model for deep reasoning and complex debugging subagents",
+	},
+];
+
+/**
+ * Submenu for the 3-tier subagent model routing (light/standard/heavy).
+ * Row 1 toggles tier mode; rows 2-4 open a model picker per tier.
+ */
+class ModelTiersSubmenu extends Container {
+	private settingsList: SettingsList;
+	private state: { enabled: boolean; light?: string; standard?: string; heavy?: string };
+
+	constructor(modelTiers: ModelTiersSettings, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		this.state = {
+			enabled: modelTiers.enabled ?? false,
+			light: modelTiers.light,
+			standard: modelTiers.standard,
+			heavy: modelTiers.heavy,
+		};
+
+		const items: SettingItem[] = [
+			{
+				id: "enabled",
+				label: "Enable model tiers",
+				description:
+					"Route subagents to per-tier models. An explicit model choice overrides the tier; tiers without a model inherit the parent model.",
+				currentValue: this.state.enabled ? "true" : "false",
+				values: ["true", "false"],
+			},
+			...MODEL_TIER_ROWS.map((row): SettingItem => {
+				const tier = row.tier;
+				return {
+					id: tier,
+					label: row.label,
+					description: row.description,
+					currentValue: this.state[tier] ?? "not set",
+					submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
+				};
+			}),
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				if (id === "enabled") {
+					this.state.enabled = newValue === "true";
+					callbacks.onModelTiersEnabledChange(this.state.enabled);
+					return;
+				}
+				const tier = id as ModelTierName;
+				this.state[tier] = newValue;
+				callbacks.onModelTierModelChange(tier, newValue);
+			},
+			() => done(this.state.enabled ? "on" : "off"),
 		);
 
 		this.addChild(this.settingsList);
@@ -626,6 +722,14 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.currentTheme,
 				submenu: (currentValue, done) =>
 					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
+			},
+			{
+				id: "model-tiers",
+				label: "Model tiers",
+				description:
+					"Route subagents to light/standard/heavy tier models. An explicit model choice overrides the tier.",
+				currentValue: config.modelTiers.enabled ? "on" : "off",
+				submenu: (_currentValue, done) => new ModelTiersSubmenu(config.modelTiers, callbacks, done),
 			},
 		];
 

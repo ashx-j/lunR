@@ -237,6 +237,37 @@ export function resolveEffectiveSubagentModel(
 	);
 }
 
+// lunr: model tier bridge — resolve a subagent `tier` param through lunR core's
+// model-tiers global (Symbol.for("@lunr/model-tiers")). Absent bridge, disabled tier
+// mode, unknown tier, or unconfigured tier all resolve to undefined so callers fall
+// back to normal inherit behavior. Never throws.
+export function resolveTierModelOverride(tier: unknown): string | undefined {
+	if (typeof tier !== "string" || !tier.trim()) return undefined;
+	const tierName = tier.trim();
+	try {
+		const bridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
+			| { getTierModel?: (tier: string) => unknown; isTierModeEnabled?: () => unknown }
+			| undefined;
+		if (typeof bridge?.isTierModeEnabled !== "function" || typeof bridge?.getTierModel !== "function") {
+			return undefined;
+		}
+		if (bridge.isTierModeEnabled() !== true) return undefined;
+		const model = bridge.getTierModel(tierName);
+		if (typeof model === "string" && model.trim()) return model.trim();
+		if (process.env.PI_SUBAGENTS_DEBUG) {
+			console.warn(`[pi-subagents] model tier '${tierName}' has no configured model; inheriting parent model.`);
+		}
+		return undefined;
+	} catch (error) {
+		if (process.env.PI_SUBAGENTS_DEBUG) {
+			console.warn(
+				`[pi-subagents] model tier resolution failed for '${tierName}': ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		return undefined;
+	}
+}
+
 export interface BuildModelCandidatesOptions {
 	/** Fallback models are inherited agent config and warn, rather than error, when out of scope. */
 	scope?: ModelScopeConfig;
