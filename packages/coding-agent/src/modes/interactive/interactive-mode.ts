@@ -435,6 +435,10 @@ export class InteractiveMode {
 	// Track whether a /research deep-research turn is in flight (footer status)
 	private researchMode = false;
 
+	// lunr: in-memory redo stack for /undo and /redo (leaf entry ids; cleared on any
+	// new user message, never persisted — undone turns reappear after restart)
+	private redoStack: string[] = [];
+
 	// lunr: one-shot guard for the session auto-name LLM call (first assistant response)
 	private autoNameTriggered = false;
 
@@ -2725,6 +2729,16 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/undo") {
+				this.editor.setText("");
+				await this.handleUndoCommand();
+				return;
+			}
+			if (text === "/redo") {
+				this.editor.setText("");
+				await this.handleRedoCommand();
+				return;
+			}
 			if (text === "/trust") {
 				this.showTrustSelector();
 				this.editor.setText("");
@@ -2960,6 +2974,8 @@ export class InteractiveMode {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
+					// lunr: a new user message invalidates /redo
+					this.redoStack.length = 0;
 					this.stopSmoothStreaming();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
@@ -5513,6 +5529,98 @@ export class InteractiveMode {
 		this.researchMode = true;
 		this.setExtensionStatus("research", "research ● active");
 		await this.session.sendUserMessage(buildResearchPrompt(question, depth, breadth));
+	}
+
+	// lunr: /undo and /redo move the in-memory leaf via navigateTree (same machinery as
+	// /tree). In-session only — the JSONL file is append-only, so undone turns reappear
+	// after restart. Persistent undo via createBranchedSession is deferred.
+	private async handleUndoCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /undo.");
+			return;
+		}
+
+		// Find the last user message on the current branch (root → leaf order)
+		const branch = this.sessionManager.getBranch();
+		let lastUserIndex = -1;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry.type === "message" && entry.message.role === "user") {
+				lastUserIndex = i;
+				break;
+			}
+		}
+		if (lastUserIndex === -1) {
+			this.showStatus("Nothing to undo");
+			return;
+		}
+
+		const lastUser = branch[lastUserIndex];
+		const leafId = this.sessionManager.getLeafId();
+		let targetId: string;
+		if (lastUser.id === leafId) {
+			// User message with no response yet (e.g. aborted stream) — undo to its parent.
+			if (!lastUser.parentId) {
+				this.showStatus("Nothing to undo");
+				return;
+			}
+			targetId = lastUser.parentId;
+		} else {
+			// Navigating to a user message entry moves the leaf to its parent and
+			// restores the message text into the editor (handles the root case too).
+			targetId = lastUser.id;
+		}
+
+		try {
+			const result = await this.session.navigateTree(targetId, {});
+			if (result.cancelled) {
+				this.showStatus("Navigation cancelled");
+				return;
+			}
+			if (leafId) {
+				this.redoStack.push(leafId);
+			}
+			this.chatContainer.clear();
+			this.renderInitialMessages();
+			if (result.editorText && !this.editor.getText().trim()) {
+				this.editor.setText(result.editorText);
+			}
+			this.showStatus("Undone last turn — /redo to restore");
+			void this.flushCompactionQueue({ willRetry: false });
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async handleRedoCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /redo.");
+			return;
+		}
+
+		const targetId = this.redoStack.pop();
+		if (!targetId) {
+			this.showStatus("Nothing to redo");
+			return;
+		}
+
+		try {
+			const result = await this.session.navigateTree(targetId, {});
+			if (result.cancelled) {
+				this.redoStack.push(targetId);
+				this.showStatus("Navigation cancelled");
+				return;
+			}
+			this.chatContainer.clear();
+			this.renderInitialMessages();
+			if (result.editorText && !this.editor.getText().trim()) {
+				this.editor.setText(result.editorText);
+			}
+			this.showStatus("Redone");
+			void this.flushCompactionQueue({ willRetry: false });
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	private async handleReloadCommand(): Promise<void> {

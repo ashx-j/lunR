@@ -115,3 +115,33 @@ Plain, uncolored `● ` prefix in the markdown source for BOTH components — NO
 - Retention scan covers both the default sessions root AND a custom `sessionDir` (flat layout) — plan only said "sessions root"; custom dirs would otherwise never be pruned.
 - Auto-name additionally skips resumed unnamed sessions that already have >1 user message (plan said "first assistant response in an unnamed session") — avoids surprise renames of old sessions.
 - Live interactive verification (auto-title after turn 1, /sessions picker in a pty) NOT performed — no live model/pty. Static + unit verification only.
+
+## 2026-07-19 — Phase 6: /undo and /redo (in-session v1)
+
+### What changed
+- `packages/coding-agent/src/modes/interactive/interactive-mode.ts`:
+  - New `redoStack: string[]` field (leaf entry ids; in-memory only, never persisted).
+  - Dispatch branches for `/undo` and `/redo` right after `/tree` (same clear-editor-then-handle pattern).
+  - `handleUndoCommand()`: `isStreaming` guard (same pattern as /init); walks `sessionManager.getBranch()` (root→leaf) for the last `type === "message" && role === "user"` entry; navigates via `session.navigateTree(target, {})` — same machinery as /tree, no summarization. Pushes the pre-navigation leaf onto `redoStack` only on success; UI refresh copies /tree exactly (`chatContainer.clear()` + `renderInitialMessages()` + editorText-to-editor-if-empty + `flushCompactionQueue`).
+  - `handleRedoCommand()`: `isStreaming` guard; pops the stack (empty → "Nothing to redo"); navigates back; re-pushes the id if an extension cancels the navigation; same UI refresh.
+  - Redo stack cleared in the `message_start` handler for `role === "user"` — fires for editor submits, queued/steered messages, and command-sent messages (/init, /swarm, /research), so any new user message kills redo.
+- `packages/coding-agent/src/core/slash-commands.ts`: `undo` + `redo` entries in `BUILTIN_SLASH_COMMANDS` after `tree`.
+
+### How /undo finds the target
+Last user message on the current branch. Two cases: (1) normal — target the user message entry itself; `navigateTree` treats user-message targets as "leaf = parentId, text back to editor", which also handles the root case (first turn → `resetLeaf`, leaf null) and restores the undone prompt into the editor for editing/resending. (2) leaf IS the user message (sent but aborted before any response) — targeting it would be a navigateTree no-op, so target its parentId directly; parentId null → "Nothing to undo".
+
+### Edge cases handled
+No user message / empty session → "Nothing to undo". Multiple consecutive undos walk further back each time (each pushes its own redo entry). Redo with empty stack → "Nothing to redo". Both commands blocked while streaming (warning, like /init). Extension-cancelled navigation: undo pushes nothing, redo restores the popped id. New user message clears the redo stack.
+
+### Known limitation (documented)
+Undone turns REAPPEAR after restart — session JSONL is append-only and navigateTree only moves the in-memory leaf. Persistent undo via `createBranchedSession` is deferred.
+
+### Verification
+- Build: agent → coding-agent → orchestrator clean (exit 0). `ai` not rebuilt.
+- `npx biome check packages/` — clean (802 files).
+- Tests: coding-agent vitest — Test Files 88 failed | 86 passed | 2 skipped (176); Tests 56 failed | 988 passed | 21 skipped (1065). Byte-identical to the Phase 5 baseline — no NEW failures.
+- Logic harness (plain node against dist, deleted after use): 6 scenarios all PASS — plan's exact 3-turn undo ×2 / redo ×2 restore, no-user-message, only-turn-to-root + redo, aborted-stream (leaf is user message) undo, editorText restoration, redo-stack-clear. Harness note: a bare `dist/index.js` entry trips the known ashxj-tui circular-import TDZ; importing `dist/main.js` first (like the real cli.js entry) works under plain node. vitest AND tsx both fail here — tsx remaps `@earendil-works/pi-coding-agent` to src via the root tsconfig paths.
+
+### Deviations from plan
+- Plan said "navigate to the entry id before the last user message"; implemented by targeting the user message entry itself, which yields the identical leaf position (parent of the message) and additionally restores the undone text into the editor and handles the root case (`parentId === null` can't be passed as a targetId). Redo pushes/targets the old leaf exactly as planned.
+- No live TUI verification (no pty / live model) — harness + static verification only.
