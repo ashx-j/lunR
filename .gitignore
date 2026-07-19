@@ -1,0 +1,52 @@
+AGENTS.md
+
+# Reference repos — study material only, not part of lunR
+pi/
+hermes-agent/
+kimi-cli/
+extension-repos/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.artifacts/
+*.log
+.DS_Store
+*.tsbuildinfo
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+*.cpuprofile
+
+# Environment / secrets
+.env
+.env.*
+
+# Editor files
+.vscode/
+.zed/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Package specific
+.npm/
+coverage/
+.nyc_output/
+.pi_config/
+tui-debug.log
+compaction-results/
+.opencode/
+syntax.jsonl
+out.jsonl
+pi-*.html
+out.html
+packages/coding-agent/binaries/
+todo.md
+plans/
+.pi/hf-sessions/
+.pi/hf-sessions-backup/
