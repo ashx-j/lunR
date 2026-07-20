@@ -51,6 +51,31 @@ function planWindowLine(window: PlanUsageWindow, labelWidth: number): string {
 }
 
 /**
+ * Shared bordered box chrome (monochrome, moon theme conventions) used by
+ * /usage and /context. `headerText` includes its surrounding spaces (e.g.
+ * " Usage "). `maxWidth` is the available terminal width; content truncates
+ * to fit.
+ */
+export function renderThemedBox(headerText: string, content: string[], maxWidth: number): string[] {
+	// Box width: widest content + `│ ` / ` │` chrome, capped by the terminal.
+	const contentWidth = Math.max(...content.map((line) => visibleWidth(line)));
+	const totalWidth = Math.max(24, Math.min(contentWidth + 4, Math.max(24, maxWidth)));
+	const innerWidth = totalWidth - 4;
+
+	const border = (text: string): string => theme.fg("border", text);
+	const top = border(`╭${headerText}${"─".repeat(Math.max(0, totalWidth - 2 - headerText.length))}╮`);
+	const bottom = border(`╰${"─".repeat(totalWidth - 2)}╯`);
+	const lines = [top];
+	for (const rawLine of content) {
+		const line = rawLine.length > 0 ? truncateToWidth(rawLine, innerWidth, "") : "";
+		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+		lines.push(`${border("│ ")}${line}${padding}${border(" │")}`);
+	}
+	lines.push(bottom);
+	return lines;
+}
+
+/**
  * Render the /usage bordered box (monochrome, moon theme conventions).
  * `maxWidth` is the available terminal width; content truncates to fit.
  */
@@ -89,21 +114,5 @@ export function renderUsageBox(data: UsageViewData, maxWidth: number): string[] 
 
 	if (content.length === 0) content.push("No usage data yet.");
 
-	// Box width: widest content + `│ ` / ` │` chrome, capped by the terminal.
-	const contentWidth = Math.max(...content.map((line) => visibleWidth(line)));
-	const totalWidth = Math.max(24, Math.min(contentWidth + 4, Math.max(24, maxWidth)));
-	const innerWidth = totalWidth - 4;
-
-	const border = (text: string): string => theme.fg("border", text);
-	const headerText = " Usage ";
-	const top = border(`╭${headerText}${"─".repeat(Math.max(0, totalWidth - 2 - headerText.length))}╮`);
-	const bottom = border(`╰${"─".repeat(totalWidth - 2)}╯`);
-	const lines = [top];
-	for (const rawLine of content) {
-		const line = rawLine.length > 0 ? truncateToWidth(rawLine, innerWidth, "") : "";
-		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
-		lines.push(`${border("│ ")}${line}${padding}${border(" │")}`);
-	}
-	lines.push(bottom);
-	return lines;
+	return renderThemedBox(" Usage ", content, maxWidth);
 }

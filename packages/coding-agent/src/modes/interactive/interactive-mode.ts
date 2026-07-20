@@ -61,6 +61,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -104,6 +105,7 @@ import { BootScreenComponent, type BootScreenRow } from "./components/boot-scree
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
+import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
@@ -2709,6 +2711,11 @@ export class InteractiveMode {
 			if (text === "/usage") {
 				this.editor.setText("");
 				await this.handleUsageCommand();
+				return;
+			}
+			if (text === "/context") {
+				this.editor.setText("");
+				this.handleContextCommand();
 				return;
 			}
 			if (text === "/changelog") {
@@ -6115,6 +6122,36 @@ export class InteractiveMode {
 		const plan = provider ? await getPlanUsage(provider, this.session.modelRuntime) : undefined;
 
 		const lines = renderUsageBox({ sessionRows, context, plan }, this.ui.terminal.columns);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.ui.requestRender();
+	}
+
+	// lunr: /context — estimated breakdown of what consumes the context window
+	// (system prompt incl. project context files, tool definitions, and the live
+	// session messages). Uses session.messages, so post-compaction renders match
+	// the context the model actually sees.
+	private handleContextCommand(): void {
+		const model = this.session.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (!model || contextWindow <= 0) {
+			this.showStatus("No model selected or context window unknown.");
+			return;
+		}
+
+		const tools = this.session
+			.getActiveToolNames()
+			.map((name) => this.session.getToolDefinition(name))
+			.filter((definition) => definition !== undefined);
+
+		const breakdown = computeContextBreakdown({
+			systemPrompt: this.session.systemPrompt,
+			tools,
+			messages: this.session.messages,
+			contextWindow,
+		});
+
+		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();

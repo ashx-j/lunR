@@ -207,3 +207,20 @@ Undone turns REAPPEAR after restart — session JSONL is append-only and navigat
 - Plan said save the dummy credential "via `AuthStorage.modify` (or whatever the provider-auth API exposes)" — used the oauth login flow, where `Models.login` performs the store write itself (cleaner; no core imports in the extension).
 - Plan said "auto-select first model (mirror `completeProviderAuthentication`)" — auto-select only fires when no real model is active (the mirror's exact condition), via a short availability poll from the extension rather than inside the core login completion.
 - `maxTokens` 8192 (plan specified only 32k ctx / zero cost / text modalities).
+
+## 2026-07-19 — Phase 9: /context breakdown (salvaged from quota-killed subagent, completed by parent)
+
+### What changed
+- `packages/coding-agent/src/core/context-breakdown.ts` (new): pure `computeContextBreakdown({systemPrompt, tools, messages, contextWindow})` — chars/4 estimates (same heuristic as `estimateTokens` in compaction.ts). Categories: system prompt (project context files baked in), tool definitions (name+description+JSON schema), user/custom messages, assistant text, thinking, tool calls, tool results, summaries (branch+compaction), total, free. Pass `AgentSession.messages` so post-compaction renders match reality.
+- `packages/coding-agent/src/modes/interactive/components/context-view.ts` (new): `renderContextBox` — per-category 20-cell bar rows, estimated-total row with `used / window (pct)`, free row, "Estimated (chars/4)" disclaimer. Shares box chrome with /usage.
+- `usage-view.ts`: box chrome extracted into exported `renderThemedBox(headerText, content, maxWidth)`; `renderUsageBox` now delegates.
+- `interactive-mode.ts`: `/context` dispatch + `handleContextCommand()` (`// lunr:` comment) — guards on missing model/contextWindow, pulls active tool definitions via `getActiveToolNames()`/`getToolDefinition()`, renders into chatContainer.
+- `core/slash-commands.ts`: `context` entry.
+- `test/context-breakdown.test.ts` (new, 9 tests).
+
+### Verification
+- Subagent was killed by provider quota mid-phase; parent verified and landed the work: biome import-sort/format fix in interactive-mode.ts, rebuild clean (exit 0), biome clean (813 files), targeted tests 9/9 pass, full suite no new failures (see commit).
+- The plan's "~10% of getContextUsage()" cross-check not performed (no live session) — estimates use the identical chars/4 heuristic, so drift is structural (tool defs/system prompt included here, excluded from message-only counts), documented in the box disclaimer.
+
+### Deviations
+- None in scope. Live TUI verification pending (no pty).
