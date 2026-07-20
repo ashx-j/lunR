@@ -369,3 +369,70 @@ vs the extension: no tool picker, no completion/question tools, no state persist
   override. Blocklist bash heuristic (not the extension's allowlist) — documented.
 - Plan mode does not survive session replacement (/new, /resume) — cleared on invalidate.
 - Live TUI run pending (static + unit verification only).
+
+## 2026-07-20 — Phase 13: autocomplete [t] fix + Extensions /settings submenu
+
+Final phase. Two parts: drop the `[t]` provenance tag on baked-in extensions, and a
+core-owned "Extensions" submenu in /settings bridging the two remaining settings-like
+extension surfaces (simple-pi-memory, pi-web-access). The codex/langfuse/plan-mode
+settings UIs that might have joined this submenu are gone with Phase 1 — the submenu
+has exactly these two rows.
+
+### Implementation
+- **[t] tag** (`interactive-mode.ts` `getAutocompleteSourceTag()`): `temporary` scope now
+  returns NO tag (early return) — baked-in extensions and ad-hoc cli/local loads are part
+  of the product. `u`/`p` kept for user/project scopes; the only call site is
+  `prefixAutocompleteDescription()` (autocomplete entries for commands + skills).
+- **Memory character cap** (core-owned state, extension reads via bridge):
+  - settings-manager: new `memoryCharCap` key (default 5000, clamped 1..30000),
+    `getMemoryCharCap()`/`setMemoryCharCap()`; constants `MEMORY_CHAR_CAP_*` live in
+    `core/memory-cap.ts` (settings-manager imports them — no runtime cycle: memory-cap
+    only type-imports SettingsManager).
+  - `core/memory-cap.ts` (new): bridge on `globalThis[Symbol.for("@lunr/memory-cap")]`
+    (`getCharCap`/`setCharCap`), `registerMemoryCapBridge(settingsManager)` — same pattern
+    as model-tiers; registered TWICE from main.ts (startup + runtime re-point).
+  - `builtin-extensions/simple-pi-memory.ts` (`// lunr:`): `readCap()`/`writeCap()` prefer
+    the bridge; legacy `~/.pi/simple-memory/config.json` is only a fallback when the bridge
+    is absent (upstream pi). Fixes the hardcoded ~/.pi config path. `/memory-char-cap`
+    stays as a working alias — it writes through the same bridge into lunR settings.
+- **Search curator** (extension-owned state, core writes through extension's path):
+  pi-web-access already persists workflow in its own web-search.json via `saveConfig()`
+  (the `/curator` command path), so per the plan there is NO forked lunR setting —
+  - `builtin-extensions/pi-web-access/index.ts` (`// lunr:`): registers
+    `Symbol.for("@lunr/search-curator")` at load with `getWorkflow()` (resolved via the
+    same `resolveWorkflow(config.workflow, true)` the /curator toggle uses) and
+    `setWorkflow()` (writes via `saveConfig` — the exact command path).
+  - `core/search-curator.ts` (new): consumer side — `SearchCuratorSetting`
+    ("off"|"on"|"auto-summary"), `getSearchCuratorSetting()` (undefined when the
+    extension isn't loaded), `setSearchCuratorSetting()` (maps to none/summary-review/
+    auto-summary; false when bridge absent).
+- **Extensions submenu** (`components/settings-selector.ts`): new row after "Model tiers"
+  (`currentValue: "configure"`, Warnings-row pattern) → `ExtensionsSubmenu` with
+  "Memory character cap" (submenu = new `MemoryCharCapSubmenu`: `Input`-based numeric
+  entry, validated 1..30000, applies via SettingsList done→onChange) and "Search curator"
+  (cycle off/on/auto-summary; "unavailable" with no values when the bridge is absent).
+  New config fields `memoryCharCap`/`searchCurator` + callbacks `onMemoryCharCapChange`
+  (→ settingsManager) / `onSearchCuratorChange` (→ bridge; showError when absent), wired
+  in interactive-mode `showSettingsSelector()`.
+
+### Tests
+- `test/memory-cap.test.ts` (new): 8 tests — setting default/clamp/persist round-trip,
+  bridge get/set + re-point, curator consumer mapping incl. bridge-absent cases.
+
+### Verification
+- Build: agent → coding-agent → orchestrator clean (exit 0). `ai` not rebuilt.
+- `npx biome check packages/` — clean (818 files; biome organize-imports applied to
+  main.ts + interactive-mode.ts).
+- Suite: Test Files 88 failed | 90 passed | 2 skipped (180); Tests 56 failed | 1036 passed |
+  21 skipped (1113) — baseline 88/56/1028/21 (1105) + my 8 new tests all passing. No NEW failures.
+- Static: no `[t]` path remains (temporary → undefined before prefix computation);
+  dist/core/memory-cap.js + dist/core/search-curator.js emitted; memory cap round-trips
+  through settings.json (unit-tested: set → flush → fresh SettingsManager reads it back;
+  extension reads the same settingsManager live via the bridge, never ~/.pi).
+
+### Deviations / limitations
+- Search curator has three states (off/on/auto-summary) rather than a bare on/off toggle —
+  preserves an auto-summary workflow set via `/curator` instead of clobbering it.
+- simple-pi-memory's memory.md itself still lives at ~/.pi/simple-memory/ — only the cap
+  config migrated (as scoped by the plan).
+- Live TUI run pending (static + unit verification only).

@@ -31,6 +31,19 @@ const DEFAULT_CHAR_CAP = 5000;
 const MIN_CHAR_CAP = 1;
 const MAX_CHAR_CAP = 30000;
 
+// lunr: inside lunR the cap lives in lunR settings, exposed by core on
+// globalThis under Symbol.for("@lunr/memory-cap") (registered from main.ts).
+// The legacy ~/.pi/simple-memory/config.json below is only a fallback for
+// running under upstream pi, where no bridge exists.
+interface MemoryCapBridge {
+	getCharCap(): number;
+	setCharCap(cap: number): void;
+}
+
+function getCapBridge(): MemoryCapBridge | undefined {
+	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/memory-cap")] as MemoryCapBridge | undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Inline structural types (self-contained for `tsc --noEmit index.ts`)
 // ---------------------------------------------------------------------------
@@ -118,6 +131,8 @@ function clampCap(n: number): number {
 }
 
 function readCap(): number {
+	const bridge = getCapBridge();
+	if (bridge) return clampCap(bridge.getCharCap());
 	if (!existsSync(CONFIG_FILE)) return DEFAULT_CHAR_CAP;
 	try {
 		const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
@@ -131,6 +146,11 @@ function readCap(): number {
 }
 
 function writeCap(cap: number): void {
+	const bridge = getCapBridge();
+	if (bridge) {
+		bridge.setCharCap(clampCap(cap));
+		return;
+	}
 	ensureDir();
 	writeFileSync(CONFIG_FILE, JSON.stringify({ charCap: cap }, null, 2), "utf-8");
 }

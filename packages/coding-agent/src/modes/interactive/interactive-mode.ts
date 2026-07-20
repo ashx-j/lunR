@@ -82,6 +82,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { PLAN_MODE_ADDENDUM, planModeBlockReason } from "../../core/plan-mode.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
@@ -574,7 +575,13 @@ export class InteractiveMode {
 			return undefined;
 		}
 
-		const scopePrefix = sourceInfo.scope === "user" ? "u" : sourceInfo.scope === "project" ? "p" : "t";
+		// lunr: temporary scope covers baked-in extensions and ad-hoc (cli/local)
+		// loads — these are part of the product, so show no provenance tag.
+		if (sourceInfo.scope === "temporary") {
+			return undefined;
+		}
+
+		const scopePrefix = sourceInfo.scope === "user" ? "u" : "p";
 		const source = sourceInfo.source.trim();
 
 		if (source === "auto" || source === "local" || source === "cli") {
@@ -4297,6 +4304,8 @@ export class InteractiveMode {
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
 					modelTiers: this.settingsManager.getModelTiers(),
+					memoryCharCap: this.settingsManager.getMemoryCharCap(),
+					searchCurator: getSearchCuratorSetting(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4446,6 +4455,14 @@ export class InteractiveMode {
 					},
 					onModelTierModelChange: (tier, model) => {
 						this.settingsManager.setTierModel(tier, model);
+					},
+					onMemoryCharCapChange: (cap) => {
+						this.settingsManager.setMemoryCharCap(cap);
+					},
+					onSearchCuratorChange: (setting) => {
+						if (!setSearchCuratorSetting(setting)) {
+							this.showError("pi-web-access is not loaded; curator setting unavailable.");
+						}
 					},
 					createModelTierPicker: (_tier, currentModelRef, done) => {
 						const selector = new ModelSelectorComponent(

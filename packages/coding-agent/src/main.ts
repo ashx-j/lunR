@@ -36,6 +36,7 @@ import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
+import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
 import { registerModelTierBridge } from "./core/model-tiers.ts";
@@ -573,6 +574,9 @@ export async function main(args: string[], options?: MainOptions) {
 	// tier settings when building its tool description. Re-pointed to the runtime
 	// settings manager below once services exist.
 	registerModelTierBridge(startupSettingsManager);
+	// lunr: same for the simple-pi-memory character cap — extensions read it via the
+	// bridge at load/runtime; re-pointed to the runtime settings manager below.
+	registerMemoryCapBridge(startupSettingsManager);
 
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
@@ -795,6 +799,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// Point the model-tier bridge at the live runtime settings manager so /settings
 	// changes take effect without a restart.
 	registerModelTierBridge(settingsManager);
+	registerMemoryCapBridge(settingsManager);
 
 	// lunr: expose the plan-usage service to builtin extensions (ashxj-tui footer
 	// limit bar) via the global bridge — read live at render/event time.

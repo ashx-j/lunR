@@ -558,6 +558,18 @@ export default function (pi: ExtensionAPI) {
 	const curateKey = initConfig.shortcuts?.curate || DEFAULT_SHORTCUTS.curate;
 	const activityKey = initConfig.shortcuts?.activity || DEFAULT_SHORTCUTS.activity;
 
+	// lunr: expose curator workflow state to core (/settings "Extensions" submenu)
+	// so the /settings toggle writes through the same web-search.json saveConfig
+	// path as /curator — single source of truth, no forked state.
+	(globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/search-curator")] = {
+		getWorkflow(): WebSearchWorkflow {
+			return resolveWorkflow(loadConfigForExtensionInit().workflow, true);
+		},
+		setWorkflow(workflow: WebSearchWorkflow): void {
+			saveConfig({ workflow });
+		},
+	};
+
 	function startBackgroundFetch(urls: string[]): string | null {
 		if (urls.length === 0) return null;
 		const fetchId = generateId();

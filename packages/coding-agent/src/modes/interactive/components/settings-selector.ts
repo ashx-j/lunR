@@ -4,6 +4,7 @@ import {
 	type Component,
 	Container,
 	getCapabilities,
+	Input,
 	type SelectItem,
 	SelectList,
 	type SelectListLayoutOptions,
@@ -13,6 +14,8 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
+import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
+import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import type {
 	DefaultProjectTrust,
 	ModelTierName,
@@ -88,6 +91,9 @@ export interface SettingsConfig {
 	showTerminalProgress: boolean;
 	warnings: WarningSettings;
 	modelTiers: ModelTiersSettings;
+	memoryCharCap: number;
+	/** undefined when pi-web-access is not loaded (curator bridge absent). */
+	searchCurator: SearchCuratorSetting | undefined;
 }
 
 export interface SettingsCallbacks {
@@ -123,6 +129,8 @@ export interface SettingsCallbacks {
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
+	onMemoryCharCapChange: (cap: number) => void;
+	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
 	createModelTierPicker: (
 		tier: ModelTierName,
@@ -259,6 +267,115 @@ class ModelTiersSubmenu extends Container {
 	}
 }
 
+/**
+ * Numeric input submenu for the simple-pi-memory character cap.
+ * Enter validates and applies via done(newValue); Esc cancels.
+ */
+class MemoryCharCapSubmenu extends Container {
+	private input: Input;
+	private errorText: Text;
+
+	constructor(currentValue: string, done: (selectedValue?: string) => void) {
+		super();
+
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Memory Character Cap")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(
+			new Text(
+				theme.fg(
+					"muted",
+					`Max characters in the memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}).`,
+				),
+				0,
+				0,
+			),
+		);
+		this.addChild(new Spacer(1));
+
+		this.input = new Input();
+		this.input.setValue(currentValue);
+		this.input.onSubmit = (value) => {
+			const n = Number(value.trim());
+			if (!Number.isInteger(n) || n < MEMORY_CHAR_CAP_MIN || n > MEMORY_CHAR_CAP_MAX) {
+				this.errorText.setText(
+					theme.fg("error", `  Enter an integer between ${MEMORY_CHAR_CAP_MIN} and ${MEMORY_CHAR_CAP_MAX}.`),
+				);
+				return;
+			}
+			done(String(n));
+		};
+		this.input.onEscape = () => done();
+		this.addChild(this.input);
+
+		this.errorText = new Text("", 0, 0);
+		this.addChild(this.errorText);
+		this.addChild(new Text(theme.fg("dim", "  Enter to save · Esc to cancel"), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		this.input.handleInput(data);
+	}
+}
+
+const SEARCH_CURATOR_VALUES: SearchCuratorSetting[] = ["off", "on", "auto-summary"];
+
+/**
+ * Submenu for built-in extension settings (core-owned — extensions can't
+ * self-register /settings rows). Memory cap writes to lunR settings (the
+ * extension reads it via the @lunr/memory-cap bridge); search curator writes
+ * through pi-web-access's own config via the @lunr/search-curator bridge.
+ */
+class ExtensionsSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		const curatorAvailable = config.searchCurator !== undefined;
+
+		const items: SettingItem[] = [
+			{
+				id: "memory-char-cap",
+				label: "Memory character cap",
+				description: `Max characters in the simple-pi-memory memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				currentValue: String(config.memoryCharCap),
+				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
+			},
+			{
+				id: "search-curator",
+				label: "Search curator",
+				description: curatorAvailable
+					? "pi-web-access search curator: off = raw results, on = browser curator with summary draft, auto-summary = summary without the curator. Also settable via /curator."
+					: "pi-web-access is not loaded; the search curator is unavailable.",
+				currentValue: config.searchCurator ?? "unavailable",
+				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				switch (id) {
+					case "memory-char-cap":
+						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "search-curator":
+						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
+						break;
+				}
+			},
+			() => done(),
+		);
+
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
 class SelectSubmenu extends Container {
 	private selectList: SelectList;
 
@@ -739,6 +856,13 @@ export class SettingsSelectorComponent extends Container {
 					"Route subagents to light/standard/heavy tier models. An explicit model choice overrides the tier.",
 				currentValue: config.modelTiers.enabled ? "on" : "off",
 				submenu: (_currentValue, done) => new ModelTiersSubmenu(config.modelTiers, callbacks, done),
+			},
+			{
+				id: "extensions",
+				label: "Extensions",
+				description: "Settings for built-in extensions (simple-pi-memory, pi-web-access)",
+				currentValue: "configure",
+				submenu: (_currentValue, done) => new ExtensionsSubmenu(config, callbacks, done),
 			},
 		];
 

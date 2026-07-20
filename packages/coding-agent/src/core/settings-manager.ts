@@ -7,6 +7,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -134,6 +135,7 @@ export interface Settings {
 	warnings?: WarningSettings;
 	modelTiers?: ModelTiersSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
+	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -929,6 +931,20 @@ export class SettingsManager {
 	setSessionRetentionDays(days: number): void {
 		this.globalSettings.sessionRetentionDays = Math.max(0, Math.floor(days));
 		this.markModified("sessionRetentionDays");
+		this.save();
+	}
+
+	getMemoryCharCap(): number {
+		const value = this.settings.memoryCharCap;
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(value)));
+		}
+		return MEMORY_CHAR_CAP_DEFAULT;
+	}
+
+	setMemoryCharCap(cap: number): void {
+		this.globalSettings.memoryCharCap = Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(cap)));
+		this.markModified("memoryCharCap");
 		this.save();
 	}
 
