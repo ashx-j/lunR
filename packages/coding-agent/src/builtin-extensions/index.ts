@@ -14,6 +14,7 @@ import piTps from "./pi-tps.ts";
 import ashxjTui from "./ashxj-tui.ts";
 import piOllamaCloud from "./pi-ollama-cloud/index.ts";
 import ashxjSpinners from "./ashxj-spinners.ts";
+import ashxjThinking from "./ashxj-thinking.ts";
 import piIntercom from "./pi-intercom/index.ts";
 import piPromptTemplateModel from "./pi-prompt-template-model/index.ts";
 import piSubagents from "./pi-subagents/index.ts";
@@ -46,6 +47,7 @@ export const builtinExtensions: InlineExtension[] = [
 	ext("ashxj-tui", ashxjTui),
 	ext("pi-ollama-cloud", piOllamaCloud),
 	ext("ashxj-spinners", ashxjSpinners),
+	ext("ashxj-thinking", ashxjThinking),
 	ext("pi-intercom", piIntercom),
 	ext("pi-prompt-template-model", piPromptTemplateModel),
 	ext("pi-subagents", piSubagents),

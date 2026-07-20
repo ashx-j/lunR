@@ -253,3 +253,60 @@ commit was made; this progress entry is the only artifact (left uncommitted for 
 Options if this phase is to proceed later: (a) bake the `examples/extensions/todo.ts` example in as a
 built-in extension and add the compact mode to its `renderResult`/`TodoListComponent`, or (b) drop
 Phase 10 entirely.
+
+## 2026-07-20 — Phase 11: ashxj-thinking bake-in
+
+### What changed
+- Cloned `https://github.com/ashx-j/ashxj-thinking` @ `0330a34` ("Remove custom footer — keep only
+  /thinking command") into `extension-repos/` (gitignored, not committed). Upstream is a single-file
+  extension (`index.ts`, ~340 lines, structural types, no runtime deps — only node builtins; peer dep
+  on pi-coding-agent only). It registers `/thinking [level]` (picker via `ctx.ui.select` + direct set
+  via `pi.setThinkingLevel`) and `/thinking show|hide|toggle` (persists `hideThinkingBlock` to the
+  global settings.json, then `await ctx.reload()` live-applies it).
+- `packages/coding-agent/src/builtin-extensions/ashxj-thinking.ts` (new): verbatim vendored copy with
+  `// @ts-nocheck` + vendored-from header (house convention). Three `// lunr:` patches:
+  1. `agentSettingsPath()`: upstream hardcoded `~/.pi/agent/settings.json` → now honors
+     `PI_CODING_AGENT_DIR` (with the same leading-`~` expansion as core `normalizePath()`) and falls
+     back to `~/.lunr/agent/settings.json`. Without this, `/thinking hide` would have written into
+     pi's config dir where lunR's SettingsManager never reads (verified core path:
+     `SettingsManager.create` → `FileSettingsStorage(cwd, getAgentDir())` → global scope =
+     `$PI_CODING_AGENT_DIR/settings.json` or `~/.lunr/agent/settings.json`).
+  2. Added `"max"` to the `ThinkingLevel` union + level list + descriptions (mirrors
+     settings-selector.ts) — lunR's ThinkingLevel includes `max`, upstream (written for pi 0.80.3)
+     didn't. Per-model filtering via `thinkingLevelMap` null entries still applies.
+  3. Notify messages now reference the resolved path instead of the hardcoded `~/.pi/...` string.
+- `builtin-extensions/index.ts`: `import ashxjThinking` + `ext("ashxj-thinking", ashxjThinking)`.
+- NO deps added: upstream imports only `node:fs`/`node:path`/`node:os` (`unicode-animations` not used).
+- NO color patches needed: the extension renders no colors (plain `● ` current-marker in the picker,
+  text-only notifies). moon.json `thinkingText: "gray"` already covers thinking-block rendering.
+
+### Coexistence findings (plan step 5)
+- `hideThinkingBlock`: `/thinking show|hide|toggle` writes the same setting key core uses
+  (`settings-manager.ts` `getHideThinkingBlock`/`setHideThinkingBlock`). In TUI mode `ctx.reload()`
+  → `handleReloadCommand()` → `restoreChatBeforeSessionStart()` re-reads the setting and rebuilds
+  every AssistantMessageComponent (interactive-mode.ts ~5686) — the upstream live-apply mechanism
+  works unmodified in lunR. Ctrl+T keybinding (`toggleThinkingBlockVisibility`) untouched; both paths
+  write the same key so they stay in sync after any reload. Caveat (pre-existing upstream design):
+  the in-memory Ctrl+T toggle is not re-read until a reload, so Ctrl+T after `/thinking hide` in the
+  same session flips from the in-memory value — same behavior as upstream pi.
+- smoothStreaming: `smooth-streaming.ts` reveals text+thinking grapheme-by-grapheme; `/thinking`
+  never touches streaming state, only the persisted visibility flag + reasoning level. No conflict.
+- Phase 4 `● ` first-text-block prefix: applies to text blocks only, never thinking blocks
+  (assistant-message.ts:104-107); thinking blocks render via `theme.fg("thinkingText", ...)`.
+  Unaffected.
+
+### Verification
+- Build: agent → coding-agent → orchestrator clean (exit 0). `ai` not rebuilt.
+- `npx biome check packages/` — clean (813 files; builtin-extensions is biome-excluded).
+- `/thinking` in dist: `dist/builtin-extensions/ashxj-thinking.js` contains
+  `registerCommand("thinking", ...)`; `dist/builtin-extensions/index.js` imports + registers
+  `ext("ashxj-thinking", ...)`; dist file carries the `PI_CODING_AGENT_DIR`/`.lunr` patch.
+- Full coding-agent suite: Test Files 88 failed | 88 passed | 2 skipped (178); Tests
+  56 failed | 1017 passed | 21 skipped (1094) — byte-identical to the post-Phase-9 baseline.
+  No NEW failures.
+- Live TUI verification pending (no pty): picker, select, and reload round-trip untested live.
+
+### Deviations
+- Plan said patch colors "if it hardcodes any" — it hardcodes none; nothing patched.
+- The `max`-level addition goes beyond the plan text but is required for correctness against lunR's
+  ThinkingLevel union (otherwise `/thinking` could never show/set `max`).
