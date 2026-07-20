@@ -609,8 +609,8 @@ function renderStatsLine(
 	//    throughput/tokens (`pi-tps-was-taken`). These are NOT on `ctx` directly.
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
-		// lunr: also render the pi-goal, /swarm, and /research footer statuses, leading the line
-		for (const key of ["goal", "swarm", "research", "lsp", "mcp", "tps"] as const) {
+		// lunr: also render the plan-mode, pi-goal, /swarm, and /research footer statuses, leading the line
+		for (const key of ["plan", "goal", "swarm", "research", "lsp", "mcp", "tps"] as const) {
 			const v = statuses.get(key);
 			if (v) parts.push(v);
 		}

@@ -128,6 +128,8 @@ In addition to the tools above, you may have access to other custom tools depend
 Guidelines:
 ${guidelines}
 
+Planning: for complex, multi-file, or architecturally significant tasks, propose entering plan mode first (the user toggles it with /plan) — investigate read-only and present a concrete plan before making any file changes.
+
 Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${readmePath}
 - Additional docs: ${docsPath}

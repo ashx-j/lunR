@@ -80,6 +80,7 @@ import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.t
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import { PLAN_MODE_ADDENDUM, planModeBlockReason } from "../../core/plan-mode.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -439,6 +440,12 @@ export class InteractiveMode {
 	// Track whether a /research deep-research turn is in flight (footer status)
 	private researchMode = false;
 
+	// lunr: native plan mode (in-memory v1 — not persisted across restarts; cleared when
+	// the session is replaced). While active, edit/write and mutating bash are gated on
+	// the AgentSession and the footer shows a "plan" status.
+	private planModeActive = false;
+	private planModeCleanup: (() => void) | undefined = undefined;
+
 	// lunr: in-memory redo stack for /undo and /redo (leaf entry ids; cleared on any
 	// new user message, never persisted — undone turns reappear after restart)
 	private redoStack: string[] = [];
@@ -512,6 +519,13 @@ export class InteractiveMode {
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
+			// lunr: plan-mode gate/addendum live on the AgentSession being replaced — drop state
+			if (this.planModeActive) {
+				this.planModeActive = false;
+				this.planModeCleanup?.();
+				this.planModeCleanup = undefined;
+				this.setExtensionStatus("plan", undefined);
+			}
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
@@ -2716,6 +2730,11 @@ export class InteractiveMode {
 			if (text === "/context") {
 				this.editor.setText("");
 				this.handleContextCommand();
+				return;
+			}
+			if (text === "/plan" || text.startsWith("/plan ")) {
+				this.editor.setText("");
+				this.handlePlanCommand(text === "/plan" ? "" : text.slice(6).trim());
 				return;
 			}
 			if (text === "/changelog") {
@@ -6155,6 +6174,54 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
+	}
+
+	// lunr: /plan — native read-only plan mode. While active, a core tool-call gate on the
+	// AgentSession blocks edit/write and mutating bash (see core/plan-mode.ts), and a
+	// plan-mode addendum is appended to the system prompt. State is in-memory only.
+	private handlePlanCommand(args: string): void {
+		const sub = args.toLowerCase();
+
+		if (sub === "status") {
+			this.showStatus(
+				this.planModeActive
+					? "Plan mode is active — edit/write and mutating bash are blocked. /plan off to implement."
+					: "Plan mode is off.",
+			);
+			return;
+		}
+		if (sub !== "" && sub !== "on" && sub !== "off") {
+			this.showStatus("Usage: /plan [on|off|status] — bare /plan toggles read-only plan mode.");
+			return;
+		}
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /plan.");
+			return;
+		}
+
+		const next = sub === "" ? !this.planModeActive : sub === "on";
+		if (next === this.planModeActive) {
+			this.showStatus(next ? "Plan mode is already active." : "Plan mode is already off.");
+			return;
+		}
+
+		if (next) {
+			this.planModeActive = true;
+			this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
+				const reason = planModeBlockReason(toolName, input);
+				return reason ? { block: true, reason } : undefined;
+			});
+			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+			this.setExtensionStatus("plan", "plan ● read-only");
+			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
+		} else {
+			this.planModeActive = false;
+			this.planModeCleanup?.();
+			this.planModeCleanup = undefined;
+			this.session.setSystemPromptAppend(undefined);
+			this.setExtensionStatus("plan", undefined);
+			this.showStatus("Plan mode off — full tool access restored.");
+		}
 	}
 
 	private handleChangelogCommand(): void {

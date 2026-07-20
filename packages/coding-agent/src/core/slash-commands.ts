@@ -29,6 +29,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "usage", description: "Show session, context, and plan usage" },
 	{ name: "context", description: "Show estimated context window breakdown" },
+	{ name: "plan", description: "Toggle read-only plan mode (bare /plan toggles)", argumentHint: "[on|off|status]" },
 	{ name: "changelog", description: "Show changelog entries" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },

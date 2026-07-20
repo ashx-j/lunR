@@ -262,6 +262,14 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
+// lunr: core-owned tool-call gate (plan mode). Return { block: true, reason } to prevent
+// execution; the agent loop turns it into an error tool result shown to the model.
+export interface ToolCallGateResult {
+	block: boolean;
+	reason?: string;
+}
+export type ToolCallGate = (toolName: string, input: Record<string, unknown>) => ToolCallGateResult | undefined;
+
 function estimateMessagesTokens(messages: AgentMessage[]): number {
 	let tokens = 0;
 	for (const message of messages) {
@@ -352,6 +360,10 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _systemPromptOverride?: string;
+	// lunr: core-owned system-prompt append (plan mode addendum) applied on top of base/override
+	private _systemPromptAppend?: string;
+	// lunr: core-owned tool-call gates (plan mode) checked before extension tool_call handlers
+	private _toolCallGates: ToolCallGate[] = [];
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -448,6 +460,14 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			// lunr: core-owned gates (plan mode) run first, even without extension handlers
+			for (const gate of this._toolCallGates) {
+				const gateResult = gate(toolCall.name, args as Record<string, unknown>);
+				if (gateResult?.block) {
+					return { block: true, reason: gateResult.reason };
+				}
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
@@ -510,7 +530,7 @@ export class AgentSession {
 				...previousSnapshot,
 				context: {
 					...previousContext,
-					systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+					systemPrompt: this._withSystemPromptAppend(this._systemPromptOverride ?? this._baseSystemPrompt),
 					tools: this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
@@ -875,6 +895,36 @@ export class AgentSession {
 		return this.agent.state.systemPrompt;
 	}
 
+	/**
+	 * lunr: register a core-owned tool-call gate (plan mode). Gates run before extension
+	 * tool_call handlers and even when no extension handles tool_call. Returns an
+	 * unsubscribe function.
+	 */
+	addToolCallGate(gate: ToolCallGate): () => void {
+		this._toolCallGates.push(gate);
+		return () => {
+			const index = this._toolCallGates.indexOf(gate);
+			if (index >= 0) this._toolCallGates.splice(index, 1);
+		};
+	}
+
+	/**
+	 * lunr: append (or clear, with undefined) a core-owned section on the effective system
+	 * prompt. Applied on top of the base prompt and any per-turn extension override.
+	 */
+	setSystemPromptAppend(text: string | undefined): void {
+		const next = text && text.trim().length > 0 ? text : undefined;
+		if (next === this._systemPromptAppend) return;
+		this._systemPromptAppend = next;
+		this.agent.state.systemPrompt = this._withSystemPromptAppend(
+			this._systemPromptOverride ?? this._baseSystemPrompt,
+		);
+	}
+
+	private _withSystemPromptAppend(prompt: string): string {
+		return this._systemPromptAppend ? `${prompt}\n\n${this._systemPromptAppend}` : prompt;
+	}
+
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
 		return this._retryAttempt;
@@ -925,7 +975,9 @@ export class AgentSession {
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
-		this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+		this.agent.state.systemPrompt = this._withSystemPromptAppend(
+			this._systemPromptOverride ?? this._baseSystemPrompt,
+		);
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1233,11 +1285,11 @@ export class AgentSession {
 			// Apply extension-modified system prompt, or reset to base
 			if (result?.systemPrompt !== undefined) {
 				this._systemPromptOverride = result.systemPrompt;
-				this.agent.state.systemPrompt = result.systemPrompt;
+				this.agent.state.systemPrompt = this._withSystemPromptAppend(result.systemPrompt);
 			} else {
 				// Ensure we're using the base prompt (in case previous turn had modifications)
 				this._systemPromptOverride = undefined;
-				this.agent.state.systemPrompt = this._baseSystemPrompt;
+				this.agent.state.systemPrompt = this._withSystemPromptAppend(this._baseSystemPrompt);
 			}
 		} catch (error) {
 			preflightResult?.(false);
@@ -2253,7 +2305,7 @@ export class AgentSession {
 
 		this._resourceLoader.extendResources(extensionPaths);
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
-		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		this.agent.state.systemPrompt = this._withSystemPromptAppend(this._baseSystemPrompt);
 	}
 
 	private buildExtensionResourcePaths(entries: Array<{ path: string; extensionPath: string }>): Array<{

@@ -310,3 +310,62 @@ Phase 10 entirely.
 - Plan said patch colors "if it hardcodes any" — it hardcodes none; nothing patched.
 - The `max`-level addition goes beyond the plan text but is required for correctness against lunR's
   ThinkingLevel union (otherwise `/thinking` could never show/set `max`).
+
+## 2026-07-20 — Phase 12: native plan mode (/plan) with read-only tool gating
+
+Phase 1 deleted narumiruna-pi-plan-mode, so plan mode is rebuilt NATIVE in core (simplified
+vs the extension: no tool picker, no completion/question tools, no state persistence).
+
+### Implementation
+- `core/plan-mode.ts` (new, pure module): `PLAN_MODE_ADDENDUM`, `PLAN_MODE_BLOCK_MESSAGE`,
+  `planModeBlockReason(toolName, input)` (blocks edit/write always; bash via heuristic),
+  `isMutatingBashCommand(command)`. Heuristic is a conservative BLOCKLIST (documented in
+  the file header, "not a security boundary"): unquoted `>`/`>>` redirects; segment split on
+  `;` `|` `&` (quote-aware); per-segment leading command — known mutating commands
+  (rm/mv/cp/mkdir/touch/chmod/ln/tee/dd/sed -i/find -delete|-exec/…), git limited to
+  read-only subcommands (branch/tag/remote flag-only), package managers limited to
+  read-only subcommands (install/add/remove/update/publish blocked), arbitrary runners
+  (sudo/xargs/npx/sh -c/apt/brew/…) blocked. Unknown unlisted commands are ALLOWED.
+- `core/agent-session.ts`: new core-owned interception independent of extensions —
+  `addToolCallGate(gate)` (unsubscribe fn) + `ToolCallGate` type; gates run FIRST in
+  `agent.beforeToolCall` even when no extension handles `tool_call` (extension runner
+  short-circuits without handlers, so the extension path alone couldn't host this).
+  Blocked → `{block:true, reason}` → agent loop emits an error tool result to the model.
+  `setSystemPromptAppend(text|undefined)` + `_withSystemPromptAppend()` applied at all 4
+  effective-prompt sites (next-turn refresh, setActiveTools rebuild, before_agent_start
+  base+override branches, resource reload) — addendum stacks on top of extension overrides.
+- `interactive-mode.ts`: `planModeActive` + `planModeCleanup` fields (in-memory v1, NOT
+  persisted); `/plan` dispatch + `handlePlanCommand(args)` with on|off|status (bare
+  toggles, unknown arg → usage, isStreaming guard on state changes matching /undo /swarm).
+  Entering registers the gate + `setSystemPromptAppend(PLAN_MODE_ADDENDUM)` + footer
+  `setExtensionStatus("plan", "plan ● read-only")`; exiting reverses all three. Plan mode
+  is CLEARED in the `setBeforeSessionInvalidate` callback (gate/addendum live on the
+  AgentSession being replaced by /new, /resume, etc.).
+- `core/slash-commands.ts`: `/plan` entry (`[on|off|status]` hint).
+- `builtin-extensions/ashxj-tui.ts` (`// lunr:`): `"plan"` added FIRST in the footer status
+  key list `["plan","goal","swarm","research","lsp","mcp","tps"]`.
+- `core/system-prompt.ts`: one permanent paragraph — for complex multi-file tasks, propose
+  entering plan mode first (model-driven auto-suggest, no heuristics).
+
+### Tests
+- `test/plan-mode.test.ts` (new): 11 tests — planModeBlockReason (edit/write blocked,
+  reads open, bash allowed/blocked + reason includes command, defensive missing command)
+  and isMutatingBashCommand (read-only allowed incl. quoted `>`, env-prefix, pipes;
+  mutating blocked incl. redirects, git subcommands, package installs, runners,
+  mutation hidden in later segments). Pure-module test, no circular-import issue.
+
+### Verification
+- Build: agent(pi-agent-core) → coding-agent → orchestrator clean (exit 0). `ai` not rebuilt.
+- `npx biome check packages/` — clean (815 files; biome format applied to the 3 new/edited files).
+- Suite: Test Files 88 failed | 89 passed | 2 skipped (179); Tests 56 failed | 1028 passed |
+  21 skipped (1105) — baseline 88/56/1017/21 (1094) + my 11 new tests all passing. No NEW failures.
+- Static: dist/core/plan-mode.js emitted; dist agent-session carries _toolCallGates (5x),
+  _withSystemPromptAppend (7x), addToolCallGate, setSystemPromptAppend; dist interactive-mode
+  carries handlePlanCommand + "plan ● read-only"; dist ashxj-tui carries "plan" first in keys.
+
+### Deviations / limitations
+- Simpler than the extension: no `/plan tools` selector, no plan_mode_complete/question
+  tools, no <proposed_plan> parsing, no per-branch state persistence, no thinking-level
+  override. Blocklist bash heuristic (not the extension's allowlist) — documented.
+- Plan mode does not survive session replacement (/new, /resume) — cleared on invalidate.
+- Live TUI run pending (static + unit verification only).
