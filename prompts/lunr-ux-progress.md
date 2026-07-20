@@ -224,3 +224,32 @@ Undone turns REAPPEAR after restart — session JSONL is append-only and navigat
 
 ### Deviations
 - None in scope. Live TUI verification pending (no pty).
+
+## 2026-07-20 — Phase 10: todo compact display setting — RECON ONLY, NO IMPLEMENTATION
+
+### Recon findings: there is NO todo tool or todo renderer in this build
+
+Searched `packages/coding-agent/src/core/tools/` (tool list: bash, edit, find, grep, ls, read, write — no todo),
+all of `packages/coding-agent/src/builtin-extensions/`, and `packages/agent/src` for
+`todo`/`TodoList`/`TodoWrite`/`in_progress`/`task list`. Hits found, none are a live todo surface:
+
+- `packages/coding-agent/examples/extensions/todo.ts` — an EXAMPLE extension (`todo` tool + `/todos`
+  command + `TodoListComponent`). Lives under `examples/`, is not in `builtin-extensions/`, is not
+  registered by `main.ts`, and is never loaded at runtime in this build.
+- `packages/coding-agent/examples/extensions/plan-mode/` — another example (todo-list widget with
+  `[DONE:id]` markers). Also not loaded.
+- `builtin-extensions/context-mode/session/extract.ts` + `adapters/{claude-code,qwen-code}` — mention
+  `TodoWrite`/`todo_write`/`TaskCreate`/`TaskUpdate` only as tool-name matchers when IMPORTING foreign
+  agents' session histories (hooks/adapters for claude-code and qwen-code). Not a lunR tool, renders
+  nothing in the TUI.
+- `builtin-extensions/narumiruna-pi-goal/src/prompts.ts` — the word "TODO" in prompt text only.
+- `pi-ollama-cloud/index.ts` — a `TODO:` code comment only.
+
+Conclusion: the user sees no todo list during runs today — there is no todo tool for the agent to call
+and no todo renderer in the TUI. Per the task's explicit fallback instruction ("do NOT invent one"),
+no `todoDisplay` setting, no /settings row, and no renderer were added. No code was changed and no
+commit was made; this progress entry is the only artifact (left uncommitted for user decision).
+
+Options if this phase is to proceed later: (a) bake the `examples/extensions/todo.ts` example in as a
+built-in extension and add the compact mode to its `renderResult`/`TodoListComponent`, or (b) drop
+Phase 10 entirely.
