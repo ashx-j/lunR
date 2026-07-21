@@ -7,7 +7,7 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("TrustSelectorComponent", () => {
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	beforeEach(() => {

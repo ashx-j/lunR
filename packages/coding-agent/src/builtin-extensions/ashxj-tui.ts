@@ -30,6 +30,17 @@
 
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 
+// lunr: customize bridge — read the prompt-symbol toggle (bridgeless → no symbol).
+const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
+interface CustomizeBridgeForPrompt {
+	getPromptSymbol(): boolean;
+}
+function lunrPromptSymbolEnabled(): boolean {
+	const bridge = (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+	return bridge?.getPromptSymbol() ?? false;
+}
+const LUNR_PROMPT_GLYPH = "☾ › ";
+
 // ---------------------------------------------------------------------------
 // Minimal structural types (inline — see file header)
 // ---------------------------------------------------------------------------
@@ -318,6 +329,11 @@ function color(theme: Theme | undefined, token: string, text: string): string {
 	}
 }
 
+// lunr: strip ANSI escape sequences so footer statuses can be re-colored uniformly.
+function stripAnsi(s: string): string {
+	return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 // ---------------------------------------------------------------------------
 // Stats formatting
 // ---------------------------------------------------------------------------
@@ -333,11 +349,10 @@ function formatCount(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
-/** Sum input/output tokens and cost across assistant messages in the session. */
-function getUsageTotals(ctx: ExtensionContextLike): { input: number; output: number; cost: number } {
+/** Sum input/output tokens across assistant messages in the session. */
+function getUsageTotals(ctx: ExtensionContextLike): { input: number; output: number } {
 	let input = 0;
 	let output = 0;
-	let cost = 0;
 	const entries = ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch?.() ?? [];
 	for (const entry of entries as readonly SessionEntry[]) {
 		if (entry.type !== "message") continue;
@@ -347,9 +362,8 @@ function getUsageTotals(ctx: ExtensionContextLike): { input: number; output: num
 		if (!u) continue;
 		input += u.input ?? 0;
 		output += u.output ?? 0;
-		cost += u.cost?.total ?? 0;
 	}
-	return { input, output, cost };
+	return { input, output };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,7 +442,9 @@ class ChatboxEditor extends CustomEditor {
 		}
 
 		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
-		const innerWidth = Math.max(1, width - 4);
+		const promptSymbol = lunrPromptSymbolEnabled();
+		const glyphW = promptSymbol ? displayWidth(LUNR_PROMPT_GLYPH) : 0;
+		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
 		// The base editor appends the autocomplete menu lines (if any) to the END
@@ -467,9 +483,13 @@ class ChatboxEditor extends CustomEditor {
 		const top = border("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
 
 		// Body: │ <padded line> │ (auto-grows with the number of wrapped lines)
-		const bodyLines = body.map(
-			(ln: string) => border("\u2502 ") + padRight(ln, innerWidth) + border(" \u2502"),
-		);
+		// lunr: prefix the first body line with the dim `☾ › ` prompt glyph; a
+		// same-width blank gutter keeps subsequent lines aligned with the border.
+		const gutter = glyphW > 0 ? " ".repeat(glyphW) : "";
+		const bodyLines = body.map((ln: string, i: number) => {
+			const prefix = i === 0 && promptSymbol ? this.color("dim", LUNR_PROMPT_GLYPH) : gutter;
+			return border("\u2502 ") + prefix + padRight(ln, innerWidth) + border(" \u2502");
+		});
 
 		// Bottom border with the right-aligned chip: ╰─…─ <chip> ─╯
 		const bottom = this.renderBottomBorder(width);
@@ -518,9 +538,13 @@ function renderStatsLine(
 	//    throughput/tokens (`pi-tps-was-taken`). These are NOT on `ctx` directly.
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
-		for (const key of ["lsp", "mcp", "tps"] as const) {
+		// lunr: render the plan-mode, pi-goal, /swarm, and /research footer statuses, leading the line.
+		// lunr: the `lsp` and `mcp` status segments are intentionally hidden here (publishers in
+		// pi-lsp-extension and pi-mcp-adapter keep calling ctx.ui.setStatus harmlessly).
+		for (const key of ["plan", "goal", "swarm", "research", "tps"] as const) {
 			const v = statuses.get(key);
-			if (v) parts.push(v);
+			// lunr: unify footer status colors to dim so the whole stats line reads as one tone.
+			if (v) parts.push(color(theme, "dim", stripAnsi(v)));
 		}
 	}
 
@@ -538,8 +562,9 @@ function renderStatsLine(
 	const totals = getUsageTotals(ctx);
 	parts.push(color(theme, "dim", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`));
 
-	// 4) Cost: $cost.
-	parts.push(color(theme, "dim", `$${totals.cost.toFixed(3)}`));
+	// lunr: cost/usage counter segment removed entirely (both the $x.xxx dollar
+	// counter for API-key providers and the plan-usage limit bar for OAuth/subscription
+	// providers). Segments 1-3 (statuses, context, tokens) remain.
 
 	let line = parts.join(sep);
 	if (displayWidth(line) > width) {

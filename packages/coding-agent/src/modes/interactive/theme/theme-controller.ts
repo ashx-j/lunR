@@ -2,8 +2,8 @@ import type { TUI } from "@earendil-works/pi-tui";
 import type { SettingsManager } from "../../../core/settings-manager.ts";
 import {
 	detectTerminalBackgroundFromEnv,
-	detectTerminalBackgroundTheme,
 	detectTerminalThemeForAuto,
+	getDefaultTheme,
 	initTheme,
 	parseAutoThemeSetting,
 	resolveThemeSetting,
@@ -50,13 +50,9 @@ export class InteractiveThemeController {
 			return;
 		}
 
-		const detection = await detectTerminalBackgroundTheme({ ui: this.ui, timeoutMs: 100 });
-		this.terminalTheme = detection.theme;
-		if (!this.applyThemeName(detection.theme).success) return;
-		if (detection.confidence === "high") {
-			this.settingsManager.setTheme(detection.theme);
-			await this.settingsManager.flush();
-		}
+		// No theme setting: apply the default theme. Terminal appearance detection
+		// no longer picks a built-in theme (moon is the only built-in).
+		this.applyThemeName(getDefaultTheme(), true);
 	}
 
 	setThemeName(themeName: string, showError = false): ThemeResult {
@@ -91,10 +87,10 @@ export class InteractiveThemeController {
 
 	private applyThemeName(themeName: string, showError = false): ThemeResult {
 		const result = setTheme(themeName, true);
-		this.activeThemeName = result.success ? themeName : "dark";
+		this.activeThemeName = result.success ? themeName : "moon";
 		this.notifyChanged();
 		if (!result.success && showError) {
-			this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to dark theme.`);
+			this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to moon theme.`);
 		}
 		return result;
 	}

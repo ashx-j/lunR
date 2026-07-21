@@ -9,7 +9,7 @@ const BG_RESET = "\x1b[49m";
 
 describe("UserMessageComponent", () => {
 	test("keeps user message height stable while moving closing OSC markers off line end", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const component = new UserMessageComponent("hello");
 		const lines = component.render(20);

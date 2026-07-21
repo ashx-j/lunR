@@ -201,11 +201,36 @@ function withMandatorySafetyGuidance(description: string): string {
 
 export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "toolDescriptionMode"> = {}, options?: ToolDescriptionOptions): string {
 	const mode = resolveToolDescriptionMode(config, options);
-	if (mode === "compact") return COMPACT_SUBAGENT_TOOL_DESCRIPTION;
-	if (mode === "custom") {
+	let description: string;
+	if (mode === "compact") {
+		description = COMPACT_SUBAGENT_TOOL_DESCRIPTION;
+	} else if (mode === "custom") {
 		const custom = loadCustomToolDescription(options);
-		if (custom) return withMandatorySafetyGuidance(custom);
-		warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
+		if (custom) {
+			description = withMandatorySafetyGuidance(custom);
+		} else {
+			warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
+			description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+		}
+	} else {
+		description = FULL_SUBAGENT_TOOL_DESCRIPTION;
 	}
-	return FULL_SUBAGENT_TOOL_DESCRIPTION;
+	// lunr: append model-tier guidance only when lunR core's tier bridge is registered and enabled.
+	if (isModelTierModeEnabled()) return `${description}\n\n${MODEL_TIER_GUIDANCE}`;
+	return description;
+}
+
+// lunr: model tier guidance appended to the subagent tool description when tier mode is on.
+const MODEL_TIER_GUIDANCE = `MODEL TIERS: Model tiers are enabled. For each subagent choose \`tier\`: 'light' for simple lookups/formatting, 'standard' for typical coding tasks, 'heavy' for deep reasoning/complex debugging. An explicit \`model\` overrides the tier. Omit both to inherit the parent model.`;
+
+// lunr: check lunR core's model-tier bridge (Symbol.for("@lunr/model-tiers")); absent bridge means tier mode is off.
+function isModelTierModeEnabled(): boolean {
+	try {
+		const bridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
+			| { isTierModeEnabled?: () => unknown }
+			| undefined;
+		return typeof bridge?.isTierModeEnabled === "function" && bridge.isTierModeEnabled() === true;
+	} catch {
+		return false;
+	}
 }

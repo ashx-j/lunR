@@ -14,8 +14,16 @@ import { CHILD_WATCHDOG_CONFIG_ENV, encodeChildWatchdogConfig, type ChildWatchdo
 import { WAIT_TOOL_ENABLED_ENV } from "../background/wait-config.ts";
 
 const TASK_ARG_LIMIT = 8000;
-const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime.ts");
-const FANOUT_CHILD_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "extension", "fanout-child.ts");
+// lunr: the bake-in compiles extensions to dist/*.js only; upstream dev mode ships .ts.
+// Resolve the .ts sibling when present, else fall back to the compiled .js so child
+// processes always get a path that exists (the extension loader accepts both).
+function resolveRuntimeScriptPath(basePathWithoutExt: string): string {
+	const tsPath = `${basePathWithoutExt}.ts`;
+	if (fs.existsSync(tsPath)) return tsPath;
+	return `${basePathWithoutExt}.js`;
+}
+const PROMPT_RUNTIME_EXTENSION_PATH = resolveRuntimeScriptPath(path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime"));
+const FANOUT_CHILD_EXTENSION_PATH = resolveRuntimeScriptPath(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "extension", "fanout-child"));
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 export const SUBAGENT_ORCHESTRATOR_TARGET_ENV = "PI_SUBAGENT_ORCHESTRATOR_TARGET";
 export const SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV = "PI_SUBAGENT_ORCHESTRATOR_SESSION_ID";

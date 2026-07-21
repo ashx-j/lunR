@@ -7,6 +7,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -42,6 +43,15 @@ export interface TerminalSettings {
 export interface ImageSettings {
 	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
 	blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
+}
+
+export type ModelTierName = "light" | "standard" | "heavy";
+
+export interface ModelTiersSettings {
+	enabled?: boolean; // default: false - route subagents to per-tier models
+	light?: string; // provider/model string (same format as /model)
+	standard?: string;
+	heavy?: string;
 }
 
 export interface ThinkingBudgetsSettings {
@@ -97,6 +107,7 @@ export interface Settings {
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
 	quietStartup?: boolean;
+	smoothStreaming?: boolean; // default: false - reveal streamed responses character by character
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
@@ -122,6 +133,12 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
+	modelTiers?: ModelTiersSettings;
+	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
+	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
+	// lunr: TUI customize settings (gutter rail, prompt symbol)
+	gutterRail?: boolean; // default: true - render a thin left rail around each turn
+	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -896,6 +913,65 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getSmoothStreaming(): boolean {
+		return this.settings.smoothStreaming ?? false;
+	}
+
+	setSmoothStreaming(enabled: boolean): void {
+		this.globalSettings.smoothStreaming = enabled;
+		this.markModified("smoothStreaming");
+		this.save();
+	}
+
+	getSessionRetentionDays(): number {
+		const value = this.settings.sessionRetentionDays;
+		if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+			return Math.floor(value);
+		}
+		return 30;
+	}
+
+	setSessionRetentionDays(days: number): void {
+		this.globalSettings.sessionRetentionDays = Math.max(0, Math.floor(days));
+		this.markModified("sessionRetentionDays");
+		this.save();
+	}
+
+	getMemoryCharCap(): number {
+		const value = this.settings.memoryCharCap;
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(value)));
+		}
+		return MEMORY_CHAR_CAP_DEFAULT;
+	}
+
+	setMemoryCharCap(cap: number): void {
+		this.globalSettings.memoryCharCap = Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(cap)));
+		this.markModified("memoryCharCap");
+		this.save();
+	}
+
+	// lunr: TUI customize settings getters/setters.
+	getGutterRail(): boolean {
+		return this.settings.gutterRail ?? true;
+	}
+
+	setGutterRail(enabled: boolean): void {
+		this.globalSettings.gutterRail = enabled;
+		this.markModified("gutterRail");
+		this.save();
+	}
+
+	getPromptSymbol(): boolean {
+		return this.settings.promptSymbol ?? true;
+	}
+
+	setPromptSymbol(enabled: boolean): void {
+		this.globalSettings.promptSymbol = enabled;
+		this.markModified("promptSymbol");
+		this.save();
+	}
+
 	getDefaultProjectTrust(): DefaultProjectTrust {
 		const value = this.globalSettings.defaultProjectTrust;
 		return value === "always" || value === "never" ? value : "ask";
@@ -1229,6 +1305,36 @@ export class SettingsManager {
 	setWarnings(warnings: WarningSettings): void {
 		this.globalSettings.warnings = { ...warnings };
 		this.markModified("warnings");
+		this.save();
+	}
+
+	getModelTiers(): ModelTiersSettings {
+		return { ...(this.settings.modelTiers ?? {}) };
+	}
+
+	getModelTiersEnabled(): boolean {
+		return this.settings.modelTiers?.enabled ?? false;
+	}
+
+	setModelTiersEnabled(enabled: boolean): void {
+		if (!this.globalSettings.modelTiers) {
+			this.globalSettings.modelTiers = {};
+		}
+		this.globalSettings.modelTiers.enabled = enabled;
+		this.markModified("modelTiers", "enabled");
+		this.save();
+	}
+
+	getTierModel(tier: ModelTierName): string | undefined {
+		return this.settings.modelTiers?.[tier];
+	}
+
+	setTierModel(tier: ModelTierName, model: string): void {
+		if (!this.globalSettings.modelTiers) {
+			this.globalSettings.modelTiers = {};
+		}
+		this.globalSettings.modelTiers[tier] = model;
+		this.markModified("modelTiers", tier);
 		this.save();
 	}
 }

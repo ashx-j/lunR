@@ -414,6 +414,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		label: "Subagent",
 		description: buildSubagentToolDescription(config),
 		parameters: SubagentParams,
+		// lunr: sequential so multiple subagent calls in one turn run one-at-a-time
+		// instead of tripping the subagentInProgress guard (parallel mode uses the tasks array).
+		executionMode: "sequential",
 
 		prepareArguments(args) {
 			// Run friendly chain validation before pi-ai's raw TypeBox schema check

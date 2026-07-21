@@ -120,6 +120,9 @@ export class GoalRuntime {
 	pendingQueueAction?: PendingQueueAction;
 	queueFrozen = false;
 	completionStatusTimer?: NodeJS.Timeout;
+	// lunr: 30s footer refresh timer so the goal indicator's elapsed minutes tick while active
+	statusRefreshTimer?: NodeJS.Timeout;
+	statusRefreshCtx?: StatusContext;
 	continuationIntent?: ContinuationTicket;
 	continuationDelivery?: ContinuationTicket;
 	goalRecovery?: GoalRecovery;
@@ -227,6 +230,34 @@ export class GoalRuntime {
 	updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 		this.clearCompletionStatusTimer();
 		ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
+		// lunr: refresh the footer every 30s while a goal is active so the elapsed time ticks
+		this.clearStatusRefreshTimer();
+		if (goal.status === "active") {
+			this.statusRefreshCtx = ctx;
+			this.statusRefreshTimer = setInterval(() => {
+				const currentGoal = this.activeGoal;
+				const refreshCtx = this.statusRefreshCtx;
+				if (!currentGoal || currentGoal.status !== "active" || !refreshCtx) {
+					this.clearStatusRefreshTimer();
+					return;
+				}
+				try {
+					refreshCtx.ui.setStatus(STATUS_KEY, formatStatus(currentGoal));
+				} catch {
+					// The captured ctx may be stale after session replacement or reload.
+					this.clearStatusRefreshTimer();
+				}
+			}, 30_000);
+			this.statusRefreshTimer.unref?.();
+		}
+	}
+
+	// lunr: paired with the status refresh interval started in updateStatus()
+	clearStatusRefreshTimer() {
+		if (!this.statusRefreshTimer) return;
+		clearInterval(this.statusRefreshTimer);
+		this.statusRefreshTimer = undefined;
+		this.statusRefreshCtx = undefined;
 	}
 
 	blockStaleGoalToolCalls() {
@@ -394,6 +425,7 @@ export class GoalRuntime {
 	}
 
 	clearActiveGoal(ctx: StatusContext) {
+		this.clearStatusRefreshTimer(); // lunr: stop the footer refresh when the goal is cleared
 		this.cancelContinuationWork();
 		this.clearGoalRecovery();
 		this.clearBudgetWrapUp();
@@ -533,7 +565,9 @@ export class GoalRuntime {
 
 	showCompletionStatus(ctx: StatusContext) {
 		this.clearCompletionStatusTimer();
-		ctx.ui.setStatus(STATUS_KEY, "complete");
+		this.clearStatusRefreshTimer(); // lunr: stop the footer refresh on completion
+		// lunr: enriched footer status format
+		ctx.ui.setStatus(STATUS_KEY, "goal ✓ complete");
 		this.completionStatusTimer = setTimeout(() => {
 			this.completionStatusTimer = undefined;
 			try {
@@ -628,16 +662,41 @@ export function incrementGoal(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
 }
 
+// lunr: enriched footer status — `goal ● active · 3m · 2 turns` (rendered by ashxj-tui)
 export function formatStatus(goal: ActiveGoal | undefined) {
 	if (!goal) return undefined;
-	if (goal.status === "complete") return "complete";
-	if (goal.status === "queued") return "queued";
-	if (goal.status === "paused") return "paused";
-	if (goal.status === "blocked") return "blocked";
-	if (goal.status === "usage_limited") return "usage";
-	if (goal.status === "budget_limited") return `budget ${formatBudget(goal)}`;
-	if (goal.tokenBudget !== undefined) return `active ${formatBudget(goal)}`;
-	return `active ${formatDuration(goal.timeUsedSeconds)}`;
+	if (goal.status === "complete") return "goal ✓ complete";
+	if (goal.status === "queued") return "goal queued";
+	if (goal.status === "paused") {
+		return `goal ◌ paused · ${formatGoalElapsed(goal)} · ${formatGoalTurns(goal)}`;
+	}
+	if (goal.status === "blocked") return "goal ✗ blocked";
+	if (goal.status === "usage_limited") return "goal usage-limited";
+	if (goal.status === "budget_limited") return `goal budget ${formatBudget(goal)}`;
+	const status = `goal ● active · ${formatGoalElapsed(goal)} · ${formatGoalTurns(goal)}`;
+	if (goal.tokenBudget !== undefined) return `${status} · ${formatBudget(goal)}`;
+	return status;
+}
+
+// lunr: live elapsed = accumulated active time + the in-progress active segment
+function goalElapsedSeconds(goal: ActiveGoal) {
+	let seconds = nonNegativeFiniteNumber(goal.timeUsedSeconds);
+	if (typeof goal.activeStartedAt === "number" && Number.isFinite(goal.activeStartedAt)) {
+		seconds += Math.max(0, Date.now() - goal.activeStartedAt) / 1000;
+	}
+	return seconds;
+}
+
+// lunr: footer elapsed format — `Xm` under 1h, `XhYm` after
+function formatGoalElapsed(goal: ActiveGoal) {
+	const totalMinutes = Math.floor(goalElapsedSeconds(goal) / 60);
+	if (totalMinutes < 60) return `${totalMinutes}m`;
+	return `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`;
+}
+
+// lunr: footer turn count, singular at 1
+function formatGoalTurns(goal: ActiveGoal) {
+	return goal.iteration === 1 ? "1 turn" : `${goal.iteration} turns`;
 }
 
 export function formatBudget(goal: ActiveGoal) {

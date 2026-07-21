@@ -73,7 +73,7 @@ type ExtensionFixture = {
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(() => {
 		// showStatus uses the global theme instance
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	test("coalesces immediately-sequential status messages", () => {
@@ -143,9 +143,9 @@ describe("InteractiveMode.setToolsExpanded", () => {
 
 describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	test("persists theme changes to settings manager", () => {
-		initTheme("dark");
+		initTheme("moon");
 
-		let currentTheme = "dark";
+		let currentTheme = "moon";
 		const settingsManager = {
 			getTheme: vi.fn(() => currentTheme),
 			setTheme: vi.fn((theme: string) => {
@@ -166,20 +166,20 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 		};
 
 		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
-		const result = uiContext.setTheme("light");
+		const result = uiContext.setTheme("custom");
 
 		expect(result.success).toBe(true);
-		expect(fakeThis.themeController.setThemeName).toHaveBeenCalledWith("light");
-		expect(settingsManager.setTheme).toHaveBeenCalledWith("light");
-		expect(currentTheme).toBe("light");
+		expect(fakeThis.themeController.setThemeName).toHaveBeenCalledWith("custom");
+		expect(settingsManager.setTheme).toHaveBeenCalledWith("custom");
+		expect(currentTheme).toBe("custom");
 		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
 	});
 
 	test("does not persist invalid theme names", () => {
-		initTheme("dark");
+		initTheme("moon");
 
 		const settingsManager = {
-			getTheme: vi.fn(() => "dark"),
+			getTheme: vi.fn(() => "moon"),
 			setTheme: vi.fn(),
 		};
 		const fakeThis: any = {
@@ -204,7 +204,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 
 describe("InteractiveMode.showExtensionCustom", () => {
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	test("overlay custom UI reclaims input after non-overlay custom UI closes", async () => {
@@ -482,7 +482,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 });
 describe("InteractiveMode.showLoadedResources", () => {
 	beforeAll(() => {
-		initTheme("dark");
+		initTheme("moon");
 	});
 
 	function createShowLoadedResourcesThis(options: {
@@ -668,9 +668,23 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 	}
 
-	test("shows a compact resource listing by default", () => {
+	test("does not show the resource listing by default", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+		});
+
+		expect(fakeThis.loadedResourcesContainer.children).toHaveLength(0);
+	});
+
+	test("shows a compact resource listing in verbose mode", () => {
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: false,
+			verbose: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
@@ -687,6 +701,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("shows full resource listing when expanded", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			toolOutputExpanded: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
@@ -722,6 +737,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("abbreviates extensions in compact listing", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions: [{ path: "/tmp/extensions/answer.ts" }, { path: "/tmp/extensions/btw.ts" }],
 		});
 
@@ -738,6 +754,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("captures mixed extension layouts in compact output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions: createExtensionFixtures(),
 			useRealScopeGroups: true,
 		});
@@ -784,6 +801,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -812,6 +830,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -840,6 +859,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -877,6 +897,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -914,6 +935,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -951,6 +973,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -979,6 +1002,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -1007,6 +1031,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			extensions,
 			useRealScopeGroups: true,
 		});
@@ -1022,6 +1047,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("captures mixed extension layouts in expanded output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			toolOutputExpanded: true,
 			extensions: createExtensionFixtures(),
 			useRealScopeGroups: true,
@@ -1054,6 +1080,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			cwd,
 			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],
 		});
@@ -1073,6 +1100,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
+			verbose: true,
 			toolOutputExpanded: true,
 			cwd,
 			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],

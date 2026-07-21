@@ -43,6 +43,7 @@ import { spawn, spawnSync } from "child_process";
 import {
 	APP_NAME,
 	APP_TITLE,
+	appendDebugLog,
 	CONFIG_DIR_NAME,
 	getAgentDir,
 	getAuthPath,
@@ -60,6 +61,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -78,7 +80,9 @@ import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.t
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import { PLAN_MODE_ADDENDUM, planModeBlockReason } from "../../core/plan-mode.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
@@ -86,6 +90,7 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
+import { getPlanUsage } from "../../core/usage-service.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -98,20 +103,22 @@ import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
+import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
+import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
-import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
+import { buildExitCard, computeExitCardStats } from "./components/exit-card.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
+import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
@@ -134,15 +141,18 @@ import {
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
+import { renderUsageBox, type UsageSessionRow } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { countMessageGraphemes, sliceMessageContent } from "./smooth-streaming.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	getEditorTheme,
 	getMarkdownTheme,
 	getThemeByName,
+	getThemeName,
 	onThemeChange,
 	setRegisteredThemes,
 	stopThemeWatcher,
@@ -205,6 +215,51 @@ function isDeadTerminalError(error: unknown): boolean {
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
 	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
+
+// lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
+const ANTHROPIC_TOS_DISCLAIMER =
+	"Connecting an Anthropic subscription (Claude Pro/Max) account to lunR may violate Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Third-party harness usage also draws from paid extra usage, not your plan limits. Continue?";
+
+const INIT_PROMPT = `Analyze this codebase and write a starter AGENTS.md in the project root.
+Scan: package manifests, directory layout, build/test/lint scripts, CI config,
+existing README/docs. Include only: project purpose (one paragraph), build &
+test commands, code style/conventions found, directory map, and agent rules
+(safety: no secrets in commits, no destructive commands without confirmation).
+Keep it under 150 lines. Facts only — if something is unknown, omit it. After
+writing the file, reply with a 5-line summary of what you detected.`;
+
+const INIT_EXISTING_FILE_INSTRUCTIONS = {
+	overwrite: "An AGENTS.md already exists — replace it entirely with the new content.",
+	append:
+		"An AGENTS.md already exists — keep the existing content and only add missing sections; do not rewrite what is already there.",
+} as const;
+
+function buildSwarmPrompt(task: string): string {
+	return `[SWARM MODE] Task: ${task}
+Act as an orchestrator. 1) Decompose into 3-8 independent subtasks. 2) Launch them
+in ONE parallel subagent call (async:false), picking an agent + model tier per
+subtask (prefer scout for exploration, worker for implementation, reviewer for
+verification). 3) Synthesize the results and report. Rules: max 8 concurrent
+subagents; no nested fan-out; if a subtask fails, retry once with the heavy tier
+before giving up on it; keep your final report under 100 lines with per-subtask
+status.`;
+}
+
+function buildResearchPrompt(question: string, depth: number, breadth: number): string {
+	return `[DEEP RESEARCH] Question: ${question}
+Procedure: 1) Write a 3-line research brief decomposing this into ${breadth}
+subtopics. 2) Launch ${breadth} deep-researcher subagents in ONE parallel call, one
+per subtopic. 3) Reflect: list what's unanswered or conflicting. If gaps remain and
+this is not round ${depth}, launch one more parallel round targeting the gaps.
+4) Launch ONE research-writer subagent (chain after the last round) with all
+findings; its output is the final report. 5) Save the report to
+research-<yyyymmdd>-<slug>.md in the cwd and reply with the file path + the
+5-line summary. Hard caps: ≤3 parallel rounds, ≤8 researchers per round, cite or
+delete every claim. Failure rule: if web_search errors because no search provider
+is configured, stop immediately and tell the user to configure a search provider
+key (Brave/Tavily/Exa/OpenAI etc. in ~/.lunr settings or env vars) instead of
+writing a half-researched report.`;
+}
 
 function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
@@ -358,6 +413,13 @@ export class InteractiveMode {
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
 
+	// Smooth streaming state (smoothStreaming setting): the streaming component
+	// reveals the target message grapheme by grapheme on a timer instead of
+	// flashing whole chunks.
+	private streamingTargetMessage: AssistantMessage | undefined = undefined;
+	private streamingDisplayedLength = 0;
+	private smoothStreamingTimer: NodeJS.Timeout | undefined = undefined;
+
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
@@ -377,6 +439,25 @@ export class InteractiveMode {
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
+
+	// Track whether a /swarm orchestration turn is in flight (footer status)
+	private swarmMode = false;
+
+	// Track whether a /research deep-research turn is in flight (footer status)
+	private researchMode = false;
+
+	// lunr: native plan mode (in-memory v1 — not persisted across restarts; cleared when
+	// the session is replaced). While active, edit/write and mutating bash are gated on
+	// the AgentSession and the footer shows a "plan" status.
+	private planModeActive = false;
+	private planModeCleanup: (() => void) | undefined = undefined;
+
+	// lunr: in-memory redo stack for /undo and /redo (leaf entry ids; cleared on any
+	// new user message, never persisted — undone turns reappear after restart)
+	private redoStack: string[] = [];
+
+	// lunr: one-shot guard for the session auto-name LLM call (first assistant response)
+	private autoNameTriggered = false;
 
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
@@ -444,6 +525,13 @@ export class InteractiveMode {
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
+			// lunr: plan-mode gate/addendum live on the AgentSession being replaced — drop state
+			if (this.planModeActive) {
+				this.planModeActive = false;
+				this.planModeCleanup?.();
+				this.planModeCleanup = undefined;
+				this.setExtensionStatus("plan", undefined);
+			}
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
@@ -492,7 +580,13 @@ export class InteractiveMode {
 			return undefined;
 		}
 
-		const scopePrefix = sourceInfo.scope === "user" ? "u" : sourceInfo.scope === "project" ? "p" : "t";
+		// lunr: temporary scope covers baked-in extensions and ad-hoc (cli/local)
+		// loads — these are part of the product, so show no provenance tag.
+		if (sourceInfo.scope === "temporary") {
+			return undefined;
+		}
+
+		const scopePrefix = sourceInfo.scope === "user" ? "u" : "p";
 		const source = sourceInfo.source.trim();
 
 		if (source === "auto" || source === "local" || source === "cli") {
@@ -721,56 +815,11 @@ export class InteractiveMode {
 
 		await this.themeController.applyFromSettings();
 
-		// Add header with keybindings from config (unless silenced)
+		// Add boot screen header (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
+			const header = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
 
-			// Build startup instructions using keybinding hint helpers
-			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
-
-			const expandedInstructions = [
-				hint("app.interrupt", "to interrupt"),
-				hint("app.clear", "to clear"),
-				rawKeyHint(`${keyText("app.clear")} twice`, "to exit"),
-				hint("app.exit", "to exit (empty)"),
-				hint("app.suspend", "to suspend"),
-				keyHint("tui.editor.deleteToLineEnd", "to delete to end"),
-				hint("app.thinking.cycle", "to cycle thinking level"),
-				rawKeyHint(`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`, "to cycle models"),
-				hint("app.model.select", "to select model"),
-				hint("app.tools.expand", "to expand tools"),
-				hint("app.thinking.toggle", "to expand thinking"),
-				hint("app.editor.external", "for external editor"),
-				rawKeyHint("/", "for commands"),
-				rawKeyHint("!", "to run bash"),
-				rawKeyHint("!!", "to run bash (no context)"),
-				hint("app.message.followUp", "to queue follow-up"),
-				hint("app.message.dequeue", "to edit all queued messages"),
-				hint("app.clipboard.pasteImage", "to paste image (with text fallback)"),
-				rawKeyHint("drop files", "to attach"),
-			].join("\n");
-			const compactInstructions = [
-				hint("app.interrupt", "interrupt"),
-				rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
-				rawKeyHint("/", "commands"),
-				rawKeyHint("!", "bash"),
-				hint("app.tools.expand", "more"),
-			].join(theme.fg("muted", " · "));
-			const compactOnboarding = theme.fg(
-				"dim",
-				`Press ${keyText("app.tools.expand")} to show full startup help and loaded resources.`,
-			);
-			const onboarding = theme.fg(
-				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
-			);
-			this.builtInHeader = new ExpandableText(
-				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-				() => `${logo}\n${expandedInstructions}\n\n${onboarding}`,
-				this.getStartupExpansionState(),
-				1,
-				0,
-			);
+			this.builtInHeader = new BootScreenComponent(header, this.buildBootRows());
 
 			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
@@ -1404,7 +1453,9 @@ export class InteractiveMode {
 		// Resource rendering is idempotent; chat clears no longer clear this separate container.
 		this.loadedResourcesContainer.clear();
 
-		const showListing = options?.force || this.options.verbose || !this.settingsManager.getQuietStartup();
+		// lunr: startup/reload render nothing by default; the [Context]/[Skills]/etc. listing
+		// only appears with --verbose (or an explicit force). Diagnostics still surface below.
+		const showListing = options?.force || this.options.verbose;
 		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
 		if (!showListing && !showDiagnostics) {
 			return;
@@ -1707,10 +1758,30 @@ export class InteractiveMode {
 		}
 	}
 
+	private buildBootRows(): BootScreenRow[] {
+		const model = this.session.model;
+		const bootRows: BootScreenRow[] = [
+			{ label: "model", value: model ? `${model.id} (${model.provider})` : "none" },
+			{ label: "directory", value: this.sessionManager.getCwd() },
+			{ label: "session", value: this.sessionManager.getSessionName() ?? this.sessionManager.getSessionId() },
+			{ label: "config", value: getAgentDir() },
+			{ label: "theme", value: getThemeName() },
+		];
+		const skillsCount = this.session.resourceLoader.getSkills().skills.length;
+		if (skillsCount > 0) {
+			bootRows.push({ label: "skills", value: String(skillsCount) });
+		}
+		return bootRows;
+	}
+
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
+		// lunr: refresh boot-screen rows on session replacement so the model row stays current.
+		if (this.builtInHeader instanceof BootScreenComponent) {
+			(this.builtInHeader as BootScreenComponent).updateRows(this.buildBootRows());
+		}
 		if (options.renderBeforeBind) {
 			this.renderCurrentSessionState();
 			this.subscribeToAgent();
@@ -1737,6 +1808,7 @@ export class InteractiveMode {
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
+		this.stopSmoothStreaming();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
@@ -2660,7 +2732,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/name" || text.startsWith("/name ")) {
+			if (text === "/name" || text.startsWith("/name ") || text === "/title" || text.startsWith("/title ")) {
 				this.handleNameCommand(text);
 				this.editor.setText("");
 				return;
@@ -2668,6 +2740,21 @@ export class InteractiveMode {
 			if (text === "/session") {
 				this.handleSessionCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/usage") {
+				this.editor.setText("");
+				await this.handleUsageCommand();
+				return;
+			}
+			if (text === "/context") {
+				this.editor.setText("");
+				this.handleContextCommand();
+				return;
+			}
+			if (text === "/plan" || text.startsWith("/plan ")) {
+				this.editor.setText("");
+				this.handlePlanCommand(text === "/plan" ? "" : text.slice(6).trim());
 				return;
 			}
 			if (text === "/changelog") {
@@ -2693,6 +2780,16 @@ export class InteractiveMode {
 			if (text === "/tree") {
 				this.showTreeSelector();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/undo") {
+				this.editor.setText("");
+				await this.handleUndoCommand();
+				return;
+			}
+			if (text === "/redo") {
+				this.editor.setText("");
+				await this.handleRedoCommand();
 				return;
 			}
 			if (text === "/trust") {
@@ -2727,6 +2824,23 @@ export class InteractiveMode {
 				await this.handleReloadCommand();
 				return;
 			}
+			if (text === "/init") {
+				this.editor.setText("");
+				await this.handleInitCommand();
+				return;
+			}
+			if (text === "/swarm" || text.startsWith("/swarm ")) {
+				const task = text.startsWith("/swarm ") ? text.slice(7).trim() : "";
+				this.editor.setText("");
+				await this.handleSwarmCommand(task);
+				return;
+			}
+			if (text === "/research" || text.startsWith("/research ")) {
+				const args = text.startsWith("/research ") ? text.slice(10).trim() : "";
+				this.editor.setText("");
+				await this.handleResearchCommand(args);
+				return;
+			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
@@ -2737,12 +2851,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/dementedelves") {
-				this.handleDementedDelves();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/resume") {
+			if (text === "/resume" || text === "/sessions") {
 				this.showSessionSelector();
 				this.editor.setText("");
 				return;
@@ -2805,6 +2914,50 @@ export class InteractiveMode {
 			}
 			this.editor.addToHistory?.(text);
 		};
+	}
+
+	/** Smooth streaming tick rate (ms) and base reveal speed (graphemes per tick). */
+	private static readonly SMOOTH_STREAMING_TICK_MS = 20;
+	private static readonly SMOOTH_STREAMING_BASE_GRAPHEMES_PER_TICK = 4;
+
+	private startSmoothStreaming(): void {
+		if (this.smoothStreamingTimer) return;
+		this.smoothStreamingTimer = setInterval(() => {
+			this.advanceSmoothStreaming();
+		}, InteractiveMode.SMOOTH_STREAMING_TICK_MS);
+		// Never keep the process alive just to finish a reveal animation.
+		this.smoothStreamingTimer.unref?.();
+	}
+
+	private advanceSmoothStreaming(): void {
+		const target = this.streamingTargetMessage;
+		if (!this.streamingComponent || !target) {
+			this.stopSmoothStreaming();
+			return;
+		}
+		const total = countMessageGraphemes(target);
+		if (this.streamingDisplayedLength >= total) return;
+		// Catch-up acceleration: the further the display lags behind the model,
+		// the more graphemes each tick reveals.
+		const backlog = total - this.streamingDisplayedLength;
+		this.streamingDisplayedLength += Math.max(
+			InteractiveMode.SMOOTH_STREAMING_BASE_GRAPHEMES_PER_TICK,
+			Math.ceil(backlog / 8),
+		);
+		if (this.streamingDisplayedLength > total) {
+			this.streamingDisplayedLength = total;
+		}
+		this.streamingComponent.updateContent(sliceMessageContent(target, this.streamingDisplayedLength));
+		this.ui.requestRender();
+	}
+
+	private stopSmoothStreaming(): void {
+		if (this.smoothStreamingTimer) {
+			clearInterval(this.smoothStreamingTimer);
+			this.smoothStreamingTimer = undefined;
+		}
+		this.streamingTargetMessage = undefined;
+		this.streamingDisplayedLength = 0;
 	}
 
 	private subscribeToAgent(): void {
@@ -2874,6 +3027,9 @@ export class InteractiveMode {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
+					// lunr: a new user message invalidates /redo
+					this.redoStack.length = 0;
+					this.stopSmoothStreaming();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
@@ -2884,8 +3040,11 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
+						this.settingsManager.getGutterRail(),
 					);
 					this.streamingMessage = event.message;
+					this.streamingTargetMessage = event.message;
+					this.streamingDisplayedLength = 0;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage);
 					this.ui.requestRender();
@@ -2895,7 +3054,14 @@ export class InteractiveMode {
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingTargetMessage = event.message;
+					if (this.settingsManager.getSmoothStreaming()) {
+						// Smooth streaming: only track the target here; the timer
+						// reveals it grapheme by grapheme.
+						this.startSmoothStreaming();
+					} else {
+						this.streamingComponent.updateContent(this.streamingMessage);
+					}
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -2930,6 +3096,8 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
+					// Stop the reveal timer and render the full message immediately.
+					this.stopSmoothStreaming();
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
@@ -3015,12 +3183,25 @@ export class InteractiveMode {
 					this.ui.terminal.setProgress(false);
 				}
 				this.clearStatusIndicator("working");
+				this.stopSmoothStreaming();
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+
+				if (this.swarmMode) {
+					this.swarmMode = false;
+					this.setExtensionStatus("swarm", undefined);
+				}
+
+				if (this.researchMode) {
+					this.researchMode = false;
+					this.setExtensionStatus("research", undefined);
+				}
+
+				this.maybeAutoNameSession();
 
 				this.ui.requestRender();
 				break;
@@ -3231,6 +3412,7 @@ export class InteractiveMode {
 								skillBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
+								this.settingsManager.getGutterRail(),
 							);
 							this.chatContainer.addChild(userComponent);
 						}
@@ -3239,6 +3421,7 @@ export class InteractiveMode {
 							textContent,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
+							this.settingsManager.getGutterRail(),
 						);
 						this.chatContainer.addChild(userComponent);
 					}
@@ -3255,6 +3438,7 @@ export class InteractiveMode {
 					this.getMarkdownThemeWithSettings(),
 					this.hiddenThinkingLabel,
 					this.outputPad,
+					this.settingsManager.getGutterRail(),
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;
@@ -3487,6 +3671,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.stopSmoothStreaming();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -3516,6 +3701,15 @@ export class InteractiveMode {
 
 		this.stop();
 		await this.runtimeHost.dispose();
+
+		// lunr: exit summary card — print a closing card for non-empty sessions,
+		// before the resume line. Fires on all interactive exits reaching shutdown
+		// (/quit, double ctrl+c, ctrl+d). Skipped for empty sessions (0 user msgs).
+		const exitStats = computeExitCardStats(this.sessionManager.getEntries());
+		const cardLines = buildExitCard(exitStats);
+		if (cardLines.length > 0) {
+			process.stdout.write(`${chalk.dim(cardLines.join("\n"))}\n`);
+		}
 
 		const resumeCommand = formatResumeCommand(this.sessionManager);
 		if (resumeCommand) {
@@ -3559,7 +3753,7 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch {}
-		console.error("pi exiting due to uncaughtException:");
+		console.error(`${APP_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		process.exit(1);
 	}
@@ -4115,7 +4309,7 @@ export class InteractiveMode {
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getThemeSetting() || "dark",
+					currentTheme: this.settingsManager.getThemeSetting() || "moon",
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
@@ -4130,9 +4324,17 @@ export class InteractiveMode {
 					outputPad: this.settingsManager.getOutputPad(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					smoothStreaming: this.settingsManager.getSmoothStreaming(),
+					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
+					modelTiers: this.settingsManager.getModelTiers(),
+					memoryCharCap: this.settingsManager.getMemoryCharCap(),
+					searchCurator: getSearchCuratorSetting(),
+					// lunr: TUI customize settings
+					gutterRail: this.settingsManager.getGutterRail(),
+					promptSymbol: this.settingsManager.getPromptSymbol(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4214,6 +4416,12 @@ export class InteractiveMode {
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
 					},
+					onSmoothStreamingChange: (enabled) => {
+						this.settingsManager.setSmoothStreaming(enabled);
+					},
+					onSessionRetentionDaysChange: (days) => {
+						this.settingsManager.setSessionRetentionDays(days);
+					},
 					onDefaultProjectTrustChange: (defaultProjectTrust) => {
 						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
 					},
@@ -4271,6 +4479,47 @@ export class InteractiveMode {
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
 					},
+					onModelTiersEnabledChange: (enabled) => {
+						this.settingsManager.setModelTiersEnabled(enabled);
+					},
+					onModelTierModelChange: (tier, model) => {
+						this.settingsManager.setTierModel(tier, model);
+					},
+					onMemoryCharCapChange: (cap) => {
+						this.settingsManager.setMemoryCharCap(cap);
+					},
+					onSearchCuratorChange: (setting) => {
+						if (!setSearchCuratorSetting(setting)) {
+							this.showError("pi-web-access is not loaded; curator setting unavailable.");
+						}
+					},
+					// lunr: TUI customize callbacks
+					onGutterRailChange: (enabled) => {
+						this.settingsManager.setGutterRail(enabled);
+					},
+					onPromptSymbolChange: (enabled) => {
+						this.settingsManager.setPromptSymbol(enabled);
+					},
+					createModelTierPicker: (_tier, currentModelRef, done) => {
+						const selector = new ModelSelectorComponent(
+							this.ui,
+							this.resolveModelReference(currentModelRef),
+							this.settingsManager,
+							this.session.modelRuntime,
+							this.session.scopedModels,
+							(model) => {
+								done(`${model.provider}/${model.id}`);
+								this.ui.requestRender();
+							},
+							() => {
+								done();
+								this.ui.requestRender();
+							},
+							undefined,
+							{ persistDefault: false },
+						);
+						return selector;
+					},
 					onCancel: () => {
 						done();
 						this.ui.requestRender();
@@ -4308,6 +4557,14 @@ export class InteractiveMode {
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
 		const models = await this.getModelCandidates();
 		return findExactModelReferenceMatch(searchTerm, models);
+	}
+
+	/** Resolve a "provider/model" settings string to a runtime model, if it still exists. */
+	private resolveModelReference(reference: string | undefined): Model<any> | undefined {
+		if (!reference) return undefined;
+		const slashIndex = reference.indexOf("/");
+		if (slashIndex <= 0 || slashIndex === reference.length - 1) return undefined;
+		return this.session.modelRuntime.getModel(reference.slice(0, slashIndex), reference.slice(slashIndex + 1));
 	}
 
 	private async getModelCandidates(): Promise<Model<any>[]> {
@@ -4870,6 +5127,14 @@ export class InteractiveMode {
 	}
 
 	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {
+		// lunr: gate Anthropic OAuth (subscription) login with a ToS disclaimer.
+		if (providerOption.id === "anthropic" && providerOption.authType === "oauth") {
+			const confirmed = await this.confirmDisclaimer("Anthropic Terms of Service", ANTHROPIC_TOS_DISCLAIMER);
+			if (!confirmed) {
+				this.showStatus("Login cancelled.");
+				return;
+			}
+		}
 		if (providerOption.authType === "oauth") {
 			await this.showLoginDialog(providerOption.id, providerOption.name);
 		} else if (providerOption.method?.login) {
@@ -4877,6 +5142,30 @@ export class InteractiveMode {
 		} else {
 			this.showAmbientAuthDialog(providerOption);
 		}
+	}
+
+	/** lunr: show a Yes/No disclaimer dialog using the existing selector pattern. */
+	private confirmDisclaimer(title: string, message: string): Promise<boolean> {
+		return new Promise<boolean>((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					title,
+					["Continue", "Cancel"],
+					(option) => {
+						done();
+						resolve(option === "Continue");
+					},
+					() => {
+						done();
+						resolve(false);
+					},
+					// lunr: default to Cancel (index 1) for safety; show the disclaimer as message text.
+					{ message },
+				);
+				selector.setSelectedIndex(1);
+				return { component: selector, focus: selector };
+			});
+		});
 	}
 
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
@@ -5262,6 +5551,196 @@ export class InteractiveMode {
 	// Command handlers
 	// =========================================================================
 
+	private async handleInitCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /init.");
+			return;
+		}
+
+		let prompt = INIT_PROMPT;
+		const agentsMdPath = path.join(this.sessionManager.getCwd(), "AGENTS.md");
+		if (fs.existsSync(agentsMdPath)) {
+			const choice = await this.showExtensionSelector("AGENTS.md already exists in this project.", [
+				"Cancel",
+				"Overwrite",
+				"Append",
+			]);
+			if (choice === "Overwrite") {
+				prompt = `${INIT_PROMPT}\n${INIT_EXISTING_FILE_INSTRUCTIONS.overwrite}`;
+			} else if (choice === "Append") {
+				prompt = `${INIT_PROMPT}\n${INIT_EXISTING_FILE_INSTRUCTIONS.append}`;
+			} else {
+				this.showStatus("Init cancelled");
+				return;
+			}
+		}
+
+		await this.session.sendUserMessage(prompt);
+		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
+	}
+
+	private async handleSwarmCommand(task: string): Promise<void> {
+		if (task.length === 0) {
+			if (this.swarmMode) {
+				this.showStatus("Swarm mode is active — run /subagents-fleet to monitor the fleet.");
+			} else {
+				this.showStatus(
+					"Usage: /swarm <task> — decomposes the task across parallel subagents. Monitor with /subagents-fleet.",
+				);
+			}
+			return;
+		}
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /swarm.");
+			return;
+		}
+
+		this.swarmMode = true;
+		this.setExtensionStatus("swarm", "swarm ● active");
+		await this.session.sendUserMessage(buildSwarmPrompt(task));
+	}
+
+	private async handleResearchCommand(args: string): Promise<void> {
+		const usage =
+			"Usage: /research [--depth N] [--breadth N] <question> — deep research with cited sources. depth: reflection rounds (1-4, default 2); breadth: subtopics per round (1-8, default 4).";
+
+		let depth = 2;
+		let breadth = 4;
+		const questionParts: string[] = [];
+		const tokens = args.split(/\s+/).filter((t) => t.length > 0);
+		for (let i = 0; i < tokens.length; i++) {
+			const token = tokens[i];
+			if (token === "--depth" || token === "--breadth") {
+				const value = tokens[i + 1];
+				if (value === undefined || !/^\d+$/.test(value)) {
+					this.showStatus(usage);
+					return;
+				}
+				if (token === "--depth") {
+					depth = Math.min(4, Math.max(1, Number.parseInt(value, 10)));
+				} else {
+					breadth = Math.min(8, Math.max(1, Number.parseInt(value, 10)));
+				}
+				i++;
+			} else if (token.startsWith("--")) {
+				this.showStatus(usage);
+				return;
+			} else {
+				questionParts.push(token);
+			}
+		}
+
+		const question = questionParts.join(" ").trim();
+		if (question.length === 0) {
+			if (this.researchMode) {
+				this.showStatus("Deep research is active — findings stream in as subagents report.");
+			} else {
+				this.showStatus(usage);
+			}
+			return;
+		}
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /research.");
+			return;
+		}
+
+		this.researchMode = true;
+		this.setExtensionStatus("research", "research ● active");
+		await this.session.sendUserMessage(buildResearchPrompt(question, depth, breadth));
+	}
+
+	// lunr: /undo and /redo move the in-memory leaf via navigateTree (same machinery as
+	// /tree). In-session only — the JSONL file is append-only, so undone turns reappear
+	// after restart. Persistent undo via createBranchedSession is deferred.
+	private async handleUndoCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /undo.");
+			return;
+		}
+
+		// Find the last user message on the current branch (root → leaf order)
+		const branch = this.sessionManager.getBranch();
+		let lastUserIndex = -1;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry.type === "message" && entry.message.role === "user") {
+				lastUserIndex = i;
+				break;
+			}
+		}
+		if (lastUserIndex === -1) {
+			this.showStatus("Nothing to undo");
+			return;
+		}
+
+		const lastUser = branch[lastUserIndex];
+		const leafId = this.sessionManager.getLeafId();
+		let targetId: string;
+		if (lastUser.id === leafId) {
+			// User message with no response yet (e.g. aborted stream) — undo to its parent.
+			if (!lastUser.parentId) {
+				this.showStatus("Nothing to undo");
+				return;
+			}
+			targetId = lastUser.parentId;
+		} else {
+			// Navigating to a user message entry moves the leaf to its parent and
+			// restores the message text into the editor (handles the root case too).
+			targetId = lastUser.id;
+		}
+
+		try {
+			const result = await this.session.navigateTree(targetId, {});
+			if (result.cancelled) {
+				this.showStatus("Navigation cancelled");
+				return;
+			}
+			if (leafId) {
+				this.redoStack.push(leafId);
+			}
+			this.chatContainer.clear();
+			this.renderInitialMessages();
+			if (result.editorText && !this.editor.getText().trim()) {
+				this.editor.setText(result.editorText);
+			}
+			this.showStatus("Undone last turn — /redo to restore");
+			void this.flushCompactionQueue({ willRetry: false });
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async handleRedoCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /redo.");
+			return;
+		}
+
+		const targetId = this.redoStack.pop();
+		if (!targetId) {
+			this.showStatus("Nothing to redo");
+			return;
+		}
+
+		try {
+			const result = await this.session.navigateTree(targetId, {});
+			if (result.cancelled) {
+				this.redoStack.push(targetId);
+				this.showStatus("Navigation cancelled");
+				return;
+			}
+			this.chatContainer.clear();
+			this.renderInitialMessages();
+			if (result.editorText && !this.editor.getText().trim()) {
+				this.editor.setText(result.editorText);
+			}
+			this.showStatus("Redone");
+			void this.flushCompactionQueue({ willRetry: false });
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	private async handleReloadCommand(): Promise<void> {
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before reloading.");
@@ -5565,7 +6044,7 @@ export class InteractiveMode {
 	}
 
 	private handleNameCommand(text: string): void {
-		const name = text.replace(/^\/name\s*/, "").trim();
+		const name = text.replace(/^\/(?:name|title)\s*/, "").trim();
 		if (!name) {
 			const currentName = this.sessionManager.getSessionName();
 			if (currentName) {
@@ -5586,6 +6065,61 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	/**
+	 * lunr: fire-and-forget session auto-naming. After the FIRST assistant response in an
+	 * unnamed session, asks the model for a short title derived from the first user message.
+	 * Uses the light tier model when model tiers are enabled; otherwise the session model.
+	 * Never blocks the UI; failures are swallowed to the debug log. Skipped entirely when
+	 * the user has already named the session (via /name, /title, or --name).
+	 */
+	private maybeAutoNameSession(): void {
+		if (this.autoNameTriggered) return;
+		if (this.sessionManager.getSessionName()) return;
+		const userMessages = this.session.getUserMessagesForForking();
+		if (userMessages.length === 0) return; // No real turn yet; try again on the next agent_end.
+		if (userMessages.length > 1) {
+			// Resumed/older unnamed session — only auto-name fresh sessions.
+			this.autoNameTriggered = true;
+			return;
+		}
+		this.autoNameTriggered = true;
+		void this.generateSessionTitle(userMessages[0].text);
+	}
+
+	private async generateSessionTitle(firstUserText: string): Promise<void> {
+		try {
+			let model = this.session.model;
+			if (this.settingsManager.getModelTiersEnabled()) {
+				const tierModel = this.resolveModelReference(this.settingsManager.getTierModel("light"));
+				if (tierModel) {
+					model = tierModel;
+				}
+			}
+			if (!model) return;
+			const prompt =
+				"Generate a title of at most 6 words summarizing this request. " +
+				"Reply with the title only — no quotes, no trailing punctuation, no prefix.\n\n" +
+				`Request:\n${firstUserText.slice(0, 2000)}`;
+			const response = await this.session.modelRuntime.complete(model, {
+				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+			});
+			let title = response.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join(" ")
+				.replace(/\s+/g, " ")
+				.trim();
+			title = title.replace(/^["'`]+|["'`.!?]+$/g, "").trim();
+			if (!title) return;
+			if (this.sessionManager.getSessionName()) return; // User named it while the request was in flight.
+			this.session.setSessionName(title);
+		} catch (error) {
+			appendDebugLog(
+				`auto-name: title generation failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 
 	private handleSessionCommand(): void {
@@ -5662,6 +6196,117 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
 		this.ui.requestRender();
+	}
+
+	// lunr: /usage — session token totals, context window bar, and subscription
+	// plan usage (when the current provider has a usage adapter).
+	private async handleUsageCommand(): Promise<void> {
+		const entries = this.sessionManager.getEntries();
+
+		// Aggregate token usage per provider/model actually used.
+		const perModelMap = new Map<string, UsageSessionRow>();
+		for (const entry of entries) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			const message = entry.message;
+			const usage = message.usage;
+			const key = `${message.provider}/${message.responseModel ?? message.model}`;
+			let row = perModelMap.get(key);
+			if (!row) {
+				row = { model: key, input: 0, output: 0, total: 0 };
+				perModelMap.set(key, row);
+			}
+			row.input += usage.input + usage.cacheRead + usage.cacheWrite;
+			row.output += usage.output;
+			row.total += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		}
+		const sessionRows = Array.from(perModelMap.values()).sort((a, b) => b.total - a.total);
+
+		const context = this.session.getContextUsage();
+		const provider = this.session.model?.provider;
+		const plan = provider ? await getPlanUsage(provider, this.session.modelRuntime) : undefined;
+
+		const lines = renderUsageBox({ sessionRows, context, plan }, this.ui.terminal.columns);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.ui.requestRender();
+	}
+
+	// lunr: /context — estimated breakdown of what consumes the context window
+	// (system prompt incl. project context files, tool definitions, and the live
+	// session messages). Uses session.messages, so post-compaction renders match
+	// the context the model actually sees.
+	private handleContextCommand(): void {
+		const model = this.session.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (!model || contextWindow <= 0) {
+			this.showStatus("No model selected or context window unknown.");
+			return;
+		}
+
+		const tools = this.session
+			.getActiveToolNames()
+			.map((name) => this.session.getToolDefinition(name))
+			.filter((definition) => definition !== undefined);
+
+		const breakdown = computeContextBreakdown({
+			systemPrompt: this.session.systemPrompt,
+			tools,
+			messages: this.session.messages,
+			contextWindow,
+		});
+
+		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.ui.requestRender();
+	}
+
+	// lunr: /plan — native read-only plan mode. While active, a core tool-call gate on the
+	// AgentSession blocks edit/write and mutating bash (see core/plan-mode.ts), and a
+	// plan-mode addendum is appended to the system prompt. State is in-memory only.
+	private handlePlanCommand(args: string): void {
+		const sub = args.toLowerCase();
+
+		if (sub === "status") {
+			this.showStatus(
+				this.planModeActive
+					? "Plan mode is active — edit/write and mutating bash are blocked. /plan off to implement."
+					: "Plan mode is off.",
+			);
+			return;
+		}
+		if (sub !== "" && sub !== "on" && sub !== "off") {
+			this.showStatus("Usage: /plan [on|off|status] — bare /plan toggles read-only plan mode.");
+			return;
+		}
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /plan.");
+			return;
+		}
+
+		const next = sub === "" ? !this.planModeActive : sub === "on";
+		if (next === this.planModeActive) {
+			this.showStatus(next ? "Plan mode is already active." : "Plan mode is already off.");
+			return;
+		}
+
+		if (next) {
+			this.planModeActive = true;
+			this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
+				const reason = planModeBlockReason(toolName, input);
+				return reason ? { block: true, reason } : undefined;
+			});
+			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+			this.setExtensionStatus("plan", "plan ● read-only");
+			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
+		} else {
+			this.planModeActive = false;
+			this.planModeCleanup?.();
+			this.planModeCleanup = undefined;
+			this.session.setSystemPromptAppend(undefined);
+			this.setExtensionStatus("plan", undefined);
+			this.showStatus("Plan mode off — full tool access restored.");
+		}
 	}
 
 	private handleChangelogCommand(): void {
@@ -5818,10 +6463,16 @@ export class InteractiveMode {
 
 	private async handleClearCommand(): Promise<void> {
 		this.clearStatusIndicator();
+		// lunr: preserve the in-flight model across /new so a /model switch survives.
+		const previousModel = this.session.model;
 		try {
 			const result = await this.runtimeHost.newSession();
 			if (result.cancelled) {
 				return;
+			}
+			// lunr: restore the model if /new reverted to the default.
+			if (previousModel && this.session.model?.id !== previousModel.id) {
+				await this.session.setModel(previousModel);
 			}
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
@@ -5867,12 +6518,6 @@ export class InteractiveMode {
 	private handleArminSaysHi(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private handleDementedDelves(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new EarendilAnnouncementComponent());
 		this.ui.requestRender();
 	}
 

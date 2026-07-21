@@ -15,9 +15,9 @@ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Initialize dark theme with full color support
+// Initialize moon theme with full color support
 process.env.COLORTERM = "truecolor";
-initTheme("dark");
+initTheme("moon");
 
 // Load the real fixture that caused the bug
 const fixtureMessage: AssistantMessage = JSON.parse(

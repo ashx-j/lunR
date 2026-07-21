@@ -397,7 +397,9 @@ function spawnRunner(cfg: object, suffix: string, cwd: string): { pid?: number; 
 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
 	const cfgPath = getAsyncConfigPath(suffix);
 	fs.writeFileSync(cfgPath, JSON.stringify(cfg));
-	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
+	// lunr: bake-in ships compiled .js only; use the .ts when present (upstream dev), else the .js sibling.
+	const runnerTsPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
+	const runner = fs.existsSync(runnerTsPath) ? runnerTsPath : runnerTsPath.replace(/\.ts$/, ".js");
 	const nodeCommand = resolveAsyncRunnerNodeCommand();
 	const startupPath = typeof (cfg as { revivalLease?: unknown; asyncDir?: unknown }).revivalLease === "object"
 		&& typeof (cfg as { asyncDir?: unknown }).asyncDir === "string"

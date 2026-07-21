@@ -16,7 +16,16 @@ import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import {
+	APP_NAME,
+	appendDebugLog,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	getPackageDir,
+	getSessionsDir,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -24,11 +33,14 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+import { registerCustomizeBridge } from "./core/customize.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
+import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
+import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -39,6 +51,7 @@ import {
 	type SessionCwdIssue,
 } from "./core/session-cwd.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
+import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
@@ -49,7 +62,7 @@ import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
-const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "pi -ne".';
+const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
 
 /**
  * Read all content from piped stdin.
@@ -557,6 +570,17 @@ export async function main(args: string[], options?: MainOptions) {
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
+	// Register the model-tier bridge before extensions load so pi-subagents can read
+	// tier settings when building its tool description. Re-pointed to the runtime
+	// settings manager below once services exist.
+	registerModelTierBridge(startupSettingsManager);
+	// lunr: same for the simple-pi-memory character cap — extensions read it via the
+	// bridge at load/runtime; re-pointed to the runtime settings manager below.
+	registerMemoryCapBridge(startupSettingsManager);
+	// lunr: TUI customize settings (spinner, dividers, rail, prompt symbol) read by
+	// ashxj-spinners and ashxj-tui via the bridge; re-pointed to runtime below.
+	registerCustomizeBridge(startupSettingsManager);
+
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
@@ -597,6 +621,33 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager.appendSessionInfo(name);
 	}
 	time("createSessionManager");
+
+	// lunr: session retention — delete session files older than sessionRetentionDays
+	// (default 30; 0 = keep forever). Best-effort: per-file errors are swallowed,
+	// deletions go to the debug log only, and the active session file is never deleted.
+	try {
+		const retentionDays = startupSettingsManager.getSessionRetentionDays();
+		if (retentionDays > 0) {
+			const activeSessionFile = sessionManager.getSessionFile();
+			const { deleted } = await pruneOldSessions(getSessionsDir(), retentionDays, {
+				excludeFile: activeSessionFile,
+			});
+			// Also cover a custom session dir (--session-dir / settings), which is a flat
+			// .jsonl directory outside the default sessions root.
+			if (sessionDir) {
+				const extra = await pruneOldSessions(sessionDir, retentionDays, { excludeFile: activeSessionFile });
+				deleted.push(...extra.deleted);
+			}
+			if (deleted.length > 0) {
+				appendDebugLog(
+					`session-retention: deleted ${deleted.length} file(s):\n${deleted.map((p) => `  ${p}`).join("\n")}`,
+				);
+			}
+		}
+	} catch (error) {
+		appendDebugLog(`session-retention: prune failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	time("pruneOldSessions");
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
@@ -747,6 +798,12 @@ export async function main(args: string[], options?: MainOptions) {
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+
+	// Point the model-tier bridge at the live runtime settings manager so /settings
+	// changes take effect without a restart.
+	registerModelTierBridge(settingsManager);
+	registerMemoryCapBridge(settingsManager);
+	registerCustomizeBridge(settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

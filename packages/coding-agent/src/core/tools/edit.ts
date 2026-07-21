@@ -21,7 +21,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { renderToolPath, str } from "./render-utils.ts";
+import { renderToolPath, str, type ToolStatusDotState, toolStatusDot } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -248,10 +248,11 @@ function buildEditCallComponent(
 	args: RenderableEditArgs | undefined,
 	theme: Theme,
 	cwd: string,
+	dotState: ToolStatusDotState,
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
+	component.addChild(new Text(`${toolStatusDot(dotState, theme)} ${formatEditCall(args, theme, cwd)}`, 0, 0));
 
 	if (!component.preview) {
 		return component;
@@ -385,7 +386,13 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme, context.cwd);
+			return buildEditCallComponent(
+				component,
+				args,
+				theme,
+				context.cwd,
+				context.isPartial ? "pending" : context.isError ? "error" : "success",
+			);
 		},
 		renderResult(result, _options, theme, context) {
 			const callComponent = context.state.callComponent;
@@ -415,6 +422,7 @@ export function createEditToolDefinition(
 						context.args as RenderableEditArgs | undefined,
 						theme,
 						context.cwd,
+						context.isPartial ? "pending" : context.isError ? "error" : "success",
 					);
 				}
 			}

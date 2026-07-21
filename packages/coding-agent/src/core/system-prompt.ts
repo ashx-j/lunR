@@ -3,6 +3,7 @@
  */
 
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.ts";
+import { BEHAVIOR_BLOCK } from "./behavior-block.ts";
 import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
 export interface BuildSystemPromptOptions {
@@ -112,21 +113,19 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		}
 	}
 
-	// Always include these
-	addGuideline("Be concise in your responses");
-	addGuideline("Show file paths clearly when working with files");
-
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
+	const guidelinesSection = guidelines ? `Guidelines:\n${guidelines}\n\n` : "";
 
 	let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+
+${BEHAVIOR_BLOCK}
 
 Available tools:
 ${toolsList}
 
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
-Guidelines:
-${guidelines}
+${guidelinesSection}Plan mode: the user toggles it with /plan. While active, investigate read-only and present a concrete plan before any file changes.
 
 Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${readmePath}

@@ -4,6 +4,7 @@ import {
 	type Component,
 	Container,
 	getCapabilities,
+	Input,
 	type SelectItem,
 	SelectList,
 	type SelectListLayoutOptions,
@@ -13,7 +14,14 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
-import type { DefaultProjectTrust, WarningSettings } from "../../../core/settings-manager.ts";
+import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
+import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
+import type {
+	DefaultProjectTrust,
+	ModelTierName,
+	ModelTiersSettings,
+	WarningSettings,
+} from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -76,10 +84,19 @@ export interface SettingsConfig {
 	outputPad: 0 | 1;
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
+	smoothStreaming: boolean;
+	sessionRetentionDays: number;
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
 	warnings: WarningSettings;
+	modelTiers: ModelTiersSettings;
+	memoryCharCap: number;
+	/** undefined when pi-web-access is not loaded (curator bridge absent). */
+	searchCurator: SearchCuratorSetting | undefined;
+	// lunr: TUI customize settings
+	gutterRail: boolean;
+	promptSymbol: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -107,10 +124,25 @@ export interface SettingsCallbacks {
 	onOutputPadChange: (padding: 0 | 1) => void;
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
+	onSmoothStreamingChange: (enabled: boolean) => void;
+	onSessionRetentionDaysChange: (days: number) => void;
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
+	onModelTiersEnabledChange: (enabled: boolean) => void;
+	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
+	onMemoryCharCapChange: (cap: number) => void;
+	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
+	// lunr: TUI customize callbacks
+	onGutterRailChange: (enabled: boolean) => void;
+	onPromptSymbolChange: (enabled: boolean) => void;
+	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
+	createModelTierPicker: (
+		tier: ModelTierName,
+		currentModel: string | undefined,
+		done: (selectedValue?: string) => void,
+	) => Component;
 	onCancel: () => void;
 }
 
@@ -129,8 +161,9 @@ class WarningSettingsSubmenu extends Container {
 		const items: SettingItem[] = [
 			{
 				id: "anthropic-extra-usage",
-				label: "Anthropic extra usage",
-				description: "Warn when Anthropic subscription auth may use paid extra usage",
+				label: "Warn about Anthropic extra usage",
+				description:
+					"Show a banner when an Anthropic subscription account is active, because third-party usage is billed per token from extra usage, not your Claude plan limits.",
 				currentValue: (this.state.anthropicExtraUsage ?? true) ? "true" : "false",
 				values: ["true", "false"],
 			},
@@ -151,6 +184,18 @@ class WarningSettingsSubmenu extends Container {
 			onCancel,
 		);
 
+		// lunr: forward-link to the ToS disclaimer (Phase 5).
+		this.addChild(
+			new Text(
+				theme.fg(
+					"warning",
+					"Note: connecting an Anthropic subscription account to lunR may violate Anthropic's Terms of Service. See /login.",
+				),
+				0,
+				0,
+			),
+		);
+		this.addChild(new Spacer(1));
 		this.addChild(this.settingsList);
 	}
 
@@ -159,6 +204,246 @@ class WarningSettingsSubmenu extends Container {
 	}
 }
 
+const MODEL_TIER_ROWS: { tier: ModelTierName; label: string; description: string }[] = [
+	{
+		tier: "light",
+		label: "Light tier model",
+		description: "Cheap/fast model for simple subagent tasks (lookups, formatting)",
+	},
+	{
+		tier: "standard",
+		label: "Standard tier model",
+		description: "Mid-tier model for typical coding subagent tasks",
+	},
+	{
+		tier: "heavy",
+		label: "Heavy tier model",
+		description: "Strongest model for deep reasoning and complex debugging subagents",
+	},
+];
+
+/**
+ * Submenu for the 3-tier subagent model routing (light/standard/heavy).
+ * Row 1 toggles tier mode; rows 2-4 open a model picker per tier.
+ */
+class ModelTiersSubmenu extends Container {
+	private settingsList: SettingsList;
+	private state: { enabled: boolean; light?: string; standard?: string; heavy?: string };
+
+	constructor(modelTiers: ModelTiersSettings, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		this.state = {
+			enabled: modelTiers.enabled ?? false,
+			light: modelTiers.light,
+			standard: modelTiers.standard,
+			heavy: modelTiers.heavy,
+		};
+
+		const items: SettingItem[] = [
+			{
+				id: "enabled",
+				label: "Enable model tiers",
+				description:
+					"Route subagents to per-tier models. An explicit model choice overrides the tier; tiers without a model inherit the parent model.",
+				currentValue: this.state.enabled ? "true" : "false",
+				values: ["true", "false"],
+			},
+			...MODEL_TIER_ROWS.map((row): SettingItem => {
+				const tier = row.tier;
+				return {
+					id: tier,
+					label: row.label,
+					description: row.description,
+					currentValue: this.state[tier] ?? "not set",
+					submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
+				};
+			}),
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				if (id === "enabled") {
+					this.state.enabled = newValue === "true";
+					callbacks.onModelTiersEnabledChange(this.state.enabled);
+					return;
+				}
+				const tier = id as ModelTierName;
+				this.state[tier] = newValue;
+				callbacks.onModelTierModelChange(tier, newValue);
+			},
+			() => done(this.state.enabled ? "on" : "off"),
+		);
+
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+/**
+ * Numeric input submenu for the simple-pi-memory character cap.
+ * Enter validates and applies via done(newValue); Esc cancels.
+ */
+class MemoryCharCapSubmenu extends Container {
+	private input: Input;
+	private errorText: Text;
+
+	constructor(currentValue: string, done: (selectedValue?: string) => void) {
+		super();
+
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Memory Character Cap")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(
+			new Text(
+				theme.fg(
+					"muted",
+					`Max characters in the memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}).`,
+				),
+				0,
+				0,
+			),
+		);
+		this.addChild(new Spacer(1));
+
+		this.input = new Input();
+		this.input.setValue(currentValue);
+		this.input.onSubmit = (value) => {
+			const n = Number(value.trim());
+			if (!Number.isInteger(n) || n < MEMORY_CHAR_CAP_MIN || n > MEMORY_CHAR_CAP_MAX) {
+				this.errorText.setText(
+					theme.fg("error", `  Enter an integer between ${MEMORY_CHAR_CAP_MIN} and ${MEMORY_CHAR_CAP_MAX}.`),
+				);
+				return;
+			}
+			done(String(n));
+		};
+		this.input.onEscape = () => done();
+		this.addChild(this.input);
+
+		this.errorText = new Text("", 0, 0);
+		this.addChild(this.errorText);
+		this.addChild(new Text(theme.fg("dim", "  Enter to save · Esc to cancel"), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		this.input.handleInput(data);
+	}
+}
+
+const SEARCH_CURATOR_VALUES: SearchCuratorSetting[] = ["off", "on", "auto-summary"];
+
+/**
+ * Submenu for built-in extension settings (core-owned — extensions can't
+ * self-register /settings rows). Memory cap writes to lunR settings (the
+ * extension reads it via the @lunr/memory-cap bridge); search curator writes
+ * through pi-web-access's own config via the @lunr/search-curator bridge.
+ */
+class ExtensionsSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		const curatorAvailable = config.searchCurator !== undefined;
+
+		const items: SettingItem[] = [
+			{
+				id: "memory-char-cap",
+				label: "Memory character cap",
+				description: `Max characters in the simple-pi-memory memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				currentValue: String(config.memoryCharCap),
+				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
+			},
+			{
+				id: "search-curator",
+				label: "Search curator",
+				description: curatorAvailable
+					? "pi-web-access search curator: off = raw results, on = browser curator with summary draft, auto-summary = summary without the curator. Also settable via /curator."
+					: "pi-web-access is not loaded; the search curator is unavailable.",
+				currentValue: config.searchCurator ?? "unavailable",
+				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				switch (id) {
+					case "memory-char-cap":
+						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "search-curator":
+						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
+						break;
+				}
+			},
+			() => done(),
+		);
+
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+// lunr: Customize submenu — toggles for the lunR TUI customize settings.
+class CustomizeSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		const items: SettingItem[] = [
+			{
+				id: "gutter-rail",
+				label: "Gutter rail",
+				description: "Render a thin left │ rail spanning each turn, closing with ╰.",
+				currentValue: config.gutterRail ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "prompt-symbol",
+				label: "Prompt symbol",
+				description: "Show the ☾ › prompt glyph on the editor's first line.",
+				currentValue: config.promptSymbol ? "on" : "off",
+				values: ["on", "off"],
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				switch (id) {
+					case "gutter-rail":
+						callbacks.onGutterRailChange(newValue === "on");
+						break;
+					case "prompt-symbol":
+						callbacks.onPromptSymbolChange(newValue === "on");
+						break;
+				}
+			},
+			() => done(),
+		);
+
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
 class SelectSubmenu extends Container {
 	private selectList: SelectList;
 
@@ -254,7 +539,7 @@ function defaultAutomaticThemes(
 	if (autoTheme) return autoTheme;
 
 	const currentFixedTheme = currentThemeSetting.includes("/") ? undefined : currentThemeSetting;
-	const themeName = preferredTheme(availableThemes, currentFixedTheme, "dark");
+	const themeName = preferredTheme(availableThemes, currentFixedTheme, "moon");
 	return { lightTheme: themeName, darkTheme: themeName };
 }
 
@@ -292,7 +577,7 @@ class ThemeSubmenu extends Container {
 		this.singleTheme = preferredTheme(
 			availableThemes,
 			fixedTheme ?? (autoTheme ? this.getActiveAutomaticTheme() : undefined),
-			"dark",
+			"moon",
 		);
 
 		if (this.mode === "automatic") {
@@ -546,6 +831,20 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "smooth-streaming",
+				label: "Smooth streaming",
+				description: "Reveal responses character by character",
+				currentValue: config.smoothStreaming ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "session-retention-days",
+				label: "Session retention",
+				description: "Auto-delete session files older than N days at launch (0 = keep forever)",
+				currentValue: String(config.sessionRetentionDays),
+				values: ["0", "7", "14", "30", "60", "90", "365"],
+			},
+			{
 				id: "install-telemetry",
 				label: "Install telemetry",
 				description: "Send an anonymous version/update ping after changelog-detected updates",
@@ -575,8 +874,8 @@ export class SettingsSelectorComponent extends Container {
 			},
 			{
 				id: "warnings",
-				label: "Warnings",
-				description: "Enable or disable individual warnings",
+				label: "Anthropic warnings",
+				description: "Manage the Anthropic subscription usage warning",
 				currentValue: "configure",
 				submenu: (_currentValue, done) =>
 					new WarningSettingsSubmenu(
@@ -617,6 +916,29 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.currentTheme,
 				submenu: (currentValue, done) =>
 					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
+			},
+			{
+				id: "model-tiers",
+				label: "Model tiers",
+				description:
+					"Route subagents to light/standard/heavy tier models. An explicit model choice overrides the tier.",
+				currentValue: config.modelTiers.enabled ? "on" : "off",
+				submenu: (_currentValue, done) => new ModelTiersSubmenu(config.modelTiers, callbacks, done),
+			},
+			{
+				id: "extensions",
+				label: "Extensions",
+				description: "Settings for built-in extensions (simple-pi-memory, pi-web-access)",
+				currentValue: "configure",
+				submenu: (_currentValue, done) => new ExtensionsSubmenu(config, callbacks, done),
+			},
+			// lunr: Customize submenu — lunR TUI toggles (spinner, dividers, rail, prompt symbol)
+			{
+				id: "customize",
+				label: "Customize",
+				description: "lunR TUI customizations: spinner style, turn dividers, gutter rail, prompt symbol",
+				currentValue: "configure",
+				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
 			},
 		];
 
@@ -782,6 +1104,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "true");
+						break;
+					case "smooth-streaming":
+						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "session-retention-days":
+						callbacks.onSessionRetentionDaysChange(parseInt(newValue, 10));
 						break;
 					case "install-telemetry":
 						callbacks.onEnableInstallTelemetryChange(newValue === "true");

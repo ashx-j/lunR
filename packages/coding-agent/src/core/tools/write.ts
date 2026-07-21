@@ -8,7 +8,7 @@ import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/inte
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { normalizeDisplayText, renderToolPath, replaceTabs, str } from "./render-utils.ts";
+import { normalizeDisplayText, renderToolPath, replaceTabs, str, toolStatusDotFromContext } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const writeSchema = Type.Object({
@@ -238,13 +238,13 @@ export function createWriteToolDefinition(
 				component.cache = undefined;
 			}
 			component.setText(
-				formatWriteCall(
+				`${toolStatusDotFromContext(context, theme)} ${formatWriteCall(
 					renderArgs,
 					{ expanded: context.expanded, isPartial: context.isPartial },
 					theme,
 					component.cache,
 					context.cwd,
-				),
+				)}`,
 			);
 			return component;
 		},

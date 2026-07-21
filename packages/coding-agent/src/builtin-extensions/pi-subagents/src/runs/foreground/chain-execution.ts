@@ -64,7 +64,7 @@ import {
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
-import { resolveEffectiveSubagentModel } from "../shared/model-fallback.ts";
+import { resolveEffectiveSubagentModel, resolveTierModelOverride } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
@@ -235,7 +235,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 	const effectiveModels = input.step.parallel.map((task) => {
 		const taskAgentConfig = input.agents.find((agent) => agent.name === task.agent);
 		return resolveEffectiveSubagentModel(
-			task.model,
+			// lunr: model tiers — explicit per-task model wins; otherwise resolve task.tier via the tier bridge.
+			task.model ?? resolveTierModelOverride(task.tier),
 			taskAgentConfig?.model,
 			input.ctx.model,
 			input.availableModels,
@@ -1126,7 +1127,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 
-			const explicitStepModel = tuiOverride?.model ?? seqStep.model;
+			// lunr: model tiers — explicit step model wins; otherwise resolve seqStep.tier via the tier bridge.
+			const explicitStepModel = tuiOverride?.model ?? seqStep.model ?? resolveTierModelOverride(seqStep.tier);
 			const effectiveModel = resolveEffectiveSubagentModel(
 				explicitStepModel,
 				agentConfig.model,
