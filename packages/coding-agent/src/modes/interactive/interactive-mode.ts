@@ -140,6 +140,7 @@ import {
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
+import { TurnDivider } from "./components/turn-divider.ts";
 import { renderUsageBox, type UsageSessionRow } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
@@ -3392,7 +3393,14 @@ export class InteractiveMode {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
+						// lunr: render a faint ☾ turn divider between turns (when enabled),
+						// otherwise the original Spacer(1). Live read at insert time; history
+						// rebuild uses this same function so loaded sessions get dividers too.
+						if (this.settingsManager.getTurnDividers()) {
+							this.chatContainer.addChild(new TurnDivider(this.outputPad));
+						} else {
+							this.chatContainer.addChild(new Spacer(1));
+						}
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
