@@ -509,40 +509,8 @@ describe("SettingsManager", () => {
 		});
 	});
 
-	// lunr: TUI customize settings (spinner style, turn dividers, gutter rail, prompt symbol)
+	// lunr: TUI customize settings (gutter rail, prompt symbol)
 	describe("customize settings", () => {
-		it("should default spinnerStyle to moon-orbit and persist", async () => {
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getSpinnerStyle()).toBe("moon-orbit");
-			manager.setSpinnerStyle("moon-phases");
-			await manager.flush();
-			expect(manager.getSpinnerStyle()).toBe("moon-phases");
-			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
-			expect(saved.spinnerStyle).toBe("moon-phases");
-		});
-
-		it("should treat unknown spinnerStyle as moon-orbit", () => {
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ spinnerStyle: "bogus" }));
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getSpinnerStyle()).toBe("moon-orbit");
-		});
-
-		it("should accept random spinnerStyle", () => {
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ spinnerStyle: "random" }));
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getSpinnerStyle()).toBe("random");
-		});
-
-		it("should default turnDividers to true and persist", async () => {
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getTurnDividers()).toBe(true);
-			manager.setTurnDividers(false);
-			await manager.flush();
-			expect(manager.getTurnDividers()).toBe(false);
-			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
-			expect(saved.turnDividers).toBe(false);
-		});
-
 		it("should default gutterRail to true and persist", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getGutterRail()).toBe(true);
@@ -559,23 +527,14 @@ describe("SettingsManager", () => {
 			expect(manager.getPromptSymbol()).toBe(false);
 		});
 
-		it("should round-trip all four customize keys", async () => {
-			writeFileSync(
-				join(agentDir, "settings.json"),
-				JSON.stringify({ spinnerStyle: "random", turnDividers: false, gutterRail: false, promptSymbol: false }),
-			);
+		it("should round-trip both customize keys", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ gutterRail: false, promptSymbol: false }));
 			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getSpinnerStyle()).toBe("random");
-			expect(manager.getTurnDividers()).toBe(false);
 			expect(manager.getGutterRail()).toBe(false);
 			expect(manager.getPromptSymbol()).toBe(false);
-			manager.setSpinnerStyle("moon-orbit");
-			manager.setTurnDividers(true);
 			manager.setGutterRail(true);
 			manager.setPromptSymbol(true);
 			await manager.flush();
-			expect(manager.getSpinnerStyle()).toBe("moon-orbit");
-			expect(manager.getTurnDividers()).toBe(true);
 			expect(manager.getGutterRail()).toBe(true);
 			expect(manager.getPromptSymbol()).toBe(true);
 		});

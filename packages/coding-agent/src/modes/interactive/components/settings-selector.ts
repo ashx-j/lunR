@@ -95,8 +95,6 @@ export interface SettingsConfig {
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
-	spinnerStyle: "moon-orbit" | "moon-phases" | "random";
-	turnDividers: boolean;
 	gutterRail: boolean;
 	promptSymbol: boolean;
 }
@@ -137,8 +135,6 @@ export interface SettingsCallbacks {
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
-	onSpinnerStyleChange: (style: "moon-orbit" | "moon-phases" | "random") => void;
-	onTurnDividersChange: (enabled: boolean) => void;
 	onGutterRailChange: (enabled: boolean) => void;
 	onPromptSymbolChange: (enabled: boolean) => void;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
@@ -401,8 +397,6 @@ class ExtensionsSubmenu extends Container {
 }
 
 // lunr: Customize submenu — toggles for the lunR TUI customize settings.
-const SPINNER_STYLE_VALUES = ["moon-orbit", "moon-phases", "random"] as const;
-
 class CustomizeSubmenu extends Container {
 	private settingsList: SettingsList;
 
@@ -410,21 +404,6 @@ class CustomizeSubmenu extends Container {
 		super();
 
 		const items: SettingItem[] = [
-			{
-				id: "spinner-style",
-				label: "Spinner style",
-				description:
-					"Working-indicator animation. moon-orbit / moon-phases are lunR signatures; random picks from the unicode-animations pool.",
-				currentValue: config.spinnerStyle,
-				values: [...SPINNER_STYLE_VALUES],
-			},
-			{
-				id: "turn-dividers",
-				label: "Turn dividers",
-				description: "Render a faint ──── ☾ ──── rule between turns in the chat scrollback.",
-				currentValue: config.turnDividers ? "on" : "off",
-				values: ["on", "off"],
-			},
 			{
 				id: "gutter-rail",
 				label: "Gutter rail",
@@ -447,12 +426,6 @@ class CustomizeSubmenu extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				switch (id) {
-					case "spinner-style":
-						callbacks.onSpinnerStyleChange(newValue as (typeof SPINNER_STYLE_VALUES)[number]);
-						break;
-					case "turn-dividers":
-						callbacks.onTurnDividersChange(newValue === "on");
-						break;
 					case "gutter-rail":
 						callbacks.onGutterRailChange(newValue === "on");
 						break;

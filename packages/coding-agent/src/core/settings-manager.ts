@@ -136,9 +136,7 @@ export interface Settings {
 	modelTiers?: ModelTiersSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
-	// lunr: TUI customize settings (spinner, dividers, gutter rail, prompt symbol)
-	spinnerStyle?: "moon-orbit" | "moon-phases" | "random"; // default: "moon-orbit"
-	turnDividers?: boolean; // default: true - render a faint rule between turns
+	// lunr: TUI customize settings (gutter rail, prompt symbol)
 	gutterRail?: boolean; // default: true - render a thin left rail around each turn
 	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -954,27 +952,6 @@ export class SettingsManager {
 	}
 
 	// lunr: TUI customize settings getters/setters.
-	getSpinnerStyle(): "moon-orbit" | "moon-phases" | "random" {
-		const value = this.settings.spinnerStyle;
-		return value === "moon-phases" || value === "random" ? value : "moon-orbit";
-	}
-
-	setSpinnerStyle(style: "moon-orbit" | "moon-phases" | "random"): void {
-		this.globalSettings.spinnerStyle = style;
-		this.markModified("spinnerStyle");
-		this.save();
-	}
-
-	getTurnDividers(): boolean {
-		return this.settings.turnDividers ?? true;
-	}
-
-	setTurnDividers(enabled: boolean): void {
-		this.globalSettings.turnDividers = enabled;
-		this.markModified("turnDividers");
-		this.save();
-	}
-
 	getGutterRail(): boolean {
 		return this.settings.gutterRail ?? true;
 	}

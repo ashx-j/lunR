@@ -1,27 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spinners } from "unicode-animations";
 
-// lunr: signature spinners — two lunR-owned working-indicator animations.
-// When the customize bridge reports spinnerStyle = "moon-orbit" or "moon-phases",
-// this spinner is used for ALL working states (it's the signature); "random"
-// keeps the existing per-state pool behavior unchanged. Frames are
-// monochrome-safe glyphs (no emoji). Bridgeless → current behavior.
-const LUNR_SPINNERS: Record<string, { frames: string[]; interval: number }> = {
-  "moon-orbit":  { frames: ["✦  ☾", " ✦ ☾", "  ✦☾", " · ☾", "·  ☾", " ☾ ✦"], interval: 120 },
-  "moon-phases": { frames: ["◔", "◑", "◕", "●", "◕", "◑"], interval: 150 },
-};
-
-const CUSTOMIZE_BRIDGE_SYMBOL = Symbol.for("@lunr/customize");
-
-interface CustomizeBridgeLike {
-  getSpinnerStyle(): "moon-orbit" | "moon-phases" | "random";
-}
-
-function getLunrSpinnerStyle(): "moon-orbit" | "moon-phases" | "random" | undefined {
-  const bridge = (globalThis as Record<symbol, unknown>)[CUSTOMIZE_BRIDGE_SYMBOL] as CustomizeBridgeLike | undefined;
-  return bridge?.getSpinnerStyle();
-}
-
 // Spinners come from the `unicode-animations` package; see
 // https://www.npmjs.com/package/unicode-animations for the full catalog.
 // On each state entry we pick a random spinner from that state's pool, and
@@ -173,15 +152,7 @@ export default function (pi: ExtensionAPI): void {
     stateEnteredAt = Date.now();
 
     const spinnerPool = SPINNER_POOL_FOR_STATE[next];
-    // lunr: when the customize bridge selects a signature spinner, use it for
-    // every working state; otherwise ("random" or bridge absent) keep the
-    // existing per-state pool behavior exactly.
-    const lunrStyle = getLunrSpinnerStyle();
-    const lunrSpinner = lunrStyle === "moon-orbit" || lunrStyle === "moon-phases" ? LUNR_SPINNERS[lunrStyle] : undefined;
-    if (lunrSpinner && spinnerPool.length > 0) {
-      const frames = lunrSpinner.frames.map(f => ctx.ui.theme.fg("accent", f));
-      ctx.ui.setWorkingIndicator({ frames, intervalMs: lunrSpinner.interval });
-    } else if (spinnerPool.length > 0) {
+    if (spinnerPool.length > 0) {
       const spinnerName = pick(spinnerPool);
       const def = spinners[spinnerName];
       const frames = def.frames.map(f => ctx.ui.theme.fg("accent", f));
