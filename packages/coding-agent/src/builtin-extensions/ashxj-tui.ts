@@ -409,6 +409,11 @@ function color(theme: Theme | undefined, token: string, text: string): string {
 	}
 }
 
+// lunr: strip ANSI escape sequences so footer statuses can be re-colored uniformly.
+function stripAnsi(s: string): string {
+	return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 // ---------------------------------------------------------------------------
 // Stats formatting
 // ---------------------------------------------------------------------------
@@ -612,7 +617,8 @@ function renderStatsLine(
 		// lunr: also render the plan-mode, pi-goal, /swarm, and /research footer statuses, leading the line
 		for (const key of ["plan", "goal", "swarm", "research", "lsp", "mcp", "tps"] as const) {
 			const v = statuses.get(key);
-			if (v) parts.push(v);
+			// lunr: unify footer status colors to dim so the whole stats line reads as one tone.
+			if (v) parts.push(color(theme, "dim", stripAnsi(v)));
 		}
 	}
 
