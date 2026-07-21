@@ -13,6 +13,8 @@ export interface ExtensionSelectorOptions {
 	tui?: TUI;
 	timeout?: number;
 	onToggleToolsExpanded?: () => void;
+	/** lunr: optional message text shown between the title and the option list. */
+	message?: string;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -25,6 +27,11 @@ export class ExtensionSelectorComponent extends Container {
 	private baseTitle: string;
 	private countdown: CountdownTimer | undefined;
 	private onToggleToolsExpanded: (() => void) | undefined;
+
+	/** lunr: allow setting the initial selection (e.g. default to Cancel for disclaimers). */
+	setSelectedIndex(index: number): void {
+		this.selectedIndex = Math.max(0, Math.min(index, this.options.length - 1));
+	}
 
 	constructor(
 		title: string,
@@ -47,6 +54,12 @@ export class ExtensionSelectorComponent extends Container {
 		this.titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
 		this.addChild(this.titleText);
 		this.addChild(new Spacer(1));
+
+		// lunr: optional message text for disclaimers.
+		if (opts?.message) {
+			this.addChild(new Text(theme.fg("text", opts.message), 1, 0));
+			this.addChild(new Spacer(1));
+		}
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
 			this.countdown = new CountdownTimer(

@@ -215,6 +215,10 @@ function isDeadTerminalError(error: unknown): boolean {
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
 	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
 
+// lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
+const ANTHROPIC_TOS_DISCLAIMER =
+	"Connecting an Anthropic subscription (Claude Pro/Max) account to lunR may violate Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Third-party harness usage also draws from paid extra usage, not your plan limits. Continue?";
+
 const INIT_PROMPT = `Analyze this codebase and write a starter AGENTS.md in the project root.
 Scan: package manifests, directory layout, build/test/lint scripts, CI config,
 existing README/docs. Include only: project purpose (one paragraph), build &
@@ -5099,6 +5103,14 @@ export class InteractiveMode {
 	}
 
 	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {
+		// lunr: gate Anthropic OAuth (subscription) login with a ToS disclaimer.
+		if (providerOption.id === "anthropic" && providerOption.authType === "oauth") {
+			const confirmed = await this.confirmDisclaimer("Anthropic Terms of Service", ANTHROPIC_TOS_DISCLAIMER);
+			if (!confirmed) {
+				this.showStatus("Login cancelled.");
+				return;
+			}
+		}
 		if (providerOption.authType === "oauth") {
 			await this.showLoginDialog(providerOption.id, providerOption.name);
 		} else if (providerOption.method?.login) {
@@ -5106,6 +5118,30 @@ export class InteractiveMode {
 		} else {
 			this.showAmbientAuthDialog(providerOption);
 		}
+	}
+
+	/** lunr: show a Yes/No disclaimer dialog using the existing selector pattern. */
+	private confirmDisclaimer(title: string, message: string): Promise<boolean> {
+		return new Promise<boolean>((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					title,
+					["Continue", "Cancel"],
+					(option) => {
+						done();
+						resolve(option === "Continue");
+					},
+					() => {
+						done();
+						resolve(false);
+					},
+					// lunr: default to Cancel (index 1) for safety; show the disclaimer as message text.
+					{ message },
+				);
+				selector.setSelectedIndex(1);
+				return { component: selector, focus: selector };
+			});
+		});
 	}
 
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
