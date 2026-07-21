@@ -28,9 +28,6 @@ import lunrLocalProviders from "./lunr-local-providers/index.ts";
 // narumiruna extensions (pi-goal kept: plan 2's /goal footer indicator patches it)
 import narumirunaGoal from "./narumiruna-pi-goal/src/goal.ts";
 
-// context-mode
-import contextMode from "./context-mode/adapters/pi/extension.ts";
-
 /**
  * Wrap a raw factory function as a named InlineExtension.
  * The cast bridges the gap between the source-level ExtensionFactory type
@@ -56,8 +53,6 @@ export const builtinExtensions: InlineExtension[] = [
 	ext("pi-mcp-adapter", piMcpAdapter),
 	// narumiruna
 	ext("narumiruna-pi-goal", narumirunaGoal),
-	// context-mode
-	ext("context-mode", contextMode),
 	// lunR-native
 	ext("lunr-local-providers", lunrLocalProviders),
 ];
