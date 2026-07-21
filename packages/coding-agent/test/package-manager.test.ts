@@ -2395,53 +2395,6 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(installParsedSourceSpy).toHaveBeenCalledTimes(1);
 		});
 
-		it("should not check package updates when offline", async () => {
-			process.env.PI_OFFLINE = "1";
-			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture");
-
-			const updates = await packageManager.checkForAvailableUpdates();
-			expect(updates).toEqual([]);
-			expect(runCommandCaptureSpy).not.toHaveBeenCalled();
-		});
-
-		it("should report updates for installed unpinned npm packages", async () => {
-			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
-			mkdirSync(installedPath, { recursive: true });
-			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
-			settingsManager.setProjectPackages(["npm:example"]);
-
-			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
-
-			const updates = await packageManager.checkForAvailableUpdates();
-			expect(updates).toEqual([
-				{
-					source: "npm:example",
-					displayName: "example",
-					type: "npm",
-					scope: "project",
-				},
-			]);
-		});
-
-		it("should skip pinned packages when checking for updates", async () => {
-			const installedNpmPath = join(tempDir, ".pi", "npm", "node_modules", "example");
-			mkdirSync(installedNpmPath, { recursive: true });
-			writeFileSync(join(installedNpmPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
-			const parsedGitSource = (packageManager as any).parseSource("git:github.com/example/repo@v1");
-			const installedGitPath = (packageManager as any).getGitInstallPath(parsedGitSource, "project") as string;
-			mkdirSync(installedGitPath, { recursive: true });
-
-			settingsManager.setProjectPackages(["npm:example@1.0.0", "git:github.com/example/repo@v1"]);
-
-			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture");
-			const gitUpdateSpy = vi.spyOn(packageManager as any, "gitHasAvailableUpdate");
-
-			const updates = await packageManager.checkForAvailableUpdates();
-			expect(updates).toEqual([]);
-			expect(runCommandCaptureSpy).not.toHaveBeenCalled();
-			expect(gitUpdateSpy).not.toHaveBeenCalled();
-		});
-
 		it("should use npm view to fetch latest version", async () => {
 			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
 

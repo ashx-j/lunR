@@ -19,7 +19,6 @@ export const RESERVED_COMMAND_NAMES = new Set([
 	"copy",
 	"name",
 	"session",
-	"changelog",
 	"hotkeys",
 	"fork",
 	"tree",
