@@ -171,7 +171,7 @@ describe("computeContextBreakdown", () => {
 });
 
 describe("renderContextBox", () => {
-	it("renders all categories, total, free, and the estimates note", () => {
+	it("renders all categories, total, and the estimates note", () => {
 		const messages: AgentMessage[] = [
 			createUserMessage("hello there"),
 			createAssistantMessage([
@@ -198,8 +198,6 @@ describe("renderContextBox", () => {
 		expect(text).toContain("Assistant text");
 		expect(text).toContain("Thinking");
 		expect(text).toContain("Estimated total");
-		expect(text).toContain("Free");
-		expect(text).toContain("█");
 		expect(text).toContain("░");
 		// Bordered box chrome
 		expect(lines[0]).toContain("╭");

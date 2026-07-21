@@ -42,7 +42,7 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 		{ label: "Summaries", tokens: breakdown.summaries },
 	].filter((row) => row.tokens > 0);
 
-	const labelWidth = Math.max(...rows.map((row) => row.label.length), "Estimated total".length, "Free".length);
+	const labelWidth = Math.max(...rows.map((row) => row.label.length), "Estimated total".length);
 	for (const row of rows) {
 		content.push(rowLine(row, labelWidth, breakdown.contextWindow));
 	}
@@ -52,7 +52,6 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	content.push(
 		`  ${"Estimated total".padEnd(labelWidth)}  ${usageBar(usedPercent)}  ${formatTokens(breakdown.total)} / ${formatTokens(breakdown.contextWindow)} (${Math.round(usedPercent)}%)`,
 	);
-	content.push(rowLine({ label: "Free", tokens: breakdown.free }, labelWidth, breakdown.contextWindow));
 
 	return renderThemedBox(" Context ", content, maxWidth);
 }
