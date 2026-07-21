@@ -136,6 +136,11 @@ export interface Settings {
 	modelTiers?: ModelTiersSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
+	// lunr: TUI customize settings (spinner, dividers, gutter rail, prompt symbol)
+	spinnerStyle?: "moon-orbit" | "moon-phases" | "random"; // default: "moon-orbit"
+	turnDividers?: boolean; // default: true - render a faint rule between turns
+	gutterRail?: boolean; // default: true - render a thin left rail around each turn
+	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -945,6 +950,48 @@ export class SettingsManager {
 	setMemoryCharCap(cap: number): void {
 		this.globalSettings.memoryCharCap = Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(cap)));
 		this.markModified("memoryCharCap");
+		this.save();
+	}
+
+	// lunr: TUI customize settings getters/setters.
+	getSpinnerStyle(): "moon-orbit" | "moon-phases" | "random" {
+		const value = this.settings.spinnerStyle;
+		return value === "moon-phases" || value === "random" ? value : "moon-orbit";
+	}
+
+	setSpinnerStyle(style: "moon-orbit" | "moon-phases" | "random"): void {
+		this.globalSettings.spinnerStyle = style;
+		this.markModified("spinnerStyle");
+		this.save();
+	}
+
+	getTurnDividers(): boolean {
+		return this.settings.turnDividers ?? true;
+	}
+
+	setTurnDividers(enabled: boolean): void {
+		this.globalSettings.turnDividers = enabled;
+		this.markModified("turnDividers");
+		this.save();
+	}
+
+	getGutterRail(): boolean {
+		return this.settings.gutterRail ?? true;
+	}
+
+	setGutterRail(enabled: boolean): void {
+		this.globalSettings.gutterRail = enabled;
+		this.markModified("gutterRail");
+		this.save();
+	}
+
+	getPromptSymbol(): boolean {
+		return this.settings.promptSymbol ?? true;
+	}
+
+	setPromptSymbol(enabled: boolean): void {
+		this.globalSettings.promptSymbol = enabled;
+		this.markModified("promptSymbol");
 		this.save();
 	}
 

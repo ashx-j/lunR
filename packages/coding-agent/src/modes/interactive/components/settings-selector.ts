@@ -94,6 +94,11 @@ export interface SettingsConfig {
 	memoryCharCap: number;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
+	// lunr: TUI customize settings
+	spinnerStyle: "moon-orbit" | "moon-phases" | "random";
+	turnDividers: boolean;
+	gutterRail: boolean;
+	promptSymbol: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -131,6 +136,11 @@ export interface SettingsCallbacks {
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
+	// lunr: TUI customize callbacks
+	onSpinnerStyleChange: (style: "moon-orbit" | "moon-phases" | "random") => void;
+	onTurnDividersChange: (enabled: boolean) => void;
+	onGutterRailChange: (enabled: boolean) => void;
+	onPromptSymbolChange: (enabled: boolean) => void;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
 	createModelTierPicker: (
 		tier: ModelTierName,
@@ -376,6 +386,78 @@ class ExtensionsSubmenu extends Container {
 						break;
 					case "search-curator":
 						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
+						break;
+				}
+			},
+			() => done(),
+		);
+
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+// lunr: Customize submenu — toggles for the lunR TUI customize settings.
+const SPINNER_STYLE_VALUES = ["moon-orbit", "moon-phases", "random"] as const;
+
+class CustomizeSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		const items: SettingItem[] = [
+			{
+				id: "spinner-style",
+				label: "Spinner style",
+				description:
+					"Working-indicator animation. moon-orbit / moon-phases are lunR signatures; random picks from the unicode-animations pool.",
+				currentValue: config.spinnerStyle,
+				values: [...SPINNER_STYLE_VALUES],
+			},
+			{
+				id: "turn-dividers",
+				label: "Turn dividers",
+				description: "Render a faint ──── ☾ ──── rule between turns in the chat scrollback.",
+				currentValue: config.turnDividers ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "gutter-rail",
+				label: "Gutter rail",
+				description: "Render a thin left │ rail spanning each turn, closing with ╰.",
+				currentValue: config.gutterRail ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "prompt-symbol",
+				label: "Prompt symbol",
+				description: "Show the ☾ › prompt glyph on the editor's first line.",
+				currentValue: config.promptSymbol ? "on" : "off",
+				values: ["on", "off"],
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				switch (id) {
+					case "spinner-style":
+						callbacks.onSpinnerStyleChange(newValue as (typeof SPINNER_STYLE_VALUES)[number]);
+						break;
+					case "turn-dividers":
+						callbacks.onTurnDividersChange(newValue === "on");
+						break;
+					case "gutter-rail":
+						callbacks.onGutterRailChange(newValue === "on");
+						break;
+					case "prompt-symbol":
+						callbacks.onPromptSymbolChange(newValue === "on");
 						break;
 				}
 			},
@@ -876,6 +958,14 @@ export class SettingsSelectorComponent extends Container {
 				description: "Settings for built-in extensions (simple-pi-memory, pi-web-access)",
 				currentValue: "configure",
 				submenu: (_currentValue, done) => new ExtensionsSubmenu(config, callbacks, done),
+			},
+			// lunr: Customize submenu — lunR TUI toggles (spinner, dividers, rail, prompt symbol)
+			{
+				id: "customize",
+				label: "Customize",
+				description: "lunR TUI customizations: spinner style, turn dividers, gutter rail, prompt symbol",
+				currentValue: "configure",
+				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
 			},
 		];
 

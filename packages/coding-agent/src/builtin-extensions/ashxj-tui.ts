@@ -521,8 +521,10 @@ function renderStatsLine(
 	//    throughput/tokens (`pi-tps-was-taken`). These are NOT on `ctx` directly.
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
-		// lunr: also render the plan-mode, pi-goal, /swarm, and /research footer statuses, leading the line
-		for (const key of ["plan", "goal", "swarm", "research", "lsp", "mcp", "tps"] as const) {
+		// lunr: render the plan-mode, pi-goal, /swarm, and /research footer statuses, leading the line.
+		// lunr: the `lsp` and `mcp` status segments are intentionally hidden here (publishers in
+		// pi-lsp-extension and pi-mcp-adapter keep calling ctx.ui.setStatus harmlessly).
+		for (const key of ["plan", "goal", "swarm", "research", "tps"] as const) {
 			const v = statuses.get(key);
 			// lunr: unify footer status colors to dim so the whole stats line reads as one tone.
 			if (v) parts.push(color(theme, "dim", stripAnsi(v)));

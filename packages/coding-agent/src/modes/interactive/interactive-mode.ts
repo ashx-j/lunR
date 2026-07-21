@@ -4318,6 +4318,11 @@ export class InteractiveMode {
 					modelTiers: this.settingsManager.getModelTiers(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					searchCurator: getSearchCuratorSetting(),
+					// lunr: TUI customize settings
+					spinnerStyle: this.settingsManager.getSpinnerStyle(),
+					turnDividers: this.settingsManager.getTurnDividers(),
+					gutterRail: this.settingsManager.getGutterRail(),
+					promptSymbol: this.settingsManager.getPromptSymbol(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4475,6 +4480,19 @@ export class InteractiveMode {
 						if (!setSearchCuratorSetting(setting)) {
 							this.showError("pi-web-access is not loaded; curator setting unavailable.");
 						}
+					},
+					// lunr: TUI customize callbacks
+					onSpinnerStyleChange: (style) => {
+						this.settingsManager.setSpinnerStyle(style);
+					},
+					onTurnDividersChange: (enabled) => {
+						this.settingsManager.setTurnDividers(enabled);
+					},
+					onGutterRailChange: (enabled) => {
+						this.settingsManager.setGutterRail(enabled);
+					},
+					onPromptSymbolChange: (enabled) => {
+						this.settingsManager.setPromptSymbol(enabled);
 					},
 					createModelTierPicker: (_tier, currentModelRef, done) => {
 						const selector = new ModelSelectorComponent(
