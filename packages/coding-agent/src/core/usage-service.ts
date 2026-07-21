@@ -78,26 +78,3 @@ export function clearPlanUsageCache(): void {
 // ---------------------------------------------------------------------------
 // Extension bridge
 // ---------------------------------------------------------------------------
-
-export const USAGE_SERVICE_BRIDGE_SYMBOL = Symbol.for("@lunr/usage-service");
-
-export interface UsageServiceBridge {
-	getPlanUsage(providerId: string): Promise<PlanUsage | undefined>;
-	/** True when the provider authenticates via OAuth (subscription), not an API key. */
-	isOAuthProvider(providerId: string): boolean;
-}
-
-/** Register the global usage-service bridge for builtin extensions. */
-export function registerUsageServiceBridge(runtime: ModelRuntime): void {
-	const bridge: UsageServiceBridge = {
-		getPlanUsage: (providerId) => getPlanUsage(providerId, runtime),
-		isOAuthProvider: (providerId) => {
-			try {
-				return runtime.isUsingOAuth(providerId);
-			} catch {
-				return false;
-			}
-		},
-	};
-	(globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] = bridge;
-}
