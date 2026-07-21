@@ -3040,6 +3040,7 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
+						this.settingsManager.getGutterRail(),
 					);
 					this.streamingMessage = event.message;
 					this.streamingTargetMessage = event.message;
@@ -3418,6 +3419,7 @@ export class InteractiveMode {
 								skillBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
+								this.settingsManager.getGutterRail(),
 							);
 							this.chatContainer.addChild(userComponent);
 						}
@@ -3426,6 +3428,7 @@ export class InteractiveMode {
 							textContent,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
+							this.settingsManager.getGutterRail(),
 						);
 						this.chatContainer.addChild(userComponent);
 					}
@@ -3442,6 +3445,7 @@ export class InteractiveMode {
 					this.getMarkdownThemeWithSettings(),
 					this.hiddenThinkingLabel,
 					this.outputPad,
+					this.settingsManager.getGutterRail(),
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;
