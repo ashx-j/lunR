@@ -800,7 +800,6 @@ export async function main(args: string[], options?: MainOptions) {
 	registerModelTierBridge(settingsManager);
 	registerMemoryCapBridge(settingsManager);
 
-
 	if (parsed.help) {
 		const extensionFlags = resourceLoader
 			.getExtensions()

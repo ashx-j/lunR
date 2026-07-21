@@ -13,6 +13,8 @@ export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
+	// lunr: kept for the deferred alternative hidden-thinking indicator (Phase 8 removed the label render).
+	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: retained for future use
 	private hiddenThinkingLabel: string;
 	private outputPad: number;
 	private lastMessage?: AssistantMessage;

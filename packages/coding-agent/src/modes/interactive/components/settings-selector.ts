@@ -156,7 +156,8 @@ class WarningSettingsSubmenu extends Container {
 			{
 				id: "anthropic-extra-usage",
 				label: "Warn about Anthropic extra usage",
-				description: "Show a banner when an Anthropic subscription account is active, because third-party usage is billed per token from extra usage, not your Claude plan limits.",
+				description:
+					"Show a banner when an Anthropic subscription account is active, because third-party usage is billed per token from extra usage, not your Claude plan limits.",
 				currentValue: (this.state.anthropicExtraUsage ?? true) ? "true" : "false",
 				values: ["true", "false"],
 			},
@@ -178,7 +179,16 @@ class WarningSettingsSubmenu extends Container {
 		);
 
 		// lunr: forward-link to the ToS disclaimer (Phase 5).
-		this.addChild(new Text(theme.fg("warning", "Note: connecting an Anthropic subscription account to lunR may violate Anthropic's Terms of Service. See /login."), 0, 0));
+		this.addChild(
+			new Text(
+				theme.fg(
+					"warning",
+					"Note: connecting an Anthropic subscription account to lunR may violate Anthropic's Terms of Service. See /login.",
+				),
+				0,
+				0,
+			),
+		);
 		this.addChild(new Spacer(1));
 		this.addChild(this.settingsList);
 	}
