@@ -19,11 +19,17 @@ const MIN_DETAILS_WIDTH = 24;
 export class BootScreenComponent implements Component {
 	/** Pre-styled first line of the details column (logo + version). */
 	private readonly header: string;
-	private readonly rows: BootScreenRow[];
+	private rows: BootScreenRow[];
 
 	constructor(header: string, rows: BootScreenRow[]) {
 		this.header = header;
 		this.rows = rows;
+	}
+
+	/** lunr: allow refreshing rows on session replacement so the model row stays current. */
+	updateRows(rows: BootScreenRow[]): void {
+		this.rows = rows;
+		this.invalidate?.();
 	}
 
 	invalidate(): void {

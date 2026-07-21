@@ -814,19 +814,7 @@ export class InteractiveMode {
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
 			const header = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
 
-			const model = this.session.model;
-			const bootRows: BootScreenRow[] = [
-				{ label: "model", value: model ? `${model.id} (${model.provider})` : "none" },
-				{ label: "directory", value: this.sessionManager.getCwd() },
-				{ label: "session", value: this.sessionManager.getSessionName() ?? this.sessionManager.getSessionId() },
-				{ label: "config", value: getAgentDir() },
-				{ label: "theme", value: getThemeName() },
-			];
-			const skillsCount = this.session.resourceLoader.getSkills().skills.length;
-			if (skillsCount > 0) {
-				bootRows.push({ label: "skills", value: String(skillsCount) });
-			}
-			this.builtInHeader = new BootScreenComponent(header, bootRows);
+			this.builtInHeader = new BootScreenComponent(header, this.buildBootRows());
 
 			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
@@ -1765,10 +1753,30 @@ export class InteractiveMode {
 		}
 	}
 
+	private buildBootRows(): BootScreenRow[] {
+		const model = this.session.model;
+		const bootRows: BootScreenRow[] = [
+			{ label: "model", value: model ? `${model.id} (${model.provider})` : "none" },
+			{ label: "directory", value: this.sessionManager.getCwd() },
+			{ label: "session", value: this.sessionManager.getSessionName() ?? this.sessionManager.getSessionId() },
+			{ label: "config", value: getAgentDir() },
+			{ label: "theme", value: getThemeName() },
+		];
+		const skillsCount = this.session.resourceLoader.getSkills().skills.length;
+		if (skillsCount > 0) {
+			bootRows.push({ label: "skills", value: String(skillsCount) });
+		}
+		return bootRows;
+	}
+
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
+		// lunr: refresh boot-screen rows on session replacement so the model row stays current.
+		if (this.builtInHeader instanceof BootScreenComponent) {
+			(this.builtInHeader as BootScreenComponent).updateRows(this.buildBootRows());
+		}
 		if (options.renderBeforeBind) {
 			this.renderCurrentSessionState();
 			this.subscribeToAgent();
@@ -6395,10 +6403,16 @@ export class InteractiveMode {
 
 	private async handleClearCommand(): Promise<void> {
 		this.clearStatusIndicator();
+		// lunr: preserve the in-flight model across /new so a /model switch survives.
+		const previousModel = this.session.model;
 		try {
 			const result = await this.runtimeHost.newSession();
 			if (result.cancelled) {
 				return;
+			}
+			// lunr: restore the model if /new reverted to the default.
+			if (previousModel && this.session.model?.id !== previousModel.id) {
+				await this.session.setModel(previousModel);
 			}
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
