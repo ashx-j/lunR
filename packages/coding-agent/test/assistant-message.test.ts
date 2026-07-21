@@ -69,12 +69,13 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain("Thinking...");
+		// lunr: thinking blocks are hidden — no Thinking... label should appear.
+		expect(rendered).not.toContain("Thinking...");
 		expect(rendered).toContain("maximum output token limit");
 		expect(rendered).toContain("response may be incomplete");
 	});
 
-	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {
+	test("hides thinking blocks without a label when hideThinkingBlock is true", () => {
 		initTheme("moon");
 
 		const component = new AssistantMessageComponent(
@@ -88,7 +89,8 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
+		// lunr: no Thinking... label when hidden; visible text follows immediately.
+		expect(rendered).not.toContain("Thinking...");
 		expect(rendered).toContain("answer");
 	});
 

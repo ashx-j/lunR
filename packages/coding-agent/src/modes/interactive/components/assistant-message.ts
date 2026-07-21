@@ -132,10 +132,8 @@ export class AssistantMessageComponent extends Container {
 					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 
 				if (this.hideThinkingBlock) {
-					// Show one static label for each run of thinking blocks when hidden.
-					this.contentContainer.addChild(
-						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0),
-					);
+					// lunr: thinking blocks are hidden — render nothing (the "Thinking..." label is
+					// removed; an alternative hidden indicator will be designed separately).
 				} else {
 					// Render each run of thinking blocks as one Markdown section.
 					this.contentContainer.addChild(
@@ -144,9 +142,10 @@ export class AssistantMessageComponent extends Container {
 							italic: true,
 						}),
 					);
-				}
-				if (hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
+					// lunr: only add the spacer when thinking is visible (avoids stray blank line when hidden).
+					if (hasVisibleContentAfter) {
+						this.contentContainer.addChild(new Spacer(1));
+					}
 				}
 			}
 		}
