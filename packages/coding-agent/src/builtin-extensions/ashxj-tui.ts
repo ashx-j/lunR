@@ -30,6 +30,17 @@
 
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 
+// lunr: customize bridge — read the prompt-symbol toggle (bridgeless → no symbol).
+const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
+interface CustomizeBridgeForPrompt {
+	getPromptSymbol(): boolean;
+}
+function lunrPromptSymbolEnabled(): boolean {
+	const bridge = (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+	return bridge?.getPromptSymbol() ?? false;
+}
+const LUNR_PROMPT_GLYPH = "☾ › ";
+
 // ---------------------------------------------------------------------------
 // Minimal structural types (inline — see file header)
 // ---------------------------------------------------------------------------
@@ -431,7 +442,9 @@ class ChatboxEditor extends CustomEditor {
 		}
 
 		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
-		const innerWidth = Math.max(1, width - 4);
+		const promptSymbol = lunrPromptSymbolEnabled();
+		const glyphW = promptSymbol ? displayWidth(LUNR_PROMPT_GLYPH) : 0;
+		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
 		// The base editor appends the autocomplete menu lines (if any) to the END
@@ -470,9 +483,13 @@ class ChatboxEditor extends CustomEditor {
 		const top = border("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
 
 		// Body: │ <padded line> │ (auto-grows with the number of wrapped lines)
-		const bodyLines = body.map(
-			(ln: string) => border("\u2502 ") + padRight(ln, innerWidth) + border(" \u2502"),
-		);
+		// lunr: prefix the first body line with the dim `☾ › ` prompt glyph; a
+		// same-width blank gutter keeps subsequent lines aligned with the border.
+		const gutter = glyphW > 0 ? " ".repeat(glyphW) : "";
+		const bodyLines = body.map((ln: string, i: number) => {
+			const prefix = i === 0 && promptSymbol ? this.color("dim", LUNR_PROMPT_GLYPH) : gutter;
+			return border("\u2502 ") + prefix + padRight(ln, innerWidth) + border(" \u2502");
+		});
 
 		// Bottom border with the right-aligned chip: ╰─…─ <chip> ─╯
 		const bottom = this.renderBottomBorder(width);
