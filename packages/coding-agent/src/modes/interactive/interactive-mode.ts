@@ -113,6 +113,7 @@ import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
+import { buildExitCard, computeExitCardStats } from "./components/exit-card.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -3708,6 +3709,15 @@ export class InteractiveMode {
 
 		this.stop();
 		await this.runtimeHost.dispose();
+
+		// lunr: exit summary card — print a closing card for non-empty sessions,
+		// before the resume line. Fires on all interactive exits reaching shutdown
+		// (/quit, double ctrl+c, ctrl+d). Skipped for empty sessions (0 user msgs).
+		const exitStats = computeExitCardStats(this.sessionManager.getEntries());
+		const cardLines = buildExitCard(exitStats);
+		if (cardLines.length > 0) {
+			process.stdout.write(`${chalk.dim(cardLines.join("\n"))}\n`);
+		}
 
 		const resumeCommand = formatResumeCommand(this.sessionManager);
 		if (resumeCommand) {
