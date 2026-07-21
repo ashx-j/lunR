@@ -3225,7 +3225,8 @@ function duplicateSubagentCallResult(params: SubagentParamsLike): AgentToolResul
 	return {
 		content: [{
 			type: "text",
-			text: "Rejected: a subagent call is already in progress. Issue exactly ONE subagent call per turn.",
+			// lunr: guide the model to the tasks array (parallel) or async:true.
+			text: "A subagent call is already running in this turn. To run several subagents at once, use ONE subagent call with tasks: [{agent, task}, …] (parallel mode), or set async: true on each call.",
 		}],
 		isError: true,
 		details: { mode: inferExecutionMode(params), results: [] },
