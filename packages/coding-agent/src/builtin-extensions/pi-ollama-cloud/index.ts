@@ -28,7 +28,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolveWebToolsEnv } from "./config.ts";
+import { loadConfig, resolveWebToolsEnv, saveConfig } from "./config.ts";
 import { GENERATED_MODELS } from "./models.generated.ts";
 import {
   assembleModels,
@@ -174,7 +174,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Module-level tracking across session restarts within the same extension
   // instance. The config file is read once, on the first session_start;
-  // later sessions reuse webToolsEnabled (including any /ollama-webtools
+  // later sessions reuse webToolsEnabled (including any /settings toggle
   // override). Restart pi or /reload to pick up config file changes.
   let webToolsConfigured = false;
   let webToolsEnabled = false;
@@ -196,37 +196,27 @@ export default async function (pi: ExtensionAPI) {
     }
   });
 
-  // Only register the runtime toggle command when the env var doesn't force tools off.
-  // PI_OLLAMA_WEB_TOOLS acts as a hard kill switch — no command to re-enable.
+  // lunr: expose the web tools toggle to core (/settings base menu) via the
+  // @lunr/ollama-webtools bridge. setEnabled applies the same runtime behavior
+  // as the old /ollama-webtools command AND persists through this extension's
+  // own ollama-cloud.json saveConfig — single source of truth, no forked state.
+  // Only registered when the env var doesn't force tools off —
+  // PI_OLLAMA_WEB_TOOLS=0 acts as a hard kill switch, suppressing the setting.
   if (resolveWebToolsEnv() !== false) {
-    pi.registerCommand("ollama-webtools", {
-      description:
-        "Enable or disable Ollama Cloud web tools (ollama_web_search, ollama_web_fetch). " +
-        "Accepts optional argument: on/off/enable/disable. Without argument, toggles.",
-      handler: async (args, ctx) => {
-        const arg = args.trim().toLowerCase();
-
-        if (arg === "on" || arg === "enable") {
-          webToolsEnabled = true;
-        } else if (arg === "off" || arg === "disable") {
-          webToolsEnabled = false;
-        } else if (arg === "") {
-          // Toggle current state
-          webToolsEnabled = !webToolsEnabled;
-        } else {
-          ctx.ui.notify(`Unknown argument "${args.trim()}". Usage: /ollama-webtools [on|off|enable|disable]`, "error");
-          return;
-        }
-
-        if (webToolsEnabled) {
+    (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-webtools")] = {
+      getEnabled(): boolean {
+        return webToolsEnabled;
+      },
+      setEnabled(enabled: boolean): void {
+        webToolsEnabled = enabled;
+        if (enabled) {
           ensureWebToolsRegistered();
           setWebToolsActive(true);
         } else {
           setWebToolsActive(false);
         }
-
-        ctx.ui.notify(`Ollama Web Tools: ${webToolsEnabled ? "enabled" : "disabled"}`, "info");
+        saveConfig({ webTools: enabled });
       },
-    });
+    };
   }
 }

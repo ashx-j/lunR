@@ -77,6 +77,7 @@ import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/htt
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+import { getOllamaWebtoolsEnabled, setOllamaWebtoolsEnabled } from "../../core/ollama-webtools.ts";
 import { PLAN_MODE_ADDENDUM, planModeBlockReason } from "../../core/plan-mode.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
@@ -207,7 +208,7 @@ function isDeadTerminalError(error: unknown): boolean {
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
-	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
+	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage.";
 
 // lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
 const ANTHROPIC_TOS_DISCLAIMER =
@@ -4141,13 +4142,18 @@ export class InteractiveMode {
 					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
-					warnings: this.settingsManager.getWarnings(),
 					modelTiers: this.settingsManager.getModelTiers(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					searchCurator: getSearchCuratorSetting(),
+					ollamaWebTools: getOllamaWebtoolsEnabled(),
 					// lunr: TUI customize settings
 					gutterRail: this.settingsManager.getGutterRail(),
 					promptSymbol: this.settingsManager.getPromptSymbol(),
+					footerMcp: this.settingsManager.getFooterMcp(),
+					footerLsp: this.settingsManager.getFooterLsp(),
+					footerContext: this.settingsManager.getFooterContext(),
+					footerTokens: this.settingsManager.getFooterTokens(),
+					footerStatuses: this.settingsManager.getFooterStatuses(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4283,9 +4289,6 @@ export class InteractiveMode {
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
 					},
-					onWarningsChange: (warnings) => {
-						this.settingsManager.setWarnings(warnings);
-					},
 					onModelTiersEnabledChange: (enabled) => {
 						this.settingsManager.setModelTiersEnabled(enabled);
 					},
@@ -4300,12 +4303,32 @@ export class InteractiveMode {
 							this.showError("pi-web-access is not loaded; curator setting unavailable.");
 						}
 					},
+					onOllamaWebToolsChange: (value) => {
+						if (!setOllamaWebtoolsEnabled(value === "on")) {
+							this.showError("pi-ollama-cloud is not loaded; Ollama web tools setting unavailable.");
+						}
+					},
 					// lunr: TUI customize callbacks
 					onGutterRailChange: (enabled) => {
 						this.settingsManager.setGutterRail(enabled);
 					},
 					onPromptSymbolChange: (enabled) => {
 						this.settingsManager.setPromptSymbol(enabled);
+					},
+					onFooterMcpChange: (enabled) => {
+						this.settingsManager.setFooterMcp(enabled);
+					},
+					onFooterLspChange: (enabled) => {
+						this.settingsManager.setFooterLsp(enabled);
+					},
+					onFooterContextChange: (enabled) => {
+						this.settingsManager.setFooterContext(enabled);
+					},
+					onFooterTokensChange: (enabled) => {
+						this.settingsManager.setFooterTokens(enabled);
+					},
+					onFooterStatusesChange: (enabled) => {
+						this.settingsManager.setFooterStatuses(enabled);
 					},
 					createModelTierPicker: (_tier, currentModelRef, done) => {
 						const selector = new ModelSelectorComponent(
@@ -4397,9 +4420,6 @@ export class InteractiveMode {
 	private async maybeWarnAboutAnthropicSubscriptionAuth(
 		model: Model<any> | undefined = this.session.model,
 	): Promise<void> {
-		if (this.settingsManager.getWarnings().anthropicExtraUsage === false) {
-			return;
-		}
 		if (this.anthropicSubscriptionWarningShown) {
 			return;
 		}

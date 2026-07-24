@@ -6,8 +6,9 @@
  *     multiple rows (the sides extend; height grows with content).
  *   - A right-aligned chip on the box's BOTTOM border:
  *       model · provider · effort     (e.g. `glm-5.2 · Ollama Cloud · xhigh`)
- *   - A slim stats line (LSP · MCP · throughput/tokens · context% · ↑↓ · cost)
- *     BELOW the box, not wrapped around the input.
+ *   - A slim stats line (extension statuses · context% · ↑↓; each segment
+ *     toggle-gated via the lunr customize bridge) BELOW the box, not wrapped
+ *     around the input.
  *   - No session-mode indicator anywhere (pi has no such concept).
  *
  * Loaded by pi via jiti — no build step, plain TypeScript.
@@ -34,10 +35,30 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
 interface CustomizeBridgeForPrompt {
 	getPromptSymbol(): boolean;
+	// lunr: footer element toggles (added to the same bridge).
+	getFooterMcp?(): boolean;
+	getFooterLsp?(): boolean;
+	getFooterContext?(): boolean;
+	getFooterTokens?(): boolean;
+	getFooterStatuses?(): boolean;
+}
+function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
+	return (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
 }
 function lunrPromptSymbolEnabled(): boolean {
-	const bridge = (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
-	return bridge?.getPromptSymbol() ?? false;
+	return lunrCustomizeBridge()?.getPromptSymbol() ?? false;
+}
+// lunr: footer toggles, read at render time. Bridgeless / missing-getter fallback
+// matches the settings-manager defaults: MCP on, LSP off, everything else on.
+function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; tokens: boolean; statuses: boolean } {
+	const bridge = lunrCustomizeBridge();
+	return {
+		mcp: bridge?.getFooterMcp?.() ?? true,
+		lsp: bridge?.getFooterLsp?.() ?? false,
+		context: bridge?.getFooterContext?.() ?? true,
+		tokens: bridge?.getFooterTokens?.() ?? true,
+		statuses: bridge?.getFooterStatuses?.() ?? true,
+	};
 }
 const LUNR_PROMPT_GLYPH = "☾ › ";
 
@@ -533,34 +554,46 @@ function renderStatsLine(
 	const sep = color(theme, "bright-black", " | ");
 	const parts: string[] = [];
 
+	// lunr: footer element toggles from the customize bridge (read at render time).
+	const footerToggles = lunrFooterToggles();
+
 	// 1) Extension statuses published by other extensions (rendered as-is,
 	//    already styled): LSP (`pi-lsp-extension`), MCP (`pi-mcp-adapter`),
 	//    throughput/tokens (`pi-tps-was-taken`). These are NOT on `ctx` directly.
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
-		// lunr: render the plan-mode, pi-goal, /swarm, and /research footer statuses, leading the line.
-		// lunr: the `lsp` and `mcp` status segments are intentionally hidden here (publishers in
-		// pi-lsp-extension and pi-mcp-adapter keep calling ctx.ui.setStatus harmlessly).
-		for (const key of ["plan", "goal", "swarm", "research", "tps"] as const) {
+		// lunr: status segments are toggle-gated via the customize bridge:
+		// footerStatuses gates plan/goal/swarm/research/tps, footerMcp gates
+		// mcp/mcp-auth, footerLsp gates lsp. Publishers keep calling
+		// ctx.ui.setStatus harmlessly when their segment is hidden.
+		const keys: string[] = [];
+		if (footerToggles.statuses) keys.push("plan", "goal", "swarm", "research", "tps");
+		if (footerToggles.mcp) keys.push("mcp", "mcp-auth");
+		if (footerToggles.lsp) keys.push("lsp");
+		for (const key of keys) {
 			const v = statuses.get(key);
 			// lunr: unify footer status colors to dim so the whole stats line reads as one tone.
 			if (v) parts.push(color(theme, "dim", stripAnsi(v)));
 		}
 	}
 
-	// 2) Context usage: `pct/window`.
-	const usage = ctx.getContextUsage();
-	const win = ctx.model?.contextWindow ?? usage?.contextWindow ?? 0;
-	const pct = usage?.percent == null ? "?" : `${Math.round(usage.percent)}%`;
-	const ctxSeg = `${pct}/${formatCount(win)}`;
-	const pv = usage?.percent ?? 0;
-	if (pv > 90) parts.push(color(theme, "error", ctxSeg));
-	else if (pv > 70) parts.push(color(theme, "warning", ctxSeg));
-	else parts.push(color(theme, "dim", ctxSeg));
+	// 2) Context usage: `pct/window` (lunr: gated on footerContext).
+	if (footerToggles.context) {
+		const usage = ctx.getContextUsage();
+		const win = ctx.model?.contextWindow ?? usage?.contextWindow ?? 0;
+		const pct = usage?.percent == null ? "?" : `${Math.round(usage.percent)}%`;
+		const ctxSeg = `${pct}/${formatCount(win)}`;
+		const pv = usage?.percent ?? 0;
+		if (pv > 90) parts.push(color(theme, "error", ctxSeg));
+		else if (pv > 70) parts.push(color(theme, "warning", ctxSeg));
+		else parts.push(color(theme, "dim", ctxSeg));
+	}
 
-	// 3) Token totals: ↑in ↓out.
-	const totals = getUsageTotals(ctx);
-	parts.push(color(theme, "dim", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`));
+	// 3) Token totals: ↑in ↓out (lunr: gated on footerTokens).
+	if (footerToggles.tokens) {
+		const totals = getUsageTotals(ctx);
+		parts.push(color(theme, "dim", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`));
+	}
 
 	// lunr: cost/usage counter segment removed entirely (both the $x.xxx dollar
 	// counter for API-key providers and the plan-usage limit bar for OAuth/subscription

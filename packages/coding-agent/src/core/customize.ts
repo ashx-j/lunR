@@ -5,8 +5,8 @@ import type { SettingsManager } from "./settings-manager.ts";
  *
  * Exposed on `globalThis` under `Symbol.for("@lunr/customize")` so the baked-in
  * ashxj-tui extension can read the customize settings (gutter rail, prompt
- * symbol) without importing core code — same pattern as the model-tiers and
- * memory-cap bridges.
+ * symbol, footer element toggles) without importing core code — same pattern as
+ * the model-tiers and memory-cap bridges.
  */
 
 export const CUSTOMIZE_BRIDGE_SYMBOL = Symbol.for("@lunr/customize");
@@ -14,6 +14,11 @@ export const CUSTOMIZE_BRIDGE_SYMBOL = Symbol.for("@lunr/customize");
 export interface CustomizeBridge {
 	getGutterRail(): boolean;
 	getPromptSymbol(): boolean;
+	getFooterMcp(): boolean;
+	getFooterLsp(): boolean;
+	getFooterContext(): boolean;
+	getFooterTokens(): boolean;
+	getFooterStatuses(): boolean;
 }
 
 let activeSettingsManager: SettingsManager | undefined;
@@ -24,6 +29,21 @@ const bridge: CustomizeBridge = {
 	},
 	getPromptSymbol(): boolean {
 		return activeSettingsManager?.getPromptSymbol() ?? true;
+	},
+	getFooterMcp(): boolean {
+		return activeSettingsManager?.getFooterMcp() ?? true;
+	},
+	getFooterLsp(): boolean {
+		return activeSettingsManager?.getFooterLsp() ?? false;
+	},
+	getFooterContext(): boolean {
+		return activeSettingsManager?.getFooterContext() ?? true;
+	},
+	getFooterTokens(): boolean {
+		return activeSettingsManager?.getFooterTokens() ?? true;
+	},
+	getFooterStatuses(): boolean {
+		return activeSettingsManager?.getFooterStatuses() ?? true;
 	},
 };
 

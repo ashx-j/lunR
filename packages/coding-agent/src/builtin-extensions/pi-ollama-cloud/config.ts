@@ -16,7 +16,7 @@
  * ```
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -127,4 +127,35 @@ export function resolveWebToolsEnv(): boolean | undefined {
   if (["0", "false", "no", "off", ""].includes(lowered)) return false;
   // Treat any other non-empty value as "enabled"
   return true;
+}
+
+// --- Saver ---
+
+/**
+ * lunr: persist config updates to the global config file
+ * (<agentDir>/ollama-cloud.json), merging into any existing content.
+ * Mirrors pi-web-access's saveConfig so the /settings toggle writes through
+ * the same file loadConfig reads — single source of truth.
+ * Note: a project-local .pi/ollama-cloud.json with webTools set still takes
+ * precedence over the global value on next load.
+ */
+export function saveConfig(updates: Partial<OllamaCloudConfig>): void {
+  const globalPath = join(getAgentDir(), "ollama-cloud.json");
+
+  let config: Record<string, unknown> = {};
+  if (existsSync(globalPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(globalPath, "utf-8"));
+      if (parsed != null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        config = parsed as Record<string, unknown>;
+      }
+    } catch (err) {
+      console.error(`[pi-ollama-cloud] Failed to load config from ${globalPath}: ${err}`);
+    }
+  }
+
+  Object.assign(config, updates);
+  const dir = getAgentDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(globalPath, JSON.stringify(config, null, 2) + "\n");
 }

@@ -16,12 +16,7 @@ import {
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
-import type {
-	DefaultProjectTrust,
-	ModelTierName,
-	ModelTiersSettings,
-	WarningSettings,
-} from "../../../core/settings-manager.ts";
+import type { DefaultProjectTrust, ModelTierName, ModelTiersSettings } from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -87,14 +82,20 @@ export interface SettingsConfig {
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
-	warnings: WarningSettings;
 	modelTiers: ModelTiersSettings;
 	memoryCharCap: number;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
+	/** undefined when pi-ollama-cloud is not loaded or web tools are env-killed (bridge absent). */
+	ollamaWebTools: boolean | undefined;
 	// lunr: TUI customize settings
 	gutterRail: boolean;
 	promptSymbol: boolean;
+	footerMcp: boolean;
+	footerLsp: boolean;
+	footerContext: boolean;
+	footerTokens: boolean;
+	footerStatuses: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -125,14 +126,19 @@ export interface SettingsCallbacks {
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
-	onWarningsChange: (warnings: WarningSettings) => void;
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
+	onOllamaWebToolsChange: (enabled: string) => void;
 	// lunr: TUI customize callbacks
 	onGutterRailChange: (enabled: boolean) => void;
 	onPromptSymbolChange: (enabled: boolean) => void;
+	onFooterMcpChange: (enabled: boolean) => void;
+	onFooterLspChange: (enabled: boolean) => void;
+	onFooterContextChange: (enabled: boolean) => void;
+	onFooterTokensChange: (enabled: boolean) => void;
+	onFooterStatusesChange: (enabled: boolean) => void;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
 	createModelTierPicker: (
 		tier: ModelTierName,
@@ -140,64 +146,6 @@ export interface SettingsCallbacks {
 		done: (selectedValue?: string) => void,
 	) => Component;
 	onCancel: () => void;
-}
-
-/**
- * A submenu component for selecting from a list of options.
- */
-class WarningSettingsSubmenu extends Container {
-	private settingsList: SettingsList;
-	private state: WarningSettings;
-
-	constructor(warnings: WarningSettings, onChange: (warnings: WarningSettings) => void, onCancel: () => void) {
-		super();
-
-		this.state = { ...warnings };
-
-		const items: SettingItem[] = [
-			{
-				id: "anthropic-extra-usage",
-				label: "Warn about Anthropic extra usage",
-				description:
-					"Show a banner when an Anthropic subscription account is active, because third-party usage is billed per token from extra usage, not your Claude plan limits.",
-				currentValue: (this.state.anthropicExtraUsage ?? true) ? "true" : "false",
-				values: ["true", "false"],
-			},
-		];
-
-		this.settingsList = new SettingsList(
-			items,
-			Math.min(items.length, 10),
-			getSettingsListTheme(),
-			(id, newValue) => {
-				switch (id) {
-					case "anthropic-extra-usage":
-						this.state = { ...this.state, anthropicExtraUsage: newValue === "true" };
-						onChange({ ...this.state });
-						break;
-				}
-			},
-			onCancel,
-		);
-
-		// lunr: forward-link to the ToS disclaimer (Phase 5).
-		this.addChild(
-			new Text(
-				theme.fg(
-					"warning",
-					"Note: connecting an Anthropic subscription account to lunR may violate Anthropic's Terms of Service. See /login.",
-				),
-				0,
-				0,
-			),
-		);
-		this.addChild(new Spacer(1));
-		this.addChild(this.settingsList);
-	}
-
-	handleInput(data: string): void {
-		this.settingsList.handleInput(data);
-	}
 }
 
 const MODEL_TIER_ROWS: { tier: ModelTierName; label: string; description: string }[] = [
@@ -334,64 +282,6 @@ class MemoryCharCapSubmenu extends Container {
 
 const SEARCH_CURATOR_VALUES: SearchCuratorSetting[] = ["off", "on", "auto-summary"];
 
-/**
- * Submenu for built-in extension settings (core-owned — extensions can't
- * self-register /settings rows). Memory cap writes to lunR settings (the
- * extension reads it via the @lunr/memory-cap bridge); search curator writes
- * through pi-web-access's own config via the @lunr/search-curator bridge.
- */
-class ExtensionsSubmenu extends Container {
-	private settingsList: SettingsList;
-
-	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
-		super();
-
-		const curatorAvailable = config.searchCurator !== undefined;
-
-		const items: SettingItem[] = [
-			{
-				id: "memory-char-cap",
-				label: "Memory character cap",
-				description: `Max characters in the simple-pi-memory memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
-				currentValue: String(config.memoryCharCap),
-				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
-			},
-			{
-				id: "search-curator",
-				label: "Search curator",
-				description: curatorAvailable
-					? "pi-web-access search curator: off = raw results, on = browser curator with summary draft, auto-summary = summary without the curator. Also settable via /curator."
-					: "pi-web-access is not loaded; the search curator is unavailable.",
-				currentValue: config.searchCurator ?? "unavailable",
-				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
-			},
-		];
-
-		this.settingsList = new SettingsList(
-			items,
-			Math.min(items.length, 10),
-			getSettingsListTheme(),
-			(id, newValue) => {
-				switch (id) {
-					case "memory-char-cap":
-						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
-						break;
-					case "search-curator":
-						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
-						break;
-				}
-			},
-			() => done(),
-		);
-
-		this.addChild(this.settingsList);
-	}
-
-	handleInput(data: string): void {
-		this.settingsList.handleInput(data);
-	}
-}
-
 // lunr: Customize submenu — toggles for the lunR TUI customize settings.
 class CustomizeSubmenu extends Container {
 	private settingsList: SettingsList;
@@ -414,6 +304,41 @@ class CustomizeSubmenu extends Container {
 				currentValue: config.promptSymbol ? "on" : "off",
 				values: ["on", "off"],
 			},
+			{
+				id: "footer-mcp",
+				label: "Footer: MCP status",
+				description: "Show the MCP server status segment in the footer stats line.",
+				currentValue: config.footerMcp ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-lsp",
+				label: "Footer: LSP status",
+				description: "Show the LSP status segment in the footer stats line.",
+				currentValue: config.footerLsp ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-context",
+				label: "Footer: context meter",
+				description: "Show the context-usage pct/window segment in the footer stats line.",
+				currentValue: config.footerContext ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-tokens",
+				label: "Footer: token counter",
+				description: "Show the ↑in ↓out token totals segment in the footer stats line.",
+				currentValue: config.footerTokens ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-statuses",
+				label: "Footer: feature statuses",
+				description: "Show the plan/goal/swarm/research/tps status segments in the footer stats line.",
+				currentValue: config.footerStatuses ? "on" : "off",
+				values: ["on", "off"],
+			},
 		];
 
 		this.settingsList = new SettingsList(
@@ -427,6 +352,21 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "prompt-symbol":
 						callbacks.onPromptSymbolChange(newValue === "on");
+						break;
+					case "footer-mcp":
+						callbacks.onFooterMcpChange(newValue === "on");
+						break;
+					case "footer-lsp":
+						callbacks.onFooterLspChange(newValue === "on");
+						break;
+					case "footer-context":
+						callbacks.onFooterContextChange(newValue === "on");
+						break;
+					case "footer-tokens":
+						callbacks.onFooterTokensChange(newValue === "on");
+						break;
+					case "footer-statuses":
+						callbacks.onFooterStatusesChange(newValue === "on");
 						break;
 				}
 			},
@@ -758,7 +698,8 @@ export class SettingsSelectorComponent extends Container {
 
 		const supportsImages = getCapabilities().images;
 		const followUpKey = keyDisplayText("app.message.followUp");
-		let currentWarnings = { ...config.warnings };
+		const curatorAvailable = config.searchCurator !== undefined;
+		const ollamaWebToolsAvailable = config.ollamaWebTools !== undefined;
 
 		const items: SettingItem[] = [
 			{
@@ -827,6 +768,31 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "memory-char-cap",
+				label: "Memory character cap",
+				description: `Max characters in the simple-pi-memory memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				currentValue: String(config.memoryCharCap),
+				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
+			},
+			{
+				id: "search-curator",
+				label: "Search curator",
+				description: curatorAvailable
+					? "pi-web-access search curator: off = raw results, on = browser curator with summary draft, auto-summary = summary without the curator. Also settable via /curator."
+					: "pi-web-access is not loaded; the search curator is unavailable.",
+				currentValue: config.searchCurator ?? "unavailable",
+				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
+			},
+			{
+				id: "ollama-webtools",
+				label: "Ollama web tools",
+				description: ollamaWebToolsAvailable
+					? "pi-ollama-cloud web tools: on = activate ollama_web_search and ollama_web_fetch, off = remove them."
+					: "pi-ollama-cloud is not loaded or web tools are disabled via PI_OLLAMA_WEB_TOOLS; unavailable.",
+				currentValue: config.ollamaWebTools === undefined ? "unavailable" : config.ollamaWebTools ? "on" : "off",
+				values: ollamaWebToolsAvailable ? ["on", "off"] : undefined,
+			},
+			{
 				id: "session-retention-days",
 				label: "Session retention",
 				description: "Auto-delete session files older than N days at launch (0 = keep forever)",
@@ -853,21 +819,6 @@ export class SettingsSelectorComponent extends Container {
 				description: "Default filter when opening /tree",
 				currentValue: config.treeFilterMode,
 				values: ["default", "no-tools", "user-only", "labeled-only", "all"],
-			},
-			{
-				id: "warnings",
-				label: "Anthropic warnings",
-				description: "Manage the Anthropic subscription usage warning",
-				currentValue: "configure",
-				submenu: (_currentValue, done) =>
-					new WarningSettingsSubmenu(
-						currentWarnings,
-						(warnings) => {
-							currentWarnings = warnings;
-							callbacks.onWarningsChange(warnings);
-						},
-						() => done(),
-					),
 			},
 			{
 				id: "thinking",
@@ -907,18 +858,11 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.modelTiers.enabled ? "on" : "off",
 				submenu: (_currentValue, done) => new ModelTiersSubmenu(config.modelTiers, callbacks, done),
 			},
-			{
-				id: "extensions",
-				label: "Extensions",
-				description: "Settings for built-in extensions (simple-pi-memory, pi-web-access)",
-				currentValue: "configure",
-				submenu: (_currentValue, done) => new ExtensionsSubmenu(config, callbacks, done),
-			},
-			// lunr: Customize submenu — lunR TUI toggles (spinner, dividers, rail, prompt symbol)
+			// lunr: Customize submenu — lunR TUI toggles (rail, prompt symbol, footer segments)
 			{
 				id: "customize",
 				label: "Customize",
-				description: "lunR TUI customizations: spinner style, turn dividers, gutter rail, prompt symbol",
+				description: "lunR TUI customizations: gutter rail, prompt symbol, footer segments",
 				currentValue: "configure",
 				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
 			},
@@ -1086,6 +1030,15 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "memory-char-cap":
+						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "search-curator":
+						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
+						break;
+					case "ollama-webtools":
+						callbacks.onOllamaWebToolsChange(newValue);
 						break;
 					case "session-retention-days":
 						callbacks.onSessionRetentionDaysChange(parseInt(newValue, 10));

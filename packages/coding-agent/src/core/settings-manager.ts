@@ -65,10 +65,6 @@ export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
 }
 
-export interface WarningSettings {
-	anthropicExtraUsage?: boolean; // default: true
-}
-
 export type DefaultProjectTrust = "ask" | "always" | "never";
 
 export type TransportSetting = Transport;
@@ -129,13 +125,18 @@ export interface Settings {
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
-	warnings?: WarningSettings;
 	modelTiers?: ModelTiersSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
 	// lunr: TUI customize settings (gutter rail, prompt symbol)
 	gutterRail?: boolean; // default: true - render a thin left rail around each turn
 	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line
+	// lunr: footer element toggles (ashxj-tui stats line)
+	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
+	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
+	footerContext?: boolean; // default: true - show the context-usage pct/window segment
+	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
+	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research/tps status segments
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -959,6 +960,57 @@ export class SettingsManager {
 		this.save();
 	}
 
+	// lunr: footer element toggle getters/setters.
+	getFooterMcp(): boolean {
+		return this.settings.footerMcp ?? true;
+	}
+
+	setFooterMcp(enabled: boolean): void {
+		this.globalSettings.footerMcp = enabled;
+		this.markModified("footerMcp");
+		this.save();
+	}
+
+	getFooterLsp(): boolean {
+		return this.settings.footerLsp ?? false;
+	}
+
+	setFooterLsp(enabled: boolean): void {
+		this.globalSettings.footerLsp = enabled;
+		this.markModified("footerLsp");
+		this.save();
+	}
+
+	getFooterContext(): boolean {
+		return this.settings.footerContext ?? true;
+	}
+
+	setFooterContext(enabled: boolean): void {
+		this.globalSettings.footerContext = enabled;
+		this.markModified("footerContext");
+		this.save();
+	}
+
+	getFooterTokens(): boolean {
+		return this.settings.footerTokens ?? true;
+	}
+
+	setFooterTokens(enabled: boolean): void {
+		this.globalSettings.footerTokens = enabled;
+		this.markModified("footerTokens");
+		this.save();
+	}
+
+	getFooterStatuses(): boolean {
+		return this.settings.footerStatuses ?? true;
+	}
+
+	setFooterStatuses(enabled: boolean): void {
+		this.globalSettings.footerStatuses = enabled;
+		this.markModified("footerStatuses");
+		this.save();
+	}
+
 	getDefaultProjectTrust(): DefaultProjectTrust {
 		const value = this.globalSettings.defaultProjectTrust;
 		return value === "always" || value === "never" ? value : "ask";
@@ -1263,16 +1315,6 @@ export class SettingsManager {
 
 	getCodeBlockIndent(): string {
 		return this.settings.markdown?.codeBlockIndent ?? "  ";
-	}
-
-	getWarnings(): WarningSettings {
-		return { ...(this.settings.warnings ?? {}) };
-	}
-
-	setWarnings(warnings: WarningSettings): void {
-		this.globalSettings.warnings = { ...warnings };
-		this.markModified("warnings");
-		this.save();
 	}
 
 	getModelTiers(): ModelTiersSettings {

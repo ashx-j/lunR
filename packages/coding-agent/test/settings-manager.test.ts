@@ -538,5 +538,46 @@ describe("SettingsManager", () => {
 			expect(manager.getGutterRail()).toBe(true);
 			expect(manager.getPromptSymbol()).toBe(true);
 		});
+
+		// lunr: footer element toggles
+		it("should default footerMcp to true and persist", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterMcp()).toBe(true);
+			manager.setFooterMcp(false);
+			await manager.flush();
+			expect(manager.getFooterMcp()).toBe(false);
+		});
+
+		it("should default footerLsp to false and persist", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterLsp()).toBe(false);
+			manager.setFooterLsp(true);
+			await manager.flush();
+			expect(manager.getFooterLsp()).toBe(true);
+		});
+
+		it("should default footerContext to true and persist", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterContext()).toBe(true);
+			manager.setFooterContext(false);
+			await manager.flush();
+			expect(manager.getFooterContext()).toBe(false);
+		});
+
+		it("should default footerTokens to true and persist", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterTokens()).toBe(true);
+			manager.setFooterTokens(false);
+			await manager.flush();
+			expect(manager.getFooterTokens()).toBe(false);
+		});
+
+		it("should default footerStatuses to true and persist", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterStatuses()).toBe(true);
+			manager.setFooterStatuses(false);
+			await manager.flush();
+			expect(manager.getFooterStatuses()).toBe(false);
+		});
 	});
 });
