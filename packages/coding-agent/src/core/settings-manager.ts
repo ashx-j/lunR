@@ -66,6 +66,9 @@ export interface MarkdownSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
+export type DefaultPermissionMode = "manual" | "yolo" | "auto";
+export type RollbackCapture = "copies" | "shadow-git" | "hybrid";
+export type RollbackScope = "tools" | "tree";
 
 export type TransportSetting = Transport;
 
@@ -137,6 +140,13 @@ export interface Settings {
 	footerContext?: boolean; // default: true - show the context-usage pct/window segment
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research/tps status segments
+	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
+	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
+	// lunr: rollback settings
+	rollbackEnabled?: boolean; // default false
+	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
+	rollbackCapture?: RollbackCapture; // default "copies"
+	rollbackScope?: RollbackScope; // default "tools"
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -1019,6 +1029,65 @@ export class SettingsManager {
 	setDefaultProjectTrust(defaultProjectTrust: DefaultProjectTrust): void {
 		this.globalSettings.defaultProjectTrust = defaultProjectTrust;
 		this.markModified("defaultProjectTrust");
+		this.save();
+	}
+
+	// lunr: default permission mode (startup default; per-session mode is in-memory)
+	getDefaultPermissionMode(): DefaultPermissionMode {
+		const value = this.settings.defaultPermissionMode;
+		return value === "manual" || value === "yolo" || value === "auto" ? value : "manual";
+	}
+
+	setDefaultPermissionMode(mode: DefaultPermissionMode): void {
+		this.globalSettings.defaultPermissionMode = mode;
+		this.markModified("defaultPermissionMode");
+		this.save();
+	}
+
+	// lunr: rollback settings getters/setters
+	getRollbackEnabled(): boolean {
+		return this.settings.rollbackEnabled ?? false;
+	}
+
+	setRollbackEnabled(enabled: boolean): void {
+		this.globalSettings.rollbackEnabled = enabled;
+		this.markModified("rollbackEnabled");
+		this.save();
+	}
+
+	getRollbackTurns(): number {
+		const value = this.settings.rollbackTurns;
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return Math.min(20, Math.max(1, Math.floor(value)));
+		}
+		return 2;
+	}
+
+	setRollbackTurns(turns: number): void {
+		this.globalSettings.rollbackTurns = Math.min(20, Math.max(1, Math.floor(turns)));
+		this.markModified("rollbackTurns");
+		this.save();
+	}
+
+	getRollbackCapture(): RollbackCapture {
+		const value = this.settings.rollbackCapture;
+		return value === "copies" || value === "shadow-git" || value === "hybrid" ? value : "copies";
+	}
+
+	setRollbackCapture(mode: RollbackCapture): void {
+		this.globalSettings.rollbackCapture = mode;
+		this.markModified("rollbackCapture");
+		this.save();
+	}
+
+	getRollbackScope(): RollbackScope {
+		const value = this.settings.rollbackScope;
+		return value === "tools" || value === "tree" ? value : "tools";
+	}
+
+	setRollbackScope(scope: RollbackScope): void {
+		this.globalSettings.rollbackScope = scope;
+		this.markModified("rollbackScope");
 		this.save();
 	}
 

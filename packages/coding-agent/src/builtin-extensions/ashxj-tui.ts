@@ -33,6 +33,7 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 
 // lunr: customize bridge — read the prompt-symbol toggle (bridgeless → no symbol).
 const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
+const PERMISSION_MODE_BRIDGE = Symbol.for("@lunr/permission-mode");
 interface CustomizeBridgeForPrompt {
 	getPromptSymbol(): boolean;
 	// lunr: footer element toggles (added to the same bridge).
@@ -42,8 +43,14 @@ interface CustomizeBridgeForPrompt {
 	getFooterTokens?(): boolean;
 	getFooterStatuses?(): boolean;
 }
+interface PermissionModeBridgeForFooter {
+	getMode(): string | undefined;
+}
 function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
 	return (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+}
+function lunrPermissionModeBridge(): PermissionModeBridgeForFooter | undefined {
+	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE] as PermissionModeBridgeForFooter | undefined;
 }
 function lunrPromptSymbolEnabled(): boolean {
 	return lunrCustomizeBridge()?.getPromptSymbol() ?? false;
@@ -59,6 +66,10 @@ function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; to
 		tokens: bridge?.getFooterTokens?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
 	};
+}
+// lunr: permission mode for the footer safety indicator (always shown).
+function lunrPermissionMode(): string | undefined {
+	return lunrPermissionModeBridge()?.getMode();
 }
 const LUNR_PROMPT_GLYPH = "☾ › ";
 
@@ -553,6 +564,12 @@ function renderStatsLine(
 ): string[] {
 	const sep = color(theme, "bright-black", " | ");
 	const parts: string[] = [];
+
+	// lunr: permission mode safety indicator — always shown (not toggle-gated).
+	const mode = lunrPermissionMode();
+	if (mode === "yolo") parts.push(color(theme, "warning", "yolo"));
+	else if (mode === "auto") parts.push(color(theme, "error", "auto"));
+	else if (mode === "manual") parts.push(color(theme, "dim", "manual"));
 
 	// lunr: footer element toggles from the customize bridge (read at render time).
 	const footerToggles = lunrFooterToggles();
