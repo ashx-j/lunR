@@ -30,6 +30,9 @@ export const RESERVED_COMMAND_NAMES = new Set([
 	"reload",
 	"quit",
 	"mode",
+	"manual",
+	"yolo",
+	"auto",
 	"processes",
 	"rollback",
 ]);

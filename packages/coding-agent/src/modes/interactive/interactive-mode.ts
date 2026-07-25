@@ -2704,6 +2704,11 @@ export class InteractiveMode {
 				this.handleModeCommand(text === "/mode" ? "" : text.slice(6).trim());
 				return;
 			}
+			if (text === "/manual" || text === "/yolo" || text === "/auto") {
+				this.editor.setText("");
+				this.applyPermissionMode(text.slice(1) as PermissionMode);
+				return;
+			}
 			if (text === "/processes") {
 				this.editor.setText("");
 				this.showProcessesSelector();
