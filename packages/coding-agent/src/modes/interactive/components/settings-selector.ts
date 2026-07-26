@@ -428,19 +428,27 @@ class RollbackSubmenu extends Container {
 				id: "rollback-capture",
 				label: "Capture mode",
 				description:
-					"How snapshots are taken: copies = pre-edit file copies, hybrid = also removes agent-created files, shadow-git = hidden git repo (needs git).",
+					"How snapshots are taken: copies = restore edited files + delete tool-created files, hybrid = also delete files created outside tools (tree scope), shadow-git = hidden git repo (needs git).",
 				currentValue: config.rollbackCapture,
 				submenu: (currentValue, submenuDone) =>
 					new SelectSubmenu(
 						"Rollback Capture Mode",
 						"How file snapshots are captured before edits.",
 						[
-							{ value: "copies", label: "copies", description: "fast, only edited files" },
-							{ value: "hybrid", label: "hybrid", description: "also removes files the agent created" },
+							{
+								value: "copies",
+								label: "copies",
+								description: "fast; restores edits, deletes tool-created files",
+							},
+							{
+								value: "hybrid",
+								label: "hybrid",
+								description: "also deletes files created outside tools (tree scope)",
+							},
 							{
 								value: "shadow-git",
 								label: "shadow-git",
-								description: "most robust, needs git, uses a hidden repo",
+								description: "needs git, hidden repo — deferred, falls back to copies",
 							},
 						],
 						currentValue,

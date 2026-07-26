@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as registry from "../src/core/process-registry.ts";
 import { isWindows } from "../src/core/process-registry.ts";
 
@@ -72,7 +72,9 @@ describe("process-registry", () => {
 		registry.clearRegistry();
 		expect(registry.list().length).toBe(0);
 		// Clean up
-		try { process.kill(child.pid); } catch {}
+		try {
+			process.kill(child.pid);
+		} catch {}
 	});
 
 	it("restart re-spawns and registers a new pid", async () => {

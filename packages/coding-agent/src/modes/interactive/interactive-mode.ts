@@ -95,11 +95,11 @@ import {
 	clearRollback,
 	disableRollbackForSession,
 	enableRollbackForSession,
-	getRollbackStatus,
 	initRollback,
 	isRollbackEnabled,
 	beginTurn as rollbackBeginTurn,
 	rollbackLastTurn,
+	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -554,6 +554,11 @@ export class InteractiveMode {
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
+			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
+			initRollback(this.settingsManager, this.sessionManager.getSessionId());
+			if (this.settingsManager.getDefaultPermissionMode() === "auto") {
+				enableRollbackForSession();
+			}
 		});
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
@@ -811,6 +816,7 @@ export class InteractiveMode {
 
 		// lunr: initialize rollback service for this session.
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
+		setRollbackWarningHandler((msg) => this.showStatus(msg));
 		// If the configured default is auto, force-enable rollback.
 		if (this.settingsManager.getDefaultPermissionMode() === "auto") {
 			enableRollbackForSession();
@@ -2956,8 +2962,8 @@ export class InteractiveMode {
 				} else if (event.message.role === "user") {
 					// lunr: a new user message invalidates /redo
 					this.redoStack.length = 0;
-					// lunr: begin a new rollback turn
-					rollbackBeginTurn();
+					// lunr: begin a new rollback turn (captures tree-scope baseline when enabled)
+					rollbackBeginTurn(this.sessionManager.getCwd());
 					this.stopSmoothStreaming();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
@@ -6361,7 +6367,7 @@ export class InteractiveMode {
 		});
 	}
 
-	// lunr: /rollback — restore last turn's file changes + rewind conversation.
+	// lunr: /rollback — restore last turn's file changes + persistently rewind the conversation.
 	private async handleRollbackCommand(): Promise<void> {
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before running /rollback.");
@@ -6371,19 +6377,52 @@ export class InteractiveMode {
 			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
 			return;
 		}
-		const status = getRollbackStatus();
-		if (status.turns === 0) {
-			this.showStatus("Nothing to roll back — no snapshots recorded this session.");
+
+		// Find the rewind target (last user message on the current branch) BEFORE
+		// mutating anything — forking to it is what makes the rewind persistent.
+		const branch = this.sessionManager.getBranch();
+		let lastUserId: string | undefined;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry.type === "message" && entry.message.role === "user") {
+				lastUserId = entry.id;
+				break;
+			}
+		}
+		if (!lastUserId) {
+			this.showStatus("Nothing to roll back");
 			return;
 		}
 
+		// Restore files FIRST: the fork below replaces the session, which clears
+		// rollback state (beforeSessionInvalidate → clearRollback).
 		const result = rollbackLastTurn();
-		// Reuse the existing /undo logic to rewind the conversation.
-		await this.handleUndoCommand();
 
+		try {
+			// Fork to just before the last user message — writes a branched session
+			// file, so the rewind survives restart/`-c` (unlike /undo's in-memory leaf).
+			const forkResult = await this.runtimeHost.fork(lastUserId, { position: "before" });
+			if (forkResult.cancelled) {
+				this.showStatus("Files restored, but conversation rewind was cancelled.");
+				return;
+			}
+			this.editor.setText(forkResult.selectedText ?? "");
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+			return;
+		}
+
+		const names = (paths: string[]): string => {
+			const base = paths
+				.slice(0, 3)
+				.map((p) => path.basename(p))
+				.join(", ");
+			return paths.length > 3 ? `${base}, …` : base;
+		};
 		const parts: string[] = [];
-		if (result.restored.length > 0) parts.push(`${result.restored.length} file(s) restored`);
-		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted`);
+		if (result.restored.length > 0)
+			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
+		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
 		if (parts.length === 0) parts.push("no file changes to restore");
 		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
 	}

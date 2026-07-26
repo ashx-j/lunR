@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
+	type ApprovalResponse,
+	clearSessionApprovals,
 	gateToolCall,
 	getPermissionMode,
-	setPermissionMode,
-	resetPermissions,
 	registerApprovalHandler,
-	clearSessionApprovals,
-	type ApprovalResponse,
+	resetPermissions,
+	setPermissionMode,
 } from "../src/core/permissions.ts";
 
 describe("permissions", () => {
