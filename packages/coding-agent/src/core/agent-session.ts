@@ -43,6 +43,12 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { getBehaviorSystemPromptBlock } from "../features/behavior.ts";
+import { getGoalFeature } from "../features/goal/index.ts";
+import { getMemorySystemPromptBlock } from "../features/memory.ts";
+import { getPromptTemplatesFeature } from "../features/prompt-templates/index.ts";
+import { getSubagentsFeature } from "../features/subagents/index.ts";
+import { getWebAccessFeature } from "../features/web-access/index.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -490,6 +496,14 @@ export class AgentSession {
 				}
 			}
 
+			// lunr: goal stale-tool gate (absorbed from the narumiruna-pi-goal
+			// extension's tool_call handler) — after permissions/rollback/plan gates,
+			// before extension tool_call handlers (its old builtin load order).
+			const goalGate = getGoalFeature()?.onToolCall({ toolName: toolCall.name });
+			if (goalGate?.block) {
+				return { block: true, reason: goalGate.reason };
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
@@ -511,6 +525,18 @@ export class AgentSession {
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+			// lunr: subagents feature tool_result hook (absorbed from pi-subagents) —
+			// refreshes the async-jobs widget/poller after subagent tool results.
+			// Runs before extension tool_result handlers (its old builtin load order)
+			// and never modifies the result.
+			await getSubagentsFeature()?.onToolResult({
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				input: args as Record<string, unknown>,
+				content: result.content,
+				details: result.details,
+				isError,
+			});
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_result")) {
 				return undefined;
@@ -744,6 +770,16 @@ export class AgentSession {
 			this._turnIndex = 0;
 			await this._extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
+			// lunr: prompt-templates feature agent_end hook (absorbed from the
+			// pi-prompt-template-model extension) — restores the pre-prompt
+			// model/thinking and runs queued run-prompt commands. Before the
+			// subagents hook and extension agent_end handlers (its old builtin
+			// load order).
+			await getPromptTemplatesFeature()?.onAgentEnd({ messages: event.messages });
+			// lunr: subagents feature agent_end hook (absorbed from pi-subagents) —
+			// watchdog turn accounting + headless async auto-drain (print/rpc modes).
+			// Before extension agent_end handlers (its old builtin load order).
+			await getSubagentsFeature()?.onAgentEnd({ messages: event.messages });
 			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
 		} else if (event.type === "turn_start") {
 			const extensionEvent: TurnStartEvent = {
@@ -759,6 +795,9 @@ export class AgentSession {
 				message: event.message,
 				toolResults: event.toolResults,
 			};
+			// lunr: subagents feature turn_end hook (absorbed from pi-subagents
+			// watchdog) — before extension turn_end handlers.
+			await getSubagentsFeature()?.onTurnEnd(extensionEvent);
 			await this._extensionRunner.emit(extensionEvent);
 			this._turnIndex++;
 		} else if (event.type === "message_start") {
@@ -1002,6 +1041,19 @@ export class AgentSession {
 		);
 	}
 
+	/**
+	 * lunr: register a custom tool mid-session and activate it (absorbed
+	 * prompt-templates run-prompt tool late registration via `/prompt-tool on` —
+	 * formerly the extension runner's registerTool + refreshTools). Tools
+	 * assembled at session creation already live in _customTools; this is only
+	 * for registrations that arrive afterwards. Dedupes by name.
+	 */
+	addCustomTool(definition: ToolDefinition): void {
+		if (this._customTools.some((existing) => existing.name === definition.name)) return;
+		this._customTools.push(definition);
+		this._refreshToolRegistry();
+	}
+
 	/** Whether compaction or branch summarization is currently running */
 	get isCompacting(): boolean {
 		return (
@@ -1193,6 +1245,17 @@ export class AgentSession {
 			// Emit input event for extension interception (before skill/template expansion)
 			let currentText = text;
 			let currentImages = options?.images;
+			// lunr: goal feature input hook (absorbed from the narumiruna-pi-goal
+			// extension's input handler) — runs before extension input handlers,
+			// matching its old builtin load order. "handled" swallows the input.
+			const goalInput = getGoalFeature()?.onInput({
+				text: currentText,
+				source: options?.source ?? "interactive",
+			});
+			if (goalInput?.action === "handled") {
+				preflightResult?.(true);
+				return;
+			}
 			if (this._extensionRunner.hasHandlers("input")) {
 				const inputResult = await this._extensionRunner.emitInput(
 					currentText,
@@ -1313,6 +1376,56 @@ export class AgentSession {
 				this._systemPromptOverride = undefined;
 				this.agent.state.systemPrompt = this._withSystemPromptAppend(this._baseSystemPrompt);
 			}
+			// lunr: goal feature before_agent_start hook (absorbed from the
+			// narumiruna-pi-goal extension). Besides managing per-run goal state it
+			// may append the active-goal system-prompt addendum; it composes on top
+			// of the extension-modified prompt exactly where its handler used to run,
+			// before the memory/behavior blocks appended below.
+			const goalBeforeAgentStart = getGoalFeature()?.onBeforeAgentStart({
+				prompt: expandedText,
+				systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+			});
+			if (goalBeforeAgentStart?.systemPrompt !== undefined) {
+				this._systemPromptOverride = goalBeforeAgentStart.systemPrompt;
+				this.agent.state.systemPrompt = this._withSystemPromptAppend(goalBeforeAgentStart.systemPrompt);
+			}
+			// lunr: subagents feature before_agent_start hook (absorbed from
+			// pi-subagents watchdog) — tracks per-run review state; never modifies
+			// the prompt. After the goal hook, before the memory/behavior blocks.
+			await getSubagentsFeature()?.onBeforeAgentStart({
+				prompt: expandedText,
+				systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+			});
+			// lunr: prompt-templates feature before_agent_start hook (absorbed from
+			// the pi-prompt-template-model extension) — appends run-prompt/loop/chain
+			// guidance to the system prompt and may inject a pending skill-loaded
+			// custom message. After the goal/subagents hooks, before the
+			// memory/behavior blocks (its old builtin load position).
+			const promptTemplatesBeforeAgentStart = await getPromptTemplatesFeature()?.onBeforeAgentStart({
+				prompt: expandedText,
+				systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+			});
+			if (promptTemplatesBeforeAgentStart?.systemPrompt !== undefined) {
+				this._systemPromptOverride = promptTemplatesBeforeAgentStart.systemPrompt;
+				this.agent.state.systemPrompt = this._withSystemPromptAppend(promptTemplatesBeforeAgentStart.systemPrompt);
+			}
+			if (promptTemplatesBeforeAgentStart?.message) {
+				const msg = promptTemplatesBeforeAgentStart.message;
+				messages.push({
+					role: "custom",
+					customType: msg.customType,
+					content: (msg.content ?? []) as (TextContent | ImageContent)[],
+					display: msg.display,
+					details: msg.details,
+					timestamp: Date.now(),
+				});
+			}
+			// lunr: memory + behavior blocks — fresh read on every agent start
+			// (absorbed from the former simple-pi-memory / lunr-behavior baked-in
+			// extensions, which injected these in before_agent_start handlers; the
+			// system prompt is rebuilt from scratch above on every prompt, so
+			// appending here preserves the fresh-read semantics).
+			this.agent.state.systemPrompt += getMemorySystemPromptBlock() + getBehaviorSystemPromptBlock();
 		} catch (error) {
 			preflightResult?.(false);
 			throw error;
@@ -1336,7 +1449,24 @@ export class AgentSession {
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
 
 		const command = this._extensionRunner.getCommand(commandName);
-		if (!command) return false;
+		if (!command) {
+			// lunr: prompt-templates feature commands (absorbed from the
+			// pi-prompt-template-model extension) — /chain-prompts, /prompt-tool, and
+			// one dynamic command per user template. Same dispatch site the runner
+			// used, so they still execute immediately during streaming/compaction.
+			const feature = getPromptTemplatesFeature();
+			if (!feature?.hasCommand(commandName)) return false;
+			try {
+				await feature.handleCommand(commandName, args);
+			} catch (err) {
+				this._extensionRunner.emitError({
+					extensionPath: `command:${commandName}`,
+					event: "command",
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+			return true;
+		}
 
 		// Get command context from extension runner (includes session control methods)
 		const ctx = this._extensionRunner.createCommandContext();
@@ -1565,6 +1695,19 @@ export class AgentSession {
 	}
 
 	/**
+	 * Append a custom entry to the session and notify listeners.
+	 * lunr: used by the absorbed goal feature to persist goal state; same body
+	 * as the appendEntry extension action in _bindExtensionCore.
+	 */
+	appendCustomEntry(customType: string, data?: unknown): void {
+		const entryId = this.sessionManager.appendCustomEntry(customType, data);
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry) {
+			this._emit({ type: "entry_appended", entry });
+		}
+	}
+
+	/**
 	 * Clear all queued messages and return them.
 	 * Useful for restoring to editor when user aborts.
 	 * @returns Object with steering and followUp arrays
@@ -1624,6 +1767,10 @@ export class AgentSession {
 		source: "set" | "cycle" | "restore",
 	): Promise<void> {
 		if (modelsAreEqual(previousModel, nextModel)) return;
+		// lunr: prompt-templates feature model_select hook (absorbed from the
+		// pi-prompt-template-model extension) — tracks the runtime model so
+		// template execution restores correctly. Before extension handlers.
+		await getPromptTemplatesFeature()?.onModelSelect({ model: nextModel, previousModel, source });
 		await this._extensionRunner.emit({
 			type: "model_select",
 			model: nextModel,
@@ -1871,6 +2018,14 @@ export class AgentSession {
 			let extensionCompaction: CompactionResult | undefined;
 			let fromExtension = false;
 
+			// lunr: goal feature session_before_compact hook (absorbed from the
+			// narumiruna-pi-goal extension) — before extension handlers, matching
+			// its old builtin load order; cancel semantics preserved.
+			const goalBeforeCompact = getGoalFeature()?.onSessionBeforeCompact({ willRetry: false });
+			if (goalBeforeCompact?.cancel) {
+				throw new Error("Compaction cancelled");
+			}
+
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
 				const result = (await this._extensionRunner.emit({
 					type: "session_before_compact",
@@ -1938,6 +2093,12 @@ export class AgentSession {
 				| undefined;
 
 			if (this._extensionRunner && savedCompactionEntry) {
+				// lunr: goal feature session_compact hook (absorbed from the
+				// narumiruna-pi-goal extension) — before extension handlers.
+				await getGoalFeature()?.onSessionCompact({ reason: "manual", willRetry: false });
+				// lunr: subagents feature session_compact hook (absorbed from
+				// pi-subagents watchdog) — resets review state on compaction.
+				await getSubagentsFeature()?.onSessionCompact({ reason: "manual", willRetry: false });
 				await this._extensionRunner.emit({
 					type: "session_compact",
 					compactionEntry: savedCompactionEntry,
@@ -2136,6 +2297,21 @@ export class AgentSession {
 			let extensionCompaction: CompactionResult | undefined;
 			let fromExtension = false;
 
+			// lunr: goal feature session_before_compact hook (absorbed from the
+			// narumiruna-pi-goal extension) — before extension handlers, matching
+			// its old builtin load order; cancel semantics preserved.
+			const goalBeforeCompact = getGoalFeature()?.onSessionBeforeCompact({ willRetry });
+			if (goalBeforeCompact?.cancel) {
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+				});
+				return false;
+			}
+
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
 				const extensionResult = (await this._extensionRunner.emit({
 					type: "session_before_compact",
@@ -2217,6 +2393,12 @@ export class AgentSession {
 				| undefined;
 
 			if (this._extensionRunner && savedCompactionEntry) {
+				// lunr: goal feature session_compact hook (absorbed from the
+				// narumiruna-pi-goal extension) — before extension handlers.
+				await getGoalFeature()?.onSessionCompact({ reason, willRetry });
+				// lunr: subagents feature session_compact hook (absorbed from
+				// pi-subagents watchdog) — resets review state on compaction.
+				await getSubagentsFeature()?.onSessionCompact({ reason, willRetry });
 				await this._extensionRunner.emit({
 					type: "session_compact",
 					compactionEntry: savedCompactionEntry,
@@ -2301,6 +2483,17 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
+		// lunr: prompt-templates feature session_start (absorbed from the
+		// pi-prompt-template-model extension) — resets per-session state, re-binds
+		// the shared event bus, rescans template files and registers their
+		// commands. Before extension session_start handlers (its old builtin load
+		// order); covers interactive, print, and rpc session binds.
+		await getPromptTemplatesFeature()?.onSessionStart(this._sessionStartEvent);
+		// lunr: subagents feature session_start (absorbed from pi-subagents) —
+		// re-binds the shared event bus, resets per-session run state, restores
+		// active async jobs. Before extension session_start handlers (its old
+		// builtin load order); covers interactive, print, and rpc session binds.
+		await getSubagentsFeature()?.onSessionStart(this._sessionStartEvent);
 		await this._extensionRunner.emit(this._sessionStartEvent);
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
@@ -2429,11 +2622,7 @@ export class AgentSession {
 					});
 				},
 				appendEntry: (customType, data) => {
-					const entryId = this.sessionManager.appendCustomEntry(customType, data);
-					const entry = this.sessionManager.getEntry(entryId);
-					if (entry) {
-						this._emit({ type: "entry_appended", entry });
-					}
+					this.appendCustomEntry(customType, data);
 				},
 				setSessionName: (name) => {
 					this.setSessionName(name);
@@ -2650,6 +2839,14 @@ export class AgentSession {
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
+		// lunr: goal feature session shutdown/start around reload (absorbed from the
+		// narumiruna-pi-goal extension) — direct calls at the old emit sites.
+		getGoalFeature()?.onSessionShutdown();
+		// lunr: web-access session_shutdown on reload (absorbed from pi-web-access).
+		getWebAccessFeature()?.onSessionShutdown();
+		// lunr: subagents session_shutdown on reload (absorbed from pi-subagents) —
+		// stops the result watcher/scheduler and unbinds the shared event bus.
+		await getSubagentsFeature()?.onSessionShutdown();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
@@ -2668,7 +2865,20 @@ export class AgentSession {
 			this._extensionErrorListener;
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
+			// lunr: goal feature session_start on reload (absorbed from the
+			// narumiruna-pi-goal extension) — before extension session_start handlers.
+			await getGoalFeature()?.onSessionStart();
+			// lunr: prompt-templates feature session_start on reload (absorbed from
+			// the pi-prompt-template-model extension) — re-binds the shared event
+			// bus and rescans template files.
+			await getPromptTemplatesFeature()?.onSessionStart({ type: "session_start", reason: "reload" });
+			// lunr: subagents session_start on reload (absorbed from pi-subagents) —
+			// re-binds the shared event bus and resets per-session run state.
+			await getSubagentsFeature()?.onSessionStart({ type: "session_start", reason: "reload" });
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+			// lunr: web-access session_start on reload (absorbed from pi-web-access) —
+			// after extension handlers (its old builtin load position inside the emit).
+			getWebAccessFeature()?.onSessionChange();
 			await this.extendResourcesFromExtensions("reload");
 		}
 	}
@@ -2954,6 +3164,31 @@ export class AgentSession {
 			let extensionSummary: { summary: string; details?: unknown } | undefined;
 			let fromExtension = false;
 
+			// lunr: prompt-templates feature session_before_tree hook (absorbed from
+			// the pi-prompt-template-model extension) — overrides the branch summary
+			// for loop --fresh collapses and boomerang prompts. Before extension
+			// handlers (its old builtin load order).
+			const promptTemplatesTreeResult = await getPromptTemplatesFeature()?.onSessionBeforeTree({
+				preparation,
+				signal: this._branchSummaryAbortController.signal,
+			});
+			if (promptTemplatesTreeResult?.cancel) {
+				return { cancelled: true };
+			}
+			if (promptTemplatesTreeResult?.summary && options.summarize) {
+				extensionSummary = promptTemplatesTreeResult.summary;
+				fromExtension = true;
+			}
+			if (promptTemplatesTreeResult?.customInstructions !== undefined) {
+				customInstructions = promptTemplatesTreeResult.customInstructions;
+			}
+			if (promptTemplatesTreeResult?.replaceInstructions !== undefined) {
+				replaceInstructions = promptTemplatesTreeResult.replaceInstructions;
+			}
+			if (promptTemplatesTreeResult?.label !== undefined) {
+				label = promptTemplatesTreeResult.label;
+			}
+
 			// Emit session_before_tree event
 			if (this._extensionRunner.hasHandlers("session_before_tree")) {
 				const result = (await this._extensionRunner.emit({
@@ -3082,6 +3317,10 @@ export class AgentSession {
 				summaryEntry,
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
+
+			// lunr: web-access feature session_tree (absorbed from pi-web-access) —
+			// restores stored search results for the new branch, after extension handlers.
+			getWebAccessFeature()?.onSessionChange();
 
 			// Emit to custom tools
 

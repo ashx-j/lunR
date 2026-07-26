@@ -14,16 +14,18 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
-import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
-import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
-import type {
-	DefaultPermissionMode,
-	DefaultProjectTrust,
-	ModelTierName,
-	ModelTiersSettings,
-	RollbackCapture,
-	RollbackScope,
+import {
+	type DefaultPermissionMode,
+	type DefaultProjectTrust,
+	MEMORY_CHAR_CAP_DEFAULT,
+	MEMORY_CHAR_CAP_MAX,
+	MEMORY_CHAR_CAP_MIN,
+	type ModelTierName,
+	type ModelTiersSettings,
+	type RollbackCapture,
+	type RollbackScope,
 } from "../../../core/settings-manager.ts";
+import type { SearchCuratorSetting } from "../../../features/web-access/index.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -91,9 +93,9 @@ export interface SettingsConfig {
 	showTerminalProgress: boolean;
 	modelTiers: ModelTiersSettings;
 	memoryCharCap: number;
-	/** undefined when pi-web-access is not loaded (curator bridge absent). */
+	/** lunr: web-access search curator setting (always defined; the feature is core now). */
 	searchCurator: SearchCuratorSetting | undefined;
-	/** undefined when pi-ollama-cloud is not loaded or web tools are env-killed (bridge absent). */
+	/** undefined when web tools are env-killed via PI_OLLAMA_WEB_TOOLS. */
 	ollamaWebTools: boolean | undefined;
 	// lunr: TUI customize settings
 	gutterRail: boolean;
@@ -252,7 +254,7 @@ class ModelTiersSubmenu extends Container {
 }
 
 /**
- * Numeric input submenu for the simple-pi-memory character cap.
+ * Numeric input submenu for the memory character cap.
  * Enter validates and applies via done(newValue); Esc cancels.
  */
 class MemoryCharCapSubmenu extends Container {
@@ -638,7 +640,7 @@ function defaultAutomaticThemes(
 	if (autoTheme) return autoTheme;
 
 	const currentFixedTheme = currentThemeSetting.includes("/") ? undefined : currentThemeSetting;
-	const themeName = preferredTheme(availableThemes, currentFixedTheme, "moon");
+	const themeName = preferredTheme(availableThemes, currentFixedTheme, "default");
 	return { lightTheme: themeName, darkTheme: themeName };
 }
 
@@ -676,7 +678,7 @@ class ThemeSubmenu extends Container {
 		this.singleTheme = preferredTheme(
 			availableThemes,
 			fixedTheme ?? (autoTheme ? this.getActiveAutomaticTheme() : undefined),
-			"moon",
+			"default",
 		);
 
 		if (this.mode === "automatic") {
@@ -933,7 +935,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "memory-char-cap",
 				label: "Memory character cap",
-				description: `Max characters in the simple-pi-memory memory file AND the behavior file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				description: `Max characters in the memory file AND the behavior file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
 				currentValue: String(config.memoryCharCap),
 				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
 			},
@@ -950,8 +952,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "ollama-webtools",
 				label: "Ollama web tools",
 				description: ollamaWebToolsAvailable
-					? "pi-ollama-cloud web tools: on = activate ollama_web_search and ollama_web_fetch, off = remove them."
-					: "pi-ollama-cloud is not loaded or web tools are disabled via PI_OLLAMA_WEB_TOOLS; unavailable.",
+					? "Ollama Cloud web tools: on = activate ollama_web_search and ollama_web_fetch, off = remove them."
+					: "Web tools are disabled via PI_OLLAMA_WEB_TOOLS; unavailable.",
 				currentValue: config.ollamaWebTools === undefined ? "unavailable" : config.ollamaWebTools ? "on" : "off",
 				values: ollamaWebToolsAvailable ? ["on", "off"] : undefined,
 			},

@@ -32,14 +32,12 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
-import { registerCustomizeBridge } from "./core/customize.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
-import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
-import { registerModelTierBridge } from "./core/model-tiers.ts";
+import { initModelTiers } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -54,6 +52,14 @@ import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import { createBehaviorTools } from "./features/behavior.ts";
+import { createGoalTools } from "./features/goal/index.ts";
+import { createMemoryTools } from "./features/memory.ts";
+import { setupOllamaCloud } from "./features/ollama-cloud/index.ts";
+import { createPromptTemplatesFeature, createPromptTemplateTools } from "./features/prompt-templates/index.ts";
+import { setupLocalProviders } from "./features/providers.ts";
+import { createSubagentsFeature, createSubagentTools } from "./features/subagents/index.ts";
+import { createWebAccessTools } from "./features/web-access/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -556,16 +562,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
-	// Register the model-tier bridge before extensions load so pi-subagents can read
-	// tier settings when building its tool description. Re-pointed to the runtime
-	// settings manager below once services exist.
-	registerModelTierBridge(startupSettingsManager);
-	// lunr: same for the simple-pi-memory character cap — extensions read it via the
-	// bridge at load/runtime; re-pointed to the runtime settings manager below.
-	registerMemoryCapBridge(startupSettingsManager);
-	// lunr: TUI customize settings (spinner, dividers, rail, prompt symbol) read by
-	// ashxj-spinners and ashxj-tui via the bridge; re-pointed to runtime below.
-	registerCustomizeBridge(startupSettingsManager);
+	// Register the model-tier settings source before the subagents feature is
+	// created so it can read tier settings when building its tool description.
+	// Re-pointed to the runtime settings manager below once services exist.
+	initModelTiers(startupSettingsManager);
 
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
@@ -712,6 +712,14 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		// lunr: provider features (absorbed from the lunr-local-providers and
+		// pi-ollama-cloud baked-in extensions). Registered directly on the fresh
+		// ModelRuntime right after services exist — before model resolution below —
+		// the same lifecycle point extension-registered providers landed at. Runs on
+		// every runtime creation (startup + session replacement), like the
+		// extension factories did.
+		setupLocalProviders(modelRuntime);
+		setupOllamaCloud(modelRuntime);
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
@@ -760,7 +768,35 @@ export async function main(args: string[], options?: MainOptions) {
 			tools: sessionOptions.tools,
 			excludeTools: sessionOptions.excludeTools,
 			noTools: sessionOptions.noTools,
-			customTools: sessionOptions.customTools,
+			// lunr: memory + behavior + goal + web-access + subagent + prompt-template
+			// tools (absorbed from baked-in extensions into core features). Their execute
+			// closures read the runtime settings manager / feature singletons lazily, so
+			// changes apply immediately.
+			customTools: [
+				...(sessionOptions.customTools ?? []),
+				...createMemoryTools(settingsManager),
+				...createBehaviorTools(settingsManager),
+				...createGoalTools(),
+				...createWebAccessTools(),
+				...createSubagentTools(),
+				...createPromptTemplateTools(),
+			],
+		});
+		// lunr: subagents feature session wiring (absorbed from pi-subagents) — the
+		// singleton's session + shared-event-bus getters follow every created session
+		// in every mode (interactive/print/rpc), so async coordination, the intercom
+		// bus, and headless auto-drain keep working across session replacement.
+		createSubagentsFeature({
+			getSession: () => created.session,
+			getEvents: () => created.session.resourceLoader.getEventBus?.(),
+		});
+		// lunr: prompt-templates feature session wiring (absorbed from
+		// pi-prompt-template-model) — same getter-follows-session pattern; the shared
+		// bus carries the prompt-template:subagent:* delegation protocol with the
+		// subagents feature.
+		createPromptTemplatesFeature({
+			getSession: () => created.session,
+			getEvents: () => created.session.resourceLoader.getEventBus?.(),
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
@@ -785,11 +821,9 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 
-	// Point the model-tier bridge at the live runtime settings manager so /settings
-	// changes take effect without a restart.
-	registerModelTierBridge(settingsManager);
-	registerMemoryCapBridge(settingsManager);
-	registerCustomizeBridge(settingsManager);
+	// Point model-tier resolution at the live runtime settings manager so
+	// /settings changes take effect without a restart.
+	initModelTiers(settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

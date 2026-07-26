@@ -69,7 +69,7 @@ describe("edit tool TUI rendering", () => {
 	const tempDirs: string[] = [];
 
 	beforeAll(() => {
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	afterEach(async () => {

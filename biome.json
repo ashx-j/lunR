@@ -39,7 +39,12 @@
 			"!hermes-agent/**/*",
 			"!kimi-cli/**/*",
 			"!extension-repos/**/*",
-			"!packages/coding-agent/src/builtin-extensions/**/*"
+			"!packages/coding-agent/src/builtin-extensions/**/*",
+			"!packages/coding-agent/src/features/goal/**/*",
+			"!packages/coding-agent/src/features/ollama-cloud/**/*",
+			"!packages/coding-agent/src/features/prompt-templates/**/*",
+			"!packages/coding-agent/src/features/subagents/src/**/*",
+			"!packages/coding-agent/src/features/web-access/**/*"
 		]
 	}
 }

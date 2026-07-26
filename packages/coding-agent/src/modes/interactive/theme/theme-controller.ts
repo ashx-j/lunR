@@ -87,10 +87,10 @@ export class InteractiveThemeController {
 
 	private applyThemeName(themeName: string, showError = false): ThemeResult {
 		const result = setTheme(themeName, true);
-		this.activeThemeName = result.success ? themeName : "moon";
+		this.activeThemeName = result.success ? themeName : "default";
 		this.notifyChanged();
 		if (!result.success && showError) {
-			this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to moon theme.`);
+			this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to default theme.`);
 		}
 		return result;
 	}

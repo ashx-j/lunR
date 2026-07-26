@@ -12,7 +12,7 @@ import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 beforeAll(() => {
-	initTheme("moon");
+	initTheme("default");
 });
 
 beforeEach(() => {

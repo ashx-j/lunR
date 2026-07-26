@@ -15,7 +15,7 @@ export interface FirstTimeSetupOptions {
 	onCancel: () => void;
 }
 
-const THEME_OPTIONS: Array<{ value: string; label: string }> = [{ value: "moon", label: "Moon" }];
+const THEME_OPTIONS: Array<{ value: string; label: string }> = [{ value: "default", label: "Default" }];
 
 const ANALYTICS_OPTIONS: Array<{ value: boolean; label: string }> = [
 	{ value: true, label: "Share anonymous usage data" },

@@ -440,9 +440,9 @@ let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const moonPath = path.join(themesDir, "moon.json");
+		const defaultPath = path.join(themesDir, "default.json");
 		BUILTIN_THEMES = {
-			moon: JSON.parse(fs.readFileSync(moonPath, "utf-8")) as ThemeJson,
+			default: JSON.parse(fs.readFileSync(defaultPath, "utf-8")) as ThemeJson,
 		};
 	}
 	return BUILTIN_THEMES;
@@ -546,7 +546,7 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 				.map((color) => `  - ${color}`)
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
-			errorMessage += "\nSee the built-in theme (moon.json) for reference values.";
+			errorMessage += "\nSee the built-in theme (default.json) for reference values.";
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
@@ -787,7 +787,7 @@ export async function detectTerminalThemeForAuto({
 }
 
 export function getDefaultTheme(): string {
-	return "moon";
+	return "default";
 }
 
 // ============================================================================
@@ -838,9 +838,9 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 			startThemeWatcher();
 		}
 	} catch (_error) {
-		// Theme is invalid - fall back to moon theme silently
-		currentThemeName = "moon";
-		setGlobalTheme(loadTheme("moon"));
+		// Theme is invalid - fall back to default theme silently
+		currentThemeName = "default";
+		setGlobalTheme(loadTheme("default"));
 		// Don't start watcher for fallback theme
 	}
 }
@@ -857,9 +857,9 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		}
 		return { success: true };
 	} catch (error) {
-		// Theme is invalid - fall back to moon theme
-		currentThemeName = "moon";
-		setGlobalTheme(loadTheme("moon"));
+		// Theme is invalid - fall back to default theme
+		currentThemeName = "default";
+		setGlobalTheme(loadTheme("default"));
 		// Don't start watcher for fallback theme
 		return {
 			success: false,
@@ -890,7 +890,7 @@ function startThemeWatcher(): void {
 	stopThemeWatcher();
 
 	// Only watch if it's a custom theme (not built-in)
-	if (!currentThemeName || currentThemeName === "moon") {
+	if (!currentThemeName || currentThemeName === "default") {
 		return;
 	}
 

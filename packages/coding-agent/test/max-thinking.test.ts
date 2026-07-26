@@ -30,7 +30,7 @@ describe("max thinking level", () => {
 		tempDirs.push(testDir);
 		const currentDir = dirname(fileURLToPath(import.meta.url));
 		const darkTheme = JSON.parse(
-			readFileSync(join(currentDir, "../src/modes/interactive/theme/moon.json"), "utf8"),
+			readFileSync(join(currentDir, "../src/modes/interactive/theme/default.json"), "utf8"),
 		) as { name: string; colors: Record<string, unknown> };
 		darkTheme.name = "legacy-theme";
 		delete darkTheme.colors.thinkingMax;

@@ -6,7 +6,7 @@ import { computeContextBreakdown, estimateToolDefinitionTokens } from "../src/co
 import { renderContextBox } from "../src/modes/interactive/components/context-view.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
-initTheme("moon", false);
+initTheme("default", false);
 
 function createMockUsage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
 	return {

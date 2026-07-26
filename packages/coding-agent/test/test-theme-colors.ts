@@ -236,11 +236,11 @@ if (cmd === "contrast") {
 	cmdContrast(parseFloat(arg) || 4.5);
 } else if (cmd === "test") {
 	cmdTest(arg);
-} else if (cmd === "moon") {
+} else if (cmd === "default") {
 	cmdTheme(cmd);
 } else {
 	console.log("Usage:");
-	console.log("  npx tsx test-theme-colors.ts moon           Test built-in theme");
+	console.log("  npx tsx test-theme-colors.ts default        Test built-in theme");
 	console.log("  npx tsx test-theme-colors.ts contrast 4.5   Compute colors at ratio");
 	console.log("  npx tsx test-theme-colors.ts test file.json Test any JSON file");
 }

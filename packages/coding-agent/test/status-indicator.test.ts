@@ -17,7 +17,7 @@ describe("status indicators", () => {
 	});
 
 	it("disposes retry countdown updates", () => {
-		initTheme("moon");
+		initTheme("default");
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const tui = { requestRender } as unknown as TUI;

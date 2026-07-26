@@ -73,7 +73,7 @@ type ExtensionFixture = {
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(() => {
 		// showStatus uses the global theme instance
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	test("coalesces immediately-sequential status messages", () => {
@@ -143,9 +143,9 @@ describe("InteractiveMode.setToolsExpanded", () => {
 
 describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	test("persists theme changes to settings manager", () => {
-		initTheme("moon");
+		initTheme("default");
 
-		let currentTheme = "moon";
+		let currentTheme = "default";
 		const settingsManager = {
 			getTheme: vi.fn(() => currentTheme),
 			setTheme: vi.fn((theme: string) => {
@@ -176,10 +176,10 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	});
 
 	test("does not persist invalid theme names", () => {
-		initTheme("moon");
+		initTheme("default");
 
 		const settingsManager = {
-			getTheme: vi.fn(() => "moon"),
+			getTheme: vi.fn(() => "default"),
 			setTheme: vi.fn(),
 		};
 		const fakeThis: any = {
@@ -204,7 +204,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 
 describe("InteractiveMode.showExtensionCustom", () => {
 	beforeAll(() => {
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	test("overlay custom UI reclaims input after non-overlay custom UI closes", async () => {
@@ -482,7 +482,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 });
 describe("InteractiveMode.showLoadedResources", () => {
 	beforeAll(() => {
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	function createShowLoadedResourcesThis(options: {

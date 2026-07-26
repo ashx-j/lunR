@@ -40,7 +40,7 @@ function createSessionFile(path: string): void {
 }
 
 describe("SessionInfo.modified", () => {
-	beforeAll(() => initTheme("moon"));
+	beforeAll(() => initTheme("default"));
 
 	afterEach(() => {
 		vi.restoreAllMocks();

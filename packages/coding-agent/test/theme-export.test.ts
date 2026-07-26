@@ -37,7 +37,7 @@ describe("getThemeExportColors", () => {
 
 	it("resolves export variable references using the same syntax as colors", () => {
 		const darkTheme = JSON.parse(
-			readFileSync(new URL("../src/modes/interactive/theme/moon.json", import.meta.url), "utf-8"),
+			readFileSync(new URL("../src/modes/interactive/theme/default.json", import.meta.url), "utf-8"),
 		) as ThemeFile;
 
 		const customTheme: ThemeFile = {
@@ -71,7 +71,7 @@ describe("getThemeExportColors", () => {
 
 	it("resolves recursive vars and converts 256-color export values to hex", () => {
 		const darkTheme = JSON.parse(
-			readFileSync(new URL("../src/modes/interactive/theme/moon.json", import.meta.url), "utf-8"),
+			readFileSync(new URL("../src/modes/interactive/theme/default.json", import.meta.url), "utf-8"),
 		) as ThemeFile;
 
 		const customTheme: ThemeFile = {

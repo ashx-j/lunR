@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { getSubagentsFeature } from "../features/subagents/index.ts";
 import { resolvePath } from "../utils/paths.ts";
 import type { AgentSession } from "./agent-session.ts";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.ts";
@@ -134,6 +135,9 @@ export class AgentSessionRuntime {
 		reason: "new" | "resume",
 		targetSessionFile?: string,
 	): Promise<{ cancelled: boolean }> {
+		// lunr: subagents feature session_before_switch hook (absorbed from
+		// pi-subagents watchdog) — resets review state; never cancels.
+		await getSubagentsFeature()?.onSessionBeforeSwitch();
 		const runner = this.session.extensionRunner;
 		if (!runner.hasHandlers("session_before_switch")) {
 			return { cancelled: false };
@@ -151,6 +155,9 @@ export class AgentSessionRuntime {
 		entryId: string,
 		options: { position: "before" | "at" },
 	): Promise<{ cancelled: boolean }> {
+		// lunr: subagents feature session_before_fork hook (absorbed from
+		// pi-subagents watchdog) — resets review state; never cancels.
+		await getSubagentsFeature()?.onSessionBeforeFork();
 		const runner = this.session.extensionRunner;
 		if (!runner.hasHandlers("session_before_fork")) {
 			return { cancelled: false };
@@ -165,6 +172,10 @@ export class AgentSessionRuntime {
 	}
 
 	private async teardownCurrent(reason: SessionShutdownEvent["reason"], targetSessionFile?: string): Promise<void> {
+		// lunr: subagents feature session_shutdown (absorbed from pi-subagents) —
+		// runs with the outgoing session still bound, before extension
+		// session_shutdown handlers (its old builtin load order).
+		await getSubagentsFeature()?.onSessionShutdown();
 		await emitSessionShutdownEvent(this.session.extensionRunner, {
 			type: "session_shutdown",
 			reason,
@@ -393,6 +404,9 @@ export class AgentSessionRuntime {
 	}
 
 	async dispose(): Promise<void> {
+		// lunr: subagents feature session_shutdown on quit (absorbed from
+		// pi-subagents) — same position as in teardownCurrent.
+		await getSubagentsFeature()?.onSessionShutdown();
 		await emitSessionShutdownEvent(this.session.extensionRunner, {
 			type: "session_shutdown",
 			reason: "quit",

@@ -5,7 +5,7 @@ import { clearPlanUsageCache, getPlanUsage } from "../src/core/usage-service.ts"
 import { formatResetCountdown, renderUsageBox, usageBar } from "../src/modes/interactive/components/usage-view.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
-initTheme("moon", false);
+initTheme("default", false);
 
 // ---------------------------------------------------------------------------
 // Fixtures + fakes

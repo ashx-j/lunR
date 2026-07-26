@@ -10,10 +10,6 @@
  * - ollama-cloud: no usage API exists.
  *
  * All adapter/network errors resolve to `undefined` — callers omit the UI.
- *
- * The bridge on `globalThis` under `Symbol.for("@lunr/usage-service")` lets
- * builtin extensions (ashxj-tui footer) read plan usage without importing core
- * code (same pattern as the model-tiers bridge).
  */
 
 import type { ModelRuntime } from "./model-runtime.ts";

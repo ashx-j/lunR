@@ -30,7 +30,7 @@ const CTRL_R = "\x1b[114;5u";
 
 describe("session selector rename", () => {
 	beforeAll(() => {
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	beforeEach(() => {

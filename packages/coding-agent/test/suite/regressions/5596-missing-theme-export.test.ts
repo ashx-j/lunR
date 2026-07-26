@@ -20,7 +20,7 @@ describe("regression #5596: missing configured theme export", () => {
 		while (cleanups.length > 0) {
 			cleanups.pop()?.();
 		}
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	it("exports with the active fallback theme when the configured theme is missing", async () => {

@@ -32,7 +32,7 @@ function createFakeTui(): TUI {
 
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	test("stacks custom call and result renderers like the old implementation", () => {

@@ -7,7 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
 import type {
@@ -77,8 +77,6 @@ import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/htt
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
-import { getOllamaWebtoolsEnabled, setOllamaWebtoolsEnabled } from "../../core/ollama-webtools.ts";
-import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import {
 	AUTO_MODE_ADDENDUM,
 	getPermissionMode,
@@ -101,14 +99,37 @@ import {
 	rollbackLastTurn,
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
-import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import { MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getPlanUsage } from "../../core/usage-service.ts";
+import { completeGoalArguments, createGoalFeature, type GoalFeature } from "../../features/goal/index.ts";
+import { getMemoryFilePath, getMemoryFileSize } from "../../features/memory.ts";
+import {
+	configureOllamaCloudDeps,
+	getOllamaWebtoolsEnabled,
+	type OllamaCloudRefreshUi,
+	onOllamaCloudSessionStart,
+	runOllamaCloudRefresh,
+	setOllamaWebtoolsEnabled,
+} from "../../features/ollama-cloud/index.ts";
+import { getPromptTemplatesFeature } from "../../features/prompt-templates/index.ts";
+import { configureLocalProvidersDeps } from "../../features/providers.ts";
+import { createSubagentsFeature, type SubagentsFeature } from "../../features/subagents/index.ts";
+import { availableThinkingLevelsFor, getThinkingArgumentCompletions } from "../../features/thinking.ts";
+import { TpsTracker } from "../../features/tps.ts";
+import {
+	createWebAccessFeature,
+	getSearchCuratorSetting,
+	setSearchCuratorSetting,
+	type WebAccessFeature,
+	type WebAccessUi,
+} from "../../features/web-access/index.ts";
+import { WorkingIndicatorController } from "../../features/working-indicator.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
@@ -121,6 +142,7 @@ import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
+import { ChatboxEditor } from "./components/chatbox-editor.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
@@ -146,6 +168,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { LunrStatsFooter } from "./components/stats-footer.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -154,6 +177,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
@@ -400,6 +424,24 @@ export class InteractiveMode {
 	private editorContainer: Container;
 	private footer: FooterComponent;
 	private footerDataProvider: FooterDataProvider;
+	// lunr: core chrome controllers (absorbed from the ashxj-tui/pi-tps/ashxj-spinners extensions)
+	private tpsTracker: TpsTracker;
+	private workingIndicator: WorkingIndicatorController;
+	// lunr: goal feature controller (absorbed from the narumiruna-pi-goal extension).
+	// Undefined only when the constructor was bypassed (tests) — drive with ?.
+	private goalFeature: GoalFeature | undefined = undefined;
+	// lunr: Ollama Cloud refresh UI surface (absorbed from the pi-ollama-cloud
+	// extension). Undefined only when the constructor was bypassed (tests) — guard uses.
+	private ollamaCloudUi: OllamaCloudRefreshUi | undefined = undefined;
+	// lunr: web-access feature controller + UI surface (absorbed from the
+	// pi-web-access extension). Undefined only when the constructor was bypassed
+	// (tests) — drive with ?.
+	private webAccessFeature: WebAccessFeature | undefined = undefined;
+	private webAccessUi: WebAccessUi | undefined = undefined;
+	// lunr: subagents feature controller (absorbed from the pi-subagents
+	// extension). Undefined only when the constructor was bypassed
+	// (tests) — drive with ?.
+	private subagentsFeature: SubagentsFeature | undefined = undefined;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
 	private version: string;
@@ -538,7 +580,19 @@ export class InteractiveMode {
 		this.options = options;
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
+			// lunr: goal feature session_shutdown (absorbed from narumiruna-pi-goal) —
+			// runs with the outgoing session still bound, so goal state persists to it.
+			// Covers session replacement (/new, /resume, fork, import) and quit (via
+			// runtimeHost.dispose()), matching the old session_shutdown emit sites.
+			this.goalFeature?.onSessionShutdown();
+			// lunr: web-access session_shutdown (absorbed from pi-web-access) — aborts
+			// pending fetches, closes curators, clears stored results + the activity widget.
+			this.webAccessFeature?.onSessionShutdown();
 			this.resetExtensionUI();
+			// lunr: re-install the core chrome that resetExtensionUI() just cleared,
+			// and reset the working indicator for the incoming session.
+			this.installLunrChrome();
+			this.workingIndicator?.onSessionStart(undefined);
 			// lunr: plan-mode gate/addendum live on the AgentSession being replaced — drop state
 			if (this.planModeActive) {
 				this.planModeActive = false;
@@ -564,8 +618,6 @@ export class InteractiveMode {
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 
-		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
-		registerPermissionModeBridge(() => getPermissionMode());
 		// lunr: reset permission mode to configured default on startup.
 		resetPermissions(this.settingsManager.getDefaultPermissionMode());
 		this.headerContainer = new Container();
@@ -589,6 +641,83 @@ export class InteractiveMode {
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+
+		// lunr: core chrome controllers (tps footer status + spinner/kaomoji working
+		// indicator), driven from handleEvent.
+		this.tpsTracker = new TpsTracker((text) => this.setExtensionStatus("tps", text));
+		this.workingIndicator = new WorkingIndicatorController({
+			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
+			setWorkingMessage: (message) => {
+				this.workingMessage = message;
+				if (this.activeStatusIndicator?.kind === "working") {
+					this.activeStatusIndicator.setMessage(message ?? this.defaultWorkingMessage);
+				}
+			},
+		});
+
+		// lunr: goal feature (absorbed from the narumiruna-pi-goal baked-in
+		// extension). Process-wide singleton shared with the agent-session core
+		// hooks; configured here with the TUI deps (footer status + dialogs +
+		// current-session getter that follows session replacement).
+		this.goalFeature = createGoalFeature({
+			getSession: () => this.runtimeHost.session,
+			notify: (message, level) => this.showExtensionNotify(message, level),
+			confirm: (title, message) => this.showExtensionConfirm(title, message),
+			setStatus: (text) => this.setExtensionStatus("goal", text),
+		});
+
+		// lunr: provider features (absorbed from the lunr-local-providers and
+		// pi-ollama-cloud baked-in extensions). Both track the CURRENT session via
+		// a getter that follows session replacement: local providers for the
+		// post-login auto-select, Ollama Cloud for the web-tools active-set and the
+		// provider re-registration after a refresh.
+		configureLocalProvidersDeps({ getSession: () => this.runtimeHost.session });
+		configureOllamaCloudDeps({ getSession: () => this.runtimeHost.session });
+		// lunr: UI surface for the Ollama Cloud refresh flow — progress widget below
+		// the editor + working message + notify, built over the same primitives the
+		// extension UI context exposed.
+		this.ollamaCloudUi = {
+			notify: (message, level) => this.showExtensionNotify(message, level),
+			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
+			setStatus: (key, text) => this.setExtensionStatus(key, text),
+			setWorkingMessage: (message) => {
+				this.workingMessage = message;
+				if (this.activeStatusIndicator?.kind === "working") {
+					this.activeStatusIndicator.setMessage(message ?? this.defaultWorkingMessage);
+				}
+			},
+		};
+
+		// lunr: web-access feature (absorbed from the pi-web-access baked-in
+		// extension). Process-wide singleton shared with the main.ts customTools
+		// assembly; configured here with the TUI deps (widget/notify/select/theme +
+		// current-session getter that follows session replacement). The moved code
+		// passes a constructed widget component, so setWidget wraps it in the
+		// component factory setExtensionWidget expects.
+		this.webAccessUi = {
+			get theme() {
+				return theme;
+			},
+			notify: (message, level) => this.showExtensionNotify(message, level),
+			select: (title, options) => this.showExtensionSelector(title, options),
+			setWidget: (key, content) => this.setExtensionWidget(key, content ? () => content : undefined),
+		};
+		this.webAccessFeature = createWebAccessFeature({
+			getSession: () => this.runtimeHost.session,
+			getUi: () => this.webAccessUi,
+		});
+
+		// lunr: subagents feature (absorbed from the pi-subagents baked-in
+		// extension). Process-wide singleton shared with the main.ts customTools
+		// assembly; main.ts already wired getSession/getEvents for every mode —
+		// here it additionally gets the full ExtensionUIContext so command
+		// handlers, the fleet overlay, clarify dialogs, and widgets get the same
+		// UI surface the extension context had. getSession is re-pointed at the
+		// runtime host getter (equivalent, follows session replacement).
+		this.subagentsFeature = createSubagentsFeature({
+			getSession: () => this.runtimeHost.session,
+			getUi: () => this.createExtensionUIContext(),
+		});
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -705,6 +834,34 @@ export class InteractiveMode {
 			};
 		}
 
+		// lunr: /thinking completions — levels valid for the current model (absorbed
+		// from ashxj-thinking; core can read session.model directly instead of
+		// tracking session_start/model_select events like the extension had to).
+		const thinkingCommand = slashCommands.find((command) => command.name === "thinking");
+		if (thinkingCommand) {
+			thinkingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null =>
+				getThinkingArgumentCompletions(prefix, this.session.model);
+		}
+
+		// lunr: /goal completions (absorbed from narumiruna-pi-goal).
+		const goalCommand = slashCommands.find((command) => command.name === "goal");
+		if (goalCommand) {
+			goalCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null =>
+				completeGoalArguments(prefix, {
+					experimentalGoals: this.goalFeature?.experimentalGoalsEnabled ?? false,
+				});
+		}
+
+		// lunr: subagent command completions (absorbed from pi-subagents) — the
+		// completion callbacks captured with the feature's command registrations
+		// (agent/chain name completion for /run, /chain, /parallel, etc.).
+		for (const command of slashCommands) {
+			const completions = this.subagentsFeature?.getArgumentCompletions(command.name);
+			if (completions) {
+				command.getArgumentCompletions = completions;
+			}
+		}
+
 		// Convert prompt templates to SlashCommand format for autocomplete
 		const templateCommands: SlashCommand[] = this.session.promptTemplates.map((cmd) => ({
 			name: cmd.name,
@@ -723,6 +880,15 @@ export class InteractiveMode {
 				getArgumentCompletions: cmd.getArgumentCompletions,
 			}));
 
+		// lunr: prompt-template commands (absorbed from the pi-prompt-template-model
+		// baked-in extension, formerly extension commands): /chain-prompts,
+		// /prompt-tool, and one dynamic command per user template on disk. The list
+		// is refreshed on every session bind (setupAutocompleteProvider runs after
+		// the feature's session_start rescan).
+		const promptTemplateCommands: SlashCommand[] = (getPromptTemplatesFeature()?.getCommandList() ?? [])
+			.filter((cmd) => !builtinCommandNames.has(cmd.name))
+			.map((cmd) => ({ name: cmd.name, description: cmd.description }));
+
 		// Build skill commands from session.skills (if enabled)
 		this.skillCommands.clear();
 		const skillCommandList: SlashCommand[] = [];
@@ -738,7 +904,7 @@ export class InteractiveMode {
 		}
 
 		return new CombinedAutocompleteProvider(
-			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
+			[...slashCommands, ...templateCommands, ...extensionCommands, ...promptTemplateCommands, ...skillCommandList],
 			this.sessionManager.getCwd(),
 			this.fdPath,
 		);
@@ -802,12 +968,17 @@ export class InteractiveMode {
 		this.ui.addChild(this.footer);
 		this.ui.setFocus(this.editor);
 
+		// lunr: install the core chrome (chatbox prompt box + stats footer) now
+		// that the default editor and footer are attached.
+		this.installLunrChrome();
+
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+		this.workingIndicator?.onSessionStart("startup");
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
@@ -1700,6 +1871,20 @@ export class InteractiveMode {
 		if (this.builtInHeader instanceof BootScreenComponent) {
 			(this.builtInHeader as BootScreenComponent).updateRows(this.buildBootRows());
 		}
+		// lunr: goal feature session_start (absorbed from narumiruna-pi-goal) — runs
+		// on startup and every session replacement, before extension session_start
+		// handlers fire inside bindCurrentSessionExtensions (its old builtin load
+		// order). Reload (/reload) is driven separately in AgentSession.reload().
+		await this.goalFeature?.onSessionStart();
+		// lunr: Ollama Cloud session_start (absorbed from pi-ollama-cloud) — stale-cache
+		// startup refresh + web-tools re-apply, on startup and every session replacement.
+		if (this.ollamaCloudUi) {
+			await onOllamaCloudSessionStart(this.ollamaCloudUi);
+		}
+		// lunr: web-access session_start (absorbed from pi-web-access) — aborts stale
+		// fetches/curators and restores stored search results from the session branch,
+		// on startup and every session replacement.
+		this.webAccessFeature?.onSessionChange();
 		if (options.renderBeforeBind) {
 			this.renderCurrentSessionState();
 			this.subscribeToAgent();
@@ -1745,7 +1930,6 @@ export class InteractiveMode {
 	 */
 	private setupExtensionShortcuts(extensionRunner: ExtensionRunner): void {
 		const shortcuts = extensionRunner.getShortcuts(this.keybindings.getEffectiveConfig());
-		if (shortcuts.size === 0) return;
 
 		// Create a context for shortcut handlers
 		const createContext = (): ExtensionContext => ({
@@ -1781,8 +1965,13 @@ export class InteractiveMode {
 			getSystemPrompt: () => this.session.systemPrompt,
 		});
 
-		// Set up the extension shortcut handler on the default editor
+		// Set up the extension shortcut handler on the default editor.
+		// lunr: web-access + subagents shortcuts (absorbed from pi-web-access and
+		// pi-subagents) are core keys now — they are checked first so they work
+		// even when no extension shortcuts are registered.
 		this.defaultEditor.onExtensionShortcut = (data: string) => {
+			if (this.handleWebAccessShortcut(data)) return true;
+			if (this.handleSubagentsShortcut(data)) return true;
 			for (const [shortcutStr, shortcut] of shortcuts) {
 				// Cast to KeyId - extension shortcuts use the same format
 				if (matchesKey(data, shortcutStr as KeyId)) {
@@ -1795,6 +1984,50 @@ export class InteractiveMode {
 			}
 			return false;
 		};
+	}
+
+	/**
+	 * lunr: web-access shortcut keys (absorbed from pi-web-access, formerly
+	 * pi.registerShortcut): curate (ctrl+shift+s) reopens the search curator while
+	 * searches stream in; activity (ctrl+shift+w) toggles the web search activity
+	 * widget. Returns true when the key was consumed.
+	 */
+	private handleWebAccessShortcut(data: string): boolean {
+		const feature = this.webAccessFeature;
+		if (!feature) return false;
+		const keys = feature.getShortcutKeys();
+		if (matchesKey(data, keys.curate as KeyId)) {
+			feature.handleCurateShortcut().catch((err) => {
+				this.showError(`Shortcut handler error: ${err instanceof Error ? err.message : String(err)}`);
+			});
+			return true;
+		}
+		if (matchesKey(data, keys.activity as KeyId)) {
+			feature.handleActivityShortcut().catch((err) => {
+				this.showError(`Shortcut handler error: ${err instanceof Error ? err.message : String(err)}`);
+			});
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * lunr: subagents shortcut keys (absorbed from pi-subagents, formerly
+	 * pi.registerShortcut): Ctrl+Alt+F opens the subagent fleet inspector.
+	 * Returns true when the key was consumed.
+	 */
+	private handleSubagentsShortcut(data: string): boolean {
+		const feature = this.subagentsFeature;
+		if (!feature) return false;
+		for (const key of feature.getShortcutKeys()) {
+			if (matchesKey(data, key as KeyId)) {
+				feature.handleShortcut(key).catch((err) => {
+					this.showError(`Shortcut handler error: ${err instanceof Error ? err.message : String(err)}`);
+				});
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1942,7 +2175,10 @@ export class InteractiveMode {
 		this.autocompleteProviderWrappers = [];
 		this.setCustomEditorComponent(undefined);
 		this.setupAutocompleteProvider();
-		this.defaultEditor.onExtensionShortcut = undefined;
+		// lunr: keep the web-access + subagents shortcut keys live between sessions
+		// (extension shortcuts are re-composed on top by setupExtensionShortcuts on rebind).
+		this.defaultEditor.onExtensionShortcut = (data) =>
+			this.handleWebAccessShortcut(data) || this.handleSubagentsShortcut(data);
 		this.updateTerminalTitle();
 		this.workingMessage = undefined;
 		this.workingVisible = true;
@@ -1989,6 +2225,40 @@ export class InteractiveMode {
 		for (const component of widgets.values()) {
 			container.addChild(component);
 		}
+	}
+
+	/**
+	 * lunr: install the core chrome — ChatboxEditor prompt box + LunrStatsFooter
+	 * stats line (absorbed from the former ashxj-tui extension). Called from
+	 * init() and re-applied after resetExtensionUI() on session replacement.
+	 * The factories capture live getters, so model/settings/session changes are
+	 * picked up at render time without re-installing.
+	 */
+	private installLunrChrome(): void {
+		this.setCustomEditorComponent(
+			(tui, editorTheme, keybindings) =>
+				new ChatboxEditor(tui, editorTheme, keybindings, {
+					getModel: () => this.session.model,
+					getThinkingLevel: () => this.session.thinkingLevel,
+					getPromptSymbol: () => this.settingsManager.getPromptSymbol(),
+				}),
+		);
+		this.setExtensionFooter(
+			() =>
+				new LunrStatsFooter(this.footerDataProvider, {
+					getModel: () => this.session.model,
+					getContextUsage: () => this.session.getContextUsage(),
+					getSessionManager: () => this.sessionManager,
+					getPermissionMode: () => getPermissionMode(),
+					getFooterToggles: () => ({
+						mcp: this.settingsManager.getFooterMcp(),
+						lsp: this.settingsManager.getFooterLsp(),
+						context: this.settingsManager.getFooterContext(),
+						tokens: this.settingsManager.getFooterTokens(),
+						statuses: this.settingsManager.getFooterStatuses(),
+					}),
+				}),
+		);
 	}
 
 	/**
@@ -2725,6 +2995,68 @@ export class InteractiveMode {
 				await this.handleRollbackCommand();
 				return;
 			}
+			// lunr: /ollama-cloud-refresh — absorbed from the pi-ollama-cloud baked-in
+			// extension (formerly an extension command).
+			if (text === "/ollama-cloud-refresh") {
+				this.editor.setText("");
+				await this.handleOllamaCloudRefreshCommand();
+				return;
+			}
+			if (text === "/thinking" || text.startsWith("/thinking ")) {
+				this.editor.setText("");
+				this.handleThinkingCommand(text === "/thinking" ? "" : text.slice(10).trim());
+				return;
+			}
+			// lunr: /goal [subcommand] <objective> — absorbed from the narumiruna-pi-goal
+			// baked-in extension (formerly an extension command).
+			if (text === "/goal" || text.startsWith("/goal ")) {
+				this.editor.setText("");
+				await this.goalFeature?.handleCommand(text === "/goal" ? "" : text.slice(6).trim());
+				return;
+			}
+			// lunr: web-access commands (absorbed from the pi-web-access baked-in
+			// extension, formerly extension commands).
+			if (text === "/websearch" || text.startsWith("/websearch ")) {
+				this.editor.setText("");
+				await this.webAccessFeature?.handleCommand("websearch", text === "/websearch" ? "" : text.slice(11).trim());
+				return;
+			}
+			if (text === "/curator" || text.startsWith("/curator ")) {
+				this.editor.setText("");
+				await this.webAccessFeature?.handleCommand("curator", text === "/curator" ? "" : text.slice(9).trim());
+				return;
+			}
+			if (text === "/google-account") {
+				this.editor.setText("");
+				await this.webAccessFeature?.handleCommand("google-account", "");
+				return;
+			}
+			if (text === "/search") {
+				this.editor.setText("");
+				await this.webAccessFeature?.handleCommand("search", "");
+				return;
+			}
+			// lunr: subagent commands (absorbed from the pi-subagents baked-in
+			// extension, formerly extension commands): /run, /chain, /run-chain,
+			// /parallel, /subagent-cost, /subagents-doctor, /subagents-fleet,
+			// /subagents-stop, /subagents-models, /subagents-profiles,
+			// /subagents-load-profile, /subagents-refresh-provider-models,
+			// /subagents-generate-profiles, /subagents-check-profile,
+			// /subagents-watchdog. Routed to the feature's captured registrations.
+			const subagentsCommandName = text.startsWith("/") ? text.slice(1).split(/\s/, 1)[0] : "";
+			if (subagentsCommandName && this.subagentsFeature?.hasCommand(subagentsCommandName)) {
+				this.editor.setText("");
+				await this.subagentsFeature.handleCommand(
+					subagentsCommandName,
+					text.slice(subagentsCommandName.length + 1).trim(),
+				);
+				return;
+			}
+			if (text === "/memory-char-cap" || text.startsWith("/memory-char-cap ")) {
+				this.editor.setText("");
+				this.handleMemoryCharCapCommand(text === "/memory-char-cap" ? "" : text.slice(17).trim());
+				return;
+			}
 			if (text === "/trust") {
 				this.showTrustSelector();
 				this.editor.setText("");
@@ -2907,8 +3239,17 @@ export class InteractiveMode {
 		this.footer.invalidate();
 
 		switch (event.type) {
+			case "turn_start":
+				this.workingIndicator?.onTurnStart();
+				break;
+
+			case "turn_end":
+				this.workingIndicator?.onTurnEnd();
+				break;
+
 			case "agent_start":
 				this.pendingTools.clear();
+				this.tpsTracker?.onAgentStart();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -2956,6 +3297,7 @@ export class InteractiveMode {
 				break;
 
 			case "message_start":
+				this.tpsTracker?.onMessageStart(event.message.role);
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
@@ -2987,6 +3329,10 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
+				this.tpsTracker?.onMessageUpdate(
+					event.message.role,
+					(event.message as { usage?: { output?: number } }).usage?.output,
+				);
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingTargetMessage = event.message;
@@ -3029,6 +3375,10 @@ export class InteractiveMode {
 				break;
 
 			case "message_end":
+				this.tpsTracker?.onMessageEnd(
+					event.message.role,
+					(event.message as { usage?: { output?: number } }).usage?.output,
+				);
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					// Stop the reveal timer and render the full message immediately.
@@ -3071,6 +3421,7 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				this.workingIndicator?.onToolExecutionStart(event.toolName);
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
 					component = new ToolExecutionComponent(
@@ -3104,6 +3455,9 @@ export class InteractiveMode {
 			}
 
 			case "tool_execution_end": {
+				// lunr: goal feature tool_execution_end (absorbed from narumiruna-pi-goal)
+				this.goalFeature?.onToolExecutionEnd();
+				this.workingIndicator?.onToolExecutionEnd(event.isError);
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
@@ -3114,6 +3468,10 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				// lunr: goal feature agent_end (absorbed from narumiruna-pi-goal) —
+				// extension handlers ran before session listeners, so drive it first.
+				this.goalFeature?.onAgentEnd(event.messages);
+				this.workingIndicator?.onAgentEnd(event.messages);
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -3145,6 +3503,9 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				// lunr: goal feature agent_settled (absorbed from narumiruna-pi-goal) —
+				// dispatches goal continuations/queued goal changes when the agent is idle.
+				await this.goalFeature?.onAgentSettled();
 				await this.checkShutdownRequested();
 				break;
 
@@ -3307,7 +3668,15 @@ export class InteractiveMode {
 			}
 			case "custom": {
 				if (message.display) {
-					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
+					// lunr: fall back to the subagents + prompt-templates features'
+					// captured renderers (absorbed from pi-subagents and
+					// pi-prompt-template-model) for slash results, notify,
+					// steering/control notices, watchdog warnings, skill-loaded,
+					// delegated subagent, and deterministic step messages.
+					const renderer =
+						this.session.extensionRunner.getMessageRenderer(message.customType) ??
+						this.subagentsFeature?.getMessageRenderer(message.customType) ??
+						getPromptTemplatesFeature()?.getMessageRenderer(message.customType);
 					const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
@@ -3610,6 +3979,8 @@ export class InteractiveMode {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
 		this.stopSmoothStreaming();
+		this.tpsTracker?.dispose();
+		this.workingIndicator?.dispose();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -3908,8 +4279,19 @@ export class InteractiveMode {
 	}
 
 	private toggleThinkingBlockVisibility(): void {
-		this.hideThinkingBlock = !this.hideThinkingBlock;
-		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
+		this.setThinkingBlockVisibility(!this.hideThinkingBlock);
+	}
+
+	// lunr: shared setter for thinking-block visibility — used by the Ctrl+T
+	// toggle above and by /thinking show|hide|toggle. Persists via
+	// SettingsManager and rebuilds the chat live (no ctx.reload() needed in core).
+	private setThinkingBlockVisibility(hidden: boolean): void {
+		if (hidden === this.hideThinkingBlock) {
+			this.showStatus(`Thinking blocks already ${hidden ? "hidden" : "visible"}.`);
+			return;
+		}
+		this.hideThinkingBlock = hidden;
+		this.settingsManager.setHideThinkingBlock(hidden);
 
 		// Rebuild chat from session messages
 		this.chatContainer.clear();
@@ -3923,6 +4305,80 @@ export class InteractiveMode {
 		}
 
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
+	}
+
+	// lunr: /thinking [level|show|hide|toggle] — absorbed from the ashxj-thinking
+	// baked-in extension. Bare /thinking opens the picker.
+	private handleThinkingCommand(args: string): void {
+		const lower = args.toLowerCase();
+
+		// Visibility subcommands first so "show"/"hide"/"toggle" are never parsed as levels.
+		if (lower === "show" || lower === "hide" || lower === "toggle") {
+			this.setThinkingBlockVisibility(lower === "toggle" ? !this.hideThinkingBlock : lower === "hide");
+			return;
+		}
+
+		const levels = availableThinkingLevelsFor(this.session.model);
+		const currentLevel = this.session.thinkingLevel;
+
+		if (lower === "") {
+			if (levels.length === 0) {
+				this.showWarning("No thinking levels available for this model.");
+				return;
+			}
+			this.showSelector((done) => {
+				const selector = new ThinkingSelectorComponent(
+					currentLevel,
+					[...levels],
+					(level) => {
+						done();
+						if (level !== currentLevel) {
+							this.session.setThinkingLevel(level);
+						}
+						this.showStatus(`Thinking level: ${level}`);
+					},
+					() => {
+						done();
+					},
+				);
+				return { component: selector, focus: selector.getSelectList() };
+			});
+			return;
+		}
+
+		const requested = lower as ThinkingLevel;
+		if (!levels.includes(requested)) {
+			this.showError(`Invalid thinking level: "${args}". Valid: ${levels.join(", ")}`);
+			return;
+		}
+		if (requested === currentLevel) {
+			this.showStatus(`Thinking level: ${requested} (unchanged)`);
+			return;
+		}
+		this.session.setThinkingLevel(requested);
+		this.showStatus(`Thinking level: ${requested}`);
+	}
+
+	// lunr: /memory-char-cap [n] — absorbed from the simple-pi-memory baked-in
+	// extension. Cap is shared with the behavior file.
+	private handleMemoryCharCapCommand(args: string): void {
+		if (args === "") {
+			this.showStatus(`Memory character cap: ${this.settingsManager.getMemoryCharCap()}`);
+			return;
+		}
+		const n = Number(args);
+		if (!Number.isFinite(n) || !Number.isInteger(n) || n < MEMORY_CHAR_CAP_MIN || n > MEMORY_CHAR_CAP_MAX) {
+			this.showError(`Invalid cap. Must be an integer between ${MEMORY_CHAR_CAP_MIN} and ${MEMORY_CHAR_CAP_MAX}.`);
+			return;
+		}
+		if (n < getMemoryFileSize()) {
+			this.showWarning(
+				`Your memory file already exceeds this character cap. Edit memory file at ${getMemoryFilePath()}`,
+			);
+			return;
+		}
+		this.settingsManager.setMemoryCharCap(n);
+		this.showStatus(`Memory character cap set to ${n}.`);
 	}
 
 	private async openExternalEditor(): Promise<void> {
@@ -4092,7 +4548,12 @@ export class InteractiveMode {
 
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		return !!extensionRunner.getCommand(commandName);
+		// lunr: prompt-templates feature commands (absorbed from
+		// pi-prompt-template-model) execute immediately too — they are dispatched
+		// inside session.prompt's extension-command path.
+		return (
+			!!extensionRunner.getCommand(commandName) || (getPromptTemplatesFeature()?.hasCommand(commandName) ?? false)
+		);
 	}
 
 	private async flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {
@@ -4218,7 +4679,7 @@ export class InteractiveMode {
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getThemeSetting() || "moon",
+					currentTheme: this.settingsManager.getThemeSetting() || "default",
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
@@ -4397,13 +4858,11 @@ export class InteractiveMode {
 						this.settingsManager.setMemoryCharCap(cap);
 					},
 					onSearchCuratorChange: (setting) => {
-						if (!setSearchCuratorSetting(setting)) {
-							this.showError("pi-web-access is not loaded; curator setting unavailable.");
-						}
+						setSearchCuratorSetting(setting);
 					},
 					onOllamaWebToolsChange: (value) => {
 						if (!setOllamaWebtoolsEnabled(value === "on")) {
-							this.showError("pi-ollama-cloud is not loaded; Ollama web tools setting unavailable.");
+							this.showError("Ollama web tools unavailable — PI_OLLAMA_WEB_TOOLS disables them.");
 						}
 					},
 					// lunr: TUI customize callbacks
@@ -6425,6 +6884,13 @@ export class InteractiveMode {
 		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
 		if (parts.length === 0) parts.push("no file changes to restore");
 		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
+	}
+
+	/** lunr: /ollama-cloud-refresh (absorbed from pi-ollama-cloud, formerly an extension command). */
+	private async handleOllamaCloudRefreshCommand(): Promise<void> {
+		if (this.ollamaCloudUi) {
+			await runOllamaCloudRefresh(this.ollamaCloudUi);
+		}
 	}
 
 	/**

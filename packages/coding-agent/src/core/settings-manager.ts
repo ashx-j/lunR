@@ -7,7 +7,12 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
-import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+
+// lunr: memory/behavior file character-cap bounds (formerly in the deleted
+// memory-cap bridge module).
+export const MEMORY_CHAR_CAP_DEFAULT = 5000;
+export const MEMORY_CHAR_CAP_MIN = 1;
+export const MEMORY_CHAR_CAP_MAX = 30000;
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -130,7 +135,7 @@ export interface Settings {
 	markdown?: MarkdownSettings;
 	modelTiers?: ModelTiersSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
-	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
+	memoryCharCap?: number; // default: 5000 - memory/behavior file character cap (1..30000)
 	// lunr: TUI customize settings (gutter rail, prompt symbol)
 	gutterRail?: boolean; // default: true - render a thin left rail around each turn
 	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line

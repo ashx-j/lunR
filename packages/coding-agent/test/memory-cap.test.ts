@@ -1,21 +1,13 @@
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	MEMORY_CAP_BRIDGE_SYMBOL,
 	MEMORY_CHAR_CAP_DEFAULT,
 	MEMORY_CHAR_CAP_MAX,
 	MEMORY_CHAR_CAP_MIN,
-	type MemoryCapBridge,
-	registerMemoryCapBridge,
-} from "../src/core/memory-cap.ts";
-import {
-	getSearchCuratorSetting,
-	SEARCH_CURATOR_BRIDGE_SYMBOL,
-	type SearchCuratorBridge,
-	setSearchCuratorSetting,
-} from "../src/core/search-curator.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
+	SettingsManager,
+} from "../src/core/settings-manager.ts";
+import { createMemoryTools } from "../src/features/memory.ts";
 
 describe("memoryCharCap setting", () => {
 	const testDir = join(process.cwd(), "test-memory-cap-tmp");
@@ -61,10 +53,11 @@ describe("memoryCharCap setting", () => {
 	});
 });
 
-describe("memory-cap bridge", () => {
-	const testDir = join(process.cwd(), "test-memory-cap-bridge-tmp");
+describe("memory tools cap enforcement", () => {
+	const testDir = join(process.cwd(), "test-memory-tools-tmp");
 	const agentDir = join(testDir, "agent");
 	const projectDir = join(testDir, "project");
+	let savedAgentDirEnv: string | undefined;
 
 	beforeEach(() => {
 		if (existsSync(testDir)) {
@@ -72,83 +65,110 @@ describe("memory-cap bridge", () => {
 		}
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(projectDir, { recursive: true });
+		// Pre-create an empty memory file so the one-time legacy migration is a no-op.
+		writeFileSync(join(agentDir, "memory.md"), "");
+		savedAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
 	});
 
 	afterEach(() => {
-		delete (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL];
+		if (savedAgentDirEnv === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
+		}
 		if (existsSync(testDir)) {
 			rmSync(testDir, { recursive: true });
 		}
 	});
 
-	it("exposes a bridge on globalThis that reads/writes lunR settings", async () => {
+	function findTool(tools: ReturnType<typeof createMemoryTools>, name: string) {
+		const tool = tools.find((t) => t.name === name);
+		if (!tool) throw new Error(`tool not found: ${name}`);
+		return tool;
+	}
+
+	it("memory_add refuses when the file would exceed the settings cap", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
-		registerMemoryCapBridge(manager);
+		manager.setMemoryCharCap(40);
+		const tools = createMemoryTools(manager);
+		const add = findTool(tools, "memory_add");
 
-		const bridge = (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] as MemoryCapBridge;
-		expect(bridge).toBeDefined();
-		expect(bridge.getCharCap()).toBe(MEMORY_CHAR_CAP_DEFAULT);
+		const first = await add.execute("t1", { content: "short" }, undefined, undefined, undefined as never);
+		expect(first.content[0].text).toContain("Added memory");
 
-		bridge.setCharCap(8000);
-		expect(bridge.getCharCap()).toBe(8000);
-		await manager.flush();
-
-		const reloaded = SettingsManager.create(projectDir, agentDir);
-		expect(reloaded.getMemoryCharCap()).toBe(8000);
+		const second = await add.execute(
+			"t2",
+			{ content: "this memory line is far too long to fit" },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		expect(second.content[0].text).toContain("Memory full");
+		expect(second.content[0].text).toContain("/40 chars");
 	});
 
-	it("re-pointing the bridge swaps the settings source", async () => {
-		const first = SettingsManager.create(projectDir, agentDir);
-		registerMemoryCapBridge(first);
-		const bridge = (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] as MemoryCapBridge;
-		bridge.setCharCap(7000);
-		await first.flush();
+	it("memory_load reports the settings cap", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		manager.setMemoryCharCap(12345);
+		const tools = createMemoryTools(manager);
+		const load = findTool(tools, "memory_load");
 
-		const second = SettingsManager.create(projectDir, agentDir);
-		registerMemoryCapBridge(second);
-		expect(bridge.getCharCap()).toBe(7000);
+		const result = await load.execute("t1", {}, undefined, undefined, undefined as never);
+		expect(result.content[0].text).toBe("Memory is empty (0/12345 chars).");
 	});
 });
 
-describe("search-curator bridge consumer", () => {
-	afterEach(() => {
-		delete (globalThis as Record<symbol, unknown>)[SEARCH_CURATOR_BRIDGE_SYMBOL];
+describe("search-curator setting (web-access feature)", () => {
+	const testDir = join(process.cwd(), "test-search-curator-tmp");
+	const agentDir = join(testDir, "agent");
+	let savedAgentDirEnv: string | undefined;
+
+	beforeEach(() => {
+		if (existsSync(testDir)) {
+			rmSync(testDir, { recursive: true });
+		}
+		mkdirSync(agentDir, { recursive: true });
+		savedAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
 	});
 
-	function registerFakeBridge(initialWorkflow: string): { written: string[] } {
-		const state = { workflow: initialWorkflow, written: [] as string[] };
-		const bridge: SearchCuratorBridge = {
-			getWorkflow: () => state.workflow,
-			setWorkflow: (workflow) => {
-				state.written.push(workflow);
-				state.workflow = workflow;
-			},
-		};
-		(globalThis as Record<symbol, unknown>)[SEARCH_CURATOR_BRIDGE_SYMBOL] = bridge;
-		return state;
+	afterEach(() => {
+		if (savedAgentDirEnv === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
+		}
+		if (existsSync(testDir)) {
+			rmSync(testDir, { recursive: true });
+		}
+	});
+
+	// The web-search.json path is resolved when the feature module is first
+	// loaded, so import it lazily after PI_CODING_AGENT_DIR points at the tmp dir.
+	async function loadFeature() {
+		return await import("../src/features/web-access/index.ts");
 	}
 
-	it("returns undefined when the bridge is absent", () => {
-		expect(getSearchCuratorSetting()).toBeUndefined();
-		expect(setSearchCuratorSetting("on")).toBe(false);
-	});
-
-	it("maps workflows to settings values", () => {
-		registerFakeBridge("none");
+	it("maps workflows to settings values", async () => {
+		writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ workflow: "none" }));
+		const { getSearchCuratorSetting } = await loadFeature();
 		expect(getSearchCuratorSetting()).toBe("off");
-		registerFakeBridge("summary-review");
+		writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ workflow: "summary-review" }));
 		expect(getSearchCuratorSetting()).toBe("on");
-		registerFakeBridge("auto-summary");
+		writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ workflow: "auto-summary" }));
 		expect(getSearchCuratorSetting()).toBe("auto-summary");
 	});
 
-	it("writes settings values through the bridge as workflows", () => {
-		const state = registerFakeBridge("none");
-		expect(setSearchCuratorSetting("on")).toBe(true);
-		expect(state.written).toEqual(["summary-review"]);
-		expect(setSearchCuratorSetting("off")).toBe(true);
-		expect(state.written).toEqual(["summary-review", "none"]);
-		expect(setSearchCuratorSetting("auto-summary")).toBe(true);
-		expect(state.written).toEqual(["summary-review", "none", "auto-summary"]);
+	it("writes settings values as workflows to web-search.json", async () => {
+		const { getSearchCuratorSetting, setSearchCuratorSetting } = await loadFeature();
+		// No config file: the curator workflow (summary-review) is the default.
+		expect(getSearchCuratorSetting()).toBe("on");
+		setSearchCuratorSetting("off");
+		expect(JSON.parse(readFileSync(join(agentDir, "web-search.json"), "utf-8")).workflow).toBe("none");
+		setSearchCuratorSetting("auto-summary");
+		expect(JSON.parse(readFileSync(join(agentDir, "web-search.json"), "utf-8")).workflow).toBe("auto-summary");
+		setSearchCuratorSetting("on");
+		expect(JSON.parse(readFileSync(join(agentDir, "web-search.json"), "utf-8")).workflow).toBe("summary-review");
 	});
 });

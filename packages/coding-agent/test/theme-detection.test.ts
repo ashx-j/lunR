@@ -102,14 +102,14 @@ describe("detectTerminalBackgroundTheme", () => {
 describe("theme color mode", () => {
 	it("uses terminal capabilities", () => {
 		setCapabilities({ images: null, trueColor: false, hyperlinks: false });
-		const ansi256Theme = getThemeByName("moon");
-		if (!ansi256Theme) throw new Error("moon theme not found");
+		const ansi256Theme = getThemeByName("default");
+		if (!ansi256Theme) throw new Error("default theme not found");
 		expect(ansi256Theme.getColorMode()).toBe("256color");
 		expect(ansi256Theme.getFgAnsi("accent")).toMatch(/^\x1b\[38;5;\d+m$/);
 
 		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
-		const truecolorTheme = getThemeByName("moon");
-		if (!truecolorTheme) throw new Error("moon theme not found");
+		const truecolorTheme = getThemeByName("default");
+		if (!truecolorTheme) throw new Error("default theme not found");
 		expect(truecolorTheme.getColorMode()).toBe("truecolor");
 		expect(truecolorTheme.getFgAnsi("accent")).toMatch(/^\x1b\[38;2;\d+;\d+;\d+m$/);
 	});

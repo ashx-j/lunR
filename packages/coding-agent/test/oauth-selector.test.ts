@@ -8,7 +8,7 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("OAuthSelectorComponent", () => {
 	beforeAll(() => {
-		initTheme("moon");
+		initTheme("default");
 	});
 
 	beforeEach(() => {
