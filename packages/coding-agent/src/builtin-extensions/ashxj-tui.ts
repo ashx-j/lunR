@@ -22,14 +22,16 @@
  * self-contained with inline types and verify via the included `tsconfig.json`
  * (`moduleResolution: "Bundler"` + `skipLibCheck: true`).
  *
- * The ONE exception is `CustomEditor`, imported as a RUNTIME VALUE from
- * `@earendil-works/pi-coding-agent`. We must `extends` it to inherit pi's app
- * keybindings (escape, ctrl+d, model switching, extension shortcuts) — wrapping
- * would lose those. Under the tsconfig above this resolves as a fully typed
- * class (verified: a zero-arg `new CustomEditor()` probe errors TS2554).
+ * The ONE exception is `CustomEditor`, imported as a RUNTIME VALUE directly
+ * from its defining module (`modes/interactive/components/custom-editor.ts`).
+ * We must `extends` it to inherit pi's app keybindings (escape, ctrl+d, model
+ * switching, extension shortcuts) — wrapping would lose those. It is imported
+ * from the concrete module, NOT the package barrel, because the barrel
+ * re-exports main.ts which imports this file — a circular import that crashes
+ * under vite-node (`Class extends value undefined`).
  */
 
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { CustomEditor } from "../modes/interactive/components/custom-editor.js";
 
 // lunr: customize bridge — read the prompt-symbol toggle (bridgeless → no symbol).
 const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");

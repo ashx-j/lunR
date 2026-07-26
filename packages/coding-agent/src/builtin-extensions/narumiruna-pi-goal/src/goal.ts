@@ -1,5 +1,8 @@
 // @ts-nocheck
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// lunr: defineTool imported from the concrete module, NOT the package barrel —
+// the barrel re-exports main.ts which imports this extension (cycle).
+import { defineTool } from "../../../core/extensions/types.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { currentTokenTotal } from "./accounting.js";
 import { completeGoalArguments, parseCommand } from "./command.js";
