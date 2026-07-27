@@ -550,7 +550,7 @@ class ChatboxEditor extends CustomEditor {
 
 		const left = "\u2570" + "\u2500".repeat(leftDashes) + " ";
 		const right = " " + "\u2500".repeat(rightDashes) + "\u256f";
-		return border(left) + this.color("dim", chip) + border(right);
+		return border(left) + this.color("white", chip) + border(right); // lunr: theme-polish — model/provider/thinking chip white (was dim)
 	}
 }
 
@@ -570,7 +570,7 @@ function renderStatsLine(
 	// lunr: permission mode safety indicator — always shown (not toggle-gated).
 	const mode = lunrPermissionMode();
 	if (mode === "yolo" || mode === "auto") parts.push(color(theme, "warning", mode));
-	else if (mode === "manual") parts.push(color(theme, "dim", "manual"));
+	else if (mode === "manual") parts.push(color(theme, "white", "manual")); // lunr: theme-polish — manual mode reads white (was dim)
 
 	// lunr: footer element toggles from the customize bridge (read at render time).
 	const footerToggles = lunrFooterToggles();
@@ -591,7 +591,7 @@ function renderStatsLine(
 		for (const key of keys) {
 			const v = statuses.get(key);
 			// lunr: unify footer status colors to dim so the whole stats line reads as one tone.
-			if (v) parts.push(color(theme, "dim", stripAnsi(v)));
+			if (v) parts.push(color(theme, "white", stripAnsi(v))); // lunr: theme-polish — status segments white (was dim)
 		}
 	}
 
@@ -604,13 +604,13 @@ function renderStatsLine(
 		const pv = usage?.percent ?? 0;
 		if (pv > 90) parts.push(color(theme, "error", ctxSeg));
 		else if (pv > 70) parts.push(color(theme, "warning", ctxSeg));
-		else parts.push(color(theme, "dim", ctxSeg));
+		else parts.push(color(theme, "white", ctxSeg)); // lunr: theme-polish — normal context % white (was dim)
 	}
 
 	// 3) Token totals: ↑in ↓out (lunr: gated on footerTokens).
 	if (footerToggles.tokens) {
 		const totals = getUsageTotals(ctx);
-		parts.push(color(theme, "dim", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`));
+		parts.push(color(theme, "white", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`)); // lunr: theme-polish — token totals white (was dim)
 	}
 
 	// lunr: cost/usage counter segment removed entirely (both the $x.xxx dollar
