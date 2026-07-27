@@ -590,7 +590,7 @@ function renderStatsLine(
 		if (footerToggles.lsp) keys.push("lsp");
 		for (const key of keys) {
 			const v = statuses.get(key);
-			// lunr: unify footer status colors to dim so the whole stats line reads as one tone.
+			// lunr: unify footer status colors (white, was dim) so the whole stats line reads as one tone.
 			if (v) parts.push(color(theme, "white", stripAnsi(v))); // lunr: theme-polish — status segments white (was dim)
 		}
 	}
