@@ -133,6 +133,10 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Default text color (usually empty string)"
 				},
+				"white": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Body-text white. Optional; falls back to text (terminal default)."
+				},
 				"thinkingText": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Thinking block text color"

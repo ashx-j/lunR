@@ -27,6 +27,7 @@
 		"muted": "gray",
 		"dim": "dimGray",
 		"text": "",
+		"white": "white",
 		"thinkingText": "gray",
 		"selectedBg": "darkerGray",
 		"userMessageBg": "nearBlack",

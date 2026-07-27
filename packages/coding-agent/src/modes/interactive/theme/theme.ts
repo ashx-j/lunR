@@ -45,6 +45,7 @@ const ThemeJsonSchema = Type.Object({
 		muted: ColorValueSchema,
 		dim: ColorValueSchema,
 		text: ColorValueSchema,
+		white: Type.Optional(ColorValueSchema),
 		thinkingText: ColorValueSchema,
 		// Backgrounds & Content Text (11 colors)
 		selectedBg: ColorValueSchema,
@@ -119,6 +120,7 @@ export type ThemeColor =
 	| "muted"
 	| "dim"
 	| "text"
+	| "white"
 	| "thinkingText"
 	| "userMessageText"
 	| "customMessageText"
@@ -323,11 +325,12 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 
 function withThemeColorFallbacks(
 	colors: ThemeJson["colors"],
-): ThemeJson["colors"] & { thinkingMax: ColorValue; accent2: ColorValue } {
+): ThemeJson["colors"] & { thinkingMax: ColorValue; accent2: ColorValue; white: ColorValue } {
 	return {
 		...colors,
 		thinkingMax: colors.thinkingMax ?? colors.thinkingXhigh,
 		accent2: colors.accent2 ?? colors.accent,
+		white: colors.white ?? colors.text,
 	};
 }
 
