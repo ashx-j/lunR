@@ -12,10 +12,12 @@
 		"nearBlack": "#1a1a1a",
 		"green": "#5faf5f",
 		"red": "#cc5555",
-		"yellow": "#d7af00"
+		"yellow": "#d7af00",
+		"lunrBlue": "#689BFF"
 	},
 	"colors": {
 		"accent": "brightWhite",
+		"accent2": "lunrBlue",
 		"border": "darkGray",
 		"borderAccent": "white",
 		"borderMuted": "darkerGray",
