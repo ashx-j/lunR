@@ -59,7 +59,7 @@ export class BootScreenComponent implements Component {
 					lines.push(" ".repeat(artWidth + GAP) + (detail ?? ""));
 					continue;
 				}
-				const artPart = theme.fg("accent", art) + " ".repeat(Math.max(0, artWidth - visibleWidth(art)));
+				const artPart = theme.fg("accent2", art) + " ".repeat(Math.max(0, artWidth - visibleWidth(art))); // lunr: theme-polish — moon art uses subtle accent2 blue (was accent white)
 				lines.push(detail === undefined ? artPart : artPart + " ".repeat(GAP) + detail);
 			}
 		} else {

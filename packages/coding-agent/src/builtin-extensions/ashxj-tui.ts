@@ -564,7 +564,7 @@ function renderStatsLine(
 	theme: Theme,
 	footerData: ReadonlyFooterDataProvider,
 ): string[] {
-	const sep = color(theme, "bright-black", " | ");
+	const sep = color(theme, "accent2", " | "); // lunr: theme-polish — separator uses subtle accent2 blue (was bright-black plain fallback)
 	const parts: string[] = [];
 
 	// lunr: permission mode safety indicator — always shown (not toggle-gated).
