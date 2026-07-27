@@ -73,7 +73,7 @@ function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; to
 function lunrPermissionMode(): string | undefined {
 	return lunrPermissionModeBridge()?.getMode();
 }
-const LUNR_PROMPT_GLYPH = "☾ › ";
+const LUNR_PROMPT_GLYPH = "☾ > "; // lunr: theme-polish — prompt glyph is '>' (was '›')
 
 // ---------------------------------------------------------------------------
 // Minimal structural types (inline — see file header)
