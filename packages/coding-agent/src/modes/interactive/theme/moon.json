@@ -31,7 +31,7 @@
 		"thinkingText": "gray",
 		"selectedBg": "darkerGray",
 		"userMessageBg": "nearBlack",
-		"userMessageText": "white",
+		"userMessageText": "brightWhite",
 		"customMessageBg": "nearBlack",
 		"customMessageText": "lightGray",
 		"customMessageLabel": "gray",

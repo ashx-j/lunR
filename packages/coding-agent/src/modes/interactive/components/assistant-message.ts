@@ -133,12 +133,18 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				// lunr: leading ● marks the first text block (never thinking blocks). Kept
-				// uncolored so it renders in the default text color (white in moon theme).
+				// lunr: leading ● marks the first text block (never thinking blocks). It rides
+				// the defaultTextStyle below, so it renders bright white like the body.
 				const trimmed = content.text.trim();
 				const text = isFirstTextBlock ? `● ${trimmed}` : trimmed;
 				isFirstTextBlock = false;
-				this.contentContainer.addChild(new Markdown(text, this.outputPad, 0, this.markdownTheme));
+				// lunr: theme-polish — assistant message body renders bright white via the
+				// shared userMessageText token (same knob as user messages).
+				this.contentContainer.addChild(
+					new Markdown(text, this.outputPad, 0, this.markdownTheme, {
+						color: (body: string) => theme.fg("userMessageText", body),
+					}),
+				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
