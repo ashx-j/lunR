@@ -24,6 +24,7 @@ import piMcpAdapter from "./pi-mcp-adapter/index.ts";
 
 // lunR-native extensions
 import lunrLocalProviders from "./lunr-local-providers/index.ts";
+import lunrCron from "./lunr-cron.ts";
 
 // narumiruna extensions (pi-goal kept: plan 2's /goal footer indicator patches it)
 import narumirunaGoal from "./narumiruna-pi-goal/src/goal.ts";
@@ -55,4 +56,5 @@ export const builtinExtensions: InlineExtension[] = [
 	ext("narumiruna-pi-goal", narumirunaGoal),
 	// lunR-native
 	ext("lunr-local-providers", lunrLocalProviders),
+	ext("lunr-cron", lunrCron),
 ];
