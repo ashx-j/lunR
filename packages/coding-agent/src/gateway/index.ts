@@ -1,6 +1,6 @@
 /**
  * lunR: gateway daemon entry (Phase 2a skeleton; Phase 2b registered the
- * Telegram adapter — Phase 3 (Discord) plugs in via ADAPTER_FACTORIES below).
+ * Telegram adapter, Phase 3 the Discord adapter — both via ADAPTER_FACTORIES).
  *
  * `lunr gateway` runs the daemon: load gateway.json, instantiate every
  * enabled platform that has a registered adapter factory AND a resolvable
@@ -14,27 +14,36 @@
  *   lunr gateway status                           config/token/session summary
  */
 
+import { DiscordAdapter } from "./adapters/discord.ts";
 import { TelegramAdapter } from "./adapters/telegram.ts";
 import { AgentBridge } from "./agent-bridge.ts";
 import { addAllowedUser } from "./authz.ts";
-import { loadGatewayConfig, type PlatformConfig, platformConfigFor, resolvePlatformToken } from "./config.ts";
+import {
+	type DiscordConfig,
+	loadGatewayConfig,
+	type PlatformConfig,
+	platformConfigFor,
+	resolvePlatformToken,
+} from "./config.ts";
 import { createPairingStore } from "./pairing.ts";
 import { createRouter } from "./router.ts";
 import { listSessions } from "./store.ts";
 import type { PlatformAdapter } from "./types.ts";
 
 /**
- * Adapter registry — the seam Phase 2b (Telegram, registered below) and
- * Phase 3 (Discord) plug into:
+ * Adapter registry — the seam adapters plug into:
  *
- *   ADAPTER_FACTORIES.discord = (cfg) => new DiscordAdapter(cfg);
+ *   ADAPTER_FACTORIES.<platform> = (cfg) => new SomeAdapter(cfg);
  *
  * A factory receives the sanitized platform config with the token already
  * resolved into cfg.token (env beats file — see resolvePlatformToken and
- * runDaemon below).
+ * runDaemon below). The registry type is the PlatformConfig base; adapters
+ * with extra fields (Discord) narrow with a cast — the daemon always passes
+ * the full sanitized per-platform object.
  */
 export const ADAPTER_FACTORIES: Record<string, (cfg: PlatformConfig) => PlatformAdapter> = {
 	telegram: (cfg) => new TelegramAdapter(cfg),
+	discord: (cfg) => new DiscordAdapter(cfg as DiscordConfig),
 };
 
 const KNOWN_PLATFORMS = ["telegram", "discord"] as const;
@@ -115,7 +124,7 @@ function runStatus(): number {
 		const platformCfg = platformConfigFor(cfg, platform);
 		if (!platformCfg) continue;
 		const token = resolvePlatformToken(platform, platformCfg);
-		const adapter = ADAPTER_FACTORIES[platform] === undefined ? "no adapter (Phase 3)" : "adapter registered";
+		const adapter = ADAPTER_FACTORIES[platform] === undefined ? "no adapter" : "adapter registered";
 		console.log(
 			`  ${platform}: ${platformCfg.enabled ? "enabled" : "disabled"} · token ${token ? "resolved" : "missing"} · ${adapter}`,
 		);
