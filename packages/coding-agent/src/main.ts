@@ -58,6 +58,7 @@ import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
+import { handleGatewayCommand } from "./gateway/command.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
@@ -501,6 +502,13 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) {
+		return;
+	}
+
+	// lunr: `lunr gateway` daemon/subcommands — same interception seam as the
+	// package/config commands above (before parseArgs, which knows nothing
+	// about gateway args).
+	if (await handleGatewayCommand(args)) {
 		return;
 	}
 

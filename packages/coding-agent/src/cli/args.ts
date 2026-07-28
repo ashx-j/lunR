@@ -231,6 +231,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} uninstall <source> [-l]   Alias for remove
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
+  ${APP_NAME} gateway [pair approve|pair list|status]  Run the chat gateway daemon
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/list/config
 
 ${chalk.bold("Options:")}

@@ -1,0 +1,230 @@
+/**
+ * lunR: gateway router.
+ *
+ * Every inbound MessageEvent flows through handleEvent:
+ *   1. group gating (allowedChats / freeResponseChats / requireMention,
+ *      with adapter-supplied metadata.mentionedBot)
+ *   2. authorization (authz.ts); denied DMs get a pairing code when the
+ *      behavior is "pair" and the user isn't rate-limited
+ *   3. slash subset (/new /reset /stop /status /help /whoami) — bypasses the
+ *      busy guard
+ *   4. normal path: bridge.runTurn with a StreamConsumer when streaming is
+ *      enabled and the adapter supports edit; the final text is
+ *      silence-filtered, split (text.ts) and sent sequentially, the first
+ *      chunk replying to the triggering message.
+ * Errors surface as a compact "⚠ <one-line>" — never a stack trace.
+ */
+
+import { type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
+import { isAuthorized } from "./authz.ts";
+import { type GatewayConfig, platformConfigFor } from "./config.ts";
+import type { PairingStore } from "./pairing.ts";
+import { buildSessionKey } from "./session-keys.ts";
+import { applySilenceFilter, StreamConsumer } from "./stream.ts";
+import { splitMessage } from "./text.ts";
+import type { MessageEvent, PlatformAdapter } from "./types.ts";
+
+/** Structural bridge shape (AgentBridge satisfies it; tests fake it). */
+export interface BridgeLike {
+	runTurn(key: string, event: MessageEvent, callbacks: TurnCallbacks): Promise<string>;
+	abort(key: string): Promise<void> | void;
+	reset(key: string): void;
+	getStatus(key: string): BridgeSessionStatus;
+}
+
+export interface RouterDeps {
+	adapters: Map<string, PlatformAdapter>;
+	cfg: GatewayConfig;
+	pairing: PairingStore;
+	bridge: BridgeLike;
+}
+
+export interface Router {
+	handleEvent(event: MessageEvent): Promise<void>;
+}
+
+const HELP_TEXT = `lunR gateway commands:
+/new or /reset — start a fresh session for this chat
+/stop — abort the running turn
+/status — session status
+/whoami — your ids and session key
+/help — this message`;
+
+function oneLine(text: string): string {
+	return text.replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+function formatPairingCode(code: string): string {
+	return code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+}
+
+function mentionedBot(event: MessageEvent): boolean {
+	return event.metadata?.mentionedBot === true;
+}
+
+export function createRouter(deps: RouterDeps): Router {
+	const { adapters, cfg, pairing, bridge } = deps;
+
+	async function sendError(adapter: PlatformAdapter, event: MessageEvent, message: string): Promise<void> {
+		await adapter.send(event.source.chatId, `⚠ ${oneLine(message)}`, {
+			replyTo: event.messageId,
+			threadId: event.source.threadId,
+		});
+	}
+
+	/** Step 1: group-chat early gating. Returns true when the event must be dropped. */
+	function isGroupGated(event: MessageEvent): boolean {
+		const { source } = event;
+		if (source.chatType === "dm") return false;
+		const platformCfg = platformConfigFor(cfg, source.platform);
+		if (!platformCfg) return true;
+		const freeResponse = platformCfg.freeResponseChats.includes(source.chatId);
+		if (
+			platformCfg.allowedChats.length > 0 &&
+			!platformCfg.allowedChats.includes(source.chatId) &&
+			!freeResponse &&
+			!mentionedBot(event)
+		) {
+			return true;
+		}
+		if (platformCfg.requireMention && !freeResponse && !mentionedBot(event)) {
+			return true;
+		}
+		return false;
+	}
+
+	/** Step 2: authorization; handles the denied-DM pairing flow. Returns true when denied. */
+	async function isDenied(adapter: PlatformAdapter, event: MessageEvent): Promise<boolean> {
+		if (isAuthorized(event.source, cfg, pairing)) return false;
+		const { source } = event;
+		if (source.chatType !== "dm") return true; // denied group: silent
+		if (cfg.unauthorizedDmBehavior !== "pair") return true;
+		const code = pairing.issueCode(source.platform, source.userId);
+		if (code === null) return true; // rate-limited or pending list full: stay silent
+		await adapter.send(
+			source.chatId,
+			`Your lunR pairing code: ${formatPairingCode(code)} — ask the owner to run: lunr gateway pair approve ${source.platform} ${formatPairingCode(code)}`,
+			{ replyTo: event.messageId, threadId: source.threadId },
+		);
+		return true;
+	}
+
+	/** Step 3: the slash-command subset. Returns true when the event was handled. */
+	async function handleSlash(adapter: PlatformAdapter, event: MessageEvent, key: string): Promise<boolean> {
+		const text = event.text.trim();
+		if (!text.startsWith("/")) return false;
+		const command = text.split(/\s+/, 1)[0].toLowerCase();
+		const reply = async (message: string) => {
+			await adapter.send(event.source.chatId, message, {
+				replyTo: event.messageId,
+				threadId: event.source.threadId,
+			});
+		};
+		switch (command) {
+			case "/new":
+			case "/reset":
+				bridge.reset(key);
+				await reply("Session reset — next message starts a fresh session.");
+				return true;
+			case "/stop":
+				await bridge.abort(key);
+				await reply("Stopped.");
+				return true;
+			case "/status": {
+				const status = bridge.getStatus(key);
+				const age = status.createdAt
+					? `${Math.max(0, Math.round((Date.now() - Date.parse(status.createdAt)) / 1000))}s`
+					: "no session yet";
+				await reply(
+					`${event.source.platform} · session age ${age} · ${status.busy ? "busy" : "idle"} · queue ${status.queueDepth}`,
+				);
+				return true;
+			}
+			case "/help":
+				await reply(HELP_TEXT);
+				return true;
+			case "/whoami":
+				await reply(`userId: ${event.source.userId}\nchatId: ${event.source.chatId}\nkey: ${key}`);
+				return true;
+			default:
+				// Unknown slash command: DM → normal text, group → ignore.
+				return event.source.chatType !== "dm";
+		}
+	}
+
+	/** Step 4 delivery: silence filter → split → sequential send. */
+	async function deliver(
+		adapter: PlatformAdapter,
+		event: MessageEvent,
+		text: string,
+		opts: { reply: boolean },
+	): Promise<void> {
+		const filtered = applySilenceFilter(text);
+		if (filtered === null) return;
+		const chunks = splitMessage(filtered, adapter.maxMessageLength);
+		for (const [index, chunk] of chunks.entries()) {
+			const result = await adapter.send(event.source.chatId, chunk, {
+				replyTo: opts.reply && index === 0 ? event.messageId : undefined,
+				threadId: event.source.threadId,
+			});
+			if (!result.success) {
+				console.error(`[gateway] send failed on ${adapter.platform}: ${result.error ?? "unknown error"}`);
+				return;
+			}
+		}
+	}
+
+	async function runTurn(adapter: PlatformAdapter, event: MessageEvent, key: string): Promise<void> {
+		const streaming = cfg.streaming.enabled && typeof adapter.editMessage === "function";
+		let consumer: StreamConsumer | undefined;
+		if (streaming) {
+			consumer = new StreamConsumer({
+				sendInitial: async (text) => {
+					const result = await adapter.send(event.source.chatId, text, {
+						replyTo: event.messageId,
+						threadId: event.source.threadId,
+					});
+					return result.success ? (result.messageId ?? null) : null;
+				},
+				edit: async (messageId, text) => {
+					await adapter.editMessage(event.source.chatId, messageId, text);
+				},
+				intervalMs: cfg.streaming.editIntervalMs,
+				threshold: cfg.streaming.bufferThreshold,
+				maxPreview: adapter.maxMessageLength,
+			});
+		}
+
+		const callbacks: TurnCallbacks = {
+			onDelta: consumer ? (delta) => consumer.push(delta) : undefined,
+			onFollowUpResult: (text) => {
+				void deliver(adapter, event, text, { reply: false });
+			},
+			onError: (message) => {
+				void sendError(adapter, event, message);
+			},
+		};
+
+		const result = await bridge.runTurn(key, event, callbacks);
+		if (result === QUEUED) return; // queued behind a running turn: no reply
+		if (consumer) await consumer.finalize();
+		await deliver(adapter, event, result, { reply: !consumer });
+	}
+
+	return {
+		async handleEvent(event: MessageEvent): Promise<void> {
+			const adapter = adapters.get(event.source.platform);
+			if (!adapter) return;
+			try {
+				if (isGroupGated(event)) return;
+				if (await isDenied(adapter, event)) return;
+				const key = buildSessionKey(event.source, { groupSessionsPerUser: cfg.groupSessionsPerUser });
+				if (await handleSlash(adapter, event, key)) return;
+				await adapter.sendTyping(event.source.chatId, event.source.threadId).catch(() => {});
+				await runTurn(adapter, event, key);
+			} catch (err) {
+				await sendError(adapter, event, err instanceof Error ? err.message : String(err)).catch(() => {});
+			}
+		},
+	};
+}
