@@ -25,6 +25,7 @@ import {
 	platformConfigFor,
 	resolvePlatformToken,
 } from "./config.ts";
+import { startGatewayCron } from "./cron.ts";
 import { createPairingStore } from "./pairing.ts";
 import { createRouter } from "./router.ts";
 import { listSessions } from "./store.ts";
@@ -187,7 +188,13 @@ async function runDaemon(): Promise<number> {
 		return 1;
 	}
 
+	// Phase 4: cron jobs fire inside the daemon and deliver back to chats.
+	// Starts even with zero stored jobs — jobs can be created later from chats.
+	const cron = startGatewayCron({ adapters, cfg });
+	console.log(`lunR gateway: cron scheduler started (${cron.intervalMs / 1000}s interval)`);
+
 	const shutdown = () => {
+		cron.stop();
 		void Promise.all(connected.map((adapter) => adapter.disconnect().catch(() => {}))).finally(() => {
 			process.exit(0);
 		});

@@ -22,16 +22,20 @@
  *
  * isGatewayTurn()/runDepth: incremented around every prompt() so Phase 4
  * (cron↔gateway delivery) and extensions can detect they run inside a
- * gateway turn and refuse self-scheduling.
+ * gateway turn and refuse self-scheduling. Every prompt() also runs inside
+ * runWithOrigin(source, ...) (core/cron/origin-context) so tools executing
+ * during the turn — e.g. the `cron` tool's create action — can read the chat
+ * the message came from and stamp it as the job's delivery origin.
  */
 
 import { existsSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../core/agent-session.ts";
+import { runWithOrigin } from "../core/cron/origin-context.ts";
 import type { SessionManager } from "../core/session-manager.ts";
 import { getSession, putSession, removeSession, touchSession } from "./store.ts";
-import type { MessageEvent } from "./types.ts";
+import type { MessageEvent, SessionSource } from "./types.ts";
 
 /** runTurn resolves with this when the message was queued behind a running turn. */
 export const QUEUED = "__lunr_gateway_queued__";
@@ -207,7 +211,7 @@ export class AgentBridge {
 		entry.busy = true;
 		let result: string;
 		try {
-			result = await this.runPrompt(entry, event.text, callbacks);
+			result = await this.runPrompt(entry, event.text, callbacks, event.source);
 		} catch (err) {
 			entry.busy = false;
 			throw err;
@@ -246,7 +250,12 @@ export class AgentBridge {
 	}
 
 	/** One prompt → final text. Increments runDepth; streams deltas when asked. */
-	private async runPrompt(entry: CacheEntry, text: string, callbacks: TurnCallbacks): Promise<string> {
+	private async runPrompt(
+		entry: CacheEntry,
+		text: string,
+		callbacks: TurnCallbacks,
+		source: SessionSource,
+	): Promise<string> {
 		const { session } = entry;
 		let unsubscribe: (() => void) | undefined;
 		if (callbacks.onDelta) {
@@ -269,7 +278,18 @@ export class AgentBridge {
 		}
 		runDepth++;
 		try {
-			await session.prompt(text, { source: "extension" });
+			// AsyncLocalStorage origin: tools executing during this turn (e.g. the
+			// `cron` tool) can read the chat the message came from. Propagates
+			// through the awaited prompt() call tree.
+			await runWithOrigin(
+				{
+					platform: source.platform,
+					chatId: source.chatId,
+					threadId: source.threadId,
+					chatType: source.chatType,
+				},
+				() => session.prompt(text, { source: "extension" }),
+			);
 		} finally {
 			runDepth--;
 			unsubscribe?.();
@@ -287,8 +307,9 @@ export class AgentBridge {
 				entry.dropped = 0;
 			}
 			try {
-				// Follow-up turns are final-only: no streaming callbacks.
-				const text = await this.runPrompt(entry, parts.join("\n\n"), {});
+				// Follow-up turns are final-only: no streaming callbacks. The origin
+				// is the chat of the latest queued message.
+				const text = await this.runPrompt(entry, parts.join("\n\n"), {}, items[items.length - 1].source);
 				callbacks.onFollowUpResult?.(text);
 			} catch (err) {
 				callbacks.onError?.(err instanceof Error ? err.message : String(err));

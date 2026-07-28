@@ -1,18 +1,22 @@
 // @ts-nocheck
 /**
- * lunr-cron — lunR-native scheduled jobs (Phase 1: local TUI delivery only).
+ * lunr-cron — lunR-native scheduled jobs (Phase 1: local TUI delivery;
+ * Phase 4: gateway delivery + origin stamping).
  *
  * lunR: this file is lunR-native (not an absorbed upstream extension). It wires
  * core/cron (jobs store + scheduler) into the interactive session:
  *
  *  - `/cron list|create|pause|resume|run|remove|status` command.
- *  - One `cron` tool (TypeBox) so the agent can manage jobs. A module-level
- *    recursion guard refuses the tool while a cron-fired turn is in flight
- *    (jobs cannot schedule jobs).
+ *  - One `cron` tool (TypeBox) so the agent can manage jobs. The shared
+ *    core/cron/fire-guard depth counter refuses the tool while a cron-fired
+ *    turn is in flight — TUI-fired OR gateway-fired (jobs cannot schedule
+ *    jobs).
+ *  - Jobs created inside a gateway chat turn are stamped with that chat as
+ *    their origin and default deliver to "origin" (core/cron/origin-context).
  *  - Scheduler starts on session_start only in "tui" mode, stops on
  *    session_shutdown. runJob = sendUserMessage + wait for agent_end;
  *    deliverResult reads the `@lunr/cron-delivery` bridge on globalThis
- *    (registered here as the local notify; the Phase 4 gateway will replace
+ *    (registered here as the local notify; the Phase 4 gateway replaces
  *    it — core/cron/scheduler.ts never touches the bridge itself).
  *
  * `// @ts-nocheck` matches the builtin-extension convention (see lunr-behavior).
@@ -21,6 +25,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { beginCronFire, endCronFire, isCronFire } from "../core/cron/fire-guard.ts";
 import {
 	createJob,
 	getJob,
@@ -31,14 +36,12 @@ import {
 	resumeJob,
 	updateJob,
 } from "../core/cron/jobs.ts";
+import { currentOrigin } from "../core/cron/origin-context.ts";
 import { executeJob, startScheduler } from "../core/cron/scheduler.ts";
 
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
-
-/** Set while a cron-fired turn is in flight; the cron tool refuses to run then. */
-let cronTurnInFlight = false;
 /** The cron-fired turn currently waiting for agent_end. */
 let pendingRun: { resolve: (text: string) => void; reject: (err: Error) => void } | null = null;
 let scheduler: { stop(): void } | null = null;
@@ -116,13 +119,13 @@ export default function (pi: ExtensionAPI): void {
 	const runJob = (prompt: string, _job: unknown): Promise<string> => {
 		if (pendingRun) return Promise.reject(new Error("another cron job turn is already in flight"));
 		return new Promise<string>((resolve, reject) => {
-			cronTurnInFlight = true;
+			beginCronFire();
 			pendingRun = { resolve, reject };
 			try {
 				pi.sendUserMessage(prompt);
 			} catch (err) {
 				pendingRun = null;
-				cronTurnInFlight = false;
+				endCronFire();
 				reject(err as Error);
 			}
 		});
@@ -154,7 +157,7 @@ export default function (pi: ExtensionAPI): void {
 		if (!pendingRun) return;
 		const pending = pendingRun;
 		pendingRun = null;
-		cronTurnInFlight = false;
+		endCronFire();
 		pending.resolve(extractAssistantText(event.messages ?? []));
 	});
 
@@ -274,11 +277,16 @@ export default function (pi: ExtensionAPI): void {
 			name: Type.Optional(Type.String({ description: "Display name (<=50 chars); derived from the prompt when omitted." })),
 			prompt: Type.Optional(Type.String({ description: "The prompt the job runs (create/update)." })),
 			schedule: Type.Optional(Type.String({ description: "Schedule input (create/update)." })),
-			deliver: Type.Optional(Type.String({ description: "Delivery target; v1 supports 'local' only." })),
+			deliver: Type.Optional(
+				Type.String({
+					description:
+						"Delivery target(s), comma-separated: 'local' (output file only), 'origin' (the chat that created the job), 'telegram'/'discord' (platform home channel), or 'telegram:<chatId>[:<threadId>]' / 'discord:<chatId>[:<threadId>]'. Defaults to 'origin' when created from a gateway chat, else 'local'.",
+				}),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
-			if (cronTurnInFlight) {
+			if (isCronFire()) {
 				return text("cron: unavailable while a cron-fired turn is running (cron jobs cannot schedule cron jobs).");
 			}
 			try {
@@ -287,11 +295,16 @@ export default function (pi: ExtensionAPI): void {
 						if (!params.prompt?.trim() || !params.schedule?.trim()) {
 							return text("cron create: prompt and schedule are required.");
 						}
+						// Inside a gateway chat turn, stamp the chat as the delivery
+						// origin and default deliver to "origin" (Phase 4); outside
+						// any origin context the default stays "local".
+						const origin = currentOrigin();
 						const job = await createJob({
 							prompt: params.prompt,
 							schedule: params.schedule,
 							name: params.name,
-							deliver: params.deliver,
+							deliver: params.deliver ?? (origin ? "origin" : undefined),
+							origin: origin ? { ...origin } : undefined,
 						});
 						return text(`Created cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${job.nextRunAt ?? "-"}.`);
 					}
