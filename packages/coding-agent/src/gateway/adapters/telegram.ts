@@ -15,6 +15,7 @@
  * Consecutive texts from the same chat/thread/user are debounced 300ms and
  * merged ("\n"-joined, latest messageId kept) to reassemble client-split long
  * messages; texts starting with "/" flush immediately so commands never merge.
+ * Callback queries are polled and mapped via callbackQueryToEvent().
  *
  * Outbound: sendMessage/editMessageText with parse_mode "Markdown" and a
  * one-shot plain-text retry when Telegram rejects the markup; send() honors
@@ -296,20 +297,16 @@ export function callbackQueryToEvent(query: TelegramCallbackQuery): CallbackEven
 	const chatType = chatTypeOf(message.chat);
 	if (chatType === null) return null;
 	return {
-		callbackId: query.id,
-		buttonId: query.data ?? "",
+		id: query.id,
+		chatId: String(message.chat.id),
 		messageId: String(message.message_id),
-		source: {
-			platform: "telegram",
-			chatId: String(message.chat.id),
-			chatType,
-			userId: String(from.id),
-			userName: from.username ?? from.first_name,
-			threadId:
-				message.chat.is_forum === true && message.message_thread_id !== undefined && message.message_thread_id !== 1
-					? String(message.message_thread_id)
-					: undefined,
-		},
+		userId: String(from.id),
+		userName: from.username ?? from.first_name,
+		data: query.data ?? "",
+		threadId:
+			message.chat.is_forum === true && message.message_thread_id !== undefined && message.message_thread_id !== 1
+				? String(message.message_thread_id)
+				: undefined,
 	};
 }
 
@@ -486,26 +483,41 @@ export class TelegramAdapter implements PlatformAdapter {
 	// Outbound
 	// -----------------------------------------------------------------------
 
-	async send(chatId: string, text: string, opts?: SendOptions): Promise<SendResult> {
-		// A completed send ends the typing bubble — stop the refresher (see sendTyping).
-		this.stopTyping(typingKey(chatId, opts?.threadId));
+	private buildSendBody(chatId: string, text: string, opts?: SendOptions): Record<string, unknown> {
 		const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: "Markdown" };
 		if (opts?.threadId !== undefined) body.message_thread_id = Number(opts.threadId);
 		if (opts?.replyTo !== undefined) body.reply_parameters = { message_id: Number(opts.replyTo) };
-		if (opts?.buttons !== undefined) {
-			body.reply_markup = {
-				inline_keyboard: opts.buttons.map((row) => row.map((b) => ({ text: b.label, callback_data: b.id }))),
-			};
-		}
+		return body;
+	}
+
+	private buildReplyMarkup(
+		buttons?: ButtonSpec[][],
+	): { inline_keyboard: { text: string; callback_data: string }[][] } | undefined {
+		if (buttons === undefined) return undefined;
+		return {
+			inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.label, callback_data: b.data }))),
+		};
+	}
+
+	async send(chatId: string, text: string, opts?: SendOptions): Promise<SendResult> {
+		// A completed send ends the typing bubble — stop the refresher (see sendTyping).
+		this.stopTyping(typingKey(chatId, opts?.threadId));
+		const body = this.buildSendBody(chatId, text, opts);
 		return this.callSend(body);
 	}
 
-	async sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult> {
-		return this.send(chatId, text, { ...opts, buttons });
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.stopTyping(typingKey(chatId, opts?.threadId));
+		const body = this.buildSendBody(chatId, text, opts);
+		const markup = this.buildReplyMarkup(buttons);
+		if (markup) body.reply_markup = markup;
+		return this.callSend(body);
 	}
 
-	async answerCallback(event: CallbackEvent): Promise<void> {
-		await this.callApi("answerCallbackQuery", { callback_query_id: event.callbackId }).catch(() => {});
+	async answerCallback(id: string, text?: string): Promise<void> {
+		const body: Record<string, unknown> = { callback_query_id: id };
+		if (text !== undefined) body.text = text;
+		await this.callApi("answerCallbackQuery", body).catch(() => {});
 	}
 
 	private async callSend(body: Record<string, unknown>): Promise<SendResult> {
@@ -537,18 +549,15 @@ export class TelegramAdapter implements PlatformAdapter {
 		}
 	}
 
-	async editMessage(chatId: string, messageId: string, text: string, opts?: SendOptions): Promise<SendResult> {
+	async editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult> {
 		const body: Record<string, unknown> = {
 			chat_id: chatId,
 			message_id: Number(messageId),
 			text,
 			parse_mode: "Markdown",
 		};
-		if (opts?.buttons !== undefined) {
-			body.reply_markup = {
-				inline_keyboard: opts.buttons.map((row) => row.map((b) => ({ text: b.label, callback_data: b.id }))),
-			};
-		}
+		const markup = this.buildReplyMarkup(buttons);
+		if (markup !== undefined) body.reply_markup = markup;
 		try {
 			await this.callApi("editMessageText", body);
 			return { success: true, messageId };

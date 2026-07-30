@@ -43,32 +43,29 @@ export interface SendResult {
 	retryable?: boolean;
 }
 
-/** A single inline button. */
-export interface Button {
-	id: string;
-	label: string;
-}
-
-/** Platform-agnostic button layout: rows of buttons. */
-export type ButtonSpec = Button[][];
-
 export interface SendOptions {
 	/** Platform message id to reply to. */
 	replyTo?: string;
 	threadId?: string;
-	/** Inline keyboard attached to the message. */
-	buttons?: ButtonSpec;
+}
+
+/** A single inline button. `data` must be ≤ 64 bytes (Telegram callback_data limit). */
+export interface ButtonSpec {
+	label: string;
+	data: string;
 }
 
 /** An inbound button-click / inline-keyboard callback. */
 export interface CallbackEvent {
-	source: SessionSource;
+	/** Platform callback id (for answerCallback). */
+	id: string;
+	chatId: string;
 	messageId: string;
-	buttonId: string;
-	/** Platform callback id (e.g. Telegram callback_query id or Discord interaction id). */
-	callbackId: string;
-	/** Optional payload carried by the button. */
-	data?: string;
+	userId: string;
+	userName?: string;
+	/** The ButtonSpec.data that was tapped. */
+	data: string;
+	threadId?: string;
 }
 
 /**
@@ -82,10 +79,10 @@ export interface PlatformAdapter {
 	connect(): Promise<boolean>;
 	disconnect(): Promise<void>;
 	send(chatId: string, text: string, opts?: SendOptions): Promise<SendResult>;
-	sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult>;
-	editMessage(chatId: string, messageId: string, text: string, opts?: SendOptions): Promise<SendResult>;
+	sendButtons(chatId: string, text: string, rows: ButtonSpec[][], opts?: SendOptions): Promise<SendResult>;
+	editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult>;
 	sendTyping(chatId: string, threadId?: string): Promise<void>;
 	onMessage(handler: (event: MessageEvent) => void): void;
-	onCallback(handler: (event: CallbackEvent) => void): void;
-	answerCallback(event: CallbackEvent): Promise<void>;
+	onCallback(handler: (event: CallbackEvent) => void | Promise<void>): void;
+	answerCallback(id: string, text?: string): Promise<void>;
 }

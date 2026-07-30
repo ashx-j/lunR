@@ -179,7 +179,7 @@ async function runDaemon(): Promise<number> {
 				void router.handleEvent(event);
 			});
 			adapter.onCallback((event) => {
-				void handleCallback(event, adapter);
+				void handleCallback(event, { adapters, cfg, pairing, bridge, adapter });
 			});
 			connected.push(adapter);
 			console.log(`lunR gateway: ${platform} connected`);

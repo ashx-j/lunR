@@ -22,9 +22,9 @@ import type {
 class FakeAdapter implements PlatformAdapter {
 	readonly platform = "telegram";
 	maxMessageLength = 4000;
-	sent: Array<{ chatId: string; text: string; opts?: SendOptions }> = [];
-	edits: Array<{ chatId: string; messageId: string; text: string; opts?: SendOptions }> = [];
-	callbackAnswers: CallbackEvent[] = [];
+	sent: Array<{ chatId: string; text: string; opts?: SendOptions; buttons?: ButtonSpec[][] }> = [];
+	edits: Array<{ chatId: string; messageId: string; text: string; buttons?: ButtonSpec[][] }> = [];
+	callbackAnswers: Array<{ id: string; text?: string }> = [];
 	private callbackHandler?: (event: CallbackEvent) => void;
 	async connect(): Promise<boolean> {
 		return true;
@@ -34,11 +34,12 @@ class FakeAdapter implements PlatformAdapter {
 		this.sent.push({ chatId, text, opts });
 		return { success: true, messageId: `m${this.sent.length}` };
 	}
-	async sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult> {
-		return this.send(chatId, text, { ...opts, buttons });
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.sent.push({ chatId, text, opts, buttons });
+		return { success: true, messageId: `m${this.sent.length}` };
 	}
-	async editMessage(chatId: string, messageId: string, text: string, opts?: SendOptions): Promise<SendResult> {
-		this.edits.push({ chatId, messageId, text, opts });
+	async editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult> {
+		this.edits.push({ chatId, messageId, text, buttons });
 		return { success: true };
 	}
 	async sendTyping(): Promise<void> {}
@@ -46,8 +47,8 @@ class FakeAdapter implements PlatformAdapter {
 	onCallback(handler: (event: CallbackEvent) => void): void {
 		this.callbackHandler = handler;
 	}
-	async answerCallback(event: CallbackEvent): Promise<void> {
-		this.callbackAnswers.push(event);
+	async answerCallback(id: string, text?: string): Promise<void> {
+		this.callbackAnswers.push({ id, text });
 	}
 	simulateCallback(event: CallbackEvent): void {
 		this.callbackHandler?.(event);
@@ -326,16 +327,15 @@ describe("/undo and /redo", () => {
 });
 
 describe("/model", () => {
-	it("lists available models as inline buttons with current model marked", async () => {
+	it("lists available models as a two-level picker", async () => {
 		const ctx = makeCtx("/model");
 		await runChatCommand(findCommand("model"), ctx);
-		expect(adapter.sent[0].text).toContain("Pick a model");
-		const buttons = adapter.sent[0].opts?.buttons;
+		expect(adapter.sent[0].text).toContain("Pick a model provider");
+		const buttons = adapter.sent[0].buttons;
 		expect(buttons).toBeDefined();
 		const labels = buttons?.flat().map((b) => b.label);
-		expect(labels).toContain("anthropic/claude-opus-4");
-		expect(labels).toContain("ollama-cloud/deepseek-v4-flash ☾");
-		expect(labels).toContain("ollama-cloud/qwen-2.5-72b");
+		expect(labels).toContain("anthropic (1)");
+		expect(labels).toContain("✓ ollama-cloud (2)");
 	});
 
 	it("selects a model by number", async () => {
@@ -459,8 +459,10 @@ describe("/thinking", () => {
 		const ctx = makeCtx("/thinking");
 		await runChatCommand(findCommand("thinking"), ctx);
 		expect(adapter.sent[0].text).toContain("Pick a thinking level");
-		const labels = adapter.sent[0].opts?.buttons?.flat().map((b) => b.label);
-		expect(labels).toEqual(["off", "low", "high"]);
+		const labels = adapter.sent[0].buttons?.flat().map((b) => b.label);
+		expect(labels).toContain("✓ off");
+		expect(labels).toContain("low");
+		expect(labels).toContain("high");
 	});
 
 	it("sets a valid level", async () => {
@@ -526,8 +528,8 @@ describe("/sessions", () => {
 		const ctx = makeCtx("/sessions");
 		await runChatCommand(findCommand("sessions"), ctx);
 		expect(adapter.sent[0].text).toContain("Pick a session");
-		const labels = adapter.sent[0].opts?.buttons?.flat().map((b) => b.label);
-		expect(labels).toContain("test-session");
+		const labels = adapter.sent[0].buttons?.flat().map((b) => b.label);
+		expect(labels).toContain("☾ test-session");
 		expect(labels).toContain("other");
 	});
 

@@ -17,7 +17,7 @@ import type { ButtonSpec, CallbackEvent, PlatformAdapter, SendOptions, SendResul
 class FakeAdapter implements PlatformAdapter {
 	readonly platform: string;
 	maxMessageLength = 100;
-	sent: Array<{ chatId: string; text: string; opts?: SendOptions }> = [];
+	sent: Array<{ chatId: string; text: string; opts?: SendOptions; buttons?: ButtonSpec[][] }> = [];
 	failNext = false;
 	private callbackHandler?: (event: CallbackEvent) => void;
 
@@ -38,8 +38,9 @@ class FakeAdapter implements PlatformAdapter {
 		this.sent.push({ chatId, text, opts });
 		return { success: true, messageId: `m${this.sent.length}` };
 	}
-	async sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult> {
-		return this.send(chatId, text, { ...opts, buttons });
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.sent.push({ chatId, text, opts, buttons });
+		return { success: true, messageId: `m${this.sent.length}` };
 	}
 	async editMessage(): Promise<SendResult> {
 		return { success: true };

@@ -22,6 +22,7 @@
  * mentions). Consecutive texts from the same chat/thread/user are debounced
  * 600ms and merged ("\n"-joined, latest messageId kept); texts starting with
  * "/" flush immediately so commands never merge.
+ * Button interactions are routed via interactionCreate → buttonInteractionToEvent().
  *
  * chatId/threadId mapping (pairs with session-keys.ts buildSessionKey):
  *   dm     → chatId = channel.id                        → agent:main:discord:dm:<channelId>
@@ -48,6 +49,10 @@
  * send() time (router passes only chatId, but thread messages live in their
  * own channel); Unknown Message (10008) is a terminal { success: false }.
  * Message splitting is NOT done here — the router owns that (text.ts).
+ *
+ * Buttons: ActionRowBuilder rows of ButtonBuilder components (max 5×5).
+ * answerCallback acknowledges the interaction; a text argument produces an
+ * ephemeral reply (used for unauthorized/expired taps), otherwise deferUpdate().
  *
  * Typing: sendTyping() is a self-contained refresher — Discord typing bubbles
  * last ~10s, so the action is re-sent on an unref'd 8s interval per target.
@@ -133,7 +138,8 @@ export interface DiscordButtonInteractionLike {
 	message: { id: string; channel: DiscordChannelLike };
 	isButton(): boolean;
 	deferUpdate(): Promise<unknown>;
-	update?(options: { components?: unknown[] }): Promise<unknown>;
+	reply?(options: { content: string; ephemeral: boolean }): Promise<unknown>;
+	update?(options: { content: string; components?: unknown[] }): Promise<unknown>;
 }
 
 export interface DiscordMessageLike {
@@ -280,26 +286,25 @@ export function buttonInteractionToEvent(interaction: DiscordButtonInteractionLi
 	const mapped = mapDiscordChannel(channel);
 	if (!mapped) return null;
 	return {
-		callbackId: interaction.id,
-		buttonId: interaction.customId,
+		id: interaction.id,
+		chatId: mapped.chatId,
 		messageId: interaction.message.id,
-		source: {
-			platform: "discord",
-			...mapped,
-			userId: interaction.user.id,
-			userName: interaction.user.username,
-		},
+		userId: interaction.user.id,
+		userName: interaction.user.username,
+		data: interaction.customId,
+		threadId: mapped.threadId,
 	};
 }
 
-function buildDiscordComponents(buttons: ButtonSpec): unknown[] {
+function buildDiscordComponents(buttons: ButtonSpec[][]): unknown[] {
 	const rows: ActionRowBuilder<ButtonBuilder>[] = [];
 	for (const row of buttons) {
 		const actionRow = new ActionRowBuilder<ButtonBuilder>();
 		for (const button of row) {
-			actionRow.addComponents(
-				new ButtonBuilder().setCustomId(button.id).setLabel(button.label).setStyle(ButtonStyle.Primary),
-			);
+			const style = button.data === "" ? ButtonStyle.Secondary : ButtonStyle.Secondary;
+			const builder = new ButtonBuilder().setCustomId(button.data).setLabel(button.label).setStyle(style);
+			if (button.data === "") builder.setDisabled(true);
+			actionRow.addComponents(builder);
 		}
 		rows.push(actionRow);
 	}
@@ -491,7 +496,7 @@ export class DiscordAdapter implements PlatformAdapter {
 	}
 
 	private async handleInteraction(interaction: DiscordButtonInteractionLike): Promise<void> {
-		if (!this.botUserId || !this.callbackHandler) return;
+		if (!this.callbackHandler) return;
 		if (!interaction.isButton()) return;
 		const event = buttonInteractionToEvent(interaction);
 		if (!event) return;
@@ -624,7 +629,6 @@ export class DiscordAdapter implements PlatformAdapter {
 		const result = await this.trySend(channel, {
 			content: text,
 			reply: opts?.replyTo !== undefined ? { messageReference: opts.replyTo } : undefined,
-			components: opts?.buttons !== undefined ? buildDiscordComponents(opts.buttons) : undefined,
 		});
 		if (!result.success && opts?.replyTo !== undefined) {
 			// The reply target may be deleted/unknown — fall back to a plain send.
@@ -633,21 +637,37 @@ export class DiscordAdapter implements PlatformAdapter {
 		return result;
 	}
 
-	async sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult> {
-		return this.send(chatId, text, { ...opts, buttons });
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.stopTyping(typingKey(chatId, opts?.threadId));
+		const channel = await this.fetchChannel(opts?.threadId ?? chatId);
+		if (!channel) return { success: false, error: `channel ${opts?.threadId ?? chatId} not found` };
+		const result = await this.trySend(channel, {
+			content: text,
+			reply: opts?.replyTo !== undefined ? { messageReference: opts.replyTo } : undefined,
+			components: buildDiscordComponents(buttons),
+		});
+		if (!result.success && opts?.replyTo !== undefined) {
+			return this.trySend(channel, { content: text, components: buildDiscordComponents(buttons) });
+		}
+		return result;
 	}
 
-	async answerCallback(event: CallbackEvent): Promise<void> {
-		const interaction = this.callbackInteractions.get(event.callbackId);
+	async answerCallback(id: string, text?: string): Promise<void> {
+		const interaction = this.callbackInteractions.get(id);
 		if (!interaction) return;
+		this.callbackInteractions.delete(id);
 		try {
-			await interaction.deferUpdate();
-		} finally {
-			this.callbackInteractions.delete(event.callbackId);
+			if (text !== undefined && interaction.reply) {
+				await interaction.reply({ content: text, ephemeral: true });
+			} else {
+				await interaction.deferUpdate();
+			}
+		} catch {
+			// best-effort acknowledgment
 		}
 	}
 
-	async editMessage(chatId: string, messageId: string, text: string, opts?: SendOptions): Promise<SendResult> {
+	async editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult> {
 		// The router passes only chatId; thread messages live in their own
 		// channel, so prefer the channel recorded at send() time.
 		const channel = await this.fetchChannel(this.sentMessageChannels.get(messageId) ?? chatId);
@@ -660,9 +680,7 @@ export class DiscordAdapter implements PlatformAdapter {
 				return { success: false, error: `message ${messageId} not found` };
 			}
 			const editOptions: { content: string; components?: unknown[] } = { content: text };
-			if (opts?.buttons !== undefined) {
-				editOptions.components = buildDiscordComponents(opts.buttons);
-			}
+			if (buttons !== undefined) editOptions.components = buildDiscordComponents(buttons);
 			await message.edit(editOptions);
 			return { success: true, messageId };
 		} catch (err) {
