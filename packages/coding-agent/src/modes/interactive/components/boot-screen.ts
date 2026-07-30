@@ -37,6 +37,25 @@ export class BootScreenComponent implements Component {
 	}
 
 	render(width: number): string[] {
+		// lunr: theme-polish — wrap the boot content in an accent2-bordered box
+		// (Kimi-Code style). Too narrow for a frame → render unbordered.
+		if (width < 12) {
+			return this.renderContent(width);
+		}
+		const boxWidth = width; // full terminal width
+		const innerWidth = boxWidth - 4; // "│ " + " │"
+		const content = this.renderContent(innerWidth);
+		const border = (s: string): string => theme.fg("accent2", s);
+		const rail = (line: string): string => {
+			const pad = Math.max(0, innerWidth - visibleWidth(line));
+			return border("│ ") + line + " ".repeat(pad) + border(" │");
+		};
+		const top = border(`╭${"─".repeat(boxWidth - 2)}╮`);
+		const bottom = border(`╰${"─".repeat(boxWidth - 2)}╯`);
+		return [top, rail(""), ...content.map(rail), rail(""), bottom];
+	}
+
+	private renderContent(width: number): string[] {
 		const artWidth = Math.max(...MOON_ASCII.map((line) => visibleWidth(line)));
 		const showArt = width >= artWidth + GAP + MIN_DETAILS_WIDTH;
 		const detailsWidth = showArt ? width - artWidth - GAP : width;
@@ -59,7 +78,7 @@ export class BootScreenComponent implements Component {
 					lines.push(" ".repeat(artWidth + GAP) + (detail ?? ""));
 					continue;
 				}
-				const artPart = theme.fg("accent", art) + " ".repeat(Math.max(0, artWidth - visibleWidth(art)));
+				const artPart = theme.fg("accent", art) + " ".repeat(Math.max(0, artWidth - visibleWidth(art))); // lunr: theme-polish — moon art stays white (accent); only the box border uses accent2
 				lines.push(detail === undefined ? artPart : artPart + " ".repeat(GAP) + detail);
 			}
 		} else {

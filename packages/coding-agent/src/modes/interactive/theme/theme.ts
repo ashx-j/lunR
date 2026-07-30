@@ -35,6 +35,7 @@ const ThemeJsonSchema = Type.Object({
 	colors: Type.Object({
 		// Core UI (10 colors)
 		accent: ColorValueSchema,
+		accent2: Type.Optional(ColorValueSchema),
 		border: ColorValueSchema,
 		borderAccent: ColorValueSchema,
 		borderMuted: ColorValueSchema,
@@ -44,6 +45,7 @@ const ThemeJsonSchema = Type.Object({
 		muted: ColorValueSchema,
 		dim: ColorValueSchema,
 		text: ColorValueSchema,
+		white: Type.Optional(ColorValueSchema),
 		thinkingText: ColorValueSchema,
 		// Backgrounds & Content Text (11 colors)
 		selectedBg: ColorValueSchema,
@@ -108,6 +110,7 @@ const validateThemeJson = Compile(ThemeJsonSchema);
 
 export type ThemeColor =
 	| "accent"
+	| "accent2"
 	| "border"
 	| "borderAccent"
 	| "borderMuted"
@@ -117,6 +120,7 @@ export type ThemeColor =
 	| "muted"
 	| "dim"
 	| "text"
+	| "white"
 	| "thinkingText"
 	| "userMessageText"
 	| "customMessageText"
@@ -319,8 +323,15 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 	return resolved as Record<keyof T, string | number>;
 }
 
-function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeJson["colors"] & { thinkingMax: ColorValue } {
-	return { ...colors, thinkingMax: colors.thinkingMax ?? colors.thinkingXhigh };
+function withThemeColorFallbacks(
+	colors: ThemeJson["colors"],
+): ThemeJson["colors"] & { thinkingMax: ColorValue; accent2: ColorValue; white: ColorValue } {
+	return {
+		...colors,
+		thinkingMax: colors.thinkingMax ?? colors.thinkingXhigh,
+		accent2: colors.accent2 ?? colors.accent,
+		white: colors.white ?? colors.text,
+	};
 }
 
 // ============================================================================

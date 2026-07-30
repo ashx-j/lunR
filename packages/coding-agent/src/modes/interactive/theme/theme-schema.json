@@ -93,6 +93,10 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Primary accent color (logo, selected items, cursor)"
 				},
+				"accent2": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Secondary/subtle accent color (boot border, separators, brand highlights). Optional; falls back to accent."
+				},
 				"border": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Normal borders"
@@ -128,6 +132,10 @@
 				"text": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Default text color (usually empty string)"
+				},
+				"white": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Body-text white. Optional; falls back to text (terminal default)."
 				},
 				"thinkingText": {
 					"$ref": "#/$defs/colorValue",
