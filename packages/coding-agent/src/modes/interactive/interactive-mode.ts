@@ -85,6 +85,8 @@ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../cor
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+// lunr: moved to core/swarm.ts so the gateway can reuse it.
+import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getPlanUsage } from "../../core/usage-service.ts";
@@ -227,17 +229,6 @@ const INIT_EXISTING_FILE_INSTRUCTIONS = {
 	append:
 		"An AGENTS.md already exists — keep the existing content and only add missing sections; do not rewrite what is already there.",
 } as const;
-
-function buildSwarmPrompt(task: string): string {
-	return `[SWARM MODE] Task: ${task}
-Act as an orchestrator. 1) Decompose into 3-8 independent subtasks. 2) Launch them
-in ONE parallel subagent call (async:false), picking an agent + model tier per
-subtask (prefer scout for exploration, worker for implementation, reviewer for
-verification). 3) Synthesize the results and report. Rules: max 8 concurrent
-subagents; no nested fan-out; if a subtask fails, retry once with the heavy tier
-before giving up on it; keep your final report under 100 lines with per-subtask
-status.`;
-}
 
 function buildResearchPrompt(question: string, depth: number, breadth: number): string {
 	return `[DEEP RESEARCH] Question: ${question}

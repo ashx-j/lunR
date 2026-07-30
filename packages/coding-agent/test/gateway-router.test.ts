@@ -57,6 +57,14 @@ class FakeBridge implements BridgeLike {
 	getStatus(): { busy: boolean; queueDepth: number } {
 		return { ...this.status };
 	}
+	async getSession(): Promise<null> {
+		return null;
+	}
+	async switchSession(): Promise<void> {}
+	async undo(): Promise<{ userText: string }> {
+		return { userText: "" };
+	}
+	async redo(): Promise<void> {}
 }
 
 let dir: string;
@@ -288,7 +296,7 @@ describe("router: slash subset (bypasses the busy guard)", () => {
 		bridge.status.busy = true;
 		await router.handleEvent(dmEvent("/stop"));
 		expect(bridge.aborted).toHaveLength(1);
-		expect(adapter.sent.map((m) => m.text)).toContain("Stopped.");
+		expect(adapter.sent.map((m) => m.text).some((t) => t.includes("Stopped."))).toBe(true);
 		expect(bridge.calls).toEqual([]);
 	});
 
@@ -296,7 +304,11 @@ describe("router: slash subset (bypasses the busy guard)", () => {
 		const { adapter, bridge, router } = makeDeps(makeConfig());
 		await router.handleEvent(dmEvent("/new"));
 		expect(bridge.resets).toHaveLength(1);
-		expect(adapter.sent.map((m) => m.text)).toContain("Session reset — next message starts a fresh session.");
+		expect(
+			adapter.sent
+				.map((m) => m.text)
+				.some((t) => t.includes("Session reset — next message starts a fresh session.")),
+		).toBe(true);
 	});
 
 	it("/status reports platform, state and queue depth", async () => {

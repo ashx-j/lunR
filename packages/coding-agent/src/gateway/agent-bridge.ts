@@ -29,13 +29,21 @@
  */
 
 import { existsSync } from "node:fs";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentSession, AgentSessionEvent } from "../core/agent-session.ts";
+import type { Model } from "@earendil-works/pi-ai/compat";
+import type { AgentSession, AgentSessionEvent, SessionStats } from "../core/agent-session.ts";
+import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
-import type { SessionManager } from "../core/session-manager.ts";
+import type { ContextUsage, ToolDefinition } from "../core/extensions/types.ts";
+import type { ModelRuntime } from "../core/model-runtime.ts";
+import type { ReadonlySessionManager, SessionManager, SessionMessageEntry } from "../core/session-manager.ts";
 import { getSession, putSession, removeSession, touchSession } from "./store.ts";
 import type { MessageEvent, SessionSource } from "./types.ts";
+
+function isUserMessageEntry(entry: { type: string }): entry is SessionMessageEntry {
+	return entry.type === "message";
+}
 
 /** runTurn resolves with this when the message was queued behind a running turn. */
 export const QUEUED = "__lunr_gateway_queued__";
@@ -71,7 +79,7 @@ export interface BridgeSessionStatus {
 
 /**
  * Structural session shape the bridge needs — satisfied by AgentSession,
- * fakeable in tests.
+ * fakeable in tests. Expanded to support gateway slash commands.
  */
 export interface BridgeSession {
 	prompt(text: string, options?: { source?: "extension" }): Promise<void>;
@@ -79,10 +87,29 @@ export interface BridgeSession {
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 	readonly state: { messages: AgentMessage[] };
 	dispose?(): void;
-	readonly sessionManager?: {
-		getSessionId(): string;
-		getSessionFile(): string | undefined;
-	};
+	readonly isStreaming: boolean;
+	readonly isCompacting?: boolean;
+	readonly model?: Model<any>;
+	readonly modelRuntime: ModelRuntime;
+	readonly thinkingLevel: ThinkingLevel;
+	readonly messages: AgentMessage[];
+	readonly systemPrompt: string;
+	readonly sessionManager?: ReadonlySessionManager;
+
+	getActiveToolNames(): string[];
+	getToolDefinition(name: string): ToolDefinition | undefined;
+	getAvailableThinkingLevels(): ThinkingLevel[];
+	supportsThinking(): boolean;
+	setThinkingLevel(level: ThinkingLevel): void;
+	setModel(model: Model<any>): Promise<void>;
+	compact(customInstructions?: string): Promise<CompactionResult>;
+	navigateTree(
+		targetId: string,
+		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
+	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
+	getContextUsage(): ContextUsage | undefined;
+	getSessionStats(): SessionStats;
+	setSessionName(name: string): void;
 }
 
 export type SessionFactory = (key: string, reopen: { sessionFile: string } | undefined) => Promise<BridgeSession>;
@@ -92,6 +119,7 @@ interface CacheEntry {
 	busy: boolean;
 	queue: MessageEvent[];
 	dropped: number;
+	unsubscribe?: () => void;
 }
 
 /**
@@ -182,6 +210,7 @@ export class AgentBridge {
 	private readonly cap: number;
 	private readonly sessionFactory: SessionFactory;
 	private readonly cache = new Map<string, CacheEntry>();
+	private readonly redoStack = new Map<string, string[]>();
 	private readonly creating = new Map<string, Promise<CacheEntry>>();
 
 	constructor(options: { cacheCap?: number; sessionFactory?: SessionFactory } = {}) {
@@ -225,14 +254,111 @@ export class AgentBridge {
 		await this.cache.get(key)?.session.abort();
 	}
 
-	/** Drop the cached session (disposing it) and forget the store entry (/new, /reset). */
-	reset(key: string): void {
+	/** Return the live session for a key, or null when none exists yet. */
+	async getSession(key: string): Promise<BridgeSession | null> {
+		const cached = this.cache.get(key);
+		if (cached) return cached.session;
+		if (!getSession(key)) return null;
+		return (await this.getOrCreate(key)).session;
+	}
+
+	/** Switch the chat to a different persisted session file. */
+	async switchSession(key: string, sessionFile: string): Promise<void> {
 		const entry = this.cache.get(key);
+		if (entry?.busy) {
+			throw new Error("Session is busy — /stop first or wait");
+		}
 		if (entry) {
+			entry.unsubscribe?.();
 			this.cache.delete(key);
 			entry.session.dispose?.();
 		}
 		removeSession(key);
+		this.redoStack.delete(key);
+
+		const session = await this.sessionFactory(key, { sessionFile });
+		const newFile = session.sessionManager?.getSessionFile();
+		if (newFile) {
+			putSession(key, { sessionId: session.sessionManager?.getSessionId() ?? key, sessionFile: newFile });
+		}
+		const newEntry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
+		this.cache.set(key, newEntry);
+		this._enforceCacheCap();
+		newEntry.unsubscribe = this._subscribeToSession(key, newEntry);
+	}
+
+	/** Undo the last user turn and push the previous leaf onto the redo stack. */
+	async undo(key: string): Promise<{ userText: string }> {
+		const session = await this.getSession(key);
+		if (!session) throw new Error("No session");
+		if (session.isStreaming) throw new Error("Wait for the current response to finish");
+		const branch = session.sessionManager?.getBranch() ?? [];
+		let lastUserIndex = -1;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (isUserMessageEntry(entry) && entry.message.role === "user") {
+				lastUserIndex = i;
+				break;
+			}
+		}
+		if (lastUserIndex === -1) throw new Error("Nothing to undo");
+		const lastUser = branch[lastUserIndex];
+		if (!isUserMessageEntry(lastUser)) throw new Error("Nothing to undo");
+
+		const leafId = session.sessionManager?.getLeafId() ?? null;
+		let targetId: string;
+		if (lastUser.id === leafId) {
+			if (!lastUser.parentId) throw new Error("Nothing to undo");
+			targetId = lastUser.parentId;
+		} else {
+			targetId = lastUser.id;
+		}
+
+		const result = await session.navigateTree(targetId, {});
+		if (result.cancelled) throw new Error("Navigation cancelled");
+
+		if (leafId) {
+			const stack = this.redoStack.get(key) ?? [];
+			stack.push(leafId);
+			this.redoStack.set(key, stack);
+		}
+
+		return { userText: extractUserText(lastUser.message) };
+	}
+
+	/** Redo to the leaf saved by the most recent undo. */
+	async redo(key: string): Promise<void> {
+		const session = await this.getSession(key);
+		if (!session) throw new Error("No session");
+		if (session.isStreaming) throw new Error("Wait for the current response to finish");
+		const stack = this.redoStack.get(key) ?? [];
+		const targetId = stack.pop();
+		if (!targetId) throw new Error("Nothing to redo");
+		this.redoStack.set(key, stack);
+
+		const result = await session.navigateTree(targetId, {});
+		if (result.cancelled) {
+			stack.push(targetId);
+			this.redoStack.set(key, stack);
+			throw new Error("Navigation cancelled");
+		}
+	}
+
+	/** Test/debug hook: how many redo targets are saved for a key. */
+	getRedoStackLength(key: string): number {
+		return this.redoStack.get(key)?.length ?? 0;
+	}
+
+	/** Drop the cached session (disposing it) and forget the store entry (/new, /reset). */
+	reset(key: string): void {
+		const entry = this.cache.get(key);
+		if (entry) {
+			entry.unsubscribe?.();
+			this.cache.delete(key);
+			entry.session.dispose?.();
+		}
+		removeSession(key);
+		this.redoStack.delete(key);
 	}
 
 	getStatus(key: string): BridgeSessionStatus {
@@ -342,15 +468,50 @@ export class AgentBridge {
 		if (sessionFile) {
 			putSession(key, { sessionId: session.sessionManager?.getSessionId() ?? key, sessionFile });
 		}
-		const entry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
+		const entry: CacheEntry = { session, busy: false, queue: [], dropped: 0, unsubscribe: undefined };
 		this.cache.set(key, entry);
+		this._enforceCacheCap();
+		entry.unsubscribe = this._subscribeToSession(key, entry);
+		return entry;
+	}
+
+	private _enforceCacheCap(): void {
 		while (this.cache.size > this.cap) {
 			const oldestKey = this.cache.keys().next().value;
 			if (oldestKey === undefined) break;
 			const oldest = this.cache.get(oldestKey);
+			oldest?.unsubscribe?.();
 			this.cache.delete(oldestKey);
 			oldest?.session.dispose?.();
 		}
-		return entry;
 	}
+
+	private _subscribeToSession(key: string, entry: CacheEntry): () => void {
+		return entry.session.subscribe((event) => this._handleSessionEvent(key, event));
+	}
+
+	private _handleSessionEvent(key: string, event: AgentSessionEvent): void {
+		if (event.type === "message_start" && event.message?.role === "user") {
+			this.redoStack.delete(key);
+		}
+	}
+}
+
+function extractUserText(message: AgentMessage): string {
+	let text = "";
+	if ("content" in message && Array.isArray(message.content)) {
+		for (const block of message.content) {
+			if (
+				block &&
+				typeof block === "object" &&
+				"type" in block &&
+				block.type === "text" &&
+				"text" in block &&
+				typeof block.text === "string"
+			) {
+				text += block.text;
+			}
+		}
+	}
+	return text;
 }

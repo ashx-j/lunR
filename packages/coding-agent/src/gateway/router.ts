@@ -6,8 +6,8 @@
  *      with adapter-supplied metadata.mentionedBot)
  *   2. authorization (authz.ts); denied DMs get a pairing code when the
  *      behavior is "pair" and the user isn't rate-limited
- *   3. slash subset (/new /reset /stop /status /help /whoami) — bypasses the
- *      busy guard
+ *   3. command registry (/new, /undo, /redo, /model, /sessions, /title,
+ *      /context, /swarm, /compact, /thinking, /stop, /status, /help, /whoami)
  *   4. normal path: bridge.runTurn with a StreamConsumer when streaming is
  *      enabled and the adapter supports edit; the final text is
  *      silence-filtered and folded INTO the streaming preview (edit, plus
@@ -17,8 +17,9 @@
  * Errors surface as a compact "⚠ <one-line>" — never a stack trace.
  */
 
-import { type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
+import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
 import { isAuthorized } from "./authz.ts";
+import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, platformConfigFor } from "./config.ts";
 import type { PairingStore } from "./pairing.ts";
 import { buildSessionKey } from "./session-keys.ts";
@@ -32,6 +33,10 @@ export interface BridgeLike {
 	abort(key: string): Promise<void> | void;
 	reset(key: string): void;
 	getStatus(key: string): BridgeSessionStatus;
+	getSession(key: string): Promise<BridgeSession | null>;
+	switchSession(key: string, sessionFile: string): Promise<void>;
+	undo(key: string): Promise<{ userText: string }>;
+	redo(key: string): Promise<void>;
 }
 
 export interface RouterDeps {
@@ -44,13 +49,6 @@ export interface RouterDeps {
 export interface Router {
 	handleEvent(event: MessageEvent): Promise<void>;
 }
-
-const HELP_TEXT = `lunR gateway commands:
-/new or /reset — start a fresh session for this chat
-/stop — abort the running turn
-/status — session status
-/whoami — your ids and session key
-/help — this message`;
 
 function oneLine(text: string): string {
 	return text.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -111,47 +109,27 @@ export function createRouter(deps: RouterDeps): Router {
 		return true;
 	}
 
-	/** Step 3: the slash-command subset. Returns true when the event was handled. */
+	/** Step 3: command registry. Returns true when the event was consumed. */
 	async function handleSlash(adapter: PlatformAdapter, event: MessageEvent, key: string): Promise<boolean> {
 		const text = event.text.trim();
 		if (!text.startsWith("/")) return false;
-		const command = text.split(/\s+/, 1)[0].toLowerCase();
-		const reply = async (message: string) => {
-			await adapter.send(event.source.chatId, message, {
-				replyTo: event.messageId,
-				threadId: event.source.threadId,
-			});
-		};
-		switch (command) {
-			case "/new":
-			case "/reset":
-				bridge.reset(key);
-				await reply("Session reset — next message starts a fresh session.");
-				return true;
-			case "/stop":
-				await bridge.abort(key);
-				await reply("Stopped.");
-				return true;
-			case "/status": {
-				const status = bridge.getStatus(key);
-				const age = status.createdAt
-					? `${Math.max(0, Math.round((Date.now() - Date.parse(status.createdAt)) / 1000))}s`
-					: "no session yet";
-				await reply(
-					`${event.source.platform} · session age ${age} · ${status.busy ? "busy" : "idle"} · queue ${status.queueDepth}`,
-				);
-				return true;
-			}
-			case "/help":
-				await reply(HELP_TEXT);
-				return true;
-			case "/whoami":
-				await reply(`userId: ${event.source.userId}\nchatId: ${event.source.chatId}\nkey: ${key}`);
-				return true;
-			default:
-				// Unknown slash command: DM → normal text, group → ignore.
-				return event.source.chatType !== "dm";
+		const firstToken = text.split(/\s+/, 1)[0].toLowerCase();
+		const commandWord = firstToken.split("@")[0].slice(1);
+		const args = text.slice(firstToken.length).trim();
+		const cmd = CHAT_COMMANDS.find((c) => c.name === commandWord || c.aliases?.includes(commandWord));
+		if (!cmd) {
+			// Unknown slash command: DM → normal text, group → ignore.
+			return event.source.chatType !== "dm";
 		}
+		const ctx = {
+			event,
+			key,
+			adapter,
+			bridge,
+			args,
+			reply: (message: string) => sendCommandReply(adapter, event, message),
+		};
+		return runChatCommand(cmd, ctx);
 	}
 
 	/** Step 4 delivery: silence filter → split → sequential send.
