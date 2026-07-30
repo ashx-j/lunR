@@ -9,12 +9,23 @@ import {
 	sendCommandReply,
 } from "../src/gateway/commands.ts";
 import type { BridgeLike } from "../src/gateway/router.ts";
-import type { MessageEvent, PlatformAdapter, SendOptions, SendResult, SessionSource } from "../src/gateway/types.ts";
+import type {
+	ButtonSpec,
+	CallbackEvent,
+	MessageEvent,
+	PlatformAdapter,
+	SendOptions,
+	SendResult,
+	SessionSource,
+} from "../src/gateway/types.ts";
 
 class FakeAdapter implements PlatformAdapter {
 	readonly platform = "telegram";
 	maxMessageLength = 4000;
-	sent: Array<{ chatId: string; text: string; opts?: SendOptions }> = [];
+	sent: Array<{ chatId: string; text: string; opts?: SendOptions; buttons?: ButtonSpec[][] }> = [];
+	edits: Array<{ chatId: string; messageId: string; text: string; buttons?: ButtonSpec[][] }> = [];
+	callbackAnswers: Array<{ id: string; text?: string }> = [];
+	private callbackHandler?: (event: CallbackEvent) => void;
 	async connect(): Promise<boolean> {
 		return true;
 	}
@@ -23,11 +34,25 @@ class FakeAdapter implements PlatformAdapter {
 		this.sent.push({ chatId, text, opts });
 		return { success: true, messageId: `m${this.sent.length}` };
 	}
-	async editMessage(): Promise<SendResult> {
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.sent.push({ chatId, text, opts, buttons });
+		return { success: true, messageId: `m${this.sent.length}` };
+	}
+	async editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult> {
+		this.edits.push({ chatId, messageId, text, buttons });
 		return { success: true };
 	}
 	async sendTyping(): Promise<void> {}
 	onMessage(): void {}
+	onCallback(handler: (event: CallbackEvent) => void): void {
+		this.callbackHandler = handler;
+	}
+	async answerCallback(id: string, text?: string): Promise<void> {
+		this.callbackAnswers.push({ id, text });
+	}
+	simulateCallback(event: CallbackEvent): void {
+		this.callbackHandler?.(event);
+	}
 }
 
 function makeSource(overrides: Partial<SessionSource> = {}): SessionSource {
@@ -302,13 +327,15 @@ describe("/undo and /redo", () => {
 });
 
 describe("/model", () => {
-	it("lists available models with current model", async () => {
+	it("lists available models as a two-level picker", async () => {
 		const ctx = makeCtx("/model");
 		await runChatCommand(findCommand("model"), ctx);
-		expect(adapter.sent[0].text).toContain("Current: ollama-cloud/deepseek-v4-flash");
-		expect(adapter.sent[0].text).toContain("1) anthropic/claude-opus-4");
-		expect(adapter.sent[0].text).toContain("2) ollama-cloud/deepseek-v4-flash");
-		expect(adapter.sent[0].text).toContain("3) ollama-cloud/qwen-2.5-72b");
+		expect(adapter.sent[0].text).toContain("Pick a model provider");
+		const buttons = adapter.sent[0].buttons;
+		expect(buttons).toBeDefined();
+		const labels = buttons?.flat().map((b) => b.label);
+		expect(labels).toContain("anthropic (1)");
+		expect(labels).toContain("✓ ollama-cloud (2)");
 	});
 
 	it("selects a model by number", async () => {
@@ -423,7 +450,7 @@ describe("/compact", () => {
 });
 
 describe("/thinking", () => {
-	it("shows current level and available levels", async () => {
+	it("shows available thinking levels as inline buttons", async () => {
 		bridge.session!.model = fakeModel(
 			"claude-opus-4",
 			"anthropic",
@@ -431,8 +458,11 @@ describe("/thinking", () => {
 		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
 		const ctx = makeCtx("/thinking");
 		await runChatCommand(findCommand("thinking"), ctx);
-		expect(adapter.sent[0].text).toContain("Level: off");
-		expect(adapter.sent[0].text).toContain("off, low, high");
+		expect(adapter.sent[0].text).toContain("Pick a thinking level");
+		const labels = adapter.sent[0].buttons?.flat().map((b) => b.label);
+		expect(labels).toContain("✓ off");
+		expect(labels).toContain("low");
+		expect(labels).toContain("high");
 	});
 
 	it("sets a valid level", async () => {
@@ -494,12 +524,13 @@ describe("/sessions", () => {
 		vi.spyOn(SessionManager, "list").mockResolvedValue(fakeSessions);
 	});
 
-	it("lists sessions with current marker", async () => {
+	it("lists sessions as inline buttons", async () => {
 		const ctx = makeCtx("/sessions");
 		await runChatCommand(findCommand("sessions"), ctx);
-		expect(adapter.sent[0].text).toContain("Sessions for");
-		expect(adapter.sent[0].text).toContain("test-session ☾");
-		expect(adapter.sent[0].text).toContain("other");
+		expect(adapter.sent[0].text).toContain("Pick a session");
+		const labels = adapter.sent[0].buttons?.flat().map((b) => b.label);
+		expect(labels).toContain("☾ test-session");
+		expect(labels).toContain("other");
 	});
 
 	it("refuses while busy", async () => {

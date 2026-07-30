@@ -16,12 +16,17 @@ import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import { buildSwarmPrompt } from "../core/swarm.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
+import { createPicker, type PickerItem } from "./buttons.ts";
 import type { BridgeLike } from "./router.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const SESSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_MODEL_LIST_LINES = 15;
+const PROVIDER_PER_PAGE = 10;
+const _MODEL_PER_PAGE = 8;
+const MAX_MODELS_PER_PROVIDER = 50;
+const MODEL_ID_MAX = 38;
 
 interface ModelCacheEntry {
 	models: Model<any>[];
@@ -107,6 +112,25 @@ function formatModelList(models: Model<any>[], maxLines = MAX_MODEL_LIST_LINES):
 		"Use /model <provider/id> or /model <query>.",
 		...providers.map((p) => `- ${p}`),
 	];
+}
+
+function groupModelsByProvider(models: Model<any>[]): Map<string, Model<any>[]> {
+	const byProvider = new Map<string, Model<any>[]>();
+	for (const model of models) {
+		const list = byProvider.get(model.provider) ?? [];
+		list.push(model);
+		byProvider.set(model.provider, list);
+	}
+	for (const list of byProvider.values()) {
+		list.sort((a, b) => a.id.localeCompare(b.id));
+	}
+	return byProvider;
+}
+
+function truncateModelId(id: string): string {
+	const lastSlash = id.lastIndexOf("/");
+	const name = lastSlash >= 0 ? id.slice(lastSlash + 1) : id;
+	return truncate(name, MODEL_ID_MAX);
 }
 
 async function refreshAndCacheModels(session: BridgeSession, key: string): Promise<Model<any>[]> {
@@ -227,9 +251,83 @@ const modelCommand: ChatCommand = {
 		const arg = ctx.args.trim();
 		if (!arg) {
 			const models = await refreshAndCacheModels(session, ctx.key);
-			const current = `${session.model?.provider ?? "none"}/${session.model?.id ?? "none"}`;
-			const lines = formatModelList(models);
-			await ctx.reply([`Current: ${current}`, ...lines, "Use /model <n> or /model <provider/id>"].join("\n"));
+			const byProvider = groupModelsByProvider(models);
+			const current = session.model;
+			const currentRef = current ? `${current.provider}/${current.id}` : "";
+			const providers = [...byProvider.keys()].sort();
+			const providerItems: PickerItem[] = providers.map((provider) => ({
+				label: `${current?.provider === provider ? "✓ " : ""}${provider} (${byProvider.get(provider)?.length ?? 0})`,
+				value: provider,
+			}));
+
+			const pickerOpts = {
+				replyTo: ctx.event.messageId,
+				threadId: ctx.event.source.threadId,
+			};
+			const result = await createPicker(
+				ctx.adapter,
+				ctx.event.source,
+				{
+					kind: "model",
+					sessionKey: ctx.key,
+					invokerId: ctx.event.source.userId,
+					items: providerItems,
+					perPage: PROVIDER_PER_PAGE,
+					title: "Pick a model provider",
+					async resolve(item) {
+						if (item.value === "__back__") {
+							return { done: false, items: providerItems, title: "Pick a model provider" };
+						}
+						if (!item.value.includes("/")) {
+							const provider = item.value;
+							const list = byProvider.get(provider) ?? [];
+							const capped = list.slice(0, MAX_MODELS_PER_PROVIDER);
+							const note =
+								list.length > MAX_MODELS_PER_PROVIDER
+									? ` — ${list.length - MAX_MODELS_PER_PROVIDER} more available`
+									: "";
+							const modelItems: PickerItem[] = [];
+							for (const m of capped) {
+								const ref = `${provider}/${m.id}`;
+								modelItems.push({
+									label: `${currentRef === ref ? "✓ " : ""}${truncateModelId(m.id)}`,
+									value: ref,
+								});
+							}
+							modelItems.unshift({ label: "◀ Back", value: "__back__" });
+							return {
+								done: false,
+								items: modelItems,
+								title: `${provider} (${list.length})${note}`,
+								breadcrumbs: provider,
+							};
+						}
+						const exact = findExactModelReferenceMatch(item.value, models);
+						if (!exact) {
+							return { done: true, text: "That model is no longer available." };
+						}
+						try {
+							await session.setModel(exact);
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							if (message.includes("No API key")) {
+								return { done: true, text: `No API key for ${exact.provider}.` };
+							}
+							throw error;
+						}
+						return {
+							done: true,
+							text: `☾ Model → ${exact.provider}/${exact.id} (thinking level re-clamped to ${session.thinkingLevel})`,
+						};
+					},
+				},
+				pickerOpts,
+			);
+			if (!result.success) {
+				const currentText = `${current?.provider ?? "none"}/${current?.id ?? "none"}`;
+				const lines = formatModelList(models);
+				await ctx.reply([`Current: ${currentText}`, ...lines, "Use /model <n> or /model <provider/id>"].join("\n"));
+			}
 			return;
 		}
 
@@ -285,14 +383,40 @@ const sessionsCommand: ChatCommand = {
 			all.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 			const sessions = all.slice(0, 10);
 			sessionsCache.set(ctx.key, { sessions, expires: Date.now() + SESSIONS_CACHE_TTL_MS });
-			const lines = sessions.map((s, i) => {
-				const marker = s.path === currentFile ? " ☾" : "";
-				const label = s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)";
-				return `${i + 1}) ${label}${marker} · ${formatRelativeTime(s.modified)} · ${s.messageCount} msgs`;
-			});
-			await ctx.reply(
-				[`Sessions for ${process.cwd()}`, ...lines, "Use /sessions <n> or /sessions <id-prefix>"].join("\n"),
+			const items: PickerItem[] = sessions.map((s) => ({
+				label: `${s.path === currentFile ? "☾ " : ""}${s.name ? truncate(s.name, 30) : truncate(s.firstMessage, 30) || "(empty)"}`,
+				value: s.path,
+			}));
+			const result = await createPicker(
+				ctx.adapter,
+				ctx.event.source,
+				{
+					kind: "sessions",
+					sessionKey: ctx.key,
+					invokerId: ctx.event.source.userId,
+					items,
+					perPage: 8,
+					title: "Pick a session",
+					async resolve(item) {
+						await ctx.bridge.switchSession(ctx.key, item.value);
+						const switched = await ctx.bridge.getSession(ctx.key);
+						const name = switched?.sessionManager?.getSessionName() ?? "unnamed";
+						const count = switched?.sessionManager?.getEntries().length ?? 0;
+						return { done: true, text: `☾ Switched to "${name}" (${count} msgs). History continues here.` };
+					},
+				},
+				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
 			);
+			if (!result.success) {
+				const lines = sessions.map((s, i) => {
+					const marker = s.path === currentFile ? " ☾" : "";
+					const label = s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)";
+					return `${i + 1}) ${label}${marker} · ${formatRelativeTime(s.modified)} · ${s.messageCount} msgs`;
+				});
+				await ctx.reply(
+					[`Sessions for ${process.cwd()}`, ...lines, "Use /sessions <n> or /sessions <id-prefix>"].join("\n"),
+				);
+			}
 			return;
 		}
 
@@ -469,7 +593,32 @@ const thinkingCommand: ChatCommand = {
 		}
 		const arg = ctx.args.trim().toLowerCase() as ThinkingLevel;
 		if (!arg) {
-			await ctx.reply(`Level: ${session.thinkingLevel} — available: ${levels.join(", ")}`);
+			const current = session.thinkingLevel;
+			const items: PickerItem[] = levels.map((level) => ({
+				label: `${level === current ? "✓ " : ""}${level}`,
+				value: level,
+			}));
+			const result = await createPicker(
+				ctx.adapter,
+				ctx.event.source,
+				{
+					kind: "thinking",
+					sessionKey: ctx.key,
+					invokerId: ctx.event.source.userId,
+					items,
+					perPage: levels.length,
+					title: "Pick a thinking level",
+					async resolve(item) {
+						const level = item.value as ThinkingLevel;
+						session.setThinkingLevel(level);
+						return { done: true, text: `☾ Thinking → ${level}` };
+					},
+				},
+				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
+			);
+			if (!result.success) {
+				await ctx.reply(`Level: ${current} — available: ${levels.join(", ")}`);
+			}
 			return;
 		}
 		if (!levels.includes(arg)) {
@@ -504,6 +653,8 @@ export function formatHelpText(): string {
 		const names = [cmd.name, ...(cmd.aliases ?? [])].map((a) => `/${a}`).join(" | ");
 		lines.push(`${names} — ${cmd.description}`);
 	}
+	lines.push("");
+	lines.push("Tap to pick: /model, /thinking, /sessions (run without args to see buttons).");
 	return lines.join("\n");
 }
 

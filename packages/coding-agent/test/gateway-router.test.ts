@@ -6,14 +6,15 @@ import { QUEUED, type TurnCallbacks } from "../src/gateway/agent-bridge.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
 import { createPairingStore } from "../src/gateway/pairing.ts";
 import { type BridgeLike, createRouter } from "../src/gateway/router.ts";
-import type { MessageEvent, PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
+import type { ButtonSpec, MessageEvent, PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
 
 class FakeAdapter implements PlatformAdapter {
 	readonly platform = "telegram";
 	maxMessageLength = 100;
-	sent: Array<{ chatId: string; text: string; opts?: SendOptions }> = [];
-	edits: Array<{ chatId: string; messageId: string; text: string }> = [];
+	sent: Array<{ chatId: string; text: string; opts?: SendOptions; buttons?: ButtonSpec[][] }> = [];
+	edits: Array<{ chatId: string; messageId: string; text: string; buttons?: ButtonSpec[][] }> = [];
 	typing: string[] = [];
+	callbackAnswers: Array<{ id: string; text?: string }> = [];
 
 	async connect(): Promise<boolean> {
 		return true;
@@ -23,14 +24,22 @@ class FakeAdapter implements PlatformAdapter {
 		this.sent.push({ chatId, text, opts });
 		return { success: true, messageId: `m${this.sent.length}` };
 	}
-	async editMessage(chatId: string, messageId: string, text: string): Promise<SendResult> {
-		this.edits.push({ chatId, messageId, text });
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.sent.push({ chatId, text, opts, buttons });
+		return { success: true, messageId: `m${this.sent.length}` };
+	}
+	async editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult> {
+		this.edits.push({ chatId, messageId, text, buttons });
 		return { success: true };
 	}
 	async sendTyping(chatId: string): Promise<void> {
 		this.typing.push(chatId);
 	}
 	onMessage(): void {}
+	onCallback(): void {}
+	async answerCallback(id: string, text?: string): Promise<void> {
+		this.callbackAnswers.push({ id, text });
+	}
 }
 
 class FakeBridge implements BridgeLike {

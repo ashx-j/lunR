@@ -46,15 +46,15 @@ class MockClient implements DiscordClientLike {
 		return this.loginError ? Promise.reject(this.loginError) : Promise.resolve("ok");
 	}
 
-	on(event: string, listener: (message: DiscordMessageLike) => void): unknown {
-		return this.addListener(event, listener as (...args: unknown[]) => void, false);
+	on(event: string, listener: (arg: unknown) => void): unknown {
+		return this.addListener(event, listener, false);
 	}
 
 	once(event: string, listener: () => void): unknown {
-		return this.addListener(event, listener as (...args: unknown[]) => void, true);
+		return this.addListener(event, listener as (arg: unknown) => void, true);
 	}
 
-	private addListener(event: string, listener: (...args: unknown[]) => void, once: boolean): this {
+	private addListener(event: string, listener: (arg: unknown) => void, once: boolean): this {
 		const list = this.listeners.get(event) ?? [];
 		list.push({ once, listener });
 		this.listeners.set(event, list);
@@ -112,8 +112,8 @@ function fakeChannel(id: string, type: number) {
 				if (!found) return Promise.reject(apiError(10008, "Unknown Message"));
 				return Promise.resolve({
 					content: found.content,
-					edit: (text: string) => {
-						edits.push({ id: messageId, text });
+					edit: (options: string | { content: string; components?: unknown[] }) => {
+						edits.push({ id: messageId, text: typeof options === "string" ? options : options.content });
 						return Promise.resolve();
 					},
 				});

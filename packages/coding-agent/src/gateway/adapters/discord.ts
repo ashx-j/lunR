@@ -22,6 +22,7 @@
  * mentions). Consecutive texts from the same chat/thread/user are debounced
  * 600ms and merged ("\n"-joined, latest messageId kept); texts starting with
  * "/" flush immediately so commands never merge.
+ * Button interactions are routed via interactionCreate → buttonInteractionToEvent().
  *
  * chatId/threadId mapping (pairs with session-keys.ts buildSessionKey):
  *   dm     → chatId = channel.id                        → agent:main:discord:dm:<channelId>
@@ -49,6 +50,10 @@
  * own channel); Unknown Message (10008) is a terminal { success: false }.
  * Message splitting is NOT done here — the router owns that (text.ts).
  *
+ * Buttons: ActionRowBuilder rows of ButtonBuilder components (max 5×5).
+ * answerCallback acknowledges the interaction; a text argument produces an
+ * ephemeral reply (used for unauthorized/expired taps), otherwise deferUpdate().
+ *
  * Typing: sendTyping() is a self-contained refresher — Discord typing bubbles
  * last ~10s, so the action is re-sent on an unref'd 8s interval per target.
  * The interval stops when send() completes for that target or after 2 minutes
@@ -60,9 +65,25 @@
  * objects, no real Client construction.
  */
 
-import { ChannelType, Client, Events, GatewayIntentBits } from "discord.js";
+import {
+	ActionRowBuilder,
+	ButtonBuilder,
+	ButtonStyle,
+	ChannelType,
+	Client,
+	Events,
+	GatewayIntentBits,
+} from "discord.js";
 import type { DiscordConfig } from "../config.ts";
-import type { ChatType, MessageEvent, PlatformAdapter, SendOptions, SendResult } from "../types.ts";
+import type {
+	ButtonSpec,
+	CallbackEvent,
+	ChatType,
+	MessageEvent,
+	PlatformAdapter,
+	SendOptions,
+	SendResult,
+} from "../types.ts";
 import type { Scheduler } from "./telegram.ts";
 
 const DEFAULT_DEBOUNCE_MS = 600;
@@ -91,19 +112,34 @@ export interface DiscordSentMessageLike {
 
 export interface DiscordFetchedMessageLike {
 	content?: string;
-	edit?(text: string): Promise<unknown>;
+	edit?(options: string | { content: string; components?: unknown[] }): Promise<unknown>;
 }
 
 export interface DiscordChannelLike {
 	id: string;
 	type: number;
 	parentId?: string | null;
-	send?(payload: { content: string; reply?: { messageReference: string } }): Promise<DiscordSentMessageLike>;
+	send?(payload: {
+		content: string;
+		reply?: { messageReference: string };
+		components?: unknown[];
+	}): Promise<DiscordSentMessageLike>;
 	sendTyping?(): Promise<unknown>;
 	messages?: {
 		cache?: { get(id: string): { content?: string } | undefined };
 		fetch(id: string): Promise<DiscordFetchedMessageLike | null>;
 	};
+}
+
+export interface DiscordButtonInteractionLike {
+	id: string;
+	customId: string;
+	user: { id: string; username?: string };
+	message: { id: string; channel: DiscordChannelLike };
+	isButton(): boolean;
+	deferUpdate(): Promise<unknown>;
+	reply?(options: { content: string; ephemeral: boolean }): Promise<unknown>;
+	update?(options: { content: string; components?: unknown[] }): Promise<unknown>;
 }
 
 export interface DiscordMessageLike {
@@ -124,7 +160,7 @@ export interface DiscordMessageLike {
 export interface DiscordClientLike {
 	user: { id: string } | null;
 	login(token: string): Promise<unknown>;
-	on(event: string, listener: (message: DiscordMessageLike) => void): unknown;
+	on(event: string, listener: (arg: unknown) => void): unknown;
 	once(event: string, listener: () => void): unknown;
 	destroy(): void;
 	channels: { fetch(id: string): Promise<DiscordChannelLike | null> };
@@ -230,6 +266,51 @@ export function messageToEvent(
 	};
 }
 
+function mapDiscordChannel(
+	channel: DiscordChannelLike,
+): { chatType: ChatType; chatId: string; threadId?: string } | null {
+	if (channel.type === ChannelType.DM) {
+		return { chatType: "dm", chatId: channel.id };
+	}
+	if (THREAD_TYPES.includes(channel.type)) {
+		return { chatType: "thread", chatId: channel.parentId ?? channel.id, threadId: channel.id };
+	}
+	if (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement) {
+		return { chatType: "group", chatId: channel.id };
+	}
+	return null;
+}
+
+export function buttonInteractionToEvent(interaction: DiscordButtonInteractionLike): CallbackEvent | null {
+	const channel = interaction.message.channel;
+	const mapped = mapDiscordChannel(channel);
+	if (!mapped) return null;
+	return {
+		id: interaction.id,
+		chatId: mapped.chatId,
+		messageId: interaction.message.id,
+		userId: interaction.user.id,
+		userName: interaction.user.username,
+		data: interaction.customId,
+		threadId: mapped.threadId,
+	};
+}
+
+function buildDiscordComponents(buttons: ButtonSpec[][]): unknown[] {
+	const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+	for (const row of buttons) {
+		const actionRow = new ActionRowBuilder<ButtonBuilder>();
+		for (const button of row) {
+			const style = button.data === "" ? ButtonStyle.Secondary : ButtonStyle.Secondary;
+			const builder = new ButtonBuilder().setCustomId(button.data).setLabel(button.label).setStyle(style);
+			if (button.data === "") builder.setDisabled(true);
+			actionRow.addComponents(builder);
+		}
+		rows.push(actionRow);
+	}
+	return rows;
+}
+
 // ---------------------------------------------------------------------------
 // Gateway-resume replay dedup (module-level: one process = one bot connection)
 // ---------------------------------------------------------------------------
@@ -318,6 +399,7 @@ export class DiscordAdapter implements PlatformAdapter {
 	private client?: DiscordClientLike;
 	private botUserId?: string;
 	private handler?: (event: MessageEvent) => void;
+	private callbackHandler?: (event: CallbackEvent) => void;
 	private readonly pending = new Map<string, PendingEntry>();
 	private readonly typing = new Map<string, TypingEntry>();
 	private readonly channelCache = new Map<string, DiscordChannelLike | null>();
@@ -325,6 +407,8 @@ export class DiscordAdapter implements PlatformAdapter {
 	private readonly participatingThreads = new Set<string>();
 	/** messageId → channel it was sent to, so editMessage finds thread messages. */
 	private readonly sentMessageChannels = new Map<string, string>();
+	/** callbackId → interaction, so answerCallback can acknowledge the click. */
+	private readonly callbackInteractions = new Map<string, DiscordButtonInteractionLike>();
 
 	constructor(cfg: DiscordConfig, options: DiscordAdapterOptions = {}) {
 		this.cfg = cfg;
@@ -345,6 +429,10 @@ export class DiscordAdapter implements PlatformAdapter {
 		this.handler = handler;
 	}
 
+	onCallback(handler: (event: CallbackEvent) => void): void {
+		this.callbackHandler = handler;
+	}
+
 	async connect(): Promise<boolean> {
 		if (!this.cfg.token) {
 			throw new Error("DiscordAdapter: no bot token (set discord.token or LUNR_DISCORD_BOT_TOKEN)");
@@ -352,8 +440,13 @@ export class DiscordAdapter implements PlatformAdapter {
 		const client = this.clientFactory();
 		this.client = client;
 		client.on(Events.MessageCreate, (message) => {
-			void this.handleMessage(message).catch((err) => {
+			void this.handleMessage(message as DiscordMessageLike).catch((err) => {
 				console.error(`[gateway] discord message handling error: ${errMessage(err)}`);
+			});
+		});
+		client.on(Events.InteractionCreate, (interaction) => {
+			void this.handleInteraction(interaction as DiscordButtonInteractionLike).catch((err) => {
+				console.error(`[gateway] discord interaction handling error: ${errMessage(err)}`);
 			});
 		});
 		const ready = new Promise<void>((resolve) => client.once(Events.ClientReady, () => resolve()));
@@ -376,6 +469,7 @@ export class DiscordAdapter implements PlatformAdapter {
 		for (const key of [...this.pending.keys()]) this.cancelPending(key);
 		for (const key of [...this.typing.keys()]) this.stopTyping(key);
 		this.channelCache.clear();
+		this.callbackInteractions.clear();
 		this.client?.destroy();
 		this.client = undefined;
 	}
@@ -399,6 +493,15 @@ export class DiscordAdapter implements PlatformAdapter {
 		await this.resolveReplyToText(message, event);
 		await this.maybeAutoThread(message, event);
 		this.dispatchEvent(event);
+	}
+
+	private async handleInteraction(interaction: DiscordButtonInteractionLike): Promise<void> {
+		if (!this.callbackHandler) return;
+		if (!interaction.isButton()) return;
+		const event = buttonInteractionToEvent(interaction);
+		if (!event) return;
+		this.callbackInteractions.set(interaction.id, interaction);
+		this.callbackHandler(event);
 	}
 
 	/** Best-effort: fill replyToText from the referenced message when it wasn't cached. */
@@ -503,7 +606,7 @@ export class DiscordAdapter implements PlatformAdapter {
 
 	private async trySend(
 		channel: DiscordChannelLike,
-		payload: { content: string; reply?: { messageReference: string } },
+		payload: { content: string; reply?: { messageReference: string }; components?: unknown[] },
 	): Promise<SendResult> {
 		if (typeof channel.send !== "function") {
 			return { success: false, error: `channel ${channel.id} is not sendable` };
@@ -534,7 +637,37 @@ export class DiscordAdapter implements PlatformAdapter {
 		return result;
 	}
 
-	async editMessage(chatId: string, messageId: string, text: string): Promise<SendResult> {
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec[][], opts?: SendOptions): Promise<SendResult> {
+		this.stopTyping(typingKey(chatId, opts?.threadId));
+		const channel = await this.fetchChannel(opts?.threadId ?? chatId);
+		if (!channel) return { success: false, error: `channel ${opts?.threadId ?? chatId} not found` };
+		const result = await this.trySend(channel, {
+			content: text,
+			reply: opts?.replyTo !== undefined ? { messageReference: opts.replyTo } : undefined,
+			components: buildDiscordComponents(buttons),
+		});
+		if (!result.success && opts?.replyTo !== undefined) {
+			return this.trySend(channel, { content: text, components: buildDiscordComponents(buttons) });
+		}
+		return result;
+	}
+
+	async answerCallback(id: string, text?: string): Promise<void> {
+		const interaction = this.callbackInteractions.get(id);
+		if (!interaction) return;
+		this.callbackInteractions.delete(id);
+		try {
+			if (text !== undefined && interaction.reply) {
+				await interaction.reply({ content: text, ephemeral: true });
+			} else {
+				await interaction.deferUpdate();
+			}
+		} catch {
+			// best-effort acknowledgment
+		}
+	}
+
+	async editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult> {
 		// The router passes only chatId; thread messages live in their own
 		// channel, so prefer the channel recorded at send() time.
 		const channel = await this.fetchChannel(this.sentMessageChannels.get(messageId) ?? chatId);
@@ -546,7 +679,9 @@ export class DiscordAdapter implements PlatformAdapter {
 			if (!message || typeof message.edit !== "function") {
 				return { success: false, error: `message ${messageId} not found` };
 			}
-			await message.edit(text);
+			const editOptions: { content: string; components?: unknown[] } = { content: text };
+			if (buttons !== undefined) editOptions.components = buildDiscordComponents(buttons);
+			await message.edit(editOptions);
 			return { success: true, messageId };
 		} catch (err) {
 			const code = discordErrorCode(err);
