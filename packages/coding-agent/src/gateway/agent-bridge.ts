@@ -112,8 +112,7 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		{ registerCustomizeBridge },
 		{ registerMemoryCapBridge },
 		{ registerModelTierBridge },
-		{ DefaultResourceLoader },
-		{ createAgentSession },
+		{ createAgentSessionFromServices, createAgentSessionServices },
 		{ SessionManager },
 		{ SettingsManager },
 	] = await Promise.all([
@@ -122,8 +121,7 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		import("../core/customize.ts"),
 		import("../core/memory-cap.ts"),
 		import("../core/model-tiers.ts"),
-		import("../core/resource-loader.ts"),
-		import("../core/sdk.ts"),
+		import("../core/agent-session-services.ts"),
 		import("../core/session-manager.ts"),
 		import("../core/settings-manager.ts"),
 	]);
@@ -145,21 +143,18 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		sessionManager = SessionManager.create(cwd);
 	}
 
-	const resourceLoader = new DefaultResourceLoader({
+	// Services-first (mirrors main.ts): extension-registered providers (e.g.
+	// ollama-cloud) must land in the shared ModelRuntime BEFORE session
+	// creation — otherwise findInitialModel can't resolve the user's default
+	// model and silently falls back to an arbitrary catalog provider (this
+	// exact bug sent gateway turns to openrouter with no key → 401).
+	const services = await createAgentSessionServices({
 		cwd,
 		agentDir,
 		settingsManager,
-		extensionFactories: [...builtinExtensions],
+		resourceLoaderOptions: { extensionFactories: [...builtinExtensions] },
 	});
-	await resourceLoader.reload();
-
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir,
-		sessionManager,
-		settingsManager,
-		resourceLoader,
-	});
+	const { session } = await createAgentSessionFromServices({ services, sessionManager });
 	await session.bindExtensions({
 		mode: "print",
 		onError: (err) => console.error(`[gateway] extension error (${err.extensionPath}): ${err.error}`),

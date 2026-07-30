@@ -57,8 +57,7 @@ async function defaultCronSessionFactory(job: CronJob): Promise<BridgeSession> {
 		{ registerCustomizeBridge },
 		{ registerMemoryCapBridge },
 		{ registerModelTierBridge },
-		{ DefaultResourceLoader },
-		{ createAgentSession },
+		{ createAgentSessionFromServices, createAgentSessionServices },
 		{ SessionManager },
 		{ SettingsManager },
 	] = await Promise.all([
@@ -67,8 +66,7 @@ async function defaultCronSessionFactory(job: CronJob): Promise<BridgeSession> {
 		import("../core/customize.ts"),
 		import("../core/memory-cap.ts"),
 		import("../core/model-tiers.ts"),
-		import("../core/resource-loader.ts"),
-		import("../core/sdk.ts"),
+		import("../core/agent-session-services.ts"),
 		import("../core/session-manager.ts"),
 		import("../core/settings-manager.ts"),
 	]);
@@ -83,21 +81,17 @@ async function defaultCronSessionFactory(job: CronJob): Promise<BridgeSession> {
 	// the per-chat gateway sessions — <agentDir>/cron/output/ is the audit trail.
 	const sessionManager = SessionManager.inMemory(cwd);
 
-	const resourceLoader = new DefaultResourceLoader({
+	// Services-first (mirrors main.ts): extension-registered providers (e.g.
+	// ollama-cloud) must land in the shared ModelRuntime BEFORE session
+	// creation — otherwise findInitialModel can't resolve the user's default
+	// model and silently falls back to an arbitrary catalog provider.
+	const services = await createAgentSessionServices({
 		cwd,
 		agentDir,
 		settingsManager,
-		extensionFactories: [...builtinExtensions],
+		resourceLoaderOptions: { extensionFactories: [...builtinExtensions] },
 	});
-	await resourceLoader.reload();
-
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir,
-		sessionManager,
-		settingsManager,
-		resourceLoader,
-	});
+	const { session } = await createAgentSessionFromServices({ services, sessionManager });
 	await session.bindExtensions({
 		mode: "print",
 		onError: (err) => console.error(`[gateway cron] extension error (${err.extensionPath}): ${err.error}`),
