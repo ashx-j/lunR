@@ -74,7 +74,12 @@ function extractAssistantText(messages: unknown[]): string {
 // ---------------------------------------------------------------------------
 
 function fmtTime(iso: string | null): string {
-	return iso ? iso.replace("T", " ").slice(0, 16) : "-";
+	if (!iso) return "-";
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return "-";
+	const p = (n: number) => String(n).padStart(2, "0");
+	// Stored timestamps are UTC ISO; render in local time so users read wall-clock.
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function formatJobList(): string {
@@ -306,7 +311,7 @@ export default function (pi: ExtensionAPI): void {
 							deliver: params.deliver ?? (origin ? "origin" : undefined),
 							origin: origin ? { ...origin } : undefined,
 						});
-						return text(`Created cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${job.nextRunAt ?? "-"}.`);
+						return text(`Created cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${fmtTime(job.nextRunAt)}.`);
 					}
 					case "list": {
 						return text(formatJobList());
@@ -319,7 +324,7 @@ export default function (pi: ExtensionAPI): void {
 							schedule: params.schedule,
 							deliver: params.deliver,
 						});
-						return text(`Updated cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${job.nextRunAt ?? "-"}.`);
+						return text(`Updated cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${fmtTime(job.nextRunAt)}.`);
 					}
 					case "pause": {
 						if (!params.id) return text("cron pause: id (or unique name) is required.");
@@ -329,7 +334,7 @@ export default function (pi: ExtensionAPI): void {
 					case "resume": {
 						if (!params.id) return text("cron resume: id (or unique name) is required.");
 						const job = await resumeJob(params.id);
-						return text(`Resumed cron job '${job.name}' (${job.id}) — next run ${job.nextRunAt ?? "-"}.`);
+						return text(`Resumed cron job '${job.name}' (${job.id}) — next run ${fmtTime(job.nextRunAt)}.`);
 					}
 					case "remove": {
 						if (!params.id) return text("cron remove: id (or unique name) is required.");
