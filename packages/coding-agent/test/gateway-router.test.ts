@@ -230,7 +230,7 @@ describe("router: normal path", () => {
 		expect(adapter.sent[0].text).toBe("⚠ boom");
 	});
 
-	it("streams a preview via send+edit, then delivers the final text", async () => {
+	it("streams a preview via send+edit, then folds the final text INTO it (no double-send)", async () => {
 		const { adapter, bridge, router } = makeDeps(
 			makeConfig((c) => {
 				c.streaming.enabled = true;
@@ -250,10 +250,35 @@ describe("router: normal path", () => {
 		await router.handleEvent(dmEvent("go"));
 		// Preview sent as a message replying to the trigger...
 		expect(adapter.sent[0].opts?.replyTo).toBe("msg1");
-		// ...edits accumulated on that message...
+		// ...and it is the ONLY message sent (no preview + final duplicate)...
+		expect(adapter.sent).toHaveLength(1);
+		// ...with the final text folded in as the last edit.
 		expect(adapter.edits.length).toBeGreaterThan(0);
-		// ...and the final text was delivered.
-		expect(adapter.sent[adapter.sent.length - 1].text).toBe("streamed final answer");
+		expect(adapter.edits[adapter.edits.length - 1].text).toBe("streamed final answer");
+	});
+
+	it("upgrades a truncated preview to chunk 1 and sends the rest as follow-ups", async () => {
+		const { adapter, bridge, router } = makeDeps(
+			makeConfig((c) => {
+				c.streaming.enabled = true;
+				c.streaming.editIntervalMs = 0;
+				c.streaming.bufferThreshold = 10;
+			}),
+		);
+		// 150 chars > adapter maxMessageLength (100) → 2 chunks, truncated preview.
+		const longResult = `${"a".repeat(90)} ${"b".repeat(59)}`;
+		bridge.results = [longResult];
+		bridge.onRunTurn = (callbacks) => {
+			callbacks.onDelta?.(longResult);
+		};
+		await router.handleEvent(dmEvent("go"));
+		// Preview (truncated) was the initial send; overflow chunk was sent after.
+		expect(adapter.sent).toHaveLength(2);
+		// The preview message was upgraded to the first full chunk via edit...
+		expect(adapter.edits[adapter.edits.length - 1].text.endsWith(" (1/2)")).toBe(true);
+		// ...and the remainder went out as a new message.
+		expect(adapter.sent[1].text.endsWith(" (2/2)")).toBe(true);
+		expect(adapter.sent[0].text.endsWith("…")).toBe(true);
 	});
 });
 

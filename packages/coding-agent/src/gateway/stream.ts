@@ -81,6 +81,16 @@ export class StreamConsumer {
 		return this.buffer;
 	}
 
+	/** The platform message id of the preview, when one was successfully sent. */
+	get sentMessageId(): string | null {
+		return this.messageId;
+	}
+
+	/** True when the preview had to truncate the full text (buffer > maxPreview). */
+	get truncated(): boolean {
+		return this.buffer.length > this.maxPreview;
+	}
+
 	/** The streaming preview: full text truncated to maxPreview-3 + "…". */
 	private preview(): string {
 		if (this.buffer.length <= this.maxPreview) return this.buffer;

@@ -10,8 +10,10 @@
  *      busy guard
  *   4. normal path: bridge.runTurn with a StreamConsumer when streaming is
  *      enabled and the adapter supports edit; the final text is
- *      silence-filtered, split (text.ts) and sent sequentially, the first
- *      chunk replying to the triggering message.
+ *      silence-filtered and folded INTO the streaming preview (edit, plus
+ *      continuation chunks when the preview was truncated) — no preview +
+ *      final double-send. Without streaming it is split (text.ts) and sent
+ *      sequentially, the first chunk replying to the triggering message.
  * Errors surface as a compact "⚠ <one-line>" — never a stack trace.
  */
 
@@ -152,18 +154,34 @@ export function createRouter(deps: RouterDeps): Router {
 		}
 	}
 
-	/** Step 4 delivery: silence filter → split → sequential send. */
+	/** Step 4 delivery: silence filter → split → sequential send.
+	 *
+	 * When a streaming preview message exists (editMessageId), the final text
+	 * is folded INTO it instead of sent as a duplicate: non-truncated previews
+	 * get a final edit (covers silence-marker stripping), truncated previews
+	 * are edited to chunk 1 and the remaining chunks are sent as follow-ups. */
 	async function deliver(
 		adapter: PlatformAdapter,
 		event: MessageEvent,
 		text: string,
-		opts: { reply: boolean },
+		opts: { reply: boolean; editMessageId?: string; previewTruncated?: boolean },
 	): Promise<void> {
 		const filtered = applySilenceFilter(text);
 		if (filtered === null) return;
 		const chunks = splitMessage(filtered, adapter.maxMessageLength);
-		for (const [index, chunk] of chunks.entries()) {
-			const result = await adapter.send(event.source.chatId, chunk, {
+		let startIndex = 0;
+		if (opts.editMessageId) {
+			if (!opts.previewTruncated) {
+				// Preview already holds the whole text: one final edit, no new message.
+				await adapter.editMessage(event.source.chatId, opts.editMessageId, filtered);
+				return;
+			}
+			// Preview was truncated: upgrade it to the first full chunk.
+			await adapter.editMessage(event.source.chatId, opts.editMessageId, chunks[0]);
+			startIndex = 1;
+		}
+		for (let index = startIndex; index < chunks.length; index++) {
+			const result = await adapter.send(event.source.chatId, chunks[index], {
 				replyTo: opts.reply && index === 0 ? event.messageId : undefined,
 				threadId: event.source.threadId,
 			});
@@ -208,7 +226,11 @@ export function createRouter(deps: RouterDeps): Router {
 		const result = await bridge.runTurn(key, event, callbacks);
 		if (result === QUEUED) return; // queued behind a running turn: no reply
 		if (consumer) await consumer.finalize();
-		await deliver(adapter, event, result, { reply: !consumer });
+		await deliver(adapter, event, result, {
+			reply: !consumer,
+			editMessageId: consumer?.sentMessageId ?? undefined,
+			previewTruncated: consumer?.truncated ?? false,
+		});
 	}
 
 	return {
