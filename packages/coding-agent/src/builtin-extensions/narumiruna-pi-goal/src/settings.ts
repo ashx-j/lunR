@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "../../../config.js";
 
 export const GOAL_SETTINGS_FILE = "pi-goal.json";
 export const GOAL_TOOL_VISIBILITIES = ["always", "after-first-goal"] as const;

@@ -16,7 +16,14 @@ import {
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
-import type { DefaultProjectTrust, ModelTierName, ModelTiersSettings } from "../../../core/settings-manager.ts";
+import type {
+	DefaultPermissionMode,
+	DefaultProjectTrust,
+	ModelTierName,
+	ModelTiersSettings,
+	RollbackCapture,
+	RollbackScope,
+} from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -96,6 +103,13 @@ export interface SettingsConfig {
 	footerContext: boolean;
 	footerTokens: boolean;
 	footerStatuses: boolean;
+	// lunr: permission mode default
+	defaultPermissionMode: DefaultPermissionMode;
+	// lunr: rollback settings
+	rollbackEnabled: boolean;
+	rollbackTurns: number;
+	rollbackCapture: RollbackCapture;
+	rollbackScope: RollbackScope;
 }
 
 export interface SettingsCallbacks {
@@ -139,6 +153,13 @@ export interface SettingsCallbacks {
 	onFooterContextChange: (enabled: boolean) => void;
 	onFooterTokensChange: (enabled: boolean) => void;
 	onFooterStatusesChange: (enabled: boolean) => void;
+	// lunr: permission mode default
+	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
+	// lunr: rollback callbacks
+	onRollbackEnabledChange: (enabled: boolean) => void;
+	onRollbackTurnsChange: (turns: number) => void;
+	onRollbackCaptureChange: (mode: RollbackCapture) => void;
+	onRollbackScopeChange: (scope: RollbackScope) => void;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
 	createModelTierPicker: (
 		tier: ModelTierName,
@@ -380,6 +401,148 @@ class CustomizeSubmenu extends Container {
 		this.settingsList.handleInput(data);
 	}
 }
+
+// lunr: Rollback submenu — enable, turns, capture mode, scope.
+class RollbackSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+
+		const items: SettingItem[] = [
+			{
+				id: "rollback-enabled",
+				label: "Rollback enabled",
+				description: "Copy files before edits so /rollback can restore them. Uses extra disk + processing.",
+				currentValue: config.rollbackEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "rollback-turns",
+				label: "Rollback turns",
+				description: `How many turns of snapshots to retain (1-20, default 2).`,
+				currentValue: String(config.rollbackTurns),
+				submenu: (currentValue, submenuDone) => new RollbackTurnsSubmenu(currentValue, submenuDone),
+			},
+			{
+				id: "rollback-capture",
+				label: "Capture mode",
+				description:
+					"How snapshots are taken: copies = restore edited files + delete tool-created files, hybrid = also delete files created outside tools (tree scope), shadow-git = hidden git repo (needs git).",
+				currentValue: config.rollbackCapture,
+				submenu: (currentValue, submenuDone) =>
+					new SelectSubmenu(
+						"Rollback Capture Mode",
+						"How file snapshots are captured before edits.",
+						[
+							{
+								value: "copies",
+								label: "copies",
+								description: "fast; restores edits, deletes tool-created files",
+							},
+							{
+								value: "hybrid",
+								label: "hybrid",
+								description: "also deletes files created outside tools (tree scope)",
+							},
+							{
+								value: "shadow-git",
+								label: "shadow-git",
+								description: "needs git, hidden repo — deferred, falls back to copies",
+							},
+						],
+						currentValue,
+						(value) => {
+							callbacks.onRollbackCaptureChange(value as RollbackCapture);
+							submenuDone(value);
+						},
+						() => submenuDone(),
+					),
+			},
+			{
+				id: "rollback-scope",
+				label: "Rollback scope",
+				description:
+					"tools = only edit/write changes; tree = also catches bash side-effects via git status (slower on large repos).",
+				currentValue: config.rollbackScope,
+				submenu: (currentValue, submenuDone) =>
+					new SelectSubmenu(
+						"Rollback Scope",
+						"What file changes to snapshot.",
+						[
+							{ value: "tools", label: "tools", description: "only edit/write tool changes" },
+							{
+								value: "tree",
+								label: "tree",
+								description: "also catches bash side-effects; slower on large repos",
+							},
+						],
+						currentValue,
+						(value) => {
+							callbacks.onRollbackScopeChange(value as RollbackScope);
+							submenuDone(value);
+						},
+						() => submenuDone(),
+					),
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id, newValue) => {
+				switch (id) {
+					case "rollback-enabled":
+						callbacks.onRollbackEnabledChange(newValue === "on");
+						break;
+				}
+			},
+			() => done(),
+		);
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Rollback")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(this.settingsList);
+		this.addChild(new Text(theme.fg("dim", "  Esc to go back"), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+class RollbackTurnsSubmenu extends Container {
+	private input: Input;
+	private errorText: Text;
+
+	constructor(currentValue: string, done: (selectedValue?: string) => void) {
+		super();
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Rollback Turns")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("muted", "How many turns of snapshots to retain (1-20, default 2)."), 0, 0));
+		this.addChild(new Spacer(1));
+		this.input = new Input();
+		this.input.setValue(currentValue);
+		this.input.onSubmit = (value) => {
+			const n = Number(value.trim());
+			if (!Number.isInteger(n) || n < 1 || n > 20) {
+				this.errorText.setText(theme.fg("error", "  Enter an integer between 1 and 20."));
+				return;
+			}
+			done(String(n));
+		};
+		this.input.onEscape = () => done();
+		this.addChild(this.input);
+		this.errorText = new Text("", 0, 0);
+		this.addChild(this.errorText);
+		this.addChild(new Text(theme.fg("dim", "  Enter to save · Esc to cancel"), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		this.input.handleInput(data);
+	}
+}
+
 class SelectSubmenu extends Container {
 	private selectList: SelectList;
 
@@ -770,7 +933,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "memory-char-cap",
 				label: "Memory character cap",
-				description: `Max characters in the simple-pi-memory memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				description: `Max characters in the simple-pi-memory memory file AND the behavior file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
 				currentValue: String(config.memoryCharCap),
 				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
 			},
@@ -805,6 +968,14 @@ export class SettingsSelectorComponent extends Container {
 				description: "Fallback behavior when no extension or saved trust decision decides project trust",
 				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
 				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
+			},
+			{
+				id: "default-permission-mode",
+				label: "Default permission mode",
+				description:
+					"Permission mode new sessions start with: manual = approve every action, yolo = auto-approve tools, auto = fully autonomous. Change per-session with /mode.",
+				currentValue: config.defaultPermissionMode,
+				values: ["manual", "yolo", "auto"],
 			},
 			{
 				id: "double-escape-action",
@@ -865,6 +1036,14 @@ export class SettingsSelectorComponent extends Container {
 				description: "lunR TUI customizations: gutter rail, prompt symbol, footer segments",
 				currentValue: "configure",
 				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
+			},
+			// lunr: Rollback submenu
+			{
+				id: "rollback",
+				label: "Rollback",
+				description: "Pre-edit file snapshots so /rollback can restore them. Capture mode, scope, retention.",
+				currentValue: config.rollbackEnabled ? "on" : "off",
+				submenu: (_currentValue, done) => new RollbackSubmenu(config, callbacks, done),
 			},
 		];
 
@@ -1050,6 +1229,9 @@ export class SettingsSelectorComponent extends Container {
 						}
 						break;
 					}
+					case "default-permission-mode":
+						callbacks.onDefaultPermissionModeChange(newValue as DefaultPermissionMode);
+						break;
 					case "double-escape-action":
 						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");
 						break;

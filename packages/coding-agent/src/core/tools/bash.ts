@@ -16,6 +16,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { register as registerProcess, unregister as unregisterProcess } from "../process-registry.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str, toolStatusDotFromContext } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -106,6 +107,12 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				child.stdin?.end(command);
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
+			// lunr: register the process for /processes tracking.
+			if (child.pid) {
+				try {
+					registerProcess(child.pid, command, cwd);
+				} catch {}
+			}
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			const onAbort = () => {
@@ -140,6 +147,13 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				return { exitCode };
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
+				// lunr: unregister from /processes if the process has exited; keep it if still
+				// alive (detached/backgrounded dev servers survive the shell call).
+				if (child.pid) {
+					try {
+						if (child.exitCode !== null) unregisterProcess(child.pid);
+					} catch {}
+				}
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);
 			}

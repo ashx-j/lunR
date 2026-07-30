@@ -78,8 +78,29 @@ import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.t
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { getOllamaWebtoolsEnabled, setOllamaWebtoolsEnabled } from "../../core/ollama-webtools.ts";
+import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
+import {
+	AUTO_MODE_ADDENDUM,
+	getPermissionMode,
+	type PermissionMode,
+	registerApprovalHandler,
+	resetPermissions,
+	setPermissionMode,
+} from "../../core/permissions.ts";
 import { PLAN_MODE_ADDENDUM, planModeBlockReason } from "../../core/plan-mode.ts";
+import * as processRegistry from "../../core/process-registry.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import {
+	captureTreeChanges,
+	clearRollback,
+	disableRollbackForSession,
+	enableRollbackForSession,
+	initRollback,
+	isRollbackEnabled,
+	beginTurn as rollbackBeginTurn,
+	rollbackLastTurn,
+	setRollbackWarningHandler,
+} from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -122,6 +143,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -515,13 +537,28 @@ export class InteractiveMode {
 				this.planModeCleanup = undefined;
 				this.setExtensionStatus("plan", undefined);
 			}
+			// lunr: reset permission mode to configured default + clear session approvals
+			resetPermissions(this.settingsManager.getDefaultPermissionMode());
+			// lunr: clear process registry and rollback state
+			processRegistry.clearRegistry();
+			clearRollback();
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
+			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
+			initRollback(this.settingsManager, this.sessionManager.getSessionId());
+			if (this.settingsManager.getDefaultPermissionMode() === "auto") {
+				enableRollbackForSession();
+			}
 		});
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+
+		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
+		registerPermissionModeBridge(() => getPermissionMode());
+		// lunr: reset permission mode to configured default on startup.
+		resetPermissions(this.settingsManager.getDefaultPermissionMode());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new Container();
@@ -762,6 +799,19 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+
+		// lunr: register the permission approval dialog handler so manual mode can prompt.
+		registerApprovalHandler(async (req) => {
+			return this.showApprovalDialog(req);
+		});
+
+		// lunr: initialize rollback service for this session.
+		initRollback(this.settingsManager, this.sessionManager.getSessionId());
+		setRollbackWarningHandler((msg) => this.showStatus(msg));
+		// If the configured default is auto, force-enable rollback.
+		if (this.settingsManager.getDefaultPermissionMode() === "auto") {
+			enableRollbackForSession();
+		}
 
 		await this.themeController.applyFromSettings();
 
@@ -2646,6 +2696,26 @@ export class InteractiveMode {
 				await this.handleRedoCommand();
 				return;
 			}
+			if (text === "/mode" || text.startsWith("/mode ")) {
+				this.editor.setText("");
+				this.handleModeCommand(text === "/mode" ? "" : text.slice(6).trim());
+				return;
+			}
+			if (text === "/manual" || text === "/yolo" || text === "/auto") {
+				this.editor.setText("");
+				this.applyPermissionMode(text.slice(1) as PermissionMode);
+				return;
+			}
+			if (text === "/processes") {
+				this.editor.setText("");
+				this.showProcessesSelector();
+				return;
+			}
+			if (text === "/rollback") {
+				this.editor.setText("");
+				await this.handleRollbackCommand();
+				return;
+			}
 			if (text === "/trust") {
 				this.showTrustSelector();
 				this.editor.setText("");
@@ -2883,6 +2953,8 @@ export class InteractiveMode {
 				} else if (event.message.role === "user") {
 					// lunr: a new user message invalidates /redo
 					this.redoStack.length = 0;
+					// lunr: begin a new rollback turn (captures tree-scope baseline when enabled)
+					rollbackBeginTurn(this.sessionManager.getCwd());
 					this.stopSmoothStreaming();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
@@ -3056,6 +3128,9 @@ export class InteractiveMode {
 				}
 
 				this.maybeAutoNameSession();
+
+				// lunr: capture tree-scope changes at turn boundary (bash side-effects).
+				captureTreeChanges(this.sessionManager.getCwd());
 
 				this.ui.requestRender();
 				break;
@@ -3541,6 +3616,9 @@ export class InteractiveMode {
 			await this.runtimeHost.dispose();
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
+			try {
+				processRegistry.killAll();
+			} catch {}
 			this.stop();
 			process.exit(0);
 		}
@@ -3552,6 +3630,18 @@ export class InteractiveMode {
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		this.themeController.disableAutoSync();
 		await this.ui.terminal.drainInput(1000);
+
+		// lunr: quit prompt — ask about killing tracked processes before stopping the TUI.
+		const tracked = processRegistry.list();
+		if (tracked.length > 0) {
+			const shouldKill = await this.confirmDisclaimerWithLabels(
+				"Session processes still running",
+				`${tracked.length} process(es) started during this session are still alive.\nKill them before exit?`,
+			);
+			if (shouldKill) {
+				processRegistry.killAll();
+			}
+		}
 
 		this.stop();
 		await this.runtimeHost.dispose();
@@ -3577,6 +3667,9 @@ export class InteractiveMode {
 		this.isShuttingDown = true;
 		this.unregisterSignalHandlers();
 		killTrackedDetachedChildren();
+		try {
+			processRegistry.killAll();
+		} catch {}
 		// The terminal is gone. Do not run normal shutdown because TUI and
 		// extension cleanup can write restore sequences and re-trigger EIO.
 		process.exit(129);
@@ -4145,6 +4238,11 @@ export class InteractiveMode {
 					footerContext: this.settingsManager.getFooterContext(),
 					footerTokens: this.settingsManager.getFooterTokens(),
 					footerStatuses: this.settingsManager.getFooterStatuses(),
+					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
+					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
+					rollbackTurns: this.settingsManager.getRollbackTurns(),
+					rollbackCapture: this.settingsManager.getRollbackCapture(),
+					rollbackScope: this.settingsManager.getRollbackScope(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4320,6 +4418,21 @@ export class InteractiveMode {
 					},
 					onFooterStatusesChange: (enabled) => {
 						this.settingsManager.setFooterStatuses(enabled);
+					},
+					onDefaultPermissionModeChange: (mode) => {
+						this.settingsManager.setDefaultPermissionMode(mode);
+					},
+					onRollbackEnabledChange: (enabled) => {
+						this.settingsManager.setRollbackEnabled(enabled);
+					},
+					onRollbackTurnsChange: (turns) => {
+						this.settingsManager.setRollbackTurns(turns);
+					},
+					onRollbackCaptureChange: (mode) => {
+						this.settingsManager.setRollbackCapture(mode);
+					},
+					onRollbackScopeChange: (scope) => {
+						this.settingsManager.setRollbackScope(scope);
 					},
 					createModelTierPicker: (_tier, currentModelRef, done) => {
 						const selector = new ModelSelectorComponent(
@@ -4981,6 +5094,35 @@ export class InteractiveMode {
 					{ message },
 				);
 				selector.setSelectedIndex(1);
+				return { component: selector, focus: selector };
+			});
+		});
+	}
+
+	/** lunr: like confirmDisclaimer but with custom option labels. */
+	private confirmDisclaimerWithLabels(
+		title: string,
+		message: string,
+		opts?: { labels?: [string, string]; defaultIndex?: number },
+	): Promise<boolean> {
+		const labels = opts?.labels ?? (["Kill all", "Leave running"] as [string, string]);
+		const defaultIndex = opts?.defaultIndex ?? 1;
+		return new Promise<boolean>((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					title,
+					labels,
+					(option) => {
+						done();
+						resolve(option === labels[0]);
+					},
+					() => {
+						done();
+						resolve(false);
+					},
+					{ message },
+				);
+				selector.setSelectedIndex(defaultIndex);
 				return { component: selector, focus: selector };
 			});
 		});
@@ -6125,6 +6267,155 @@ export class InteractiveMode {
 			this.setExtensionStatus("plan", undefined);
 			this.showStatus("Plan mode off — full tool access restored.");
 		}
+	}
+
+	// lunr: /mode — permission mode selector (manual / yolo / auto). Per-session only.
+	private handleModeCommand(args: string): void {
+		const sub = args.toLowerCase();
+
+		if (sub === "status") {
+			this.showStatus(`Permission mode: ${getPermissionMode()}`);
+			return;
+		}
+
+		if (sub === "manual" || sub === "yolo" || sub === "auto") {
+			this.applyPermissionMode(sub as PermissionMode);
+			return;
+		}
+
+		if (sub !== "") {
+			this.showStatus("Usage: /mode [manual|yolo|auto] — bare /mode opens the selector.");
+			return;
+		}
+
+		// Open selector
+		const options = [
+			"Manual — approve every action",
+			"YOLO — auto-approve tools, agent may still ask",
+			"Auto — fully autonomous, no questions",
+		];
+		void this.showExtensionSelector("Permission mode", options).then((choice) => {
+			if (!choice) return;
+			if (choice.startsWith("Manual")) this.applyPermissionMode("manual");
+			else if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
+			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
+		});
+	}
+
+	private applyPermissionMode(mode: PermissionMode): void {
+		const prev = getPermissionMode();
+		setPermissionMode(mode);
+		this.ui.requestRender();
+
+		if (mode === "auto" && prev !== "auto") {
+			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
+			enableRollbackForSession();
+			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
+		} else if (mode !== "auto" && prev === "auto") {
+			this.session.setSystemPromptAppend(undefined);
+			disableRollbackForSession();
+			this.showStatus(`Permission mode: ${mode}`);
+		} else {
+			this.showStatus(`Permission mode: ${mode}`);
+		}
+	}
+
+	// lunr: approval dialog for manual permission mode.
+	private async showApprovalDialog(req: {
+		toolName: string;
+		action: string;
+		detail: string;
+	}): Promise<"once" | "session" | "reject"> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					`Approve ${req.action}?`,
+					["Approve once", "Approve for session", "Reject"],
+					(option) => {
+						done();
+						if (option === "Approve once") resolve("once");
+						else if (option === "Approve for session") resolve("session");
+						else resolve("reject");
+					},
+					() => {
+						done();
+						resolve("reject");
+					},
+					{ message: req.detail.slice(0, 500) },
+				);
+				return { component: selector, focus: selector };
+			});
+		});
+	}
+
+	// lunr: /processes — view and manage background processes.
+	private showProcessesSelector(): void {
+		this.showSelector((done) => {
+			const component = new ProcessesSelectorComponent(() => {
+				done();
+			});
+			return { component, focus: component };
+		});
+	}
+
+	// lunr: /rollback — restore last turn's file changes + persistently rewind the conversation.
+	private async handleRollbackCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /rollback.");
+			return;
+		}
+		if (!isRollbackEnabled()) {
+			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
+			return;
+		}
+
+		// Find the rewind target (last user message on the current branch) BEFORE
+		// mutating anything — forking to it is what makes the rewind persistent.
+		const branch = this.sessionManager.getBranch();
+		let lastUserId: string | undefined;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry.type === "message" && entry.message.role === "user") {
+				lastUserId = entry.id;
+				break;
+			}
+		}
+		if (!lastUserId) {
+			this.showStatus("Nothing to roll back");
+			return;
+		}
+
+		// Restore files FIRST: the fork below replaces the session, which clears
+		// rollback state (beforeSessionInvalidate → clearRollback).
+		const result = rollbackLastTurn();
+
+		try {
+			// Fork to just before the last user message — writes a branched session
+			// file, so the rewind survives restart/`-c` (unlike /undo's in-memory leaf).
+			const forkResult = await this.runtimeHost.fork(lastUserId, { position: "before" });
+			if (forkResult.cancelled) {
+				this.showStatus("Files restored, but conversation rewind was cancelled.");
+				return;
+			}
+			this.editor.setText(forkResult.selectedText ?? "");
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+			return;
+		}
+
+		const names = (paths: string[]): string => {
+			const base = paths
+				.slice(0, 3)
+				.map((p) => path.basename(p))
+				.join(", ");
+			return paths.length > 3 ? `${base}, …` : base;
+		};
+		const parts: string[] = [];
+		if (result.restored.length > 0)
+			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
+		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
+		if (parts.length === 0) parts.push("no file changes to restore");
+		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
 	}
 
 	/**

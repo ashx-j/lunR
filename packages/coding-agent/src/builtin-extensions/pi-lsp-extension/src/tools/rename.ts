@@ -7,7 +7,7 @@
 import { Type } from "@sinclair/typebox";
 import type { WorkspaceEdit, TextEdit } from "vscode-languageserver-protocol";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
+import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "../../../../core/tools/truncate.js";
 import { Text } from "@earendil-works/pi-tui";
 import type { LspManager } from "../lsp-manager.js";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";

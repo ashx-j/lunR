@@ -22,17 +22,20 @@
  * self-contained with inline types and verify via the included `tsconfig.json`
  * (`moduleResolution: "Bundler"` + `skipLibCheck: true`).
  *
- * The ONE exception is `CustomEditor`, imported as a RUNTIME VALUE from
- * `@earendil-works/pi-coding-agent`. We must `extends` it to inherit pi's app
- * keybindings (escape, ctrl+d, model switching, extension shortcuts) — wrapping
- * would lose those. Under the tsconfig above this resolves as a fully typed
- * class (verified: a zero-arg `new CustomEditor()` probe errors TS2554).
+ * The ONE exception is `CustomEditor`, imported as a RUNTIME VALUE directly
+ * from its defining module (`modes/interactive/components/custom-editor.ts`).
+ * We must `extends` it to inherit pi's app keybindings (escape, ctrl+d, model
+ * switching, extension shortcuts) — wrapping would lose those. It is imported
+ * from the concrete module, NOT the package barrel, because the barrel
+ * re-exports main.ts which imports this file — a circular import that crashes
+ * under vite-node (`Class extends value undefined`).
  */
 
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { CustomEditor } from "../modes/interactive/components/custom-editor.js";
 
 // lunr: customize bridge — read the prompt-symbol toggle (bridgeless → no symbol).
 const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
+const PERMISSION_MODE_BRIDGE = Symbol.for("@lunr/permission-mode");
 interface CustomizeBridgeForPrompt {
 	getPromptSymbol(): boolean;
 	// lunr: footer element toggles (added to the same bridge).
@@ -42,8 +45,14 @@ interface CustomizeBridgeForPrompt {
 	getFooterTokens?(): boolean;
 	getFooterStatuses?(): boolean;
 }
+interface PermissionModeBridgeForFooter {
+	getMode(): string | undefined;
+}
 function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
 	return (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+}
+function lunrPermissionModeBridge(): PermissionModeBridgeForFooter | undefined {
+	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE] as PermissionModeBridgeForFooter | undefined;
 }
 function lunrPromptSymbolEnabled(): boolean {
 	return lunrCustomizeBridge()?.getPromptSymbol() ?? false;
@@ -59,6 +68,10 @@ function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; to
 		tokens: bridge?.getFooterTokens?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
 	};
+}
+// lunr: permission mode for the footer safety indicator (always shown).
+function lunrPermissionMode(): string | undefined {
+	return lunrPermissionModeBridge()?.getMode();
 }
 const LUNR_PROMPT_GLYPH = "☾ › ";
 
@@ -553,6 +566,11 @@ function renderStatsLine(
 ): string[] {
 	const sep = color(theme, "bright-black", " | ");
 	const parts: string[] = [];
+
+	// lunr: permission mode safety indicator — always shown (not toggle-gated).
+	const mode = lunrPermissionMode();
+	if (mode === "yolo" || mode === "auto") parts.push(color(theme, "warning", mode));
+	else if (mode === "manual") parts.push(color(theme, "dim", "manual"));
 
 	// lunr: footer element toggles from the customize bridge (read at render time).
 	const footerToggles = lunrFooterToggles();

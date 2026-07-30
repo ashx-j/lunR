@@ -29,6 +29,12 @@ export const RESERVED_COMMAND_NAMES = new Set([
 	"resume",
 	"reload",
 	"quit",
+	"mode",
+	"manual",
+	"yolo",
+	"auto",
+	"processes",
+	"rollback",
 ]);
 
 export type PromptSource = "user" | "project";

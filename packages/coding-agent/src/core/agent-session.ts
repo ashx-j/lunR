@@ -14,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type {
 	Agent,
 	AgentEvent,
@@ -93,8 +93,10 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { gateToolCall } from "./permissions.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
@@ -460,6 +462,26 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
+			const permBlock = await gateToolCall(toolCall.name, args as Record<string, unknown>, this._cwd);
+			if (permBlock) {
+				return { block: true, reason: permBlock.reason };
+			}
+
+			// lunr: rollback snapshot — capture pre-write content for edit/write before the tool runs.
+			if (
+				(toolCall.name === "edit" || toolCall.name === "write") &&
+				args &&
+				typeof args === "object" &&
+				"path" in args
+			) {
+				try {
+					rollbackSnapshotBeforeWrite(resolve(this._cwd, String((args as Record<string, unknown>).path)));
+				} catch {
+					// rollback failures must never block the tool call
+				}
+			}
+
 			// lunr: core-owned gates (plan mode) run first, even without extension handlers
 			for (const gate of this._toolCallGates) {
 				const gateResult = gate(toolCall.name, args as Record<string, unknown>);

@@ -3,7 +3,6 @@
  */
 
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.ts";
-import { BEHAVIOR_BLOCK } from "./behavior-block.ts";
 import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
 export interface BuildSystemPromptOptions {
@@ -117,8 +116,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const guidelinesSection = guidelines ? `Guidelines:\n${guidelines}\n\n` : "";
 
 	let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
-
-${BEHAVIOR_BLOCK}
 
 Available tools:
 ${toolsList}
