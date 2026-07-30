@@ -8,7 +8,7 @@ import { type CronJob, createJob, getJob, setCronBaseDir } from "../src/core/cro
 import { currentOrigin, runWithOrigin } from "../src/core/cron/origin-context.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
 import { createPlatformDeliverer, startGatewayCron, wrapCronContent } from "../src/gateway/cron.ts";
-import type { PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
+import type { ButtonSpec, CallbackEvent, PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
 
 // ---------------------------------------------------------------------------
 // Fakes + setup
@@ -19,6 +19,7 @@ class FakeAdapter implements PlatformAdapter {
 	maxMessageLength = 100;
 	sent: Array<{ chatId: string; text: string; opts?: SendOptions }> = [];
 	failNext = false;
+	private callbackHandler?: (event: CallbackEvent) => void;
 
 	constructor(platform: string, maxMessageLength = 100) {
 		this.platform = platform;
@@ -37,11 +38,21 @@ class FakeAdapter implements PlatformAdapter {
 		this.sent.push({ chatId, text, opts });
 		return { success: true, messageId: `m${this.sent.length}` };
 	}
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult> {
+		return this.send(chatId, text, { ...opts, buttons });
+	}
 	async editMessage(): Promise<SendResult> {
 		return { success: true };
 	}
 	async sendTyping(): Promise<void> {}
 	onMessage(): void {}
+	onCallback(handler: (event: CallbackEvent) => void): void {
+		this.callbackHandler = handler;
+	}
+	async answerCallback(): Promise<void> {}
+	simulateCallback(event: CallbackEvent): void {
+		this.callbackHandler?.(event);
+	}
 }
 
 let dir: string;

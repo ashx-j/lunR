@@ -32,7 +32,15 @@
  */
 
 import type { PlatformConfig } from "../config.ts";
-import type { ChatType, MessageEvent, PlatformAdapter, SendOptions, SendResult } from "../types.ts";
+import type {
+	ButtonSpec,
+	CallbackEvent,
+	ChatType,
+	MessageEvent,
+	PlatformAdapter,
+	SendOptions,
+	SendResult,
+} from "../types.ts";
 
 const API_BASE = "https://api.telegram.org";
 const DEFAULT_DEBOUNCE_MS = 300;
@@ -81,6 +89,14 @@ export interface TelegramMessage {
 export interface TelegramUpdate {
 	update_id: number;
 	message?: TelegramMessage;
+	callback_query?: TelegramCallbackQuery;
+}
+
+export interface TelegramCallbackQuery {
+	id: string;
+	from: TelegramUser;
+	message?: TelegramMessage;
+	data?: string;
 }
 
 export interface BotInfo {
@@ -273,6 +289,30 @@ export function updateToEvent(update: TelegramUpdate, botInfo: BotInfo): Message
 	};
 }
 
+export function callbackQueryToEvent(query: TelegramCallbackQuery): CallbackEvent | null {
+	const message = query.message;
+	if (!message) return null;
+	const from = query.from;
+	const chatType = chatTypeOf(message.chat);
+	if (chatType === null) return null;
+	return {
+		callbackId: query.id,
+		buttonId: query.data ?? "",
+		messageId: String(message.message_id),
+		source: {
+			platform: "telegram",
+			chatId: String(message.chat.id),
+			chatType,
+			userId: String(from.id),
+			userName: from.username ?? from.first_name,
+			threadId:
+				message.chat.is_forum === true && message.message_thread_id !== undefined && message.message_thread_id !== 1
+					? String(message.message_thread_id)
+					: undefined,
+		},
+	};
+}
+
 export interface TelegramAdapterOptions {
 	/** Injected Bot API transport (tests). When omitted, HTTPS calls are made with cfg.token. */
 	callApi?: CallApi;
@@ -300,6 +340,7 @@ export class TelegramAdapter implements PlatformAdapter {
 	private readonly debounceMs: number;
 	private readonly now: () => number;
 	private handler?: (event: MessageEvent) => void;
+	private callbackHandler?: (event: CallbackEvent) => void;
 	private botInfo?: BotInfo;
 	private offset = 0;
 	private abortController?: AbortController;
@@ -323,6 +364,10 @@ export class TelegramAdapter implements PlatformAdapter {
 
 	onMessage(handler: (event: MessageEvent) => void): void {
 		this.handler = handler;
+	}
+
+	onCallback(handler: (event: CallbackEvent) => void): void {
+		this.callbackHandler = handler;
 	}
 
 	async connect(): Promise<boolean> {
@@ -349,7 +394,7 @@ export class TelegramAdapter implements PlatformAdapter {
 			try {
 				const updates = (await this.callApi(
 					"getUpdates",
-					{ offset: this.offset, timeout: 30, allowed_updates: ["message"] },
+					{ offset: this.offset, timeout: 30, allowed_updates: ["message", "callback_query"] },
 					signal,
 				)) as TelegramUpdate[];
 				failures = 0;
@@ -394,7 +439,13 @@ export class TelegramAdapter implements PlatformAdapter {
 	}
 
 	private dispatchUpdate(update: TelegramUpdate): void {
-		if (!this.botInfo || !this.handler) return;
+		if (!this.botInfo) return;
+		if (update.callback_query) {
+			const event = callbackQueryToEvent(update.callback_query);
+			if (event) this.callbackHandler?.(event);
+			return;
+		}
+		if (!this.handler) return;
 		const event = updateToEvent(update, this.botInfo);
 		if (!event) return;
 		const key = this.debounceKey(event);
@@ -441,7 +492,20 @@ export class TelegramAdapter implements PlatformAdapter {
 		const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: "Markdown" };
 		if (opts?.threadId !== undefined) body.message_thread_id = Number(opts.threadId);
 		if (opts?.replyTo !== undefined) body.reply_parameters = { message_id: Number(opts.replyTo) };
+		if (opts?.buttons !== undefined) {
+			body.reply_markup = {
+				inline_keyboard: opts.buttons.map((row) => row.map((b) => ({ text: b.label, callback_data: b.id }))),
+			};
+		}
 		return this.callSend(body);
+	}
+
+	async sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult> {
+		return this.send(chatId, text, { ...opts, buttons });
+	}
+
+	async answerCallback(event: CallbackEvent): Promise<void> {
+		await this.callApi("answerCallbackQuery", { callback_query_id: event.callbackId }).catch(() => {});
 	}
 
 	private async callSend(body: Record<string, unknown>): Promise<SendResult> {
@@ -473,13 +537,18 @@ export class TelegramAdapter implements PlatformAdapter {
 		}
 	}
 
-	async editMessage(chatId: string, messageId: string, text: string): Promise<SendResult> {
+	async editMessage(chatId: string, messageId: string, text: string, opts?: SendOptions): Promise<SendResult> {
 		const body: Record<string, unknown> = {
 			chat_id: chatId,
 			message_id: Number(messageId),
 			text,
 			parse_mode: "Markdown",
 		};
+		if (opts?.buttons !== undefined) {
+			body.reply_markup = {
+				inline_keyboard: opts.buttons.map((row) => row.map((b) => ({ text: b.label, callback_data: b.id }))),
+			};
+		}
 		try {
 			await this.callApi("editMessageText", body);
 			return { success: true, messageId };

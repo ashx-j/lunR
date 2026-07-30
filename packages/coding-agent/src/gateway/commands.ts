@@ -16,6 +16,7 @@ import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import { buildSwarmPrompt } from "../core/swarm.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
+import { createPicker, type PickerItem } from "./buttons.ts";
 import type { BridgeLike } from "./router.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
@@ -70,17 +71,6 @@ function prefixLines(text: string, prefix: string): string {
 function truncate(text: string, max: number): string {
 	if (text.length <= max) return text;
 	return `${text.slice(0, max - 1)}…`;
-}
-
-function formatRelativeTime(date: Date): string {
-	const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-	if (seconds < 60) return `${seconds}s ago`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.floor(hours / 24);
-	return `${days}d ago`;
 }
 
 function formatModelList(models: Model<any>[], maxLines = MAX_MODEL_LIST_LINES): string[] {
@@ -228,8 +218,22 @@ const modelCommand: ChatCommand = {
 		if (!arg) {
 			const models = await refreshAndCacheModels(session, ctx.key);
 			const current = `${session.model?.provider ?? "none"}/${session.model?.id ?? "none"}`;
-			const lines = formatModelList(models);
-			await ctx.reply([`Current: ${current}`, ...lines, "Use /model <n> or /model <provider/id>"].join("\n"));
+			const items: PickerItem[] = models.map((m) => ({
+				id: `${m.provider}/${m.id}`,
+				label: `${m.provider}/${m.id}${`${m.provider}/${m.id}` === current ? " ☾" : ""}`,
+			}));
+			await createPicker(ctx, {
+				command: "model",
+				items,
+				async onSelect(item) {
+					const exact = findExactModelReferenceMatch(item.id, models);
+					if (!exact) {
+						await ctx.reply("That model is no longer available.");
+						return;
+					}
+					await setModelAndReply(ctx, exact);
+				},
+			});
 			return;
 		}
 
@@ -276,23 +280,28 @@ const sessionsCommand: ChatCommand = {
 	bypassBusy: false,
 	needsSession: true,
 	async handler(ctx) {
-		const session = ctx.session!;
 		const arg = ctx.args.trim();
-		const currentFile = session.sessionManager?.getSessionFile();
 
 		if (!arg) {
 			const all = await SessionManager.list(process.cwd());
 			all.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 			const sessions = all.slice(0, 10);
 			sessionsCache.set(ctx.key, { sessions, expires: Date.now() + SESSIONS_CACHE_TTL_MS });
-			const lines = sessions.map((s, i) => {
-				const marker = s.path === currentFile ? " ☾" : "";
-				const label = s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)";
-				return `${i + 1}) ${label}${marker} · ${formatRelativeTime(s.modified)} · ${s.messageCount} msgs`;
+			const items: PickerItem[] = sessions.map((s) => ({
+				id: s.path,
+				label: s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)",
+			}));
+			await createPicker(ctx, {
+				command: "session",
+				items,
+				async onSelect(item) {
+					await ctx.bridge.switchSession(ctx.key, item.id);
+					const switched = await ctx.bridge.getSession(ctx.key);
+					const name = switched?.sessionManager?.getSessionName() ?? "unnamed";
+					const count = switched?.sessionManager?.getEntries().length ?? 0;
+					await ctx.reply(`Switched to "${name}" (${count} msgs). History continues here.`);
+				},
 			});
-			await ctx.reply(
-				[`Sessions for ${process.cwd()}`, ...lines, "Use /sessions <n> or /sessions <id-prefix>"].join("\n"),
-			);
 			return;
 		}
 
@@ -469,7 +478,16 @@ const thinkingCommand: ChatCommand = {
 		}
 		const arg = ctx.args.trim().toLowerCase() as ThinkingLevel;
 		if (!arg) {
-			await ctx.reply(`Level: ${session.thinkingLevel} — available: ${levels.join(", ")}`);
+			const items: PickerItem[] = levels.map((level) => ({ id: level, label: level }));
+			await createPicker(ctx, {
+				command: "thinking level",
+				items,
+				async onSelect(item) {
+					const level = item.id as ThinkingLevel;
+					session.setThinkingLevel(level);
+					await ctx.reply(`Thinking → ${level}`);
+				},
+			});
 			return;
 		}
 		if (!levels.includes(arg)) {

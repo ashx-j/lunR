@@ -18,6 +18,7 @@ import { DiscordAdapter } from "./adapters/discord.ts";
 import { TelegramAdapter } from "./adapters/telegram.ts";
 import { AgentBridge } from "./agent-bridge.ts";
 import { addAllowedUser } from "./authz.ts";
+import { handleCallback, startButtonSweeper, stopButtonSweeper } from "./buttons.ts";
 import {
 	type DiscordConfig,
 	loadGatewayConfig,
@@ -166,6 +167,7 @@ async function runDaemon(): Promise<number> {
 	const router = createRouter({ adapters, cfg, pairing, bridge });
 
 	const connected: PlatformAdapter[] = [];
+	startButtonSweeper();
 	for (const [platform, adapter] of adapters) {
 		try {
 			const ok = await adapter.connect();
@@ -176,6 +178,9 @@ async function runDaemon(): Promise<number> {
 			adapter.onMessage((event) => {
 				void router.handleEvent(event);
 			});
+			adapter.onCallback((event) => {
+				void handleCallback(event, adapter);
+			});
 			connected.push(adapter);
 			console.log(`lunR gateway: ${platform} connected`);
 		} catch (err) {
@@ -185,6 +190,7 @@ async function runDaemon(): Promise<number> {
 
 	if (connected.length === 0) {
 		console.error("lunR gateway: every configured platform failed to connect.");
+		stopButtonSweeper();
 		return 1;
 	}
 
@@ -195,6 +201,7 @@ async function runDaemon(): Promise<number> {
 
 	const shutdown = () => {
 		cron.stop();
+		stopButtonSweeper();
 		void Promise.all(connected.map((adapter) => adapter.disconnect().catch(() => {}))).finally(() => {
 			process.exit(0);
 		});

@@ -43,10 +43,32 @@ export interface SendResult {
 	retryable?: boolean;
 }
 
+/** A single inline button. */
+export interface Button {
+	id: string;
+	label: string;
+}
+
+/** Platform-agnostic button layout: rows of buttons. */
+export type ButtonSpec = Button[][];
+
 export interface SendOptions {
 	/** Platform message id to reply to. */
 	replyTo?: string;
 	threadId?: string;
+	/** Inline keyboard attached to the message. */
+	buttons?: ButtonSpec;
+}
+
+/** An inbound button-click / inline-keyboard callback. */
+export interface CallbackEvent {
+	source: SessionSource;
+	messageId: string;
+	buttonId: string;
+	/** Platform callback id (e.g. Telegram callback_query id or Discord interaction id). */
+	callbackId: string;
+	/** Optional payload carried by the button. */
+	data?: string;
 }
 
 /**
@@ -60,7 +82,10 @@ export interface PlatformAdapter {
 	connect(): Promise<boolean>;
 	disconnect(): Promise<void>;
 	send(chatId: string, text: string, opts?: SendOptions): Promise<SendResult>;
-	editMessage(chatId: string, messageId: string, text: string): Promise<SendResult>;
+	sendButtons(chatId: string, text: string, buttons: ButtonSpec, opts?: SendOptions): Promise<SendResult>;
+	editMessage(chatId: string, messageId: string, text: string, opts?: SendOptions): Promise<SendResult>;
 	sendTyping(chatId: string, threadId?: string): Promise<void>;
 	onMessage(handler: (event: MessageEvent) => void): void;
+	onCallback(handler: (event: CallbackEvent) => void): void;
+	answerCallback(event: CallbackEvent): Promise<void>;
 }

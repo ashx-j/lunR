@@ -258,7 +258,7 @@ describe("TelegramAdapter", () => {
 		const { adapter, events } = await connectAdapter(api);
 		await vi.advanceTimersByTimeAsync(300); // let both batches process + debounce flush
 		const polls = api.callsFor("getUpdates");
-		expect(polls[0]).toMatchObject({ offset: 0, timeout: 30, allowed_updates: ["message"] });
+		expect(polls[0]).toMatchObject({ offset: 0, timeout: 30, allowed_updates: ["message", "callback_query"] });
 		expect(polls[1]).toMatchObject({ offset: 102 });
 		expect(polls[2]).toMatchObject({ offset: 103 });
 		expect(events.map((e) => e.text)).toEqual(["one", "two", "three"]);
