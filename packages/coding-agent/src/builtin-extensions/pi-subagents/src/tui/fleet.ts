@@ -2,7 +2,7 @@
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
-import { formatTokens, shortenPath } from "../shared/formatters.ts";
+import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../shared/formatters.ts";
 import { RESULTS_DIR, type AsyncJobState, type ForegroundResumeChild, type ForegroundResumeRun, type SubagentState } from "../shared/types.ts";
 import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
@@ -153,11 +153,32 @@ function statusGlyph(item: FleetItem, theme: Theme): string {
 	return theme.fg("error", "✗");
 }
 
+/** lunr: enrich roster rows with elapsed / tool count / model:thinking badge. */
+function rosterFacts(item: FleetItem, _theme: Theme): string | undefined {
+	const parts: string[] = [];
+	let startedAt: number | undefined;
+	if (item.kind === "foreground-active") startedAt = item.control.startedAt;
+	else if (item.kind === "async") startedAt = item.run.startedAt;
+	if (startedAt !== undefined && Number.isFinite(startedAt) && item.updatedAt > startedAt) {
+		parts.push(formatDuration(item.updatedAt - startedAt));
+	}
+	let toolCount: number | undefined;
+	if (item.kind === "foreground-active") toolCount = item.control.toolCount;
+	else if (item.kind === "async") toolCount = item.step?.toolCount ?? item.run.toolCount;
+	if (toolCount !== undefined) parts.push(`${toolCount} tools`);
+	if (item.kind === "async") {
+		const model = item.step?.model;
+		const thinking = item.step?.thinking;
+		const badge = formatModelThinking(model, thinking);
+		if (badge) parts.push(badge);
+	}
+	return parts.length ? parts.join(" · ") : undefined;
+}
+
 function foregroundActiveDetail(item: Extract<FleetItem, { kind: "foreground-active" }>): string[] {
 	const { control } = item;
 	const lines = [
 		`Run: ${item.runId}`,
-		"Source: foreground",
 		`State: running`,
 		`Mode: ${control.mode}`,
 		item.index !== undefined ? `Child: ${item.index} (${item.agent})` : `Agent: ${item.agent}`,
@@ -178,7 +199,6 @@ function foregroundRecentDetail(item: Extract<FleetItem, { kind: "foreground-rec
 	const outputPath = child.artifactPaths?.outputPath ?? child.savedOutputPath;
 	const lines = [
 		`Run: ${item.runId}`,
-		"Source: foreground",
 		`State: ${child.status}`,
 		`Mode: ${run.mode}`,
 		`Child: ${child.index} (${child.agent})`,
@@ -328,7 +348,9 @@ export class SubagentFleetComponent implements Component {
 			const marker = index === this.selected ? this.theme.fg("accent", "›") : " ";
 			const child = item.index !== undefined ? `:${item.index + 1}` : "";
 			const source = item.kind === "async" ? "async" : item.kind === "foreground-active" ? "live" : "recent";
-			const left = `${marker} ${statusGlyph(item, this.theme)} ${source} ${item.runId.slice(0, 8)}${child} ${item.agent}`;
+			const facts = rosterFacts(item, this.theme);
+			const factsSuffix = facts ? ` ${this.theme.fg("dim", facts)}` : "";
+			const left = `${marker} ${statusGlyph(item, this.theme)} ${source} ${item.runId.slice(0, 8)}${child} ${item.agent}${factsSuffix}`;
 			return rightAligned(left, this.theme.fg("dim", item.state), width);
 		});
 	}

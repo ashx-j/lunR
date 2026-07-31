@@ -45,14 +45,14 @@ export class BootScreenComponent implements Component {
 		const boxWidth = width; // full terminal width
 		const innerWidth = boxWidth - 4; // "│ " + " │"
 		const content = this.renderContent(innerWidth);
-		const border = (s: string): string => theme.fg("accent2", s);
+		const border = (s: string): string => theme.fg("white", s);
 		const rail = (line: string): string => {
 			const pad = Math.max(0, innerWidth - visibleWidth(line));
 			return border("│ ") + line + " ".repeat(pad) + border(" │");
 		};
 		const top = border(`╭${"─".repeat(boxWidth - 2)}╮`);
 		const bottom = border(`╰${"─".repeat(boxWidth - 2)}╯`);
-		return [top, rail(""), ...content.map(rail), rail(""), bottom];
+		return [top, ...content.map(rail), bottom];
 	}
 
 	private renderContent(width: number): string[] {

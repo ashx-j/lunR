@@ -37,6 +37,7 @@ import type {
 	ButtonSpec,
 	CallbackEvent,
 	ChatType,
+	InboundAttachment,
 	MessageEvent,
 	PlatformAdapter,
 	SendOptions,
@@ -75,6 +76,22 @@ export interface TelegramEntity {
 	user?: TelegramUser;
 }
 
+export interface TelegramPhotoSize {
+	file_id: string;
+	file_unique_id: string;
+	width: number;
+	height: number;
+	file_size?: number;
+}
+
+export interface TelegramDocument {
+	file_id: string;
+	file_unique_id: string;
+	file_name?: string;
+	mime_type?: string;
+	file_size?: number;
+}
+
 export interface TelegramMessage {
 	message_id: number;
 	from?: TelegramUser;
@@ -85,6 +102,8 @@ export interface TelegramMessage {
 	caption_entities?: TelegramEntity[];
 	message_thread_id?: number;
 	reply_to_message?: { text?: string };
+	photo?: TelegramPhotoSize[];
+	document?: TelegramDocument;
 }
 
 export interface TelegramUpdate {
@@ -185,6 +204,13 @@ async function defaultCallApi(
 	return data.result;
 }
 
+/** lunr: download an inbound file by its file_path from the Telegram file API. */
+async function defaultDownloadFile(token: string, filePath: string): Promise<Uint8Array> {
+	const res = await fetch(`${API_BASE}/file/bot${token}/${filePath}`);
+	if (!res.ok) throw new TelegramApiError(res.status, `file download HTTP ${res.status}`);
+	return new Uint8Array(await res.arrayBuffer());
+}
+
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -246,8 +272,47 @@ function extractMention(
 }
 
 /**
+ * lunr: media descriptor for an inbound image (photo or image document).
+ * The adapter downloads the bytes via getFile + downloadFile and base64-encodes them.
+ */
+export interface TelegramMediaDescriptor {
+	fileId: string;
+	mimeType: string;
+	filename?: string;
+	fileSize?: number;
+}
+
+function isImageMimeType(mimeType: string | undefined): boolean {
+	return typeof mimeType === "string" && mimeType.split(";")[0]?.trim().toLowerCase().startsWith("image/");
+}
+
+/** lunr: collect inbound image media from a Telegram message (largest photo + image documents). */
+export function collectTelegramMedia(message: TelegramMessage): TelegramMediaDescriptor[] {
+	const descriptors: TelegramMediaDescriptor[] = [];
+	if (message.photo && message.photo.length > 0) {
+		// Largest size is last per Telegram Bot API ordering.
+		const largest = message.photo[message.photo.length - 1];
+		descriptors.push({
+			fileId: largest.file_id,
+			mimeType: "image/jpeg",
+			...(largest.file_size !== undefined ? { fileSize: largest.file_size } : {}),
+		});
+	}
+	if (message.document && isImageMimeType(message.document.mime_type)) {
+		descriptors.push({
+			fileId: message.document.file_id,
+			mimeType: message.document.mime_type ?? "image/jpeg",
+			...(message.document.file_name ? { filename: message.document.file_name } : {}),
+			...(message.document.file_size !== undefined ? { fileSize: message.document.file_size } : {}),
+		});
+	}
+	return descriptors;
+}
+
+/**
  * Map a Telegram update to a MessageEvent; null = drop (non-message update,
- * media-only message, own message, any bot message, unknown chat type).
+ * own message, any bot message, unknown chat type, or a message with neither
+ * text nor inbound image media).
  */
 export function updateToEvent(update: TelegramUpdate, botInfo: BotInfo): MessageEvent | null {
 	const message = update.message;
@@ -257,8 +322,9 @@ export function updateToEvent(update: TelegramUpdate, botInfo: BotInfo): Message
 	if (from.id === botInfo.botId) return null; // own messages
 	if (from.is_bot) return null; // all bots (hermes exclusive_bot_mentions, simplified)
 
+	const hasMedia = collectTelegramMedia(message).length > 0;
 	const rawText = message.text ?? message.caption;
-	if (!rawText) return null; // media-only (v1)
+	if (!rawText && !hasMedia) return null; // no text and no image media
 	const rawEntities = message.text !== undefined ? message.entities : message.caption_entities;
 
 	const chatType = chatTypeOf(message.chat);
@@ -270,7 +336,7 @@ export function updateToEvent(update: TelegramUpdate, botInfo: BotInfo): Message
 			? String(message.message_thread_id)
 			: undefined;
 
-	const { text, mentioned } = extractMention(rawText, rawEntities ?? [], botInfo);
+	const { text, mentioned } = extractMention(rawText ?? "", rawEntities ?? [], botInfo);
 
 	const replyText = message.reply_to_message?.text;
 
@@ -313,6 +379,10 @@ export function callbackQueryToEvent(query: TelegramCallbackQuery): CallbackEven
 export interface TelegramAdapterOptions {
 	/** Injected Bot API transport (tests). When omitted, HTTPS calls are made with cfg.token. */
 	callApi?: CallApi;
+	/** lunr: injected file downloader for inbound media (tests). Downloads from api.telegram.org/file/bot<token>/<file_path>. */
+	downloadFile?: (filePath: string) => Promise<Uint8Array>;
+	/** lunr: skip inbound media larger than this many bytes (pre-download). Defaults to 10MB. */
+	maxMediaBytes?: number;
 	scheduler?: Scheduler;
 	debounceMs?: number;
 	now?: () => number;
@@ -333,6 +403,8 @@ export class TelegramAdapter implements PlatformAdapter {
 	readonly maxMessageLength = 4096;
 
 	private readonly callApi: CallApi;
+	private readonly downloadFile: (filePath: string) => Promise<Uint8Array>;
+	private readonly maxMediaBytes: number;
 	private readonly scheduler: Scheduler;
 	private readonly debounceMs: number;
 	private readonly now: () => number;
@@ -357,6 +429,10 @@ export class TelegramAdapter implements PlatformAdapter {
 			const token = cfg.token;
 			this.callApi = (method, body, signal) => defaultCallApi(token, method, body, signal);
 		}
+		// lunr: inbound media download. When tests inject callApi they also inject
+		// downloadFile; production uses the bot token against the Telegram file API.
+		this.downloadFile = options.downloadFile ?? ((filePath) => defaultDownloadFile(cfg.token ?? "", filePath));
+		this.maxMediaBytes = options.maxMediaBytes ?? 10 * 1024 * 1024;
 	}
 
 	onMessage(handler: (event: MessageEvent) => void): void {
@@ -397,12 +473,13 @@ export class TelegramAdapter implements PlatformAdapter {
 				failures = 0;
 				for (const update of updates) {
 					this.offset = update.update_id + 1;
-					this.dispatchUpdate(update);
+					await this.dispatchUpdate(update);
 				}
 			} catch (err) {
 				if (signal.aborted) return;
 				if (err instanceof TelegramApiError && err.status === 429) {
-					await this.sleep((err.retryAfter ?? 1) * 1000, signal);
+					const retryAfter = Math.min(err.retryAfter ?? 1, 30);
+					await this.sleep(retryAfter * 1000, signal);
 					continue;
 				}
 				const delay = backoffDelayMs(failures);
@@ -435,7 +512,7 @@ export class TelegramAdapter implements PlatformAdapter {
 		return `${event.source.chatId}:${event.source.threadId ?? ""}:${event.source.userId}`;
 	}
 
-	private dispatchUpdate(update: TelegramUpdate): void {
+	private async dispatchUpdate(update: TelegramUpdate): Promise<void> {
 		if (!this.botInfo) return;
 		if (update.callback_query) {
 			const event = callbackQueryToEvent(update.callback_query);
@@ -445,6 +522,12 @@ export class TelegramAdapter implements PlatformAdapter {
 		if (!this.handler) return;
 		const event = updateToEvent(update, this.botInfo);
 		if (!event) return;
+		// lunr: download inbound image media before dispatch so the bridge can attach
+		// images to the turn. Failures drop the media but keep the text turn going.
+		if (update.message) {
+			const attachments = await this.downloadMedia(update.message);
+			if (attachments.length > 0) event.attachments = attachments;
+		}
 		const key = this.debounceKey(event);
 		if (event.text.trimStart().startsWith("/")) {
 			// Commands must not merge: flush any pending text, emit immediately.
@@ -456,12 +539,45 @@ export class TelegramAdapter implements PlatformAdapter {
 		if (existing) {
 			this.scheduler.clearTimeout(existing.timer);
 			// Merge: earlier text first, latest messageId (and other fields) win.
-			existing.event = { ...event, text: `${existing.event.text}\n${event.text}` };
+			const mergedAttachments = [...(existing.event.attachments ?? []), ...(event.attachments ?? [])];
+			existing.event = {
+				...event,
+				text: `${existing.event.text}\n${event.text}`,
+				...(mergedAttachments.length > 0 ? { attachments: mergedAttachments } : {}),
+			};
 			existing.timer = this.scheduler.setTimeout(() => this.flushPending(key), this.debounceMs);
 		} else {
 			const timer = this.scheduler.setTimeout(() => this.flushPending(key), this.debounceMs);
 			this.pending.set(key, { event, timer });
 		}
+	}
+
+	/** lunr: download + base64-encode inbound image media for one Telegram message. */
+	private async downloadMedia(message: TelegramMessage): Promise<InboundAttachment[]> {
+		const descriptors = collectTelegramMedia(message);
+		if (descriptors.length === 0) return [];
+		const attachments: InboundAttachment[] = [];
+		for (const descriptor of descriptors) {
+			if (descriptor.fileSize !== undefined && descriptor.fileSize > this.maxMediaBytes) continue;
+			try {
+				const fileResult = (await this.callApi("getFile", { file_id: descriptor.fileId })) as
+					| { file_path?: string; file_size?: number }
+					| undefined;
+				const filePath = fileResult?.file_path;
+				if (!filePath) continue;
+				if (fileResult?.file_size !== undefined && fileResult.file_size > this.maxMediaBytes) continue;
+				const bytes = await this.downloadFile(filePath);
+				if (bytes.byteLength > this.maxMediaBytes) continue;
+				attachments.push({
+					data: Buffer.from(bytes).toString("base64"),
+					mimeType: descriptor.mimeType,
+					...(descriptor.filename ? { filename: descriptor.filename } : {}),
+				});
+			} catch {
+				// Media download failed — drop this attachment, keep the text turn.
+			}
+		}
+		return attachments;
 	}
 
 	private flushPending(key: string): void {

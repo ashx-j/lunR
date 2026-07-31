@@ -447,19 +447,19 @@ export function formatAsyncRunTranscript(status: AsyncStatus, asyncDir: string, 
 		if (tail.error) warnings.push(`Output read failed for ${tail.path}: ${tail.error}`);
 		if (tail.lines.length === 0) continue;
 		transcriptLines = tail.lines;
-		transcriptSource = `Transcript tail from ${tail.path}`;
+		transcriptSource = "Transcript tail";
 		truncated = tail.truncated;
 		break;
 	}
 	if (transcriptLines.length === 0 && selected.step?.recentOutput?.length) {
 		transcriptLines = selected.step.recentOutput.slice(-lineLimit);
-		transcriptSource = "Recent output from status.json";
+		transcriptSource = "Recent output";
 	}
 	if (transcriptLines.length === 0 && sessionFile) {
 		const sessionTail = readSessionTranscriptTail(sessionFile, lineLimit, options.sessionRoots ?? []);
 		transcriptLines = sessionTail.lines;
 		warnings.push(...sessionTail.warnings);
-		if (transcriptLines.length > 0) transcriptSource = `Session transcript tail from ${sessionFile}`;
+		if (transcriptLines.length > 0) transcriptSource = "Session transcript tail";
 	}
 
 	if (warnings.length) {

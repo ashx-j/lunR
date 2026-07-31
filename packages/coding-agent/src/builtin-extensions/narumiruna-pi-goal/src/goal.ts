@@ -2,6 +2,7 @@
 // lunr: defineTool imported from the concrete module, NOT the package barrel —
 // the barrel re-exports main.ts which imports this extension (cycle).
 import { defineTool } from "../../../core/extensions/types.js";
+import { isCronFire } from "../../../core/cron/fire-guard.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { currentTokenTotal } from "./accounting.js";
@@ -26,6 +27,7 @@ import {
 	isGoalContextOverflow,
 	isRetryableGoalInterruption,
 	isUsageLimitedGoalInterruption,
+	parseUsageResetTimeMs,
 	STATUS_KEY,
 	type StatusContext,
 	transitionGoal,
@@ -719,6 +721,35 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		const ownedPromptGoalId = goalPromptGoalId ?? continuationGoalId;
 		const activeBudgetWrapUp = runtime.hasActiveBudgetWrapUp();
 		const activeGoalRecovery = runtime.hasActiveGoalRecovery();
+		// lunr: auto-resume a usage_limited goal on a wake-up turn. Two triggers:
+		//  - resumeAfter was parsed from the provider error and has elapsed (any turn
+		//    resumes — the reset time is known, so the goal should not stay parked);
+		//  - no reset time was parseable: only a cron-fired turn resumes (the user
+		//    scheduled the wake-up explicitly; ordinary manual turns don't hijack —
+		//    /goal resume stays the manual path).
+		// Gateway cron fires are headless and cannot see this session's goal.
+		const resumeAfter = runtime.activeGoal?.resumeAfter;
+		const resumeDue = resumeAfter !== undefined && Date.now() >= resumeAfter;
+		const cronWakeUp = resumeAfter === undefined && isCronFire();
+		if (
+			runtime.activeGoal?.status === "usage_limited" &&
+			(resumeDue || cronWakeUp) &&
+			!ownedPromptGoalId &&
+			!activeBudgetWrapUp &&
+			!activeGoalRecovery
+		) {
+			const resumed = runtime.reactivateGoalForResume(ctx);
+			if (resumed) {
+				runtime.agentRunGoalId = resumed.id;
+				if (!goalToolsAvailable()) {
+					pauseGoalForUnavailableTools(ctx, false);
+					return;
+				}
+				return {
+					systemPrompt: event.systemPrompt + "\n\n" + buildGoalSystemPrompt(runtime.activeGoal),
+				};
+			}
+		}
 		if (
 			runtime.pendingQueueAction?.kind === "prioritize" &&
 			!activeBudgetWrapUp &&
@@ -894,7 +925,11 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearBudgetWrapUp();
 		blockStaleGoalToolCalls();
 		abortCurrentTurn(ctx);
-		runtime.activeGoal = transitionGoal(goal, status);
+		// lunr: if the provider error carries a reset time, pre-fill resumeAfter so a
+		// one-shot /cron wake-up auto-resumes the goal without a manual /goal resume.
+		const resumeAfter = status === "usage_limited" ? parseUsageResetTimeMs(assistant.errorMessage) : undefined;
+		const goalWithResume = resumeAfter !== undefined ? { ...goal, resumeAfter } : goal;
+		runtime.activeGoal = transitionGoal(goalWithResume, status);
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 
@@ -909,8 +944,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			return;
 		}
 		if (status === "usage_limited") {
+			const when = resumeAfter !== undefined ? ` Auto-resume scheduled for ${new Date(resumeAfter).toLocaleString()}.` : "";
 			ctx.ui.notify(
-				`Goal stopped after provider usage limit${details}. Run /goal resume when usage is available.`,
+				`Goal usage-limited${details}.${when} Run /goal resume when usage resets, or schedule a one-shot /cron firing "continue" into this session to wake it.`,
 				"warning",
 			);
 			return;

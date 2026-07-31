@@ -399,6 +399,11 @@ export class ModelRuntime implements Models {
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 	}
 
+	/** lunr: whether network model-catalog fetches are allowed (offline mode disables them). */
+	isNetworkAllowed(): boolean {
+		return this.allowModelNetwork;
+	}
+
 	listCredentials(): Promise<readonly CredentialInfo[]> {
 		return this.credentials.list();
 	}

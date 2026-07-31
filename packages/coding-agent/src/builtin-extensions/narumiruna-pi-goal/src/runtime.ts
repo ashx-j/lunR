@@ -531,6 +531,40 @@ export class GoalRuntime {
 		};
 	}
 
+	/**
+	 * lunr: reactivate a stopped (usage_limited / paused / blocked / budget_limited)
+	 * goal back to active WITHOUT sending a prompt. Shared by the /goal resume
+	 * command and the auto-resume hook (cron wake-up). Returns the reactivated goal
+	 * or undefined if reactivation was rejected (tools unavailable, budget reached).
+	 * Consumes resumeAfter so a single schedule only fires once.
+	 */
+	reactivateGoalForResume(ctx: StatusContext): ActiveGoal | undefined {
+		if (!this.activeGoal) return undefined;
+		if (!isResumableGoalStatus(this.activeGoal.status)) return undefined;
+		if (
+			this.activeGoal.tokenBudget !== undefined &&
+			this.activeGoal.tokensUsed >= this.activeGoal.tokenBudget
+		) {
+			return undefined;
+		}
+		try {
+			this.prepareGoalToolsForActivation(ctx);
+		} catch (error) {
+			ctx.ui.notify(`Cannot resume /goal: ${formatError(error)}`, "error");
+			return undefined;
+		}
+		this.cancelContinuationWork();
+		this.clearGoalRecovery();
+		this.clearBudgetWrapUp();
+		this.clearStaleGoalToolCallBlock();
+		const next = transitionGoal(nextGoalInstance(this.activeGoal), "active");
+		this.activeGoal = { ...next, resumeAfter: undefined };
+		this.persistGoal(this.activeGoal);
+		this.updateStatus(ctx, this.activeGoal);
+		if (this.activeGoal.status !== "active") return undefined;
+		return this.activeGoal;
+	}
+
 	restoreGoalToolVisibility(snapshot: GoalToolVisibilitySnapshot) {
 		this.pi.setActiveTools(snapshot.activeTools);
 		this.goalToolsUnlocked = snapshot.goalToolsUnlocked;
@@ -797,6 +831,41 @@ export function isRetryableGoalInterruption(assistant: AssistantMessageLike) {
 
 export function isGoalContextOverflow(assistant: AssistantMessageLike) {
 	return isContextOverflow(toPiAssistantMessage(assistant));
+}
+
+/**
+ * lunr: best-effort extraction of a usage-limit reset time from a provider error
+ * message. Returns an absolute epoch ms to resume after, or undefined. Handles
+ * relative delays ("reset in 2h", "try again in 30m", "available in 3600s") and
+ * ISO-8601 timestamps. Most provider errors omit this, so undefined is the norm.
+ */
+const USAGE_RESET_TIME_PATTERNS = [
+	/reset(?:s|ting)?\s*(?:in|after|at)?\s*(\d+)\s*s(ec)?/i,
+	/reset(?:s|ting)?\s*(?:in|after|at)?\s*(\d+)\s*m(in)?/i,
+	/reset(?:s|ting)?\s*(?:in|after|at)?\s*(\d+)\s*h(our|r)?/i,
+	/(?:retry|try(?:\s+again)?|available)\s+(?:in|after|at)\s*(\d+)\s*s(ec)?/i,
+	/(?:retry|try(?:\s+again)?|available)\s+(?:in|after|at)\s*(\d+)\s*m(in)?/i,
+	/(?:retry|try(?:\s+again)?|available)\s+(?:in|after|at)\s*(\d+)\s*h(our|r)?/i,
+] as const;
+
+export function parseUsageResetTimeMs(errorMessage: string | undefined): number | undefined {
+	if (!errorMessage) return undefined;
+	const now = Date.now();
+	for (const pattern of USAGE_RESET_TIME_PATTERNS) {
+		const match = errorMessage.match(pattern);
+		if (!match) continue;
+		const value = Number.parseInt(match[1] ?? "", 10);
+		if (!Number.isFinite(value) || value <= 0) continue;
+		const unit = pattern.source.includes("\\s*h") ? 3600_000 : pattern.source.includes("\\s*m") ? 60_000 : 1_000;
+		return now + value * unit;
+	}
+	// ISO-8601 timestamp fallback (e.g. "reset at 2026-08-01T09:00:00Z").
+	const isoMatch = errorMessage.match(/(?:reset|available).{0,12}(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)/i);
+	if (isoMatch?.[1]) {
+		const parsed = Date.parse(isoMatch[1]);
+		if (Number.isFinite(parsed) && parsed > now) return parsed;
+	}
+	return undefined;
 }
 
 export function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {

@@ -20,6 +20,14 @@ export interface SessionSource {
 	roleAuthorized?: boolean;
 }
 
+/** An inbound image attachment (v1: images only). */
+export interface InboundAttachment {
+	/** base64-encoded image bytes. */
+	data: string;
+	mimeType: string;
+	filename?: string;
+}
+
 /** An inbound chat message. */
 export interface MessageEvent {
 	text: string;
@@ -27,6 +35,8 @@ export interface MessageEvent {
 	messageId: string;
 	/** Text of the message this one replies to, when the platform exposes it. */
 	replyToText?: string;
+	/** Inbound image attachments (v1: images only). */
+	attachments?: InboundAttachment[];
 	/**
 	 * Adapter-supplied extras. Reserved keys:
 	 * - mentionedBot === true: the message explicitly @-mentions the bot

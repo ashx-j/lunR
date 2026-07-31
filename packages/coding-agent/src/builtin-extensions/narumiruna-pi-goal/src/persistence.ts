@@ -28,6 +28,8 @@ export interface ActiveGoal {
 	timeUsedSeconds: number;
 	baselineTokens: number;
 	activeStartedAt?: number;
+	/** lunr: auto-resume a usage_limited goal once this timestamp elapses. */
+	resumeAfter?: number;
 }
 
 export type PendingQueueAction =
@@ -216,6 +218,7 @@ function normalizeQueuedGoal(goal: ActiveGoal): ActiveGoal {
 
 export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 	const now = Date.now();
+	const resumeAfter = isNonNegativeFiniteNumber(goal.resumeAfter) ? goal.resumeAfter : undefined;
 	return {
 		...goal,
 		startedAt: isNonNegativeFiniteNumber(goal.startedAt) ? goal.startedAt : now,
@@ -226,6 +229,7 @@ export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 		timeUsedSeconds: nonNegativeFiniteNumber(goal.timeUsedSeconds),
 		baselineTokens: nonNegativeFiniteNumber(goal.baselineTokens),
 		activeStartedAt: goal.status === "active" ? now : undefined,
+		...(resumeAfter !== undefined ? { resumeAfter } : {}),
 	};
 }
 
@@ -271,7 +275,8 @@ function isGoal(value: unknown): value is ActiveGoal {
 		typeof value.tokensUsed === "number" &&
 		typeof value.timeUsedSeconds === "number" &&
 		typeof value.baselineTokens === "number" &&
-		(value.activeStartedAt === undefined || typeof value.activeStartedAt === "number")
+		(value.activeStartedAt === undefined || typeof value.activeStartedAt === "number") &&
+		(value.resumeAfter === undefined || typeof value.resumeAfter === "number")
 	);
 }
 

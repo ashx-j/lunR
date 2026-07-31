@@ -79,6 +79,7 @@ import type {
 	ButtonSpec,
 	CallbackEvent,
 	ChatType,
+	InboundAttachment,
 	MessageEvent,
 	PlatformAdapter,
 	SendOptions,
@@ -93,6 +94,9 @@ const REPLY_TO_TEXT_MAX = 500;
 const THREAD_NAME_MAX = 40;
 const SEEN_CAP = 500;
 const SENT_CHANNEL_CAP = 500;
+const CALLBACK_INTERACTION_CAP = 500;
+const CHANNEL_CACHE_CAP = 500;
+const PARTICIPATING_THREAD_CAP = 500;
 const ERR_INVALID_FORM_BODY = 50035; // e.g. content over 2000 chars — non-retryable
 const ERR_UNKNOWN_MESSAGE = 10008; // deleted/unknown message — terminal
 
@@ -142,6 +146,15 @@ export interface DiscordButtonInteractionLike {
 	update?(options: { content: string; components?: unknown[] }): Promise<unknown>;
 }
 
+export interface DiscordAttachmentLike {
+	id: string;
+	/** Direct CDN URL for the attachment content. */
+	url: string;
+	contentType?: string;
+	name?: string;
+	size?: number;
+}
+
 export interface DiscordMessageLike {
 	id: string;
 	content?: string;
@@ -154,6 +167,7 @@ export interface DiscordMessageLike {
 		repliedUser?: { id: string } | null;
 	};
 	startThread?(opts: { name: string; autoArchiveDuration: number }): Promise<DiscordChannelLike>;
+	attachments?: DiscordAttachmentLike[];
 }
 
 /** Minimal Client surface; the real discord.js Client satisfies this. */
@@ -176,6 +190,13 @@ function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+/** lunr: download an inbound Discord attachment from its CDN URL. */
+async function defaultDownloadAttachment(url: string): Promise<Uint8Array> {
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`attachment download HTTP ${res.status}`);
+	return new Uint8Array(await res.arrayBuffer());
+}
+
 /** Discord REST error code (DiscordAPIError.code) when present. */
 function discordErrorCode(err: unknown): number | undefined {
 	const code = (err as { code?: unknown } | null)?.code;
@@ -189,10 +210,20 @@ export interface MessageToEventOptions {
 	participatingThreads?: ReadonlySet<string>;
 }
 
+function isImageContentType(contentType: string | undefined): boolean {
+	return typeof contentType === "string" && contentType.split(";")[0]?.trim().toLowerCase().startsWith("image/");
+}
+
+/** lunr: collect inbound image attachments (contentType image/*) from a Discord message. */
+export function collectDiscordImageAttachments(message: DiscordMessageLike): DiscordAttachmentLike[] {
+	return (message.attachments ?? []).filter((attachment) => isImageContentType(attachment.contentType));
+}
+
 /**
  * Map a Discord message to a MessageEvent; null = drop (own message, any bot,
- * system message, attachment-only, ignored channel, unsupported channel type,
- * or a non-DM message mentioning others but not us).
+ * system message, ignored channel, unsupported channel type, or a non-DM
+ * message mentioning others but not us). Messages with no text but image
+ * attachments are kept (v1: images inbound).
  */
 export function messageToEvent(
 	message: DiscordMessageLike,
@@ -205,7 +236,8 @@ export function messageToEvent(
 	if (author.bot) return null; // all bots (same simplification as telegram)
 	if (message.system) return null;
 	const content = (message.content ?? "").trim();
-	if (content === "") return null; // attachment-only (v1)
+	const imageAttachments = collectDiscordImageAttachments(message);
+	if (content === "" && imageAttachments.length === 0) return null; // no text and no image attachments
 
 	const channel = message.channel;
 	const ignored = options.ignoredChannels ?? [];
@@ -368,6 +400,10 @@ function defaultClientFactory(): DiscordClientLike {
 export interface DiscordAdapterOptions {
 	/** Injected Client factory (tests). When omitted, a real discord.js Client is created. */
 	clientFactory?: DiscordClientFactory;
+	/** lunr: injected image downloader for inbound attachments (tests). Defaults to fetch(url). */
+	downloadAttachment?: (url: string) => Promise<Uint8Array>;
+	/** lunr: skip inbound media larger than this many bytes. Defaults to 10MB. */
+	maxMediaBytes?: number;
 	scheduler?: Scheduler;
 	debounceMs?: number;
 	now?: () => number;
@@ -393,6 +429,8 @@ export class DiscordAdapter implements PlatformAdapter {
 
 	private readonly cfg: DiscordConfig;
 	private readonly clientFactory: DiscordClientFactory;
+	private readonly downloadAttachment: (url: string) => Promise<Uint8Array>;
+	private readonly maxMediaBytes: number;
 	private readonly scheduler: Scheduler;
 	private readonly debounceMs: number;
 	private readonly now: () => number;
@@ -423,6 +461,8 @@ export class DiscordAdapter implements PlatformAdapter {
 			}
 			this.clientFactory = defaultClientFactory;
 		}
+		this.downloadAttachment = options.downloadAttachment ?? defaultDownloadAttachment;
+		this.maxMediaBytes = options.maxMediaBytes ?? 10 * 1024 * 1024;
 	}
 
 	onMessage(handler: (event: MessageEvent) => void): void {
@@ -492,7 +532,32 @@ export class DiscordAdapter implements PlatformAdapter {
 		if (!event) return;
 		await this.resolveReplyToText(message, event);
 		await this.maybeAutoThread(message, event);
+		// lunr: download inbound image attachments before dispatch so the bridge
+		// can attach images to the turn. Failures drop the media but keep the turn.
+		await this.downloadAttachments(message, event);
 		this.dispatchEvent(event);
+	}
+
+	/** lunr: download + base64-encode inbound image attachments for one Discord message. */
+	private async downloadAttachments(message: DiscordMessageLike, event: MessageEvent): Promise<void> {
+		const imageAttachments = collectDiscordImageAttachments(message);
+		if (imageAttachments.length === 0) return;
+		const attachments: InboundAttachment[] = [];
+		for (const attachment of imageAttachments) {
+			if (attachment.size !== undefined && attachment.size > this.maxMediaBytes) continue;
+			try {
+				const bytes = await this.downloadAttachment(attachment.url);
+				if (bytes.byteLength > this.maxMediaBytes) continue;
+				attachments.push({
+					data: Buffer.from(bytes).toString("base64"),
+					mimeType: attachment.contentType ?? "image/png",
+					...(attachment.name ? { filename: attachment.name } : {}),
+				});
+			} catch {
+				// Media download failed — drop this attachment, keep the text turn.
+			}
+		}
+		if (attachments.length > 0) event.attachments = attachments;
 	}
 
 	private async handleInteraction(interaction: DiscordButtonInteractionLike): Promise<void> {
@@ -501,6 +566,10 @@ export class DiscordAdapter implements PlatformAdapter {
 		const event = buttonInteractionToEvent(interaction);
 		if (!event) return;
 		this.callbackInteractions.set(interaction.id, interaction);
+		if (this.callbackInteractions.size > CALLBACK_INTERACTION_CAP) {
+			const oldest = this.callbackInteractions.keys().next().value;
+			if (oldest !== undefined) this.callbackInteractions.delete(oldest);
+		}
 		this.callbackHandler(event);
 	}
 
@@ -533,6 +602,10 @@ export class DiscordAdapter implements PlatformAdapter {
 				autoArchiveDuration: 60,
 			});
 			this.participatingThreads.add(thread.id);
+			if (this.participatingThreads.size > PARTICIPATING_THREAD_CAP) {
+				const oldest = this.participatingThreads.values().next().value;
+				if (oldest !== undefined) this.participatingThreads.delete(oldest);
+			}
 			event.source = { ...event.source, chatType: "thread", chatId: message.channel.id, threadId: thread.id };
 		} catch {
 			// e.g. missing CREATE_THREADS permission — respond in-channel instead.
@@ -555,7 +628,12 @@ export class DiscordAdapter implements PlatformAdapter {
 		if (existing) {
 			this.scheduler.clearTimeout(existing.timer);
 			// Merge: earlier text first, latest messageId (and other fields) win.
-			existing.event = { ...event, text: `${existing.event.text}\n${event.text}` };
+			const mergedAttachments = [...(existing.event.attachments ?? []), ...(event.attachments ?? [])];
+			existing.event = {
+				...event,
+				text: `${existing.event.text}\n${event.text}`,
+				...(mergedAttachments.length > 0 ? { attachments: mergedAttachments } : {}),
+			};
 			existing.timer = this.scheduler.setTimeout(() => this.flushPending(key), this.debounceMs);
 		} else {
 			const timer = this.scheduler.setTimeout(() => this.flushPending(key), this.debounceMs);
@@ -588,15 +666,27 @@ export class DiscordAdapter implements PlatformAdapter {
 		try {
 			const channel = await this.client.channels.fetch(id);
 			this.channelCache.set(id, channel);
+			if (this.channelCache.size > CHANNEL_CACHE_CAP) {
+				const oldest = this.channelCache.keys().next().value;
+				if (oldest !== undefined) this.channelCache.delete(oldest);
+			}
 			return channel;
 		} catch {
 			this.channelCache.set(id, null);
+			if (this.channelCache.size > CHANNEL_CACHE_CAP) {
+				const oldest = this.channelCache.keys().next().value;
+				if (oldest !== undefined) this.channelCache.delete(oldest);
+			}
 			return null;
 		}
 	}
 
 	private recordSent(messageId: string, channel: DiscordChannelLike): void {
 		if (THREAD_TYPES.includes(channel.type)) this.participatingThreads.add(channel.id);
+		if (this.participatingThreads.size > PARTICIPATING_THREAD_CAP) {
+			const oldest = this.participatingThreads.values().next().value;
+			if (oldest !== undefined) this.participatingThreads.delete(oldest);
+		}
 		this.sentMessageChannels.set(messageId, channel.id);
 		if (this.sentMessageChannels.size > SENT_CHANNEL_CAP) {
 			const oldest = this.sentMessageChannels.keys().next().value;

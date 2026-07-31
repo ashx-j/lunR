@@ -30,16 +30,18 @@
 
 import { existsSync } from "node:fs";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { AgentSession, AgentSessionEvent, SessionStats } from "../core/agent-session.ts";
 import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
 import type { ContextUsage, ToolDefinition } from "../core/extensions/types.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
+import { createPermissionContext, deletePermissionContext } from "../core/permissions.ts";
 import type { ReadonlySessionManager, SessionManager, SessionMessageEntry } from "../core/session-manager.ts";
+import { processImage } from "../utils/image-process.ts";
 import { getSession, putSession, removeSession, touchSession } from "./store.ts";
-import type { MessageEvent, SessionSource } from "./types.ts";
+import type { InboundAttachment, MessageEvent, SessionSource } from "./types.ts";
 
 function isUserMessageEntry(entry: { type: string }): entry is SessionMessageEntry {
 	return entry.type === "message";
@@ -82,7 +84,7 @@ export interface BridgeSessionStatus {
  * fakeable in tests. Expanded to support gateway slash commands.
  */
 export interface BridgeSession {
-	prompt(text: string, options?: { source?: "extension" }): Promise<void>;
+	prompt(text: string, options?: { source?: "extension"; images?: ImageContent[] }): Promise<void>;
 	abort(): Promise<void> | void;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 	readonly state: { messages: AgentMessage[] };
@@ -207,7 +209,7 @@ function extractFinalText(session: BridgeSession): string {
 }
 
 export class AgentBridge {
-	private readonly cap: number;
+	private cap: number;
 	private readonly sessionFactory: SessionFactory;
 	private readonly cache = new Map<string, CacheEntry>();
 	private readonly redoStack = new Map<string, string[]>();
@@ -235,7 +237,7 @@ export class AgentBridge {
 		entry.busy = true;
 		let result: string;
 		try {
-			result = await this.runPrompt(entry, event.text, callbacks, event.source);
+			result = await this.runPrompt(entry, event.text, callbacks, event.source, event.attachments);
 		} catch (err) {
 			entry.busy = false;
 			throw err;
@@ -269,21 +271,27 @@ export class AgentBridge {
 			throw new Error("Session is busy — /stop first or wait");
 		}
 		if (entry) {
+			const oldSessionId = entry.session.sessionManager?.getSessionId();
 			entry.unsubscribe?.();
 			this.cache.delete(key);
 			entry.session.dispose?.();
+			if (oldSessionId) deletePermissionContext(oldSessionId);
 		}
 		removeSession(key);
 		this.redoStack.delete(key);
 
 		const session = await this.sessionFactory(key, { sessionFile });
 		const newFile = session.sessionManager?.getSessionFile();
+		const newSessionId = session.sessionManager?.getSessionId();
 		if (newFile) {
-			putSession(key, { sessionId: session.sessionManager?.getSessionId() ?? key, sessionFile: newFile });
+			putSession(key, { sessionId: newSessionId ?? key, sessionFile: newFile });
+		}
+		if (newSessionId) {
+			createPermissionContext(newSessionId);
 		}
 		const newEntry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
 		this.cache.set(key, newEntry);
-		this._enforceCacheCap();
+		this._enforceCacheCap(key);
 		newEntry.unsubscribe = this._subscribeToSession(key, newEntry);
 	}
 
@@ -376,6 +384,7 @@ export class AgentBridge {
 		text: string,
 		callbacks: TurnCallbacks,
 		source: SessionSource,
+		attachments?: InboundAttachment[],
 	): Promise<string> {
 		const { session } = entry;
 		let unsubscribe: (() => void) | undefined;
@@ -399,6 +408,22 @@ export class AgentBridge {
 		}
 		runDepth++;
 		try {
+			// lunr: convert inbound image attachments to ImageContent for the model.
+			// processImage normalizes + resizes under the inline 4.5MB base64 limit;
+			// failures become bracketed text notes so the model explains the gap.
+			const images: ImageContent[] = [];
+			const notes: string[] = [];
+			for (const attachment of attachments ?? []) {
+				const bytes = Buffer.from(attachment.data, "base64");
+				const processed = await processImage(new Uint8Array(bytes), attachment.mimeType);
+				if (processed.ok) {
+					images.push({ type: "image", data: processed.data, mimeType: processed.mimeType });
+					for (const hint of processed.hints) notes.push(hint);
+				} else {
+					notes.push(processed.message);
+				}
+			}
+			const promptText = notes.length > 0 ? `${text}\n\n${notes.join(" ")}` : text;
 			// AsyncLocalStorage origin: tools executing during this turn (e.g. the
 			// `cron` tool) can read the chat the message came from. Propagates
 			// through the awaited prompt() call tree.
@@ -409,7 +434,7 @@ export class AgentBridge {
 					threadId: source.threadId,
 					chatType: source.chatType,
 				},
-				() => session.prompt(text, { source: "extension" }),
+				() => session.prompt(promptText, { source: "extension", ...(images.length ? { images } : {}) }),
 			);
 		} finally {
 			runDepth--;
@@ -423,6 +448,7 @@ export class AgentBridge {
 		while (entry.queue.length > 0) {
 			const items = entry.queue.splice(0);
 			const parts = items.map((item) => item.text);
+			const attachments = items.flatMap((item) => item.attachments ?? []);
 			if (entry.dropped > 0) {
 				parts.unshift(`[gateway: ${entry.dropped} earlier message(s) were dropped — the queue was full]`);
 				entry.dropped = 0;
@@ -430,7 +456,13 @@ export class AgentBridge {
 			try {
 				// Follow-up turns are final-only: no streaming callbacks. The origin
 				// is the chat of the latest queued message.
-				const text = await this.runPrompt(entry, parts.join("\n\n"), {}, items[items.length - 1].source);
+				const text = await this.runPrompt(
+					entry,
+					parts.join("\n\n"),
+					{},
+					items[items.length - 1].source,
+					attachments,
+				);
 				callbacks.onFollowUpResult?.(text);
 			} catch (err) {
 				callbacks.onError?.(err instanceof Error ? err.message : String(err));
@@ -465,24 +497,42 @@ export class AgentBridge {
 		const stored = getSession(key);
 		const session = await this.sessionFactory(key, stored ? { sessionFile: stored.sessionFile } : undefined);
 		const sessionFile = session.sessionManager?.getSessionFile();
+		const sessionId = session.sessionManager?.getSessionId();
 		if (sessionFile) {
-			putSession(key, { sessionId: session.sessionManager?.getSessionId() ?? key, sessionFile });
+			putSession(key, { sessionId: sessionId ?? key, sessionFile });
+		}
+		if (sessionId) {
+			createPermissionContext(sessionId);
 		}
 		const entry: CacheEntry = { session, busy: false, queue: [], dropped: 0, unsubscribe: undefined };
 		this.cache.set(key, entry);
-		this._enforceCacheCap();
+		this._enforceCacheCap(key);
 		entry.unsubscribe = this._subscribeToSession(key, entry);
 		return entry;
 	}
 
-	private _enforceCacheCap(): void {
+	private _enforceCacheCap(protectedKey?: string): void {
 		while (this.cache.size > this.cap) {
-			const oldestKey = this.cache.keys().next().value;
-			if (oldestKey === undefined) break;
-			const oldest = this.cache.get(oldestKey);
-			oldest?.unsubscribe?.();
+			let oldestKey: string | undefined;
+			let oldest: CacheEntry | undefined;
+			for (const [key, entry] of this.cache) {
+				if (key === protectedKey) continue;
+				if (entry.busy) continue;
+				oldestKey = key;
+				oldest = entry;
+				break;
+			}
+			if (!oldest || !oldestKey) {
+				// Every cached session is busy (or is the protected new entry);
+				// grow the cap temporarily rather than killing an in-flight turn.
+				this.cap = this.cache.size;
+				break;
+			}
+			oldest.unsubscribe?.();
 			this.cache.delete(oldestKey);
-			oldest?.session.dispose?.();
+			oldest.session.dispose?.();
+			const evictedSessionId = oldest.session.sessionManager?.getSessionId();
+			if (evictedSessionId) deletePermissionContext(evictedSessionId);
 		}
 	}
 

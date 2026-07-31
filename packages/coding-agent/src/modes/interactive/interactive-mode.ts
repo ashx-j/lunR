@@ -74,6 +74,7 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
+import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
@@ -135,6 +136,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
+import { InjectedPromptMessageComponent } from "./components/injected-prompt-message.ts";
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
@@ -423,6 +425,7 @@ export class InteractiveMode {
 	// flashing whole chunks.
 	private streamingTargetMessage: AssistantMessage | undefined = undefined;
 	private streamingDisplayedLength = 0;
+	private lastSmoothRenderAt = 0;
 	private smoothStreamingTimer: NodeJS.Timeout | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
@@ -548,7 +551,7 @@ export class InteractiveMode {
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
 			if (this.settingsManager.getDefaultPermissionMode() === "auto") {
-				enableRollbackForSession();
+				enableRollbackForSession(this.sessionManager.getSessionId());
 			}
 		});
 		this.version = VERSION;
@@ -810,7 +813,7 @@ export class InteractiveMode {
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
 		// If the configured default is auto, force-enable rollback.
 		if (this.settingsManager.getDefaultPermissionMode() === "auto") {
-			enableRollbackForSession();
+			enableRollbackForSession(this.sessionManager.getSessionId());
 		}
 
 		await this.themeController.applyFromSettings();
@@ -824,7 +827,6 @@ export class InteractiveMode {
 			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
 			this.headerContainer.addChild(this.builtInHeader);
-			this.headerContainer.addChild(new Spacer(1));
 		} else {
 			// Minimal header when silenced
 			this.builtInHeader = new Text("", 0, 0);
@@ -2621,6 +2623,11 @@ export class InteractiveMode {
 				await this.handleModelCommand(searchTerm);
 				return;
 			}
+			if (text === "/refresh") {
+				this.editor.setText("");
+				await this.handleRefreshCommand();
+				return;
+			}
 			if (text === "/export" || text.startsWith("/export ")) {
 				await this.handleExportCommand(text);
 				this.editor.setText("");
@@ -2872,7 +2879,12 @@ export class InteractiveMode {
 			this.streamingDisplayedLength = total;
 		}
 		this.streamingComponent.updateContent(sliceMessageContent(target, this.streamingDisplayedLength));
-		this.ui.requestRender();
+		// Throttle renders to ~30 FPS so the TUI isn't redrawn every 20 ms tick.
+		const now = Date.now();
+		if (now - this.lastSmoothRenderAt >= 33) {
+			this.lastSmoothRenderAt = now;
+			this.ui.requestRender();
+		}
 	}
 
 	private stopSmoothStreaming(): void {
@@ -2882,6 +2894,7 @@ export class InteractiveMode {
 		}
 		this.streamingTargetMessage = undefined;
 		this.streamingDisplayedLength = 0;
+		this.lastSmoothRenderAt = 0;
 	}
 
 	private subscribeToAgent(): void {
@@ -2954,7 +2967,7 @@ export class InteractiveMode {
 					// lunr: a new user message invalidates /redo
 					this.redoStack.length = 0;
 					// lunr: begin a new rollback turn (captures tree-scope baseline when enabled)
-					rollbackBeginTurn(this.sessionManager.getCwd());
+					rollbackBeginTurn(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
 					this.stopSmoothStreaming();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
@@ -2972,7 +2985,11 @@ export class InteractiveMode {
 					this.streamingTargetMessage = event.message;
 					this.streamingDisplayedLength = 0;
 					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage);
+					if (this.settingsManager.getSmoothStreaming()) {
+						this.streamingComponent.updateContent(sliceMessageContent(this.streamingMessage, 0));
+					} else {
+						this.streamingComponent.updateContent(this.streamingMessage);
+					}
 					this.ui.requestRender();
 				}
 				break;
@@ -3130,7 +3147,7 @@ export class InteractiveMode {
 				this.maybeAutoNameSession();
 
 				// lunr: capture tree-scope changes at turn boundary (bash side-effects).
-				captureTreeChanges(this.sessionManager.getCwd());
+				captureTreeChanges(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
 
 				this.ui.requestRender();
 				break;
@@ -3326,7 +3343,19 @@ export class InteractiveMode {
 						this.chatContainer.addChild(new Spacer(1));
 					}
 					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
+					// lunr: render injected prompts (/swarm /research /goal) collapsed instead
+					// of dumping the full multi-line prompt body verbatim.
+					const injected = detectInjectedPrompt(textContent);
+					if (injected) {
+						const component = new InjectedPromptMessageComponent(
+							injected.kind,
+							injected.summary,
+							textContent,
+							this.getMarkdownThemeWithSettings(),
+						);
+						component.setExpanded(this.toolOutputExpanded);
+						this.chatContainer.addChild(component);
+					} else if (skillBlock) {
 						// Render skill block (collapsible)
 						const component = new SkillInvocationMessageComponent(
 							skillBlock,
@@ -3600,7 +3629,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.stopSmoothStreaming();
+		this.stopSmoothStreaming?.();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -3632,7 +3661,7 @@ export class InteractiveMode {
 		await this.ui.terminal.drainInput(1000);
 
 		// lunr: quit prompt — ask about killing tracked processes before stopping the TUI.
-		const tracked = processRegistry.list();
+		const tracked = processRegistry.list().filter((p) => p.status !== "exited");
 		if (tracked.length > 0) {
 			const shouldKill = await this.confirmDisclaimerWithLabels(
 				"Session processes still running",
@@ -3649,13 +3678,17 @@ export class InteractiveMode {
 		// lunr: exit summary card — print a closing card for non-empty sessions,
 		// before the resume line. Fires on all interactive exits reaching shutdown
 		// (/quit, double ctrl+c, ctrl+d). Skipped for empty sessions (0 user msgs).
-		const exitStats = computeExitCardStats(this.sessionManager.getEntries());
+		const entries = this.sessionManager?.getEntries?.();
+		const exitStats = entries ? computeExitCardStats(entries) : { turns: 0, tokens: 0, filesChanged: 0 };
 		const cardLines = buildExitCard(exitStats);
 		if (cardLines.length > 0) {
 			process.stdout.write(`${chalk.dim(cardLines.join("\n"))}\n`);
 		}
 
-		const resumeCommand = formatResumeCommand(this.sessionManager);
+		const resumeCommand =
+			this.sessionManager && typeof this.sessionManager.isPersisted === "function"
+				? formatResumeCommand(this.sessionManager)
+				: undefined;
 		if (resumeCommand) {
 			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
 		}
@@ -4486,6 +4519,51 @@ export class InteractiveMode {
 		}
 
 		this.showModelSelector(searchTerm);
+	}
+
+	// lunr: /refresh — refresh model lists for ALL providers (replaces ollama-only).
+	// Fans out to every composed provider's refreshModels hook (local servers, remote
+	// catalog, extension hooks) via ModelRuntime.refresh, then re-runs any registered
+	// extension refresh command (e.g. ollama-cloud-refresh) so providers that bypass the
+	// hook stay current.
+	private async handleRefreshCommand(): Promise<void> {
+		const runtime = this.session.modelRuntime;
+		const allowNetwork = runtime.isNetworkAllowed();
+		if (!allowNetwork) {
+			this.showStatus("Model network refresh is disabled (offline mode). Reloaded from cache only.");
+		}
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 15_000);
+		let summary: string;
+		try {
+			const result = await runtime.refresh({ allowNetwork, force: true, signal: controller.signal });
+			if (result.aborted) {
+				summary = "Model refresh timed out; showing cached models.";
+			} else if (result.errors.size === 0) {
+				summary = "Model catalogs refreshed.";
+			} else if (result.errors.size === 1) {
+				summary = `Could not refresh ${result.errors.keys().next().value}; showing cached models.`;
+			} else {
+				summary = `Could not refresh ${result.errors.size} model catalogs; showing cached models.`;
+			}
+		} catch (error) {
+			summary = `Model refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+		} finally {
+			clearTimeout(timeout);
+		}
+		// Re-run extension-registered refresh commands (e.g. ollama-cloud-refresh)
+		// that bypass the refreshModels hook and re-register providers wholesale.
+		const runner = this.session.extensionRunner;
+		const cloudCommand = runner.getCommand("ollama-cloud-refresh");
+		if (cloudCommand) {
+			try {
+				await cloudCommand.handler("", runner.createCommandContext());
+			} catch (error) {
+				summary += ` (ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)})`;
+			}
+		}
+		this.showStatus(summary);
+		this.footer.invalidate();
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
@@ -5609,9 +5687,10 @@ export class InteractiveMode {
 		await this.session.sendUserMessage(buildResearchPrompt(question, depth, breadth));
 	}
 
-	// lunr: /undo and /redo move the in-memory leaf via navigateTree (same machinery as
-	// /tree). In-session only — the JSONL file is append-only, so undone turns reappear
-	// after restart. Persistent undo via createBranchedSession is deferred.
+	// lunr: /undo persists the rewind by forking the session to just before the
+	// last user message (same fork mechanism /rollback uses, but WITHOUT touching files).
+	// The branched session file survives restart/`-c`, so undone turns stay gone.
+	// /redo stays ephemeral and cannot redo across a fork, so the redo stack is cleared.
 	private async handleUndoCommand(): Promise<void> {
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before running /undo.");
@@ -5644,26 +5723,25 @@ export class InteractiveMode {
 			}
 			targetId = lastUser.parentId;
 		} else {
-			// Navigating to a user message entry moves the leaf to its parent and
-			// restores the message text into the editor (handles the root case too).
 			targetId = lastUser.id;
 		}
 
 		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.showStatus("Navigation cancelled");
+			// Fork to just before the target — writes a branched session file so the
+			// rewind survives restart. Unlike /rollback, this must NOT touch files.
+			const forkResult = await this.runtimeHost.fork(targetId, { position: "before" });
+			if (forkResult.cancelled) {
+				this.showStatus("Undo cancelled");
 				return;
 			}
-			if (leafId) {
-				this.redoStack.push(leafId);
-			}
+			// /redo cannot redo across a fork — clear the ephemeral redo stack.
+			this.redoStack.length = 0;
 			this.chatContainer.clear();
 			this.renderInitialMessages();
-			if (result.editorText && !this.editor.getText().trim()) {
-				this.editor.setText(result.editorText);
+			if (forkResult.selectedText && !this.editor.getText().trim()) {
+				this.editor.setText(forkResult.selectedText);
 			}
-			this.showStatus("Undone last turn — /redo to restore");
+			this.showStatus("Undone — branched session created (persistent). /redo unavailable after a fork.");
 			void this.flushCompactionQueue({ willRetry: false });
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
@@ -6309,11 +6387,11 @@ export class InteractiveMode {
 
 		if (mode === "auto" && prev !== "auto") {
 			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
-			enableRollbackForSession();
+			enableRollbackForSession(this.sessionManager.getSessionId());
 			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
 		} else if (mode !== "auto" && prev === "auto") {
 			this.session.setSystemPromptAppend(undefined);
-			disableRollbackForSession();
+			disableRollbackForSession(this.sessionManager.getSessionId());
 			this.showStatus(`Permission mode: ${mode}`);
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
@@ -6321,6 +6399,8 @@ export class InteractiveMode {
 	}
 
 	// lunr: approval dialog for manual permission mode.
+	// lunr: adds "Switch to auto" / "Switch to yolo" at the bottom so users can
+	// escape manual approval mid-turn without a separate /mode round-trip.
 	private async showApprovalDialog(req: {
 		toolName: string;
 		action: string;
@@ -6330,12 +6410,18 @@ export class InteractiveMode {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					`Approve ${req.action}?`,
-					["Approve once", "Approve for session", "Reject"],
+					["Approve once", "Approve for session", "Reject", "Switch to auto", "Switch to yolo"],
 					(option) => {
 						done();
 						if (option === "Approve once") resolve("once");
 						else if (option === "Approve for session") resolve("session");
-						else resolve("reject");
+						else if (option === "Switch to auto") {
+							this.applyPermissionMode("auto");
+							resolve("once");
+						} else if (option === "Switch to yolo") {
+							this.applyPermissionMode("yolo");
+							resolve("once");
+						} else resolve("reject");
 					},
 					() => {
 						done();
@@ -6387,7 +6473,7 @@ export class InteractiveMode {
 
 		// Restore files FIRST: the fork below replaces the session, which clears
 		// rollback state (beforeSessionInvalidate → clearRollback).
-		const result = rollbackLastTurn();
+		const result = rollbackLastTurn(this.sessionManager.getSessionId());
 
 		try {
 			// Fork to just before the last user message — writes a branched session
