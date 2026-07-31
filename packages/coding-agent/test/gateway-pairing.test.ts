@@ -19,12 +19,28 @@ function makeStore(now: { t: number }) {
 }
 
 describe("pairing", () => {
-	it("issues 8-char codes from the unambiguous alphabet (no 0/O/1/I/L)", () => {
-		const store = createPairingStore({ dir, now: () => 1000, maxPending: 30 });
-		for (let i = 0; i < 20; i++) {
-			const code = store.issueCode("telegram", `user-${i}`);
-			expect(code).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/);
-		}
+	describe("pairing code generation", () => {
+		it("issues 8-char codes from the unambiguous alphabet (no 0/O/1/I/L)", () => {
+			const store = createPairingStore({ dir, now: () => 1000, maxPending: 30 });
+			for (let i = 0; i < 20; i++) {
+				const code = store.issueCode("telegram", `user-${i}`);
+				expect(code).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/);
+			}
+		});
+
+		it("uses the full alphabet (no obvious bias in a large sample)", () => {
+			const store = createPairingStore({ dir, now: () => 1000, maxPending: 1000 });
+			const seen = new Set<string>();
+			for (let i = 0; i < 200; i++) {
+				const code = store.issueCode("telegram", `user-${i}`);
+				expect(code).not.toBeNull();
+				seen.add(code!);
+			}
+			// 200 random 8-char codes from a 32-char alphabet should almost never collide.
+			expect(seen.size).toBeGreaterThan(190);
+			const chars = new Set([...seen].join("").split(""));
+			expect(chars.size).toBeGreaterThan(20);
+		});
 	});
 
 	it("approve round-trips: issue → approve → isPaired", () => {
@@ -82,14 +98,18 @@ describe("pairing", () => {
 		expect(store.approve("telegram", code)).toBe("u1");
 	});
 
-	it("5 fails lock the code out", () => {
+	it("5 fails lock the platform out (the pending code stays pending until TTL)", () => {
 		const store = createPairingStore({ dir, maxFails: 5, now: () => 1000 });
 		const code = store.issueCode("telegram", "u1")!;
 		for (let i = 0; i < 5; i++) {
 			expect(store.approve("telegram", "WRONGCODE")).toBe(null);
 		}
 		expect(store.approve("telegram", code)).toBe(null);
-		expect(store.listPending()).toEqual([]);
+		expect(store.listPending()).toEqual([{ code, platform: "telegram", userId: "u1", expiresAt: 1000 + 3_600_000 }]);
+		// Re-issuing for any user on the platform is blocked during lockout.
+		expect(store.issueCode("telegram", "u2")).toBe(null);
+		// Other platforms are unaffected.
+		expect(store.issueCode("discord", "u2")).not.toBe(null);
 	});
 
 	it("listPending and listApproved reflect state", () => {

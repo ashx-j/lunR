@@ -13,6 +13,9 @@
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
  * the synchronous `_toolCallGates` loop (plan mode etc.). beforeToolCall is
  * already async, so awaiting the approval dialog is fine.
+ *
+ * State (mode + session-scoped approvals) is keyed by session id so
+ * concurrent gateway chats do not share permission decisions.
  */
 
 import { resolve } from "node:path";
@@ -52,33 +55,76 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_symbols",
 	"lsp_code_actions",
 	"lsp_completions",
+	"behavior_load",
+	"memory_load",
+]);
+
+/** Tools that mutate state and must be gated in manual mode. */
+const MUTATING_TOOLS = new Set([
+	"bash",
+	"edit",
+	"write",
+	"behavior_add",
+	"behavior_remove",
+	"memory_add",
+	"memory_remove",
+	"cron",
 ]);
 
 const REJECT_REASON = "Rejected by user (permission mode: manual).";
+export const NO_HANDLER_REASON = "Mutating tool blocked in manual mode: no approval channel available.";
 
-let currentMode: PermissionMode = "manual";
-const sessionApprovals = new Set<string>();
+interface PermissionContext {
+	mode: PermissionMode;
+	approvals: Set<string>;
+}
+
+const contexts = new Map<string, PermissionContext>();
+let defaultContext: PermissionContext = { mode: "manual", approvals: new Set() };
 let approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined;
 
-export function getPermissionMode(): PermissionMode {
-	return currentMode;
+function getContext(sessionId?: string): PermissionContext {
+	if (!sessionId) return defaultContext;
+	return contexts.get(sessionId) ?? defaultContext;
 }
 
-export function setPermissionMode(mode: PermissionMode): void {
-	currentMode = mode;
+export function createPermissionContext(sessionId: string, mode: PermissionMode = defaultContext.mode): void {
+	contexts.set(sessionId, { mode, approvals: new Set() });
 }
 
-export function resetPermissions(defaultMode: PermissionMode = "manual"): void {
-	currentMode = defaultMode;
-	sessionApprovals.clear();
+export function deletePermissionContext(sessionId: string): void {
+	contexts.delete(sessionId);
+}
+
+export function getPermissionMode(sessionId?: string): PermissionMode {
+	return getContext(sessionId).mode;
+}
+
+export function setPermissionMode(mode: PermissionMode, sessionId?: string): void {
+	getContext(sessionId).mode = mode;
+}
+
+export function resetPermissions(defaultMode: PermissionMode = "manual", sessionId?: string): void {
+	if (sessionId) {
+		contexts.set(sessionId, { mode: defaultMode, approvals: new Set() });
+	} else {
+		defaultContext = { mode: defaultMode, approvals: new Set() };
+	}
 }
 
 export function registerApprovalHandler(fn: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined): void {
 	approvalHandler = fn;
 }
 
-export function clearSessionApprovals(): void {
-	sessionApprovals.clear();
+export function clearSessionApprovals(sessionId?: string): void {
+	getContext(sessionId).approvals.clear();
+}
+
+/** Test seam: remove every per-session context and restore the default. */
+export function resetAllPermissionContexts(): void {
+	contexts.clear();
+	defaultContext = { mode: "manual", approvals: new Set() };
+	approvalHandler = undefined;
 }
 
 /** Appended to the system prompt while auto mode is active. */
@@ -99,42 +145,74 @@ function resolvePath(cwd: string, p: unknown): string {
 	return resolve(cwd, p);
 }
 
+function isMutatingTool(toolName: string): boolean {
+	return MUTATING_TOOLS.has(toolName);
+}
+
+function sanitizeDetail(value: unknown): string {
+	const text = String(value ?? "").trim();
+	return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
+
 /**
  * Returns a block result when the tool call should be blocked, else undefined.
- * Read-only tools always pass. YOLO and Auto always pass. Manual mode asks
- * the approval handler (if registered) or allows (no handler = non-TUI safety).
+ * Read-only tools always pass. YOLO and Auto always pass. Manual mode gates
+ * every mutating tool; if an approval handler is registered it is asked,
+ * otherwise the call is blocked (fail-closed — no silent allow).
  */
 export async function gateToolCall(
 	toolName: string,
 	input: Record<string, unknown>,
 	cwd: string,
+	sessionId?: string,
 ): Promise<{ block: true; reason: string } | undefined> {
+	const ctx = getContext(sessionId);
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
-	if (currentMode !== "manual") return undefined;
+	if (ctx.mode !== "manual") return undefined;
+	if (!isMutatingTool(toolName)) return undefined;
 
 	let action: string;
 	let detail: string;
 
 	if (toolName === "bash") {
 		action = "bash";
-		detail = String(input.command ?? "").trim();
+		detail = sanitizeDetail(input.command);
 	} else if (toolName === "edit" || toolName === "write") {
 		const path = resolvePath(cwd, input.path);
 		const outside = path ? isPathOutsideCwd(path, cwd) : false;
 		action = outside ? `${toolName}-outside` : toolName;
 		detail = path || String(input.path ?? "");
+	} else if (toolName === "behavior_add" || toolName === "memory_add") {
+		action = toolName;
+		detail = sanitizeDetail(input.content);
+	} else if (toolName === "behavior_remove" || toolName === "memory_remove") {
+		action = toolName;
+		detail = sanitizeDetail(input.line);
+	} else if (toolName === "cron") {
+		action = "cron";
+		detail = sanitizeDetail(input.action);
 	} else {
-		return undefined;
+		// All other mutating tools fall back to the tool name with no extra detail.
+		action = toolName;
+		detail = "";
 	}
 
-	if (sessionApprovals.has(action)) return undefined;
+	if (ctx.approvals.has(action)) return undefined;
 
-	if (!approvalHandler) return undefined;
+	if (!approvalHandler) {
+		return { block: true, reason: NO_HANDLER_REASON };
+	}
 
-	const resp = await approvalHandler({ toolName, action, detail });
+	let resp: ApprovalResponse;
+	try {
+		resp = await approvalHandler({ toolName, action, detail });
+	} catch (err) {
+		const message = err instanceof Error ? err.message : NO_HANDLER_REASON;
+		return { block: true, reason: message };
+	}
 
 	if (resp === "session") {
-		sessionApprovals.add(action);
+		ctx.approvals.add(action);
 		return undefined;
 	}
 	if (resp === "reject") {

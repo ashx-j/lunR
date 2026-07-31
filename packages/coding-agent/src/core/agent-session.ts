@@ -14,7 +14,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import type {
 	Agent,
 	AgentEvent,
@@ -43,6 +44,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -463,23 +465,41 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
-			const permBlock = await gateToolCall(toolCall.name, args as Record<string, unknown>, this._cwd);
+			const permBlock = await gateToolCall(
+				toolCall.name,
+				args as Record<string, unknown>,
+				this._cwd,
+				this.sessionId,
+			);
 			if (permBlock) {
 				return { block: true, reason: permBlock.reason };
 			}
 
-			// lunr: rollback snapshot — capture pre-write content for edit/write before the tool runs.
-			if (
-				(toolCall.name === "edit" || toolCall.name === "write") &&
-				args &&
-				typeof args === "object" &&
-				"path" in args
-			) {
-				try {
-					rollbackSnapshotBeforeWrite(resolve(this._cwd, String((args as Record<string, unknown>).path)));
-				} catch {
-					// rollback failures must never block the tool call
+			// lunr: rollback snapshot — capture pre-write content for mutating tools before they run.
+			try {
+				const toolName = toolCall.name;
+				const argPath =
+					args && typeof args === "object" && "path" in args
+						? resolve(this._cwd, String((args as Record<string, unknown>).path))
+						: undefined;
+				const pathsToSnapshot: string[] = [];
+				if (toolName === "edit" || toolName === "write") {
+					if (argPath) pathsToSnapshot.push(argPath);
+				} else if (toolName === "behavior_add" || toolName === "behavior_remove") {
+					pathsToSnapshot.push(join(getAgentDir(), "behavior.md"));
+				} else if (toolName === "memory_add" || toolName === "memory_remove") {
+					pathsToSnapshot.push(join(homedir(), ".pi", "simple-memory", "memory.md"));
+				} else if (toolName === "cron" && args && typeof args === "object") {
+					const action = String((args as Record<string, unknown>).action ?? "");
+					if (action === "create" || action === "update" || action === "remove") {
+						pathsToSnapshot.push(join(getAgentDir(), "cron", "jobs.json"));
+					}
 				}
+				for (const p of pathsToSnapshot) {
+					rollbackSnapshotBeforeWrite(p, this.sessionId);
+				}
+			} catch {
+				// rollback failures must never block the tool call
 			}
 
 			// lunr: core-owned gates (plan mode) run first, even without extension handlers
@@ -2795,7 +2815,7 @@ export class AgentSession {
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath }),
+				options?.operations ?? createLocalBashOperations({ shellPath, sessionId: this.sessionId }),
 				{
 					onChunk,
 					signal: this._bashAbortController.signal,

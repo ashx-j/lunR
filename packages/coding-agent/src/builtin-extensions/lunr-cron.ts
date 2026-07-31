@@ -150,8 +150,12 @@ export default function (pi: ExtensionAPI): void {
 	/** Manual trigger: run inline when idle, otherwise make the job due for the next tick. */
 	const triggerRun = async (job: any, ctx: ExtensionContext): Promise<string> => {
 		if (ctx.isIdle()) {
-			void executeJob(getJob(job.id), schedulerDeps).catch(() => {});
-			return `Cron job '${job.name}' (${job.id}) started.`;
+			try {
+				await executeJob(getJob(job.id), schedulerDeps);
+				return `Cron job '${job.name}' (${job.id}) finished.`;
+			} catch (err) {
+				return `Cron job '${job.name}' (${job.id}) failed: ${String((err as Error)?.message ?? err)}`;
+			}
 		}
 		await updateJob(job.id, { nextRunAt: new Date().toISOString() });
 		return `Cron job '${job.name}' (${job.id}) queued for the next scheduler tick.`;

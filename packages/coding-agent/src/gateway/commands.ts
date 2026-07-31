@@ -27,6 +27,8 @@ const PROVIDER_PER_PAGE = 10;
 const _MODEL_PER_PAGE = 8;
 const MAX_MODELS_PER_PROVIDER = 50;
 const MODEL_ID_MAX = 38;
+const MODEL_CACHE_CAP = 100;
+const SESSIONS_CACHE_CAP = 100;
 
 interface ModelCacheEntry {
 	models: Model<any>[];
@@ -40,6 +42,48 @@ interface SessionsCacheEntry {
 
 const modelCache = new Map<string, ModelCacheEntry>();
 const sessionsCache = new Map<string, SessionsCacheEntry>();
+
+function evictLRU<K, V>(map: Map<K, V>, cap: number): void {
+	while (map.size > cap) {
+		const first = map.keys().next().value;
+		if (first !== undefined) map.delete(first);
+	}
+}
+
+function getCachedModels(key: string): Model<any>[] | undefined {
+	const cached = modelCache.get(key);
+	if (!cached) return undefined;
+	if (Date.now() > cached.expires) {
+		modelCache.delete(key);
+		return undefined;
+	}
+	// LRU refresh.
+	modelCache.delete(key);
+	modelCache.set(key, cached);
+	return cached.models;
+}
+
+function setCachedModels(key: string, models: Model<any>[]): void {
+	modelCache.set(key, { models, expires: Date.now() + MODEL_CACHE_TTL_MS });
+	evictLRU(modelCache, MODEL_CACHE_CAP);
+}
+
+function getCachedSessions(key: string): SessionInfo[] | undefined {
+	const cached = sessionsCache.get(key);
+	if (!cached) return undefined;
+	if (Date.now() > cached.expires) {
+		sessionsCache.delete(key);
+		return undefined;
+	}
+	sessionsCache.delete(key);
+	sessionsCache.set(key, cached);
+	return cached.sessions;
+}
+
+function setCachedSessions(key: string, sessions: SessionInfo[]): void {
+	sessionsCache.set(key, { sessions, expires: Date.now() + SESSIONS_CACHE_TTL_MS });
+	evictLRU(sessionsCache, SESSIONS_CACHE_CAP);
+}
 
 export interface ChatCommandContext {
 	event: MessageEvent;
@@ -139,7 +183,7 @@ async function refreshAndCacheModels(session: BridgeSession, key: string): Promi
 	const models = [...(await runtime.getAvailable())].sort(
 		(a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
 	);
-	modelCache.set(key, { models, expires: Date.now() + MODEL_CACHE_TTL_MS });
+	setCachedModels(key, models);
 	return models;
 }
 
@@ -162,7 +206,7 @@ const newCommand: ChatCommand = {
 	name: "new",
 	aliases: ["reset"],
 	description: "start a fresh session for this chat",
-	bypassBusy: true,
+	bypassBusy: false,
 	needsSession: false,
 	async handler(ctx) {
 		await ctx.bridge.reset(ctx.key);
@@ -250,7 +294,8 @@ const modelCommand: ChatCommand = {
 		const session = ctx.session!;
 		const arg = ctx.args.trim();
 		if (!arg) {
-			const models = await refreshAndCacheModels(session, ctx.key);
+			const cached = getCachedModels(ctx.key);
+			const models = cached ?? (await refreshAndCacheModels(session, ctx.key));
 			const byProvider = groupModelsByProvider(models);
 			const current = session.model;
 			const currentRef = current ? `${current.provider}/${current.id}` : "";
@@ -333,16 +378,16 @@ const modelCommand: ChatCommand = {
 
 		const numeric = Number.parseInt(arg, 10);
 		if (!Number.isNaN(numeric) && /^\d+$/.test(arg)) {
-			const cached = modelCache.get(ctx.key);
-			if (!cached || Date.now() > cached.expires || numeric < 1 || numeric > cached.models.length) {
+			const cached = getCachedModels(ctx.key);
+			if (!cached || numeric < 1 || numeric > cached.length) {
 				await ctx.reply("Invalid selection — run /model to see the current list.");
 				return;
 			}
-			await setModelAndReply(ctx, cached.models[numeric - 1]);
+			await setModelAndReply(ctx, cached[numeric - 1]);
 			return;
 		}
 
-		const models = await refreshAndCacheModels(session, ctx.key);
+		const models = getCachedModels(ctx.key) ?? (await refreshAndCacheModels(session, ctx.key));
 		const exact = findExactModelReferenceMatch(arg, models);
 		if (exact) {
 			await setModelAndReply(ctx, exact);
@@ -382,7 +427,7 @@ const sessionsCommand: ChatCommand = {
 			const all = await SessionManager.list(process.cwd());
 			all.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 			const sessions = all.slice(0, 10);
-			sessionsCache.set(ctx.key, { sessions, expires: Date.now() + SESSIONS_CACHE_TTL_MS });
+			setCachedSessions(ctx.key, sessions);
 			const items: PickerItem[] = sessions.map((s) => ({
 				label: `${s.path === currentFile ? "☾ " : ""}${s.name ? truncate(s.name, 30) : truncate(s.firstMessage, 30) || "(empty)"}`,
 				value: s.path,
@@ -422,16 +467,15 @@ const sessionsCommand: ChatCommand = {
 
 		let path: string | undefined;
 		const numeric = Number.parseInt(arg, 10);
-		const cached = sessionsCache.get(ctx.key);
+		const cached = getCachedSessions(ctx.key);
 		if (!Number.isNaN(numeric) && /^\d+$/.test(arg)) {
-			if (!cached || Date.now() > cached.expires || numeric < 1 || numeric > cached.sessions.length) {
+			if (!cached || numeric < 1 || numeric > cached.length) {
 				await ctx.reply("Invalid selection — run /sessions to see the current list.");
 				return;
 			}
-			path = cached.sessions[numeric - 1].path;
+			path = cached[numeric - 1].path;
 		} else {
-			const pool =
-				cached && Date.now() <= cached.expires ? cached.sessions : await SessionManager.list(process.cwd());
+			const pool = cached ?? (await SessionManager.list(process.cwd()));
 			const matches = pool.filter((s) => s.id.startsWith(arg) || s.path.startsWith(arg));
 			if (matches.length === 0) {
 				await ctx.reply(`No session matches "${arg}".`);

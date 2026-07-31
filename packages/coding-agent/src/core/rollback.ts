@@ -2,8 +2,9 @@
  * lunR: rollback service — pre-edit file snapshots for /rollback.
  *
  * Captures pre-write file content before edit/write tools mutate files, keyed
- * by user-turn. `/rollback` restores the newest non-empty turn's snapshots and
- * then rewinds the conversation via a session fork (persistent, unlike /undo).
+ * by user-turn and session id. `/rollback` restores the newest non-empty turn's
+ * snapshots and then rewinds the conversation via a session fork (persistent,
+ * unlike /undo).
  *
  * Capture modes (setting `rollbackCapture`):
  *  - copies:  snapshot pre-write content; restore = write back + delete files
@@ -29,7 +30,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize, resolve } from "node:path";
 import type { SettingsManager } from "./settings-manager.ts";
 
 export interface Snapshot {
@@ -40,6 +41,7 @@ export interface Snapshot {
 
 interface TurnSnapshots {
 	turnIndex: number;
+	cwd?: string;
 	files: Map<string, Snapshot>;
 }
 
@@ -49,14 +51,25 @@ interface ManifestEntry {
 	snapFile?: string;
 }
 
+interface TurnManifest {
+	cwd?: string;
+	files: Record<string, ManifestEntry>;
+}
+
 const ROLLBACK_BASE = join(homedir(), ".lunr", "rollback");
 
-let sessionForceEnabled = false;
-let settingsManager: SettingsManager | undefined;
-let sessionId = "default";
-let turns: TurnSnapshots[] = [];
-let currentTurnIndex = -1;
-let repoWarningShown = false;
+interface RollbackContext {
+	sessionId: string;
+	settingsManager: SettingsManager | undefined;
+	sessionForceEnabled: boolean;
+	turns: TurnSnapshots[];
+	currentTurnIndex: number;
+	repoWarningShown: boolean;
+}
+
+const contexts = new Map<string, RollbackContext>();
+let lastSessionId: string | undefined;
+let globalSettingsManager: SettingsManager | undefined;
 let warningHandler: ((message: string) => void) | undefined;
 
 /** Register a sink for one-time user-facing warnings (e.g. tree scope outside a git repo). */
@@ -64,33 +77,54 @@ export function setRollbackWarningHandler(handler: ((message: string) => void) |
 	warningHandler = handler;
 }
 
+function createContext(sessionId: string): RollbackContext {
+	return {
+		sessionId,
+		settingsManager: globalSettingsManager,
+		sessionForceEnabled: false,
+		turns: [],
+		currentTurnIndex: -1,
+		repoWarningShown: false,
+	};
+}
+
+function getContext(sessionId?: string): RollbackContext {
+	const sid = sessionId ?? lastSessionId ?? "default";
+	let ctx = contexts.get(sid);
+	if (!ctx) {
+		ctx = createContext(sid);
+		contexts.set(sid, ctx);
+	}
+	return ctx;
+}
+
 export function initRollback(sm: SettingsManager, sid: string): void {
-	settingsManager = sm;
-	sessionId = sid;
-	turns = [];
-	currentTurnIndex = -1;
-	sessionForceEnabled = false;
-	repoWarningShown = false;
-	loadPersistedTurns();
+	globalSettingsManager = sm;
+	lastSessionId = sid;
+	contexts.set(sid, createContext(sid));
+	const ctx = contexts.get(sid)!;
+	ctx.settingsManager = sm;
+	loadPersistedTurns(ctx);
 }
 
-export function isRollbackEnabled(): boolean {
-	return (settingsManager?.getRollbackEnabled() ?? false) || sessionForceEnabled;
+export function isRollbackEnabled(sessionId?: string): boolean {
+	const ctx = getContext(sessionId);
+	return (ctx.settingsManager?.getRollbackEnabled() ?? false) || ctx.sessionForceEnabled;
 }
 
-export function enableRollbackForSession(): void {
-	sessionForceEnabled = true;
+export function enableRollbackForSession(sessionId?: string): void {
+	getContext(sessionId).sessionForceEnabled = true;
 }
 
-export function disableRollbackForSession(): void {
-	sessionForceEnabled = false;
+export function disableRollbackForSession(sessionId?: string): void {
+	getContext(sessionId).sessionForceEnabled = false;
 }
 
-function pruneTurns(): void {
-	const maxTurns = settingsManager?.getRollbackTurns() ?? 2;
-	while (turns.length > maxTurns) {
-		const old = turns.shift();
-		if (old) cleanupTurnFiles(old);
+function pruneTurns(ctx: RollbackContext): void {
+	const maxTurns = ctx.settingsManager?.getRollbackTurns() ?? 2;
+	while (ctx.turns.length > maxTurns) {
+		const old = ctx.turns.shift();
+		if (old) cleanupTurnFiles(ctx, old);
 	}
 }
 
@@ -100,21 +134,24 @@ function pruneTurns(): void {
  * (content of all currently dirty/untracked files) so bash side-effects can be
  * restored later.
  */
-export function beginTurn(cwd?: string): void {
-	if (!isRollbackEnabled()) return;
-	currentTurnIndex++;
-	turns.push({ turnIndex: currentTurnIndex, files: new Map() });
-	pruneTurns();
-	if (cwd && settingsManager?.getRollbackScope() === "tree") {
-		captureTreeBaseline(cwd);
+export function beginTurn(cwd?: string, sessionId?: string): void {
+	const ctx = getContext(sessionId);
+	if (!isRollbackEnabled(ctx.sessionId)) return;
+	ctx.currentTurnIndex++;
+	const turn: TurnSnapshots = { turnIndex: ctx.currentTurnIndex, cwd, files: new Map() };
+	ctx.turns.push(turn);
+	pruneTurns(ctx);
+	if (cwd && ctx.settingsManager?.getRollbackScope() === "tree") {
+		captureTreeBaseline(ctx, cwd);
 	}
 }
 
 /** Capture pre-write content for a file path, recording under the current turn. */
-export function rollbackSnapshotBeforeWrite(absPath: string): void {
-	if (!isRollbackEnabled()) return;
-	if (currentTurnIndex < 0 || turns.length === 0) beginTurn();
-	const turn = turns[turns.length - 1];
+export function rollbackSnapshotBeforeWrite(absPath: string, sessionId?: string): void {
+	const ctx = getContext(sessionId);
+	if (!isRollbackEnabled(ctx.sessionId)) return;
+	if (ctx.currentTurnIndex < 0 || ctx.turns.length === 0) beginTurn(undefined, ctx.sessionId);
+	const turn = ctx.turns[ctx.turns.length - 1];
 	if (!turn) return;
 	if (turn.files.has(absPath)) return; // already snapshotted this turn
 
@@ -129,7 +166,7 @@ export function rollbackSnapshotBeforeWrite(absPath: string): void {
 			content,
 			createdByTool: true,
 		});
-		persistSnapshot(turn, absPath);
+		persistSnapshot(ctx, turn, absPath);
 	} catch {
 		// snapshot failures are non-fatal
 	}
@@ -139,10 +176,10 @@ export function rollbackSnapshotBeforeWrite(absPath: string): void {
  * Tree scope, turn START: snapshot the current (pre-turn) content of every
  * dirty/untracked file so modifications made during the turn can be restored.
  */
-function captureTreeBaseline(cwd: string): void {
-	const turn = turns[turns.length - 1];
+function captureTreeBaseline(ctx: RollbackContext, cwd: string): void {
+	const turn = ctx.turns[ctx.turns.length - 1];
 	if (!turn) return;
-	const entries = gitPorcelain(cwd);
+	const entries = gitPorcelain(ctx, cwd);
 	if (!entries) return;
 	for (const { path } of entries) {
 		if (!path) continue;
@@ -155,7 +192,7 @@ function captureTreeBaseline(cwd: string): void {
 				content: existed ? readFileSync(abs) : undefined,
 				createdByTool: false,
 			});
-			persistSnapshot(turn, abs);
+			persistSnapshot(ctx, turn, abs);
 		} catch {
 			// skip unreadable
 		}
@@ -167,14 +204,15 @@ function captureTreeBaseline(cwd: string): void {
  * were clean/absent at baseline. Untracked = created during the turn (deleted
  * on restore under hybrid); tracked-modified = restore from HEAD content.
  */
-export function captureTreeChanges(cwd: string): void {
-	if (!isRollbackEnabled()) return;
-	if (settingsManager?.getRollbackScope() !== "tree") return;
-	if (currentTurnIndex < 0 || turns.length === 0) return;
-	const turn = turns[turns.length - 1];
+export function captureTreeChanges(cwd: string, sessionId?: string): void {
+	const ctx = getContext(sessionId);
+	if (!isRollbackEnabled(ctx.sessionId)) return;
+	if (ctx.settingsManager?.getRollbackScope() !== "tree") return;
+	if (ctx.currentTurnIndex < 0 || ctx.turns.length === 0) return;
+	const turn = ctx.turns[ctx.turns.length - 1];
 	if (!turn) return;
 
-	const entries = gitPorcelain(cwd);
+	const entries = gitPorcelain(ctx, cwd);
 	if (!entries) return;
 	for (const { status, path } of entries) {
 		if (!path) continue;
@@ -184,7 +222,7 @@ export function captureTreeChanges(cwd: string): void {
 			if (status === "??") {
 				// Untracked now and not in the baseline — created during this turn.
 				turn.files.set(abs, { existed: false, createdByTool: false });
-				persistSnapshot(turn, abs);
+				persistSnapshot(ctx, turn, abs);
 			} else {
 				// Tracked file that was clean at turn start; original = HEAD content.
 				const head = spawnSync("git", ["show", `HEAD:${path}`], {
@@ -198,7 +236,7 @@ export function captureTreeChanges(cwd: string): void {
 					content: head.stdout as Buffer,
 					createdByTool: false,
 				});
-				persistSnapshot(turn, abs);
+				persistSnapshot(ctx, turn, abs);
 			}
 		} catch {
 			// skip unreadable
@@ -211,11 +249,14 @@ export function captureTreeChanges(cwd: string): void {
  * a one-time warning) when cwd is not a repo / git fails. Rename entries emit
  * their source path as a separate bare field — skipped via `skipNext`.
  */
-function gitPorcelain(cwd: string): Array<{ status: string; path: string }> | undefined {
+function gitPorcelain(ctx: RollbackContext, cwd: string): Array<{ status: string; path: string }> | undefined {
 	try {
 		const result = spawnSync("git", ["status", "--porcelain", "-z"], { cwd, encoding: "utf8", timeout: 5000 });
 		if (result.error || result.status !== 0) {
-			warnOnce("Rollback tree scope: not a git repository (or git failed) — bash side-effects won't be captured.");
+			warnOnce(
+				ctx,
+				"Rollback tree scope: not a git repository (or git failed) — bash side-effects won't be captured.",
+			);
 			return undefined;
 		}
 		const fields = (result.stdout ?? "").split("\0").filter((f) => f.length > 0);
@@ -233,14 +274,14 @@ function gitPorcelain(cwd: string): Array<{ status: string; path: string }> | un
 		}
 		return entries;
 	} catch {
-		warnOnce("Rollback tree scope: not a git repository (or git failed) — bash side-effects won't be captured.");
+		warnOnce(ctx, "Rollback tree scope: not a git repository (or git failed) — bash side-effects won't be captured.");
 		return undefined;
 	}
 }
 
-function warnOnce(message: string): void {
-	if (repoWarningShown) return;
-	repoWarningShown = true;
+function warnOnce(ctx: RollbackContext, message: string): void {
+	if (ctx.repoWarningShown) return;
+	ctx.repoWarningShown = true;
 	try {
 		warningHandler?.(message);
 	} catch {
@@ -248,11 +289,11 @@ function warnOnce(message: string): void {
 	}
 }
 
-function persistSnapshot(turn: TurnSnapshots, absPath: string): void {
+function persistSnapshot(ctx: RollbackContext, turn: TurnSnapshots, absPath: string): void {
 	try {
 		const snap = turn.files.get(absPath);
 		if (!snap) return;
-		const turnDir = getTurnDir(turn.turnIndex);
+		const turnDir = getTurnDir(ctx, turn.turnIndex);
 		mkdirSync(turnDir, { recursive: true });
 		const manifestPath = join(turnDir, "manifest.json");
 		const manifest = readManifest(manifestPath);
@@ -262,26 +303,38 @@ function persistSnapshot(turn: TurnSnapshots, absPath: string): void {
 			writeFileSync(join(turnDir, snapFile), snap.content);
 			entry.snapFile = snapFile;
 		}
-		manifest[absPath] = entry;
+		manifest.files[absPath] = entry;
+		if (turn.cwd) manifest.cwd = turn.cwd;
 		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 	} catch {
 		// disk persistence failures are non-fatal
 	}
 }
 
-function readManifest(path: string): Record<string, ManifestEntry> {
-	if (!existsSync(path)) return {};
+function readManifest(path: string): TurnManifest {
+	if (!existsSync(path)) return { files: {} };
 	try {
-		return JSON.parse(readFileSync(path, "utf-8"));
+		const parsed = JSON.parse(readFileSync(path, "utf-8"));
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			const files = (parsed as Record<string, unknown>).files;
+			return {
+				cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
+				files:
+					files && typeof files === "object" && !Array.isArray(files)
+						? (files as Record<string, ManifestEntry>)
+						: {},
+			};
+		}
+		return { files: {} };
 	} catch {
-		return {};
+		return { files: {} };
 	}
 }
 
 /** Reload persisted turns from disk (called by initRollback) so rollback survives restarts. */
-function loadPersistedTurns(): void {
+function loadPersistedTurns(ctx: RollbackContext): void {
 	try {
-		const sessionDir = join(ROLLBACK_BASE, sessionId);
+		const sessionDir = join(ROLLBACK_BASE, ctx.sessionId);
 		if (!existsSync(sessionDir)) return;
 		const loaded: TurnSnapshots[] = [];
 		for (const dirName of readdirSync(sessionDir)) {
@@ -291,7 +344,7 @@ function loadPersistedTurns(): void {
 			const turnDir = join(sessionDir, dirName);
 			const manifest = readManifest(join(turnDir, "manifest.json"));
 			const files = new Map<string, Snapshot>();
-			for (const [absPath, meta] of Object.entries(manifest)) {
+			for (const [absPath, meta] of Object.entries(manifest.files)) {
 				let content: Buffer | undefined;
 				if (meta.snapFile) {
 					try {
@@ -302,24 +355,24 @@ function loadPersistedTurns(): void {
 				}
 				files.set(absPath, { existed: meta.existed, content, createdByTool: meta.createdByTool });
 			}
-			loaded.push({ turnIndex, files });
+			loaded.push({ turnIndex, cwd: manifest.cwd, files });
 		}
 		loaded.sort((a, b) => a.turnIndex - b.turnIndex);
-		turns = loaded;
-		currentTurnIndex = loaded.length > 0 ? loaded[loaded.length - 1].turnIndex : -1;
-		pruneTurns();
+		ctx.turns = loaded;
+		ctx.currentTurnIndex = loaded.length > 0 ? loaded[loaded.length - 1].turnIndex : -1;
+		pruneTurns(ctx);
 	} catch {
 		// reload failures are non-fatal — start empty
 	}
 }
 
-function getTurnDir(turnIndex: number): string {
-	return join(ROLLBACK_BASE, sessionId, `turn-${turnIndex}`);
+function getTurnDir(ctx: RollbackContext, turnIndex: number): string {
+	return join(ROLLBACK_BASE, ctx.sessionId, `turn-${turnIndex}`);
 }
 
-function cleanupTurnFiles(turn: TurnSnapshots): void {
+function cleanupTurnFiles(ctx: RollbackContext, turn: TurnSnapshots): void {
 	try {
-		const dir = getTurnDir(turn.turnIndex);
+		const dir = getTurnDir(ctx, turn.turnIndex);
 		if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 	} catch {
 		// ignore
@@ -337,24 +390,64 @@ export interface RollbackResult {
  * with edit/write are deleted in every capture mode; files created outside
  * tools (tree scope) are deleted only under hybrid/shadow-git.
  */
-export function rollbackLastTurn(): RollbackResult {
-	const empty: RollbackResult = { restored: [], deleted: [] };
-	if (!isRollbackEnabled()) return empty;
+function isPathUnderRoot(absPath: string, root: string): boolean {
+	const normRoot = normalize(root).replace(/\\$/g, "");
+	const normPath = normalize(absPath).replace(/\\$/g, "");
+	return normPath === normRoot || normPath.startsWith(`${normRoot}/`) || normPath.startsWith(`${normRoot}\\`);
+}
 
-	while (turns.length > 0 && turns[turns.length - 1].files.size === 0) {
-		const skipped = turns.pop();
-		if (skipped) cleanupTurnFiles(skipped);
+function isWithinAllowedRoots(absPath: string, turn: TurnSnapshots): boolean {
+	if (!turn.cwd) return true; // no recorded cwd: cannot validate, allow (tests / legacy)
+	const roots = [ROLLBACK_BASE, resolve(turn.cwd)];
+	return roots.some((root) => isPathUnderRoot(absPath, root));
+}
+
+let externalModWarningShown = false;
+
+function warnExternalModification(handler: ((message: string) => void) | undefined, message: string): void {
+	if (externalModWarningShown || !handler) return;
+	externalModWarningShown = true;
+	try {
+		handler(message);
+	} catch {
+		// warning delivery is best-effort
 	}
-	if (turns.length === 0) return empty;
+}
 
-	const turn = turns[turns.length - 1];
-	const capture = settingsManager?.getRollbackCapture() ?? "copies";
+export function rollbackLastTurn(sessionId?: string): RollbackResult {
+	const ctx = getContext(sessionId);
+	const empty: RollbackResult = { restored: [], deleted: [] };
+	if (!isRollbackEnabled(ctx.sessionId)) return empty;
+
+	while (ctx.turns.length > 0 && ctx.turns[ctx.turns.length - 1].files.size === 0) {
+		const skipped = ctx.turns.pop();
+		if (skipped) cleanupTurnFiles(ctx, skipped);
+	}
+	if (ctx.turns.length === 0) return empty;
+
+	const turn = ctx.turns[ctx.turns.length - 1];
+	const capture = ctx.settingsManager?.getRollbackCapture() ?? "copies";
 	const restored: string[] = [];
 	const deleted: string[] = [];
 
 	for (const [absPath, snap] of turn.files) {
 		try {
+			if (!isWithinAllowedRoots(absPath, turn)) {
+				warnExternalModification(
+					warningHandler,
+					`Rollback skipped ${absPath}: outside the session working directory or lunR config dir.`,
+				);
+				continue;
+			}
+
 			if (snap.existed && snap.content) {
+				// For tree-scope baseline snapshots, skip the write if the file is
+				// already identical to the snapshot (no actual change occurred during the
+				// turn). Tool snapshots are always written so /rollback reports them.
+				if (!snap.createdByTool && existsSync(absPath)) {
+					const current = readFileSync(absPath);
+					if (current.equals(snap.content)) continue;
+				}
 				mkdirSync(dirname(absPath), { recursive: true });
 				writeFileSync(absPath, snap.content);
 				restored.push(absPath);
@@ -371,24 +464,43 @@ export function rollbackLastTurn(): RollbackResult {
 		}
 	}
 
-	cleanupTurnFiles(turn);
-	turns.pop();
+	cleanupTurnFiles(ctx, turn);
+	ctx.turns.pop();
 
 	return { restored, deleted };
 }
 
-export function getRollbackStatus(): { enabled: boolean; turns: number; files: number } {
+export function getRollbackStatus(sessionId?: string): { enabled: boolean; turns: number; files: number } {
+	const ctx = getContext(sessionId);
 	return {
-		enabled: isRollbackEnabled(),
-		turns: turns.length,
-		files: turns.reduce((sum, t) => sum + t.files.size, 0),
+		enabled: isRollbackEnabled(ctx.sessionId),
+		turns: ctx.turns.length,
+		files: ctx.turns.reduce((sum, t) => sum + t.files.size, 0),
 	};
 }
 
-/** Clear all rollback state + this session's snapshot dir (called on session replace). */
-export function clearRollback(): void {
-	for (const turn of turns) {
-		cleanupTurnFiles(turn);
+/** Clear rollback state for a session (or all sessions when no id is passed). */
+export function clearRollback(sessionId?: string): void {
+	if (sessionId === undefined) {
+		for (const ctx of contexts.values()) {
+			for (const turn of ctx.turns) {
+				cleanupTurnFiles(ctx, turn);
+			}
+			try {
+				const sessionDir = join(ROLLBACK_BASE, ctx.sessionId);
+				if (existsSync(sessionDir)) rmSync(sessionDir, { recursive: true, force: true });
+			} catch {
+				// ignore
+			}
+		}
+		contexts.clear();
+		return;
+	}
+
+	const ctx = contexts.get(sessionId);
+	if (!ctx) return;
+	for (const turn of ctx.turns) {
+		cleanupTurnFiles(ctx, turn);
 	}
 	try {
 		const sessionDir = join(ROLLBACK_BASE, sessionId);
@@ -396,9 +508,7 @@ export function clearRollback(): void {
 	} catch {
 		// ignore
 	}
-	turns = [];
-	currentTurnIndex = -1;
-	sessionForceEnabled = false;
+	contexts.delete(sessionId);
 }
 
 function snapFileName(absPath: string): string {

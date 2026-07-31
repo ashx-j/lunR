@@ -31,6 +31,7 @@ export class ExtensionSelectorComponent extends Container {
 	/** lunr: allow setting the initial selection (e.g. default to Cancel for disclaimers). */
 	setSelectedIndex(index: number): void {
 		this.selectedIndex = Math.max(0, Math.min(index, this.options.length - 1));
+		this.updateList();
 	}
 
 	constructor(

@@ -17,6 +17,7 @@
 import { DiscordAdapter } from "./adapters/discord.ts";
 import { TelegramAdapter } from "./adapters/telegram.ts";
 import { AgentBridge } from "./agent-bridge.ts";
+import { handleApprovalCallback } from "./approval.ts";
 import { addAllowedUser } from "./authz.ts";
 import { handleCallback, startButtonSweeper, stopButtonSweeper } from "./buttons.ts";
 import {
@@ -164,7 +165,7 @@ async function runDaemon(): Promise<number> {
 
 	const pairing = createPairingStore();
 	const bridge = new AgentBridge();
-	const router = createRouter({ adapters, cfg, pairing, bridge });
+	const router = createRouter({ adapters, cfg, pairing, bridge, reloadConfig: true });
 
 	const connected: PlatformAdapter[] = [];
 	startButtonSweeper();
@@ -178,8 +179,11 @@ async function runDaemon(): Promise<number> {
 			adapter.onMessage((event) => {
 				void router.handleEvent(event);
 			});
-			adapter.onCallback((event) => {
-				void handleCallback(event, { adapters, cfg, pairing, bridge, adapter });
+			adapter.onCallback(async (event) => {
+				const consumed = await handleApprovalCallback(event, adapter);
+				if (!consumed) {
+					void handleCallback(event, { adapters, cfg, pairing, bridge, adapter });
+				}
 			});
 			connected.push(adapter);
 			console.log(`lunR gateway: ${platform} connected`);

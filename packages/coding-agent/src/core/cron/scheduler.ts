@@ -36,6 +36,8 @@ export interface SchedulerDeps {
 	deliverResult: (job: CronJob, content: string) => Promise<void>;
 	/** Tick interval; default 60s. */
 	intervalMs?: number;
+	/** Per-job wall-clock timeout; default 5 minutes. */
+	jobTimeoutMs?: number;
 }
 
 export const SILENT_TAG = "[SILENT]";
@@ -131,9 +133,28 @@ export async function executeJob(job: CronJob, deps: SchedulerDeps): Promise<voi
 /** One scheduler tick: run every due job sequentially. Exported for tests. */
 export async function runSchedulerTick(deps: SchedulerDeps, now: Date = new Date()): Promise<void> {
 	const due = await getDueJobs(now);
+	const jobTimeoutMs = deps.jobTimeoutMs ?? 5 * 60 * 1000;
 	for (const dueJob of due) {
 		if (dueJob.schedule.kind !== "once") await advanceNextRun(dueJob.id);
-		await executeJob(getJob(dueJob.id), deps);
+		const job = getJob(dueJob.id);
+		let timedOut = false;
+		const executePromise = executeJob(job, deps);
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			const timer = setTimeout(() => {
+				timedOut = true;
+				reject(new Error(`timed out after ${jobTimeoutMs}ms`));
+			}, jobTimeoutMs);
+			// If executeJob finishes, this promise is discarded; the timer must not keep the process alive.
+			timer.unref?.();
+		});
+		try {
+			await Promise.race([executePromise, timeoutPromise]);
+		} catch (err) {
+			if (!timedOut) throw err;
+			const message = err instanceof Error ? err.message : String(err);
+			await markJobRun(job.id, { status: "error", error: message });
+			await deliverFailure(job, deps, message);
+		}
 	}
 }
 

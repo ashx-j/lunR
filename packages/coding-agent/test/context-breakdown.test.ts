@@ -103,6 +103,13 @@ describe("computeContextBreakdown", () => {
 		expect(breakdown.toolResults).toBe(estimateTokens(messages[2]));
 		expect(breakdown.summaries).toBe(0);
 
+		expect(breakdown.counts.user).toBe(1);
+		expect(breakdown.counts.assistantText).toBe(1);
+		expect(breakdown.counts.thinking).toBe(1);
+		expect(breakdown.counts.toolCalls).toBe(1);
+		expect(breakdown.counts.toolResults).toBe(1);
+		expect(breakdown.counts.summaries).toBe(0);
+
 		const sum =
 			breakdown.systemPrompt +
 			breakdown.toolDefinitions +
@@ -191,12 +198,12 @@ describe("renderContextBox", () => {
 
 		expect(text).toContain("Context");
 		expect(text).toContain("anthropic/claude-sonnet-4-5");
-		expect(text).toContain("Estimated (chars/4)");
+		expect(text).toContain("Estimated (chars/4), current session only");
 		expect(text).toContain("System prompt + files");
 		expect(text).toContain("Tool definitions");
-		expect(text).toContain("User messages");
-		expect(text).toContain("Assistant text");
-		expect(text).toContain("Thinking");
+		expect(text).toContain("User messages (1)");
+		expect(text).toContain("Assistant text (1)");
+		expect(text).toContain("Thinking (1)");
 		expect(text).toContain("Estimated total");
 		expect(text).toContain("░");
 		// Bordered box chrome

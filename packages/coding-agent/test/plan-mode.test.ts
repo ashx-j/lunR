@@ -12,6 +12,12 @@ describe("planModeBlockReason", () => {
 		expect(planModeBlockReason("write", { path: "a.ts" })).toBe(PLAN_MODE_BLOCK_MESSAGE);
 	});
 
+	it("blocks extension mutating tools", () => {
+		for (const tool of ["behavior_add", "behavior_remove", "memory_add", "memory_remove", "cron"]) {
+			expect(planModeBlockReason(tool, { content: "x" }), tool).toBe(PLAN_MODE_BLOCK_MESSAGE);
+		}
+	});
+
 	it("allows read tools", () => {
 		expect(planModeBlockReason("read", { path: "a.ts" })).toBeUndefined();
 		expect(planModeBlockReason("grep", { pattern: "x" })).toBeUndefined();
@@ -61,8 +67,10 @@ describe("isMutatingBashCommand", () => {
 			"git tag -l",
 			"git remote -v",
 			"npm test",
-			"npm run build",
 			"node --version",
+			"node -v",
+			"python --version",
+			"python3 -V",
 			"FOO=bar grep x y",
 			"cat a.txt && grep b a.txt",
 			"ls | wc -l",
@@ -70,6 +78,12 @@ describe("isMutatingBashCommand", () => {
 			'echo "a > b"',
 		]) {
 			expect(isMutatingBashCommand(command), command).toBe(false);
+		}
+	});
+
+	it("blocks non-allowlist read-only-looking commands", () => {
+		for (const command of ["vim file.ts", "nano file.ts", "make", "ninja", "cmake --version", "rustc file.rs"]) {
+			expect(isMutatingBashCommand(command), command).toBe(true);
 		}
 	});
 
@@ -97,6 +111,23 @@ describe("isMutatingBashCommand", () => {
 		expect(isMutatingBashCommand("echo hello > file.txt")).toBe(true);
 		expect(isMutatingBashCommand("cat a >> b")).toBe(true);
 		expect(isMutatingBashCommand("ls > /tmp/list.txt")).toBe(true);
+		expect(isMutatingBashCommand("ls &> /tmp/list.txt")).toBe(true);
+	});
+
+	it("blocks command substitution and process substitution", () => {
+		expect(isMutatingBashCommand("echo $(rm -rf .)")).toBe(true);
+		expect(isMutatingBashCommand("echo `rm -rf .`")).toBe(true);
+		expect(isMutatingBashCommand("cat <(echo mutated)")).toBe(true);
+		expect(isMutatingBashCommand("bash -c 'echo hi'")).toBe(true);
+		expect(isMutatingBashCommand("bash -ic 'alias e=rm; e x'")).toBe(true);
+	});
+
+	it("blocks interpreters running code", () => {
+		expect(isMutatingBashCommand("python -c 'import os; os.remove(\"x\")'")).toBe(true);
+		expect(isMutatingBashCommand("python3 -m os")).toBe(true);
+		expect(isMutatingBashCommand("python script.py")).toBe(true);
+		expect(isMutatingBashCommand("node -e 'fs.unlinkSync(\"x\")'")).toBe(true);
+		expect(isMutatingBashCommand("node script.js")).toBe(true);
 	});
 
 	it("blocks mutating git subcommands", () => {
@@ -146,5 +177,6 @@ describe("isMutatingBashCommand", () => {
 		expect(isMutatingBashCommand("ls && rm -rf dist")).toBe(true);
 		expect(isMutatingBashCommand("cat ok.txt ; rm bad.txt")).toBe(true);
 		expect(isMutatingBashCommand("ls | xargs rm")).toBe(true);
+		expect(isMutatingBashCommand("ls || rm -rf dist")).toBe(true);
 	});
 });

@@ -1,4 +1,4 @@
-import { Container, type Focusable, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, type Focusable, getKeybindings, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { TrackedProcess } from "../../../core/process-registry.ts";
 import * as processRegistry from "../../../core/process-registry.ts";
 import { theme } from "../theme/theme.ts";
@@ -54,13 +54,23 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 
 		if (this.processes.length === 0) {
 			this.addChild(new Text(theme.fg("dim", "No processes tracked this session."), 0, 0));
+			this.addChild(
+				new Text(theme.fg("dim", "Only processes spawned directly by the bash tool are tracked."), 0, 0),
+			);
 			this.addChild(new Spacer(1));
 		} else {
 			for (let i = 0; i < this.processes.length; i++) {
 				const p = this.processes[i];
 				if (!p) continue;
 				const elapsed = formatElapsed(p.startedAt);
-				const status = p.status === "paused" ? "paused" : "running";
+				let status: string;
+				if (p.status === "exited") {
+					status = `exited(${p.exitCode ?? "?"})`;
+				} else if (p.status === "paused") {
+					status = "paused";
+				} else {
+					status = "running";
+				}
 				const prefix = i === this.selected ? "▸ " : "  ";
 				const line = `${prefix}${p.pid} · ${status} · ${elapsed} · ${truncateToWidth(p.command, 60)}`;
 				const colored = i === this.selected ? theme.fg("accent", line) : theme.fg("dim", line);
@@ -75,10 +85,11 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 		}
 
 		const isWin = processRegistry.isWindows();
+		const isExited = this.processes.length > 0 && this.processes[this.selected]?.status === "exited";
 		const hints: string[] = [];
-		hints.push(rawKeyHint("k", "kill"));
-		hints.push(rawKeyHint("r", "restart"));
-		if (!isWin) hints.push(rawKeyHint("p", "pause/resume"));
+		if (!isExited) hints.push(rawKeyHint("x", "kill"));
+		if (!isExited) hints.push(rawKeyHint("r", "restart"));
+		if (!isWin && !isExited) hints.push(rawKeyHint("p", "pause/resume"));
 		hints.push(rawKeyHint("Esc", "close"));
 		this.addChild(new Text(hints.join("  "), 0, 0));
 		this.addChild(new DynamicBorder());
@@ -105,7 +116,12 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 			return;
 		}
 
-		if (data === "\u001b" || data === "q") {
+		if (data === "q") {
+			this.cleanup();
+			this.done();
+			return;
+		}
+		if (getKeybindings().matches(data, "tui.select.cancel")) {
 			this.cleanup();
 			this.done();
 			return;
@@ -113,12 +129,12 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 
 		if (this.processes.length === 0) return;
 
-		if (data === "\u001b[A" || data === "k") {
+		if (data === "\u001b[A") {
 			this.selected = (this.selected - 1 + this.processes.length) % this.processes.length;
 			this.rebuild();
 			return;
 		}
-		if (data === "\u001b[B" || data === "j") {
+		if (data === "\u001b[B") {
 			this.selected = (this.selected + 1) % this.processes.length;
 			this.rebuild();
 			return;
@@ -127,17 +143,19 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 		const p = this.processes[this.selected];
 		if (!p) return;
 
-		if (data === "K" || data === "x") {
+		if (p.status === "exited") return;
+
+		if (data === "x" || data === "X") {
 			this.confirmKill = p.pid;
 			this.rebuild();
 			return;
 		}
-		if (data === "R") {
+		if (data === "r" || data === "R") {
 			processRegistry.restart(p.pid);
 			this.refresh();
 			return;
 		}
-		if (data === "P") {
+		if (data === "p" || data === "P") {
 			try {
 				if (p.status === "paused") processRegistry.resume(p.pid);
 				else processRegistry.pause(p.pid);

@@ -193,6 +193,36 @@ describe("rollback", () => {
 		expect(existsSync(hybridFile)).toBe(false);
 	});
 
+	it("skips restoring paths outside the session cwd or lunR config dir", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const outside = join(tmpdir(), `rollback-outside-${Date.now()}.txt`);
+		writeFileSync(outside, "outside");
+		rollback.beginTurn(testDir); // cwd recorded
+		rollback.rollbackSnapshotBeforeWrite(outside);
+		writeFileSync(outside, "modified");
+		const result = rollback.rollbackLastTurn();
+		expect(result.restored).not.toContain(outside);
+		expect(readFileSync(outside, "utf8")).toBe("modified");
+	});
+
+	it("skips unchanged tree-scope baseline files", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		mockSM.getRollbackScope = () => "tree";
+		initGitRepo(testDir);
+		const filePath = join(testDir, "unchanged.txt");
+		writeFileSync(filePath, "original");
+		spawnSync("git", ["add", "."], { cwd: testDir });
+		spawnSync("git", ["commit", "-m", "init"], { cwd: testDir });
+
+		rollback.beginTurn(testDir);
+		// No modification during the turn.
+		rollback.captureTreeChanges(testDir);
+
+		const result = rollback.rollbackLastTurn();
+		expect(result.restored).not.toContain(filePath);
+		expect(readFileSync(filePath, "utf8")).toBe("original");
+	});
+
 	it("disabled rollback is a no-op", async () => {
 		const rollback = await import("../src/core/rollback.ts");
 		mockSM.getRollbackEnabled = () => false;
@@ -234,16 +264,34 @@ describe("rollback", () => {
 		expect(readFileSync(file1, "utf8")).toBe("v1-modified");
 	});
 
-	it("getRollbackStatus reports state", async () => {
+	it("isolates turns per session id", async () => {
 		const rollback = await import("../src/core/rollback.ts");
-		rollback.beginTurn();
-		const filePath = join(testDir, "status.ts");
-		writeFileSync(filePath, "content");
-		rollback.rollbackSnapshotBeforeWrite(filePath);
+		const sidA = "session-a";
+		const sidB = "session-b";
+		rollback.initRollback(mockSM as SettingsManager, sidA);
+		rollback.enableRollbackForSession(sidA);
+		rollback.beginTurn(undefined, sidA);
+		const fileA = join(testDir, "a.ts");
+		writeFileSync(fileA, "A");
+		rollback.rollbackSnapshotBeforeWrite(fileA, sidA);
 
-		const status = rollback.getRollbackStatus();
-		expect(status.enabled).toBe(true);
-		expect(status.turns).toBeGreaterThanOrEqual(1);
-		expect(status.files).toBeGreaterThanOrEqual(1);
+		rollback.initRollback(mockSM as SettingsManager, sidB);
+		rollback.enableRollbackForSession(sidB);
+		rollback.beginTurn(undefined, sidB);
+		const fileB = join(testDir, "b.ts");
+		writeFileSync(fileB, "B");
+		rollback.rollbackSnapshotBeforeWrite(fileB, sidB);
+
+		expect(rollback.getRollbackStatus(sidA).files).toBe(1);
+		expect(rollback.getRollbackStatus(sidB).files).toBe(1);
+
+		// Rolling back session A should only touch fileA.
+		const resultA = rollback.rollbackLastTurn(sidA);
+		expect(resultA.restored).toContain(fileA);
+		expect(resultA.restored).not.toContain(fileB);
+		expect(rollback.getRollbackStatus(sidA).turns).toBe(0);
+		expect(rollback.getRollbackStatus(sidB).turns).toBe(1);
+
+		rollback.clearRollback();
 	});
 });

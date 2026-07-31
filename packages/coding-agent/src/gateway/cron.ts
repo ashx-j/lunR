@@ -24,7 +24,8 @@
  */
 
 import { beginCronFire, endCronFire } from "../core/cron/fire-guard.ts";
-import type { CronJob } from "../core/cron/jobs.ts";
+import type { CronJob, CronJobOrigin } from "../core/cron/jobs.ts";
+import { setCronDeliverValidator } from "../core/cron/jobs.ts";
 import { startScheduler } from "../core/cron/scheduler.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
 import { type GatewayConfig, platformConfigFor } from "./config.ts";
@@ -158,6 +159,41 @@ function resolveTarget(target: string, job: CronJob, cfg: GatewayConfig): Resolv
 	return { platform, chatId: home };
 }
 
+function createDeliverValidator(
+	cfg: GatewayConfig,
+): (deliver: string, origin?: CronJobOrigin | null) => string | undefined {
+	return (deliver, origin) => {
+		const targets = deliver
+			.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean);
+		for (const target of targets) {
+			if (target === "local") continue;
+			if (target === "origin") continue; // delivery time resolves/fails with a sensible error
+			const explicit = EXPLICIT_TARGET_RE.exec(target);
+			const platform = explicit ? explicit[1].toLowerCase() : target.toLowerCase();
+			const platformCfg = platformConfigFor(cfg, platform);
+			if (!platformCfg) return `unknown platform "${explicit ? explicit[1] : target}"`;
+			if (explicit) {
+				const chatId = explicit[2];
+				const allowed = new Set(
+					[
+						platformCfg.homeChannel,
+						...(platformCfg.allowedChats ?? []),
+						...(origin?.platform === platform ? [origin.chatId] : []),
+					].filter((x): x is string => !!x),
+				);
+				if (!allowed.has(chatId)) {
+					return `deliver target "${target}" is not an allowed chat for ${platform}`;
+				}
+			} else if (!platformCfg.homeChannel) {
+				return `no homeChannel configured for ${platform}`;
+			}
+		}
+		return undefined;
+	};
+}
+
 /** Wrap the run output with a compact cron header. */
 export function wrapCronContent(job: CronJob, content: string): string {
 	return `☾ Cron: ${job.name}\n———\n${content}`;
@@ -214,6 +250,10 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 	const { adapters, cfg } = options;
 	const sessionFactory = options.sessionFactory ?? defaultCronSessionFactory;
 	const platformDeliverer = createPlatformDeliverer(adapters, cfg);
+
+	// Reject deliver targets that are not local, origin, a configured home channel,
+	// or an explicit chat in the platform allowlist / the job's origin.
+	setCronDeliverValidator(createDeliverValidator(cfg));
 
 	// Replace the local-notify bridge lunr-cron registered with the platform deliverer.
 	(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;

@@ -12,11 +12,17 @@ export interface ContextViewData {
 interface BreakdownRow {
 	label: string;
 	tokens: number;
+	count?: number;
+}
+
+function renderRowLabel(row: BreakdownRow): string {
+	return row.count !== undefined && row.count > 0 ? `${row.label} (${row.count})` : row.label;
 }
 
 function rowLine(row: BreakdownRow, labelWidth: number, contextWindow: number): string {
 	const percent = contextWindow > 0 ? (row.tokens / contextWindow) * 100 : 0;
-	return `  ${row.label.padEnd(labelWidth)}  ${usageBar(percent)}  ${formatTokens(row.tokens)}`;
+	const label = renderRowLabel(row);
+	return `  ${label.padEnd(labelWidth)}  ${usageBar(percent)}  ${formatTokens(row.tokens)}`;
 }
 
 /**
@@ -28,21 +34,21 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	const content: string[] = [];
 
 	if (data.model) content.push(data.model);
-	content.push(theme.fg("dim", "Estimated (chars/4) — actual token counts may differ."));
+	content.push(theme.fg("dim", "Estimated (chars/4), current session only — actual token counts may differ."));
 	content.push("");
 
 	const rows: BreakdownRow[] = [
 		{ label: "System prompt + files", tokens: breakdown.systemPrompt },
 		{ label: "Tool definitions", tokens: breakdown.toolDefinitions },
-		{ label: "User messages", tokens: breakdown.user },
-		{ label: "Assistant text", tokens: breakdown.assistantText },
-		{ label: "Thinking", tokens: breakdown.thinking },
-		{ label: "Tool calls", tokens: breakdown.toolCalls },
-		{ label: "Tool results", tokens: breakdown.toolResults },
-		{ label: "Summaries", tokens: breakdown.summaries },
+		{ label: "User messages", tokens: breakdown.user, count: breakdown.counts.user },
+		{ label: "Assistant text", tokens: breakdown.assistantText, count: breakdown.counts.assistantText },
+		{ label: "Thinking", tokens: breakdown.thinking, count: breakdown.counts.thinking },
+		{ label: "Tool calls", tokens: breakdown.toolCalls, count: breakdown.counts.toolCalls },
+		{ label: "Tool results", tokens: breakdown.toolResults, count: breakdown.counts.toolResults },
+		{ label: "Summaries", tokens: breakdown.summaries, count: breakdown.counts.summaries },
 	].filter((row) => row.tokens > 0);
 
-	const labelWidth = Math.max(...rows.map((row) => row.label.length), "Estimated total".length);
+	const labelWidth = Math.max(...rows.map((row) => renderRowLabel(row).length), "Estimated total".length);
 	for (const row of rows) {
 		content.push(rowLine(row, labelWidth, breakdown.contextWindow));
 	}

@@ -14,7 +14,8 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { Cron } from "croner";
 import { getAgentDir } from "../../config.ts";
 
@@ -301,8 +302,58 @@ function nextSlotAfter(job: CronJob, after: Date): Date | null {
 }
 
 // ---------------------------------------------------------------------------
-// CRUD
+// Validation
 // ---------------------------------------------------------------------------
+
+let workdirRoots: string[] = [process.cwd(), homedir()];
+let deliverValidator: ((deliver: string, origin?: CronJobOrigin | null) => string | undefined) | undefined;
+
+/**
+ * Configure the allowed absolute roots for cron job workdirs. Relative workdirs
+ * are resolved against process.cwd() and must fall under one of these roots.
+ * Default roots are process.cwd() and the user's home directory.
+ */
+export function setCronWorkdirRoots(roots: string[]): void {
+	workdirRoots = roots.map((r) => normalize(resolve(r)));
+}
+
+/**
+ * Configure a deliver-target validator. When set, createJob/updateJob reject
+ * deliver strings that the validator does not approve. The gateway uses this
+ * to prevent delivery to arbitrary chats.
+ */
+export function setCronDeliverValidator(
+	fn: ((deliver: string, origin?: CronJobOrigin | null) => string | undefined) | undefined,
+): void {
+	deliverValidator = fn;
+}
+
+/** Test seam: restore default validation state. */
+export function resetCronValidators(): void {
+	workdirRoots = [process.cwd(), homedir()];
+	deliverValidator = undefined;
+}
+
+function isPathUnderRoot(absPath: string, root: string): boolean {
+	const normRoot = normalize(root).replace(/\\$/g, "");
+	const normPath = normalize(absPath).replace(/\\$/g, "");
+	return normPath === normRoot || normPath.startsWith(`${normRoot}/`) || normPath.startsWith(`${normRoot}\\`);
+}
+
+function validateWorkdir(workdir: string): string | undefined {
+	const candidate = resolve(workdir);
+	if (isAbsolute(workdir) && !workdirRoots.some((root) => isPathUnderRoot(candidate, root))) {
+		return `workdir ${workdir} is outside allowed roots`;
+	}
+	if (!workdirRoots.some((root) => isPathUnderRoot(candidate, root))) {
+		return `workdir ${workdir} resolves outside allowed roots`;
+	}
+	return undefined;
+}
+
+function runDeliverValidation(deliver: string, origin?: CronJobOrigin | null): string | undefined {
+	return deliverValidator?.(deliver, origin);
+}
 
 function deriveName(prompt: string): string {
 	const first = prompt.split("\n")[0].replace(/\s+/g, " ").trim();
@@ -312,6 +363,14 @@ function deriveName(prompt: string): string {
 export async function createJob(input: CreateJobInput): Promise<CronJob> {
 	const prompt = input.prompt.trim();
 	if (!prompt) throw new Error("createJob: prompt is empty");
+	if (input.workdir) {
+		const err = validateWorkdir(input.workdir);
+		if (err) throw new Error(`createJob: ${err}`);
+	}
+	if (input.deliver) {
+		const err = runDeliverValidation(input.deliver, input.origin);
+		if (err) throw new Error(`createJob: ${err}`);
+	}
 	const now = new Date();
 	const parsed = parseSchedule(input.schedule, now);
 	const isOneShot = parsed.schedule.kind === "once";
@@ -367,6 +426,18 @@ export function listJobs(): CronJob[] {
 export async function updateJob(idOrName: string, patch: JobPatch): Promise<CronJob> {
 	const job = getJob(idOrName);
 	if (patch.name !== undefined) job.name = patch.name.trim().slice(0, MAX_NAME_LEN) || job.name;
+	if (patch.workdir !== undefined) {
+		if (patch.workdir) {
+			const err = validateWorkdir(patch.workdir);
+			if (err) throw new Error(`updateJob: ${err}`);
+		}
+		job.workdir = patch.workdir;
+	}
+	if (patch.deliver !== undefined) {
+		const err = runDeliverValidation(patch.deliver, patch.origin ?? job.origin);
+		if (err) throw new Error(`updateJob: ${err}`);
+		job.deliver = patch.deliver.trim() || "local";
+	}
 	if (patch.prompt !== undefined) {
 		const prompt = patch.prompt.trim();
 		if (!prompt) throw new Error("updateJob: prompt is empty");
@@ -379,7 +450,6 @@ export async function updateJob(idOrName: string, patch: JobPatch): Promise<Cron
 		if (parsed.schedule.kind === "once") job.repeat.times = 1;
 		job.nextRunAt = computeNextRun(job)?.toISOString() ?? null;
 	}
-	if (patch.deliver !== undefined) job.deliver = patch.deliver.trim() || "local";
 	if (patch.enabled !== undefined) job.enabled = patch.enabled;
 	if (patch.times !== undefined) {
 		if (patch.times !== null && (!Number.isInteger(patch.times) || patch.times < 1)) {
@@ -388,7 +458,6 @@ export async function updateJob(idOrName: string, patch: JobPatch): Promise<Cron
 		if (job.schedule.kind !== "once") job.repeat.times = patch.times;
 	}
 	if (patch.contextFrom !== undefined) job.contextFrom = patch.contextFrom;
-	if (patch.workdir !== undefined) job.workdir = patch.workdir;
 	if (patch.origin !== undefined) job.origin = patch.origin;
 	if (patch.nextRunAt !== undefined) job.nextRunAt = patch.nextRunAt;
 	if (patch.lastDeliveryError !== undefined) job.lastDeliveryError = patch.lastDeliveryError;
@@ -483,7 +552,7 @@ export async function advanceNextRun(jobId: string): Promise<CronJob> {
 /**
  * Record a finished run: lastRunAt/lastStatus/lastError, repeat.completed++,
  * then either complete the job (finite repeats exhausted, one-shots included)
- * or re-anchor nextRunAt off the actual lastRunAt.
+ * or re-anchor nextRunAt off the previous scheduled slot (no drift).
  */
 export async function markJobRun(jobId: string, result: { status: CronJobStatus; error?: string }): Promise<CronJob> {
 	const job = getJob(jobId);
@@ -496,7 +565,16 @@ export async function markJobRun(jobId: string, result: { status: CronJobStatus;
 		job.state = "completed";
 		job.nextRunAt = null;
 	} else if (job.schedule.kind === "interval") {
-		job.nextRunAt = new Date(now.getTime() + (job.schedule.minutes ?? 0) * 60_000).toISOString();
+		// Anchor to the previous scheduled slot + period to avoid cumulative drift.
+		// If advanceNextRun already moved nextRunAt into the future (scheduler path),
+		// keep it; otherwise (manual run) step forward from now.
+		const current = job.nextRunAt ? new Date(job.nextRunAt) : now;
+		if (current.getTime() > now.getTime()) {
+			// Already advanced by the scheduler — keep the scheduled slot.
+			job.nextRunAt = current.toISOString();
+		} else {
+			job.nextRunAt = nextSlotAfter(job, now)?.toISOString() ?? null;
+		}
 	} else if (job.schedule.kind === "cron") {
 		job.nextRunAt = new Cron(job.schedule.expr!).nextRun(now)?.toISOString() ?? null;
 	}

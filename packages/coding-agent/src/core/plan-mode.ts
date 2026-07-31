@@ -27,32 +27,65 @@ export const PLAN_MODE_ADDENDUM =
 /** Error returned to the model when a tool call is blocked by plan mode. */
 export const PLAN_MODE_BLOCK_MESSAGE = "Plan mode is active — propose a plan; no file changes.";
 
-const BLOCKED_TOOLS = new Set(["edit", "write"]);
+const BLOCKED_TOOLS = new Set([
+	"edit",
+	"write",
+	"behavior_add",
+	"behavior_remove",
+	"memory_add",
+	"memory_remove",
+	"cron",
+]);
 
-const MUTATING_COMMANDS = new Set([
-	"rm",
-	"rmdir",
-	"mv",
-	"cp",
-	"mkdir",
-	"touch",
-	"chmod",
-	"chown",
-	"chgrp",
-	"ln",
-	"tee",
-	"truncate",
-	"dd",
-	"shred",
-	"install",
-	"patch",
-	"sudo",
-	"su",
-	"xargs",
-	"npx",
-	"bunx",
-	"uvx",
-	"pipx",
+/** Small allowlist of read-only commands permitted in plan mode. Everything else is rejected. */
+const ALLOWED_COMMANDS = new Set([
+	"ls",
+	"ll",
+	"cat",
+	"tac",
+	"grep",
+	"rg",
+	"find",
+	"pwd",
+	"echo",
+	"printf",
+	"head",
+	"tail",
+	"wc",
+	"less",
+	"more",
+	"sort",
+	"uniq",
+	"diff",
+	"cmp",
+	"comm",
+	"test",
+	"[",
+	"true",
+	"false",
+	"which",
+	"whereis",
+	"stat",
+	"file",
+	"id",
+	"whoami",
+	"who",
+	"date",
+	"cal",
+	"env",
+	"printenv",
+	"uname",
+	"hostname",
+	"uptime",
+	"nproc",
+	"tput",
+	"git",
+	"gh",
+	"node",
+	"npm",
+	"pnpm",
+	"yarn",
+	"bun",
 ]);
 
 const MUTATING_GIT_SUBCOMMANDS = new Set([
@@ -107,14 +140,6 @@ const PACKAGE_MANAGER_MUTATIONS: Record<string, Set<string>> = {
 	pnpm: new Set(["install", "add", "remove", "uninstall", "update", "upgrade", "publish", "link", "unlink", "init"]),
 	yarn: new Set(["install", "add", "remove", "uninstall", "upgrade", "publish", "link", "unlink", "init"]),
 	bun: new Set(["install", "add", "remove", "uninstall", "update", "upgrade", "publish", "link", "unlink", "init"]),
-	deno: new Set(["install", "add", "remove", "uninstall", "upgrade", "publish", "init"]),
-	pip: new Set(["install", "uninstall"]),
-	pip3: new Set(["install", "uninstall"]),
-	uv: new Set(["pip", "add", "remove", "sync", "init"]),
-	cargo: new Set(["add", "install", "remove", "uninstall", "update", "publish", "init", "new"]),
-	gem: new Set(["install", "uninstall", "update", "push"]),
-	composer: new Set(["install", "require", "remove", "update", "init"]),
-	poetry: new Set(["install", "add", "remove", "update", "publish", "init", "new"]),
 };
 
 // Almost every subcommand mutates the system.
@@ -129,6 +154,20 @@ const ALWAYS_MUTATING_MANAGERS = new Set([
 	"winget",
 	"scoop",
 ]);
+
+/** Flags that cause an interpreter to execute code and are never allowed in plan mode. */
+const EXECUTING_NODE_FLAGS = new Set([
+	"-e",
+	"--eval",
+	"-p",
+	"--print",
+	"-r",
+	"--require",
+	"--import",
+	"-i",
+	"--interactive",
+]);
+const EXECUTING_PYTHON_FLAGS = new Set(["-c", "-m", "-i", "--interactive"]);
 
 /**
  * Returns the block reason when plan mode should block this tool call, else undefined.
@@ -151,12 +190,22 @@ function readBashCommand(input: unknown): string {
 	return typeof command === "string" ? command : "";
 }
 
-/** Conservative heuristic: true when the bash command may modify files or system state. */
+/**
+ * Plan-mode bash allowlist. A command is mutating unless every segment is a
+ * known read-only command used safely (no redirects, no command substitution,
+ * no process substitution, no executing-interpreter flags).
+ */
 export function isMutatingBashCommand(command: string): boolean {
+	if (!command.trim()) return false;
+
 	// Any output redirect outside quotes can write a file.
 	if (hasUnquotedRedirect(command)) return true;
 
-	// Every segment separated by ; | & must individually be read-only.
+	// Command substitution / process substitution / grouped redirect syntaxes
+	// bypass a simple command-name check.
+	if (hasShellSubstitution(command)) return true;
+
+	// Every segment separated by ; | & && || must individually be read-only.
 	for (const segment of splitShellSegments(command)) {
 		if (isMutatingSegment(segment)) return true;
 	}
@@ -196,6 +245,7 @@ function splitShellSegments(command: string): string[] {
 	let start = 0;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
+		const next = command[i + 1];
 		if (escaped) {
 			escaped = false;
 			continue;
@@ -212,15 +262,51 @@ function splitShellSegments(command: string): string[] {
 			quote = ch;
 			continue;
 		}
+		// Combined operators && and || split as one boundary.
+		if ((ch === "&" && next === "&") || (ch === "|" && next === "|")) {
+			segments.push(command.slice(start, i));
+			i++;
+			start = i + 1;
+			continue;
+		}
 		if (ch === ";" || ch === "|" || ch === "&" || ch === "\n") {
 			segments.push(command.slice(start, i));
-			// skip the second char of && / ||
-			if ((ch === "&" || ch === "|") && command[i + 1] === ch) i++;
 			start = i + 1;
 		}
 	}
 	segments.push(command.slice(start));
 	return segments.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/** True when the command contains command/process substitution outside quotes. */
+function hasShellSubstitution(command: string): boolean {
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (ch === quote) quote = undefined;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (ch === "`") return true;
+		if (ch === "$" && command[i + 1] === "(") return true;
+		if (ch === "<" && command[i + 1] === "(") return true;
+		if (ch === ">" && command[i + 1] === "(") return true;
+		if (ch === "&" && command[i + 1] === ">") return true;
+	}
+	return false;
 }
 
 function isMutatingSegment(segment: string): boolean {
@@ -234,7 +320,6 @@ function isMutatingSegment(segment: string): boolean {
 	const command = basenameOf(tokens[0]).toLowerCase();
 	const args = tokens.slice(1);
 
-	if (MUTATING_COMMANDS.has(command)) return true;
 	if (ALWAYS_MUTATING_MANAGERS.has(command)) return true;
 
 	if (command === "sed") {
@@ -276,7 +361,16 @@ function isMutatingSegment(segment: string): boolean {
 		return subcommand !== undefined && pkgMutations.has(subcommand);
 	}
 
-	return false;
+	// Node / Python interpreters: flag-only, no executing flags, no positional scripts.
+	if (command === "node") {
+		return args.some((a) => !a.startsWith("-")) || args.some((a) => EXECUTING_NODE_FLAGS.has(a));
+	}
+	if (command === "python" || command === "python3") {
+		return args.some((a) => !a.startsWith("-")) || args.some((a) => EXECUTING_PYTHON_FLAGS.has(a));
+	}
+
+	// Final gate: the command must be in the read-only allowlist.
+	return !ALLOWED_COMMANDS.has(command);
 }
 
 function isMutatingGit(args: string[]): boolean {

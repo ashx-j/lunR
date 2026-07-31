@@ -17,10 +17,13 @@
  * Errors surface as a compact "⚠ <one-line>" — never a stack trace.
  */
 
+import { existsSync } from "node:fs";
+
 import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
+import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
 import { isAuthorized } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
-import { type GatewayConfig, platformConfigFor } from "./config.ts";
+import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import type { PairingStore } from "./pairing.ts";
 import { buildSessionKey } from "./session-keys.ts";
 import { applySilenceFilter, StreamConsumer } from "./stream.ts";
@@ -44,6 +47,8 @@ export interface RouterDeps {
 	cfg: GatewayConfig;
 	pairing: PairingStore;
 	bridge: BridgeLike;
+	/** Reload gateway.json on every inbound event so CLI config edits (e.g. pair approve) are picked up by the running daemon. */
+	reloadConfig?: boolean;
 }
 
 export interface Router {
@@ -63,7 +68,23 @@ function mentionedBot(event: MessageEvent): boolean {
 }
 
 export function createRouter(deps: RouterDeps): Router {
-	const { adapters, cfg, pairing, bridge } = deps;
+	const { adapters, cfg: initialCfg, pairing, bridge, reloadConfig } = deps;
+
+	// lunr: headless gateway sessions must prompt for mutating tools in manual mode.
+	registerGatewayApprovalHandler();
+
+	/** Reload gateway.json on every inbound event so CLI edits (e.g. pair approve) take effect immediately. */
+	function freshCfg(): GatewayConfig {
+		if (!reloadConfig) return initialCfg;
+		try {
+			if (existsSync(gatewayConfigPath())) {
+				return loadGatewayConfig();
+			}
+		} catch {
+			// fall through to initial config
+		}
+		return initialCfg;
+	}
 
 	async function sendError(adapter: PlatformAdapter, event: MessageEvent, message: string): Promise<void> {
 		await adapter.send(event.source.chatId, `⚠ ${oneLine(message)}`, {
@@ -73,7 +94,7 @@ export function createRouter(deps: RouterDeps): Router {
 	}
 
 	/** Step 1: group-chat early gating. Returns true when the event must be dropped. */
-	function isGroupGated(event: MessageEvent): boolean {
+	function isGroupGated(event: MessageEvent, cfg: GatewayConfig): boolean {
 		const { source } = event;
 		if (source.chatType === "dm") return false;
 		const platformCfg = platformConfigFor(cfg, source.platform);
@@ -94,7 +115,7 @@ export function createRouter(deps: RouterDeps): Router {
 	}
 
 	/** Step 2: authorization; handles the denied-DM pairing flow. Returns true when denied. */
-	async function isDenied(adapter: PlatformAdapter, event: MessageEvent): Promise<boolean> {
+	async function isDenied(adapter: PlatformAdapter, event: MessageEvent, cfg: GatewayConfig): Promise<boolean> {
 		if (isAuthorized(event.source, cfg, pairing)) return false;
 		const { source } = event;
 		if (source.chatType !== "dm") return true; // denied group: silent
@@ -170,7 +191,12 @@ export function createRouter(deps: RouterDeps): Router {
 		}
 	}
 
-	async function runTurn(adapter: PlatformAdapter, event: MessageEvent, key: string): Promise<void> {
+	async function runTurn(
+		adapter: PlatformAdapter,
+		event: MessageEvent,
+		key: string,
+		cfg: GatewayConfig,
+	): Promise<void> {
 		const streaming = cfg.streaming.enabled && typeof adapter.editMessage === "function";
 		let consumer: StreamConsumer | undefined;
 		if (streaming) {
@@ -201,7 +227,9 @@ export function createRouter(deps: RouterDeps): Router {
 			},
 		};
 
-		const result = await bridge.runTurn(key, event, callbacks);
+		const result = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
+			bridge.runTurn(key, event, callbacks),
+		);
 		if (result === QUEUED) return; // queued behind a running turn: no reply
 		if (consumer) await consumer.finalize();
 		await deliver(adapter, event, result, {
@@ -215,13 +243,14 @@ export function createRouter(deps: RouterDeps): Router {
 		async handleEvent(event: MessageEvent): Promise<void> {
 			const adapter = adapters.get(event.source.platform);
 			if (!adapter) return;
+			const cfg = freshCfg();
 			try {
-				if (isGroupGated(event)) return;
-				if (await isDenied(adapter, event)) return;
+				if (isGroupGated(event, cfg)) return;
+				if (await isDenied(adapter, event, cfg)) return;
 				const key = buildSessionKey(event.source, { groupSessionsPerUser: cfg.groupSessionsPerUser });
 				if (await handleSlash(adapter, event, key)) return;
 				await adapter.sendTyping(event.source.chatId, event.source.threadId).catch(() => {});
-				await runTurn(adapter, event, key);
+				await runTurn(adapter, event, key, cfg);
 			} catch (err) {
 				await sendError(adapter, event, err instanceof Error ? err.message : String(err)).catch(() => {});
 			}

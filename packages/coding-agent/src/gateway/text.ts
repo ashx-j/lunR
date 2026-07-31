@@ -14,6 +14,8 @@ export function utf16Len(s: string): number {
 	return s.length;
 }
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /** Never cut right after a high surrogate (its low half would lead the next chunk). */
 function surrogateSafeCut(s: string, cut: number): number {
 	if (cut > 0) {
@@ -23,15 +25,27 @@ function surrogateSafeCut(s: string, cut: number): number {
 	return cut;
 }
 
+/** Cut before a grapheme cluster boundary so hard splits never break a cluster. */
+function graphemeSafeCut(s: string, maxIndex: number): number {
+	if (maxIndex <= 0) return 0;
+	let end = 0;
+	for (const segment of graphemeSegmenter.segment(s)) {
+		const nextEnd = segment.index + segment.segment.length;
+		if (nextEnd > maxIndex) break;
+		end = nextEnd;
+	}
+	return surrogateSafeCut(s, end);
+}
+
 /** Last blank-line, line, or word boundary inside the window; hard split as last resort. */
-function findSplitPoint(window: string): number {
+function findSplitPoint(window: string, limit: number): number {
 	const blank = window.lastIndexOf("\n\n");
 	if (blank > 0) return blank + 1;
 	const newline = window.lastIndexOf("\n");
 	if (newline > 0) return newline + 1;
 	const space = window.lastIndexOf(" ");
 	if (space > 0) return space + 1;
-	return surrogateSafeCut(window, window.length);
+	return graphemeSafeCut(window, limit);
 }
 
 const FENCE_RE = /^\s*```/;
@@ -60,24 +74,24 @@ function splitRaw(text: string, limit: number): string[] {
 	while (utf16Len(rest) > limit) {
 		// Reserve room for the fence close when the cut lands inside a fence.
 		// (Fence state depends on the cut, so iterate — converges in 1-2 passes.)
-		let cut = findSplitPoint(rest.slice(0, limit));
+		let cut = findSplitPoint(rest.slice(0, limit), limit);
 		let chunk = rest.slice(0, cut).replace(/\s+$/, "");
 		let opener = openFenceAtEnd(chunk);
 		while (opener !== undefined && chunk.length + FENCE_CLOSE.length > limit) {
-			cut = findSplitPoint(rest.slice(0, limit - FENCE_CLOSE.length));
+			cut = findSplitPoint(rest.slice(0, limit - FENCE_CLOSE.length), limit - FENCE_CLOSE.length);
 			chunk = rest.slice(0, cut).replace(/\s+$/, "");
 			opener = openFenceAtEnd(chunk);
 		}
 		if (opener !== undefined && chunk === opener) {
 			// Only the fence opener fits: hard-split so the chunk carries content
 			// and the loop makes progress.
-			cut = surrogateSafeCut(rest, Math.max(1, limit - FENCE_CLOSE.length));
+			cut = graphemeSafeCut(rest, Math.max(1, limit - FENCE_CLOSE.length));
 			chunk = rest.slice(0, cut);
 			opener = openFenceAtEnd(chunk);
 			if (opener !== undefined && chunk === opener) {
 				// Opener alone still fills the chunk (pathological tiny limit):
 				// give up fence balancing for this chunk.
-				cut = surrogateSafeCut(rest, limit);
+				cut = graphemeSafeCut(rest, limit);
 				chunk = rest.slice(0, cut);
 				opener = undefined;
 			}

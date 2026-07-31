@@ -137,6 +137,42 @@ describe("runSchedulerTick", () => {
 		expect(after.lastDeliveryError).toBe("telegram down");
 	});
 
+	it("does not drift interval jobs (keeps the scheduled slot despite a late run)", async () => {
+		const job = await createJob({ prompt: "p", schedule: "every 10m" });
+		await dueNow(job.id);
+		let advancedNextRunAt: string | null = null;
+		const { deps } = makeDeps({
+			runJob: async () => {
+				// advanceNextRun already moved nextRunAt into the future before runJob.
+				advancedNextRunAt = getJob(job.id).nextRunAt;
+				await new Promise((resolve) => setTimeout(resolve, 5000));
+				return "ok";
+			},
+		});
+		await runSchedulerTick(deps);
+		const after = getJob(job.id);
+		// markJobRun must not re-anchor to the actual run time (now+5s) — it keeps
+		// the slot advanceNextRun computed before the run.
+		expect(after.nextRunAt).toBe(advancedNextRunAt);
+	});
+
+	it("times out a hanging job and records the error", async () => {
+		const job = await createJob({ prompt: "p", schedule: "every 30m", name: "hangjob" });
+		await dueNow(job.id);
+		const { deps, calls } = makeDeps({
+			runJob: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10_000));
+				return "late";
+			},
+		});
+		await runSchedulerTick({ ...deps, jobTimeoutMs: 50 });
+		expect(calls.run).toHaveLength(0);
+		const after = getJob(job.id);
+		expect(after.lastStatus).toBe("error");
+		expect(after.lastError).toContain("timed out");
+		expect(calls.delivered[0]).toContain("Cron job 'hangjob' failed");
+	});
+
 	it("completes one-shots after firing", async () => {
 		const job = await createJob({ prompt: "p", schedule: "30m" });
 		await dueNow(job.id);

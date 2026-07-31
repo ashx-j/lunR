@@ -264,7 +264,7 @@ describe("button registry", () => {
 		expect(adapter.edits[1].buttons).toEqual([]);
 	});
 
-	it("rejects callbacks from a different user as unauthorized", async () => {
+	it("rejects callbacks from a different user as not their picker", async () => {
 		const adapter = new FakeAdapter();
 		const event = makeEvent("/model");
 		await createPicker(
@@ -287,7 +287,37 @@ describe("button registry", () => {
 			{ id: "cb4", chatId: "chat1", messageId: adapter.sent[0].messageId ?? "m1", userId: "u2", data: target!.data },
 			makeDeps({ adapter }),
 		);
-		expect(adapter.callbackAnswers[0].text).toBe("⛔ Not authorized.");
+		expect(adapter.callbackAnswers[0].text).toBe("⛔ Not your picker.");
+		expect(activePickerIds()).toHaveLength(1);
+	});
+
+	it("does not inherit the invoker's role authorization for another user", async () => {
+		const adapter = new FakeAdapter();
+		const event = makeEvent("/model");
+		const source: SessionSource = { ...event.source, roleAuthorized: true };
+		await createPicker(
+			adapter,
+			source,
+			{
+				kind: "model",
+				sessionKey: "k1",
+				invokerId: "u1",
+				items: [{ value: "a", label: "A" }],
+				title: "model",
+				async resolve() {
+					return { done: true, text: "done" };
+				},
+			},
+			{ replyTo: event.messageId },
+		);
+		const target = adapter.sent[0].buttons?.flat()[0];
+		const deps = makeDeps({ adapter });
+		// u2 is not in allowedUsers and has no role authorization of its own.
+		await handleCallback(
+			{ id: "cb4", chatId: "chat1", messageId: adapter.sent[0].messageId ?? "m1", userId: "u2", data: target!.data },
+			deps,
+		);
+		expect(adapter.callbackAnswers[0].text).toBe("⛔ Not your picker.");
 		expect(activePickerIds()).toHaveLength(1);
 	});
 
@@ -346,6 +376,51 @@ describe("button registry", () => {
 		void vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000);
 		expect(activePickerIds()).toHaveLength(0);
 		stopButtonSweeper();
+		vi.useRealTimers();
+	});
+
+	it("does not reset picker TTL on every tap", async () => {
+		vi.useFakeTimers();
+		const adapter = new FakeAdapter();
+		const event = makeEvent("/model");
+		// Use enough items to force pagination so a "page" tap keeps the picker open.
+		const items: PickerItem[] = Array.from({ length: 10 }, (_, i) => ({ value: `i${i}`, label: `Item ${i}` }));
+		await createPicker(
+			adapter,
+			event.source,
+			{
+				kind: "model",
+				sessionKey: "k1",
+				invokerId: "u1",
+				items,
+				perPage: 2,
+				title: "model",
+				async resolve() {
+					return { done: true, text: "done" };
+				},
+			},
+			{ replyTo: event.messageId },
+		);
+		const messageId = adapter.sent[0].messageId ?? "m1";
+		const pageIndicator = adapter.sent[0].buttons?.flat().find((b) => /^\d+\/\d+$/.test(b.label));
+		expect(pageIndicator).toBeDefined();
+
+		// Advance to just before expiry.
+		await vi.advanceTimersByTimeAsync(15 * 60 * 1000 - 1000);
+		// A page/noop tap must not refresh createdAt and keep the picker alive.
+		await handleCallback(
+			{ id: "cb-noop", chatId: "chat1", messageId, userId: "u1", data: pageIndicator!.data },
+			makeDeps({ adapter }),
+		);
+		expect(activePickerIds()).toHaveLength(1);
+
+		// Advance past the original TTL.
+		await vi.advanceTimersByTimeAsync(2000);
+		await handleCallback(
+			{ id: "cb-expired", chatId: "chat1", messageId, userId: "u1", data: pageIndicator!.data },
+			makeDeps({ adapter }),
+		);
+		expect(activePickerIds()).toHaveLength(0);
 		vi.useRealTimers();
 	});
 

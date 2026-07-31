@@ -16,9 +16,11 @@ import {
 	parseSchedule,
 	pauseJob,
 	removeJob,
+	resetCronValidators,
 	resumeJob,
 	saveJobOutput,
 	setCronBaseDir,
+	setCronWorkdirRoots,
 	updateJob,
 } from "../src/core/cron/jobs.ts";
 
@@ -27,10 +29,13 @@ let dir: string;
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "lunr-cron-jobs-"));
 	setCronBaseDir(dir);
+	resetCronValidators();
+	setCronWorkdirRoots([dir, process.cwd()]);
 });
 
 afterEach(() => {
 	setCronBaseDir(undefined);
+	resetCronValidators();
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -265,6 +270,21 @@ describe("advanceNextRun / markJobRun", () => {
 		const marked = await markJobRun(job.id, { status: "ok" });
 		expect(marked.state).toBe("completed");
 		expect(marked.nextRunAt).toBeNull();
+	});
+});
+
+describe("validation", () => {
+	it("rejects a workdir outside the allowed roots", async () => {
+		await expect(createJob({ prompt: "p", schedule: "every 1h", workdir: "/tmp" })).rejects.toThrow(/workdir/);
+	});
+
+	it("rejects a relative workdir that resolves outside the roots", async () => {
+		await expect(createJob({ prompt: "p", schedule: "every 1h", workdir: "../outside" })).rejects.toThrow(/workdir/);
+	});
+
+	it("accepts a workdir inside an allowed root", async () => {
+		const job = await createJob({ prompt: "p", schedule: "every 1h", workdir: "." });
+		expect(job.workdir).toBe(".");
 	});
 });
 

@@ -165,10 +165,27 @@ function agentSettingsPath(): string {
 	return join(homedir(), ".lunr", "agent", "settings.json");
 }
 
+// ---------------------------------------------------------------------------
+// lunR customize bridge for persisted thinking-block visibility.
+// When the bridge is present (TUI / gateway sessions), reads/writes go through
+// SettingsManager (lockfile + merge). Falls back to direct file I/O when the
+// extension loads in a context without the bridge (e.g. upstream pi).
+// ---------------------------------------------------------------------------
+interface CustomizeBridge {
+	getHideThinkingBlock(): boolean;
+	setHideThinkingBlock(hide: boolean): void;
+}
+
+function getCustomizeBridge(): CustomizeBridge | undefined {
+	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/customize")] as CustomizeBridge | undefined;
+}
+
 /** Returns the persisted `hideThinkingBlock` value (default false, matching
  *  `getHideThinkingBlock()` which returns `this.settings.hideThinkingBlock ?? false`).
  *  Never throws — on any error (missing file, bad JSON) returns false. */
 function readHideThinkingBlock(): boolean {
+	const bridge = getCustomizeBridge();
+	if (bridge) return bridge.getHideThinkingBlock();
 	try {
 		const p = agentSettingsPath();
 		if (!existsSync(p)) return false;
@@ -196,6 +213,15 @@ function writeHideThinkingBlock(hide: boolean): {
 	ok: boolean;
 	createdFresh: boolean;
 } {
+	const bridge = getCustomizeBridge();
+	if (bridge) {
+		try {
+			bridge.setHideThinkingBlock(hide);
+			return { ok: true, createdFresh: false };
+		} catch {
+			return { ok: false, createdFresh: false };
+		}
+	}
 	try {
 		const p = agentSettingsPath();
 		let cfg: Record<string, unknown> = {};

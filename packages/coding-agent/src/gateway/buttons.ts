@@ -105,7 +105,8 @@ function sourceForAuth(picker: PendingPicker, cb: CallbackEvent): SessionSource 
 		userId: cb.userId,
 		userName: cb.userName,
 		threadId: cb.threadId,
-		roleAuthorized: picker.source.roleAuthorized,
+		// Do NOT inherit the original invoker's role authorization.
+		roleAuthorized: undefined,
 	};
 }
 
@@ -186,6 +187,10 @@ async function answerUnauthorized(adapter: PlatformAdapter, cb: CallbackEvent): 
 	await adapter.answerCallback(cb.id, "⛔ Not authorized.").catch(() => {});
 }
 
+async function answerNotYourPicker(adapter: PlatformAdapter, cb: CallbackEvent): Promise<void> {
+	await adapter.answerCallback(cb.id, "⛔ Not your picker.").catch(() => {});
+}
+
 /** Dispatch a CallbackEvent to the matching picker entry. */
 export async function handleCallback(
 	cb: CallbackEvent,
@@ -217,12 +222,15 @@ export async function handleCallback(
 		return;
 	}
 
+	if (cb.userId !== picker.invokerId) {
+		await answerNotYourPicker(adapter, cb);
+		return;
+	}
+
 	if (!isAuthorized(sourceForAuth(picker, cb), cfg, pairing)) {
 		await answerUnauthorized(adapter, cb);
 		return;
 	}
-
-	picker.createdAt = Date.now();
 
 	if (parsed.action === "cancel") {
 		registry.delete(parsed.id);

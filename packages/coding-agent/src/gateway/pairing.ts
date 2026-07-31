@@ -11,6 +11,7 @@
  * pending code is invalidated. All limits are injectable for tests.
  */
 
+import { randomInt } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
@@ -23,13 +24,13 @@ const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_RATE_LIMIT_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_PENDING = 3;
 const DEFAULT_MAX_FAILS = 5;
+const DEFAULT_LOCKOUT_MS = 60 * 60 * 1000;
 
 interface PendingCode {
 	code: string;
 	platform: string;
 	userId: string;
 	issuedAt: number;
-	fails: number;
 }
 
 interface ApprovedUser {
@@ -41,6 +42,10 @@ interface ApprovedUser {
 interface PairingData {
 	pending: PendingCode[];
 	approved: ApprovedUser[];
+	/** Per-platform failed approval attempts (wrong codes). */
+	failedAttempts?: Record<string, number>;
+	/** Per-platform lockout expiry epoch ms. */
+	lockedOutUntil?: Record<string, number>;
 }
 
 export interface PairingOptions {
@@ -50,6 +55,8 @@ export interface PairingOptions {
 	rateLimitMs?: number;
 	maxPending?: number;
 	maxFails?: number;
+	/** Lockout duration after maxFails wrong attempts. Default: 1 hour. */
+	lockoutMs?: number;
 	/** Clock injection for tests. */
 	now?: () => number;
 }
@@ -71,7 +78,7 @@ function normalizeCode(code: string): string {
 function generateCode(): string {
 	let code = "";
 	for (let i = 0; i < CODE_LENGTH; i++) {
-		code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+		code += CODE_ALPHABET[randomInt(0, CODE_ALPHABET.length)];
 	}
 	return code;
 }
@@ -82,6 +89,7 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 	const rateLimitMs = options.rateLimitMs ?? DEFAULT_RATE_LIMIT_MS;
 	const maxPending = options.maxPending ?? DEFAULT_MAX_PENDING;
 	const maxFails = options.maxFails ?? DEFAULT_MAX_FAILS;
+	const lockoutMs = options.lockoutMs ?? DEFAULT_LOCKOUT_MS;
 	const now = options.now ?? (() => Date.now());
 
 	function storeFile(): string {
@@ -104,6 +112,14 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 					(c) => typeof c?.code === "string" && typeof c?.platform === "string" && typeof c?.userId === "string",
 				),
 				approved: approved.filter((u) => typeof u?.platform === "string" && typeof u?.userId === "string"),
+				failedAttempts:
+					typeof p.failedAttempts === "object" && p.failedAttempts !== null && !Array.isArray(p.failedAttempts)
+						? (p.failedAttempts as Record<string, number>)
+						: undefined,
+				lockedOutUntil:
+					typeof p.lockedOutUntil === "object" && p.lockedOutUntil !== null && !Array.isArray(p.lockedOutUntil)
+						? (p.lockedOutUntil as Record<string, number>)
+						: undefined,
 			};
 		} catch {
 			return { pending: [], approved: [] }; // corrupt: start empty
@@ -123,13 +139,33 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 		}
 	}
 
+	function isLockedOut(platform: string): boolean {
+		const until = read().lockedOutUntil?.[platform] ?? 0;
+		return now() < until;
+	}
+
+	function recordFailedAttempt(platform: string): void {
+		const data = read();
+		const failed = data.failedAttempts ?? {};
+		failed[platform] = (failed[platform] ?? 0) + 1;
+		if (failed[platform] >= maxFails) {
+			const locked = data.lockedOutUntil ?? {};
+			locked[platform] = now() + lockoutMs;
+			failed[platform] = 0;
+			data.lockedOutUntil = locked;
+		}
+		data.failedAttempts = failed;
+		write(data);
+	}
+
 	function livePending(data: PairingData): PendingCode[] {
 		const cutoff = now() - ttlMs;
-		return data.pending.filter((c) => c.issuedAt >= cutoff && c.fails < maxFails);
+		return data.pending.filter((c) => c.issuedAt >= cutoff);
 	}
 
 	return {
 		issueCode(platform, userId) {
+			if (isLockedOut(platform)) return null;
 			const data = read();
 			// Per-user rate limit: any code (live or expired) issued recently blocks re-issue.
 			const lastIssued = data.pending
@@ -143,7 +179,6 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 				platform,
 				userId,
 				issuedAt: now(),
-				fails: 0,
 			};
 			data.pending = [...live, entry];
 			write(data);
@@ -151,6 +186,7 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 		},
 
 		approve(platform, code) {
+			if (isLockedOut(platform)) return null;
 			const data = read();
 			const live = livePending(data);
 			const normalized = normalizeCode(code);
@@ -164,16 +200,10 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 				write(data);
 				return match.userId;
 			}
-			// Failed attempt: count it against every pending code for this platform;
-			// a code that accumulates maxFails misses is invalidated (lockout).
-			let changed = false;
-			for (const entry of live) {
-				if (entry.platform !== platform) continue;
-				entry.fails += 1;
-				changed = true;
-			}
-			data.pending = changed ? livePending({ ...data, pending: live }) : live;
-			write(data);
+			// Failed attempt: increment the per-platform failure counter. When it
+			// reaches maxFails the platform is locked out for lockoutMs so one user
+			// brute-forcing cannot indefinitely consume codes.
+			recordFailedAttempt(platform);
 			return null;
 		},
 

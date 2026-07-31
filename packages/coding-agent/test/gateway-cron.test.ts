@@ -406,12 +406,15 @@ describe("startGatewayCron", () => {
 			schedule: runAt,
 			name: "e2ejob",
 			deliver: "telegram:123",
+			origin: { platform: "telegram", chatId: "123" },
 		});
 
 		let guardSeenDuringPrompt = false;
 		const cron = startGatewayCron({
 			adapters: new Map([["telegram", adapter]]),
-			cfg: makeConfig(),
+			cfg: makeConfig((c) => {
+				c.telegram.homeChannel = "123";
+			}),
 			intervalMs: 100,
 			sessionFactory: stubSessionFactory("all green", () => {
 				guardSeenDuringPrompt = isCronFire();
@@ -457,5 +460,69 @@ describe("startGatewayCron", () => {
 		expect(err).toBeNull();
 		expect(adapter.sent[0].chatId).toBe("321");
 		expect(adapter.sent[0].text).toBe("☾ Cron: bridgejob\n———\nvia bridge");
+	});
+
+	it("rejects an explicit deliver target not in the allowlist", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const cfg = makeConfig((c) => {
+			c.telegram.homeChannel = "homeChat";
+			c.telegram.allowedChats = ["allowed1"];
+		});
+		const cron = startGatewayCron({
+			adapters: new Map([["telegram", adapter]]),
+			cfg,
+			intervalMs: 60_000,
+			sessionFactory: stubSessionFactory("unused"),
+		});
+		stoppers.push(cron.stop);
+
+		await expect(
+			createJob({
+				prompt: "p",
+				schedule: "30m",
+				deliver: "telegram:attackerChat",
+				origin: { platform: "telegram", chatId: "originChat" },
+			}),
+		).rejects.toThrow(/not an allowed chat/);
+
+		const allowedExplicit = await createJob({
+			prompt: "p",
+			schedule: "30m",
+			deliver: "telegram:allowed1",
+			origin: { platform: "telegram", chatId: "originChat" },
+		});
+		expect(allowedExplicit.deliver).toBe("telegram:allowed1");
+	});
+
+	it("rejects a bare platform deliver when no homeChannel is configured", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const cron = startGatewayCron({
+			adapters: new Map([["telegram", adapter]]),
+			cfg: makeConfig(),
+			intervalMs: 60_000,
+			sessionFactory: stubSessionFactory("unused"),
+		});
+		stoppers.push(cron.stop);
+
+		await expect(createJob({ prompt: "p", schedule: "30m", deliver: "telegram" })).rejects.toThrow(/no homeChannel/);
+	});
+
+	it("allows deliver='origin' for a job with an origin", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const cron = startGatewayCron({
+			adapters: new Map([["telegram", adapter]]),
+			cfg: makeConfig(),
+			intervalMs: 60_000,
+			sessionFactory: stubSessionFactory("unused"),
+		});
+		stoppers.push(cron.stop);
+
+		const job = await createJob({
+			prompt: "p",
+			schedule: "30m",
+			deliver: "origin",
+			origin: { platform: "telegram", chatId: "chat1" },
+		});
+		expect(job.deliver).toBe("origin");
 	});
 });

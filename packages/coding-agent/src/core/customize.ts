@@ -19,6 +19,8 @@ export interface CustomizeBridge {
 	getFooterContext(): boolean;
 	getFooterTokens(): boolean;
 	getFooterStatuses(): boolean;
+	getHideThinkingBlock(): boolean;
+	setHideThinkingBlock(hide: boolean): void;
 }
 
 let activeSettingsManager: SettingsManager | undefined;
@@ -44,6 +46,12 @@ const bridge: CustomizeBridge = {
 	},
 	getFooterStatuses(): boolean {
 		return activeSettingsManager?.getFooterStatuses() ?? true;
+	},
+	getHideThinkingBlock(): boolean {
+		return activeSettingsManager?.getHideThinkingBlock() ?? false;
+	},
+	setHideThinkingBlock(hide: boolean): void {
+		activeSettingsManager?.setHideThinkingBlock(hide);
 	},
 };
 

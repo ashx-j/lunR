@@ -16,7 +16,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { register as registerProcess, unregister as unregisterProcess } from "../process-registry.ts";
+import { markExited as markProcessExited, register as registerProcess } from "../process-registry.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str, toolStatusDotFromContext } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -80,7 +80,7 @@ export interface BashOperations {
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
+export function createLocalBashOperations(options?: { shellPath?: string; sessionId?: string }): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
@@ -110,7 +110,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 			// lunr: register the process for /processes tracking.
 			if (child.pid) {
 				try {
-					registerProcess(child.pid, command, cwd);
+					registerProcess(child.pid, command, cwd, options?.sessionId);
 				} catch {}
 			}
 			let timedOut = false;
@@ -151,7 +151,9 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				// alive (detached/backgrounded dev servers survive the shell call).
 				if (child.pid) {
 					try {
-						if (child.exitCode !== null) unregisterProcess(child.pid);
+						// lunr: keep finished processes visible briefly so /processes can show
+						// their exit state; markExited deletes trivial fast commands immediately.
+						markProcessExited(child.pid, child.exitCode);
 					} catch {}
 				}
 				if (timeoutHandle) clearTimeout(timeoutHandle);

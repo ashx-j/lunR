@@ -50,6 +50,15 @@ export interface ContextBreakdown {
 	contextWindow: number;
 	/** max(0, contextWindow - total) */
 	free: number;
+	/** Per-category message counts (not token counts). */
+	counts: {
+		user: number;
+		assistantText: number;
+		thinking: number;
+		toolCalls: number;
+		toolResults: number;
+		summaries: number;
+	};
 }
 
 const CHARS_PER_TOKEN = 4;
@@ -87,6 +96,15 @@ export function computeContextBreakdown(input: ContextBreakdownInput): ContextBr
 	let toolResults = 0;
 	let summaries = 0;
 
+	const counts = {
+		user: 0,
+		assistantText: 0,
+		thinking: 0,
+		toolCalls: 0,
+		toolResults: 0,
+		summaries: 0,
+	};
+
 	for (const message of input.messages) {
 		switch (message.role) {
 			case "assistant": {
@@ -105,19 +123,25 @@ export function computeContextBreakdown(input: ContextBreakdownInput): ContextBr
 				assistantText += Math.ceil(textChars / CHARS_PER_TOKEN);
 				thinking += Math.ceil(thinkingChars / CHARS_PER_TOKEN);
 				toolCalls += Math.ceil(toolCallChars / CHARS_PER_TOKEN);
+				if (textChars > 0) counts.assistantText++;
+				if (thinkingChars > 0) counts.thinking++;
+				if (toolCallChars > 0) counts.toolCalls++;
 				break;
 			}
 			case "user":
 			case "custom":
 				user += estimateTokens(message);
+				counts.user++;
 				break;
 			case "toolResult":
 			case "bashExecution":
 				toolResults += estimateTokens(message);
+				counts.toolResults++;
 				break;
 			case "branchSummary":
 			case "compactionSummary":
 				summaries += estimateTokens(message);
+				counts.summaries++;
 				break;
 		}
 	}
@@ -135,5 +159,6 @@ export function computeContextBreakdown(input: ContextBreakdownInput): ContextBr
 		total,
 		contextWindow: input.contextWindow,
 		free: Math.max(0, input.contextWindow - total),
+		counts,
 	};
 }
