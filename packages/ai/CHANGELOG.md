@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Qwen Token Plan providers (`qwen-token-plan`, `qwen-token-plan-cn`) on the DashScope OpenAI-compatible endpoint, authenticating with `DASHSCOPE_TOKEN_PLAN_API_KEY` / `DASHSCOPE_TOKEN_PLAN_CN_API_KEY` (falling back to `DASHSCOPE_API_KEY`), with 15 text models including the token-plan-only `qwen3.8-max-preview`.
+
 ## [0.80.10] - 2026-07-16
 
 ### Fixed

@@ -48,6 +48,8 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"xiaomi-token-plan-cn": "mimo-v2.5-pro",
 	"xiaomi-token-plan-ams": "mimo-v2.5-pro",
 	"xiaomi-token-plan-sgp": "mimo-v2.5-pro",
+	"qwen-token-plan": "qwen3.8-max-preview",
+	"qwen-token-plan-cn": "qwen3.8-max-preview",
 };
 
 export interface ScopedModel {

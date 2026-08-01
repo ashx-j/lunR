@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Qwen Token Plan** — Added built-in providers for QwenCloud's Credits-based Token Plan (`qwen-token-plan` international and `qwen-token-plan-cn` China), using the DashScope OpenAI-compatible endpoint with `DASHSCOPE_TOKEN_PLAN_API_KEY` / `DASHSCOPE_TOKEN_PLAN_CN_API_KEY`. Includes 15 text models and defaults to the token-plan-only `qwen3.8-max-preview`.
+
 ## [0.80.10] - 2026-07-16
 
 ### New Features

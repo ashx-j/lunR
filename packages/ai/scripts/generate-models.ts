@@ -1780,6 +1780,71 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
+		// Process Qwen Token Plan models (QwenCloud Credits subscription, sk-sp- keys).
+		// OpenAI-compatible DashScope endpoint; Qwen thinking uses top-level enable_thinking.
+		const qwenTokenPlanCompat: OpenAICompletionsCompat = {
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			thinkingFormat: "qwen",
+			maxTokensField: "max_tokens",
+		};
+		const qwenTokenPlanVariants = [
+			// Official QwenCloud docs base URL (intl). models.dev proposes a dedicated
+			// token-plan host (token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1);
+			// switch here if the shared dashscope-intl host rejects sk-sp- keys in practice.
+			{
+				source: "alibaba-token-plan",
+				provider: "qwen-token-plan",
+				baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+			},
+			{
+				source: "alibaba-token-plan-cn",
+				provider: "qwen-token-plan-cn",
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			},
+		] as const;
+
+		for (const { source, provider, baseUrl } of qwenTokenPlanVariants) {
+			const providerModels = data[source]?.models;
+			if (!providerModels) continue;
+
+			for (const [modelId, model] of Object.entries(providerModels)) {
+				const m = model as ModelsDevModel;
+				// Only text-capable tool-calling models. Excludes wan2.7-image-*, happyhorse-*,
+				// qwen-image-* (image/video generation, no tool_call).
+				if (m.tool_call !== true) continue;
+				if (!m.modalities?.output?.includes("text")) continue;
+
+				const supportsImage = m.modalities?.input?.includes("image");
+
+				// effort-style reasoning models accept reasoning_effort; toggle-style use enable_thinking only.
+				const effortStyle = m.reasoning_options?.some((o) => o.type === "effort");
+				const compat: OpenAICompletionsCompat = {
+					...qwenTokenPlanCompat,
+					...(effortStyle ? { supportsReasoningEffort: true } : {}),
+				};
+
+				models.push({
+					id: modelId,
+					name: m.name || modelId,
+					api: "openai-completions",
+					provider,
+					baseUrl,
+					compat,
+					reasoning: m.reasoning === true,
+					input: supportsImage ? ["text", "image"] : ["text"],
+					cost: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+					},
+					contextWindow: m.limit?.context || 4096,
+					maxTokens: m.limit?.output || 4096,
+				});
+			}
+		}
+
 		console.log(`Loaded ${models.length} tool-capable models from models.dev`);
 		return models;
 	} catch (error) {
@@ -2039,7 +2104,12 @@ async function generateModels() {
 	allModels.push(...antLingModels);
 
 	for (const candidate of allModels) {
-		if (candidate.api === "openai-completions" && candidate.id.includes("deepseek-v4")) {
+		if (
+			candidate.api === "openai-completions" &&
+			candidate.id.includes("deepseek-v4") &&
+			candidate.provider !== "qwen-token-plan" &&
+			candidate.provider !== "qwen-token-plan-cn"
+		) {
 			const preservesNativeReasoningEffort = candidate.provider === "openrouter" || candidate.provider === "opencode";
 			candidate.compat = {
 				...candidate.compat,
