@@ -93,8 +93,6 @@ export interface SettingsConfig {
 	memoryCharCap: number;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
-	/** undefined when pi-ollama-cloud is not loaded or web tools are env-killed (bridge absent). */
-	ollamaWebTools: boolean | undefined;
 	// lunr: TUI customize settings
 	gutterRail: boolean;
 	promptSymbol: boolean;
@@ -144,7 +142,6 @@ export interface SettingsCallbacks {
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
-	onOllamaWebToolsChange: (enabled: string) => void;
 	// lunr: TUI customize callbacks
 	onGutterRailChange: (enabled: boolean) => void;
 	onPromptSymbolChange: (enabled: boolean) => void;
@@ -862,7 +859,6 @@ export class SettingsSelectorComponent extends Container {
 		const supportsImages = getCapabilities().images;
 		const followUpKey = keyDisplayText("app.message.followUp");
 		const curatorAvailable = config.searchCurator !== undefined;
-		const ollamaWebToolsAvailable = config.ollamaWebTools !== undefined;
 
 		const items: SettingItem[] = [
 			{
@@ -945,15 +941,6 @@ export class SettingsSelectorComponent extends Container {
 					: "pi-web-access is not loaded; the search curator is unavailable.",
 				currentValue: config.searchCurator ?? "unavailable",
 				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
-			},
-			{
-				id: "ollama-webtools",
-				label: "Ollama web tools",
-				description: ollamaWebToolsAvailable
-					? "pi-ollama-cloud web tools: on = activate ollama_web_search and ollama_web_fetch, off = remove them."
-					: "pi-ollama-cloud is not loaded or web tools are disabled via PI_OLLAMA_WEB_TOOLS; unavailable.",
-				currentValue: config.ollamaWebTools === undefined ? "unavailable" : config.ollamaWebTools ? "on" : "off",
-				values: ollamaWebToolsAvailable ? ["on", "off"] : undefined,
 			},
 			{
 				id: "session-retention-days",
@@ -1215,9 +1202,6 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "search-curator":
 						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
-						break;
-					case "ollama-webtools":
-						callbacks.onOllamaWebToolsChange(newValue);
 						break;
 					case "session-retention-days":
 						callbacks.onSessionRetentionDaysChange(parseInt(newValue, 10));

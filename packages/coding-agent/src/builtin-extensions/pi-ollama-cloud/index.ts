@@ -28,7 +28,6 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolveWebToolsEnv, saveConfig } from "./config.ts";
 import { GENERATED_MODELS } from "./models.generated.ts";
 import {
   assembleModels,
@@ -39,6 +38,7 @@ import {
   writeCache,
 } from "./models.ts";
 // Web tools (ollama_web_search, ollama_web_fetch) excluded — API type mismatches with current pi-coding-agent version. TODO: re-include after updating web-tools.ts to match current AgentToolResult/AuthStorage APIs.
+// lunr 2026-08-02: the no-op /settings "Ollama web tools" row, the @lunr/ollama-webtools bridge, and config.ts (webTools key, PI_OLLAMA_WEB_TOOLS) were removed — they toggled state nothing consumed. A leftover "webTools" key in ollama-cloud.json is harmless.
 
 // --- Registrations ---
 
@@ -139,84 +139,5 @@ export default async function (pi: ExtensionAPI) {
       started = true;
       await runRefresh(pi, ctx);
     });
-  }
-
-  // --- Web Tools Management ---
-
-  /**
-   * Ensure web tools are registered (idempotent).
-   * Returns true if any tools were newly registered.
-   */
-  function ensureWebToolsRegistered(): boolean {
-    // Web tools excluded — see note at top of file.
-    return false;
-  }
-
-  /**
-   * Add or remove web tools from the active tools set.
-   */
-  function setWebToolsActive(active: boolean) {
-    const currentActive = pi.getActiveTools();
-    const webToolNames = ["ollama_web_search", "ollama_web_fetch"];
-
-    if (active) {
-      const missing = webToolNames.filter((n) => !currentActive.includes(n));
-      if (missing.length > 0) {
-        pi.setActiveTools([...currentActive, ...missing]);
-      }
-    } else {
-      const filtered = currentActive.filter((t) => !webToolNames.includes(t));
-      if (filtered.length < currentActive.length) {
-        pi.setActiveTools(filtered);
-      }
-    }
-  }
-
-  // Module-level tracking across session restarts within the same extension
-  // instance. The config file is read once, on the first session_start;
-  // later sessions reuse webToolsEnabled (including any /settings toggle
-  // override). Restart pi or /reload to pick up config file changes.
-  let webToolsConfigured = false;
-  let webToolsEnabled = false;
-
-  pi.on("session_start", async (_event, ctx) => {
-    if (!webToolsConfigured) {
-      webToolsConfigured = true;
-      const config = loadConfig(ctx.cwd);
-      if (config.webTools !== false) {
-        webToolsEnabled = true;
-        ensureWebToolsRegistered();
-      }
-    }
-    // On every session start (including resume/fork/new), re-apply the
-    // runtime state. Tools may have been unregistered during teardown.
-    if (webToolsEnabled) {
-      ensureWebToolsRegistered();
-      setWebToolsActive(true);
-    }
-  });
-
-  // lunr: expose the web tools toggle to core (/settings base menu) via the
-  // @lunr/ollama-webtools bridge. setEnabled applies the same runtime behavior
-  // as the old /ollama-webtools command AND persists through this extension's
-  // own ollama-cloud.json saveConfig — single source of truth, no forked state.
-  // Only registered when the env var doesn't force tools off —
-  // PI_OLLAMA_WEB_TOOLS=0 acts as a hard kill switch, suppressing the setting.
-  if (resolveWebToolsEnv() !== false) {
-    (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-webtools")] = {
-      getEnabled(): boolean {
-        return webToolsEnabled;
-      },
-      setEnabled(enabled: boolean): void {
-        webToolsEnabled = enabled;
-        if (enabled) {
-          ensureWebToolsRegistered();
-          setWebToolsActive(true);
-        } else {
-          setWebToolsActive(false);
-        }
-        saveConfig({ webTools: enabled });
-      },
-    };
   }
 }

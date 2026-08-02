@@ -73,7 +73,15 @@ function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; to
 function lunrPermissionMode(): string | undefined {
 	return lunrPermissionModeBridge()?.getMode();
 }
-const LUNR_PROMPT_GLYPH = "☾ > "; // lunr: theme-polish — prompt glyph is '>' (was '›')
+// lunr: prompt glyph comes from the theme tokens `glyphs.promptMoon` /
+// `glyphs.promptArrow` (defaults below match moon.json). An empty token hides
+// that part; both empty = no glyph at all.
+function lunrPromptGlyph(theme: Theme | undefined): string {
+	const moon = theme?.glyph?.("promptMoon") ?? "☾";
+	const arrow = theme?.glyph?.("promptArrow") ?? ">";
+	const parts = [moon, arrow].filter((s) => s !== "");
+	return parts.length > 0 ? `${parts.join(" ")} ` : "";
+}
 
 // ---------------------------------------------------------------------------
 // Minimal structural types (inline — see file header)
@@ -81,9 +89,11 @@ const LUNR_PROMPT_GLYPH = "☾ > "; // lunr: theme-polish — prompt glyph is '>
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Trimmed view of pi's `Theme` — only the method we use. */
+/** Trimmed view of pi's `Theme` — only the methods we use. */
 interface Theme {
 	fg(token: string, text: string): string;
+	/** lunr: prompt glyph tokens (optional for forward/backward compat). */
+	glyph?(name: "promptMoon" | "promptArrow"): string;
 }
 
 /** Trimmed view of `pi-tui`'s `TUI` — only the method we use. */
@@ -477,7 +487,8 @@ class ChatboxEditor extends CustomEditor {
 
 		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
 		const promptSymbol = lunrPromptSymbolEnabled();
-		const glyphW = promptSymbol ? displayWidth(LUNR_PROMPT_GLYPH) : 0;
+		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
+		const glyphW = promptSymbol ? displayWidth(glyph) : 0;
 		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
@@ -517,11 +528,11 @@ class ChatboxEditor extends CustomEditor {
 		const top = border("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
 
 		// Body: │ <padded line> │ (auto-grows with the number of wrapped lines)
-		// lunr: prefix the first body line with the dim `☾ › ` prompt glyph; a
-		// same-width blank gutter keeps subsequent lines aligned with the border.
+		// lunr: prefix the first body line with the dim theme prompt glyph (☾ > by
+		// default); a same-width blank gutter keeps subsequent lines aligned.
 		const gutter = glyphW > 0 ? " ".repeat(glyphW) : "";
 		const bodyLines = body.map((ln: string, i: number) => {
-			const prefix = i === 0 && promptSymbol ? this.color("dim", LUNR_PROMPT_GLYPH) : gutter;
+			const prefix = i === 0 && glyphW > 0 ? this.color("dim", glyph) : gutter;
 			return border("\u2502 ") + prefix + padRight(ln, innerWidth) + border(" \u2502");
 		});
 

@@ -71,6 +71,10 @@
 		"thinkingMax": "brightWhite",
 		"bashMode": "white"
 	},
+	"glyphs": {
+		"promptMoon": "☾",
+		"promptArrow": ">"
+	},
 	"export": {
 		"pageBg": "#000000",
 		"cardBg": "#0a0a0a",

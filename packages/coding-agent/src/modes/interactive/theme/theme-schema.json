@@ -308,6 +308,21 @@
 			},
 			"additionalProperties": false
 		},
+		"glyphs": {
+			"type": "object",
+			"description": "Optional non-color glyph customization (prompt glyph parts; empty string hides that part)",
+			"properties": {
+				"promptMoon": {
+					"type": "string",
+					"description": "Leading prompt glyph (default \"☾\")"
+				},
+				"promptArrow": {
+					"type": "string",
+					"description": "Trailing prompt glyph (default \">\")"
+				}
+			},
+			"additionalProperties": false
+		},
 		"export": {
 			"type": "object",
 			"description": "Optional colors for HTML export (defaults derived from userMessageBg if not specified)",

@@ -95,6 +95,14 @@ const ThemeJsonSchema = Type.Object({
 		// Bash Mode (1 color)
 		bashMode: ColorValueSchema,
 	}),
+	// lunr: non-color glyph customization. Both optional; empty string hides
+	// that part of the prompt glyph. Defaults: promptMoon "☾", promptArrow ">".
+	glyphs: Type.Optional(
+		Type.Object({
+			promptMoon: Type.Optional(Type.String()),
+			promptArrow: Type.Optional(Type.String()),
+		}),
+	),
 	export: Type.Optional(
 		Type.Object({
 			pageBg: Type.Optional(ColorValueSchema),
@@ -338,24 +346,39 @@ function withThemeColorFallbacks(
 // Theme Class
 // ============================================================================
 
+// lunr: non-color glyph tokens (ThemeJson.glyphs). Empty string hides that part.
+export type ThemeGlyph = "promptMoon" | "promptArrow";
+
+export const DEFAULT_THEME_GLYPHS: Record<ThemeGlyph, string> = {
+	promptMoon: "☾",
+	promptArrow: ">",
+};
+
 export class Theme {
 	readonly name?: string;
 	readonly sourcePath?: string;
 	sourceInfo?: SourceInfo;
 	private fgColors: Map<ThemeColor, string>;
 	private bgColors: Map<ThemeBg, string>;
+	private glyphs: Record<ThemeGlyph, string>;
 	private mode: ColorMode;
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
 		bgColors: Record<ThemeBg, string | number>,
 		mode: ColorMode,
-		options: { name?: string; sourcePath?: string; sourceInfo?: SourceInfo } = {},
+		options: {
+			name?: string;
+			sourcePath?: string;
+			sourceInfo?: SourceInfo;
+			glyphs?: Partial<Record<ThemeGlyph, string>>;
+		} = {},
 	) {
 		this.name = options.name;
 		this.sourcePath = options.sourcePath;
 		this.sourceInfo = options.sourceInfo;
 		this.mode = mode;
+		this.glyphs = { ...DEFAULT_THEME_GLYPHS, ...options.glyphs };
 		this.fgColors = new Map();
 		const colors = { ...fgColors, thinkingMax: fgColors.thinkingMax ?? fgColors.thinkingXhigh };
 		for (const [key, value] of Object.entries(colors) as [ThemeColor, string | number][]) {
@@ -413,6 +436,11 @@ export class Theme {
 
 	getColorMode(): ColorMode {
 		return this.mode;
+	}
+
+	/** lunr: prompt glyph tokens; empty string means that part is hidden. */
+	glyph(name: ThemeGlyph): string {
+		return this.glyphs[name];
 	}
 
 	getThinkingBorderColor(level: ThinkingLevel): (str: string) => string {
@@ -626,6 +654,12 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 	return new Theme(fgColors, bgColors, colorMode, {
 		name: themeJson.name,
 		sourcePath,
+		// lunr: `??` (not `||`) is intentional — an explicitly empty glyph stays
+		// empty (hidden); only a missing key falls back to the default.
+		glyphs: {
+			promptMoon: themeJson.glyphs?.promptMoon ?? DEFAULT_THEME_GLYPHS.promptMoon,
+			promptArrow: themeJson.glyphs?.promptArrow ?? DEFAULT_THEME_GLYPHS.promptArrow,
+		},
 	});
 }
 

@@ -78,7 +78,6 @@ import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
-import { getOllamaWebtoolsEnabled, setOllamaWebtoolsEnabled } from "../../core/ollama-webtools.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import {
 	AUTO_MODE_ADDENDUM,
@@ -1670,9 +1669,8 @@ export class InteractiveMode {
 	}
 
 	private buildBootRows(): BootScreenRow[] {
-		const model = this.session.model;
+		// lunr: no model row — the footer (ashxj-tui) already shows the current model.
 		const bootRows: BootScreenRow[] = [
-			{ label: "model", value: model ? `${model.id} (${model.provider})` : "none" },
 			{ label: "directory", value: this.sessionManager.getCwd() },
 			{ label: "session", value: this.sessionManager.getSessionName() ?? this.sessionManager.getSessionId() },
 			{ label: "config", value: getAgentDir() },
@@ -1689,7 +1687,7 @@ export class InteractiveMode {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
-		// lunr: refresh boot-screen rows on session replacement so the model row stays current.
+		// lunr: refresh boot-screen rows on session replacement so the session row stays current.
 		if (this.builtInHeader instanceof BootScreenComponent) {
 			(this.builtInHeader as BootScreenComponent).updateRows(this.buildBootRows());
 		}
@@ -2670,7 +2668,7 @@ export class InteractiveMode {
 			}
 			if (text === "/plan" || text.startsWith("/plan ")) {
 				this.editor.setText("");
-				this.handlePlanCommand(text === "/plan" ? "" : text.slice(6).trim());
+				await this.handlePlanCommand(text === "/plan" ? "" : text.slice(6).trim());
 				return;
 			}
 			if (text === "/hotkeys") {
@@ -4262,7 +4260,6 @@ export class InteractiveMode {
 					modelTiers: this.settingsManager.getModelTiers(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					searchCurator: getSearchCuratorSetting(),
-					ollamaWebTools: getOllamaWebtoolsEnabled(),
 					// lunr: TUI customize settings
 					gutterRail: this.settingsManager.getGutterRail(),
 					promptSymbol: this.settingsManager.getPromptSymbol(),
@@ -4423,11 +4420,6 @@ export class InteractiveMode {
 					onSearchCuratorChange: (setting) => {
 						if (!setSearchCuratorSetting(setting)) {
 							this.showError("pi-web-access is not loaded; curator setting unavailable.");
-						}
-					},
-					onOllamaWebToolsChange: (value) => {
-						if (!setOllamaWebtoolsEnabled(value === "on")) {
-							this.showError("pi-ollama-cloud is not loaded; Ollama web tools setting unavailable.");
 						}
 					},
 					// lunr: TUI customize callbacks
@@ -6302,7 +6294,7 @@ export class InteractiveMode {
 	// lunr: /plan — native read-only plan mode. While active, a core tool-call gate on the
 	// AgentSession blocks edit/write and mutating bash (see core/plan-mode.ts), and a
 	// plan-mode addendum is appended to the system prompt. State is in-memory only.
-	private handlePlanCommand(args: string): void {
+	private async handlePlanCommand(args: string): Promise<void> {
 		const sub = args.toLowerCase();
 
 		if (sub === "status") {
@@ -6313,12 +6305,24 @@ export class InteractiveMode {
 			);
 			return;
 		}
-		if (sub !== "" && sub !== "on" && sub !== "off") {
-			this.showStatus("Usage: /plan [on|off|status] — bare /plan toggles read-only plan mode.");
-			return;
-		}
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before running /plan.");
+			return;
+		}
+
+		// lunr: `/plan <task>` — any arg other than on/off/status is treated as the
+		// task: enter plan mode (if not already active) and send it as the request.
+		if (sub !== "" && sub !== "on" && sub !== "off") {
+			if (!this.planModeActive) {
+				this.planModeActive = true;
+				this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
+					const reason = planModeBlockReason(toolName, input);
+					return reason ? { block: true, reason } : undefined;
+				});
+				this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+				this.setExtensionStatus("plan", "plan ● read-only");
+			}
+			await this.session.sendUserMessage(args);
 			return;
 		}
 
