@@ -526,3 +526,120 @@ describe("startGatewayCron", () => {
 		expect(job.deliver).toBe("origin");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// startGatewayCron fallback models (settings cronFallbackModels / seam)
+// ---------------------------------------------------------------------------
+
+describe("startGatewayCron fallback models", () => {
+	function makeSession(text: string, onPrompt?: () => Promise<void> | void) {
+		return {
+			prompt: async () => {
+				await onPrompt?.();
+			},
+			abort: async () => {},
+			subscribe: () => () => {},
+			state: {
+				messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }],
+			},
+			dispose: () => {},
+		};
+	}
+
+	async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
+		const deadline = Date.now() + ms;
+		while (!cond() && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+
+	it("falls back to the configured model when the default attempt fails", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const seen: string[] = [];
+		const job = await createJob({
+			prompt: "p",
+			schedule: new Date(Date.now() + 700).toISOString(),
+			name: "fallbackjob",
+			deliver: "telegram:123",
+			origin: { platform: "telegram", chatId: "123" },
+		});
+		const cron = startGatewayCron({
+			adapters: new Map([["telegram", adapter]]),
+			cfg: makeConfig(),
+			intervalMs: 100,
+			fallbackModels: [{ provider: "ollama-cloud", modelId: "glm-5.2" }],
+			sessionFactory: async (_job, modelOverride) => {
+				seen.push(modelOverride ? `${modelOverride.provider}/${modelOverride.modelId}` : "default");
+				return makeSession("fallback result", () => {
+					if (!modelOverride) throw new Error("rate limited");
+				});
+			},
+		});
+		stoppers.push(cron.stop);
+
+		await waitFor(() => adapter.sent.length > 0);
+		expect(seen).toEqual(["default", "ollama-cloud/glm-5.2"]);
+		expect(adapter.sent[0].text).toBe(
+			"☾ Cron: fallbackjob\n———\n[fell back to ollama-cloud/glm-5.2]\nfallback result",
+		);
+		expect(getJob(job.id).lastStatus).toBe("ok");
+	});
+
+	it("marks the job errored with every attempt listed when all candidates fail", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const job = await createJob({
+			prompt: "p",
+			schedule: new Date(Date.now() + 700).toISOString(),
+			name: "allfail",
+			deliver: "telegram:123",
+			origin: { platform: "telegram", chatId: "123" },
+		});
+		const cron = startGatewayCron({
+			adapters: new Map([["telegram", adapter]]),
+			cfg: makeConfig(),
+			intervalMs: 100,
+			fallbackModels: [{ provider: "ollama-cloud", modelId: "glm-5.2" }],
+			sessionFactory: async (_job, modelOverride) => {
+				throw new Error(modelOverride ? "fallback down" : "primary down");
+			},
+		});
+		stoppers.push(cron.stop);
+
+		await waitFor(() => adapter.sent.length > 0);
+		const after = getJob(job.id);
+		expect(after.lastStatus).toBe("error");
+		expect(after.lastError).toContain("default model: primary down");
+		expect(after.lastError).toContain("ollama-cloud/glm-5.2: fallback down");
+		// The failure notice exceeds the fake adapter's 100-char chunk size.
+		expect(adapter.sent.map((m) => m.text).join("")).toContain("Cron job 'allfail' failed:");
+	});
+
+	it("runs a single attempt when no fallback models are configured", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const seen: string[] = [];
+		await createJob({
+			prompt: "p",
+			schedule: new Date(Date.now() + 700).toISOString(),
+			name: "nofallback",
+			deliver: "telegram:123",
+			origin: { platform: "telegram", chatId: "123" },
+		});
+		const cron = startGatewayCron({
+			adapters: new Map([["telegram", adapter]]),
+			cfg: makeConfig(),
+			intervalMs: 100,
+			fallbackModels: [],
+			sessionFactory: async (_job, modelOverride) => {
+				seen.push(modelOverride ? "override" : "default");
+				return makeSession("solo", () => {
+					throw new Error("boom");
+				});
+			},
+		});
+		stoppers.push(cron.stop);
+
+		await waitFor(() => adapter.sent.length > 0);
+		expect(seen).toEqual(["default"]);
+		expect(adapter.sent[0].text).toContain("Cron job 'nofallback' failed:");
+	});
+});

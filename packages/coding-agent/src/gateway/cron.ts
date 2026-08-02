@@ -21,8 +21,16 @@
  * The bridge is re-installed after every cron session creation because loading
  * the builtin extensions (lunr-cron) re-registers its local-notify bridge per
  * session; delivery re-reads the bridge on every call, matching lunr-cron.
+ *
+ * Fallback models (2026-08-02): settings.json `cronFallbackModels`
+ * ("provider/modelId" entries) are tried IN ORDER when a fire fails — timeout
+ * or any error. Each attempt gets a fresh headless session and
+ * jobTimeoutMs/candidates of the budget; a successful fallback run prefixes
+ * "[fell back to provider/modelId]" to the output. TUI fires are unaffected
+ * (they use the live session's model).
  */
 
+import type { Model } from "@earendil-works/pi-ai";
 import { beginCronFire, endCronFire } from "../core/cron/fire-guard.ts";
 import type { CronJob, CronJobOrigin } from "../core/cron/jobs.ts";
 import { setCronDeliverValidator } from "../core/cron/jobs.ts";
@@ -37,7 +45,12 @@ const DELIVERY_BRIDGE_SYMBOL = Symbol.for("@lunr/cron-delivery");
 type DeliveryBridge = (job: CronJob, content: string) => Promise<string | null>;
 
 /** Test seam / default: one fresh headless session per cron fire. */
-export type CronSessionFactory = (job: CronJob) => Promise<BridgeSession>;
+export interface CronModelRef {
+	provider: string;
+	modelId: string;
+}
+
+export type CronSessionFactory = (job: CronJob, modelOverride?: CronModelRef) => Promise<BridgeSession>;
 
 export interface GatewayCronOptions {
 	adapters: Map<string, PlatformAdapter>;
@@ -46,12 +59,14 @@ export interface GatewayCronOptions {
 	intervalMs?: number;
 	/** Session factory for cron fires; defaults to a real headless agent session. */
 	sessionFactory?: CronSessionFactory;
+	/** Test seam: fallback models. When omitted, read fresh from settings.json `cronFallbackModels` on every fire. */
+	fallbackModels?: CronModelRef[];
 }
 
 const KNOWN_PLATFORMS = ["telegram", "discord"] as const;
 
 /** Default factory: fresh in-memory headless session, mirroring agent-bridge's wiring. */
-async function defaultCronSessionFactory(job: CronJob): Promise<BridgeSession> {
+async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModelRef): Promise<BridgeSession> {
 	const [
 		{ builtinExtensions },
 		{ getAgentDir },
@@ -92,7 +107,18 @@ async function defaultCronSessionFactory(job: CronJob): Promise<BridgeSession> {
 		settingsManager,
 		resourceLoaderOptions: { extensionFactories: [...builtinExtensions] },
 	});
-	const { session } = await createAgentSessionFromServices({ services, sessionManager });
+	// Fallback-model attempts pin the session model explicitly; an unresolvable
+	// or unauthenticated override fails the attempt so the next fallback runs.
+	let model: Model<any> | undefined;
+	if (modelOverride) {
+		const resolved = services.modelRuntime.getModel(modelOverride.provider, modelOverride.modelId);
+		if (!resolved) throw new Error(`model not found: ${modelOverride.provider}/${modelOverride.modelId}`);
+		if (!services.modelRuntime.hasConfiguredAuth(resolved.provider)) {
+			throw new Error(`no configured auth for provider: ${modelOverride.provider}`);
+		}
+		model = resolved;
+	}
+	const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
 	await session.bindExtensions({
 		mode: "print",
 		onError: (err) => console.error(`[gateway cron] extension error (${err.extensionPath}): ${err.error}`),
@@ -242,6 +268,50 @@ export function createPlatformDeliverer(adapters: Map<string, PlatformAdapter>, 
 	};
 }
 
+/** Race one prompt attempt against its share of the job budget. */
+function withAttemptTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<never>((_, reject) => {
+			const timer = setTimeout(() => reject(new Error(`attempt timed out after ${ms}ms`)), ms);
+			// If the attempt settles first this promise is discarded; the timer must not keep the process alive.
+			timer.unref?.();
+		}),
+	]);
+}
+
+/**
+ * Read settings.json `cronFallbackModels` ("provider/modelId" entries).
+ * Fresh read per fire so edits apply without a daemon restart; invalid
+ * entries are skipped with a log line. Never throws.
+ */
+async function readCronFallbackModels(): Promise<CronModelRef[]> {
+	try {
+		const [{ getAgentDir }, { SettingsManager }] = await Promise.all([
+			import("../config.ts"),
+			import("../core/settings-manager.ts"),
+		]);
+		const settingsManager = SettingsManager.create(process.cwd(), getAgentDir(), { projectTrusted: false });
+		const out: CronModelRef[] = [];
+		for (const entry of settingsManager.getCronFallbackModels()) {
+			const idx = entry.indexOf("/");
+			if (idx <= 0 || idx === entry.length - 1) {
+				console.error(
+					`[gateway cron] ignoring invalid cronFallbackModels entry "${entry}" (want "provider/modelId")`,
+				);
+				continue;
+			}
+			out.push({ provider: entry.slice(0, idx), modelId: entry.slice(idx + 1) });
+		}
+		return out;
+	} catch (err) {
+		console.error(
+			`[gateway cron] failed to read cronFallbackModels: ${err instanceof Error ? err.message : String(err)}`,
+		);
+		return [];
+	}
+}
+
 /**
  * Start the cron scheduler inside the gateway daemon. Starts even with zero
  * stored jobs — jobs can be created later from chats. stop() halts the loop.
@@ -251,6 +321,10 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 	const sessionFactory = options.sessionFactory ?? defaultCronSessionFactory;
 	const platformDeliverer = createPlatformDeliverer(adapters, cfg);
 
+	// Explicit so runJob can split it into per-attempt budgets that sum to (at
+	// most) the scheduler's outer race (core/cron/scheduler.ts runSchedulerTick).
+	const jobTimeoutMs = 5 * 60 * 1000;
+
 	// Reject deliver targets that are not local, origin, a configured home channel,
 	// or an explicit chat in the platform allowlist / the job's origin.
 	setCronDeliverValidator(createDeliverValidator(cfg));
@@ -259,18 +333,34 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 	(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;
 
 	const runJob = async (prompt: string, job: CronJob): Promise<string> => {
+		const fallbacks = options.fallbackModels ?? (await readCronFallbackModels());
+		const candidates: Array<CronModelRef | undefined> = [undefined, ...fallbacks];
+		const attemptTimeoutMs = Math.floor(jobTimeoutMs / candidates.length);
+		const errors: string[] = [];
 		beginCronFire();
-		let session: BridgeSession | undefined;
 		try {
-			session = await sessionFactory(job);
-			// Loading the builtin extensions re-registered lunr-cron's local-notify
-			// bridge; restore the platform deliverer before any delivery re-reads it.
-			(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;
-			await session.prompt(prompt, { source: "extension" });
-			return extractFinalText(session);
+			for (const candidate of candidates) {
+				const label = candidate ? `${candidate.provider}/${candidate.modelId}` : "default model";
+				let session: BridgeSession | undefined;
+				try {
+					session = await sessionFactory(job, candidate);
+					// Loading the builtin extensions re-registered lunr-cron's local-notify
+					// bridge; restore the platform deliverer before any delivery re-reads it.
+					(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;
+					await withAttemptTimeout(session.prompt(prompt, { source: "extension" }), attemptTimeoutMs);
+					const text = extractFinalText(session);
+					// The marker lands in the output file (the audit trail); [SILENT] as
+					// the last line still suppresses delivery (scheduler isSilent check).
+					return candidate ? `[fell back to ${label}]\n${text}` : text;
+				} catch (err) {
+					errors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+				} finally {
+					session?.dispose?.();
+				}
+			}
+			throw new Error(errors.join(" | ") || "no model candidates");
 		} finally {
 			endCronFire();
-			session?.dispose?.();
 		}
 	};
 
@@ -282,6 +372,6 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 		if (err) throw new Error(err);
 	};
 
-	const scheduler = startScheduler({ runJob, deliverResult, intervalMs: options.intervalMs });
+	const scheduler = startScheduler({ runJob, deliverResult, intervalMs: options.intervalMs, jobTimeoutMs });
 	return { stop: () => scheduler.stop(), intervalMs: options.intervalMs ?? 60_000 };
 }

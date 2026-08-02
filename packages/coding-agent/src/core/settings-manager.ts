@@ -93,6 +93,9 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: ThinkingLevel;
+	// lunr: gateway-daemon cron fallback models, "provider/modelId" entries tried
+	// in order when a cron fire fails (timeout or any error). Hand-edited.
+	cronFallbackModels?: string[];
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
@@ -693,6 +696,11 @@ export class SettingsManager {
 
 	getDefaultModel(): string | undefined {
 		return this.settings.defaultModel;
+	}
+
+	/** lunr: cron fallback models ("provider/modelId"), tried in order after a gateway cron fire's default model fails. */
+	getCronFallbackModels(): string[] {
+		return this.settings.cronFallbackModels ?? [];
 	}
 
 	setDefaultProvider(provider: string): void {
