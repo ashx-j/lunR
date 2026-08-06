@@ -150,6 +150,7 @@ export interface Settings {
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
 	rollbackCapture?: RollbackCapture; // default "copies"
 	rollbackScope?: RollbackScope; // default "tools"
+	autoManageSubscriptions?: boolean; // lunr: when true, subscription key switching is fully automatic (no manual picker)
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -1096,6 +1097,17 @@ export class SettingsManager {
 	setRollbackScope(scope: RollbackScope): void {
 		this.globalSettings.rollbackScope = scope;
 		this.markModified("rollbackScope");
+		this.save();
+	}
+
+	// lunr: multi-subscription auto-management toggle
+	getAutoManageSubscriptions(): boolean {
+		return this.settings.autoManageSubscriptions ?? false;
+	}
+
+	setAutoManageSubscriptions(enabled: boolean): void {
+		this.globalSettings.autoManageSubscriptions = enabled;
+		this.markModified("autoManageSubscriptions");
 		this.save();
 	}
 

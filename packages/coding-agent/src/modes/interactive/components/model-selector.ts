@@ -32,6 +32,8 @@ type ModelScope = "all" | "scoped";
 export interface ModelSelectorOptions {
 	/** Save the selection as the default model in settings (default: true). */
 	persistDefault?: boolean;
+	/** lunr: providerId → active subscription name, rendered as a `[provider · name]` suffix. */
+	subscriptionNames?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -72,6 +74,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private refreshTimeout?: ReturnType<typeof setTimeout>;
 	private closed = false;
 	private readonly persistDefault: boolean;
+	// lunr: active subscription names for providers with multi-key pools (empty = no suffixes).
+	private readonly subscriptionNames: ReadonlyMap<string, string>;
 
 	constructor(
 		tui: TUI,
@@ -87,6 +91,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		super();
 
 		this.persistDefault = options?.persistDefault ?? true;
+		this.subscriptionNames = options?.subscriptionNames ?? new Map();
 
 		this.tui = tui;
 		this.currentModel = currentModel;
@@ -269,16 +274,18 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const isSelected = i === this.selectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);
 
+			// lunr: show the active subscription name for providers with a multi-key pool.
+			const subName = this.subscriptionNames.get(item.provider);
+			const providerBadge = theme.fg("muted", subName ? `[${item.provider} · ${subName}]` : `[${item.provider}]`);
+
 			let line = "";
 			if (isSelected) {
 				const prefix = theme.fg("accent", "→ ");
 				const modelText = `${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
 				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
 				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${checkmark}`;
 			} else {
 				const modelText = `  ${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
 				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
 				line = `${modelText} ${providerBadge}${checkmark}`;
 			}

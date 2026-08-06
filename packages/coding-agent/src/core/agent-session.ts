@@ -108,6 +108,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { isAuthInvalidError, isUsageLimitError } from "./usage-limit.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -163,7 +164,9 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	// lunr: emitted when a failed run rotates the provider to the next pooled subscription key.
+	| { type: "subscription_rotation"; providerId: string; keyName: string; errorMessage: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -1161,7 +1164,18 @@ export class AgentSession {
 			return false;
 		}
 
+		// lunr: quota-dead or auth-invalid keys rotate immediately — same-key backoff
+		// against an exhausted credential is pointless.
+		if (msg.stopReason === "error" && this._isRotationError(msg) && (await this._tryRotateSubscriptionKey(msg))) {
+			return true;
+		}
+
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
+			return true;
+		}
+
+		// lunr: last-resort rotation for retryable errors once same-key backoff is exhausted.
+		if (msg.stopReason === "error" && this._isRetryableError(msg) && (await this._tryRotateSubscriptionKey(msg))) {
 			return true;
 		}
 
@@ -2768,6 +2782,54 @@ export class AgentSession {
 	 */
 	abortRetry(): void {
 		this._retryAbortController?.abort();
+	}
+
+	/** lunr: errors that mark a subscription key dead — rotate without same-key backoff. */
+	private _isRotationError(message: AssistantMessage): boolean {
+		const errorMessage = message.errorMessage ?? "";
+		return isUsageLimitError(errorMessage) || isAuthInvalidError(errorMessage);
+	}
+
+	/**
+	 * lunr: multi-subscription rotation. When a run is about to fail final, switch
+	 * the provider to the next pooled key (mirrored into the credential store by
+	 * SubscriptionManager) and continue immediately — no backoff sleep. Returns
+	 * false when rotation is impossible, leaving the error as the final message.
+	 */
+	private async _tryRotateSubscriptionKey(message: AssistantMessage): Promise<boolean> {
+		const model = this.model;
+		if (!model) return false;
+		const providerId = model.provider;
+		// A runtime --api-key override wins over auth.json in RuntimeCredentials.read(),
+		// so mirroring a rotated key into the store would have no effect — skip rotation.
+		if (this._modelRuntime.hasRuntimeApiKey(providerId)) return false;
+		const manager = this._modelRuntime.subscriptionManager;
+		if ((await manager.list(providerId)).length < 2) return false;
+
+		const errorMessage = message.errorMessage ?? "Unknown error";
+		const entry = await manager.rotateOnFailure(providerId, errorMessage);
+		if (!entry) return false;
+
+		// Close out any in-flight retry indicator; a fresh key gets a fresh retry budget.
+		if (this._retryAttempt > 0) {
+			this._emit({ type: "auto_retry_end", success: true, attempt: this._retryAttempt });
+		}
+		this._retryAttempt = 0;
+
+		// Remove error message from agent state (keep in session for history) —
+		// same slice pattern as _prepareRetry.
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			this.agent.state.messages = messages.slice(0, -1);
+		}
+
+		this._emit({
+			type: "subscription_rotation",
+			providerId,
+			keyName: entry.name,
+			errorMessage,
+		});
+		return true;
 	}
 
 	/** Whether auto-retry is currently in progress */

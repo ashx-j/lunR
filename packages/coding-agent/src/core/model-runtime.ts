@@ -46,6 +46,7 @@ import {
 } from "./provider-composer.ts";
 import { withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
+import { SubscriptionManager } from "./subscriptions.ts";
 
 interface ModelRuntimeSnapshot {
 	all: readonly Model<Api>[];
@@ -65,6 +66,8 @@ export interface CreateModelRuntimeOptions {
 	allowModelNetwork?: boolean;
 	modelRefreshTimeoutMs?: number;
 	catalogBaseUrl?: string;
+	/** lunr: subscription-key pool. Defaults to subscriptions.json next to authPath (in-memory for custom stores). */
+	subscriptions?: SubscriptionManager;
 }
 
 export interface ModelRuntimeAuthOverrides {
@@ -92,6 +95,8 @@ function mergeHeaders(
 export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
+	/** lunr: per-provider subscription-key pools; rotation mirrors the active key into the credential store. */
+	readonly subscriptionManager: SubscriptionManager;
 	private readonly defaultBuiltins: ReadonlyMap<string, Provider>;
 	private readonly builtins = new Map<string, Provider>();
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
@@ -116,11 +121,13 @@ export class ModelRuntime implements Models {
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
 		allowModelNetwork: boolean,
+		subscriptionManager: SubscriptionManager,
 	) {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
 		this.allowModelNetwork = allowModelNetwork;
+		this.subscriptionManager = subscriptionManager;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
 		this.models = createModels({ credentials, modelsStore });
@@ -128,7 +135,22 @@ export class ModelRuntime implements Models {
 	}
 
 	static async create(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {
-		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
+		// lunr: keep the underlying store — the SubscriptionManager mirrors rotated
+		// keys into it directly, NOT through the RuntimeCredentials overlay (a runtime
+		// --api-key override would shadow the mirror there).
+		const baseStore = options.credentials ?? DefaultAuthStorage.create(options.authPath);
+		const credentials = new RuntimeCredentials(baseStore);
+		// Pool persistence: subscriptions.json next to auth.json. A custom credential
+		// store without an authPath (tests, SDK embeddings) gets a process-local pool
+		// so nothing leaks into the real agent dir.
+		const subscriptionManager =
+			options.subscriptions ??
+			(options.credentials && !options.authPath
+				? SubscriptionManager.inMemory(baseStore)
+				: SubscriptionManager.create(
+						baseStore,
+						options.authPath ? join(dirname(options.authPath), "subscriptions.json") : undefined,
+					));
 		const modelsPath =
 			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
 		const config = await ModelConfig.load(modelsPath);
@@ -149,6 +171,7 @@ export class ModelRuntime implements Models {
 			modelsStore,
 			providers,
 			options.allowModelNetwork ?? process.env.PI_OFFLINE === undefined,
+			subscriptionManager,
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
@@ -377,6 +400,11 @@ export class ModelRuntime implements Models {
 				headers: mergeHeaders(resolution.auth.headers, configuredHeaders),
 			},
 		};
+	}
+
+	/** lunr: whether a runtime --api-key override is active for the provider (it shadows auth.json). */
+	hasRuntimeApiKey(providerId: string): boolean {
+		return this.credentials.hasRuntimeApiKey(providerId);
 	}
 
 	async setRuntimeApiKey(providerId: string, apiKey: string): Promise<void> {

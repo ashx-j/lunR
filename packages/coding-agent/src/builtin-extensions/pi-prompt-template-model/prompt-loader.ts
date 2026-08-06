@@ -24,6 +24,9 @@ export const RESERVED_COMMAND_NAMES = new Set([
 	"tree",
 	"login",
 	"logout",
+	// lunr: /auth and /deauth aliases of /login and /logout
+	"auth",
+	"deauth",
 	"new",
 	"compact",
 	"resume",
