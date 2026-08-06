@@ -412,6 +412,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	toolCallId: string;
 	/** Invalidate just this tool execution component for redraw. */
 	invalidate: () => void;
+	/** Repaint the TUI without rebuilding this tool execution component. Cheaper than invalidate() for animation ticks. */
+	requestRender?: () => void;
 	/** Previously returned component for this render slot, if any. */
 	lastComponent: Component | undefined;
 	/** Shared renderer state for this tool row. Initialized by tool-execution.ts. */

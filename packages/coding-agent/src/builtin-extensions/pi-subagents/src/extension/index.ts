@@ -24,7 +24,7 @@ import { discoverAgents } from "../agents/agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
-import { clearLegacyResultAnimationTimer, renderSubagentResult } from "../tui/render.ts";
+import { clearLegacyResultAnimationTimer, renderSubagentResult, subagentAnimSink } from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -123,23 +123,36 @@ function isSlashResultRunning(result: { details?: Details }): boolean {
 // Drives the inline running-indicator braille animation for foreground subagent
 // results. Foreground runs receive progress only on child events, so the glyph
 // (derived from progress fields) would freeze between events. While a result is
-// running we tick a frame counter + invalidate() every 80ms so renderSubagentResult
-// can blend the frame into runningGlyph and produce a smooth spinner.
+// running we tick a frame counter every 80ms; renderResult registers the
+// running-glyph lines in state.animEntries (via subagentAnimSink) and the timer
+// rewrites just those Text nodes + requests a repaint, instead of invalidate()-ing
+// the whole tool component (a full renderSubagentResult rebuild 12.5x/s made the
+// spinner laggy).
 function subagentResultIsRunning(result: { details?: Details }): boolean {
 	return result.details?.progress?.some((entry) => entry.status === "running")
 		|| result.details?.results.some((entry) => entry.progress?.status === "running")
 		|| false;
 }
 
-function ensureSubagentResultAnimation(context: { state: Record<string, unknown>; invalidate?: () => void }): void {
-	const state = context.state as { subagentResultAnimationTimer?: ReturnType<typeof setInterval>; frame?: number };
+function ensureSubagentResultAnimation(context: { state: Record<string, unknown>; invalidate?: () => void; requestRender?: () => void }): void {
+	const state = context.state as {
+		subagentResultAnimationTimer?: ReturnType<typeof setInterval>;
+		frame?: number;
+		animEntries?: Array<{ text: Text; line: (frame: number) => string }>;
+	};
 	if (state.subagentResultAnimationTimer) return;
 	if (typeof context.invalidate !== "function") return;
 	if (state.frame === undefined) state.frame = 0;
 	state.subagentResultAnimationTimer = setInterval(() => {
 		state.frame = ((state.frame ?? 0) + 1) % 10;
 		try {
-			context.invalidate();
+			const entries = state.animEntries;
+			if (entries?.length && typeof context.requestRender === "function") {
+				for (const entry of entries) entry.text.setText(entry.line(state.frame ?? 0));
+				context.requestRender();
+			} else {
+				context.invalidate();
+			}
 		} catch {}
 	}, 80);
 }
@@ -461,18 +474,42 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 
 		renderResult(result, options, theme, context) {
+			// lunr: hide the `subagent list` result body — the call row already shows
+			// the action; the roster stays in the transcript for the model.
+			if ((context.args as { action?: string } | undefined)?.action === "list") {
+				return { render: () => [], invalidate() {} };
+			}
 			if (subagentResultIsRunning(result)) {
 				ensureSubagentResultAnimation(context);
 			} else {
 				clearLegacyResultAnimationTimer(context);
 			}
-			const frame = (context.state as { frame?: number } | undefined)?.frame ?? 0;
-			return renderSubagentResult(result, options, theme, frame);
+			const state = context.state as { frame?: number; animEntries?: Array<{ text: Text; line: (frame: number) => string }> };
+			// lunr: collect running-glyph line templates while rendering so the
+			// animation timer can rewrite them in place (see ensureSubagentResultAnimation).
+			const entries: Array<{ text: Text; line: (frame: number) => string }> = [];
+			state.animEntries = entries;
+			subagentAnimSink.current = entries;
+			try {
+				return renderSubagentResult(result, options, theme, state.frame ?? 0);
+			} finally {
+				subagentAnimSink.current = null;
+			}
 		},
 
 	};
 
 	pi.registerTool(tool);
+
+	// lunr: register a callback so toggling model tiers mid-session rebuilds the subagent
+	// tool description (adds/removes MODEL TIERS guidance) and refreshes the tool registry.
+	const modelTierBridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
+		| { registerToolDescriptionRefresher?: (refresher: () => void) => void }
+		| undefined;
+	modelTierBridge?.registerToolDescriptionRefresher?.(() => {
+		tool.description = buildSubagentToolDescription(config);
+		pi.runtime.refreshTools();
+	});
 
 	registerWaitTool(pi, state, waitToolConfig.enabled);
 

@@ -1143,6 +1143,14 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   pi.registerMessageRenderer("intercom_message", (message, options, theme) => {
     const details = message.details as { from: SessionInfo; message: Message; replyCommand?: string; bodyText?: string } | undefined;
     if (!details) return undefined;
+    // lunr: hide subagent relay messages (subagent-result, subagent-control) from the chat — the subagent tool result view
+    // already shows the outcome (✓/stats); the message stays in the transcript for
+    // the model. Returning undefined would fall back to the default boxed renderer,
+    // so return a zero-line component instead.
+    const sender = details.from?.name || details.from?.id;
+    if (sender === "subagent-result" || sender === "subagent-control") {
+      return { render: () => [], invalidate() {} };
+    }
     return new InlineMessageComponent(details.from, details.message, theme, details.replyCommand, details.bodyText, !options.expanded);
   });
 

@@ -3,7 +3,6 @@
  * Rendering functions for subagent results
  */
 
-import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { getMarkdownTheme, keyText, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
@@ -165,6 +164,23 @@ export function clearLegacyResultAnimationTimer(context: LegacyResultAnimationCo
 	if (!timer) return;
 	clearInterval(timer);
 	context.state.subagentResultAnimationTimer = undefined;
+}
+
+// lunr: animation sink — while `current` is set, running-glyph lines register a
+// per-frame template so the extension timer can rewrite just those Text nodes
+// (setText + requestRender) instead of rebuilding the whole result tree per frame.
+export interface SubagentAnimatedLine {
+	text: Text;
+	line: (frame: number) => string;
+}
+export const subagentAnimSink: { current: SubagentAnimatedLine[] | null } = { current: null };
+
+function animatedLine(line: (frame: number) => string, frame: number | undefined, animate: boolean): Text {
+	const text = new Text(line(frame ?? 0), 0, 0);
+	if (animate && frame !== undefined && subagentAnimSink.current) {
+		subagentAnimSink.current.push({ text, line });
+	}
+	return text;
 }
 
 function extractOutputTarget(task: string): string | undefined {
@@ -789,11 +805,6 @@ function widgetStepActivityLine(step: NonNullable<AsyncJobState["steps"]>[number
 	return "";
 }
 
-function widgetOutputPath(job: AsyncJobState, step: NonNullable<AsyncJobState["steps"]>[number]): string | undefined {
-	if (typeof step.index !== "number") return undefined;
-	return path.join(job.asyncDir, `output-${step.index}.log`);
-}
-
 function nestedRunName(run: NestedRunSummary): string {
 	if (run.agent) return run.agent;
 	if (run.agents?.length) return formatWidgetAgents(run.agents);
@@ -895,8 +906,6 @@ function foregroundStyleWidgetStepLines(
 	}
 	if (step.status === "running") {
 		if (!expanded) lines.push(`    ${theme.fg("accent", liveDetailHintText())}`);
-		const output = widgetOutputPath(job, step);
-		if (output) lines.push(`    ${theme.fg("dim", `output: ${shortenPath(output)}`)}`);
 		if (expanded) {
 			const liveStatus = buildLiveStatusLine(step, job.updatedAt);
 			if (liveStatus && liveStatus !== activity) lines.push(`    ${theme.fg("accent", liveStatus)}`);
@@ -1303,7 +1312,8 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const stats = formatProgressStats(theme, progress);
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, frame)} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
+	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
 
 	if (isRunning && r.progress) {
 		const progressSnapshotNow = snapshotNowForProgress(r.progress);
@@ -1350,8 +1360,8 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 	const multiLabel = buildMultiProgressLabel(d, hasRunning);
 	const itemTitle = multiLabel.itemTitle;
 	const stats = statJoin(theme, [multiLabel.headerLabel, formatProgressStats(theme, totalSummary), formatTotalCostStat(d.totalCost)]);
-	const glyph = hasRunning
-		? theme.fg("accent", runningGlyph(frame !== undefined ? (runningSeed(progressRunningSeed(totalSummary), d.currentStepIndex) ?? 0) + frame : runningSeed(progressRunningSeed(totalSummary), d.currentStepIndex)))
+	const glyph = (f: number | undefined) => hasRunning
+		? theme.fg("accent", runningGlyph(f !== undefined ? (runningSeed(progressRunningSeed(totalSummary), d.currentStepIndex) ?? 0) + f : runningSeed(progressRunningSeed(totalSummary), d.currentStepIndex)))
 		: stopped
 			? theme.fg("warning", "■")
 			: failed
@@ -1362,7 +1372,8 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	// lunr: header line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
+	c.addChild(animatedLine((f) => truncLine(`${glyph(f)} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, hasRunning));
 
 	const useResultsDirectly = multiLabel.hasParallelInChain || !d.chainAgents?.length;
 	const displayStart = multiLabel.showActiveGroupOnly ? multiLabel.groupStartIndex : 0;
@@ -1398,11 +1409,13 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
 		const stepStats = formatProgressStats(theme, rProg);
-		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), frame);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
-		const line = `${glyph} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
-		c.addChild(new Text(truncLine(`  ${line}`, width), 0, 0));
+		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
+		c.addChild(animatedLine((f) => {
+			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
+			return truncLine(`  ${glyph} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
+		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
 			const activity = compactCurrentActivity(rProg);
 			c.addChild(new Text(truncLine(theme.fg("dim", `    ⎿  ${activity}`), width), 0, 0));
@@ -1694,11 +1707,6 @@ export function renderSubagentResult(
 			? r.task
 			: `${r.task.slice(0, taskMaxLen)}...`;
 		c.addChild(new Text(fit(theme.fg("dim", `    task: ${taskPreview}`)), 0, 0));
-
-		const outputTarget = extractOutputTarget(r.task);
-		if (outputTarget) {
-			c.addChild(new Text(fit(theme.fg("dim", `    output: ${outputTarget}`)), 0, 0));
-		}
 
 		if (r.skills?.length) {
 			c.addChild(new Text(fit(theme.fg("dim", `    skills: ${r.skills.join(", ")}`)), 0, 0));

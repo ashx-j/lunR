@@ -120,6 +120,9 @@ export class ToolExecutionComponent extends Container {
 				this.invalidate();
 				this.ui.requestRender();
 			},
+			requestRender: () => {
+				this.ui.requestRender();
+			},
 			lastComponent,
 			state: this.rendererState,
 			cwd: this.cwd,
