@@ -81,7 +81,10 @@ async function createApprovalPrompt(
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<ApprovalResponse> {
 	const id = generateId();
-	const title = `Approve ${req.toolName}?\n${req.detail}`;
+	// lunr: auto-activated agent swarms get the AgentSwarm title; buttons stay
+	// once/session/reject (inline buttons cannot capture reject feedback).
+	const title =
+		req.kind === "swarm" ? `▶ Approve AgentSwarm?\n${req.detail}` : `Approve ${req.toolName}?\n${req.detail}`;
 	const rows: ButtonSpec[][] = [
 		[
 			{ label: "✓ Approve once", data: makeCallbackData(id, "once") },

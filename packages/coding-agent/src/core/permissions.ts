@@ -19,18 +19,26 @@
  */
 
 import { resolve } from "node:path";
+import { effectiveSwarmCount, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
 
 export type PermissionMode = "manual" | "yolo" | "auto";
 
 export interface ApprovalRequest {
 	toolName: string;
 	/** "bash" (detail = command), "edit"/"write" (detail = path),
-	 *  "edit-outside"/"write-outside" when path escapes cwd. */
+	 *  "edit-outside"/"write-outside" when path escapes cwd,
+	 *  "swarm" for auto-activated agent swarms (detail = summary lines). */
 	action: string;
 	detail: string;
+	/** "swarm" when this is the agent-swarm approval prompt, so the UI can
+	 *  render the AgentSwarm dialog instead of the generic tool dialog. */
+	kind?: "swarm";
 }
 
-export type ApprovalResponse = "once" | "session" | "reject";
+export type ApprovalDecision = "once" | "session" | "reject";
+/** Handlers may return a bare decision string, or a reject carrying user
+ *  feedback that becomes the block reason the model sees. */
+export type ApprovalResponse = ApprovalDecision | { decision: "reject"; feedback: string };
 
 /** Read-only tools that never need approval. */
 const READ_ONLY_TOOLS = new Set([
@@ -73,6 +81,10 @@ const MUTATING_TOOLS = new Set([
 
 const REJECT_REASON = "Rejected by user (permission mode: manual).";
 export const NO_HANDLER_REASON = "Mutating tool blocked in manual mode: no approval channel available.";
+export const SWARM_REJECT_REASON = "Agent swarm rejected by user.";
+export const NO_SWARM_HANDLER_REASON = "Agent swarm blocked: no approval channel available.";
+/** Session-approval key for auto-activated agent swarms. */
+const SWARM_ACTION = "swarm";
 
 interface PermissionContext {
 	mode: PermissionMode;
@@ -149,6 +161,70 @@ function isMutatingTool(toolName: string): boolean {
 	return MUTATING_TOOLS.has(toolName);
 }
 
+export interface GateOptions {
+	/** True when the current turn started from an explicit /swarm prompt — the
+	 *  user already asked for the swarm, so the swarm approval gate is skipped. */
+	explicitSwarmTurn?: boolean;
+}
+
+/** First task text of a parallel fan-out, used as the dialog summary line. */
+function swarmTaskSummary(input: Record<string, unknown>): string {
+	if (!Array.isArray(input.tasks)) return "";
+	for (const task of input.tasks) {
+		const text = task && typeof task === "object" ? (task as { task?: unknown }).task : undefined;
+		if (typeof text === "string" && text.trim()) return sanitizeDetail(text);
+	}
+	return "";
+}
+
+/**
+ * Agent-swarm gate. An auto-activated swarm (one `subagent` call launching more
+ * than SWARM_APPROVAL_THRESHOLD parallel subagents) requires user approval in
+ * manual AND yolo modes; auto mode runs it unconditionally and explicit /swarm
+ * turns are pre-approved. Fail-closed without an approval handler, same as the
+ * mutating-tool gate.
+ */
+async function gateSwarmCall(
+	input: Record<string, unknown>,
+	ctx: PermissionContext,
+	options?: GateOptions,
+): Promise<{ block: true; reason: string } | undefined> {
+	if (ctx.mode === "auto") return undefined;
+	if (options?.explicitSwarmTurn) return undefined;
+	const count = effectiveSwarmCount(input);
+	if (count <= SWARM_APPROVAL_THRESHOLD) return undefined;
+	if (ctx.approvals.has(SWARM_ACTION)) return undefined;
+
+	if (!approvalHandler) {
+		return { block: true, reason: NO_SWARM_HANDLER_REASON };
+	}
+
+	const summary = swarmTaskSummary(input);
+	let resp: ApprovalResponse;
+	try {
+		resp = await approvalHandler({
+			toolName: "subagent",
+			action: SWARM_ACTION,
+			detail: summary ? `agent swarm (${count} subagents)\n${summary}` : `agent swarm (${count} subagents)`,
+			kind: "swarm",
+		});
+	} catch (err) {
+		const message = err instanceof Error ? err.message : NO_SWARM_HANDLER_REASON;
+		return { block: true, reason: message };
+	}
+
+	const decision = typeof resp === "string" ? resp : resp.decision;
+	if (decision === "session") {
+		ctx.approvals.add(SWARM_ACTION);
+		return undefined;
+	}
+	if (decision === "reject") {
+		const feedback = typeof resp === "string" ? undefined : resp.feedback.trim();
+		return { block: true, reason: feedback ? `${SWARM_REJECT_REASON} ${feedback}` : SWARM_REJECT_REASON };
+	}
+	return undefined;
+}
+
 function sanitizeDetail(value: unknown): string {
 	const text = String(value ?? "").trim();
 	return text.length > 200 ? `${text.slice(0, 200)}…` : text;
@@ -165,9 +241,18 @@ export async function gateToolCall(
 	input: Record<string, unknown>,
 	cwd: string,
 	sessionId?: string,
+	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
 	const ctx = getContext(sessionId);
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
+
+	// lunr: agent-swarm gate runs before the mode early-return — it applies in
+	// yolo mode too (only auto mode bypasses it).
+	if (toolName === "subagent") {
+		const swarmBlock = await gateSwarmCall(input, ctx, options);
+		if (swarmBlock) return swarmBlock;
+	}
+
 	if (ctx.mode !== "manual") return undefined;
 	if (!isMutatingTool(toolName)) return undefined;
 
@@ -211,12 +296,14 @@ export async function gateToolCall(
 		return { block: true, reason: message };
 	}
 
-	if (resp === "session") {
+	const decision = typeof resp === "string" ? resp : resp.decision;
+	if (decision === "session") {
 		ctx.approvals.add(action);
 		return undefined;
 	}
-	if (resp === "reject") {
-		return { block: true, reason: REJECT_REASON };
+	if (decision === "reject") {
+		const feedback = typeof resp === "string" ? undefined : resp.feedback.trim();
+		return { block: true, reason: feedback ? `${REJECT_REASON} ${feedback}` : REJECT_REASON };
 	}
 	// "once" — allow this call only
 	return undefined;

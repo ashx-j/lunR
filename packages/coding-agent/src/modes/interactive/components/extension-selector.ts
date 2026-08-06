@@ -78,6 +78,8 @@ export class ExtensionSelectorComponent extends Container {
 			new Text(
 				rawKeyHint("↑↓", "navigate") +
 					"  " +
+					rawKeyHint("1-9", "choose") +
+					"  " +
 					keyHint("tui.select.confirm", "select") +
 					"  " +
 					keyHint("tui.select.cancel", "cancel"),
@@ -117,6 +119,15 @@ export class ExtensionSelectorComponent extends Container {
 			if (selected) this.onSelectCallback(selected);
 		} else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.onCancelCallback();
+		} else if (/^[1-9]$/.test(keyData)) {
+			// lunr: number keys pick an option directly (1 = first option).
+			const index = Number(keyData) - 1;
+			if (index < this.options.length) {
+				this.selectedIndex = index;
+				this.updateList();
+				const selected = this.options[this.selectedIndex];
+				if (selected) this.onSelectCallback(selected);
+			}
 		}
 	}
 

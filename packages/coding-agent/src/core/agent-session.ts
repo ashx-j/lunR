@@ -104,6 +104,7 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { isExplicitSwarmTurn } from "./swarm.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
@@ -468,11 +469,16 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
+			// Explicit /swarm turns are pre-approved for the agent-swarm gate: the last
+			// user message carries the literal [SWARM MODE] prefix on both TUI and gateway.
+			const explicitSwarmTurn =
+				toolCall.name === "subagent" ? isExplicitSwarmTurn(this.sessionManager.getBranch()) : undefined;
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
 				this._cwd,
 				this.sessionId,
+				{ explicitSwarmTurn },
 			);
 			if (permBlock) {
 				return { block: true, reason: permBlock.reason };

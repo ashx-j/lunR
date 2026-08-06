@@ -81,6 +81,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import {
+	type ApprovalResponse,
 	AUTO_MODE_ADDENDUM,
 	getPermissionMode,
 	type PermissionMode,
@@ -826,6 +827,18 @@ export class InteractiveMode {
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
+			// lunr: auto-activated agent swarms get their own dialog; on approval the
+			// footer shows the swarm status for the rest of the turn (cleared with
+			// this.swarmMode at turn end, same as an explicit /swarm).
+			if (req.kind === "swarm") {
+				const resp = await this.showSwarmApprovalDialog(req);
+				const decision = typeof resp === "string" ? resp : resp.decision;
+				if (decision !== "reject") {
+					this.swarmMode = true;
+					this.setExtensionStatus("swarm", "swarm ● active");
+				}
+				return resp;
+			}
 			return this.showApprovalDialog(req);
 		});
 
@@ -6711,6 +6724,43 @@ export class InteractiveMode {
 						} else if (option === "Switch to yolo") {
 							this.applyPermissionMode("yolo");
 							resolve("once");
+						} else resolve("reject");
+					},
+					() => {
+						done();
+						resolve("reject");
+					},
+					{ message: req.detail.slice(0, 500) },
+				);
+				return { component: selector, focus: selector };
+			});
+		});
+	}
+
+	// lunr: approval dialog for auto-activated agent swarms (one subagent call
+	// launching >2 parallel subagents). "Reject with feedback" collects a one-line
+	// reason that becomes the block reason the model sees, so it can adjust the plan.
+	private async showSwarmApprovalDialog(req: {
+		toolName: string;
+		action: string;
+		detail: string;
+	}): Promise<ApprovalResponse> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					"▶ Approve AgentSwarm?",
+					["Approve once", "Approve for this session", "Reject", "Reject with feedback"],
+					(option) => {
+						done();
+						if (option === "Approve once") resolve("once");
+						else if (option === "Approve for this session") resolve("session");
+						else if (option === "Reject with feedback") {
+							void this.showExtensionInput("Reject AgentSwarm", "feedback for the agent (optional)").then(
+								(feedback) => {
+									const trimmed = feedback?.trim();
+									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
+								},
+							);
 						} else resolve("reject");
 					},
 					() => {
