@@ -7,7 +7,7 @@
  *   1. Get an API key from https://ollama.com
  *   2. Add to auth.json in the agent config dir (~/.pi/agent/auth.json, or set PI_CODING_AGENT_DIR):
  *      { "ollama-cloud": { "type": "api_key", "key": "your-key" } }
- *   3. Run /ollama-cloud-refresh to fetch model metadata
+ *   3. Run /refresh to fetch model metadata
  *   4. Use /model or ctrl+l to select an Ollama Cloud model
  *
  * Two endpoints are used to build the model list:
@@ -107,15 +107,6 @@ async function runRefresh(pi: ExtensionAPI, ctx: Pick<ExtensionCommandContext, "
   }
 }
 
-function registerRefreshCommand(pi: ExtensionAPI) {
-  pi.registerCommand("ollama-cloud-refresh", {
-    description: "Refresh Ollama Cloud models from the API",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      await runRefresh(pi, ctx);
-    },
-  });
-}
-
 // --- Main ---
 
 export default async function (pi: ExtensionAPI) {
@@ -126,11 +117,16 @@ export default async function (pi: ExtensionAPI) {
   const needsStartupRefresh = cacheState.status === "stale";
   // GENERATED_MODELS ships with the package (36 tool-capable models from
   // the build script). Used when no local cache exists. A fresh user cache
-  // from /ollama-cloud-refresh takes precedence over the generated list.
+  // from /refresh takes precedence over the generated list.
   const models = cacheState.status === "missing" ? GENERATED_MODELS : assembleModels(cacheState.models);
 
   registerProvider(pi, models);
-  registerRefreshCommand(pi);
+  // lunr: no user-visible command here — /refresh is the single refresh entry
+  // point. Core triggers this extension's refresh through the bridge because
+  // it bypasses the refreshModels hook and re-registers the provider wholesale.
+  (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] = (
+    ctx: Pick<ExtensionCommandContext, "ui">,
+  ) => runRefresh(pi, ctx);
 
   if (needsStartupRefresh) {
     let started = false;

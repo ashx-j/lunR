@@ -19,8 +19,8 @@ function renderRowLabel(row: BreakdownRow): string {
 	return row.count !== undefined && row.count > 0 ? `${row.label} (${row.count})` : row.label;
 }
 
-function rowLine(row: BreakdownRow, labelWidth: number, contextWindow: number): string {
-	const percent = contextWindow > 0 ? (row.tokens / contextWindow) * 100 : 0;
+function rowLine(row: BreakdownRow, labelWidth: number, denominator: number): string {
+	const percent = denominator > 0 ? (row.tokens / denominator) * 100 : 0;
 	const label = renderRowLabel(row);
 	return `  ${label.padEnd(labelWidth)}  ${usageBar(percent)}  ${formatTokens(row.tokens)}`;
 }
@@ -50,7 +50,7 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 
 	const labelWidth = Math.max(...rows.map((row) => renderRowLabel(row).length), "Estimated total".length);
 	for (const row of rows) {
-		content.push(rowLine(row, labelWidth, breakdown.contextWindow));
+		content.push(rowLine(row, labelWidth, breakdown.total));
 	}
 
 	content.push("");

@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
+import type { AuthEvent, AuthPrompt, Credential } from "@earendil-works/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
@@ -78,6 +78,7 @@ import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import {
 	AUTO_MODE_ADDENDUM,
@@ -97,6 +98,10 @@ import {
 	enableRollbackForSession,
 	initRollback,
 	isRollbackEnabled,
+	isRollbackSessionForceEnabled,
+	migrateRollbackSession,
+	peekRollbackTurnsConsumed,
+	type RollbackResult,
 	beginTurn as rollbackBeginTurn,
 	rollbackLastTurn,
 	setRollbackWarningHandler,
@@ -106,6 +111,8 @@ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../cor
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+// lunr: multi-subscription API-key pools (stage 3 UI).
+import type { SubEntry } from "../../core/subscriptions.ts";
 // lunr: moved to core/swarm.ts so the gateway can reuse it.
 import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -147,7 +154,11 @@ import {
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
-import { SettingsSelectorComponent } from "./components/settings-selector.ts";
+import {
+	formatSubscriptionExhaustedUntil,
+	SettingsSelectorComponent,
+	type SubscriptionRowInfo,
+} from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	BranchSummaryStatusIndicator,
@@ -530,7 +541,7 @@ export class InteractiveMode {
 		this.runtimeHost = runtimeHost;
 		this.options = options;
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
-		this.runtimeHost.setBeforeSessionInvalidate(() => {
+		this.runtimeHost.setBeforeSessionInvalidate((reason) => {
 			this.resetExtensionUI();
 			// lunr: plan-mode gate/addendum live on the AgentSession being replaced — drop state
 			if (this.planModeActive) {
@@ -543,7 +554,12 @@ export class InteractiveMode {
 			resetPermissions(this.settingsManager.getDefaultPermissionMode());
 			// lunr: clear process registry and rollback state
 			processRegistry.clearRegistry();
-			clearRollback();
+			// lunr: on fork (/rollback, /undo, tree navigation) the snapshots SURVIVE —
+			// the caller migrates them to the forked session id (migrateRollbackSession).
+			// Any other replacement wipes only the session being torn down.
+			if (reason !== "fork") {
+				clearRollback(this.sessionManager.getSessionId());
+			}
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
@@ -686,16 +702,22 @@ export class InteractiveMode {
 			};
 		}
 
+		const loginArgCompletions = (prefix: string): AutocompleteItem[] | null => {
+			const providers = getLoginProviderCompletionOptions(this.getLoginProviderOptions());
+			return createFuzzyAutocompleteItems(providers, prefix, getLoginProviderSearchText, (provider) => ({
+				value: provider.id,
+				label: provider.id,
+				description: formatLoginProviderCompletionDescription(provider),
+			}));
+		};
 		const loginCommand = slashCommands.find((command) => command.name === "login");
 		if (loginCommand) {
-			loginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const providers = getLoginProviderCompletionOptions(this.getLoginProviderOptions());
-				return createFuzzyAutocompleteItems(providers, prefix, getLoginProviderSearchText, (provider) => ({
-					value: provider.id,
-					label: provider.id,
-					description: formatLoginProviderCompletionDescription(provider),
-				}));
-			};
+			loginCommand.getArgumentCompletions = loginArgCompletions;
+		}
+		// lunr: /auth shares /login's provider argument completions.
+		const authCommand = slashCommands.find((command) => command.name === "auth");
+		if (authCommand) {
+			authCommand.getArgumentCompletions = loginArgCompletions;
 		}
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -2547,7 +2569,7 @@ export class InteractiveMode {
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
-		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
+		this.defaultEditor.onAction("app.model.select", () => void this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
@@ -2606,7 +2628,7 @@ export class InteractiveMode {
 
 			// Handle commands
 			if (text === "/settings") {
-				this.showSettingsSelector();
+				void this.showSettingsSelector();
 				this.editor.setText("");
 				return;
 			}
@@ -2726,13 +2748,15 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/login" || text.startsWith("/login ")) {
-				const providerRef = text.startsWith("/login ") ? text.slice(7).trim() : undefined;
+			if (text === "/login" || text === "/auth" || text.startsWith("/login ") || text.startsWith("/auth ")) {
+				// lunr: /auth is an alias of /login; the provider arg follows the first space.
+				const providerRef = text.includes(" ") ? text.slice(text.indexOf(" ") + 1).trim() : undefined;
 				this.editor.setText("");
 				await this.handleLoginCommand(providerRef);
 				return;
 			}
-			if (text === "/logout") {
+			if (text === "/logout" || text === "/deauth") {
+				// lunr: /deauth is an alias of /logout.
 				this.showOAuthSelector("logout");
 				this.editor.setText("");
 				return;
@@ -3232,6 +3256,12 @@ export class InteractiveMode {
 					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
 				}
 				this.ui.requestRender();
+				break;
+			}
+
+			// lunr: one-line status when a failed run rotates to the next pooled subscription key.
+			case "subscription_rotation": {
+				this.showStatus(`Switched ${event.providerId} key to '${event.keyName}' (previous key hit its limit)`);
 				break;
 			}
 		}
@@ -4224,7 +4254,9 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private showSettingsSelector(): void {
+	private async showSettingsSelector(): Promise<void> {
+		// lunr: prefetch the pool size for the Subscriptions row label (render paths stay sync).
+		const subscriptionCount = await this.countSubscriptions();
 		this.showSelector((done) => {
 			const selector = new SettingsSelectorComponent(
 				{
@@ -4273,6 +4305,9 @@ export class InteractiveMode {
 					rollbackTurns: this.settingsManager.getRollbackTurns(),
 					rollbackCapture: this.settingsManager.getRollbackCapture(),
 					rollbackScope: this.settingsManager.getRollbackScope(),
+					// lunr: multi-subscription pools
+					autoManageSubscriptions: this.settingsManager.getAutoManageSubscriptions(),
+					subscriptionCount,
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4410,6 +4445,7 @@ export class InteractiveMode {
 					},
 					onModelTiersEnabledChange: (enabled) => {
 						this.settingsManager.setModelTiersEnabled(enabled);
+						getModelTiersBridge()?.refreshToolDescription();
 					},
 					onModelTierModelChange: (tier, model) => {
 						this.settingsManager.setTierModel(tier, model);
@@ -4459,6 +4495,23 @@ export class InteractiveMode {
 					onRollbackScopeChange: (scope) => {
 						this.settingsManager.setRollbackScope(scope);
 					},
+					isRollbackSessionForceEnabled: () => isRollbackSessionForceEnabled(this.sessionManager.getSessionId()),
+					// lunr: multi-subscription pool callbacks
+					onAutoManageSubscriptionsChange: (enabled) => {
+						this.settingsManager.setAutoManageSubscriptions(enabled);
+					},
+					subscriptions: {
+						list: () => this.listSubscriptionRows(),
+						setActive: (providerId, id) =>
+							this.session.modelRuntime.subscriptionManager.setActive(providerId, id),
+						rename: (providerId, id, name) =>
+							this.session.modelRuntime.subscriptionManager.renameKey(providerId, id, name),
+						clearExhaustion: (providerId, id) =>
+							this.session.modelRuntime.subscriptionManager.clearExhaustion(providerId, id),
+						remove: (providerId, id) => this.session.modelRuntime.subscriptionManager.removeKey(providerId, id),
+						autoManage: () => this.settingsManager.getAutoManageSubscriptions(),
+						requestRender: () => this.ui.requestRender(),
+					},
 					createModelTierPicker: (_tier, currentModelRef, done) => {
 						const selector = new ModelSelectorComponent(
 							this.ui,
@@ -4491,7 +4544,7 @@ export class InteractiveMode {
 
 	private async handleModelCommand(searchTerm?: string): Promise<void> {
 		if (!searchTerm) {
-			this.showModelSelector();
+			await this.showModelSelector();
 			return;
 		}
 
@@ -4510,14 +4563,14 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.showModelSelector(searchTerm);
+		await this.showModelSelector(searchTerm);
 	}
 
 	// lunr: /refresh — refresh model lists for ALL providers (replaces ollama-only).
 	// Fans out to every composed provider's refreshModels hook (local servers, remote
-	// catalog, extension hooks) via ModelRuntime.refresh, then re-runs any registered
-	// extension refresh command (e.g. ollama-cloud-refresh) so providers that bypass the
-	// hook stay current.
+	// catalog, extension hooks) via ModelRuntime.refresh, then re-runs the ollama-cloud
+	// refresh via its bridge (Symbol.for("@lunr/ollama-cloud-refresh")) because that
+	// extension bypasses the hook and re-registers its provider wholesale.
 	private async handleRefreshCommand(): Promise<void> {
 		const runtime = this.session.modelRuntime;
 		const allowNetwork = runtime.isNetworkAllowed();
@@ -4543,13 +4596,15 @@ export class InteractiveMode {
 		} finally {
 			clearTimeout(timeout);
 		}
-		// Re-run extension-registered refresh commands (e.g. ollama-cloud-refresh)
-		// that bypass the refreshModels hook and re-register providers wholesale.
+		// Re-run the ollama-cloud refresh via the extension's bridge — it bypasses
+		// the refreshModels hook and re-registers its provider wholesale.
 		const runner = this.session.extensionRunner;
-		const cloudCommand = runner.getCommand("ollama-cloud-refresh");
-		if (cloudCommand) {
+		const cloudRefresh = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] as
+			| ((ctx: { ui: unknown }) => Promise<unknown>)
+			| undefined;
+		if (cloudRefresh) {
 			try {
-				await cloudCommand.handler("", runner.createCommandContext());
+				await cloudRefresh({ ui: runner.createCommandContext().ui });
 			} catch (error) {
 				summary += ` (ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)})`;
 			}
@@ -4669,7 +4724,9 @@ export class InteractiveMode {
 		});
 	}
 
-	private showModelSelector(initialSearchInput?: string): void {
+	private async showModelSelector(initialSearchInput?: string): Promise<void> {
+		// lunr: prefetch active subscription names so row rendering stays synchronous.
+		const subscriptionNames = await this.getActiveSubscriptionNames();
 		this.showSelector((done) => {
 			const selector = new ModelSelectorComponent(
 				this.ui,
@@ -4686,6 +4743,8 @@ export class InteractiveMode {
 						this.showStatus(`Model: ${model.id}`);
 						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 						this.checkDaxnutsEasterEgg(model);
+						// lunr: offer manual subscription switching for pooled providers.
+						await this.maybeShowSubscriptionPicker(model.provider);
 					} catch (error) {
 						done();
 						this.showError(error instanceof Error ? error.message : String(error));
@@ -4696,9 +4755,114 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				initialSearchInput,
+				{ subscriptionNames },
 			);
 			return { component: selector, focus: selector };
 		});
+	}
+
+	// lunr: providerId → active subscription name for providers with a multi-key pool.
+	// Empty when auto-manage subscriptions is on (no manual switching UI then).
+	private async getActiveSubscriptionNames(): Promise<ReadonlyMap<string, string>> {
+		const names = new Map<string, string>();
+		if (this.settingsManager.getAutoManageSubscriptions()) return names;
+		try {
+			const manager = this.session.modelRuntime.subscriptionManager;
+			for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
+				if (type !== "api_key") continue;
+				const subs = await manager.list(providerId);
+				if (subs.length < 2) continue;
+				const active = await manager.getActive(providerId);
+				if (active) names.set(providerId, active.name);
+			}
+		} catch {
+			// Pool read failures must not break the model selector.
+		}
+		return names;
+	}
+
+	// lunr: after a model pick, offer manual subscription switching for pooled providers.
+	// Skipped when auto-manage is on; the model selection stands either way.
+	private async maybeShowSubscriptionPicker(providerId: string): Promise<void> {
+		if (this.settingsManager.getAutoManageSubscriptions()) return;
+		const manager = this.session.modelRuntime.subscriptionManager;
+		const subs = await manager.list(providerId);
+		if (subs.length < 2) return;
+		const activeId = (await manager.getActive(providerId))?.id;
+		const labels = subs.map((sub) => this.formatSubscriptionPickerLabel(sub, sub.id === activeId));
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Select active subscription for ${providerId}:`,
+				labels,
+				(option) => {
+					done();
+					const sub = subs[labels.indexOf(option)];
+					if (!sub || sub.id === activeId) {
+						this.ui.requestRender();
+						return;
+					}
+					manager.setActive(providerId, sub.id).then(
+						() => this.showStatus(`Subscription: ${sub.name} (${providerId})`),
+						(error: unknown) =>
+							this.showError(
+								`Failed to switch subscription: ${error instanceof Error ? error.message : String(error)}`,
+							),
+					);
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	// lunr: picker row label — "work (active)", "Sub 3 · exhausted until 14:30".
+	private formatSubscriptionPickerLabel(sub: SubEntry, isActive: boolean): string {
+		let label = sub.name;
+		if (isActive) label += " (active)";
+		if (sub.exhaustedUntil !== undefined) {
+			label += ` · exhausted until ${formatSubscriptionExhaustedUntil(sub.exhaustedUntil)}`;
+		}
+		return label;
+	}
+
+	// lunr: total pool size across providers, for the /settings Subscriptions row label.
+	private async countSubscriptions(): Promise<number> {
+		try {
+			let count = 0;
+			for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
+				if (type !== "api_key") continue;
+				count += (await this.session.modelRuntime.subscriptionManager.list(providerId)).length;
+			}
+			return count;
+		} catch {
+			return 0;
+		}
+	}
+
+	// lunr: plain-data rows for the /settings Subscriptions submenu (manager stays in core).
+	private async listSubscriptionRows(): Promise<SubscriptionRowInfo[]> {
+		const rows: SubscriptionRowInfo[] = [];
+		const manager = this.session.modelRuntime.subscriptionManager;
+		for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
+			if (type !== "api_key") continue;
+			const providerName = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
+			const subs = await manager.list(providerId);
+			const activeId = (await manager.getActive(providerId))?.id;
+			for (const sub of subs) {
+				rows.push({
+					providerId,
+					providerName,
+					id: sub.id,
+					name: sub.name,
+					active: sub.id === activeId,
+					...(sub.exhaustedUntil !== undefined ? { exhaustedUntil: sub.exhaustedUntil } : {}),
+				});
+			}
+		}
+		return rows;
 	}
 
 	private async showModelsSelector(): Promise<void> {
@@ -5080,14 +5244,40 @@ export class InteractiveMode {
 	}
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials())
-			.map(({ providerId, type }) => ({
-				id: providerId,
-				name: this.session.modelRuntime.getProvider(providerId)?.name ?? providerId,
-				authType: type,
-				status: { type, source: "stored credential" },
-			}))
-			.sort((a, b) => a.name.localeCompare(b.name));
+		// lunr: providers with a multi-key pool list one entry per subscription plus an
+		// "all subscriptions" entry, encoding the target as "<providerId>#<subId|all>".
+		const options: AuthSelectorProvider[] = [];
+		for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
+			const name = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
+			const status = { type, source: "stored credential" };
+			if (type === "api_key") {
+				const subs = await this.session.modelRuntime.subscriptionManager.list(providerId);
+				if (subs.length > 1) {
+					for (const sub of subs) {
+						options.push({
+							id: `${providerId}#${sub.id}`,
+							name: `${name} — ${sub.name}`,
+							authType: type,
+							status,
+						});
+					}
+					options.push({ id: `${providerId}#all`, name: `${name} — all subscriptions`, authType: type, status });
+					continue;
+				}
+			}
+			options.push({ id: providerId, name, authType: type, status });
+		}
+		return options.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	// lunr: remove every pool key for a provider; removing the last key also deletes
+	// the auth.json credential, so the modelRuntime.logout afterwards is a no-op delete.
+	private async removeAllSubscriptions(providerId: string): Promise<void> {
+		const manager = this.session.modelRuntime.subscriptionManager;
+		const subs = await manager.list(providerId);
+		for (const sub of subs) {
+			await manager.removeKey(providerId, sub.id);
+		}
 	}
 
 	private findLoginProviderOptions(providerRef: string): AuthSelectorProvider[] {
@@ -5326,6 +5516,30 @@ export class InteractiveMode {
 					}
 
 					try {
+						// lunr: pool-aware logout — "provider#subId" removes one key,
+						// "provider#all" and plain entries remove everything.
+						const hashIndex = providerOption.id.indexOf("#");
+						if (hashIndex > 0) {
+							const poolProviderId = providerOption.id.slice(0, hashIndex);
+							const subRef = providerOption.id.slice(hashIndex + 1);
+							if (subRef !== "all") {
+								await this.session.modelRuntime.subscriptionManager.removeKey(poolProviderId, subRef);
+								await this.updateAvailableProviderCount();
+								this.showStatus(`Removed subscription ${providerOption.name}.`);
+								return;
+							}
+							await this.removeAllSubscriptions(poolProviderId);
+							await this.session.modelRuntime.logout(poolProviderId);
+							await this.updateAvailableProviderCount();
+							const poolProviderName =
+								this.session.modelRuntime.getProvider(poolProviderId)?.name ?? poolProviderId;
+							this.showStatus(`Removed all subscriptions for ${poolProviderName}`);
+							return;
+						}
+
+						// lunr: a plain entry can still have a lazy-imported pool — clear it so
+						// rotation cannot resurrect the removed credential.
+						await this.removeAllSubscriptions(providerOption.id);
 						await this.session.modelRuntime.logout(providerOption.id);
 						await this.updateAvailableProviderCount();
 						const message =
@@ -5351,10 +5565,15 @@ export class InteractiveMode {
 		providerName: string,
 		authType: "oauth" | "api_key",
 		previousModel: Model<any> | undefined,
+		// lunr: lets the subscription add-flow adjust the status wording.
+		overrides?: { actionLabel?: string; savedNote?: string },
 	): Promise<void> {
 		await this.session.modelRuntime.getAvailable();
 
-		const actionLabel = authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`;
+		const actionLabel =
+			overrides?.actionLabel ??
+			(authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`);
+		const savedNote = overrides?.savedNote ?? `Credentials saved to ${getAuthPath()}`;
 
 		let selectedModel: Model<any> | undefined;
 		let selectionError: string | undefined;
@@ -5386,11 +5605,11 @@ export class InteractiveMode {
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
 		if (selectedModel) {
-			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${getAuthPath()}`);
+			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedNote}`);
 			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
 			this.checkDaxnutsEasterEgg(selectedModel);
 		} else {
-			this.showStatus(`${actionLabel}. Credentials saved to ${getAuthPath()}`);
+			this.showStatus(`${actionLabel}. ${savedNote}`);
 			if (selectionError) {
 				this.showError(selectionError);
 			} else {
@@ -5425,6 +5644,19 @@ export class InteractiveMode {
 	private async showApiKeyLoginDialog(providerId: string, providerName: string): Promise<void> {
 		const previousModel = this.session.model;
 
+		// lunr: multi-subscription pools — when the provider already has stored keys,
+		// ask whether the new key joins the pool or replaces it.
+		const subscriptionManager = this.session.modelRuntime.subscriptionManager;
+		const existingSubs = await subscriptionManager.list(providerId);
+		let poolMode: "add" | "replace" | undefined;
+		if (existingSubs.length > 0) {
+			poolMode = await this.chooseSubscriptionLoginMode(providerName, existingSubs.length);
+			if (poolMode === undefined) {
+				this.showStatus("Login cancelled.");
+				return;
+			}
+		}
+
 		const dialog = new LoginDialogComponent(
 			this.ui,
 			providerId,
@@ -5455,8 +5687,19 @@ export class InteractiveMode {
 		};
 
 		try {
-			await this.loginProvider(dialog, providerId, "api_key");
+			const credential = await this.loginProvider(dialog, providerId, "api_key");
 			restoreEditor();
+			if (poolMode === "add" && credential.type === "api_key" && credential.key !== undefined) {
+				const entry = await subscriptionManager.addKey(providerId, credential.key);
+				await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel, {
+					actionLabel: `Added subscription "${entry.name}" for ${providerName}`,
+					savedNote: "Key stored in the subscription pool. Rename it in /settings → Subscriptions.",
+				});
+				return;
+			}
+			if (poolMode === "replace") {
+				await this.replaceSubscriptionPool(providerId, credential);
+			}
 			await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel);
 		} catch (error: unknown) {
 			restoreEditor();
@@ -5464,6 +5707,45 @@ export class InteractiveMode {
 			if (errorMsg !== "Login cancelled") {
 				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
 			}
+		}
+	}
+
+	// lunr: add-vs-replace picker shown when an API-key provider already has stored keys.
+	private chooseSubscriptionLoginMode(providerName: string, keyCount: number): Promise<"add" | "replace" | undefined> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					`${providerName} already has ${keyCount} stored key${keyCount === 1 ? "" : "s"}.`,
+					["Add as new subscription", "Replace existing"],
+					(option) => {
+						done();
+						resolve(option === "Add as new subscription" ? "add" : "replace");
+					},
+					() => {
+						done();
+						resolve(undefined);
+					},
+					{
+						message:
+							"Add keeps the existing keys in a pool you can switch between; Replace overwrites them with the new key.",
+					},
+				);
+				return { component: selector, focus: selector };
+			});
+		});
+	}
+
+	// lunr: "Replace existing" collapses the pool to the single key login just stored,
+	// so rotation cannot resurrect replaced keys. Removing the last pool key deletes the
+	// auth.json credential, and addKey re-mirrors the same key the login already stored.
+	private async replaceSubscriptionPool(providerId: string, credential: Credential): Promise<void> {
+		const subscriptionManager = this.session.modelRuntime.subscriptionManager;
+		const subs = await subscriptionManager.list(providerId);
+		for (const sub of subs) {
+			await subscriptionManager.removeKey(providerId, sub.id);
+		}
+		if (credential.type === "api_key" && credential.key !== undefined) {
+			await subscriptionManager.addKey(providerId, credential.key);
 		}
 	}
 
@@ -5541,8 +5823,8 @@ export class InteractiveMode {
 		dialog: LoginDialogComponent,
 		providerId: string,
 		method: "api_key" | "oauth",
-	): Promise<void> {
-		await this.session.modelRuntime.login(providerId, method, {
+	): Promise<Credential> {
+		return this.session.modelRuntime.login(providerId, method, {
 			signal: dialog.signal,
 			prompt: (prompt) => this.showAuthPrompt(dialog, prompt),
 			notify: (event) => this.notifyAuthDialog(dialog, event),
@@ -5721,11 +6003,15 @@ export class InteractiveMode {
 		try {
 			// Fork to just before the target — writes a branched session file so the
 			// rewind survives restart. Unlike /rollback, this must NOT touch files.
+			// lunr: fork teardown skips the rollback wipe (reason === "fork"), so carry
+			// the surviving snapshots over to the forked session id.
+			const oldSid = this.sessionManager.getSessionId();
 			const forkResult = await this.runtimeHost.fork(targetId, { position: "before" });
 			if (forkResult.cancelled) {
 				this.showStatus("Undo cancelled");
 				return;
 			}
+			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
 			// /redo cannot redo across a fork — clear the ephemeral redo stack.
 			this.redoStack.length = 0;
 			this.chatContainer.clear();
@@ -6459,35 +6745,50 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Find the rewind target (last user message on the current branch) BEFORE
-		// mutating anything — forking to it is what makes the rewind persistent.
+		// lunr: how many turns the rollback will consume — the newest non-empty turn
+		// plus any empty (chat-only) turns on top of it. The conversation must rewind
+		// past the same number of user messages or files and messages desync.
+		// Defaults to 1 so /rollback still rewinds one exchange when there's nothing to restore.
+		const turnsToConsume = Math.max(1, peekRollbackTurnsConsumed(this.sessionManager.getSessionId()));
+
+		// Find the rewind target (the turnsToConsume-th user message from the end of
+		// the current branch) BEFORE mutating anything — forking to it is what makes
+		// the rewind persistent.
 		const branch = this.sessionManager.getBranch();
-		let lastUserId: string | undefined;
+		let targetUserId: string | undefined;
+		let userMessagesSeen = 0;
 		for (let i = branch.length - 1; i >= 0; i--) {
 			const entry = branch[i];
 			if (entry.type === "message" && entry.message.role === "user") {
-				lastUserId = entry.id;
-				break;
+				userMessagesSeen++;
+				targetUserId = entry.id;
+				if (userMessagesSeen >= turnsToConsume) break;
 			}
 		}
-		if (!lastUserId) {
+		if (!targetUserId) {
 			this.showStatus("Nothing to roll back");
 			return;
 		}
 
-		// Restore files FIRST: the fork below replaces the session, which clears
-		// rollback state (beforeSessionInvalidate → clearRollback).
-		const result = rollbackLastTurn(this.sessionManager.getSessionId());
-
+		let result: RollbackResult;
 		try {
-			// Fork to just before the last user message — writes a branched session
-			// file, so the rewind survives restart/`-c` (unlike /undo's in-memory leaf).
-			const forkResult = await this.runtimeHost.fork(lastUserId, { position: "before" });
+			// lunr: fork FIRST. If the fork throws or is cancelled by an extension veto,
+			// no snapshot has been popped yet, so files and conversation stay consistent
+			// and /rollback can simply be retried. Fork teardown skips the rollback wipe
+			// (reason === "fork"); the snapshots are then migrated to the forked session id.
+			const oldSid = this.sessionManager.getSessionId();
+			const forkResult = await this.runtimeHost.fork(targetUserId, { position: "before" });
 			if (forkResult.cancelled) {
-				this.showStatus("Files restored, but conversation rewind was cancelled.");
+				this.showStatus("Rollback cancelled");
 				return;
 			}
-			this.editor.setText(forkResult.selectedText ?? "");
+			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
+			result = rollbackLastTurn(this.sessionManager.getSessionId());
+			// /redo cannot redo across a fork — the branched session has new entry ids.
+			this.redoStack.length = 0;
+			if (forkResult.selectedText && !this.editor.getText().trim()) {
+				this.editor.setText(forkResult.selectedText);
+			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 			return;

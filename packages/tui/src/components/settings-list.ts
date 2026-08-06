@@ -17,12 +17,15 @@ export interface SettingItem {
 	values?: string[];
 	/** If provided, Enter opens this submenu. Receives current value and done callback. */
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
+	/** If true, the row is rendered dimmed and cannot be activated. Evaluated at render/activation time. */
+	disabled?: () => boolean;
 }
 
 export interface SettingsListTheme {
 	label: (text: string, selected: boolean) => string;
 	value: (text: string, selected: boolean) => string;
 	description: (text: string) => string;
+	disabled: (text: string) => string;
 	cursor: string;
 	hint: (text: string) => string;
 }
@@ -126,19 +129,22 @@ export class SettingsList implements Component {
 			if (!item) continue;
 
 			const isSelected = i === this.selectedIndex;
+			const isDisabled = item.disabled?.() ?? false;
 			const prefix = isSelected ? this.theme.cursor : "  ";
 			const prefixWidth = visibleWidth(prefix);
 
 			// Pad label to align values
 			const labelPadded = item.label + " ".repeat(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
-			const labelText = this.theme.label(labelPadded, isSelected);
+			const labelText = isDisabled ? this.theme.disabled(labelPadded) : this.theme.label(labelPadded, isSelected);
 
 			// Calculate space for value
 			const separator = "  ";
 			const usedWidth = prefixWidth + maxLabelWidth + visibleWidth(separator);
 			const valueMaxWidth = width - usedWidth - 2;
 
-			const valueText = this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
+			const valueText = isDisabled
+				? this.theme.disabled(truncateToWidth(item.currentValue, valueMaxWidth, ""))
+				: this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
 
 			lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
 		}
@@ -199,6 +205,7 @@ export class SettingsList implements Component {
 	private activateItem(): void {
 		const item = this.searchEnabled ? this.filteredItems[this.selectedIndex] : this.items[this.selectedIndex];
 		if (!item) return;
+		if (item.disabled?.()) return;
 
 		if (item.submenu) {
 			// Open submenu, passing current value so it can pre-select correctly

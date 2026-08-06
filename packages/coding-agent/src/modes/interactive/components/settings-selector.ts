@@ -4,6 +4,7 @@ import {
 	type Component,
 	Container,
 	getCapabilities,
+	getKeybindings,
 	Input,
 	type SelectItem,
 	SelectList,
@@ -13,6 +14,7 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
+import { getCustomizeBridge } from "../../../core/customize.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
@@ -108,6 +110,9 @@ export interface SettingsConfig {
 	rollbackTurns: number;
 	rollbackCapture: RollbackCapture;
 	rollbackScope: RollbackScope;
+	// lunr: multi-subscription pools
+	autoManageSubscriptions: boolean;
+	subscriptionCount: number;
 }
 
 export interface SettingsCallbacks {
@@ -157,6 +162,11 @@ export interface SettingsCallbacks {
 	onRollbackTurnsChange: (turns: number) => void;
 	onRollbackCaptureChange: (mode: RollbackCapture) => void;
 	onRollbackScopeChange: (scope: RollbackScope) => void;
+	isRollbackSessionForceEnabled: () => boolean;
+	// lunr: multi-subscription pool callbacks
+	onAutoManageSubscriptionsChange: (enabled: boolean) => void;
+	/** lunr: live pool accessors; when absent the Subscriptions row is hidden. */
+	subscriptions?: SubscriptionCallbacks;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
 	createModelTierPicker: (
 		tier: ModelTierName,
@@ -192,11 +202,16 @@ class ModelTiersSubmenu extends Container {
 	private settingsList: SettingsList;
 	private state: { enabled: boolean; light?: string; standard?: string; heavy?: string };
 
-	constructor(modelTiers: ModelTiersSettings, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+	constructor(
+		currentValue: string | undefined,
+		modelTiers: ModelTiersSettings,
+		callbacks: SettingsCallbacks,
+		done: (selectedValue?: string) => void,
+	) {
 		super();
 
 		this.state = {
-			enabled: modelTiers.enabled ?? false,
+			enabled: currentValue === "on" || (currentValue === undefined && (modelTiers.enabled ?? false)),
 			light: modelTiers.light,
 			standard: modelTiers.standard,
 			heavy: modelTiers.heavy,
@@ -208,8 +223,8 @@ class ModelTiersSubmenu extends Container {
 				label: "Enable model tiers",
 				description:
 					"Route subagents to per-tier models. An explicit model choice overrides the tier; tiers without a model inherit the parent model.",
-				currentValue: this.state.enabled ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: this.state.enabled ? "on" : "off",
+				values: ["on", "off"],
 			},
 			...MODEL_TIER_ROWS.map((row): SettingItem => {
 				const tier = row.tier;
@@ -218,6 +233,7 @@ class ModelTiersSubmenu extends Container {
 					label: row.label,
 					description: row.description,
 					currentValue: this.state[tier] ?? "not set",
+					disabled: () => !this.state.enabled,
 					submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
 				};
 			}),
@@ -229,7 +245,7 @@ class ModelTiersSubmenu extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				if (id === "enabled") {
-					this.state.enabled = newValue === "true";
+					this.state.enabled = newValue === "on";
 					callbacks.onModelTiersEnabledChange(this.state.enabled);
 					return;
 				}
@@ -304,57 +320,60 @@ const SEARCH_CURATOR_VALUES: SearchCuratorSetting[] = ["off", "on", "auto-summar
 class CustomizeSubmenu extends Container {
 	private settingsList: SettingsList;
 
-	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+	constructor(_config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
 		super();
 
+		// Read live values from the customize bridge so re-entering the submenu within
+		// one /settings session reflects toggles made earlier in that session.
+		const bridge = getCustomizeBridge();
 		const items: SettingItem[] = [
 			{
 				id: "gutter-rail",
 				label: "Gutter rail",
 				description: "Render a thin left │ rail spanning each turn, closing with ╰.",
-				currentValue: config.gutterRail ? "on" : "off",
+				currentValue: (bridge?.getGutterRail() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "prompt-symbol",
 				label: "Prompt symbol",
 				description: "Show the ☾ › prompt glyph on the editor's first line.",
-				currentValue: config.promptSymbol ? "on" : "off",
+				currentValue: (bridge?.getPromptSymbol() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-mcp",
 				label: "Footer: MCP status",
 				description: "Show the MCP server status segment in the footer stats line.",
-				currentValue: config.footerMcp ? "on" : "off",
+				currentValue: (bridge?.getFooterMcp() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-lsp",
 				label: "Footer: LSP status",
 				description: "Show the LSP status segment in the footer stats line.",
-				currentValue: config.footerLsp ? "on" : "off",
+				currentValue: (bridge?.getFooterLsp() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-context",
 				label: "Footer: context meter",
 				description: "Show the context-usage pct/window segment in the footer stats line.",
-				currentValue: config.footerContext ? "on" : "off",
+				currentValue: (bridge?.getFooterContext() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-tokens",
 				label: "Footer: token counter",
 				description: "Show the ↑in ↓out token totals segment in the footer stats line.",
-				currentValue: config.footerTokens ? "on" : "off",
+				currentValue: (bridge?.getFooterTokens() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-statuses",
 				label: "Footer: feature statuses",
 				description: "Show the plan/goal/swarm/research/tps status segments in the footer stats line.",
-				currentValue: config.footerStatuses ? "on" : "off",
+				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 		];
@@ -402,23 +421,36 @@ class CustomizeSubmenu extends Container {
 // lunr: Rollback submenu — enable, turns, capture mode, scope.
 class RollbackSubmenu extends Container {
 	private settingsList: SettingsList;
+	private enabled: boolean;
 
-	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+	constructor(
+		currentValue: string | undefined,
+		config: SettingsConfig,
+		callbacks: SettingsCallbacks,
+		sessionForceEnabled: boolean,
+		done: (selectedValue?: string) => void,
+	) {
 		super();
+
+		this.enabled = currentValue === "on" || (currentValue === undefined && config.rollbackEnabled);
 
 		const items: SettingItem[] = [
 			{
 				id: "rollback-enabled",
 				label: "Rollback enabled",
-				description: "Copy files before edits so /rollback can restore them. Uses extra disk + processing.",
-				currentValue: config.rollbackEnabled ? "on" : "off",
+				description:
+					"Copy files before edits so /rollback can restore them. Uses extra disk + processing." +
+					(sessionForceEnabled ? " (forced on by auto mode)" : ""),
+				currentValue: this.enabled ? "on" : "off",
 				values: ["on", "off"],
+				disabled: () => sessionForceEnabled,
 			},
 			{
 				id: "rollback-turns",
 				label: "Rollback turns",
 				description: `How many turns of snapshots to retain (1-20, default 2).`,
 				currentValue: String(config.rollbackTurns),
+				disabled: () => !this.enabled,
 				submenu: (currentValue, submenuDone) => new RollbackTurnsSubmenu(currentValue, submenuDone),
 			},
 			{
@@ -427,6 +459,7 @@ class RollbackSubmenu extends Container {
 				description:
 					"How snapshots are taken: copies = restore edited files + delete tool-created files, hybrid = also delete files created outside tools (tree scope), shadow-git = hidden git repo (needs git).",
 				currentValue: config.rollbackCapture,
+				disabled: () => !this.enabled,
 				submenu: (currentValue, submenuDone) =>
 					new SelectSubmenu(
 						"Rollback Capture Mode",
@@ -462,6 +495,7 @@ class RollbackSubmenu extends Container {
 				description:
 					"tools = only edit/write changes; tree = also catches bash side-effects via git status (slower on large repos).",
 				currentValue: config.rollbackScope,
+				disabled: () => !this.enabled,
 				submenu: (currentValue, submenuDone) =>
 					new SelectSubmenu(
 						"Rollback Scope",
@@ -491,11 +525,12 @@ class RollbackSubmenu extends Container {
 			(id, newValue) => {
 				switch (id) {
 					case "rollback-enabled":
-						callbacks.onRollbackEnabledChange(newValue === "on");
+						this.enabled = newValue === "on";
+						callbacks.onRollbackEnabledChange(this.enabled);
 						break;
 				}
 			},
-			() => done(),
+			() => done(this.enabled ? "on" : "off"),
 		);
 		this.addChild(new Text(theme.bold(theme.fg("accent", "Rollback")), 0, 0));
 		this.addChild(new Spacer(1));
@@ -537,6 +572,260 @@ class RollbackTurnsSubmenu extends Container {
 
 	handleInput(data: string): void {
 		this.input.handleInput(data);
+	}
+}
+
+// lunr: one subscription pool entry, passed as plain data so render paths stay synchronous.
+export interface SubscriptionRowInfo {
+	providerId: string;
+	providerName: string;
+	id: string;
+	name: string;
+	active: boolean;
+	exhaustedUntil?: number;
+}
+
+// lunr: live accessors for the subscription pool, wired by interactive-mode.
+export interface SubscriptionCallbacks {
+	list: () => Promise<SubscriptionRowInfo[]>;
+	setActive: (providerId: string, id: string) => Promise<void>;
+	rename: (providerId: string, id: string, name: string) => Promise<void>;
+	clearExhaustion: (providerId: string, id: string) => Promise<void>;
+	remove: (providerId: string, id: string) => Promise<void>;
+	autoManage: () => boolean;
+	requestRender: () => void;
+}
+
+// lunr: format an exhaustion timestamp — local HH:mm when it ends today, else a short date.
+export function formatSubscriptionExhaustedUntil(exhaustedUntil: number, now: number = Date.now()): string {
+	const date = new Date(exhaustedUntil);
+	if (date.toDateString() === new Date(now).toDateString()) {
+		return date.toTimeString().slice(0, 5);
+	}
+	return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// lunr: free-text rename prompt for a subscription key (same Input pattern as MemoryCharCapSubmenu).
+class SubscriptionRenameSubmenu extends Container {
+	private input: Input;
+	private errorText: Text;
+
+	constructor(currentName: string, done: (selectedValue?: string) => void) {
+		super();
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Rename Subscription")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("muted", "Display name for this API key."), 0, 0));
+		this.addChild(new Spacer(1));
+		this.input = new Input();
+		this.input.setValue(currentName);
+		this.input.onSubmit = (value) => {
+			const name = value.trim();
+			if (!name) {
+				this.errorText.setText(theme.fg("error", "  Enter a non-empty name."));
+				return;
+			}
+			done(name);
+		};
+		this.input.onEscape = () => done();
+		this.addChild(this.input);
+		this.errorText = new Text("", 0, 0);
+		this.addChild(this.errorText);
+		this.addChild(new Text(theme.fg("dim", "  Enter to save · Esc to cancel"), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		this.input.handleInput(data);
+	}
+}
+
+// lunr: per-subscription actions — set active, rename, clear exhaustion, remove.
+// onChanged asks the parent SubscriptionsSubmenu to reload its rows from the live manager.
+class SubscriptionActionSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(
+		row: SubscriptionRowInfo,
+		subs: SubscriptionCallbacks,
+		done: (selectedValue?: string) => void,
+		onChanged: () => void,
+	) {
+		super();
+
+		const items: SettingItem[] = [
+			{
+				id: "set-active",
+				label: "Set active",
+				description: subs.autoManage()
+					? "Manual switching is disabled while Auto-manage subscriptions is on."
+					: "Use this key for new requests.",
+				currentValue: row.active ? "already active" : "activate",
+				values: ["activate"],
+				disabled: () => subs.autoManage() || row.active,
+			},
+			{
+				id: "rename",
+				label: "Rename",
+				description: "Display name for this key.",
+				currentValue: row.name,
+				submenu: (currentValue, renameDone) =>
+					new SubscriptionRenameSubmenu(currentValue, (name) => {
+						if (name === undefined) {
+							renameDone();
+							return;
+						}
+						void subs.rename(row.providerId, row.id, name).then(() => {
+							renameDone(name);
+							done();
+							onChanged();
+						});
+					}),
+			},
+			{
+				id: "clear-exhaustion",
+				label: "Clear exhausted flag",
+				description:
+					row.exhaustedUntil !== undefined
+						? `Marked exhausted until ${formatSubscriptionExhaustedUntil(row.exhaustedUntil)}.`
+						: "Only available for keys marked exhausted.",
+				currentValue: "clear",
+				values: ["clear"],
+				disabled: () => row.exhaustedUntil === undefined,
+			},
+			{
+				id: "remove",
+				label: "Remove",
+				description: "Delete this key. Removing the provider's last key logs it out completely.",
+				currentValue: "remove…",
+				submenu: (_currentValue, confirmDone) =>
+					new SelectSubmenu(
+						"Remove Subscription",
+						`Remove "${row.name}" (${row.providerName})? Removing the provider's last key logs it out.`,
+						[
+							{ value: "cancel", label: "Cancel" },
+							{ value: "remove", label: "Remove key" },
+						],
+						"cancel",
+						(value) => {
+							if (value !== "remove") {
+								confirmDone();
+								return;
+							}
+							void subs.remove(row.providerId, row.id).then(() => {
+								confirmDone();
+								done();
+								onChanged();
+							});
+						},
+						() => confirmDone(),
+					),
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			(id) => {
+				if (id === "set-active") {
+					void subs.setActive(row.providerId, row.id).then(() => {
+						done();
+						onChanged();
+					});
+				} else if (id === "clear-exhaustion") {
+					void subs.clearExhaustion(row.providerId, row.id).then(() => {
+						done();
+						onChanged();
+					});
+				}
+			},
+			() => done(),
+		);
+
+		this.addChild(new Text(theme.bold(theme.fg("accent", `${row.providerName} — ${row.name}`)), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+// lunr: Subscriptions submenu — one row per pooled API key across all providers.
+// Rows reload from the live manager on open and after every mutation.
+class SubscriptionsSubmenu extends Container {
+	private readonly subs: SubscriptionCallbacks;
+	private readonly done: (selectedValue?: string) => void;
+	private contentContainer: Container;
+	private settingsList: SettingsList | undefined;
+	private closed = false;
+
+	constructor(subs: SubscriptionCallbacks, done: (selectedValue?: string) => void) {
+		super();
+		this.subs = subs;
+		this.done = done;
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Subscriptions")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.contentContainer = new Container();
+		this.addChild(this.contentContainer);
+		this.contentContainer.addChild(new Text(theme.fg("muted", "  Loading…"), 0, 0));
+		void this.reload();
+	}
+
+	private async reload(): Promise<void> {
+		let rows: SubscriptionRowInfo[] = [];
+		try {
+			rows = await this.subs.list();
+		} catch {
+			rows = [];
+		}
+		if (this.closed) return;
+
+		this.contentContainer.clear();
+		this.settingsList = undefined;
+
+		if (rows.length === 0) {
+			this.contentContainer.addChild(new Text(theme.fg("muted", "  No stored API key subscriptions."), 0, 0));
+			this.contentContainer.addChild(new Text(theme.fg("dim", "  Esc to go back"), 0, 0));
+			this.subs.requestRender();
+			return;
+		}
+
+		const items: SettingItem[] = rows.map((row) => ({
+			id: `${row.providerId}/${row.id}`,
+			label: `${row.providerName} — ${row.name}`,
+			description:
+				`${row.providerId} API key` +
+				(row.exhaustedUntil !== undefined
+					? ` · exhausted until ${formatSubscriptionExhaustedUntil(row.exhaustedUntil)}`
+					: ""),
+			currentValue: row.active ? "active" : row.exhaustedUntil !== undefined ? "exhausted" : "",
+			submenu: (_currentValue, subDone) =>
+				new SubscriptionActionSubmenu(row, this.subs, subDone, () => void this.reload()),
+		}));
+
+		this.settingsList = new SettingsList(
+			items,
+			Math.min(items.length, 10),
+			getSettingsListTheme(),
+			() => {},
+			// Closing reports the current count so the parent row label stays fresh.
+			() => this.done(`${rows.length} key${rows.length === 1 ? "" : "s"}`),
+		);
+		this.contentContainer.addChild(this.settingsList);
+		this.subs.requestRender();
+	}
+
+	handleInput(data: string): void {
+		if (this.settingsList) {
+			this.settingsList.handleInput(data);
+			return;
+		}
+		// Loading/empty state: only Esc goes back.
+		if (getKeybindings().matches(data, "tui.select.cancel")) {
+			this.closed = true;
+			this.done();
+		}
 	}
 }
 
@@ -1014,7 +1303,7 @@ export class SettingsSelectorComponent extends Container {
 				description:
 					"Route subagents to light/standard/heavy tier models. An explicit model choice overrides the tier.",
 				currentValue: config.modelTiers.enabled ? "on" : "off",
-				submenu: (_currentValue, done) => new ModelTiersSubmenu(config.modelTiers, callbacks, done),
+				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
 			},
 			// lunr: Customize submenu — lunR TUI toggles (rail, prompt symbol, footer segments)
 			{
@@ -1030,9 +1319,34 @@ export class SettingsSelectorComponent extends Container {
 				label: "Rollback",
 				description: "Pre-edit file snapshots so /rollback can restore them. Capture mode, scope, retention.",
 				currentValue: config.rollbackEnabled ? "on" : "off",
-				submenu: (_currentValue, done) => new RollbackSubmenu(config, callbacks, done),
+				submenu: (currentValue, done) =>
+					new RollbackSubmenu(currentValue, config, callbacks, callbacks.isRollbackSessionForceEnabled(), done),
+			},
+			// lunr: multi-subscription pools
+			{
+				id: "auto-manage-subscriptions",
+				label: "Auto-manage subscriptions",
+				description:
+					"When on, lunr rotates API keys automatically on usage limits and the model selector won't offer manual subscription switching.",
+				currentValue: config.autoManageSubscriptions ? "on" : "off",
+				values: ["on", "off"],
 			},
 		];
+
+		// lunr: Subscriptions submenu — one row per pooled API key (live manager accessors).
+		const subscriptionCallbacks = callbacks.subscriptions;
+		if (subscriptionCallbacks) {
+			items.push({
+				id: "subscriptions",
+				label: "Subscriptions",
+				description: "Per-provider API key pools: set the active key, rename, clear exhaustion, remove.",
+				currentValue:
+					config.subscriptionCount === 0
+						? "none"
+						: `${config.subscriptionCount} key${config.subscriptionCount === 1 ? "" : "s"}`,
+				submenu: (_currentValue, done) => new SubscriptionsSubmenu(subscriptionCallbacks, done),
+			});
+		}
 
 		// Only show image toggle if terminal supports it
 		if (supportsImages) {
@@ -1241,6 +1555,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "terminal-progress":
 						callbacks.onShowTerminalProgressChange(newValue === "true");
+						break;
+					case "auto-manage-subscriptions":
+						callbacks.onAutoManageSubscriptionsChange(newValue === "on");
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

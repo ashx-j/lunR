@@ -1336,6 +1336,7 @@ export function getSettingsListTheme(): SettingsListTheme {
 		label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
 		value: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : theme.fg("muted", text)),
 		description: (text: string) => theme.fg("dim", text),
+		disabled: (text: string) => theme.fg("dim", text),
 		cursor: theme.fg("accent", "→ "),
 		hint: (text: string) => theme.fg("dim", text),
 	};
