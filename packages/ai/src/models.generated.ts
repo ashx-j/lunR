@@ -29,6 +29,8 @@ import { OPENCODE_GO_MODELS } from "./providers/opencode-go.models.ts";
 import { OPENROUTER_MODELS } from "./providers/openrouter.models.ts";
 import { QWEN_TOKEN_PLAN_MODELS } from "./providers/qwen-token-plan.models.ts";
 import { QWEN_TOKEN_PLAN_CN_MODELS } from "./providers/qwen-token-plan-cn.models.ts";
+import { QWEN_CLOUD_MODELS } from "./providers/qwen-cloud.models.ts";
+import { QWEN_CLOUD_CN_MODELS } from "./providers/qwen-cloud-cn.models.ts";
 import { TOGETHER_MODELS } from "./providers/together.models.ts";
 import { VERCEL_AI_GATEWAY_MODELS } from "./providers/vercel-ai-gateway.models.ts";
 import { XAI_MODELS } from "./providers/xai.models.ts";
@@ -68,6 +70,8 @@ export const MODELS = {
 	"openrouter": OPENROUTER_MODELS,
 	"qwen-token-plan": QWEN_TOKEN_PLAN_MODELS,
 	"qwen-token-plan-cn": QWEN_TOKEN_PLAN_CN_MODELS,
+	"qwen-cloud": QWEN_CLOUD_MODELS,
+	"qwen-cloud-cn": QWEN_CLOUD_CN_MODELS,
 	"together": TOGETHER_MODELS,
 	"vercel-ai-gateway": VERCEL_AI_GATEWAY_MODELS,
 	"xai": XAI_MODELS,

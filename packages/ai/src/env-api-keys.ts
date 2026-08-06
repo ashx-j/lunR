@@ -106,6 +106,8 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 		"xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
 		"qwen-token-plan": "DASHSCOPE_TOKEN_PLAN_API_KEY",
 		"qwen-token-plan-cn": "DASHSCOPE_TOKEN_PLAN_CN_API_KEY",
+		"qwen-cloud": "DASHSCOPE_API_KEY",
+		"qwen-cloud-cn": "DASHSCOPE_API_KEY",
 	};
 
 	const envVar = envMap[provider];

@@ -1845,6 +1845,66 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
+		// Process Qwen Cloud pay-as-you-go models from the regular Alibaba/DashScope catalogs
+		// (data["alibaba"] / data["alibaba-cn"]). These share the same OpenAI-compatible endpoint
+		// as Token Plan but carry real per-token pricing.
+		const qwenCloudCompat: OpenAICompletionsCompat = {
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			thinkingFormat: "qwen",
+			maxTokensField: "max_tokens",
+		};
+		const qwenCloudVariants = [
+			{
+				source: "alibaba",
+				provider: "qwen-cloud",
+				baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+			},
+			{
+				source: "alibaba-cn",
+				provider: "qwen-cloud-cn",
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			},
+		] as const;
+
+		for (const { source, provider, baseUrl } of qwenCloudVariants) {
+			const providerModels = data[source]?.models;
+			if (!providerModels) continue;
+
+			for (const [modelId, model] of Object.entries(providerModels)) {
+				const m = model as ModelsDevModel;
+				// Only text-capable tool-calling models. Excludes image/video/audio-only models.
+				if (m.tool_call !== true) continue;
+				if (!m.modalities?.output?.includes("text")) continue;
+
+				const supportsImage = m.modalities?.input?.includes("image");
+				const effortStyle = (m as any).reasoning_options?.some((o: any) => o.type === "effort");
+				const compat: OpenAICompletionsCompat = {
+					...qwenCloudCompat,
+					...(effortStyle ? { supportsReasoningEffort: true } : {}),
+				};
+
+				models.push({
+					id: modelId,
+					name: m.name || modelId,
+					api: "openai-completions",
+					provider,
+					baseUrl,
+					compat,
+					reasoning: m.reasoning === true,
+					input: supportsImage ? ["text", "image"] : ["text"],
+					cost: {
+						input: m.cost?.input || 0,
+						output: m.cost?.output || 0,
+						cacheRead: m.cost?.cache_read || 0,
+						cacheWrite: m.cost?.cache_write || 0,
+					},
+					contextWindow: m.limit?.context || 4096,
+					maxTokens: m.limit?.output || 4096,
+				});
+			}
+		}
+
 		console.log(`Loaded ${models.length} tool-capable models from models.dev`);
 		return models;
 	} catch (error) {

@@ -29,6 +29,8 @@ import { opencodeProvider } from "./opencode.ts";
 import { opencodeGoProvider } from "./opencode-go.ts";
 import { openrouterProvider } from "./openrouter.ts";
 import { openrouterImagesProvider } from "./openrouter-images.ts";
+import { qwenCloudProvider } from "./qwen-cloud.ts";
+import { qwenCloudCnProvider } from "./qwen-cloud-cn.ts";
 import { qwenTokenPlanProvider } from "./qwen-token-plan.ts";
 import { qwenTokenPlanCnProvider } from "./qwen-token-plan-cn.ts";
 import { radiusProvider } from "./radius.ts";
@@ -115,6 +117,8 @@ export function builtinProviders(): Provider[] {
 		xiaomiTokenPlanSgpProvider(),
 		qwenTokenPlanProvider(),
 		qwenTokenPlanCnProvider(),
+		qwenCloudProvider(),
+		qwenCloudCnProvider(),
 		zaiProvider(),
 		zaiCodingCnProvider(),
 	];
