@@ -28,9 +28,20 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	cpSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
+import { CONFIG_DIR_NAME } from "../config.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 export interface Snapshot {
@@ -65,6 +76,9 @@ interface RollbackContext {
 	turns: TurnSnapshots[];
 	currentTurnIndex: number;
 	repoWarningShown: boolean;
+	externalModWarningShown: boolean;
+	/** Last cwd seen by beginTurn — reused by auto-started turns (mid-turn enable). */
+	lastCwd?: string;
 }
 
 const contexts = new Map<string, RollbackContext>();
@@ -85,6 +99,7 @@ function createContext(sessionId: string): RollbackContext {
 		turns: [],
 		currentTurnIndex: -1,
 		repoWarningShown: false,
+		externalModWarningShown: false,
 	};
 }
 
@@ -112,6 +127,11 @@ export function isRollbackEnabled(sessionId?: string): boolean {
 	return (ctx.settingsManager?.getRollbackEnabled() ?? false) || ctx.sessionForceEnabled;
 }
 
+/** Whether rollback is force-enabled for this session (e.g. by auto permission mode). */
+export function isRollbackSessionForceEnabled(sessionId?: string): boolean {
+	return getContext(sessionId).sessionForceEnabled;
+}
+
 export function enableRollbackForSession(sessionId?: string): void {
 	getContext(sessionId).sessionForceEnabled = true;
 }
@@ -137,6 +157,9 @@ function pruneTurns(ctx: RollbackContext): void {
 export function beginTurn(cwd?: string, sessionId?: string): void {
 	const ctx = getContext(sessionId);
 	if (!isRollbackEnabled(ctx.sessionId)) return;
+	// lunr: remember the session cwd so auto-started turns (mid-turn enable) can
+	// still be constrained by the allowed-roots check.
+	if (cwd) ctx.lastCwd = cwd;
 	ctx.currentTurnIndex++;
 	const turn: TurnSnapshots = { turnIndex: ctx.currentTurnIndex, cwd, files: new Map() };
 	ctx.turns.push(turn);
@@ -150,7 +173,9 @@ export function beginTurn(cwd?: string, sessionId?: string): void {
 export function rollbackSnapshotBeforeWrite(absPath: string, sessionId?: string): void {
 	const ctx = getContext(sessionId);
 	if (!isRollbackEnabled(ctx.sessionId)) return;
-	if (ctx.currentTurnIndex < 0 || ctx.turns.length === 0) beginTurn(undefined, ctx.sessionId);
+	// lunr: auto-started turn inherits the last known cwd so restores stay
+	// root-checked; without any recorded cwd the allowed roots still apply.
+	if (ctx.currentTurnIndex < 0 || ctx.turns.length === 0) beginTurn(ctx.lastCwd, ctx.sessionId);
 	const turn = ctx.turns[ctx.turns.length - 1];
 	if (!turn) return;
 	if (turn.files.has(absPath)) return; // already snapshotted this turn
@@ -214,15 +239,36 @@ export function captureTreeChanges(cwd: string, sessionId?: string): void {
 
 	const entries = gitPorcelain(ctx, cwd);
 	if (!entries) return;
-	for (const { status, path } of entries) {
+	for (const { status, path, source } of entries) {
 		if (!path) continue;
 		const abs = join(cwd, path);
-		if (turn.files.has(abs)) continue;
+		if (turn.files.has(abs)) continue; // already captured (baseline or tool snapshot)
 		try {
-			if (status === "??") {
-				// Untracked now and not in the baseline — created during this turn.
+			if (status === "??" || status.includes("R")) {
+				// lunr: untracked now (or rename dest) and not in the baseline — created
+				// during this turn (deleted on restore under hybrid/shadow-git).
 				turn.files.set(abs, { existed: false, createdByTool: false });
 				persistSnapshot(ctx, turn, abs);
+				// lunr: rename source existed at HEAD and is gone now — restore its
+				// HEAD content on rollback, like a tracked file deleted mid-turn.
+				if (status.includes("R") && source) {
+					const sourceAbs = join(cwd, source);
+					if (!turn.files.has(sourceAbs)) {
+						const headSrc = spawnSync("git", ["show", `HEAD:${source}`], {
+							cwd,
+							timeout: 5000,
+							maxBuffer: 32 * 1024 * 1024,
+						});
+						if (!headSrc.error && headSrc.status === 0 && headSrc.stdout) {
+							turn.files.set(sourceAbs, {
+								existed: true,
+								content: headSrc.stdout as Buffer,
+								createdByTool: false,
+							});
+							persistSnapshot(ctx, turn, sourceAbs);
+						}
+					}
+				}
 			} else {
 				// Tracked file that was clean at turn start; original = HEAD content.
 				const head = spawnSync("git", ["show", `HEAD:${path}`], {
@@ -246,10 +292,13 @@ export function captureTreeChanges(cwd: string, sessionId?: string): void {
 
 /**
  * Run `git status --porcelain -z` and parse entries, or return undefined (with
- * a one-time warning) when cwd is not a repo / git fails. Rename entries emit
- * their source path as a separate bare field — skipped via `skipNext`.
+ * a one-time warning) when cwd is not a repo / git fails. Rename/copy entries
+ * carry their source path in a separate bare field — parsed into `source`.
  */
-function gitPorcelain(ctx: RollbackContext, cwd: string): Array<{ status: string; path: string }> | undefined {
+function gitPorcelain(
+	ctx: RollbackContext,
+	cwd: string,
+): Array<{ status: string; path: string; source?: string }> | undefined {
 	try {
 		const result = spawnSync("git", ["status", "--porcelain", "-z"], { cwd, encoding: "utf8", timeout: 5000 });
 		if (result.error || result.status !== 0) {
@@ -260,17 +309,18 @@ function gitPorcelain(ctx: RollbackContext, cwd: string): Array<{ status: string
 			return undefined;
 		}
 		const fields = (result.stdout ?? "").split("\0").filter((f) => f.length > 0);
-		const entries: Array<{ status: string; path: string }> = [];
-		let skipNext = false;
-		for (const field of fields) {
-			if (skipNext) {
-				skipNext = false; // rename source path (bare field after an "R" entry)
-				continue;
-			}
+		const entries: Array<{ status: string; path: string; source?: string }> = [];
+		for (let i = 0; i < fields.length; i++) {
+			const field = fields[i];
 			const status = field.slice(0, 2);
 			const path = field.slice(3);
-			if (status.includes("R")) skipNext = true;
-			entries.push({ status, path });
+			let source: string | undefined;
+			if (status.includes("R") || status.includes("C")) {
+				// Rename/copy: the bare field after this entry is the source path.
+				source = fields[i + 1];
+				i++;
+			}
+			entries.push({ status, path, source });
 		}
 		return entries;
 	} catch {
@@ -382,6 +432,8 @@ function cleanupTurnFiles(ctx: RollbackContext, turn: TurnSnapshots): void {
 export interface RollbackResult {
 	restored: string[];
 	deleted: string[];
+	/** Number of turns consumed: the restored turn plus any empty turns skipped above it. */
+	turnsConsumed: number;
 }
 
 /**
@@ -391,39 +443,67 @@ export interface RollbackResult {
  * tools (tree scope) are deleted only under hybrid/shadow-git.
  */
 function isPathUnderRoot(absPath: string, root: string): boolean {
-	const normRoot = normalize(root).replace(/\\$/g, "");
-	const normPath = normalize(absPath).replace(/\\$/g, "");
+	let normRoot = normalize(root).replace(/\\$/g, "");
+	let normPath = normalize(absPath).replace(/\\$/g, "");
+	// lunr: Windows drive-letter/directory casing differs by launch context and
+	// resolve() preserves input casing — compare case-insensitively there.
+	if (process.platform === "win32") {
+		normRoot = normRoot.toLowerCase();
+		normPath = normPath.toLowerCase();
+	}
 	return normPath === normRoot || normPath.startsWith(`${normRoot}/`) || normPath.startsWith(`${normRoot}\\`);
 }
 
 function isWithinAllowedRoots(absPath: string, turn: TurnSnapshots): boolean {
 	if (!turn.cwd) return true; // no recorded cwd: cannot validate, allow (tests / legacy)
-	const roots = [ROLLBACK_BASE, resolve(turn.cwd)];
+	const roots = [
+		ROLLBACK_BASE,
+		join(homedir(), CONFIG_DIR_NAME), // lunr: behavior.md / cron jobs.json live under the config dir
+		// lunr: ~/.pi memory path is known debt (AGENTS.md Deferred) — allowed so the memory snapshot feature works
+		join(homedir(), ".pi", "simple-memory"),
+		resolve(turn.cwd),
+	];
 	return roots.some((root) => isPathUnderRoot(absPath, root));
 }
 
-let externalModWarningShown = false;
-
-function warnExternalModification(handler: ((message: string) => void) | undefined, message: string): void {
-	if (externalModWarningShown || !handler) return;
-	externalModWarningShown = true;
+function warnExternalModification(ctx: RollbackContext, message: string): void {
+	if (ctx.externalModWarningShown || !warningHandler) return;
+	ctx.externalModWarningShown = true;
 	try {
-		handler(message);
+		warningHandler(message);
 	} catch {
 		// warning delivery is best-effort
 	}
 }
 
+/** Count how many turns a rollback would consume (trailing empty turns + the newest non-empty one). */
+export function peekRollbackTurnsConsumed(sessionId?: string): number {
+	const ctx = getContext(sessionId);
+	if (!isRollbackEnabled(ctx.sessionId)) return 0;
+	if (ctx.turns.length === 0) return 0;
+	let consumed = 0;
+	for (let i = ctx.turns.length - 1; i >= 0; i--) {
+		consumed++;
+		if (ctx.turns[i].files.size > 0) break;
+	}
+	return consumed;
+}
+
 export function rollbackLastTurn(sessionId?: string): RollbackResult {
 	const ctx = getContext(sessionId);
-	const empty: RollbackResult = { restored: [], deleted: [] };
+	const empty: RollbackResult = { restored: [], deleted: [], turnsConsumed: 0 };
 	if (!isRollbackEnabled(ctx.sessionId)) return empty;
 
+	let turnsConsumed = 0;
 	while (ctx.turns.length > 0 && ctx.turns[ctx.turns.length - 1].files.size === 0) {
 		const skipped = ctx.turns.pop();
-		if (skipped) cleanupTurnFiles(ctx, skipped);
+		if (skipped) {
+			cleanupTurnFiles(ctx, skipped);
+			turnsConsumed++;
+		}
 	}
 	if (ctx.turns.length === 0) return empty;
+	turnsConsumed++;
 
 	const turn = ctx.turns[ctx.turns.length - 1];
 	const capture = ctx.settingsManager?.getRollbackCapture() ?? "copies";
@@ -434,7 +514,7 @@ export function rollbackLastTurn(sessionId?: string): RollbackResult {
 		try {
 			if (!isWithinAllowedRoots(absPath, turn)) {
 				warnExternalModification(
-					warningHandler,
+					ctx,
 					`Rollback skipped ${absPath}: outside the session working directory or lunR config dir.`,
 				);
 				continue;
@@ -467,7 +547,7 @@ export function rollbackLastTurn(sessionId?: string): RollbackResult {
 	cleanupTurnFiles(ctx, turn);
 	ctx.turns.pop();
 
-	return { restored, deleted };
+	return { restored, deleted, turnsConsumed };
 }
 
 export function getRollbackStatus(sessionId?: string): { enabled: boolean; turns: number; files: number } {
@@ -477,6 +557,38 @@ export function getRollbackStatus(sessionId?: string): { enabled: boolean; turns
 		turns: ctx.turns.length,
 		files: ctx.turns.reduce((sum, t) => sum + t.files.size, 0),
 	};
+}
+
+/**
+ * lunr: carry a session's rollback state across a fork — re-key the in-memory
+ * context and move the on-disk dir to the forked session's id. No-op when the
+ * old session has no state. Fork teardown deliberately skips clearRollback so
+ * this can run right after (see interactive-mode beforeSessionInvalidate).
+ */
+export function migrateRollbackSession(oldSessionId: string, newSessionId: string): void {
+	if (oldSessionId === newSessionId) return;
+	const ctx = contexts.get(oldSessionId);
+	if (ctx) {
+		contexts.delete(oldSessionId);
+		ctx.sessionId = newSessionId;
+		contexts.set(newSessionId, ctx);
+	}
+	try {
+		const oldDir = join(ROLLBACK_BASE, oldSessionId);
+		const newDir = join(ROLLBACK_BASE, newSessionId);
+		if (existsSync(oldDir)) {
+			if (existsSync(newDir)) rmSync(newDir, { recursive: true, force: true });
+			try {
+				renameSync(oldDir, newDir);
+			} catch {
+				// Cross-device or locked-dir fallback: copy then delete.
+				cpSync(oldDir, newDir, { recursive: true });
+				rmSync(oldDir, { recursive: true, force: true });
+			}
+		}
+	} catch {
+		// migration failures are non-fatal — in-memory state was still re-keyed
+	}
 }
 
 /** Clear rollback state for a session (or all sessions when no id is passed). */

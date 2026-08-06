@@ -73,7 +73,7 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
  */
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
-	private beforeSessionInvalidate?: () => void;
+	private beforeSessionInvalidate?: (reason: SessionShutdownEvent["reason"]) => void;
 	private _session: AgentSession;
 	private _services: AgentSessionServices;
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
@@ -126,7 +126,7 @@ export class AgentSessionRuntime {
 	 * such as detaching extension-provided TUI components before the old extension
 	 * context becomes stale.
 	 */
-	setBeforeSessionInvalidate(beforeSessionInvalidate?: () => void): void {
+	setBeforeSessionInvalidate(beforeSessionInvalidate?: (reason: SessionShutdownEvent["reason"]) => void): void {
 		this.beforeSessionInvalidate = beforeSessionInvalidate;
 	}
 
@@ -170,7 +170,7 @@ export class AgentSessionRuntime {
 			reason,
 			targetSessionFile,
 		});
-		this.beforeSessionInvalidate?.();
+		this.beforeSessionInvalidate?.(reason);
 		this.session.dispose();
 	}
 
@@ -397,7 +397,7 @@ export class AgentSessionRuntime {
 			type: "session_shutdown",
 			reason: "quit",
 		});
-		this.beforeSessionInvalidate?.();
+		this.beforeSessionInvalidate?.("quit");
 		this.session.dispose();
 	}
 }
