@@ -6748,14 +6748,14 @@ export class InteractiveMode {
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
-					"▶ Approve AgentSwarm?",
+					"▶ Approve agent swarm?",
 					["Approve once", "Approve for this session", "Reject", "Reject with feedback"],
 					(option) => {
 						done();
 						if (option === "Approve once") resolve("once");
 						else if (option === "Approve for this session") resolve("session");
 						else if (option === "Reject with feedback") {
-							void this.showExtensionInput("Reject AgentSwarm", "feedback for the agent (optional)").then(
+							void this.showExtensionInput("Reject agent swarm", "feedback for the agent (optional)").then(
 								(feedback) => {
 									const trimmed = feedback?.trim();
 									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
