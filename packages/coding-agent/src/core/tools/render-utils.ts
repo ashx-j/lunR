@@ -72,6 +72,17 @@ export function invalidArgText(theme: Theme): string {
 	return theme.fg("error", "[invalid arg]");
 }
 
+// lunr: compact-by-default — tool execute() paths append truncation/limit notices
+// as a trailing "\n\n[...]" block. Compact (header-only) results blank the body,
+// so this extracts that notice to keep it visible without the full output.
+export function extractTrailingNotice(text: string): string | undefined {
+	const trimmed = text.trimEnd();
+	if (!trimmed.endsWith("]")) return undefined;
+	const start = trimmed.lastIndexOf("\n\n[");
+	if (start === -1) return undefined;
+	return trimmed.slice(start + 2);
+}
+
 export type ToolStatusDotState = "pending" | "success" | "error";
 
 /**

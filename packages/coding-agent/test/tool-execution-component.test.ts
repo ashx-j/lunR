@@ -509,3 +509,227 @@ describe("ToolExecutionComponent parity", () => {
 		});
 	}
 });
+
+// lunr: TUI density — compact-by-default completed tool calls + same-tool grouping.
+describe("ToolExecutionComponent density", () => {
+	beforeAll(() => {
+		initTheme("moon");
+	});
+
+	test("exposes the tool name for grouping adjacency checks", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-name",
+			{},
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		expect(component.getToolName()).toBe("bash");
+	});
+
+	test("setGroupContinuation(true) removes the leading spacer line", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-group",
+			{ command: "echo hi" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		const defaultLines = component.render(80).length;
+		component.setGroupContinuation(true);
+		expect(component.render(80).length).toBe(defaultLines - 1);
+		component.setGroupContinuation(false);
+		expect(component.render(80).length).toBe(defaultLines);
+	});
+
+	test("finished successful bash calls render a single compact header with duration", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-compact",
+			{ command: "echo line1" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult(
+			{ content: [{ type: "text", text: "line1\nline2\nline3" }], details: undefined, isError: false },
+			false,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		// Header carries the command and the folded-in duration…
+		expect(rendered).toContain("$ echo line1");
+		expect(rendered).toContain("— Took");
+		// …exactly once (no separate footer), and the output preview is gone.
+		expect(rendered.match(/Took/g)).toHaveLength(1);
+		expect(rendered).not.toContain("line2");
+	});
+
+	test("expanded bash calls keep the full output preview", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-expanded",
+			{ command: "echo line1" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.setExpanded(true);
+		component.markExecutionStarted();
+		component.updateResult(
+			{ content: [{ type: "text", text: "line1\nline2\nline3" }], details: undefined, isError: false },
+			false,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("line2");
+		expect(rendered).toContain("line3");
+	});
+
+	test("errored bash calls keep the full output and Took footer", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-error",
+			{ command: "echo line1" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line1\nline2\nCommand exited with code 1" }],
+				details: undefined,
+				isError: true,
+			},
+			false,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("line2");
+		expect(rendered).not.toContain("— Took");
+		expect(rendered).toContain("Took");
+	});
+
+	test("slim bash header keeps only the first line of multi-line commands", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-multiline",
+			{ command: "echo one\necho two" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("$ echo one …");
+		expect(rendered).not.toContain("echo two");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("echo two");
+	});
+
+	test("slim bash header drops the timeout suffix when compact", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-timeout",
+			{ command: "echo hi", timeout: 30 },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		// While running, the timeout suffix is visible.
+		const running = stripAnsi(component.render(120).join("\n"));
+		expect(running).toContain("(timeout 30s)");
+
+		component.markExecutionStarted();
+		component.updateResult({ content: [{ type: "text", text: "hi" }], details: undefined, isError: false }, false);
+		const compact = stripAnsi(component.render(120).join("\n"));
+		expect(compact).not.toContain("(timeout 30s)");
+	});
+
+	test("finished successful grep calls render header-only", () => {
+		const component = new ToolExecutionComponent(
+			"grep",
+			"tool-grep-compact",
+			{ pattern: "usage" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "src/a.ts:10: usage here" }], details: undefined, isError: false },
+			false,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("grep");
+		expect(rendered).not.toContain("usage here");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("usage here");
+	});
+
+	test("compact grep results keep a trailing truncation/limit notice", () => {
+		const component = new ToolExecutionComponent(
+			"grep",
+			"tool-grep-notice",
+			{ pattern: "usage" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "src/a.ts:10: usage here\n\n[50 matches limit reached. Use limit=100 for more, or refine pattern]",
+					},
+				],
+				details: { matchLimitReached: 50 },
+				isError: false,
+			},
+			false,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).not.toContain("usage here");
+		expect(rendered).toContain("[50 matches limit reached");
+	});
+
+	test("errored grep calls render the full result", () => {
+		const component = new ToolExecutionComponent(
+			"grep",
+			"tool-grep-error",
+			{ pattern: "usage" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "ripgrep exited with code 2" }], details: undefined, isError: true },
+			false,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("ripgrep exited with code 2");
+	});
+});

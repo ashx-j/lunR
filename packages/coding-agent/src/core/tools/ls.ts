@@ -7,7 +7,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
-import { getTextOutput, renderToolPath, str, toolStatusDotFromContext } from "./render-utils.ts";
+import { extractTrailingNotice, getTextOutput, renderToolPath, str, toolStatusDotFromContext } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -215,9 +215,11 @@ export function createLsToolDefinition(
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result).
+			// render header-only (ctrl+o reveals the full result); a trailing
+			// truncation/limit notice stays visible.
 			if (!options.isPartial && !options.expanded && !context.isError) {
-				text.setText("");
+				const notice = extractTrailingNotice(getTextOutput(result as any, context.showImages));
+				text.setText(notice ? `\n${theme.fg("warning", notice)}` : "");
 				return text;
 			}
 			text.setText(formatLsResult(result as any, options, theme, context.showImages));

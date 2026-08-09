@@ -129,4 +129,55 @@ describe("AssistantMessageComponent", () => {
 		const unpaddedLines = unpaddedComponent.render(40).map((line) => stripAnsi(line));
 		expect(unpaddedLines.some((line) => line.startsWith("● hello"))).toBe(true);
 	});
+
+	// lunr: ctrl+o expansion of collapsed reasoning (Expandable interface).
+	function createCollapsedThinkingComponent(): AssistantMessageComponent {
+		// thinkingCollapse=true, no timings attached → history message → run is complete.
+		return new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "First sentence of reasoning. More detail follows here." },
+				{ type: "text", text: "answer" },
+			]),
+			false,
+			undefined,
+			"Thinking...",
+			1,
+			false,
+			true,
+		);
+	}
+
+	test("collapsed thinking runs show the summary line by default", () => {
+		initTheme("moon");
+
+		const component = createCollapsedThinkingComponent();
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("✻ Thought");
+		expect(rendered).toContain("First sentence of reasoning.");
+		expect(rendered).not.toContain("More detail follows here.");
+	});
+
+	test("setExpanded(true) renders the full thinking block", () => {
+		initTheme("moon");
+
+		const component = createCollapsedThinkingComponent();
+		component.setExpanded(true);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).not.toContain("✻ Thought");
+		expect(rendered).toContain("First sentence of reasoning. More detail follows here.");
+	});
+
+	test("setExpanded(false) re-collapses the thinking run", () => {
+		initTheme("moon");
+
+		const component = createCollapsedThinkingComponent();
+		component.setExpanded(true);
+		component.setExpanded(false);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("✻ Thought");
+		expect(rendered).not.toContain("More detail follows here.");
+	});
 });

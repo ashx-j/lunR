@@ -13,7 +13,14 @@ import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
-import { getTextOutput, renderToolPath, replaceTabs, str, toolStatusDotFromContext } from "./render-utils.ts";
+import {
+	extractTrailingNotice,
+	getTextOutput,
+	renderToolPath,
+	replaceTabs,
+	str,
+	toolStatusDotFromContext,
+} from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -338,9 +345,11 @@ export function createReadToolDefinition(
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result).
+			// render header-only (ctrl+o reveals the full result); a trailing
+			// truncation/limit notice stays visible.
 			if (!options.isPartial && !options.expanded && !context.isError) {
-				text.setText("");
+				const notice = extractTrailingNotice(getTextOutput(result as any, context.showImages));
+				text.setText(notice ? `\n${theme.fg("warning", notice)}` : "");
 				return text;
 			}
 			text.setText(
