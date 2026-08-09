@@ -1,8 +1,8 @@
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
-import { readFileSync, unlinkSync } from "fs";
+import { readFileSync, statSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { extname, join } from "path";
 
 import { clipboard } from "./clipboard-native.ts";
 import { loadPhoton } from "./photon.ts";
@@ -156,20 +156,24 @@ function isWSL(env: NodeJS.ProcessEnv = process.env): boolean {
 /**
  * On WSL, the Linux clipboard (Wayland/X11) does not receive image data from
  * Windows screenshots (Win+Shift+S). PowerShell can access the Windows clipboard
- * directly, so we use it as a fallback.
+ * directly, so we use it as a fallback. On native Windows it doubles as a
+ * fallback when the native clipboard module is unavailable or reports no image.
  */
-function readClipboardImageViaPowerShell(): ClipboardImage | null {
-	const tmpFile = join(tmpdir(), `pi-wsl-clip-${randomUUID()}.png`);
+function readClipboardImageViaPowerShell(useWslpath: boolean): ClipboardImage | null {
+	const tmpFile = join(tmpdir(), `pi-clip-${randomUUID()}.png`);
 
 	try {
-		const winPathResult = runCommand("wslpath", ["-w", tmpFile], { timeoutMs: DEFAULT_LIST_TIMEOUT_MS });
-		if (!winPathResult.ok) {
-			return null;
-		}
+		let winPath = tmpFile;
+		if (useWslpath) {
+			const winPathResult = runCommand("wslpath", ["-w", tmpFile], { timeoutMs: DEFAULT_LIST_TIMEOUT_MS });
+			if (!winPathResult.ok) {
+				return null;
+			}
 
-		const winPath = winPathResult.stdout.toString("utf-8").trim();
-		if (!winPath) {
-			return null;
+			winPath = winPathResult.stdout.toString("utf-8").trim();
+			if (!winPath) {
+				return null;
+			}
 		}
 
 		const psQuotedWinPath = winPath.replaceAll("'", "''");
@@ -208,6 +212,54 @@ function readClipboardImageViaPowerShell(): ClipboardImage | null {
 			// Ignore cleanup errors.
 		}
 	}
+}
+
+const FILE_DROP_IMAGE_MIME_TYPES: Record<string, string> = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".gif": "image/gif",
+	".bmp": "image/bmp",
+};
+
+/**
+ * On Windows, copying an image file in Explorer puts a file reference
+ * (CF_HDROP) on the clipboard instead of image data, so `hasImage()` is false.
+ * Return the first image file from the drop list. Only used on native Windows.
+ */
+function readClipboardImageFileDropViaPowerShell(): ClipboardImage | null {
+	const result = runCommand("powershell.exe", ["-NoProfile", "-Command", "Get-Clipboard -Format FileDropList"], {
+		timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
+	});
+	if (!result.ok || result.stdout.length === 0) {
+		return null;
+	}
+
+	const candidates = result.stdout
+		.toString("utf-8")
+		.split(/\r?\n/)
+		.map((p) => p.trim())
+		.filter(Boolean);
+
+	for (const filePath of candidates) {
+		const mimeType = FILE_DROP_IMAGE_MIME_TYPES[extname(filePath).toLowerCase()];
+		if (!mimeType) {
+			continue;
+		}
+
+		try {
+			const stat = statSync(filePath);
+			if (!stat.isFile() || stat.size === 0 || stat.size > DEFAULT_MAX_BUFFER_BYTES) {
+				continue;
+			}
+			return { bytes: new Uint8Array(readFileSync(filePath)), mimeType };
+		} catch {
+			// Unreadable file; try the next candidate.
+		}
+	}
+
+	return null;
 }
 
 function readClipboardImageViaXclip(): ClipboardImage | null {
@@ -273,12 +325,19 @@ export async function readClipboardImage(options?: {
 		}
 
 		if (!image && wsl) {
-			image = readClipboardImageViaPowerShell();
+			image = readClipboardImageViaPowerShell(true);
 		}
 
 		if (!image && !wayland) {
 			image = (await readClipboardImageViaNativeClipboard()) ?? readClipboardImageViaXclip();
 		}
+	} else if (platform === "win32") {
+		// Native module first; PowerShell covers a missing/failed native module and
+		// file-drop clipboards (image copied as a file in Explorer).
+		image =
+			(await readClipboardImageViaNativeClipboard()) ??
+			readClipboardImageViaPowerShell(false) ??
+			readClipboardImageFileDropViaPowerShell();
 	} else {
 		image = await readClipboardImageViaNativeClipboard();
 	}

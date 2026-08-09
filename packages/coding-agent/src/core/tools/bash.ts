@@ -214,11 +214,26 @@ function formatDuration(ms: number): string {
 	return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
+// lunr: slim header — collapsed calls show only the first line of the command,
+// capped at this many chars; an ellipsis marks either kind of truncation.
+const MAX_COLLAPSED_COMMAND_CHARS = 100;
+
+function formatBashCall(
+	args: { command?: string; timeout?: number } | undefined,
+	options?: { expanded?: boolean; compact?: boolean },
+): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
-	const timeoutSuffix = timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
-	const commandDisplay = command === null ? invalidArgText(theme) : command ? command : theme.fg("toolOutput", "...");
+	// lunr: compact-by-default — the timeout suffix is noise on a one-line header;
+	// it stays visible while streaming and in the expanded view.
+	const timeoutSuffix = timeout && !options?.compact ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
+	let commandDisplay = command === null ? invalidArgText(theme) : command ? command : theme.fg("toolOutput", "...");
+	if (!options?.expanded && command) {
+		const firstLine = command.split("\n")[0];
+		const capped = firstLine.length > MAX_COLLAPSED_COMMAND_CHARS;
+		const base = capped ? firstLine.slice(0, MAX_COLLAPSED_COMMAND_CHARS) : firstLine;
+		commandDisplay = capped || base.length < command.length ? `${base} …` : base;
+	}
 	return theme.fg("toolTitle", theme.bold(`$ ${commandDisplay}`)) + timeoutSuffix;
 }
 
@@ -232,6 +247,9 @@ function rebuildBashResultRenderComponent(
 	showImages: boolean,
 	startedAt: number | undefined,
 	endedAt: number | undefined,
+	// lunr: compact-by-default — finished, successful, non-expanded calls skip the
+	// output preview and the "Took" footer (duration moves into the call header).
+	compact = false,
 ): void {
 	const state = component.state;
 	component.clear();
@@ -246,7 +264,7 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
-	if (output) {
+	if (!compact && output) {
 		const styledOutput = output
 			.split("\n")
 			.map((line) => theme.fg("toolOutput", line))
@@ -297,7 +315,7 @@ function rebuildBashResultRenderComponent(
 		component.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
 	}
 
-	if (startedAt !== undefined) {
+	if (!compact && startedAt !== undefined) {
 		const label = options.isPartial ? "Elapsed" : "Took";
 		const endTime = endedAt ?? Date.now();
 		component.addChild(new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
@@ -449,8 +467,20 @@ export function createBashToolDefinition(
 				state.startedAt = Date.now();
 				state.endedAt = undefined;
 			}
+			// lunr: compact-by-default — stamp endedAt here too: renderCall runs before
+			// renderResult on the final update, and the header needs the duration.
+			if (!context.isPartial && state.startedAt !== undefined) {
+				state.endedAt ??= Date.now();
+			}
+			// lunr: compact-by-default — a finished, successful, non-expanded call
+			// renders as a single slim header line with the duration folded in.
+			const compact = !context.isPartial && !context.expanded && !context.isError;
+			let header = `${toolStatusDotFromContext(context, theme)} ${formatBashCall(args, { expanded: context.expanded, compact })}`;
+			if (compact && state.startedAt !== undefined && state.endedAt !== undefined) {
+				header += theme.fg("muted", ` — Took ${formatDuration(state.endedAt - state.startedAt)}`);
+			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(`${toolStatusDotFromContext(context, theme)} ${formatBashCall(args)}`);
+			text.setText(header);
 			return text;
 		},
 		renderResult(result, options, _theme, context) {
@@ -467,6 +497,8 @@ export function createBashToolDefinition(
 			}
 			const component =
 				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
+			// lunr: compact-by-default — suppresses the output preview + "Took" footer.
+			const compact = !options.isPartial && !options.expanded && !context.isError;
 			rebuildBashResultRenderComponent(
 				component,
 				result as any,
@@ -474,6 +506,7 @@ export function createBashToolDefinition(
 				context.showImages,
 				state.startedAt,
 				state.endedAt,
+				compact,
 			);
 			component.invalidate();
 			return component;

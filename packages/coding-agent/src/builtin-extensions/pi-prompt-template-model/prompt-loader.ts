@@ -32,6 +32,8 @@ export const RESERVED_COMMAND_NAMES = new Set([
 	"resume",
 	"reload",
 	"quit",
+	// lunr: /exit alias of /quit
+	"exit",
 	"mode",
 	"manual",
 	"yolo",

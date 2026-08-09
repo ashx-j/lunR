@@ -78,6 +78,7 @@ export interface SettingsConfig {
 	terminalTheme: TerminalTheme;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	thinkingCollapse: boolean;
 	showCacheMissNotices: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
@@ -130,6 +131,7 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onThinkingCollapseChange: (collapse: boolean) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
@@ -1195,6 +1197,16 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				// lunr: collapsible reasoning — completed thinking runs render as
+				// "✻ Thought for Xs" + first sentence. Disabled when thinking is hidden.
+				id: "thinking-collapse",
+				label: "Collapse thinking",
+				description: "Collapse completed thinking blocks to a short summary",
+				currentValue: config.thinkingCollapse ? "true" : "false",
+				values: ["true", "false"],
+				disabled: () => config.hideThinkingBlock,
+			},
+			{
 				id: "cache-miss-notices",
 				label: "Cache miss notices",
 				description: "Show transcript notices for significant prompt-cache misses",
@@ -1501,6 +1513,9 @@ export class SettingsSelectorComponent extends Container {
 					}
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
+						break;
+					case "thinking-collapse":
+						callbacks.onThinkingCollapseChange(newValue === "true");
 						break;
 					case "cache-miss-notices":
 						callbacks.onShowCacheMissNoticesChange(newValue === "true");

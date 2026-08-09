@@ -249,12 +249,15 @@ function buildEditCallComponent(
 	theme: Theme,
 	cwd: string,
 	dotState: ToolStatusDotState,
+	// lunr: compact-by-default — finished, successful, non-expanded calls render
+	// header-only; the diff preview stays while streaming and when expanded.
+	compact = false,
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
 	component.addChild(new Text(`${toolStatusDot(dotState, theme)} ${formatEditCall(args, theme, cwd)}`, 0, 0));
 
-	if (!component.preview) {
+	if (compact || !component.preview) {
 		return component;
 	}
 
@@ -392,6 +395,8 @@ export function createEditToolDefinition(
 				theme,
 				context.cwd,
 				context.isPartial ? "pending" : context.isError ? "error" : "success",
+				// lunr: compact-by-default
+				!context.isPartial && !context.expanded && !context.isError,
 			);
 		},
 		renderResult(result, _options, theme, context) {
@@ -402,6 +407,8 @@ export function createEditToolDefinition(
 				: undefined;
 			const typedResult = result as EditToolResultLike;
 			const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
+			// lunr: compact-by-default — header-only call, no result diff body.
+			const compact = !_options.isPartial && !_options.expanded && !context.isError;
 			let changed = false;
 			if (callComponent) {
 				if (typeof resultDiff === "string") {
@@ -416,18 +423,21 @@ export function createEditToolDefinition(
 					callComponent.settledError = context.isError;
 					changed = true;
 				}
-				if (changed) {
+				if (changed || compact) {
 					buildEditCallComponent(
 						callComponent,
 						context.args as RenderableEditArgs | undefined,
 						theme,
 						context.cwd,
 						context.isPartial ? "pending" : context.isError ? "error" : "success",
+						compact,
 					);
 				}
 			}
 
-			const output = formatEditResult(context.args, callComponent?.preview, typedResult, theme, context.isError);
+			const output = compact
+				? undefined
+				: formatEditResult(context.args, callComponent?.preview, typedResult, theme, context.isError);
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			component.clear();
 			if (!output) {

@@ -457,7 +457,6 @@ class SessionList implements Component, Focusable {
 			const prefix = this.buildTreePrefix(node);
 
 			// Session display text (name or first message)
-			const hasName = !!session.name;
 			const displayText = session.name ?? session.firstMessage;
 			const normalizedMessage = displayText.replace(/[\x00-\x1f\x7f]/g, " ").trim();
 
@@ -482,19 +481,14 @@ class SessionList implements Component, Focusable {
 
 			const truncatedMsg = truncateToWidth(normalizedMessage, Math.max(10, availableForMsg), "…");
 
-			// Style message
-			let messageColor: "error" | "warning" | "accent" | null = null;
+			// Style message - selected row uses accent text (no background fill), matching the other selectors
+			let messageColor: "error" | "accent" | null = null;
 			if (isConfirmingDelete) {
 				messageColor = "error";
-			} else if (isCurrent) {
+			} else if (isSelected || isCurrent) {
 				messageColor = "accent";
-			} else if (hasName) {
-				messageColor = "warning";
 			}
-			let styledMsg = messageColor ? theme.fg(messageColor, truncatedMsg) : truncatedMsg;
-			if (isSelected) {
-				styledMsg = theme.bold(styledMsg);
-			}
+			const styledMsg = messageColor ? theme.fg(messageColor, truncatedMsg) : truncatedMsg;
 
 			// Build line
 			const leftPart = cursor + theme.fg("dim", prefix) + styledMsg;
@@ -502,10 +496,7 @@ class SessionList implements Component, Focusable {
 			const spacing = Math.max(1, width - leftWidth - visibleWidth(rightPart));
 			const styledRight = theme.fg(isConfirmingDelete ? "error" : "dim", rightPart);
 
-			let line = leftPart + " ".repeat(spacing) + styledRight;
-			if (isSelected) {
-				line = theme.bg("selectedBg", line);
-			}
+			const line = leftPart + " ".repeat(spacing) + styledRight;
 			lines.push(truncateToWidth(line, width));
 		}
 

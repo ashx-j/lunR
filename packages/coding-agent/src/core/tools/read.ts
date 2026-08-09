@@ -337,6 +337,12 @@ export function createReadToolDefinition(
 		},
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			// lunr: compact-by-default — finished, successful, non-expanded calls
+			// render header-only (ctrl+o reveals the full result).
+			if (!options.isPartial && !options.expanded && !context.isError) {
+				text.setText("");
+				return text;
+			}
 			text.setText(
 				formatReadResult(context.args, result, options, theme, context.showImages, context.cwd, context.isError),
 			);

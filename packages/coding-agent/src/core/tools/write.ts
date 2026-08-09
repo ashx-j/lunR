@@ -134,6 +134,9 @@ function formatWriteCall(
 	theme: Theme,
 	cache: WriteHighlightCache | undefined,
 	cwd: string,
+	// lunr: compact-by-default — finished, successful, non-expanded calls render
+	// header-only; the content preview stays while streaming and when expanded.
+	compact = false,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const fileContent = str(args?.content);
@@ -142,7 +145,7 @@ function formatWriteCall(
 
 	if (fileContent === null) {
 		text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
-	} else if (fileContent) {
+	} else if (fileContent && !compact) {
 		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 		const renderedLines = lang
 			? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
@@ -244,6 +247,8 @@ export function createWriteToolDefinition(
 					theme,
 					component.cache,
 					context.cwd,
+					// lunr: compact-by-default
+					!context.isPartial && !context.expanded && !context.isError,
 				)}`,
 			);
 			return component;

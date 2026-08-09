@@ -1,6 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import {
+	formatThoughtDuration,
+	isThinkingRunComplete,
+	type ThinkingRunTiming,
+	thinkingSnippet,
+} from "./thinking-summary.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -12,6 +18,15 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
+	// lunr: collapsible reasoning — when true, a completed thinking run renders as
+	// "✻ Thought for Xs" + its first sentence instead of the full block.
+	private thinkingCollapse: boolean;
+	// lunr: ctrl+o expansion — when true, collapsed thinking runs render in full
+	// (wired into the global app.tools.expand toggle via the Expandable interface).
+	private expanded = false;
+	// lunr: live per-run timings from interactive-mode; undefined = history message
+	// (always treated as final, rendered without durations).
+	private thinkingTimings?: ThinkingRunTiming[];
 	private markdownTheme: MarkdownTheme;
 	// lunr: kept for the deferred alternative hidden-thinking indicator (Phase 8 removed the label render).
 	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: retained for future use
@@ -30,10 +45,12 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		gutterRail = false,
+		thinkingCollapse = false,
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
+		this.thinkingCollapse = thinkingCollapse;
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
@@ -60,6 +77,27 @@ export class AssistantMessageComponent extends Container {
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
+	}
+
+	// lunr: collapsible reasoning toggles (live; re-render like setHideThinkingBlock).
+	setThinkingCollapse(collapse: boolean): void {
+		this.thinkingCollapse = collapse;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	// lunr: ctrl+o expansion — Expandable interface hook; expanded collapsed thinking
+	// runs render as full Markdown blocks again.
+	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setThinkingTimings(timings: ThinkingRunTiming[] | undefined): void {
+		this.thinkingTimings = timings;
 	}
 
 	// lunr: gutter rail toggle (live; applied on next render).
@@ -128,6 +166,7 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let isFirstTextBlock = true;
+		let thinkingRunIndex = -1;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
@@ -146,6 +185,7 @@ export class AssistantMessageComponent extends Container {
 					}),
 				);
 			} else if (content.type === "thinking") {
+				thinkingRunIndex++;
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
 					const thinkingContent = message.content[i];
@@ -172,6 +212,34 @@ export class AssistantMessageComponent extends Container {
 				if (this.hideThinkingBlock) {
 					// lunr: thinking blocks are hidden — render nothing (the "Thinking..." label is
 					// removed; an alternative hidden indicator will be designed separately).
+				} else if (
+					this.thinkingCollapse &&
+					!this.expanded &&
+					isThinkingRunComplete(
+						i < message.content.length - 1,
+						this.thinkingTimings?.[thinkingRunIndex],
+						this.thinkingTimings !== undefined,
+					)
+				) {
+					// lunr: collapsible reasoning — a completed run collapses to
+					// "✻ Thought for Xs" (duration only from live timings) + its first sentence.
+					const timing = this.thinkingTimings?.[thinkingRunIndex];
+					const label =
+						timing?.end !== undefined
+							? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
+							: "✻ Thought";
+					this.contentContainer.addChild(
+						new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0),
+					);
+					const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
+					if (snippet) {
+						this.contentContainer.addChild(
+							new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0),
+						);
+					}
+					if (hasVisibleContentAfter) {
+						this.contentContainer.addChild(new Spacer(1));
+					}
 				} else {
 					// Render each run of thinking blocks as one Markdown section.
 					this.contentContainer.addChild(

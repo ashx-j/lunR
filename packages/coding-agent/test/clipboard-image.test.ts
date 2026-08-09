@@ -181,4 +181,90 @@ describe("readClipboardImage", () => {
 		expect(result?.mimeType).toBe("image/png");
 		expect(Array.from(result?.bytes ?? [])).toEqual([8, 9]);
 	});
+
+	test("win32: uses native clipboard and never spawns PowerShell", async () => {
+		mocks.spawnSync.mockImplementation(() => {
+			throw new Error("spawnSync should not be called on win32 when native clipboard returns an image");
+		});
+
+		mocks.clipboard.hasImage.mockReturnValue(true);
+		mocks.clipboard.getImageBinary.mockResolvedValue(new Uint8Array([11]));
+
+		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
+		const result = await readClipboardImage({ platform: "win32", env: {} });
+		expect(result).not.toBeNull();
+		expect(result?.mimeType).toBe("image/png");
+		expect(Array.from(result?.bytes ?? [])).toEqual([11]);
+	});
+
+	test("win32: falls back to PowerShell (without wslpath) when native clipboard has no image", async () => {
+		mocks.clipboard.hasImage.mockReturnValue(false);
+
+		mocks.spawnSync.mockImplementation((command, args, _options) => {
+			if (command === "wslpath") {
+				throw new Error("wslpath should not be called on native win32");
+			}
+			if (command === "powershell.exe") {
+				const script = args[2];
+				const match = script.match(/\$path = '((?:[^']|'')+)'/);
+				if (!match) {
+					throw new Error(`Could not find $path in script: ${script}`);
+				}
+				writeFileSync(match[1].replaceAll("''", "'"), Buffer.from([12, 13]));
+				return spawnOk(Buffer.from("ok\n", "utf-8"));
+			}
+			throw new Error(`Unexpected spawnSync call: ${command} ${args.join(" ")}`);
+		});
+
+		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
+		const result = await readClipboardImage({ platform: "win32", env: {} });
+		expect(result).not.toBeNull();
+		expect(result?.mimeType).toBe("image/png");
+		expect(Array.from(result?.bytes ?? [])).toEqual([12, 13]);
+	});
+
+	test("win32: falls back to file-drop list when clipboard holds a copied image file", async () => {
+		mocks.clipboard.hasImage.mockReturnValue(false);
+
+		const { tmpdir } = await import("os");
+		const { join } = await import("path");
+		const fixture = join(tmpdir(), `pi-clip-test-${Math.random().toString(36).slice(2)}.png`);
+		writeFileSync(fixture, Buffer.from([14, 15]));
+
+		mocks.spawnSync.mockImplementation((command, args, _options) => {
+			if (command === "powershell.exe" && args[2].includes("FileDropList")) {
+				return spawnOk(Buffer.from(`C:\\Users\\test\\notes.txt\r\n${fixture}\r\n`, "utf-8"));
+			}
+			if (command === "powershell.exe") {
+				return spawnOk(Buffer.from("empty\n", "utf-8"));
+			}
+			throw new Error(`Unexpected spawnSync call: ${command} ${args.join(" ")}`);
+		});
+
+		try {
+			const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
+			const result = await readClipboardImage({ platform: "win32", env: {} });
+			expect(result).not.toBeNull();
+			expect(result?.mimeType).toBe("image/png");
+			expect(Array.from(result?.bytes ?? [])).toEqual([14, 15]);
+		} finally {
+			const { unlinkSync } = await import("fs");
+			unlinkSync(fixture);
+		}
+	});
+
+	test("win32: returns null when clipboard has no image anywhere", async () => {
+		mocks.clipboard.hasImage.mockReturnValue(false);
+
+		mocks.spawnSync.mockImplementation((command, _args, _options) => {
+			if (command === "powershell.exe") {
+				return spawnOk(Buffer.from("empty\n", "utf-8"));
+			}
+			throw new Error(`Unexpected spawnSync call: ${command}`);
+		});
+
+		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
+		const result = await readClipboardImage({ platform: "win32", env: {} });
+		expect(result).toBeNull();
+	});
 });

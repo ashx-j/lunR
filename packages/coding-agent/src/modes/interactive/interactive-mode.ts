@@ -169,6 +169,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
@@ -447,6 +448,12 @@ export class InteractiveMode {
 
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
+	// lunr: collapsible reasoning — collapse completed thinking runs to a summary.
+	private thinkingCollapse = true;
+	// lunr: live timings for the streaming message's thinking runs; kept per
+	// message so rebuildChatFromMessages can re-attach them.
+	private thinkingRunTimings: ThinkingRunTiming[] = [];
+	private thinkingTimingsByMessage = new WeakMap<AssistantMessage, ThinkingRunTiming[]>();
 	private outputPad = 1;
 
 	// Skill commands: command name -> skill file path
@@ -602,6 +609,7 @@ export class InteractiveMode {
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.thinkingCollapse = this.settingsManager.getThinkingCollapse();
 		this.outputPad = this.settingsManager.getOutputPad();
 
 		// Register themes from resource loader and initialize
@@ -1686,6 +1694,7 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.thinkingCollapse = this.settingsManager.getThinkingCollapse();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
@@ -2602,7 +2611,8 @@ export class InteractiveMode {
 			}
 		};
 
-		// Handle clipboard paste (triggered on Ctrl+V). Images are attached by path;
+		// Handle clipboard paste (keybinding: app.clipboard.pasteImage, Alt+V on Windows —
+		// Ctrl+V is owned by the terminal and never reaches us). Images are attached by path;
 		// otherwise, paste plain text from the system clipboard.
 		this.defaultEditor.onPasteImage = () => {
 			void this.handleClipboardPaste();
@@ -2621,6 +2631,7 @@ export class InteractiveMode {
 
 				this.editor.insertTextAtCursor?.(filePath);
 				this.ui.requestRender();
+				this.showStatus(`Pasted clipboard image → ${fileName}`);
 				return;
 			}
 
@@ -2628,9 +2639,12 @@ export class InteractiveMode {
 			if (text) {
 				this.editor.insertTextAtCursor?.(text);
 				this.ui.requestRender();
+				return;
 			}
-		} catch {
-			// Silently ignore clipboard errors (may not have permission, etc.)
+
+			this.showStatus("Clipboard contains no image or text");
+		} catch (err) {
+			this.showStatus(`Clipboard paste failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -2822,7 +2836,8 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/quit") {
+			if (text === "/quit" || text === "/exit") {
+				// lunr: /exit is an alias of /quit.
 				this.editor.setText("");
 				await this.shutdown();
 				return;
@@ -3015,7 +3030,13 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.settingsManager.getGutterRail(),
+						this.thinkingCollapse,
 					);
+					// lunr: collapsible reasoning — fresh timing array for this message.
+					this.thinkingRunTimings = [];
+					this.streamingComponent.setThinkingTimings(this.thinkingRunTimings);
+					// lunr: ctrl+o expansion — inherit the global expand state.
+					this.streamingComponent.setExpanded(this.toolOutputExpanded);
 					this.streamingMessage = event.message;
 					this.streamingTargetMessage = event.message;
 					this.streamingDisplayedLength = 0;
@@ -3033,6 +3054,9 @@ export class InteractiveMode {
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingTargetMessage = event.message;
+					// lunr: collapsible reasoning — time runs against the FULL message
+					// so smooth-streaming reveal lag doesn't inflate durations.
+					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), false);
 					if (this.settingsManager.getSmoothStreaming()) {
 						// Smooth streaming: only track the target here; the timer
 						// reveals it grapheme by grapheme.
@@ -3057,7 +3081,7 @@ export class InteractiveMode {
 									this.sessionManager.getCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
+								this.addToolComponentToChat(component);
 								this.pendingTools.set(content.id, component);
 							} else {
 								const component = this.pendingTools.get(content.id);
@@ -3086,6 +3110,10 @@ export class InteractiveMode {
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
 					}
+					// lunr: collapsible reasoning — close any open run and remember the
+					// timings so rebuildChatFromMessages can re-attach them.
+					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), true);
+					this.thinkingTimingsByMessage.set(this.streamingMessage, this.thinkingRunTimings);
 					this.streamingComponent.updateContent(this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
@@ -3129,7 +3157,7 @@ export class InteractiveMode {
 						this.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
+					this.addToolComponentToChat(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
 				component.markExecutionStarted();
@@ -3438,7 +3466,13 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.settingsManager.getGutterRail(),
+					this.thinkingCollapse,
 				);
+				// lunr: collapsible reasoning — re-attach live timings when this
+				// message was streamed in this session (undefined = history).
+				assistantComponent.setThinkingTimings(this.thinkingTimingsByMessage.get(message));
+				// lunr: ctrl+o expansion — inherit the global expand state.
+				assistantComponent.setExpanded(this.toolOutputExpanded);
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -3495,7 +3529,7 @@ export class InteractiveMode {
 							this.sessionManager.getCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
+						this.addToolComponentToChat(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -3972,6 +4006,18 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	// lunr: consecutive same-tool grouping — a tool component appended right after
+	// another component for the SAME tool becomes a group continuation (no top
+	// spacer), so adjacent same-bg boxes merge into one continuous background.
+	// Adjacency is decided at add time only; later arrivals naturally break the run.
+	private addToolComponentToChat(component: ToolExecutionComponent): void {
+		const last = this.chatContainer.children[this.chatContainer.children.length - 1];
+		if (last instanceof ToolExecutionComponent && last.getToolName() === component.getToolName()) {
+			component.setGroupContinuation(true);
+		}
+		this.chatContainer.addChild(component);
+	}
+
 	private toggleThinkingBlockVisibility(): void {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
@@ -4289,6 +4335,7 @@ export class InteractiveMode {
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					thinkingCollapse: this.thinkingCollapse,
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
@@ -4384,6 +4431,17 @@ export class InteractiveMode {
 						for (const child of this.chatContainer.children) {
 							if (child instanceof AssistantMessageComponent) {
 								child.setHideThinkingBlock(hidden);
+							}
+						}
+						this.chatContainer.clear();
+						this.rebuildChatFromMessages();
+					},
+					onThinkingCollapseChange: (collapse) => {
+						this.thinkingCollapse = collapse;
+						this.settingsManager.setThinkingCollapse(collapse);
+						for (const child of this.chatContainer.children) {
+							if (child instanceof AssistantMessageComponent) {
+								child.setThinkingCollapse(collapse);
 							}
 						}
 						this.chatContainer.clear();
@@ -6117,6 +6175,7 @@ export class InteractiveMode {
 				return;
 			}
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+			this.thinkingCollapse = this.settingsManager.getThinkingCollapse();
 			this.outputPad = this.settingsManager.getOutputPad();
 			this.rebuildChatFromMessages();
 			chatRestoredBeforeSessionStart = true;

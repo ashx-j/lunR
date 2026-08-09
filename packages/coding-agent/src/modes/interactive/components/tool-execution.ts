@@ -14,6 +14,9 @@ export class ToolExecutionComponent extends Container {
 	private contentBox: Box;
 	private contentText: Text;
 	private selfRenderContainer: Container;
+	// lunr: top spacer kept as a field so consecutive same-tool calls can be
+	// grouped into one continuous background by zeroing it (setGroupContinuation).
+	private topSpacer: Spacer;
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
 	private rendererState: any = {};
@@ -60,7 +63,8 @@ export class ToolExecutionComponent extends Container {
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		this.topSpacer = new Spacer(1);
+		this.addChild(this.topSpacer);
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
@@ -209,6 +213,20 @@ export class ToolExecutionComponent extends Container {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		this.updateDisplay();
+	}
+
+	// lunr: consecutive same-tool grouping — exposes the tool name so the caller
+	// can detect adjacency.
+	getToolName(): string {
+		return this.toolName;
+	}
+
+	// lunr: consecutive same-tool grouping — continuation calls hide the top
+	// spacer so adjacent same-bg boxes read as one continuous background; each
+	// call's content still renders normally inside its own box.
+	setGroupContinuation(on: boolean): void {
+		this.topSpacer.setLines(on ? 0 : 1);
+		this.invalidate();
 	}
 
 	setShowImages(show: boolean): void {
