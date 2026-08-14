@@ -16,7 +16,9 @@ interface ModelLike {
 }
 
 function getAgentDir(): string {
-	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+	// lunr: fallback was ~/.pi/agent — lunr's agent dir is ~/.lunr/agent (and the
+	// PI_CODING_AGENT_DIR default set by core config.ts makes the env branch win anyway).
+	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".lunr", "agent");
 }
 
 function readSettings(path: string): Record<string, unknown> {
@@ -33,7 +35,8 @@ function readSettings(path: string): Record<string, unknown> {
 export function loadEnabledModelPatterns(ctx: SummaryModelScopeContext): string[] | null {
 	const globalSettings = readSettings(join(getAgentDir(), "settings.json"));
 	const projectSettings = ctx.isProjectTrusted()
-		? readSettings(join(ctx.cwd, ".pi", "settings.json"))
+		// lunr: project settings live in <cwd>/.lunr, not .pi
+		? readSettings(join(ctx.cwd, ".lunr", "settings.json"))
 		: {};
 	const value = Object.hasOwn(projectSettings, "enabledModels")
 		? projectSettings.enabledModels

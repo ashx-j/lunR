@@ -80,6 +80,8 @@ export interface SettingsConfig {
 	hideThinkingBlock: boolean;
 	thinkingCollapse: boolean;
 	showCacheMissNotices: boolean;
+	/** Display value; unset settings render as "short". */
+	cacheRetention: "none" | "short" | "long";
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	showHardwareCursor: boolean;
@@ -133,6 +135,7 @@ export interface SettingsCallbacks {
 	onHideThinkingBlockChange: (hidden: boolean) => void;
 	onThinkingCollapseChange: (collapse: boolean) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
+	onCacheRetentionChange: (retention: "none" | "short" | "long") => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
@@ -1214,6 +1217,15 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				// lunr: unset settings stay undefined so PI_CACHE_RETENTION still
+				// applies; the row displays "short" as the implicit default.
+				id: "cache-retention",
+				label: "Cache retention",
+				description: "Prompt-cache TTL: short (5 min), long (1h where supported), or none",
+				currentValue: config.cacheRetention,
+				values: ["short", "long", "none"],
+			},
+			{
 				id: "quiet-startup",
 				label: "Quiet startup",
 				description: "Disable verbose printing at startup",
@@ -1519,6 +1531,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "cache-miss-notices":
 						callbacks.onShowCacheMissNoticesChange(newValue === "true");
+						break;
+					case "cache-retention":
+						callbacks.onCacheRetentionChange(newValue as "none" | "short" | "long");
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "true");

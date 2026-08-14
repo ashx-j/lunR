@@ -1,20 +1,23 @@
 // @ts-nocheck
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import process from "node:process";
 import {
 	isNonNegativeFiniteNumber,
 	nonNegativeFiniteNumber,
 	normalizeTokenBudget,
 } from "./accounting.js";
 import type { GoalStatus } from "./prompts.js";
+import { getAgentDir } from "../../../config.js";
 
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const LEGACY_GOALS_STATE_ENTRY_TYPE = "goals-state";
-const STATE_FILE = join(
-	process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
-	"pi-goal-state.json",
-);
+// lunr: lazy getter (was a module-level constant) — module constants evaluate at
+// import time, which can precede core config.ts's PI_CODING_AGENT_DIR default, and
+// the old fallback hardcoded ~/.pi/agent. Routing through core getAgentDir keeps the
+// state file under the lunr agent dir regardless of import order.
+function getStateFile(): string {
+	return join(getAgentDir(), "pi-goal-state.json");
+}
 
 export interface ActiveGoal {
 	id: string;
@@ -234,17 +237,19 @@ export function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 }
 
 export function clearLegacyPersistedGoal(cwd: string) {
-	if (!existsSync(STATE_FILE)) return;
+	const stateFile = getStateFile();
+	if (!existsSync(stateFile)) return;
 	const goals = readState();
 	delete goals[cwd];
-	mkdirSync(dirname(STATE_FILE), { recursive: true });
-	writeFileSync(STATE_FILE, `${JSON.stringify(goals, null, 2)}\n`);
+	mkdirSync(dirname(stateFile), { recursive: true });
+	writeFileSync(stateFile, `${JSON.stringify(goals, null, 2)}\n`);
 }
 
 function readState(): Record<string, unknown> {
-	if (!existsSync(STATE_FILE)) return {};
+	const stateFile = getStateFile();
+	if (!existsSync(stateFile)) return {};
 	try {
-		const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown;
+		const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as unknown;
 		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
 			? (parsed as Record<string, unknown>)
 			: {};

@@ -32,7 +32,9 @@ export function getAgentDirPath(
 ): string {
   const configured = env.PI_CODING_AGENT_DIR?.trim();
   if (!configured) {
-    return join(homeDir, ".pi/agent");
+    // lunr: fallback was ~/.pi/agent — lunr's agent dir is ~/.lunr/agent. Normally the
+    // env branch wins because core config.ts defaults PI_CODING_AGENT_DIR at startup.
+    return join(homeDir, ".lunr/agent");
   }
 
   return isAbsolute(configured) ? configured : resolve(cwd, configured);

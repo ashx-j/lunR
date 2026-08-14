@@ -95,6 +95,11 @@ export function flattenSteps(steps: RunnerStep[]): RunnerSubagentStep[] {
 
 export const DEFAULT_GLOBAL_CONCURRENCY_LIMIT = 20;
 
+// lunr: stagger parallel cold starts so the first child's response begins
+// (creating the Anthropic cache entry) before siblings fire identical
+// system prompts. Sequential mode (limit=1) is untouched.
+const PARALLEL_COLD_START_STAGGER_MS = 1000;
+
 /**
  * A promise-based semaphore for limiting concurrent access across multiple
  * mapConcurrent calls within a single run. Enforces a global cap on the total
@@ -142,6 +147,11 @@ export async function mapConcurrent<T, R>(
 	async function worker(_workerIndex: number): Promise<void> {
 		while (next < items.length) {
 			const i = next++;
+			if (safeLimit > 1 && i > 0 && PARALLEL_COLD_START_STAGGER_MS > 0) {
+				await new Promise<void>((resolve) => {
+					setTimeout(resolve, PARALLEL_COLD_START_STAGGER_MS * i);
+				});
+			}
 			if (globalSemaphore) {
 				await globalSemaphore.acquire();
 				try {

@@ -3,7 +3,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CONFIG_DIR_NAME = ".pi";
+// lunr: was ".pi" — share lunr's config dir so the orchestrator socket/state
+// doesn't collide with a real pi install. PI_ORCHESTRATOR_DIR/PI_CONFIG_DIR
+// env overrides still win.
+const CONFIG_DIR_NAME = ".lunr";
 const ENV_ORCHESTRATOR_DIR = "PI_ORCHESTRATOR_DIR";
 
 const __filename = fileURLToPath(import.meta.url);

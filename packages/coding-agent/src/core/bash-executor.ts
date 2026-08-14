@@ -66,7 +66,7 @@ export async function executeBashWithOperations(
 			return;
 		}
 		const id = randomBytes(8).toString("hex");
-		tempFilePath = join(tmpdir(), `pi-bash-${id}.log`);
+		tempFilePath = join(tmpdir(), `lunr-bash-${id}.log`); // lunr: renamed from pi-bash
 		tempFileStream = createWriteStream(tempFilePath);
 		for (const chunk of outputChunks) {
 			tempFileStream.write(chunk);

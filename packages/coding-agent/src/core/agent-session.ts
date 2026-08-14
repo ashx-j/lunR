@@ -14,7 +14,6 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
 	Agent,
@@ -497,7 +496,8 @@ export class AgentSession {
 				} else if (toolName === "behavior_add" || toolName === "behavior_remove") {
 					pathsToSnapshot.push(join(getAgentDir(), "behavior.md"));
 				} else if (toolName === "memory_add" || toolName === "memory_remove") {
-					pathsToSnapshot.push(join(homedir(), ".pi", "simple-memory", "memory.md"));
+					// lunr: simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
+					pathsToSnapshot.push(join(dirname(getAgentDir()), "simple-memory", "memory.md"));
 				} else if (toolName === "cron" && args && typeof args === "object") {
 					const action = String((args as Record<string, unknown>).action ?? "");
 					if (action === "create" || action === "update" || action === "remove") {

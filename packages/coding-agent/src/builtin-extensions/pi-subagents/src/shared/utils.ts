@@ -14,7 +14,9 @@ import type { AgentProgress, AsyncStatus, Details, DisplayItem, ErrorInfo, Neste
 // File System Utilities
 // ============================================================================
 
-const DEFAULT_CONFIG_DIR_NAME = ".pi";
+// lunr: last-resort default was ".pi" — lunr's config dir is .lunr. (The package.json
+// probe above normally resolves piConfig.configDir; this only fires when it fails.)
+const DEFAULT_CONFIG_DIR_NAME = ".lunr";
 const PI_CODING_AGENT_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 export const PI_CODING_AGENT_PACKAGE_ROOT_ENV = "PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT";
 

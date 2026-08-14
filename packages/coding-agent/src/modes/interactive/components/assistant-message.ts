@@ -7,6 +7,7 @@ import {
 	type ThinkingRunTiming,
 	thinkingSnippet,
 } from "./thinking-summary.ts";
+import { ThinkingTailComponent } from "./thinking-tail.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -212,45 +213,59 @@ export class AssistantMessageComponent extends Container {
 				if (this.hideThinkingBlock) {
 					// lunr: thinking blocks are hidden — render nothing (the "Thinking..." label is
 					// removed; an alternative hidden indicator will be designed separately).
-				} else if (
-					this.thinkingCollapse &&
-					!this.expanded &&
-					isThinkingRunComplete(
+				} else {
+					// lunr: a run is complete when a block follows it, its timing closed, or no
+					// timings are attached (history). Incomplete = still streaming.
+					const runComplete = isThinkingRunComplete(
 						i < message.content.length - 1,
 						this.thinkingTimings?.[thinkingRunIndex],
 						this.thinkingTimings !== undefined,
-					)
-				) {
-					// lunr: collapsible reasoning — a completed run collapses to
-					// "✻ Thought for Xs" (duration only from live timings) + its first sentence.
-					const timing = this.thinkingTimings?.[thinkingRunIndex];
-					const label =
-						timing?.end !== undefined
-							? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
-							: "✻ Thought";
-					this.contentContainer.addChild(
-						new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0),
 					);
-					const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
-					if (snippet) {
+					if (this.thinkingCollapse && !this.expanded && runComplete) {
+						// lunr: collapsible reasoning — a completed run collapses to
+						// "✻ Thought for Xs" (duration only from live timings) + its first sentence.
+						const timing = this.thinkingTimings?.[thinkingRunIndex];
+						const label =
+							timing?.end !== undefined
+								? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
+								: "✻ Thought";
 						this.contentContainer.addChild(
-							new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0),
+							new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0),
 						);
-					}
-					if (hasVisibleContentAfter) {
-						this.contentContainer.addChild(new Spacer(1));
-					}
-				} else {
-					// Render each run of thinking blocks as one Markdown section.
-					this.contentContainer.addChild(
-						new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						}),
-					);
-					// lunr: only add the spacer when thinking is visible (avoids stray blank line when hidden).
-					if (hasVisibleContentAfter) {
-						this.contentContainer.addChild(new Spacer(1));
+						const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
+						if (snippet) {
+							this.contentContainer.addChild(
+								new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0),
+							);
+						}
+						if (hasVisibleContentAfter) {
+							this.contentContainer.addChild(new Spacer(1));
+						}
+					} else if (!runComplete && !this.expanded) {
+						// lunr: rolling window — a still-streaming run shows only its last
+						// THINKING_TAIL_LINES rendered lines; older lines disappear as new
+						// ones stream in. ctrl+o expand (or completion) renders in full.
+						this.contentContainer.addChild(
+							new ThinkingTailComponent(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+								color: (text: string) => theme.fg("thinkingText", text),
+								italic: true,
+							}),
+						);
+						if (hasVisibleContentAfter) {
+							this.contentContainer.addChild(new Spacer(1));
+						}
+					} else {
+						// Render each run of thinking blocks as one Markdown section.
+						this.contentContainer.addChild(
+							new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+								color: (text: string) => theme.fg("thinkingText", text),
+								italic: true,
+							}),
+						);
+						// lunr: only add the spacer when thinking is visible (avoids stray blank line when hidden).
+						if (hasVisibleContentAfter) {
+							this.contentContainer.addChild(new Spacer(1));
+						}
 					}
 				}
 			}

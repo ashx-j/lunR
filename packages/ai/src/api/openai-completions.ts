@@ -787,7 +787,7 @@ function applyAnthropicCacheControl(
 ): void {
 	addCacheControlToSystemPrompt(messages, cacheControl);
 	addCacheControlToLastTool(tools, cacheControl);
-	addCacheControlToLastConversationMessage(messages, cacheControl);
+	addCacheControlToLastConversationMessages(messages, cacheControl);
 }
 
 function addCacheControlToSystemPrompt(
@@ -802,15 +802,19 @@ function addCacheControlToSystemPrompt(
 	}
 }
 
-function addCacheControlToLastConversationMessage(
+// lunr: marks the last TWO user/assistant messages (pi#1736, opencode's
+// slice(-2) pattern) so the last assistant turn sits inside the cache window.
+// Budget: 1 system + 1 tool + 2 messages = Anthropic's max of 4 breakpoints.
+function addCacheControlToLastConversationMessages(
 	messages: ChatCompletionMessageParam[],
 	cacheControl: OpenAICompatCacheControl,
 ): void {
-	for (let i = messages.length - 1; i >= 0; i--) {
+	let marked = 0;
+	for (let i = messages.length - 1; i >= 0 && marked < 2; i--) {
 		const message = messages[i];
 		if (message.role === "user" || message.role === "assistant") {
 			if (addCacheControlToMessage(message, cacheControl)) {
-				return;
+				marked++;
 			}
 		}
 	}
@@ -1170,6 +1174,7 @@ function parseChunkUsage(
 		prompt_tokens?: number;
 		completion_tokens?: number;
 		prompt_cache_hit_tokens?: number;
+		prompt_cache_miss_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
 		completion_tokens_details?: { reasoning_tokens?: number };
 	},
@@ -1187,7 +1192,12 @@ function parseChunkUsage(
 	// Do not subtract writes from cached_tokens, otherwise spec-compliant
 	// providers are under-reported. DS4 mirrors this contract too:
 	// https://github.com/antirez/ds4/pull/29
-	const input = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
+	// lunr: DeepSeek reports prompt_cache_miss_tokens explicitly; prefer it
+	// over the implicit (prompt - hit - write) remainder when present.
+	const input =
+		rawUsage.prompt_cache_miss_tokens !== undefined
+			? Math.max(0, rawUsage.prompt_cache_miss_tokens)
+			: Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
 	// OpenAI completion_tokens already includes reasoning_tokens.
 	const outputTokens = rawUsage.completion_tokens || 0;
 	const usage: AssistantMessage["usage"] = {

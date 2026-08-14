@@ -3,7 +3,8 @@
  */
 
 import chalk from "chalk";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
@@ -298,6 +299,75 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
 }
 
 /**
+ * lunr: one-time copy of pi-era state into the lunr dirs (~/.pi → ~/.lunr).
+ * Vendored extensions used to resolve state under ~/.pi (mcp.json + companions,
+ * mcp-oauth/, pi-goal-state.json, web-search.json, simple-memory/); now that they
+ * resolve to .lunr, carry over anything already accumulated under ~/.pi.
+ * COPY-only: never deletes or modifies anything under ~/.pi; an existing
+ * destination always wins; every failure is swallowed (startup must never break
+ * on migration). Intercom broker state (pid/sock/port) is deliberately NOT
+ * migrated — it is transient and copying stale pids is harmful.
+ *
+ * @returns destination paths that were copied (used by tests)
+ */
+export function migratePiStateToLunr(
+	piHome: string = join(homedir(), ".pi"),
+	lunrAgentDir: string = getAgentDir(),
+): string[] {
+	const copied: string[] = [];
+
+	const copyFileIfMissing = (src: string, dest: string): void => {
+		try {
+			if (!existsSync(src) || existsSync(dest)) return;
+			mkdirSync(dirname(dest), { recursive: true });
+			copyFileSync(src, dest);
+			copied.push(dest);
+		} catch {
+			// non-fatal, quiet
+		}
+	};
+
+	const copyDirIfMissing = (srcDir: string, destDir: string): void => {
+		try {
+			if (!existsSync(srcDir)) return;
+			for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+				const src = join(srcDir, entry.name);
+				const dest = join(destDir, entry.name);
+				if (entry.isDirectory()) copyDirIfMissing(src, dest);
+				else if (entry.isFile()) copyFileIfMissing(src, dest);
+			}
+		} catch {
+			// non-fatal, quiet
+		}
+	};
+
+	try {
+		const piAgent = join(piHome, "agent");
+		for (const name of [
+			"mcp.json",
+			"mcp-cache.json",
+			"mcp-npx-cache.json",
+			"mcp-onboarding.json",
+			"pi-goal-state.json",
+		]) {
+			copyFileIfMissing(join(piAgent, name), join(lunrAgentDir, name));
+		}
+		copyDirIfMissing(join(piAgent, "mcp-oauth"), join(lunrAgentDir, "mcp-oauth"));
+		// pi-web-access keys: destination matches getWebSearchConfigPath() (~/.lunr/agent/web-search.json)
+		copyFileIfMissing(join(piHome, "web-search.json"), join(lunrAgentDir, "web-search.json"));
+		// simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
+		const lunrMemoryDir = join(dirname(lunrAgentDir), "simple-memory");
+		for (const name of ["memory.md", "config.json"]) {
+			copyFileIfMissing(join(piHome, "simple-memory", name), join(lunrMemoryDir, name));
+		}
+	} catch {
+		// non-fatal, quiet
+	}
+
+	return copied;
+}
+
+/**
  * Run all migrations. Called once on startup.
  *
  * @returns Object with migration results and deprecation warnings
@@ -310,6 +380,7 @@ export function runMigrations(cwd: string): {
 	migrateSessionsFromAgentRoot();
 	migrateToolsToBin();
 	migrateKeybindingsConfigFile();
+	migratePiStateToLunr(); // lunr: ~/.pi → ~/.lunr carry-over (copy-only, non-fatal)
 	const deprecationWarnings = migrateExtensionSystem(cwd);
 	return { migratedAuthProviders, deprecationWarnings };
 }

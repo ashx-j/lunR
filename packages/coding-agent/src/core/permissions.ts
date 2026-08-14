@@ -30,15 +30,20 @@ export interface ApprovalRequest {
 	 *  "swarm" for auto-activated agent swarms (detail = summary lines). */
 	action: string;
 	detail: string;
-	/** "swarm" when this is the agent-swarm approval prompt, so the UI can
-	 *  render the AgentSwarm dialog instead of the generic tool dialog. */
-	kind?: "swarm";
+	/** "swarm" when this is the agent-swarm approval prompt, "plan" for the
+	 *  present_plan plan-approval prompt — the UI renders a dedicated dialog
+	 *  for each instead of the generic tool dialog. */
+	kind?: "swarm" | "plan";
 }
 
 export type ApprovalDecision = "once" | "session" | "reject";
-/** Handlers may return a bare decision string, or a reject carrying user
- *  feedback that becomes the block reason the model sees. */
-export type ApprovalResponse = ApprovalDecision | { decision: "reject"; feedback: string };
+/** Handlers may return a bare decision string, a reject carrying user feedback
+ *  that becomes the block reason the model sees, or an approve carrying optional
+ *  feedback (plan approval with comments). */
+export type ApprovalResponse =
+	| ApprovalDecision
+	| { decision: "reject"; feedback: string }
+	| { decision: "approve"; feedback?: string };
 
 /** Read-only tools that never need approval. */
 const READ_ONLY_TOOLS = new Set([
@@ -126,6 +131,43 @@ export function resetPermissions(defaultMode: PermissionMode = "manual", session
 
 export function registerApprovalHandler(fn: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined): void {
 	approvalHandler = fn;
+}
+
+/** Model-facing result texts for the present_plan tool. */
+export const PLAN_APPROVED_TEXT = "Plan approved — implement it now.";
+export const PLAN_DECLINED_TEXT = "Plan declined — revise the plan and call present_plan again.";
+export const PLAN_PASS_THROUGH_TEXT = "Plan presented. The user will review and reply.";
+
+/** lunr: map an approval response to the model-facing present_plan result text. */
+export function planApprovalResultText(resp: ApprovalResponse): string {
+	const decision = typeof resp === "string" ? resp : resp.decision;
+	const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
+	if (decision === "reject") {
+		return feedback
+			? `Plan declined: ${feedback} — revise the plan and call present_plan again.`
+			: PLAN_DECLINED_TEXT;
+	}
+	return feedback ? `Plan approved with feedback: ${feedback} — implement it now.` : PLAN_APPROVED_TEXT;
+}
+
+/**
+ * lunr: present_plan approval request. Unlike the mutating-tool and swarm gates
+ * this fails OPEN when no approval handler is registered (or none is reachable,
+ * e.g. a gateway turn without a chat context): headless sessions have no one to
+ * show the dialog to, so the plan is presented and the user replies in chat
+ * instead of deadlocking the turn. Everything else keeps fail-closed.
+ */
+export async function requestPlanApproval(summary: string): Promise<string> {
+	if (!approvalHandler) return PLAN_PASS_THROUGH_TEXT;
+	let resp: ApprovalResponse;
+	try {
+		resp = await approvalHandler({ toolName: "present_plan", action: "plan", detail: summary, kind: "plan" });
+	} catch (err) {
+		const message = err instanceof Error ? err.message : "approval request failed";
+		if (message === NO_HANDLER_REASON) return PLAN_PASS_THROUGH_TEXT;
+		return `Plan declined: ${message} — revise the plan and call present_plan again.`;
+	}
+	return planApprovalResultText(resp);
 }
 
 export function clearSessionApprovals(sessionId?: string): void {
@@ -219,7 +261,7 @@ async function gateSwarmCall(
 		return undefined;
 	}
 	if (decision === "reject") {
-		const feedback = typeof resp === "string" ? undefined : resp.feedback.trim();
+		const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
 		return { block: true, reason: feedback ? `${SWARM_REJECT_REASON} ${feedback}` : SWARM_REJECT_REASON };
 	}
 	return undefined;
@@ -302,7 +344,7 @@ export async function gateToolCall(
 		return undefined;
 	}
 	if (decision === "reject") {
-		const feedback = typeof resp === "string" ? undefined : resp.feedback.trim();
+		const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
 		return { block: true, reason: feedback ? `${REJECT_REASON} ${feedback}` : REJECT_REASON };
 	}
 	// "once" — allow this call only

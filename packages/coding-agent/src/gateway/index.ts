@@ -20,6 +20,7 @@ import { AgentBridge } from "./agent-bridge.ts";
 import { handleApprovalCallback } from "./approval.ts";
 import { addAllowedUser } from "./authz.ts";
 import { handleCallback, startButtonSweeper, stopButtonSweeper } from "./buttons.ts";
+import { botCommandSpecs } from "./commands.ts";
 import {
 	type DiscordConfig,
 	loadGatewayConfig,
@@ -185,6 +186,13 @@ async function runDaemon(): Promise<number> {
 					void handleCallback(event, { adapters, cfg, pairing, bridge, adapter });
 				}
 			});
+			try {
+				await adapter.registerCommands?.(botCommandSpecs());
+			} catch (err) {
+				console.error(
+					`[gateway] ${platform}: command menu registration failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
 			connected.push(adapter);
 			console.log(`lunR gateway: ${platform} connected`);
 		} catch (err) {

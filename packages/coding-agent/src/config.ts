@@ -185,6 +185,15 @@ export function getAgentDir(): string {
 	return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 
+// lunr: default PI_CODING_AGENT_DIR to the resolved agent dir (~/.lunr/agent) so
+// vendored extensions carrying their own PI_CODING_AGENT_DIR-honoring resolvers
+// (pi-mcp-adapter agent-dir.ts, pi-intercom broker/paths.ts, pi-web-access utils.ts,
+// pi-goal persistence.ts) land in .lunr instead of leaking into a real pi install's
+// ~/.pi. Only set when unset/blank, so explicit user/test values still win.
+if (!process.env[ENV_AGENT_DIR]?.trim()) {
+	process.env[ENV_AGENT_DIR] = getAgentDir();
+}
+
 /** Get path to user's custom themes directory */
 export function getCustomThemesDir(): string {
 	return join(getAgentDir(), "themes");

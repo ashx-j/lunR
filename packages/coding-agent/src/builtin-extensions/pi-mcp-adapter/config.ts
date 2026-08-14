@@ -8,7 +8,11 @@ import type { McpConfig, ServerEntry, McpSettings, ImportKind, ServerProvenance 
 
 const GENERIC_GLOBAL_CONFIG_PATH = join(homedir(), ".config", "mcp", "mcp.json");
 const PROJECT_CONFIG_NAME = ".mcp.json";
-const PROJECT_PI_CONFIG_NAME = ".pi/mcp.json";
+// lunr: project-scope MCP config lives at .lunr/mcp.json (lunr's project config
+// dir); .pi/mcp.json is kept only as a back-compat read fallback for projects
+// previously configured under upstream pi. Writes always go to .lunr/mcp.json.
+const PROJECT_LUNR_CONFIG_NAME = ".lunr/mcp.json";
+const LEGACY_PROJECT_PI_CONFIG_NAME = ".pi/mcp.json";
 const REPOPROMPT_BINARY_CANDIDATES = [
   join(homedir(), "RepoPrompt", "repoprompt_cli"),
   "/Applications/Repo Prompt.app/Contents/MacOS/repoprompt-mcp",
@@ -103,7 +107,16 @@ export function getProjectConfigPath(cwd = process.cwd()): string {
 }
 
 export function getProjectPiConfigPath(cwd = process.cwd()): string {
-  return resolve(cwd, PROJECT_PI_CONFIG_NAME);
+  return resolve(cwd, PROJECT_LUNR_CONFIG_NAME);
+}
+
+// lunr: read path prefers .lunr/mcp.json and falls back to the legacy .pi/mcp.json
+// when only the pi-era file exists.
+export function getProjectPiConfigReadPath(cwd = process.cwd()): string {
+  const lunrPath = getProjectPiConfigPath(cwd);
+  if (existsSync(lunrPath)) return lunrPath;
+  const legacyPath = resolve(cwd, LEGACY_PROJECT_PI_CONFIG_NAME);
+  return existsSync(legacyPath) ? legacyPath : lunrPath;
 }
 
 export function getConfigDiscoveryPaths(overridePath?: string, cwd = process.cwd()): ConfigDiscoveryPath[] {
@@ -197,6 +210,7 @@ function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSou
   const userPath = getPiGlobalConfigPath(overridePath);
   const projectPath = getProjectConfigPath(cwd);
   const projectPiPath = getProjectPiConfigPath(cwd);
+  const projectPiReadPath = getProjectPiConfigReadPath(cwd);
   const sources: ConfigSourceSpec[] = [];
 
   if (GENERIC_GLOBAL_CONFIG_PATH !== userPath) {
@@ -238,7 +252,7 @@ function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSou
     sources.push({
       id: "pi-project",
       label: "project Pi override",
-      readPath: projectPiPath,
+      readPath: projectPiReadPath,
       writePath: projectPiPath,
       kind: "project",
       shared: false,
@@ -493,6 +507,7 @@ function findProjectRoot(cwd = process.cwd()): string | null {
       || existsSync(join(current, "package.json"))
       || existsSync(join(current, PROJECT_CONFIG_NAME))
       || existsSync(join(current, ".pi"))
+      || existsSync(join(current, ".lunr")) // lunr: lunr's project config dir is also a root marker
     ) {
       return current;
     }

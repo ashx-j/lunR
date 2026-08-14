@@ -25,33 +25,33 @@ export interface GoalPromptContext {
 }
 
 export function buildGoalPrompt(goal: GoalPromptContext) {
-	const budgetLine =
-		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
+	// lunr: activation prompt carries the LIVE budget counter — volatility
+	// lives in the latest user message so the system-prompt prefix stays stable.
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\n${buildBudgetStatusLine(goal)}`;
 	return `Goal mode is active. Complete this goal fully:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalModeRules("this goal")}`;
 }
 
 export function buildObjectiveUpdatedPrompt(goal: GoalPromptContext) {
-	const budgetLine =
-		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\n${buildBudgetStatusLine(goal)}`;
 	return `The active /goal objective was updated. The updated objective supersedes every previous goal objective. Avoid continuing work that only served the previous objective unless it also advances the updated objective:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalModeRules("the updated goal")}`;
 }
 
 export function buildResumePrompt(goal: GoalPromptContext, stoppedStatus: GoalStatus) {
-	const budgetLine =
-		goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\n${buildBudgetStatusLine(goal)}`;
 	return `The user explicitly resumed the ${stoppedStatusLabel(stoppedStatus)} /goal. Continue working toward this goal:\n\n${goalContextBlock(goal)}${budgetLine}\n\n${goalModeRules("this goal")}`;
 }
 
 export function buildGoalSystemPrompt(goal: GoalPromptContext) {
-	const budgetLine =
-		goal.tokenBudget === undefined
-			? ""
-			: `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
-	return `Active /goal:\n${goalContextBlock(goal)}\n\n${goalModeRules("the active goal")}${budgetLine}`;
+	// lunr: static addendum only. Live tokensUsed/tokenBudget rides the latest
+	// user message (activation / continue / resume). goal_id is a randomUUID —
+	// a new goal instance is legitimately new content and should not share a
+	// cache prefix with a previous goal.
+	return `Active /goal:\n${goalContextBlock(goal)}\n\n${goalModeRules("the active goal")}`;
 }
 
 export function buildContinuePrompt(goal: GoalPromptContext, marker: string) {
-	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. The full objective persists across turns; continue from the authoritative current state.\n\n${goalModeRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\n${buildBudgetStatusLine(goal)}`;
+	return `Continue the active /goal until it is complete:\n\n${goalContextBlock(goal)}${budgetLine}\n\nThis is automatic continuation #${goal.iteration}. The full objective persists across turns; continue from the authoritative current state.\n\n${goalModeRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
 }
 
 function goalContextBlock(goal: GoalPromptContext) {
@@ -89,6 +89,10 @@ function goalModeRules(goalLabel: string) {
 
 function formatBudget(goal: GoalPromptContext) {
 	return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
+}
+
+function buildBudgetStatusLine(goal: GoalPromptContext) {
+	return `Token budget: ${formatBudget(goal)} used.`;
 }
 
 function stoppedStatusLabel(status: GoalStatus) {

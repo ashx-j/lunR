@@ -455,31 +455,15 @@ export class GoalRuntime {
 		const active = this.pi.getActiveTools();
 		const hidden = active.filter((name) => this.isGoalToolName(name));
 		if (hidden.length === 0) return;
-		this.pi.setActiveTools(active.filter((name) => !this.isGoalToolName(name)));
+		// lunr: do not mutate the active tool list (Anthropic tools sit at the
+		// front of the cache prefix). Locked goal tools stay registered; the
+		// tool_call gate rejects them until a /goal is activated.
 		for (const name of hidden) this.goalToolsHiddenByPolicy.add(name);
 	}
 
 	restoreGoalToolsHiddenByPolicy() {
-		const activeBeforeRestore = this.pi.getActiveTools();
-		const activeSet = new Set(activeBeforeRestore);
-		const missingOwnedTools = [...this.goalToolsHiddenByPolicy].filter(
-			(name) => !activeSet.has(name),
-		);
-		if (missingOwnedTools.length === 0) {
-			this.goalToolsHiddenByPolicy.clear();
-			return;
-		}
-		try {
-			this.pi.setActiveTools([...activeBeforeRestore, ...missingOwnedTools]);
-			const restored = new Set(this.pi.getActiveTools());
-			if (missingOwnedTools.some((name) => !restored.has(name))) {
-				throw new Error("the active tool policy rejected a previously hidden goal tool");
-			}
-			this.goalToolsHiddenByPolicy.clear();
-		} catch (error) {
-			this.pi.setActiveTools(activeBeforeRestore);
-			throw error;
-		}
+		// lunr: flags only — the tool list is never rewritten at runtime.
+		this.goalToolsHiddenByPolicy.clear();
 	}
 
 	assertGoalToolsAvailable() {
@@ -490,10 +474,8 @@ export class GoalRuntime {
 	}
 
 	ensureGoalToolsVisible() {
-		const active = this.pi.getActiveTools();
-		const activeSet = new Set(active);
-		const missing = GOAL_TOOL_NAMES.filter((name) => !activeSet.has(name));
-		if (missing.length > 0) this.pi.setActiveTools([...active, ...missing]);
+		// lunr: never add/remove tools mid-session. Assert they were already
+		// registered at session start so the wire bytes stay stable.
 		this.assertGoalToolsAvailable();
 	}
 
@@ -510,14 +492,12 @@ export class GoalRuntime {
 
 	/** Mark lazy tools permanently desired for this runtime and make them active now. */
 	revealGoalTools() {
-		const activeBeforeReveal = this.pi.getActiveTools();
 		const wasUnlocked = this.goalToolsUnlocked;
 		try {
 			this.ensureGoalToolsVisible();
 			this.goalToolsUnlocked = true;
 			this.goalToolsHiddenByPolicy.clear();
 		} catch (error) {
-			this.pi.setActiveTools(activeBeforeReveal);
 			this.goalToolsUnlocked = wasUnlocked;
 			throw error;
 		}
@@ -566,12 +546,16 @@ export class GoalRuntime {
 	}
 
 	restoreGoalToolVisibility(snapshot: GoalToolVisibilitySnapshot) {
-		this.pi.setActiveTools(snapshot.activeTools);
+		// lunr: restore unlock/hidden flags only — never rewrite the tool list.
 		this.goalToolsUnlocked = snapshot.goalToolsUnlocked;
 		this.goalToolsHiddenByPolicy.clear();
 		for (const name of snapshot.goalToolsHiddenByPolicy) {
 			this.goalToolsHiddenByPolicy.add(name);
 		}
+	}
+
+	areGoalToolsLocked() {
+		return !this.goalToolsUnlocked && this.settings.toolVisibility === "after-first-goal";
 	}
 
 	pauseGoalForUnavailableTools(ctx: StatusContext, abortTurn = true, recordUsage = true) {

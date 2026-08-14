@@ -308,6 +308,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				...options,
 				timeoutMs,
 				websocketConnectTimeoutMs,
+				cacheRetention: settingsManager.getCacheRetention(),
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
 				transformHeaders: async (requestHeaders) => {

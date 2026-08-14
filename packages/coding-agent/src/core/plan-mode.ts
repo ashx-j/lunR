@@ -22,7 +22,21 @@
 
 /** Appended to the system prompt while plan mode is active. */
 export const PLAN_MODE_ADDENDUM =
-	"You are in plan mode. Investigate read-only, then present a concrete plan. Tell the user to run /plan off to implement.";
+	"You are in plan mode. Investigate read-only, then present your plan by calling the present_plan tool with a concise summary — the user approves or declines it in a dialog. Do not make changes until the plan is approved. The user can also exit plan mode manually with /plan off.";
+
+// lunr: module-level plan-mode flag so baked-in extensions (present_plan) can
+// check state without importing the TUI. interactive-mode keeps it in sync at
+// every activation/teardown site.
+let planModeActiveFlag = false;
+
+/** True while plan mode is active in the interactive session. */
+export function isPlanModeActive(): boolean {
+	return planModeActiveFlag;
+}
+
+export function setPlanModeActive(active: boolean): void {
+	planModeActiveFlag = active;
+}
 
 /** Error returned to the model when a tool call is blocked by plan mode. */
 export const PLAN_MODE_BLOCK_MESSAGE = "Plan mode is active — propose a plan; no file changes.";

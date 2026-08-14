@@ -106,6 +106,7 @@ export interface Settings {
 	hideThinkingBlock?: boolean;
 	thinkingCollapse?: boolean; // default: true - collapse completed thinking blocks to "Thought for Xs" + first sentence
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
+	cacheRetention?: "none" | "short" | "long"; // default: unset - falls back to PI_CACHE_RETENTION env, then "short" (packages/ai)
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
 	quietStartup?: boolean;
@@ -779,6 +780,16 @@ export class SettingsManager {
 	setTransport(transport: TransportSetting): void {
 		this.globalSettings.transport = transport;
 		this.markModified("transport");
+		this.save();
+	}
+
+	getCacheRetention(): "none" | "short" | "long" | undefined {
+		return this.settings.cacheRetention;
+	}
+
+	setCacheRetention(cacheRetention: "none" | "short" | "long"): void {
+		this.globalSettings.cacheRetention = cacheRetention;
+		this.markModified("cacheRetention");
 		this.save();
 	}
 

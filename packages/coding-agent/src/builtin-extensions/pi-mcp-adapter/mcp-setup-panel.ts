@@ -487,7 +487,7 @@ export class McpSetupPanel {
           "1. ~/.config/mcp/mcp.json",
           "2. <Pi agent dir>/mcp.json",
           "3. .mcp.json",
-          "4. .pi/mcp.json",
+          "4. .lunr/mcp.json (legacy read fallback: .pi/mcp.json)", // lunr: was ".pi/mcp.json"
           "Pi writes compatibility imports and adapter-only overrides to Pi-owned files.",
         ]);
       case "open-paths":

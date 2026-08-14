@@ -41,7 +41,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
-import { CONFIG_DIR_NAME } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 export interface Snapshot {
@@ -459,8 +459,8 @@ function isWithinAllowedRoots(absPath: string, turn: TurnSnapshots): boolean {
 	const roots = [
 		ROLLBACK_BASE,
 		join(homedir(), CONFIG_DIR_NAME), // lunr: behavior.md / cron jobs.json live under the config dir
-		// lunr: ~/.pi memory path is known debt (AGENTS.md Deferred) — allowed so the memory snapshot feature works
-		join(homedir(), ".pi", "simple-memory"),
+		// lunr: simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
+		join(dirname(getAgentDir()), "simple-memory"),
 		resolve(turn.cwd),
 	];
 	return roots.some((root) => isPathUnderRoot(absPath, root));

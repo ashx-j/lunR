@@ -77,6 +77,12 @@ import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/htt
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
+import {
+	isValidProviderBaseUrl,
+	parseModelIds,
+	slugifyProviderId,
+	upsertCustomProvider,
+} from "../../core/model-config-writer.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
@@ -89,7 +95,7 @@ import {
 	resetPermissions,
 	setPermissionMode,
 } from "../../core/permissions.ts";
-import { PLAN_MODE_ADDENDUM, planModeBlockReason } from "../../core/plan-mode.ts";
+import { PLAN_MODE_ADDENDUM, planModeBlockReason, setPlanModeActive } from "../../core/plan-mode.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
@@ -118,6 +124,7 @@ import type { SubEntry } from "../../core/subscriptions.ts";
 import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
+import { collectUsageHistory, type UsageHistory } from "../../core/usage-history.ts";
 import { getPlanUsage } from "../../core/usage-service.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -173,7 +180,7 @@ import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/t
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { renderUsageBox, type UsageSessionRow } from "./components/usage-view.ts";
+import { renderTokenUsageBox, renderUsageBox, type UsageSessionRow } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -554,6 +561,7 @@ export class InteractiveMode {
 			// lunr: plan-mode gate/addendum live on the AgentSession being replaced — drop state
 			if (this.planModeActive) {
 				this.planModeActive = false;
+				setPlanModeActive(false);
 				this.planModeCleanup?.();
 				this.planModeCleanup = undefined;
 				this.setExtensionStatus("plan", undefined);
@@ -844,6 +852,17 @@ export class InteractiveMode {
 				if (decision !== "reject") {
 					this.swarmMode = true;
 					this.setExtensionStatus("swarm", "swarm ● active");
+				}
+				return resp;
+			}
+			// lunr: plan approval (present_plan tool). Any approve exits plan mode —
+			// teardown runs BEFORE resolving so the model's next tool call already
+			// has full access. Decline keeps plan mode active.
+			if (req.kind === "plan") {
+				const resp = await this.showPlanApprovalDialog(req.detail);
+				const decision = typeof resp === "string" ? resp : resp.decision;
+				if (decision !== "reject") {
+					this.deactivatePlanMode();
 				}
 				return resp;
 			}
@@ -2710,6 +2729,11 @@ export class InteractiveMode {
 				await this.handleUsageCommand();
 				return;
 			}
+			if (text === "/token-usage") {
+				this.editor.setText("");
+				this.handleTokenUsageCommand();
+				return;
+			}
 			if (text === "/context") {
 				this.editor.setText("");
 				this.handleContextCommand();
@@ -4003,6 +4027,8 @@ export class InteractiveMode {
 				}
 			}
 		}
+		// lunr: let extensions (lunr-todos widget) react to ctrl+o expansion.
+		(globalThis as any)[Symbol.for("@lunr/tools-expanded-changed")]?.(expanded);
 		this.ui.requestRender();
 	}
 
@@ -4336,6 +4362,7 @@ export class InteractiveMode {
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					thinkingCollapse: this.thinkingCollapse,
+					cacheRetention: this.settingsManager.getCacheRetention() ?? "short",
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
@@ -4450,6 +4477,9 @@ export class InteractiveMode {
 					onShowCacheMissNoticesChange: (shown) => {
 						this.settingsManager.setShowCacheMissNotices(shown);
 						this.rebuildChatFromMessages();
+					},
+					onCacheRetentionChange: (retention) => {
+						this.settingsManager.setCacheRetention(retention);
 					},
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
@@ -5475,6 +5505,12 @@ export class InteractiveMode {
 		if (availableAuthTypes.has("api_key")) {
 			options.push(apiKeyLabel);
 		}
+		// lunr: custom-endpoint wizard is only offered from the top-level auth-type menu
+		// (no provider chosen yet), not when re-authenticating a specific provider.
+		const customProviderLabel = "Connect a custom API endpoint…";
+		if (!providerOptions) {
+			options.push(customProviderLabel);
+		}
 
 		if (options.length === 0) {
 			this.showStatus("No login methods available.");
@@ -5498,6 +5534,11 @@ export class InteractiveMode {
 				options,
 				(option) => {
 					done();
+					// lunr: intercept before the oauth/api_key label mapping below.
+					if (option === customProviderLabel) {
+						void this.showCustomProviderWizard();
+						return;
+					}
 					const authType = option === subscriptionLabel ? "oauth" : "api_key";
 					if (providerOptions) {
 						const providerOption = providerOptions.find((provider) => provider.authType === authType);
@@ -5558,6 +5599,125 @@ export class InteractiveMode {
 			);
 			return { component: selector, focus: selector };
 		});
+	}
+
+	// lunr: /login "Connect a custom API endpoint…" wizard. Writes the provider to
+	// models.json via upsertCustomProvider, then stores the key through the standard
+	// api_key login route (auth.json) once reloadConfig has composed the provider.
+	private async showCustomProviderWizard(): Promise<void> {
+		const cancelled = () => this.showStatus("Custom provider setup cancelled.");
+
+		const nameInput = await this.showExtensionInput("Custom provider — display name:", "My Provider");
+		const name = nameInput?.trim();
+		if (!name) {
+			cancelled();
+			return;
+		}
+		const existingIds = this.session.modelRuntime.getProviders().map((provider) => provider.id);
+		const providerId = slugifyProviderId(name, existingIds);
+
+		const baseUrlInput = await this.showExtensionInput(`Base URL for ${name}:`, "https://api.example.com/v1");
+		if (baseUrlInput === undefined) {
+			cancelled();
+			return;
+		}
+		const baseUrl = baseUrlInput.trim();
+		if (!isValidProviderBaseUrl(baseUrl)) {
+			this.showError(`Invalid base URL "${baseUrl}" — it must start with http:// or https://.`);
+			return;
+		}
+
+		const api = await this.showExtensionSelector(`API protocol for ${name}:`, [
+			"openai-completions",
+			"openai-responses",
+			"anthropic-messages",
+			"google-generative-ai",
+		]);
+		if (!api) {
+			cancelled();
+			return;
+		}
+
+		const modelIdsInput = await this.showExtensionInput(
+			`Model IDs exposed by ${name} (comma-separated):`,
+			"model-a, model-b",
+		);
+		if (modelIdsInput === undefined) {
+			cancelled();
+			return;
+		}
+		const modelIds = parseModelIds(modelIdsInput);
+		if (modelIds.length === 0) {
+			this.showError("At least one model ID is required.");
+			return;
+		}
+
+		const apiKeyInput = await this.showExtensionInput(`API key for ${name}:`);
+		const apiKey = apiKeyInput?.trim();
+		if (!apiKey) {
+			cancelled();
+			return;
+		}
+
+		const modelsJsonPath = path.join(getAgentDir(), "models.json");
+		try {
+			await upsertCustomProvider(modelsJsonPath, providerId, {
+				name,
+				baseUrl,
+				api,
+				models: modelIds.map((id) => ({ id })),
+			});
+			await this.session.modelRuntime.reloadConfig();
+		} catch (error: unknown) {
+			this.showError(`Failed to add custom provider: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+
+		try {
+			// The composed provider's fabricated apiKey.login persists via credentials.modify
+			// (auth.json) — the same storage route showApiKeyLoginDialog uses.
+			await this.session.modelRuntime.login(providerId, "api_key", {
+				prompt: () => Promise.resolve(apiKey),
+				notify: () => {},
+			});
+		} catch (error: unknown) {
+			await this.updateAvailableProviderCount();
+			this.showError(
+				`Custom provider '${name}' was added to models.json, but saving its API key failed: ${error instanceof Error ? error.message : String(error)}. Use /login to store a key.`,
+			);
+			return;
+		}
+
+		await this.updateAvailableProviderCount();
+		this.footer.invalidate();
+		this.updateEditorBorderColor();
+
+		const refineNote = `Refine contextWindow/cost by editing ${modelsJsonPath}.`;
+		const modelCount = modelIds.length;
+		if (modelCount === 1) {
+			const modelId = modelIds[0];
+			const model = modelId ? this.session.modelRuntime.getModel(providerId, modelId) : undefined;
+			if (model) {
+				const choice = await this.showExtensionSelector(
+					`Custom provider '${name}' added. Select ${model.id} as the active model?`,
+					["Select model", "Skip"],
+				);
+				if (choice === "Select model") {
+					try {
+						await this.session.setModel(model);
+						this.showStatus(`Custom provider '${name}' added (1 model). Selected ${model.id}. ${refineNote}`);
+						return;
+					} catch (error: unknown) {
+						this.showError(
+							`Selecting ${model.id} failed: ${error instanceof Error ? error.message : String(error)}. Use /model to select a model.`,
+						);
+					}
+				}
+			}
+		}
+		this.showStatus(
+			`Custom provider '${name}' added (${modelCount} model${modelCount === 1 ? "" : "s"}). ${refineNote}`,
+		);
 	}
 
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
@@ -6586,34 +6746,72 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: /usage — session token totals, context window bar, and subscription
-	// plan usage (when the current provider has a usage adapter).
-	private async handleUsageCommand(): Promise<void> {
-		const entries = this.sessionManager.getEntries();
-
-		// Aggregate token usage per provider/model actually used.
+	// lunr: shared per-model session aggregation for /usage and /token-usage.
+	private collectSessionModelRows(): UsageSessionRow[] {
 		const perModelMap = new Map<string, UsageSessionRow>();
-		for (const entry of entries) {
+		for (const entry of this.sessionManager.getEntries()) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 			const message = entry.message;
 			const usage = message.usage;
 			const key = `${message.provider}/${message.responseModel ?? message.model}`;
 			let row = perModelMap.get(key);
 			if (!row) {
-				row = { model: key, input: 0, output: 0, total: 0 };
+				row = { model: key, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 				perModelMap.set(key, row);
 			}
-			row.input += usage.input + usage.cacheRead + usage.cacheWrite;
+			row.input += usage.input;
 			row.output += usage.output;
+			row.cacheRead += usage.cacheRead;
+			row.cacheWrite += usage.cacheWrite;
 			row.total += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 		}
-		const sessionRows = Array.from(perModelMap.values()).sort((a, b) => b.total - a.total);
+		return Array.from(perModelMap.values()).sort((a, b) => b.total - a.total);
+	}
+
+	// lunr: 30-day history from session files on disk; best-effort — on any
+	// error the section is simply omitted.
+	private collectUsageHistorySafe(): UsageHistory | undefined {
+		try {
+			return collectUsageHistory({ sinceMs: Date.now() - 30 * 24 * 60 * 60 * 1000 });
+		} catch {
+			return undefined;
+		}
+	}
+
+	// lunr: /usage — simple token totals (session + last 30 days), context window
+	// bar, and subscription plan usage (when the current provider has a usage
+	// adapter). Per-model rows live in /token-usage.
+	private async handleUsageCommand(): Promise<void> {
+		const stats = this.session.getSessionStats();
+		const sessionTotals =
+			stats.tokens.total > 0
+				? {
+						input: stats.tokens.input,
+						output: stats.tokens.output,
+						cacheRead: stats.tokens.cacheRead,
+						cacheWrite: stats.tokens.cacheWrite,
+						total: stats.tokens.total,
+					}
+				: undefined;
 
 		const context = this.session.getContextUsage();
 		const provider = this.session.model?.provider;
 		const plan = provider ? await getPlanUsage(provider, this.session.modelRuntime) : undefined;
+		const history = this.collectUsageHistorySafe();
 
-		const lines = renderUsageBox({ sessionRows, context, plan }, this.ui.terminal.columns);
+		const lines = renderUsageBox({ sessionTotals, context, plan, history }, this.ui.terminal.columns);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.ui.requestRender();
+	}
+
+	// lunr: /token-usage — per-model token breakdown for the current session and
+	// the last 30 days (from session files on disk).
+	private handleTokenUsageCommand(): void {
+		const sessionRows = this.collectSessionModelRows();
+		const history = this.collectUsageHistorySafe();
+
+		const lines = renderTokenUsageBox({ sessionRows, history }, this.ui.terminal.columns);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
@@ -6668,17 +6866,16 @@ export class InteractiveMode {
 			return;
 		}
 
-		// lunr: `/plan <task>` — any arg other than on/off/status is treated as the
-		// task: enter plan mode (if not already active) and send it as the request.
+		// lunr: `/plan <text>` TOGGLES — any arg other than on/off/status is task text.
+		// While plan mode is inactive: enter plan mode and send the text as the request.
+		// While plan mode is ACTIVE: EXIT plan mode (same teardown as /plan off) and send
+		// the text with full tool access — e.g. "/plan looks good, go implement it".
 		if (sub !== "" && sub !== "on" && sub !== "off") {
-			if (!this.planModeActive) {
-				this.planModeActive = true;
-				this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
-					const reason = planModeBlockReason(toolName, input);
-					return reason ? { block: true, reason } : undefined;
-				});
-				this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
-				this.setExtensionStatus("plan", "plan ● read-only");
+			if (this.planModeActive) {
+				this.deactivatePlanMode();
+				this.showStatus("Plan mode off — full tool access restored.");
+			} else {
+				this.activatePlanMode();
 			}
 			await this.session.sendUserMessage(args);
 			return;
@@ -6691,22 +6888,36 @@ export class InteractiveMode {
 		}
 
 		if (next) {
-			this.planModeActive = true;
-			this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
-				const reason = planModeBlockReason(toolName, input);
-				return reason ? { block: true, reason } : undefined;
-			});
-			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
-			this.setExtensionStatus("plan", "plan ● read-only");
+			this.activatePlanMode();
 			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
 		} else {
-			this.planModeActive = false;
-			this.planModeCleanup?.();
-			this.planModeCleanup = undefined;
-			this.session.setSystemPromptAppend(undefined);
-			this.setExtensionStatus("plan", undefined);
+			this.deactivatePlanMode();
 			this.showStatus("Plan mode off — full tool access restored.");
 		}
+	}
+
+	// lunr: plan-mode activation — tool-call gate + system-prompt addendum + footer
+	// status, and the module-level flag the present_plan tool checks.
+	private activatePlanMode(): void {
+		this.planModeActive = true;
+		setPlanModeActive(true);
+		this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
+			const reason = planModeBlockReason(toolName, input);
+			return reason ? { block: true, reason } : undefined;
+		});
+		this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		this.setExtensionStatus("plan", "plan");
+	}
+
+	// lunr: plan-mode teardown — mirrors activation in reverse. Called from /plan off,
+	// `/plan <text>` while active, and the plan-approval dialog on approve.
+	private deactivatePlanMode(): void {
+		this.planModeActive = false;
+		setPlanModeActive(false);
+		this.planModeCleanup?.();
+		this.planModeCleanup = undefined;
+		this.session.setSystemPromptAppend(undefined);
+		this.setExtensionStatus("plan", undefined);
 	}
 
 	// lunr: /mode — permission mode selector (manual / yolo / auto). Per-session only.
@@ -6827,6 +7038,45 @@ export class InteractiveMode {
 						resolve("reject");
 					},
 					{ message: req.detail.slice(0, 500) },
+				);
+				return { component: selector, focus: selector };
+			});
+		});
+	}
+
+	// lunr: approval dialog for present_plan (plan mode). The "with feedback"
+	// options collect a one-line note via showExtensionInput that becomes part of
+	// the result text the model sees. Esc/close counts as Decline.
+	private async showPlanApprovalDialog(summary: string): Promise<ApprovalResponse> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					"▶ Approve plan?",
+					["Approve", "Approve with feedback", "Decline", "Decline with feedback"],
+					(option) => {
+						done();
+						if (option === "Approve") resolve({ decision: "approve" });
+						else if (option === "Approve with feedback") {
+							void this.showExtensionInput("Approve plan", "feedback for the agent (optional)").then(
+								(feedback) => {
+									const trimmed = feedback?.trim();
+									resolve(trimmed ? { decision: "approve", feedback: trimmed } : { decision: "approve" });
+								},
+							);
+						} else if (option === "Decline with feedback") {
+							void this.showExtensionInput("Decline plan", "feedback for the agent (optional)").then(
+								(feedback) => {
+									const trimmed = feedback?.trim();
+									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
+								},
+							);
+						} else resolve("reject");
+					},
+					() => {
+						done();
+						resolve("reject");
+					},
+					{ message: summary.slice(0, 500) },
 				);
 				return { component: selector, focus: selector };
 			});

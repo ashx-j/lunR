@@ -407,3 +407,43 @@ describe("TelegramAdapter", () => {
 		expect(backoffDelayMs(99)).toBe(30000);
 	});
 });
+
+describe("registerCommands", () => {
+	it("calls setMyCommands with the exact command payload", async () => {
+		const api = new MockApi();
+		const adapter = new TelegramAdapter(CFG, { callApi: api.callApi });
+		await adapter.registerCommands([
+			{ name: "model", description: "list or switch models" },
+			{ name: "new", description: "start a fresh session for this chat" },
+		]);
+		expect(api.callsFor("setMyCommands")).toEqual([
+			{
+				commands: [
+					{ command: "model", description: "list or switch models" },
+					{ command: "new", description: "start a fresh session for this chat" },
+				],
+			},
+		]);
+	});
+
+	it("filters invalid names, trims and caps descriptions", async () => {
+		const api = new MockApi();
+		const adapter = new TelegramAdapter(CFG, { callApi: api.callApi });
+		await adapter.registerCommands([
+			{ name: "Has-Dash", description: "bad name" },
+			{ name: "toolongcommandnamethatexceeds32chars", description: "bad name" },
+			{ name: "ok", description: "   " },
+			{ name: "good", description: `  ${"x".repeat(300)}  ` },
+		]);
+		expect(api.callsFor("setMyCommands")).toEqual([
+			{ commands: [{ command: "good", description: "x".repeat(256) }] },
+		]);
+	});
+
+	it("skips the API call when nothing valid remains", async () => {
+		const api = new MockApi();
+		const adapter = new TelegramAdapter(CFG, { callApi: api.callApi });
+		await adapter.registerCommands([{ name: "NOPE", description: "bad" }]);
+		expect(api.callsFor("setMyCommands")).toHaveLength(0);
+	});
+});

@@ -257,7 +257,7 @@ describe("usage service cache", () => {
 describe("renderUsageBox", () => {
 	const now = Date.now();
 	const data = {
-		sessionRows: [{ model: "kimi-coding/k3", input: 24_300_000, output: 83_000, total: 24_400_000 }],
+		sessionTotals: { input: 24_300_000, output: 83_000, total: 24_400_000 },
 		context: { tokens: 193_000, contextWindow: 1_000_000, percent: 19 },
 		plan: {
 			provider: "openai-codex",
@@ -275,7 +275,7 @@ describe("renderUsageBox", () => {
 		const plain = lines.join("\n");
 		expect(plain).toContain("╭ Usage ");
 		expect(plain).toContain("Session usage");
-		expect(plain).toContain("kimi-coding/k3");
+		expect(plain).not.toContain("kimi-coding/k3");
 		expect(plain).toContain("input 24M");
 		expect(plain).toContain("output 83k");
 		expect(plain).toContain("Context window");
@@ -305,7 +305,7 @@ describe("renderUsageBox", () => {
 	});
 
 	it("renders a placeholder for an empty session", () => {
-		const lines = renderUsageBox({ sessionRows: [], context: undefined, plan: undefined }, 120);
+		const lines = renderUsageBox({ sessionTotals: undefined, context: undefined, plan: undefined }, 120);
 		expect(lines.join("\n")).toContain("No usage data yet.");
 	});
 });

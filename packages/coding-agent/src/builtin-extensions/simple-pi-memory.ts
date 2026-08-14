@@ -1,7 +1,7 @@
 /**
  * simple-memory — a minimal one-file memory extension for pi.
  *
- * One memory file (~/.pi/simple-memory/memory.md), one memory per line.
+ * One memory file (~/.lunr/simple-memory/memory.md), one memory per line.
  * Loaded into the system prompt every turn (before_agent_start); never truncated.
  * Tools: memory_add, memory_remove, memory_load.
  * Command: /memory-char-cap [n] — view or set the character cap (1..30000, default 5000).
@@ -16,14 +16,19 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { Type } from "@sinclair/typebox";
+// lunr: concrete core-module import (never the package barrel) — resolves the
+// memory dir next to the lunr agent dir instead of the hardcoded ~/.pi below.
+import { getAgentDir } from "../config.js";
 
 // ---------------------------------------------------------------------------
 // Paths and config
 // ---------------------------------------------------------------------------
-const BASE_DIR = join(homedir(), ".pi", "simple-memory");
+// lunr: was join(homedir(), ".pi", "simple-memory") — leaked lunr memory into a
+// real pi install's ~/.pi. Now a sibling of the lunr agent dir (~/.lunr/simple-memory).
+// Old files are copied over by the core startup migration (migrations.ts).
+const BASE_DIR = join(dirname(getAgentDir()), "simple-memory");
 const MEMORY_FILE = join(BASE_DIR, "memory.md");
 const CONFIG_FILE = join(BASE_DIR, "config.json");
 
@@ -33,8 +38,7 @@ const MAX_CHAR_CAP = 30000;
 
 // lunr: inside lunR the cap lives in lunR settings, exposed by core on
 // globalThis under Symbol.for("@lunr/memory-cap") (registered from main.ts).
-// The legacy ~/.pi/simple-memory/config.json below is only a fallback for
-// running under upstream pi, where no bridge exists.
+// The config.json fallback below only matters when no bridge exists.
 interface MemoryCapBridge {
 	getCharCap(): number;
 	setCharCap(cap: number): void;

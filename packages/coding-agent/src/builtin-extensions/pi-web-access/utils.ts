@@ -4,8 +4,9 @@ import { join } from "node:path";
 
 export function getWebSearchConfigDir(): string {
 	if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
-	if (process.env.XDG_CONFIG_HOME) return join(process.env.XDG_CONFIG_HOME, "pi");
-	return join(homedir(), ".pi");
+	// lunr: fallbacks were pi paths ($XDG_CONFIG_HOME/pi, ~/.pi) — point them at lunr.
+	if (process.env.XDG_CONFIG_HOME) return join(process.env.XDG_CONFIG_HOME, "lunr");
+	return join(homedir(), ".lunr", "agent");
 }
 
 export function getWebSearchConfigPath(): string {

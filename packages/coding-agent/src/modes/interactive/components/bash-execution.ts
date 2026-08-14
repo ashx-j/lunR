@@ -24,8 +24,6 @@ export class BashExecutionComponent extends Container {
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
 	private exitCode: number | undefined = undefined;
 	private loader: Loader;
-	private truncationResult?: TruncationResult;
-	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
 
@@ -98,8 +96,10 @@ export class BashExecutionComponent extends Container {
 	setComplete(
 		exitCode: number | undefined,
 		cancelled: boolean,
-		truncationResult?: TruncationResult,
-		fullOutputPath?: string,
+		// lunr: truncation info no longer stored — it is not rendered; kept in
+		// the signature so callers (and BashExecutionMessage flow) stay unchanged.
+		_truncationResult?: TruncationResult,
+		_fullOutputPath?: string,
 	): void {
 		this.exitCode = exitCode;
 		this.status = cancelled
@@ -107,8 +107,6 @@ export class BashExecutionComponent extends Container {
 			: exitCode !== 0 && exitCode !== undefined && exitCode !== null
 				? "error"
 				: "complete";
-		this.truncationResult = truncationResult;
-		this.fullOutputPath = fullOutputPath;
 
 		// Stop loader
 		this.loader.stop();
@@ -192,11 +190,8 @@ export class BashExecutionComponent extends Container {
 				statusParts.push(theme.fg("error", `(exit ${this.exitCode})`));
 			}
 
-			// Add truncation warning (context truncation, not preview truncation)
-			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated;
-			if (wasTruncated && this.fullOutputPath) {
-				statusParts.push(theme.fg("warning", `Output truncated. Full output: ${this.fullOutputPath}`));
-			}
+			// lunr: truncation/full-output notice intentionally not shown — the
+			// model still gets it via the BashExecutionMessage text.
 
 			if (statusParts.length > 0) {
 				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));

@@ -95,4 +95,6 @@ export interface PlatformAdapter {
 	onMessage(handler: (event: MessageEvent) => void): void;
 	onCallback(handler: (event: CallbackEvent) => void | Promise<void>): void;
 	answerCallback(id: string, text?: string): Promise<void>;
+	/** Optional: register the bot's slash-command menu with the platform (Telegram setMyCommands). */
+	registerCommands?(commands: { name: string; description: string }[]): Promise<void>;
 }

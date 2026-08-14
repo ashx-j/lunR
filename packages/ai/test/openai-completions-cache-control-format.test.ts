@@ -158,6 +158,93 @@ describe("openai-completions cacheControlFormat", () => {
 		expectAnthropicCacheMarkers(params);
 	});
 
+	it("marks the last two conversation messages under the 4-breakpoint budget", async () => {
+		const model: Model<"openai-completions"> = {
+			id: "custom-qwen",
+			name: "Custom Qwen",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://example.com/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 128000,
+			maxTokens: 32000,
+			compat: {
+				cacheControlFormat: "anthropic",
+			},
+		};
+
+		const timestamp = Date.now();
+		await streamOpenAICompletions(
+			model,
+			{
+				systemPrompt: "System prompt",
+				messages: [
+					{ role: "user", content: "First", timestamp },
+					{
+						role: "assistant",
+						content: [{ type: "text", text: "Working" }],
+						api: "openai-completions",
+						provider: "openrouter",
+						model: "custom-qwen",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: timestamp + 1,
+					},
+					{ role: "user", content: "Second", timestamp: timestamp + 2 },
+				],
+				tools: [
+					{
+						name: "read",
+						description: "Read a file",
+						parameters: Type.Object({
+							path: Type.String(),
+						}),
+					},
+				],
+			},
+			{ apiKey: "test-key" },
+		).result();
+
+		if (!mockState.lastParams) {
+			throw new Error("Expected payload to be captured");
+		}
+		const params = mockState.lastParams;
+		const conversation = params.messages.filter((message) => message.role === "user" || message.role === "assistant");
+		expect(conversation.length).toBeGreaterThanOrEqual(2);
+
+		const marked = conversation.filter((message) => {
+			if (!Array.isArray(message.content)) return false;
+			return (message.content as TextPart[]).some((part) => part.cache_control?.type === "ephemeral");
+		});
+		expect(marked.length).toBe(2);
+		expect(marked.at(-1)?.role).toBe("user");
+		expect(marked.at(-2)?.role).toBe("assistant");
+
+		const instructionMessage = getInstructionMessage(params);
+		const breakpoints = [
+			Array.isArray(instructionMessage?.content) && (instructionMessage?.content as TextPart[])[0]?.cache_control
+				? 1
+				: 0,
+			params.tools?.[0]?.cache_control ? 1 : 0,
+			marked.length,
+		].reduce((sum, n) => sum + n, 0);
+		expect(breakpoints).toBeLessThanOrEqual(4);
+	});
+
 	it("omits Anthropic-style cache markers when cacheRetention is none", async () => {
 		const model: Model<"openai-completions"> = {
 			id: "custom-qwen",

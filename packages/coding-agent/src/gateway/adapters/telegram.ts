@@ -636,6 +636,15 @@ export class TelegramAdapter implements PlatformAdapter {
 		await this.callApi("answerCallbackQuery", body).catch(() => {});
 	}
 
+	/** lunr: register the bot's slash-command menu (Telegram client autocomplete). Best-effort — caller catches. */
+	async registerCommands(commands: { name: string; description: string }[]): Promise<void> {
+		const valid = commands
+			.filter((c) => /^[a-z0-9_]{1,32}$/.test(c.name) && c.description.trim().length > 0)
+			.map((c) => ({ command: c.name, description: c.description.trim().slice(0, 256) }));
+		if (valid.length === 0) return;
+		await this.callApi("setMyCommands", { commands: valid });
+	}
+
 	private async callSend(body: Record<string, unknown>): Promise<SendResult> {
 		try {
 			const result = (await this.callApi("sendMessage", body)) as { message_id: number };

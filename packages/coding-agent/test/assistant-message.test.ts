@@ -180,4 +180,42 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("✻ Thought");
 		expect(rendered).not.toContain("More detail follows here.");
 	});
+
+	// lunr: rolling window — a still-streaming thinking run (timings attached,
+	// no end, no following block) shows only its last THINKING_TAIL_LINES lines.
+	function createStreamingThinkingComponent(): AssistantMessageComponent {
+		const source = Array.from({ length: 10 }, (_, i) => `streamed thought ${String(i + 1).padStart(2, "0")}`).join(
+			"\n",
+		);
+		// Mirror interactive-mode: construct empty, attach live timings, then updateContent.
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		component.setThinkingTimings([{ start: Date.now() }]);
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: source }]));
+		return component;
+	}
+
+	test("a streaming thinking run renders at most THINKING_TAIL_LINES lines", () => {
+		initTheme("moon");
+
+		const component = createStreamingThinkingComponent();
+		const lines = component.render(80).map((line) => stripAnsi(line));
+
+		expect(lines.some((line) => line.includes("streamed thought 01"))).toBe(false);
+		expect(lines.some((line) => line.includes("streamed thought 06"))).toBe(false);
+		for (const n of ["07", "08", "09", "10"]) {
+			expect(lines.some((line) => line.includes(`streamed thought ${n}`))).toBe(true);
+		}
+	});
+
+	test("setExpanded(true) renders a streaming thinking run in full", () => {
+		initTheme("moon");
+
+		const component = createStreamingThinkingComponent();
+		component.setExpanded(true);
+		const lines = component.render(80).map((line) => stripAnsi(line));
+
+		for (const n of ["01", "05", "10"]) {
+			expect(lines.some((line) => line.includes(`streamed thought ${n}`))).toBe(true);
+		}
+	});
 });

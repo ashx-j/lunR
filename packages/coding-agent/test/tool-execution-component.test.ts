@@ -184,10 +184,11 @@ describe("ToolExecutionComponent parity", () => {
 		component.updateResult({ ...result, isError: false }, false);
 
 		const rendered = stripAnsi(component.render(200).join("\n"));
-		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
+		// lunr: the truncation/full-output notice is not rendered in the TUI at all;
+		// the model-facing result text still carries it (covered in tools.test.ts).
+		expect(rendered).not.toContain("Full output:");
+		expect(rendered).not.toContain("Truncated:");
+		expect(rendered).toContain("line-4000");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
 

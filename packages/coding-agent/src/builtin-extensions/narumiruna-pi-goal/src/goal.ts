@@ -86,7 +86,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	const isPiOwnedCompactionRetry = runtime.isPiOwnedCompactionRetry.bind(runtime);
 	const requestContinuation = runtime.requestContinuation.bind(runtime);
 	const dispatchContinuationIfSettled = runtime.dispatchContinuationIfSettled.bind(runtime);
-	const keepBudgetWrapUpMessage = runtime.keepBudgetWrapUpMessage.bind(runtime);
 	const isGoalToolName = runtime.isGoalToolName.bind(runtime);
 	const queueBudgetWrapUp = runtime.queueBudgetWrapUp.bind(runtime);
 	const clearGoalRecoveryForGoal = runtime.clearGoalRecoveryForGoal.bind(runtime);
@@ -652,10 +651,12 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		clearStaleGoalToolCallBlock();
 	});
 
-	pi.on("context", (event) => {
-		const messages = event.messages.filter((message) => keepBudgetWrapUpMessage(message));
-		if (messages.length !== event.messages.length) return { messages };
-	});
+	// lunr: the previous context-event filter dropped superseded budget
+	// wrap-up messages from request context. That breaks Anthropic prefix
+	// continuity (full cache miss from the cut). The wrap-up custom message
+	// is small; keeping history unfiltered is cheaper than a cache rewrite.
+	// keepBudgetWrapUpMessage remains on the runtime if a future token-saving
+	// path can prove the wrap-up was never sent.
 
 	pi.on("tool_call", (event, ctx) => {
 		if (runtime.queueFrozen) {
@@ -664,6 +665,14 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				block: true,
 				reason:
 					"The experimental goal queue is frozen. Re-enable experimental.goals and run /reload, or use /goal clear.",
+			};
+		}
+		// lunr: mask locked goal tools instead of removing them from the active
+		// list (setActiveTools churn busts the tools+system cache prefix).
+		if (isGoalToolName(event.toolName) && runtime.areGoalToolsLocked()) {
+			return {
+				block: true,
+				reason: "Goal tools are locked until a /goal is activated.",
 			};
 		}
 		if (

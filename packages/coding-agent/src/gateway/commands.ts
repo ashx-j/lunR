@@ -691,6 +691,11 @@ export const CHAT_COMMANDS: ChatCommand[] = [
 	thinkingCommand,
 ];
 
+/** Platform menu specs (e.g. Telegram setMyCommands): canonical names only, aliases skipped. */
+export function botCommandSpecs(): { name: string; description: string }[] {
+	return CHAT_COMMANDS.map((c) => ({ name: c.name, description: c.description }));
+}
+
 export function formatHelpText(): string {
 	const lines = ["lunR gateway commands:"];
 	for (const cmd of CHAT_COMMANDS) {

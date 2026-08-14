@@ -578,10 +578,14 @@ function renderStatsLine(
 	const sep = color(theme, "accent2", " | "); // lunr: theme-polish — separator uses subtle accent2 blue (was bright-black plain fallback)
 	const parts: string[] = [];
 
+	// lunr: mode zone — permission mode + agent-mode statuses (plan/goal/swarm/research)
+	// render as ONE segment (dim middot-separated), not scattered across piped sections.
+	const modeZone: string[] = [];
+
 	// lunr: permission mode safety indicator — always shown (not toggle-gated).
 	const mode = lunrPermissionMode();
-	if (mode === "yolo" || mode === "auto") parts.push(color(theme, "warning", mode));
-	else if (mode === "manual") parts.push(color(theme, "white", "manual")); // lunr: theme-polish — manual mode reads white (was dim)
+	if (mode === "yolo" || mode === "auto") modeZone.push(color(theme, "warning", mode));
+	else if (mode === "manual") modeZone.push(color(theme, "white", "manual")); // lunr: theme-polish — manual mode reads white (was dim)
 
 	// lunr: footer element toggles from the customize bridge (read at render time).
 	const footerToggles = lunrFooterToggles();
@@ -595,15 +599,24 @@ function renderStatsLine(
 		// footerStatuses gates plan/goal/swarm/research/tps, footerMcp gates
 		// mcp/mcp-auth, footerLsp gates lsp. Publishers keep calling
 		// ctx.ui.setStatus harmlessly when their segment is hidden.
-		const keys: string[] = [];
-		if (footerToggles.statuses) keys.push("plan", "goal", "swarm", "research", "tps");
-		if (footerToggles.mcp) keys.push("mcp", "mcp-auth");
-		if (footerToggles.lsp) keys.push("lsp");
-		for (const key of keys) {
+		// lunr: plan/goal/swarm/research join the mode zone; tps/mcp/lsp stay piped.
+		const modeKeys: string[] = footerToggles.statuses ? ["plan", "goal", "swarm", "research"] : [];
+		for (const key of modeKeys) {
+			const v = statuses.get(key);
+			if (v) modeZone.push(color(theme, "white", stripAnsi(v)));
+		}
+		const pipedKeys: string[] = [];
+		if (footerToggles.statuses) pipedKeys.push("tps");
+		if (footerToggles.mcp) pipedKeys.push("mcp", "mcp-auth");
+		if (footerToggles.lsp) pipedKeys.push("lsp");
+		for (const key of pipedKeys) {
 			const v = statuses.get(key);
 			// lunr: unify footer status colors (white, was dim) so the whole stats line reads as one tone.
 			if (v) parts.push(color(theme, "white", stripAnsi(v))); // lunr: theme-polish — status segments white (was dim)
 		}
+	}
+	if (modeZone.length > 0) {
+		parts.unshift(modeZone.join(color(theme, "dim", " · ")));
 	}
 
 	// 2) Context usage: `pct/window` (lunr: gated on footerContext).

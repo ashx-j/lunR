@@ -25,6 +25,8 @@ import piMcpAdapter from "./pi-mcp-adapter/index.ts";
 // lunR-native extensions
 import lunrLocalProviders from "./lunr-local-providers/index.ts";
 import lunrCron from "./lunr-cron.ts";
+import lunrTodos from "./lunr-todos.ts";
+import lunrPlanTools from "./lunr-plan-tools.ts";
 import lunrBehavior from "./lunr-behavior.ts";
 import lunrSkillCreator from "./lunr-skill-creator/index.ts";
 
@@ -59,6 +61,8 @@ export const builtinExtensions: InlineExtension[] = [
 	// lunR-native
 	ext("lunr-local-providers", lunrLocalProviders),
 	ext("lunr-cron", lunrCron),
+	ext("lunr-todos", lunrTodos),
+	ext("lunr-plan-tools", lunrPlanTools),
 	ext("lunr-behavior", lunrBehavior),
 	ext("lunr-skill-creator", lunrSkillCreator),
 ];

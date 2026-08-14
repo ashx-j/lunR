@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
 import type { BridgeSession, BridgeSessionStatus } from "../src/gateway/agent-bridge.ts";
 import {
+	botCommandSpecs,
 	CHAT_COMMANDS,
 	type ChatCommandContext,
 	formatHelpText,
@@ -258,6 +259,16 @@ describe("command registry", () => {
 		expect(text).toContain("/swarm");
 		expect(text).toContain("/thinking");
 		expect(text).toContain("/undo");
+	});
+
+	it("botCommandSpecs covers every command, aliases skipped, Telegram-safe names", () => {
+		const specs = botCommandSpecs();
+		expect(specs.map((s) => s.name)).toEqual(CHAT_COMMANDS.map((c) => c.name));
+		for (const spec of specs) {
+			expect(spec.name).toMatch(/^[a-z0-9_]{1,32}$/);
+			expect(spec.description.trim().length).toBeGreaterThan(0);
+			expect(spec.description.length).toBeLessThanOrEqual(256);
+		}
 	});
 });
 

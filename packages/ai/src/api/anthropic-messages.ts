@@ -959,7 +959,12 @@ function buildParams(
 			{
 				type: "text",
 				text: "You are Claude Code, Anthropic's official CLI for Claude.",
-				...(cacheControl ? { cache_control: cacheControl } : {}),
+				// lunr: no breakpoint on the static preamble — the cache is a
+				// cumulative prefix, so the real system prompt's breakpoint covers
+				// it, and the preamble is below the minimum cacheable size anyway.
+				// This keeps the OAuth path within Anthropic's 4-breakpoint budget
+				// (1 system + 1 tool + 2 messages) now that the conversation tail
+				// is dual-marked.
 			},
 		];
 		if (context.systemPrompt) {
@@ -1228,24 +1233,53 @@ function convertMessages(
 
 	// Add cache_control to the last user message to cache conversation history
 	if (cacheControl && params.length > 0) {
-		const lastMessage = params[params.length - 1];
-		if (lastMessage.role === "user") {
-			if (Array.isArray(lastMessage.content)) {
-				const lastBlock = lastMessage.content[lastMessage.content.length - 1];
-				if (
-					lastBlock &&
-					(lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")
-				) {
-					(lastBlock as any).cache_control = cacheControl;
+		// lunr: also mark the last assistant message (pi#1736, opencode's
+		// slice(-2) pattern) so its tool_use blocks sit inside the cache window.
+		// Budget: 1 system + 1 tool + 2 messages = Anthropic's max of 4.
+		let userMarked = false;
+		let assistantMarked = false;
+		for (let i = params.length - 1; i >= 0 && !(userMarked && assistantMarked); i--) {
+			const message = params[i];
+			if (message.role === "user" && !userMarked) {
+				if (Array.isArray(message.content)) {
+					const lastBlock = message.content[message.content.length - 1];
+					if (
+						lastBlock &&
+						(lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")
+					) {
+						(lastBlock as any).cache_control = cacheControl;
+					}
+				} else if (typeof message.content === "string") {
+					message.content = [
+						{
+							type: "text",
+							text: message.content,
+							cache_control: cacheControl,
+						},
+					] as any;
 				}
-			} else if (typeof lastMessage.content === "string") {
-				lastMessage.content = [
-					{
-						type: "text",
-						text: lastMessage.content,
-						cache_control: cacheControl,
-					},
-				] as any;
+				userMarked = true;
+			} else if (message.role === "assistant" && !assistantMarked) {
+				if (Array.isArray(message.content)) {
+					// lunr: walk back to the last cacheable block; thinking blocks are
+					// skipped when placing breakpoints (opencode does the same).
+					for (let j = message.content.length - 1; j >= 0; j--) {
+						const block = message.content[j] as any;
+						if (block.type === "tool_use" || block.type === "text") {
+							block.cache_control = cacheControl;
+							break;
+						}
+					}
+				} else if (typeof message.content === "string") {
+					message.content = [
+						{
+							type: "text",
+							text: message.content,
+							cache_control: cacheControl,
+						},
+					] as any;
+				}
+				assistantMarked = true;
 			}
 		}
 	}

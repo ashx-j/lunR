@@ -1327,7 +1327,11 @@ export class TUI extends Container {
 		const debugRedraw = process.env.PI_DEBUG_REDRAW === "1";
 		const logRedraw = (reason: string): void => {
 			if (!debugRedraw) return;
-			const logPath = path.join(os.homedir(), ".pi", "agent", "pi-debug.log");
+			// lunr: tui cannot import coding-agent (layering) — env-first with .lunr fallback (was ~/.pi/agent)
+			const logPath = path.join(
+				process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".lunr", "agent"),
+				"pi-debug.log",
+			);
 			const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.previousLines.length}, new=${newLines.length}, height=${height})\n`;
 			fs.appendFileSync(logPath, msg);
 		};
@@ -1519,7 +1523,11 @@ export class TUI extends Container {
 			buffer += "\x1b[2K"; // Clear current line
 			if (!isImage && visibleWidth(line) > width) {
 				// Log all lines to crash file for debugging
-				const crashLogPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
+				// lunr: tui cannot import coding-agent (layering) — env-first with .lunr fallback (was ~/.pi/agent)
+				const crashLogPath = path.join(
+					process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".lunr", "agent"),
+					"pi-crash.log",
+				);
 				const crashData = [
 					`Crash at ${new Date().toISOString()}`,
 					`Terminal width: ${width}`,

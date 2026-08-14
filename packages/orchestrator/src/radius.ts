@@ -133,7 +133,7 @@ export function getRadiusAccessToken(): string {
 		return apiKey;
 	}
 
-	throw new Error("Radius credentials are required in ~/.pi/agent/auth.json or RADIUS_API_KEY");
+	throw new Error("Radius credentials are required in ~/.lunr/agent/auth.json or RADIUS_API_KEY");
 }
 
 export function isRadiusEnabled(): boolean {

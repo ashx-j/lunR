@@ -125,7 +125,7 @@ export function resolvePiCliScript(
 			return candidate;
 		}
 	} catch {
-		// Verified CLI resolution is optional; falling back to `pi` lets PATH handle execution.
+		// Verified CLI resolution is optional; falling back to `lunr` lets PATH handle execution.
 		return undefined;
 	}
 
@@ -150,5 +150,6 @@ export function getPiSpawnCommand(
 		};
 	}
 
-	return { command: "pi", args };
+	// lunr: last-resort PATH lookup spawns the lunr binary, not a real pi install.
+	return { command: "lunr", args };
 }
