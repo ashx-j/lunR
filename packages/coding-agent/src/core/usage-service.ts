@@ -1,7 +1,7 @@
 /**
  * Plan/subscription usage service. Per-provider adapters query provider quota
- * endpoints (5-minute cache each) so /usage and the footer limit bar can show
- * subscription windows alongside pay-per-token cost.
+ * endpoints (5-minute cache each) so /usage can show subscription windows
+ * alongside session/context totals.
  *
  * Deliberately absent adapters:
  * - anthropic: Anthropic policy prohibits subscription usage tracking in

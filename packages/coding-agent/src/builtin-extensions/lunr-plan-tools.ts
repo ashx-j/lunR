@@ -22,8 +22,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { requestPlanApproval } from "../core/permissions.ts";
-import { isPlanModeActive } from "../core/plan-mode.ts";
+import { isPlanModeActive, requestPlanApproval } from "../core/permissions.ts";
 
 export const PRESENT_PLAN_WRONG_MODE_TEXT = "present_plan is only available in plan mode.";
 

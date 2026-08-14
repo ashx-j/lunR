@@ -111,7 +111,8 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.model.select` | `ctrl+l` | Open model selector |
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` | Cycle to previous model |
-| `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
+| `app.mode.cycle` | `shift+tab` | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
+| `app.thinking.cycle` | *(unbound)* | Cycle thinking level (`/thinking` and `/settings` still set it) |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
 ### Display and Message Queue
@@ -119,6 +120,8 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
+| `app.chat.pageUp` | `shift+pageUp`, `ctrl+up` | Scroll chat up |
+| `app.chat.pageDown` | `shift+pageDown`, `ctrl+down` | Scroll chat down |
 | `app.message.copy` | `ctrl+x` | Copy the last assistant message, or the selected message in `/tree` |
 | `app.message.followUp` | `alt+enter` | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` | Restore queued messages to editor |

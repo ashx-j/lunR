@@ -1,10 +1,11 @@
 /**
- * lunr: native plan mode (Phase 12) — read-only tool gating + system-prompt addendum.
+ * lunr: plan permission mode — read-only tool-gating heuristics + system-prompt addendum.
  *
- * While plan mode is active the InteractiveMode registers a core tool-call gate on the
- * AgentSession (see `addToolCallGate`) that blocks the `edit`/`write` tools and mutating
- * `bash` commands; read tools (read/grep/find/ls/web) stay open. The addendum below is
- * appended to the system prompt while active.
+ * Plan is a first-class permission mode (`PermissionMode = "plan"`). `gateToolCall`
+ * in permissions.ts applies `planModeBlockReason` when the session is in plan:
+ * `edit`/`write` and mutating `bash` are hard-blocked; read tools stay open.
+ * InteractiveMode installs `PLAN_MODE_ADDENDUM` via the shared system-prompt
+ * append slot (same slot auto mode uses).
  *
  * Bash heuristic (conservative, blocklist-based — NOT a security boundary):
  * - any `>`/`>>` redirect outside quotes blocks the whole command;
@@ -23,20 +24,6 @@
 /** Appended to the system prompt while plan mode is active. */
 export const PLAN_MODE_ADDENDUM =
 	"You are in plan mode. Investigate read-only, then present your plan by calling the present_plan tool with a concise summary — the user approves or declines it in a dialog. Do not make changes until the plan is approved. The user can also exit plan mode manually with /plan off.";
-
-// lunr: module-level plan-mode flag so baked-in extensions (present_plan) can
-// check state without importing the TUI. interactive-mode keeps it in sync at
-// every activation/teardown site.
-let planModeActiveFlag = false;
-
-/** True while plan mode is active in the interactive session. */
-export function isPlanModeActive(): boolean {
-	return planModeActiveFlag;
-}
-
-export function setPlanModeActive(active: boolean): void {
-	planModeActiveFlag = active;
-}
 
 /** Error returned to the model when a tool call is blocked by plan mode. */
 export const PLAN_MODE_BLOCK_MESSAGE = "Plan mode is active — propose a plan; no file changes.";

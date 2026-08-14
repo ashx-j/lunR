@@ -92,6 +92,9 @@ describe("renderUsageBox", () => {
 		expect(out).toContain("Tool results");
 		expect(out).not.toContain("Thinking"); // zero-token categories are hidden
 		expect(out).toContain("system prompt/tools not stored per session");
+		// Estimated category rows are counts only — no share-of-pie bars.
+		expect(out).not.toContain("█");
+		expect(out).not.toContain("░");
 	});
 });
 

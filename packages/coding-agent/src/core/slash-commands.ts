@@ -33,10 +33,14 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "context", description: "Show estimated context window breakdown" },
 	{
 		name: "plan",
-		description: "Toggle read-only plan mode, or /plan <task> to plan a task",
+		description: "Switch to plan permission mode, or /plan <task> to plan a task",
 		argumentHint: "[on|off|status|<task>]",
 	},
-	{ name: "mode", description: "Set permission mode: manual, yolo, or auto", argumentHint: "[manual|yolo|auto]" },
+	{
+		name: "mode",
+		description: "Set permission mode: manual, yolo, plan, or auto",
+		argumentHint: "[manual|yolo|plan|auto]",
+	},
 	{ name: "manual", description: "Activate manual permission mode (approve every action)" },
 	{ name: "yolo", description: "Activate YOLO permission mode (auto-approve tools)" },
 	{ name: "auto", description: "Activate auto permission mode (fully autonomous, no questions)" },

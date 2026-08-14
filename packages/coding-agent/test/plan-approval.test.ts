@@ -3,6 +3,7 @@ import { PRESENT_PLAN_WRONG_MODE_TEXT, runPresentPlan } from "../src/builtin-ext
 import {
 	type ApprovalRequest,
 	type ApprovalResponse,
+	isPlanModeActive,
 	NO_HANDLER_REASON,
 	PLAN_APPROVED_TEXT,
 	PLAN_DECLINED_TEXT,
@@ -11,8 +12,8 @@ import {
 	registerApprovalHandler,
 	requestPlanApproval,
 	resetAllPermissionContexts,
+	setPermissionMode,
 } from "../src/core/permissions.ts";
-import { isPlanModeActive, setPlanModeActive } from "../src/core/plan-mode.ts";
 
 describe("planApprovalResultText", () => {
 	it("maps bare approve decisions to the approved text", () => {
@@ -99,7 +100,7 @@ describe("present_plan tool (runPresentPlan)", () => {
 	beforeEach(() => {
 		resetAllPermissionContexts();
 		registerApprovalHandler(undefined);
-		setPlanModeActive(false);
+		setPermissionMode("manual");
 	});
 
 	it("errors outside plan mode", async () => {
@@ -108,12 +109,12 @@ describe("present_plan tool (runPresentPlan)", () => {
 	});
 
 	it("passes through in plan mode without a handler", async () => {
-		setPlanModeActive(true);
+		setPermissionMode("plan");
 		expect(await runPresentPlan("my plan")).toBe(PLAN_PASS_THROUGH_TEXT);
 	});
 
 	it("returns the approval result text in plan mode with a handler", async () => {
-		setPlanModeActive(true);
+		setPermissionMode("plan");
 		registerApprovalHandler(async () => ({ decision: "approve" }));
 		expect(await runPresentPlan("my plan")).toBe(PLAN_APPROVED_TEXT);
 	});

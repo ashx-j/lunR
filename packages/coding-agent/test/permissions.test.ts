@@ -7,12 +7,16 @@ import {
 	deletePermissionContext,
 	gateToolCall,
 	getPermissionMode,
+	isPlanModeActive,
 	NO_SWARM_HANDLER_REASON,
+	nextPermissionMode,
 	registerApprovalHandler,
 	resetAllPermissionContexts,
 	resetPermissions,
+	restorePermissionModeAfterPlan,
 	setPermissionMode,
 } from "../src/core/permissions.ts";
+import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
 import { effectiveSwarmCount, isExplicitSwarmTurn, SWARM_APPROVAL_THRESHOLD } from "../src/core/swarm.ts";
 
 describe("permissions", () => {
@@ -287,5 +291,81 @@ describe("agent-swarm gate", () => {
 			block: true,
 			reason: "Agent swarm rejected by user. too many agents, use one",
 		});
+	});
+});
+
+describe("plan permission mode", () => {
+	beforeEach(() => {
+		resetAllPermissionContexts();
+		resetPermissions("manual");
+		registerApprovalHandler(undefined);
+		clearSessionApprovals();
+	});
+
+	it("isPlanModeActive follows getPermissionMode", () => {
+		expect(isPlanModeActive()).toBe(false);
+		setPermissionMode("plan");
+		expect(isPlanModeActive()).toBe(true);
+		setPermissionMode("yolo");
+		expect(isPlanModeActive()).toBe(false);
+	});
+
+	it("hard-blocks edit/write without prompting", async () => {
+		setPermissionMode("plan");
+		let calls = 0;
+		registerApprovalHandler(async () => {
+			calls++;
+			return "once";
+		});
+		expect(await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd")).toEqual({
+			block: true,
+			reason: PLAN_MODE_BLOCK_MESSAGE,
+		});
+		expect(await gateToolCall("write", { path: "/cwd/b.ts" }, "/cwd")).toEqual({
+			block: true,
+			reason: PLAN_MODE_BLOCK_MESSAGE,
+		});
+		expect(calls).toBe(0);
+	});
+
+	it("hard-blocks mutating bash and allows read-only bash", async () => {
+		setPermissionMode("plan");
+		const blocked = await gateToolCall("bash", { command: "rm -rf dist" }, "/cwd");
+		expect(blocked?.block).toBe(true);
+		expect(blocked?.reason).toContain(PLAN_MODE_BLOCK_MESSAGE);
+		expect(blocked?.reason).toContain("rm -rf dist");
+		expect(await gateToolCall("bash", { command: "ls -la" }, "/cwd")).toBeUndefined();
+	});
+
+	it("allows read tools", async () => {
+		setPermissionMode("plan");
+		expect(await gateToolCall("read", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("ls", {}, "/cwd")).toBeUndefined();
+	});
+});
+
+describe("nextPermissionMode", () => {
+	it("walks manual → yolo → plan → auto → manual", () => {
+		expect(nextPermissionMode("manual")).toBe("yolo");
+		expect(nextPermissionMode("yolo")).toBe("plan");
+		expect(nextPermissionMode("plan")).toBe("auto");
+		expect(nextPermissionMode("auto")).toBe("manual");
+	});
+});
+
+describe("restorePermissionModeAfterPlan", () => {
+	it("restores the previous non-plan mode", () => {
+		expect(restorePermissionModeAfterPlan("yolo", "manual")).toBe("yolo");
+		expect(restorePermissionModeAfterPlan("auto", "manual")).toBe("auto");
+	});
+
+	it("falls back to the configured default when there is no previous", () => {
+		expect(restorePermissionModeAfterPlan(undefined, "manual")).toBe("manual");
+		expect(restorePermissionModeAfterPlan(undefined, "yolo")).toBe("yolo");
+	});
+
+	it("falls back to yolo when previous is missing and the default is plan", () => {
+		expect(restorePermissionModeAfterPlan(undefined, "plan")).toBe("yolo");
+		expect(restorePermissionModeAfterPlan("plan", "plan")).toBe("yolo");
 	});
 });

@@ -41,6 +41,13 @@ export interface TokenUsageViewData {
 
 const BAR_CELLS = 20;
 
+/** Traffic-light token for a 0–100 usage percent. Matches footer thresholds. */
+export function usageLevelColor(percent: number): "success" | "warning" | "error" {
+	if (percent > 90) return "error";
+	if (percent > 70) return "warning";
+	return "success";
+}
+
 /** `cached X (Y%)` where Y = cacheRead / (input + cacheRead + cacheWrite). */
 function formatCachedSuffix(input: number, cacheRead: number, cacheWrite: number): string {
 	if (cacheRead <= 0) return "";
@@ -50,11 +57,14 @@ function formatCachedSuffix(input: number, cacheRead: number, cacheWrite: number
 	return `  cached ${formatTokens(cacheRead)} (${percent}%)`;
 }
 
-/** 20-cell monochrome bar: `████░░░░░░░░░░░░░░░░`. */
+/** 20-cell bar: filled cells green / yellow / red, empty cells dim. */
 export function usageBar(percent: number): string {
 	const clamped = Math.max(0, Math.min(100, percent));
 	const filled = Math.round((clamped / 100) * BAR_CELLS);
-	return "█".repeat(filled) + "░".repeat(BAR_CELLS - filled);
+	const empty = BAR_CELLS - filled;
+	const fill = filled > 0 ? theme.fg(usageLevelColor(clamped), "█".repeat(filled)) : "";
+	const rest = empty > 0 ? theme.fg("dim", "░".repeat(empty)) : "";
+	return fill + rest;
 }
 
 /** Compact countdown: `6d 21h`, `2h 51m`, `45m`, `now`. */
@@ -107,7 +117,7 @@ export function renderThemedBox(headerText: string, content: string[], maxWidth:
 }
 
 /**
- * Render the /usage bordered box (monochrome, moon theme conventions).
+ * Render the /usage bordered box (moon theme conventions).
  * Simple totals only — per-model rows live in /token-usage.
  * `maxWidth` is the available terminal width; content truncates to fit.
  */
@@ -155,8 +165,7 @@ export function renderUsageBox(data: UsageViewData, maxWidth: number): string[] 
 			content.push(theme.fg("dim", "Last 30 days by category (estimated, chars/4)"));
 			const labelWidth = Math.max(...rows.map((row) => row.label.length));
 			for (const row of rows) {
-				const percent = categories.total > 0 ? (row.tokens / categories.total) * 100 : 0;
-				content.push(`  ${row.label.padEnd(labelWidth)}  ${usageBar(percent)}  ${formatTokens(row.tokens)}`);
+				content.push(`  ${row.label.padEnd(labelWidth)}  ${formatTokens(row.tokens)}`);
 			}
 			if (!data.history.includesSystemPrompt) {
 				content.push(theme.fg("dim", "(message categories only — system prompt/tools not stored per session)"));

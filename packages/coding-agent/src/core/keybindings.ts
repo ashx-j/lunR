@@ -16,10 +16,13 @@ export interface AppKeybindings {
 	"app.exit": true;
 	"app.suspend": true;
 	"app.thinking.cycle": true;
+	"app.mode.cycle": true;
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
 	"app.tools.expand": true;
+	"app.chat.pageUp": true;
+	"app.chat.pageDown": true;
 	"app.thinking.toggle": true;
 	"app.session.toggleNamedFilter": true;
 	"app.editor.external": true;
@@ -71,8 +74,12 @@ export const KEYBINDINGS = {
 		description: "Suspend to background",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: "shift+tab",
+		defaultKeys: [],
 		description: "Cycle thinking level",
+	},
+	"app.mode.cycle": {
+		defaultKeys: "shift+tab",
+		description: "Cycle permission mode",
 	},
 	"app.model.cycleForward": {
 		defaultKeys: "ctrl+p",
@@ -84,6 +91,14 @@ export const KEYBINDINGS = {
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
+	"app.chat.pageUp": {
+		defaultKeys: ["shift+pageUp", "ctrl+up"],
+		description: "Scroll chat up",
+	},
+	"app.chat.pageDown": {
+		defaultKeys: ["shift+pageDown", "ctrl+down"],
+		description: "Scroll chat down",
+	},
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",
@@ -243,6 +258,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	exit: "app.exit",
 	suspend: "app.suspend",
 	cycleThinkingLevel: "app.thinking.cycle",
+	cyclePermissionMode: "app.mode.cycle",
 	cycleModelForward: "app.model.cycleForward",
 	cycleModelBackward: "app.model.cycleBackward",
 	selectModel: "app.model.select",

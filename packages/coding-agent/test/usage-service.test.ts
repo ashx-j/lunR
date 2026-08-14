@@ -2,8 +2,13 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import { clearPlanUsageCache, getPlanUsage } from "../src/core/usage-service.ts";
-import { formatResetCountdown, renderUsageBox, usageBar } from "../src/modes/interactive/components/usage-view.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import {
+	formatResetCountdown,
+	renderUsageBox,
+	usageBar,
+	usageLevelColor,
+} from "../src/modes/interactive/components/usage-view.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 initTheme("moon", false);
 
@@ -45,10 +50,22 @@ const ZAI_PAYLOAD = {
 
 const XAI_PAYLOAD = {
 	config: {
+		creditUsagePercent: 1,
+		currentPeriod: { start: "2026-07-29T00:00:00Z", end: "2026-08-05T00:00:00Z" },
+		subscriptionTier: "supergrok",
+		monthlyLimit: { val: 15000 },
+		includedUsed: { val: 2398 },
+		onDemandCap: { val: 0 },
+		onDemandUsed: { val: 0 },
+		billingPeriodEnd: "2026-08-01T00:00:00Z",
+	},
+};
+
+const XAI_MONTHLY_ONLY_PAYLOAD = {
+	config: {
 		monthlyLimit: { val: 1000 },
 		includedUsed: { val: 250 },
-		onDemandCap: { val: 100 },
-		onDemandUsed: { val: 40 },
+		onDemandCap: { val: 0 },
 		billingPeriodEnd: "2026-08-01T00:00:00Z",
 	},
 };
@@ -57,6 +74,7 @@ interface FakeRuntimeOptions {
 	apiKey?: string;
 	headers?: Record<string, string>;
 	models?: Array<{ provider: string; id: string }>;
+	oauth?: boolean;
 }
 
 function fakeRuntime(options: FakeRuntimeOptions = {}): ModelRuntime {
@@ -65,8 +83,12 @@ function fakeRuntime(options: FakeRuntimeOptions = {}): ModelRuntime {
 		getAuth: async () => (hasAuth ? { auth: { apiKey: options.apiKey, headers: options.headers } } : undefined),
 		getModels: () => options.models ?? [],
 		getAvailableSnapshot: () => [],
-		isUsingOAuth: () => false,
+		isUsingOAuth: () => options.oauth === true,
 	} as unknown as ModelRuntime;
+}
+
+function xaiRuntime(): ModelRuntime {
+	return fakeRuntime({ apiKey: "xai-oauth-token", oauth: true });
 }
 
 function codexRuntime(): ModelRuntime {
@@ -143,16 +165,68 @@ describe("usage adapters", () => {
 		]);
 	});
 
-	it("normalizes the xai billing payload (protobuf-json { val } wrappers)", async () => {
+	it("normalizes the xai weekly SuperGrok pool (creditUsagePercent + currentPeriod)", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse(XAI_PAYLOAD));
 		vi.stubGlobal("fetch", fetchMock);
-		const usage = await getPlanUsage("xai", fakeRuntime({ apiKey: "xai-oauth-token" }));
+		const usage = await getPlanUsage("xai", xaiRuntime());
+		expect(usage?.provider).toBe("xai");
+		expect(usage?.planLabel).toBe("supergrok");
 		expect(usage?.windows).toEqual([
-			{ label: "Monthly", usedPercent: 25, resetsAt: Date.parse("2026-08-01T00:00:00Z") },
-			{ label: "On-demand", usedPercent: 40, resetsAt: Date.parse("2026-08-01T00:00:00Z") },
+			{ label: "Weekly", usedPercent: 1, resetsAt: Date.parse("2026-08-05T00:00:00Z") },
 		]);
-		const [url] = fetchMock.mock.calls[0] as unknown as [string];
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 		expect(url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
+		expect((init.headers as Record<string, string>)["x-xai-token-auth"]).toBe("xai-grok-cli");
+		expect((init.headers as Record<string, string>).Authorization).toBe("Bearer xai-oauth-token");
+	});
+
+	it("treats an omitted creditUsagePercent with a live currentPeriod as 0% used", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({
+					config: { currentPeriod: { end: "2026-08-05T00:00:00Z" }, subscriptionTier: "supergrok" },
+				}),
+			),
+		);
+		const usage = await getPlanUsage("xai", xaiRuntime());
+		expect(usage?.windows).toEqual([
+			{ label: "Weekly", usedPercent: 0, resetsAt: Date.parse("2026-08-05T00:00:00Z") },
+		]);
+	});
+
+	it("adds an Extra window only when onDemandCap is positive", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({
+					config: {
+						...XAI_PAYLOAD.config,
+						onDemandCap: { val: 100 },
+						onDemandUsed: { val: 40 },
+					},
+				}),
+			),
+		);
+		const usage = await getPlanUsage("xai", xaiRuntime());
+		expect(usage?.windows).toEqual([
+			{ label: "Weekly", usedPercent: 1, resetsAt: Date.parse("2026-08-05T00:00:00Z") },
+			{ label: "Extra", usedPercent: 40, resetsAt: Date.parse("2026-08-05T00:00:00Z") },
+		]);
+	});
+
+	it("does not treat the monthly Extra Usage envelope as the SuperGrok plan", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse(XAI_MONTHLY_ONLY_PAYLOAD));
+		vi.stubGlobal("fetch", fetchMock);
+		expect(await getPlanUsage("xai", xaiRuntime())).toBeUndefined();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not fetch xai billing for API-key (non-OAuth) sessions", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse(XAI_PAYLOAD));
+		vi.stubGlobal("fetch", fetchMock);
+		expect(await getPlanUsage("xai", fakeRuntime({ apiKey: "xai-api-key" }))).toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
 
@@ -194,7 +268,7 @@ describe("usage service failure paths", () => {
 			vi.fn(async () => new Response("nope", { status: 401 })),
 		);
 		expect(await getPlanUsage("zai", fakeRuntime({ apiKey: "k" }))).toBeUndefined();
-		expect(await getPlanUsage("xai", fakeRuntime({ apiKey: "k" }))).toBeUndefined();
+		expect(await getPlanUsage("xai", xaiRuntime())).toBeUndefined();
 	});
 
 	it("returns undefined on malformed payloads", async () => {
@@ -310,12 +384,32 @@ describe("renderUsageBox", () => {
 	});
 });
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 describe("usage view helpers", () => {
 	it("usageBar renders 20 cells proportional to the percent", () => {
-		expect(usageBar(0)).toBe("░".repeat(20));
-		expect(usageBar(100)).toBe("█".repeat(20));
-		expect(usageBar(50)).toBe("█".repeat(10) + "░".repeat(10));
-		expect(usageBar(150)).toBe("█".repeat(20));
+		expect(stripAnsi(usageBar(0))).toBe("░".repeat(20));
+		expect(stripAnsi(usageBar(100))).toBe("█".repeat(20));
+		expect(stripAnsi(usageBar(50))).toBe("█".repeat(10) + "░".repeat(10));
+		expect(stripAnsi(usageBar(150))).toBe("█".repeat(20));
+	});
+
+	it("usageLevelColor is green / yellow / red by usage", () => {
+		expect(usageLevelColor(0)).toBe("success");
+		expect(usageLevelColor(70)).toBe("success");
+		expect(usageLevelColor(71)).toBe("warning");
+		expect(usageLevelColor(90)).toBe("warning");
+		expect(usageLevelColor(91)).toBe("error");
+		expect(usageLevelColor(100)).toBe("error");
+	});
+
+	it("usageBar colors the fill by usage level", () => {
+		expect(usageBar(0)).toBe(theme.fg("dim", "░".repeat(20)));
+		expect(usageBar(50)).toBe(theme.fg("success", "█".repeat(10)) + theme.fg("dim", "░".repeat(10)));
+		expect(usageBar(71)).toBe(theme.fg("warning", "█".repeat(14)) + theme.fg("dim", "░".repeat(6)));
+		expect(usageBar(100)).toBe(theme.fg("error", "█".repeat(20)));
 	});
 
 	it("formatResetCountdown compacts durations", () => {

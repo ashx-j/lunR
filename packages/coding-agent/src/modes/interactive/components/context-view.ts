@@ -19,15 +19,15 @@ function renderRowLabel(row: BreakdownRow): string {
 	return row.count !== undefined && row.count > 0 ? `${row.label} (${row.count})` : row.label;
 }
 
-function rowLine(row: BreakdownRow, labelWidth: number, denominator: number): string {
-	const percent = denominator > 0 ? (row.tokens / denominator) * 100 : 0;
+function rowLine(row: BreakdownRow, labelWidth: number): string {
 	const label = renderRowLabel(row);
-	return `  ${label.padEnd(labelWidth)}  ${usageBar(percent)}  ${formatTokens(row.tokens)}`;
+	return `  ${label.padEnd(labelWidth)}  ${formatTokens(row.tokens)}`;
 }
 
 /**
  * Render the /context bordered box: an estimated breakdown of what consumes
- * the context window. Shares the box chrome and 20-cell bars with /usage.
+ * the context window. Category rows are counts only; the estimated-total
+ * row keeps the shared 20-cell usage bar.
  */
 export function renderContextBox(data: ContextViewData, maxWidth: number): string[] {
 	const { breakdown } = data;
@@ -50,7 +50,7 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 
 	const labelWidth = Math.max(...rows.map((row) => renderRowLabel(row).length), "Estimated total".length);
 	for (const row of rows) {
-		content.push(rowLine(row, labelWidth, breakdown.total));
+		content.push(rowLine(row, labelWidth));
 	}
 
 	content.push("");

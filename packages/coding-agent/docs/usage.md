@@ -38,6 +38,8 @@ Type `/` in the editor to open command completion. Extensions can register custo
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | `/model` | Switch models |
+| `/mode` | Set permission mode: manual, yolo, plan, or auto (Shift+Tab cycles) |
+| `/plan` | Switch to plan permission mode, or `/plan <task>` to plan a task |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |

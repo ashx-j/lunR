@@ -66,7 +66,7 @@ export interface MarkdownSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
-export type DefaultPermissionMode = "manual" | "yolo" | "auto";
+export type DefaultPermissionMode = "manual" | "yolo" | "plan" | "auto";
 export type RollbackCapture = "copies" | "shadow-git" | "hybrid";
 export type RollbackScope = "tools" | "tree";
 
@@ -1066,7 +1066,7 @@ export class SettingsManager {
 	// lunr: default permission mode (startup default; per-session mode is in-memory)
 	getDefaultPermissionMode(): DefaultPermissionMode {
 		const value = this.settings.defaultPermissionMode;
-		return value === "manual" || value === "yolo" || value === "auto" ? value : "manual";
+		return value === "manual" || value === "yolo" || value === "plan" || value === "auto" ? value : "manual";
 	}
 
 	setDefaultPermissionMode(mode: DefaultPermissionMode): void {

@@ -26,6 +26,7 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
+	isFocusable,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -90,12 +91,14 @@ import {
 	type ApprovalResponse,
 	AUTO_MODE_ADDENDUM,
 	getPermissionMode,
+	nextPermissionMode,
 	type PermissionMode,
 	registerApprovalHandler,
 	resetPermissions,
+	restorePermissionModeAfterPlan,
 	setPermissionMode,
 } from "../../core/permissions.ts";
-import { PLAN_MODE_ADDENDUM, planModeBlockReason, setPlanModeActive } from "../../core/plan-mode.ts";
+import { PLAN_MODE_ADDENDUM } from "../../core/plan-mode.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
@@ -479,11 +482,9 @@ export class InteractiveMode {
 	// Track whether a /research deep-research turn is in flight (footer status)
 	private researchMode = false;
 
-	// lunr: native plan mode (in-memory v1 — not persisted across restarts; cleared when
-	// the session is replaced). While active, edit/write and mutating bash are gated on
-	// the AgentSession and the footer shows a "plan" status.
-	private planModeActive = false;
-	private planModeCleanup: (() => void) | undefined = undefined;
+	// lunr: mode in effect before the current plan stretch. Used by approve / `/plan off`
+	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
+	private previousPermissionMode: PermissionMode | undefined;
 
 	// lunr: in-memory redo stack for /undo and /redo (leaf entry ids; cleared on any
 	// new user message, never persisted — undone turns reappear after restart)
@@ -558,15 +559,8 @@ export class InteractiveMode {
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate((reason) => {
 			this.resetExtensionUI();
-			// lunr: plan-mode gate/addendum live on the AgentSession being replaced — drop state
-			if (this.planModeActive) {
-				this.planModeActive = false;
-				setPlanModeActive(false);
-				this.planModeCleanup?.();
-				this.planModeCleanup = undefined;
-				this.setExtensionStatus("plan", undefined);
-			}
 			// lunr: reset permission mode to configured default + clear session approvals
+			this.previousPermissionMode = undefined;
 			resetPermissions(this.settingsManager.getDefaultPermissionMode());
 			// lunr: clear process registry and rollback state
 			processRegistry.clearRegistry();
@@ -581,9 +575,7 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
-			if (this.settingsManager.getDefaultPermissionMode() === "auto") {
-				enableRollbackForSession(this.sessionManager.getSessionId());
-			}
+			this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
 		});
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
@@ -837,6 +829,9 @@ export class InteractiveMode {
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 
+		this.ui.pinFrom(this.widgetContainerAbove);
+		this.ui.setAlternateScreen(true);
+
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
@@ -855,14 +850,14 @@ export class InteractiveMode {
 				}
 				return resp;
 			}
-			// lunr: plan approval (present_plan tool). Any approve exits plan mode —
-			// teardown runs BEFORE resolving so the model's next tool call already
+			// lunr: plan approval (present_plan tool). Any approve leaves plan mode —
+			// restore runs BEFORE resolving so the model's next tool call already
 			// has full access. Decline keeps plan mode active.
 			if (req.kind === "plan") {
 				const resp = await this.showPlanApprovalDialog(req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
-					this.deactivatePlanMode();
+					this.applyPermissionMode(this.restoreTargetAfterPlan());
 				}
 				return resp;
 			}
@@ -872,10 +867,7 @@ export class InteractiveMode {
 		// lunr: initialize rollback service for this session.
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
-		// If the configured default is auto, force-enable rollback.
-		if (this.settingsManager.getDefaultPermissionMode() === "auto") {
-			enableRollbackForSession(this.sessionManager.getSessionId());
-		}
+		this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
 
 		await this.themeController.applyFromSettings();
 
@@ -1776,6 +1768,7 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
+		this.ui.setChatScroll(0);
 		this.loadedResourcesContainer.clear();
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
@@ -2605,6 +2598,7 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
+		this.defaultEditor.onAction("app.mode.cycle", () => this.cyclePermissionMode());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
 		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
 
@@ -2636,6 +2630,38 @@ export class InteractiveMode {
 		this.defaultEditor.onPasteImage = () => {
 			void this.handleClipboardPaste();
 		};
+
+		this.ui.addInputListener((data) => {
+			if (!this.ui.isPinned()) return;
+			if (this.ui.hasCapturingOverlayFocus()) return;
+
+			const viewH = this.ui.getChatViewportHeight();
+			if (this.keybindings.matches(data, "app.chat.pageUp")) {
+				this.ui.scrollChat(viewH);
+				return { consume: true };
+			}
+			if (this.keybindings.matches(data, "app.chat.pageDown")) {
+				this.ui.scrollChat(-viewH);
+				return { consume: true };
+			}
+
+			const editorFocused = isFocusable(this.editor) && this.editor.focused;
+			const singleLine = !this.editor.getText().includes("\n");
+			const showingAutocomplete =
+				"isShowingAutocomplete" in this.editor &&
+				typeof (this.editor as { isShowingAutocomplete?: () => boolean }).isShowingAutocomplete === "function" &&
+				(this.editor as { isShowingAutocomplete: () => boolean }).isShowingAutocomplete();
+			if (!editorFocused || !singleLine || showingAutocomplete) return;
+
+			if (this.keybindings.matches(data, "tui.editor.pageUp")) {
+				this.ui.scrollChat(viewH);
+				return { consume: true };
+			}
+			if (this.keybindings.matches(data, "tui.editor.pageDown")) {
+				this.ui.scrollChat(-viewH);
+				return { consume: true };
+			}
+		});
 	}
 
 	private async handleClipboardPaste(): Promise<void> {
@@ -2671,6 +2697,7 @@ export class InteractiveMode {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
 			if (!text) return;
+			this.ui.setChatScroll(0);
 
 			// Handle commands
 			if (text === "/settings") {
@@ -3989,6 +4016,10 @@ export class InteractiveMode {
 			this.updateEditorBorderColor();
 			this.showStatus(`Thinking level: ${newLevel}`);
 		}
+	}
+
+	private cyclePermissionMode(): void {
+		this.applyPermissionMode(nextPermissionMode(getPermissionMode()), { silent: true });
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -6847,80 +6878,47 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: /plan — native read-only plan mode. While active, a core tool-call gate on the
-	// AgentSession blocks edit/write and mutating bash (see core/plan-mode.ts), and a
-	// plan-mode addendum is appended to the system prompt. State is in-memory only.
+	// lunr: /plan — shortcut onto the plan permission mode (not a second state machine).
 	private async handlePlanCommand(args: string): Promise<void> {
 		const sub = args.toLowerCase();
+		const inPlan = getPermissionMode() === "plan";
 
 		if (sub === "status") {
 			this.showStatus(
-				this.planModeActive
+				inPlan
 					? "Plan mode is active — edit/write and mutating bash are blocked. /plan off to implement."
-					: "Plan mode is off.",
+					: `Permission mode: ${getPermissionMode()}.`,
 			);
 			return;
 		}
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /plan.");
-			return;
-		}
 
-		// lunr: `/plan <text>` TOGGLES — any arg other than on/off/status is task text.
-		// While plan mode is inactive: enter plan mode and send the text as the request.
-		// While plan mode is ACTIVE: EXIT plan mode (same teardown as /plan off) and send
-		// the text with full tool access — e.g. "/plan looks good, go implement it".
+		// lunr: `/plan <text>` — any arg other than on/off/status is task text.
+		// While not in plan: enter plan and send. While in plan: restore previous
+		// mode and send with full tool access ("looks good, go implement it").
 		if (sub !== "" && sub !== "on" && sub !== "off") {
-			if (this.planModeActive) {
-				this.deactivatePlanMode();
-				this.showStatus("Plan mode off — full tool access restored.");
+			if (inPlan) {
+				this.applyPermissionMode(this.restoreTargetAfterPlan());
 			} else {
-				this.activatePlanMode();
+				this.applyPermissionMode("plan");
 			}
 			await this.session.sendUserMessage(args);
 			return;
 		}
 
-		const next = sub === "" ? !this.planModeActive : sub === "on";
-		if (next === this.planModeActive) {
+		const next = sub === "" ? !inPlan : sub === "on";
+		if (next === inPlan) {
 			this.showStatus(next ? "Plan mode is already active." : "Plan mode is already off.");
 			return;
 		}
 
 		if (next) {
-			this.activatePlanMode();
-			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
+			this.applyPermissionMode("plan");
 		} else {
-			this.deactivatePlanMode();
-			this.showStatus("Plan mode off — full tool access restored.");
+			this.applyPermissionMode(this.restoreTargetAfterPlan());
 		}
 	}
 
-	// lunr: plan-mode activation — tool-call gate + system-prompt addendum + footer
-	// status, and the module-level flag the present_plan tool checks.
-	private activatePlanMode(): void {
-		this.planModeActive = true;
-		setPlanModeActive(true);
-		this.planModeCleanup = this.session.addToolCallGate((toolName, input) => {
-			const reason = planModeBlockReason(toolName, input);
-			return reason ? { block: true, reason } : undefined;
-		});
-		this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
-		this.setExtensionStatus("plan", "plan");
-	}
-
-	// lunr: plan-mode teardown — mirrors activation in reverse. Called from /plan off,
-	// `/plan <text>` while active, and the plan-approval dialog on approve.
-	private deactivatePlanMode(): void {
-		this.planModeActive = false;
-		setPlanModeActive(false);
-		this.planModeCleanup?.();
-		this.planModeCleanup = undefined;
-		this.session.setSystemPromptAppend(undefined);
-		this.setExtensionStatus("plan", undefined);
-	}
-
-	// lunr: /mode — permission mode selector (manual / yolo / auto). Per-session only.
+	// lunr: /mode — permission mode selector (manual / yolo / plan / auto). Per-session only.
 	private handleModeCommand(args: string): void {
 		const sub = args.toLowerCase();
 
@@ -6929,43 +6927,79 @@ export class InteractiveMode {
 			return;
 		}
 
-		if (sub === "manual" || sub === "yolo" || sub === "auto") {
-			this.applyPermissionMode(sub as PermissionMode);
+		if (sub === "manual" || sub === "yolo" || sub === "plan" || sub === "auto") {
+			this.applyPermissionMode(sub);
 			return;
 		}
 
 		if (sub !== "") {
-			this.showStatus("Usage: /mode [manual|yolo|auto] — bare /mode opens the selector.");
+			this.showStatus("Usage: /mode [manual|yolo|plan|auto] — bare /mode opens the selector.");
 			return;
 		}
 
-		// Open selector
 		const options = [
 			"Manual — approve every action",
 			"YOLO — auto-approve tools, agent may still ask",
+			"Plan — read-only; present a plan for approval",
 			"Auto — fully autonomous, no questions",
 		];
 		void this.showExtensionSelector("Permission mode", options).then((choice) => {
 			if (!choice) return;
 			if (choice.startsWith("Manual")) this.applyPermissionMode("manual");
 			else if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
+			else if (choice.startsWith("Plan")) this.applyPermissionMode("plan");
 			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
 		});
 	}
 
-	private applyPermissionMode(mode: PermissionMode): void {
+	/** Destination when leaving plan via approve / `/plan off` / `/plan <text>`. */
+	private restoreTargetAfterPlan(): PermissionMode {
+		return restorePermissionModeAfterPlan(
+			this.previousPermissionMode,
+			this.settingsManager.getDefaultPermissionMode(),
+		);
+	}
+
+	/** Apply addendum + auto-rollback for a mode without a status toast. */
+	private syncPermissionModeEffects(mode: PermissionMode): void {
+		if (mode === "plan") {
+			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		} else if (mode === "auto") {
+			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
+			enableRollbackForSession(this.sessionManager.getSessionId());
+		} else {
+			this.session.setSystemPromptAppend(undefined);
+		}
+	}
+
+	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean }): void {
 		const prev = getPermissionMode();
+		if (mode === "plan" && prev !== "plan") {
+			this.previousPermissionMode = prev;
+		}
 		setPermissionMode(mode);
 		this.ui.requestRender();
 
-		if (mode === "auto" && prev !== "auto") {
+		if (mode === "plan") {
+			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		} else if (mode === "auto") {
 			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
-			enableRollbackForSession(this.sessionManager.getSessionId());
-			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
-		} else if (mode !== "auto" && prev === "auto") {
+		} else {
 			this.session.setSystemPromptAppend(undefined);
+		}
+
+		if (mode === "auto" && prev !== "auto") {
+			enableRollbackForSession(this.sessionManager.getSessionId());
+		} else if (mode !== "auto" && prev === "auto") {
 			disableRollbackForSession(this.sessionManager.getSessionId());
-			this.showStatus(`Permission mode: ${mode}`);
+		}
+
+		if (opts?.silent) return;
+
+		if (mode === "auto" && prev !== "auto") {
+			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
+		} else if (mode === "plan") {
+			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
 		}
@@ -7215,6 +7249,7 @@ export class InteractiveMode {
 		const exit = this.getAppKeyDisplay("app.exit");
 		const suspend = this.getAppKeyDisplay("app.suspend");
 		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
+		const cyclePermissionMode = this.getAppKeyDisplay("app.mode.cycle");
 		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
 		const selectModel = this.getAppKeyDisplay("app.model.select");
 		const expandTools = this.getAppKeyDisplay("app.tools.expand");
@@ -7259,8 +7294,8 @@ export class InteractiveMode {
 | \`${clear}\` | Clear editor (first) / exit (second) |
 | \`${exit}\` | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
-| \`${cycleThinkingLevel}\` | Cycle thinking level |
-| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
+| \`${cyclePermissionMode}\` | Cycle permission mode |
+${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
@@ -7301,6 +7336,7 @@ export class InteractiveMode {
 
 	private async handleClearCommand(): Promise<void> {
 		this.clearStatusIndicator();
+		this.ui.setChatScroll(0);
 		// lunr: preserve the in-flight model across /new so a /model switch survives.
 		const previousModel = this.session.model;
 		try {

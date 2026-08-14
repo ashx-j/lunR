@@ -1273,9 +1273,9 @@ export class SettingsSelectorComponent extends Container {
 				id: "default-permission-mode",
 				label: "Default permission mode",
 				description:
-					"Permission mode new sessions start with: manual = approve every action, yolo = auto-approve tools, auto = fully autonomous. Change per-session with /mode.",
+					"Permission mode new sessions start with: manual = approve every action, yolo = auto-approve tools, plan = read-only, auto = fully autonomous. Change per-session with /mode or Shift+Tab.",
 				currentValue: config.defaultPermissionMode,
-				values: ["manual", "yolo", "auto"],
+				values: ["manual", "yolo", "plan", "auto"],
 			},
 			{
 				id: "double-escape-action",

@@ -315,6 +315,7 @@ export class TUI extends Container {
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
 	private stopped = false;
+	private started = false;
 	private pendingOsc11BackgroundReplies = 0;
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
@@ -324,6 +325,14 @@ export class TUI extends Container {
 	private focusOrderCounter = 0;
 	private overlayStack: OverlayStackEntry[] = [];
 	private overlayFocusRestore: OverlayFocusRestoreState = { status: "inactive" };
+
+	// Opt-in pinned dock: pinFrom child + later siblings stay on the last rows.
+	private pinComponent: Component | null = null;
+	private chatScrollOffset = 0;
+	private lastChatViewportHeight = 1;
+	private lastChatScrollMax = 0;
+	private alternateScreen = false;
+	private alternateScreenActive = false;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
@@ -361,6 +370,82 @@ export class TUI extends Container {
 	 */
 	setClearOnShrink(enabled: boolean): void {
 		this.clearOnShrink = enabled;
+	}
+
+	/**
+	 * Pin `component` and every later sibling as the dock (last rows).
+	 * Earlier children become the in-app scroll region. `null` clears pinning.
+	 */
+	pinFrom(component: Component | null): void {
+		this.pinComponent = component;
+		if (!component) {
+			this.chatScrollOffset = 0;
+			this.lastChatViewportHeight = Math.max(1, this.terminal.rows);
+			this.lastChatScrollMax = 0;
+		}
+		if (this.started) this.requestRender();
+	}
+
+	isPinned(): boolean {
+		return this.pinComponent !== null;
+	}
+
+	/** `0` follows the latest chat. Larger values scroll up into history. */
+	setChatScroll(offset: number): void {
+		const next = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+		this.chatScrollOffset = next;
+		if (this.getPinIndex() >= 0) {
+			this.render(this.terminal.columns);
+		} else {
+			this.chatScrollOffset = 0;
+			this.lastChatScrollMax = 0;
+		}
+		if (this.started) this.requestRender();
+	}
+
+	/** Positive delta scrolls up (older). Negative scrolls toward the latest. */
+	scrollChat(deltaLines: number): void {
+		const delta = Number.isFinite(deltaLines) ? Math.trunc(deltaLines) : 0;
+		this.setChatScroll(this.chatScrollOffset + delta);
+	}
+
+	getChatScroll(): number {
+		return this.chatScrollOffset;
+	}
+
+	/**
+	 * Current chat pane height (terminal rows minus dock). Useful for page-sized scrolls.
+	 */
+	getChatViewportHeight(): number {
+		if (!this.pinComponent || this.getPinIndex() < 0) {
+			return Math.max(1, this.terminal.rows);
+		}
+		return Math.max(1, this.lastChatViewportHeight);
+	}
+
+	/** Opt-in alternate screen. Interactive mode turns this on. Tests do not need it. */
+	setAlternateScreen(enabled: boolean): void {
+		if (this.alternateScreen === enabled) return;
+		this.alternateScreen = enabled;
+		if (!this.started) return;
+		if (enabled && !this.alternateScreenActive) {
+			this.terminal.write("\x1b[?1049h");
+			this.alternateScreenActive = true;
+			this.requestRender(true);
+		} else if (!enabled && this.alternateScreenActive) {
+			this.terminal.write("\x1b[?1049l");
+			this.alternateScreenActive = false;
+			this.requestRender(true);
+		}
+	}
+
+	/** True when a visible capturing overlay currently has focus. */
+	hasCapturingOverlayFocus(): boolean {
+		const focused = this.focusedComponent;
+		if (!focused) return false;
+		return this.overlayStack.some(
+			(entry) => entry.component === focused && !entry.options?.nonCapturing && this.isOverlayVisible(entry),
+		);
 	}
 
 	setFocus(component: Component | null): void {
@@ -484,6 +569,78 @@ export class TUI extends Container {
 		if (root === target) return true;
 		if (!(root instanceof Container)) return false;
 		return root.children.some((child) => this.containsComponent(child, target));
+	}
+
+	private getPinIndex(): number {
+		if (!this.pinComponent) return -1;
+		return this.children.indexOf(this.pinComponent);
+	}
+
+	private collectChildLines(from: number, to: number, width: number): string[] {
+		const lines: string[] = [];
+		for (let i = from; i < to; i++) {
+			const child = this.children[i];
+			if (!child) continue;
+			for (const line of child.render(width)) {
+				lines.push(line);
+			}
+		}
+		return lines;
+	}
+
+	private snapStartToKittyImageHeader(lines: string[], start: number): number {
+		if (start <= 0 || start >= lines.length) return start;
+		if (isImageLine(lines[start] ?? "")) return start;
+		for (let i = start - 1; i >= 0; i--) {
+			const line = lines[i] ?? "";
+			if (isImageLine(line)) {
+				const reserved = this.getKittyImageReservedRows(lines, i);
+				if (i + reserved > start) return i;
+				return start;
+			}
+			if (visibleWidth(line) > 0) return start;
+		}
+		return start;
+	}
+
+	override render(width: number): string[] {
+		const pinIndex = this.getPinIndex();
+		if (pinIndex < 0) {
+			return super.render(width);
+		}
+
+		const rows = Math.max(1, this.terminal.rows);
+		const minView = 1;
+		const scrollLines = this.collectChildLines(0, pinIndex, width);
+		let dockLines = this.collectChildLines(pinIndex, this.children.length, width);
+
+		const maxDock = rows - minView;
+		if (dockLines.length > maxDock) {
+			dockLines = dockLines.slice(dockLines.length - maxDock);
+		}
+
+		const viewH = Math.max(minView, rows - dockLines.length);
+		this.lastChatViewportHeight = viewH;
+
+		let chatSlice: string[];
+		if (scrollLines.length <= viewH) {
+			// Content-hug: do not pin the dock to the bottom of an unfilled screen.
+			this.chatScrollOffset = 0;
+			this.lastChatScrollMax = 0;
+			chatSlice = scrollLines;
+		} else {
+			this.lastChatScrollMax = scrollLines.length - viewH;
+			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.lastChatScrollMax));
+			let start = scrollLines.length - viewH - this.chatScrollOffset;
+			start = this.snapStartToKittyImageHeader(scrollLines, start);
+			start = Math.max(0, start);
+			chatSlice = scrollLines.slice(start, start + viewH);
+			while (chatSlice.length < viewH) {
+				chatSlice.push("");
+			}
+		}
+
+		return [...chatSlice, ...dockLines];
 	}
 
 	/**
@@ -634,10 +791,15 @@ export class TUI extends Container {
 
 	start(): void {
 		this.stopped = false;
+		this.started = true;
 		this.terminal.start(
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		if (this.alternateScreen && !this.alternateScreenActive) {
+			this.terminal.write("\x1b[?1049h");
+			this.alternateScreenActive = true;
+		}
 		this.terminal.hideCursor();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
@@ -686,6 +848,7 @@ export class TUI extends Container {
 
 	stop(): void {
 		this.stopped = true;
+		this.started = false;
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
@@ -693,8 +856,11 @@ export class TUI extends Container {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-		if (this.previousLines.length > 0) {
+		if (this.alternateScreenActive) {
+			this.terminal.write("\x1b[?1049l");
+			this.alternateScreenActive = false;
+		} else if (this.previousLines.length > 0) {
+			// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 			const targetRow = this.previousLines.length; // Line after the last content
 			const lineDiff = targetRow - this.hardwareCursorRow;
 			if (lineDiff > 0) {
@@ -1336,10 +1502,11 @@ export class TUI extends Container {
 			fs.appendFileSync(logPath, msg);
 		};
 
-		// First render - just output everything without clearing (assumes clean screen)
+		// First render - just output everything without clearing (assumes clean screen).
+		// Alternate screen may have leftover buffer contents — clear it.
 		if (this.previousLines.length === 0 && !widthChanged && !heightChanged) {
 			logRedraw("first render");
-			fullRender(false);
+			fullRender(this.alternateScreenActive);
 			return;
 		}
 

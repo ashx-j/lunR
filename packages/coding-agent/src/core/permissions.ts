@@ -1,5 +1,5 @@
 /**
- * lunR: permission modes (Manual / YOLO / Auto).
+ * lunR: permission modes (Manual / YOLO / Plan / Auto).
  *
  * Per-session only — never persisted per session, but the default mode new
  * sessions start with is configurable in /settings (`defaultPermissionMode`,
@@ -7,21 +7,47 @@
  *
  * - manual: every mutating tool call (bash, edit, write) requires approval.
  * - yolo:   auto-approve tools; the agent may still ask questions.
+ * - plan:   read-only; mutating tools are hard-blocked (planModeBlockReason).
  * - auto:   fully autonomous; a system-prompt addendum steers the model to
  *           self-decide, and rollback is force-enabled for the session.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
- * the synchronous `_toolCallGates` loop (plan mode etc.). beforeToolCall is
- * already async, so awaiting the approval dialog is fine.
+ * the synchronous `_toolCallGates` loop. beforeToolCall is already async, so
+ * awaiting the approval dialog is fine.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
  * concurrent gateway chats do not share permission decisions.
  */
 
 import { resolve } from "node:path";
+import { planModeBlockReason } from "./plan-mode.ts";
 import { effectiveSwarmCount, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
 
-export type PermissionMode = "manual" | "yolo" | "auto";
+/** Shift+Tab cycle order. */
+export const PERMISSION_MODES = ["manual", "yolo", "plan", "auto"] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export function nextPermissionMode(current: PermissionMode): PermissionMode {
+	const i = PERMISSION_MODES.indexOf(current);
+	return PERMISSION_MODES[(i + 1) % PERMISSION_MODES.length];
+}
+
+/** True when the (default or session) permission mode is plan. */
+export function isPlanModeActive(sessionId?: string): boolean {
+	return getPermissionMode(sessionId) === "plan";
+}
+
+/**
+ * Destination mode when leaving plan via approve / `/plan off` / `/plan <text>`.
+ * Explicit Shift+Tab or `/mode` picks do not use this — they already chose a mode.
+ */
+export function restorePermissionModeAfterPlan(
+	previous: PermissionMode | undefined,
+	defaultMode: PermissionMode,
+): PermissionMode {
+	if (previous && previous !== "plan") return previous;
+	return defaultMode === "plan" ? "yolo" : defaultMode;
+}
 
 export interface ApprovalRequest {
 	toolName: string;
@@ -274,9 +300,10 @@ function sanitizeDetail(value: unknown): string {
 
 /**
  * Returns a block result when the tool call should be blocked, else undefined.
- * Read-only tools always pass. YOLO and Auto always pass. Manual mode gates
- * every mutating tool; if an approval handler is registered it is asked,
- * otherwise the call is blocked (fail-closed — no silent allow).
+ * Read-only tools always pass. YOLO and Auto always pass mutating tools. Plan
+ * mode hard-blocks mutating tools (no prompt). Manual mode gates every mutating
+ * tool; if an approval handler is registered it is asked, otherwise the call is
+ * blocked (fail-closed — no silent allow).
  */
 export async function gateToolCall(
 	toolName: string,
@@ -293,6 +320,11 @@ export async function gateToolCall(
 	if (toolName === "subagent") {
 		const swarmBlock = await gateSwarmCall(input, ctx, options);
 		if (swarmBlock) return swarmBlock;
+	}
+
+	if (ctx.mode === "plan") {
+		const reason = planModeBlockReason(toolName, input);
+		return reason ? { block: true, reason } : undefined;
 	}
 
 	if (ctx.mode !== "manual") return undefined;
