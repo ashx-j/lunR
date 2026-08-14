@@ -1,8 +1,9 @@
 name: npm audit
 
+# Manual only. Daily cron failed every run (transitive advisories)
+# and spammed notifications. Re-add a schedule only if the lockfile
+# is kept green on purpose.
 on:
-  schedule:
-    - cron: '37 7 * * *'
   workflow_dispatch:
 
 permissions:
