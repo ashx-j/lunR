@@ -1,6 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { mergeCatalogLayers } from "../src/core/catalog-merge.ts";
+import { formatCatalogRefreshSummary, mergeCatalogLayers } from "../src/core/catalog-merge.ts";
 import { evictUserModelsOnOfficial } from "../src/core/user-models.ts";
 
 function model(id: string, layer: string, provider = "xai"): Model<"openai-completions"> {
@@ -85,5 +85,42 @@ describe("catalog merge precedence", () => {
 		});
 		expect(merged.find((entry) => entry.id === "grok-4.6")?.name).toBe("official:grok-4.6");
 		expect(merged.find((entry) => entry.id === "keep-me")?.name).toBe("user:keep-me");
+	});
+});
+
+describe("formatCatalogRefreshSummary", () => {
+	it("does not count skipped live-list slots as refreshed providers", () => {
+		expect(
+			formatCatalogRefreshSummary({
+				providers: [
+					{ id: "xai", status: "error", error: "HTTP 403" },
+					{ id: "openrouter", status: "skipped" },
+					{ id: "qwen-cloud", status: "skipped" },
+					{ id: "qwen-cloud-cn", status: "skipped" },
+					{ id: "groq", status: "skipped" },
+					{ id: "openai", status: "skipped" },
+					{ id: "deepseek", status: "skipped" },
+				],
+			}),
+		).toBe("xai failed (HTTP 403).");
+	});
+
+	it("lists successes then failures", () => {
+		expect(
+			formatCatalogRefreshSummary({
+				providers: [
+					{ id: "openai", status: "ok", total: 3 },
+					{ id: "xai", status: "error", error: "HTTP 403" },
+				],
+			}),
+		).toBe("Refreshed openai (3). xai failed (HTTP 403).");
+	});
+
+	it("reports a lone timeout without a provider count", () => {
+		expect(
+			formatCatalogRefreshSummary({
+				providers: [{ id: "xai", status: "timeout", error: "timed out" }],
+			}),
+		).toBe("xai timed out (cached).");
 	});
 });

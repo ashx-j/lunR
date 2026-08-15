@@ -737,7 +737,20 @@ export class ModelRuntime implements Models {
 					};
 				}
 
-				const credential = await this.refreshCredentialFor(providerId);
+				let credential: Credential | undefined;
+				try {
+					credential = await this.refreshCredentialFor(providerId);
+				} catch (error) {
+					return {
+						providerId,
+						status: "error" as const,
+						discoveries: [],
+						added: 0,
+						total: stored?.models.length ?? 0,
+						incomplete: [],
+						error: error instanceof Error ? error.message : String(error),
+					};
+				}
 				if (!credential) {
 					return {
 						providerId,
@@ -774,9 +787,11 @@ export class ModelRuntime implements Models {
 
 	private async refreshCredentialFor(providerId: string): Promise<Credential | undefined> {
 		const stored = await this.credentials.read(providerId);
-		if (stored?.type === "oauth" && stored.access) return stored;
+		// Same lock + persist path as chat. Returning stored OAuth here skips
+		// refresh and sends expired SuperGrok tokens to GET /models (HTTP 403).
 		const resolved = await this.getAuth(providerId);
 		if (resolved?.auth.apiKey) return { type: "api_key", key: resolved.auth.apiKey, env: resolved.env };
+		if (stored?.type === "oauth" && stored.access) return stored;
 		if (stored?.type === "api_key" && stored.key) return stored;
 		return undefined;
 	}
