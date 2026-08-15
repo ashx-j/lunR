@@ -71,7 +71,6 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private scopeText?: Text;
 	private scopeHintText?: Text;
 	private readonly refreshAbortController = new AbortController();
-	private refreshTimeout?: ReturnType<typeof setTimeout>;
 	private closed = false;
 	private readonly persistDefault: boolean;
 	// lunr: active subscription names for providers with multi-key pools (empty = no suffixes).
@@ -174,18 +173,19 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private async refreshModels(): Promise<void> {
-		const timeoutMs = 15_000;
-		let timedOut = false;
-		this.refreshTimeout = setTimeout(() => {
-			timedOut = true;
-			this.refreshAbortController.abort();
-		}, timeoutMs);
 		try {
 			const result = await this.modelRuntime.refresh({ signal: this.refreshAbortController.signal });
 			if (this.closed) return;
 			this.refreshStatusMessage = "";
-			if (result.aborted && timedOut) {
-				this.errorMessage = "Model refresh timed out; showing cached models.";
+			const liveErrors = result.live.filter((entry) => entry.status === "error" || entry.status === "timeout");
+			if (liveErrors.length === 1) {
+				const failed = liveErrors[0];
+				this.errorMessage =
+					failed?.status === "timeout"
+						? `${failed.providerId} timed out; showing cached models.`
+						: `Could not refresh ${failed?.providerId}; showing cached models.`;
+			} else if (liveErrors.length > 1) {
+				this.errorMessage = `Could not refresh ${liveErrors.length} model catalogs; showing cached models.`;
 			} else if (result.errors.size === 1) {
 				this.errorMessage = `Could not refresh ${result.errors.keys().next().value}; showing cached models.`;
 			} else if (result.errors.size > 1) {
@@ -200,14 +200,16 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.loadModelsFromSnapshot();
 			this.filterModels(this.searchInput.getValue());
 			this.tui.requestRender();
-		} finally {
-			if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+		} catch {
+			if (this.closed) return;
+			this.refreshStatusMessage = "";
+			this.errorMessage = this.modelRuntime.getError() ?? "Could not refresh model catalogs.";
+			this.tui.requestRender();
 		}
 	}
 
 	private close(): void {
 		this.closed = true;
-		if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
 		this.refreshAbortController.abort();
 	}
 

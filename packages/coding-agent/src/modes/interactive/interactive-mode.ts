@@ -60,6 +60,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { formatCatalogRefreshSummary } from "../../core/catalog-merge.ts";
 import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -77,6 +78,13 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
+import {
+	applyIncompleteAnswers,
+	describeIncomplete,
+	INCOMPLETE_PROMPT_CAP,
+	type IncompleteLiveModel,
+	parsePositiveInt,
+} from "../../core/live-catalog.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import {
 	isValidProviderBaseUrl,
@@ -129,6 +137,7 @@ import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { collectUsageHistory, type UsageHistory } from "../../core/usage-history.ts";
 import { getPlanUsage } from "../../core/usage-service.ts";
+import { modelToUserEntry } from "../../core/user-models.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
@@ -4698,38 +4707,58 @@ export class InteractiveMode {
 		await this.showModelSelector(searchTerm);
 	}
 
-	// lunr: /refresh — refresh model lists for ALL providers (replaces ollama-only).
-	// Fans out to every composed provider's refreshModels hook (local servers, remote
-	// catalog, extension hooks) via ModelRuntime.refresh, then re-runs the ollama-cloud
-	// refresh via its bridge (Symbol.for("@lunr/ollama-cloud-refresh")) because that
-	// extension bypasses the hook and re-registers its provider wholesale.
+	// lunr: /refresh — local provider /models + official GitHub overlay. Never pi.dev.
+	// Ollama Cloud still re-registers via its bridge after the core refresh.
 	private async handleRefreshCommand(): Promise<void> {
 		const runtime = this.session.modelRuntime;
 		const allowNetwork = runtime.isNetworkAllowed();
 		if (!allowNetwork) {
 			this.showStatus("Model network refresh is disabled (offline mode). Reloaded from cache only.");
 		}
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 15_000);
-		let summary: string;
+		let result: Awaited<ReturnType<typeof runtime.refresh>>;
 		try {
-			const result = await runtime.refresh({ allowNetwork, force: true, signal: controller.signal });
-			if (result.aborted) {
-				summary = "Model refresh timed out; showing cached models.";
-			} else if (result.errors.size === 0) {
-				summary = "Model catalogs refreshed.";
-			} else if (result.errors.size === 1) {
-				summary = `Could not refresh ${result.errors.keys().next().value}; showing cached models.`;
-			} else {
-				summary = `Could not refresh ${result.errors.size} model catalogs; showing cached models.`;
-			}
+			result = await runtime.refresh({ allowNetwork, force: true });
 		} catch (error) {
-			summary = `Model refresh failed: ${error instanceof Error ? error.message : String(error)}`;
-		} finally {
-			clearTimeout(timeout);
+			this.showStatus(`Model refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+			this.footer.invalidate();
+			return;
 		}
-		// Re-run the ollama-cloud refresh via the extension's bridge — it bypasses
-		// the refreshModels hook and re-registers its provider wholesale.
+
+		const incomplete = result.incomplete;
+		const toPrompt = incomplete.slice(0, INCOMPLETE_PROMPT_CAP);
+		const extraDefaults = Math.max(0, incomplete.length - toPrompt.length);
+		const persisted = [];
+		const asked: string[] = [];
+		let skipRemaining = false;
+		for (const item of toPrompt) {
+			if (skipRemaining) {
+				persisted.push(modelToUserEntry(item.draft));
+				continue;
+			}
+			const choice = await this.showExtensionSelector(describeIncomplete(item), [
+				"Enter details",
+				"Use defaults",
+				"Skip remaining",
+			]);
+			asked.push(`${item.provider}/${item.id}`);
+			if (choice === "Skip remaining") {
+				skipRemaining = true;
+				persisted.push(modelToUserEntry(item.draft));
+				continue;
+			}
+			if (choice === "Enter details") {
+				const detailed = await this.promptIncompleteModelDetails(item);
+				persisted.push(modelToUserEntry(detailed ?? item.draft));
+				continue;
+			}
+			persisted.push(modelToUserEntry(item.draft));
+		}
+		for (const item of incomplete.slice(toPrompt.length)) {
+			persisted.push(modelToUserEntry(item.draft));
+		}
+		if (persisted.length > 0) runtime.persistUserModels(persisted);
+
+		let ollama: string | undefined;
 		const runner = this.session.extensionRunner;
 		const cloudRefresh = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] as
 			| ((ctx: { ui: unknown }) => Promise<unknown>)
@@ -4738,11 +4767,70 @@ export class InteractiveMode {
 			try {
 				await cloudRefresh({ ui: runner.createCommandContext().ui });
 			} catch (error) {
-				summary += ` (ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)})`;
+				ollama = `ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 			}
 		}
-		this.showStatus(summary);
+		this.showStatus(
+			formatCatalogRefreshSummary({
+				official: result.official
+					? {
+							source: result.official.source,
+							modelCount: result.official.catalog.models.length,
+							evictedUserRows: result.official.evictedUserRows,
+						}
+					: undefined,
+				providers: result.live.map((entry) => ({
+					id: entry.providerId,
+					status: entry.status,
+					added: entry.added,
+					total: entry.total,
+					error: entry.error,
+				})),
+				asked,
+				extraDefaults,
+				ollama,
+			}),
+		);
 		this.footer.invalidate();
+	}
+
+	private async promptIncompleteModelDetails(item: IncompleteLiveModel): Promise<Model<any> | undefined> {
+		const contextInput = await this.showExtensionInput(
+			`${item.provider}/${item.id} — context window:`,
+			String(item.draft.contextWindow || 128000),
+		);
+		if (contextInput === undefined) return undefined;
+		const maxTokensInput = await this.showExtensionInput(
+			`${item.provider}/${item.id} — max output tokens:`,
+			String(item.draft.maxTokens || 8192),
+		);
+		if (maxTokensInput === undefined) return undefined;
+		const inputChoice = await this.showExtensionSelector(`${item.provider}/${item.id} — input:`, [
+			"text",
+			"text + image",
+		]);
+		if (inputChoice === undefined) return undefined;
+		const reasoningChoice = await this.showExtensionSelector(`${item.provider}/${item.id} — reasoning:`, [
+			"yes",
+			"no",
+		]);
+		if (reasoningChoice === undefined) return undefined;
+		let api = item.draft.api;
+		if (item.availableApis.length > 1) {
+			const apiChoice = await this.showExtensionSelector(
+				`${item.provider}/${item.id} — API protocol:`,
+				item.availableApis.map(String),
+			);
+			if (apiChoice === undefined) return undefined;
+			api = apiChoice;
+		}
+		return applyIncompleteAnswers(item.draft, {
+			contextWindow: parsePositiveInt(contextInput, item.draft.contextWindow),
+			maxTokens: parsePositiveInt(maxTokensInput, item.draft.maxTokens),
+			input: inputChoice === "text + image" ? ["text", "image"] : ["text"],
+			reasoning: reasoningChoice === "yes",
+			api,
+		});
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {

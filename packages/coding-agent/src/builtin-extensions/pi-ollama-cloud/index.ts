@@ -94,6 +94,7 @@ async function runRefresh(pi: ExtensionAPI, ctx: Pick<ExtensionCommandContext, "
 
     const raw = await fetchModels(ctx, (progress) => progressUi.update(progress));
     if (!raw) return false;
+    if (Object.keys(raw).length === 0) return false;
 
     writeCache(raw);
     const newModels = assembleModels(raw);

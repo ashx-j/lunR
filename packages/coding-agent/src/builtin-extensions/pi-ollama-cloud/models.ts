@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ExtensionCommandContext, getAgentDir, type ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "../../config.ts";
 import { resolve as resolveThinkingLevelMap } from "./thinking-levels.ts";
 import { concurrentMap, fetchJsonWithTimeout, getContextLength } from "./utils.ts";
 
@@ -167,9 +168,27 @@ export function writeCache(models: Record<string, CachedOllamaModel>): void {
 }
 
 // --- Fetch Models ---
+/** Env key first, then stored auth.json api_key. */
+export function resolveOllamaApiKey(): string | undefined {
+  const envKey = process.env.OLLAMA_API_KEY?.trim();
+  if (envKey) return envKey;
+  try {
+    const raw = readFileSync(join(getAgentDir(), "auth.json"), "utf-8");
+    const data = JSON.parse(raw) as Record<string, { type?: string; key?: string }>;
+    const cred = data["ollama-cloud"];
+    if (cred?.type === "api_key" && typeof cred.key === "string") {
+      const key = cred.key.trim();
+      if (key) return key;
+    }
+  } catch {
+    // Missing or unreadable auth.json — treat as no key.
+  }
+  return undefined;
+}
+
 export async function fetchModelIds(timeoutMs = FETCH_TIMEOUT_MS): Promise<string[]> {
   const headers: Record<string, string> = {};
-  const apiKey = process.env.OLLAMA_API_KEY;
+  const apiKey = resolveOllamaApiKey();
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
@@ -192,7 +211,7 @@ export async function fetchModelIds(timeoutMs = FETCH_TIMEOUT_MS): Promise<strin
 
 export async function fetchModelDetails(id: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<CachedOllamaModel> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const apiKey = process.env.OLLAMA_API_KEY;
+  const apiKey = resolveOllamaApiKey();
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
@@ -224,6 +243,10 @@ export async function refreshOllamaCloudModels(params: {
 }): Promise<Record<string, CachedOllamaModel>> {
   const notify = params.notify ?? (() => undefined);
   const onProgress = params.onProgress ?? (() => undefined);
+  if (!resolveOllamaApiKey()) {
+    notify("Ollama Cloud skipped (no API key)");
+    return {};
+  }
   onProgress({ stage: "list", message: "Fetching model list..." });
   const modelIds = await fetchModelIds();
   notify(`Found ${modelIds.length} models, fetching details...`);

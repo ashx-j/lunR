@@ -32,8 +32,24 @@ import {
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "../config.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { CatalogOverlaySource, knownModelKeys, withCatalogOverlay } from "./catalog-merge.ts";
+import {
+	buildLiveOverlay,
+	fetchLiveProviderModels,
+	type IncompleteLiveModel,
+	isLiveListProvider,
+	LIVE_LIST_PROVIDER_IDS,
+	type LiveCatalogResult,
+} from "./live-catalog.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
+import {
+	loadOfficialCatalog,
+	type OfficialCatalogLoadResult,
+	officialCatalogCachePath,
+	officialEntryToModel,
+	officialModelKeys,
+} from "./official-catalog.ts";
 import {
 	type AuthStatus,
 	type CompatibilityRequestConfig,
@@ -44,9 +60,9 @@ import {
 	resolveConfiguredModelHeaders,
 	validateExtensionProvider,
 } from "./provider-composer.ts";
-import { withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 import { SubscriptionManager } from "./subscriptions.ts";
+import { type UserModelEntry, UserModelsStore, userEntryToModel, userModelsPath } from "./user-models.ts";
 
 interface ModelRuntimeSnapshot {
 	all: readonly Model<Api>[];
@@ -64,10 +80,18 @@ export interface CreateModelRuntimeOptions {
 	modelsStore?: ModelsStore;
 	modelsStorePath?: string;
 	allowModelNetwork?: boolean;
+	/** Applied by callers of `refresh()`, not by `create()` (startup is cache-only). */
 	modelRefreshTimeoutMs?: number;
+	/** Unused. Kept so older callers compiling against this options bag still typecheck. */
 	catalogBaseUrl?: string;
 	/** lunr: subscription-key pool. Defaults to subscriptions.json next to authPath (in-memory for custom stores). */
 	subscriptions?: SubscriptionManager;
+}
+
+export interface CatalogRefreshResult extends ModelsRefreshResult {
+	official?: OfficialCatalogLoadResult & { evictedUserRows: number };
+	live: LiveCatalogResult[];
+	incomplete: IncompleteLiveModel[];
 }
 
 export interface ModelRuntimeAuthOverrides {
@@ -113,6 +137,11 @@ export class ModelRuntime implements Models {
 	};
 	private availabilityRefresh: Promise<void> | undefined;
 	private availabilityError: string | undefined;
+	private readonly modelsStore: ModelsStore;
+	private readonly overlay = new CatalogOverlaySource();
+	private readonly userModels: UserModelsStore;
+	private readonly officialCachePath: string | undefined;
+	private lastCatalogRefresh: CatalogRefreshResult = { aborted: false, errors: new Map(), live: [], incomplete: [] };
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -122,12 +151,16 @@ export class ModelRuntime implements Models {
 		providers: readonly Provider[],
 		allowModelNetwork: boolean,
 		subscriptionManager: SubscriptionManager,
+		catalogDir: string | undefined,
 	) {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
+		this.modelsStore = modelsStore;
 		this.allowModelNetwork = allowModelNetwork;
 		this.subscriptionManager = subscriptionManager;
+		this.userModels = new UserModelsStore(catalogDir ? userModelsPath(catalogDir) : undefined);
+		this.officialCachePath = catalogDir ? officialCatalogCachePath(catalogDir) : undefined;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
 		this.models = createModels({ credentials, modelsStore });
@@ -159,11 +192,8 @@ export class ModelRuntime implements Models {
 			(modelsPath
 				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
-		const providers = builtinProviderCatalog
-			.builtinProviders()
-			.map((provider) =>
-				provider.id === "radius" ? provider : withRemoteCatalog(provider, options.catalogBaseUrl),
-			);
+		const providers = builtinProviderCatalog.builtinProviders();
+		const catalogDir = modelsPath ? dirname(modelsPath) : options.authPath ? dirname(options.authPath) : undefined;
 		const runtime = new ModelRuntime(
 			credentials,
 			config,
@@ -172,18 +202,14 @@ export class ModelRuntime implements Models {
 			providers,
 			options.allowModelNetwork ?? process.env.PI_OFFLINE === undefined,
 			subscriptionManager,
+			catalogDir,
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
-		const controller = new AbortController();
-		const timeout = runtime.allowModelNetwork
-			? setTimeout(() => controller.abort(), options.modelRefreshTimeoutMs ?? 15_000)
-			: undefined;
-		try {
-			await runtime.refresh({ allowNetwork: runtime.allowModelNetwork, signal: controller.signal });
-		} finally {
-			if (timeout) clearTimeout(timeout);
-		}
+		// lunr: create() must not wait on GitHub / provider /v1/models / a dead NIC.
+		// Disk cache + baked-in + bundled official overlay are enough to start;
+		// /refresh and the model picker still do a live refresh.
+		await runtime.refresh({ allowNetwork: false });
 		return runtime;
 	}
 
@@ -217,19 +243,27 @@ export class ModelRuntime implements Models {
 			return;
 		}
 		if (base && !this.config.getProvider(providerId) && !extension) {
-			// No overlays: use the builtin untouched so its auth/login/stream behavior is exact.
-			this.models.setProvider(base);
+			// No models.json/extension overlays: keep builtin auth/stream exact, then apply catalog layers.
+			this.models.setProvider(this.withLocalCatalog(base));
 			this.compositionErrors.delete(providerId);
 			return;
 		}
 		try {
-			this.models.setProvider(composeModelProvider(providerId, base, this.config, extension));
+			this.models.setProvider(this.withLocalCatalog(composeModelProvider(providerId, base, this.config, extension)));
 			this.compositionErrors.delete(providerId);
 		} catch (error) {
 			this.compositionErrors.set(providerId, error instanceof Error ? error.message : String(error));
-			if (base) this.models.setProvider(base);
+			if (base) this.models.setProvider(this.withLocalCatalog(base));
 			else this.models.deleteProvider(providerId);
 		}
+	}
+
+	private withLocalCatalog(provider: Provider): Provider {
+		return isLiveListProvider(provider.id) ? withCatalogOverlay(provider, this.overlay) : provider;
+	}
+
+	private bakedInModels(providerId: string): Model<Api>[] {
+		return [...(this.defaultBuiltins.get(providerId)?.getModels() ?? [])];
 	}
 
 	private rebuildProviders(): void {
@@ -533,24 +567,176 @@ export class ModelRuntime implements Models {
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 	}
 
-	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+	async refresh(options: ModelsRefreshOptions = {}): Promise<CatalogRefreshResult> {
 		const refreshOptions = {
 			...options,
 			allowNetwork: options.allowNetwork ?? this.allowModelNetwork,
 		};
-		// Published pi-ai builds before ModelsStore returned void and accepted a provider ID.
-		// The fallback keeps source-mode CLI tests working without rebuilding workspace dependencies.
+		const official = await this.refreshOfficialCatalog(refreshOptions.allowNetwork, refreshOptions.signal);
+		const live = refreshOptions.allowNetwork
+			? await this.refreshLiveCatalogs(
+					official ? officialModelKeys(official.catalog) : new Set(),
+					refreshOptions.signal,
+				)
+			: await this.restoreLiveCatalogs();
+
+		// Radius / local-provider / extension refreshModels hooks. Live-list
+		// providers have no refreshModels, so this does not hit pi.dev.
 		const result = ((await this.models.refresh(refreshOptions)) as ModelsRefreshResult | undefined) ?? {
 			aborted: refreshOptions.signal?.aborted ?? false,
 			errors: new Map(),
 		};
+		const errors = new Map(result.errors);
+		for (const entry of live) {
+			if (entry.status === "error" || entry.status === "timeout") {
+				errors.set(entry.providerId, new Error(entry.error ?? entry.status));
+			}
+		}
 		this.updateModelSnapshot();
 		try {
 			await this.forceRefreshAvailability();
 		} catch {
 			// Availability errors are recorded by forceRefreshAvailability; refreshed models remain usable.
 		}
-		return result;
+		const catalogResult: CatalogRefreshResult = {
+			aborted: result.aborted,
+			errors,
+			official,
+			live,
+			incomplete: live.flatMap((entry) => entry.incomplete),
+		};
+		this.lastCatalogRefresh = catalogResult;
+		return catalogResult;
+	}
+
+	getLastCatalogRefresh(): CatalogRefreshResult {
+		return this.lastCatalogRefresh;
+	}
+
+	persistUserModels(rows: readonly UserModelEntry[]): void {
+		this.userModels.upsert(rows);
+		this.overlay.setUser(this.userModels.list().map(userEntryToModel));
+		this.updateModelSnapshot();
+	}
+
+	private async refreshOfficialCatalog(
+		allowNetwork: boolean,
+		signal?: AbortSignal,
+	): Promise<(OfficialCatalogLoadResult & { evictedUserRows: number }) | undefined> {
+		const loaded = await loadOfficialCatalog({
+			allowNetwork,
+			cachePath: this.officialCachePath,
+			signal,
+		});
+		const evicted = this.userModels.evictOfficial(officialModelKeys(loaded.catalog));
+		const templateByProvider = new Map<string, Model<Api> | undefined>();
+		const officialModels = loaded.catalog.models.map((entry) => {
+			if (!templateByProvider.has(entry.provider)) {
+				templateByProvider.set(entry.provider, this.bakedInModels(entry.provider)[0]);
+			}
+			return officialEntryToModel(entry, templateByProvider.get(entry.provider));
+		});
+		this.overlay.setOfficial(officialModels);
+		this.overlay.setUser(this.userModels.list().map(userEntryToModel));
+		return { ...loaded, evictedUserRows: evicted.length };
+	}
+
+	private async restoreLiveCatalogs(): Promise<LiveCatalogResult[]> {
+		const results: LiveCatalogResult[] = [];
+		for (const providerId of LIVE_LIST_PROVIDER_IDS) {
+			const stored = await this.modelsStore.read(providerId);
+			if (stored?.models) this.overlay.setLive(providerId, stored.models);
+			results.push({
+				providerId,
+				status: "skipped",
+				discoveries: [],
+				added: 0,
+				total: stored?.models.length ?? 0,
+				incomplete: [],
+			});
+		}
+		return results;
+	}
+
+	private async refreshLiveCatalogs(officialKeys: Set<string>, signal?: AbortSignal): Promise<LiveCatalogResult[]> {
+		const known = knownModelKeys(
+			LIVE_LIST_PROVIDER_IDS.flatMap((id) => this.bakedInModels(id)),
+			officialKeys,
+			this.userModels.keys(),
+		);
+
+		const results = await Promise.all(
+			LIVE_LIST_PROVIDER_IDS.map(async (providerId) => {
+				const stored = await this.modelsStore.read(providerId);
+				if (stored?.models) this.overlay.setLive(providerId, stored.models);
+				if (signal?.aborted) {
+					return {
+						providerId,
+						status: "skipped" as const,
+						discoveries: [],
+						added: 0,
+						total: stored?.models.length ?? 0,
+						incomplete: [],
+						error: "aborted",
+					};
+				}
+
+				const bakedIn = this.bakedInModels(providerId);
+				const provider = this.models.getProvider(providerId) ?? this.defaultBuiltins.get(providerId);
+				const baseUrl = provider?.baseUrl ?? bakedIn[0]?.baseUrl;
+				if (!baseUrl) {
+					return {
+						providerId,
+						status: "skipped" as const,
+						discoveries: [],
+						added: 0,
+						total: 0,
+						incomplete: [],
+					};
+				}
+
+				const credential = await this.refreshCredentialFor(providerId);
+				if (!credential) {
+					return {
+						providerId,
+						status: "skipped" as const,
+						discoveries: [],
+						added: 0,
+						total: stored?.models.length ?? 0,
+						incomplete: [],
+					};
+				}
+
+				const result = await fetchLiveProviderModels({
+					providerId,
+					baseUrl,
+					bakedIn,
+					credential,
+					knownKeys: known,
+					signal,
+				});
+				if (result.status === "ok") {
+					const overlayModels = buildLiveOverlay(bakedIn, result.discoveries);
+					this.overlay.setLive(providerId, overlayModels);
+					try {
+						await this.modelsStore.write(providerId, { models: overlayModels, checkedAt: Date.now() });
+					} catch {
+						// Store write is best-effort.
+					}
+				}
+				return result;
+			}),
+		);
+		return results;
+	}
+
+	private async refreshCredentialFor(providerId: string): Promise<Credential | undefined> {
+		const stored = await this.credentials.read(providerId);
+		if (stored?.type === "oauth" && stored.access) return stored;
+		const resolved = await this.getAuth(providerId);
+		if (resolved?.auth.apiKey) return { type: "api_key", key: resolved.auth.apiKey, env: resolved.env };
+		if (stored?.type === "api_key" && stored.key) return stored;
+		return undefined;
 	}
 
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
