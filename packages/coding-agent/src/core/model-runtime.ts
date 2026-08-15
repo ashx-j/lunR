@@ -648,10 +648,12 @@ export class ModelRuntime implements Models {
 		allowNetwork: boolean,
 		signal?: AbortSignal,
 	): Promise<(OfficialCatalogLoadResult & { evictedUserRows: number }) | undefined> {
+		const storedProviders = await this.listStoredProviderIds();
 		const loaded = await loadOfficialCatalog({
 			allowNetwork,
 			cachePath: this.officialCachePath,
 			signal,
+			providerIds: [...storedProviders],
 		});
 		const evicted = this.userModels.evictOfficial(officialModelKeys(loaded.catalog));
 		const templateByProvider = new Map<string, Model<Api> | undefined>();
@@ -662,7 +664,7 @@ export class ModelRuntime implements Models {
 			return officialEntryToModel(entry, templateByProvider.get(entry.provider));
 		});
 		this.overlay.setOfficial(officialModels);
-		this.overlay.setUser(this.userModelsForStoredProviders(await this.listStoredProviderIds()));
+		this.overlay.setUser(this.userModelsForStoredProviders(storedProviders));
 		return { ...loaded, evictedUserRows: evicted.length };
 	}
 

@@ -1,0 +1,86 @@
+name: Publish model catalog
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "packages/ai/scripts/generate-models.ts"
+      - "scripts/sync-model-catalog.mjs"
+      - ".github/workflows/publish-model-catalog.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "packages/ai/scripts/generate-models.ts"
+      - "scripts/sync-model-catalog.mjs"
+      - ".github/workflows/publish-model-catalog.yml"
+      - "catalog/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Generate model catalog
+        run: npm run generate:model-catalog
+
+      - name: Validate generated catalog
+        run: node scripts/sync-model-catalog.mjs --check
+
+      - name: Sync catalog into repo
+        if: github.event_name != 'pull_request'
+        run: node scripts/sync-model-catalog.mjs --source-commit ${{ github.sha }}
+
+      - name: Commit catalog if changed
+        id: commit
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Catalog unchanged."
+          else
+            git commit -m "chore: refresh generated model catalog"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push to master
+        id: push
+        if: github.event_name != 'pull_request' && steps.commit.outputs.changed == 'true'
+        continue-on-error: true
+        run: git push origin HEAD:${{ github.ref_name }}
+
+      - name: Open PR if push was rejected
+        if: github.event_name != 'pull_request' && steps.commit.outputs.changed == 'true' && steps.push.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="chore/refresh-model-catalog-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --base master \
+            --head "$BRANCH" \
+            --title "chore: refresh generated model catalog" \
+            --body "Automated catalog refresh. Direct push to \`${{ github.ref_name }}\` was rejected."

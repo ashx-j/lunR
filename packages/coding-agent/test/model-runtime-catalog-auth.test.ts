@@ -150,3 +150,57 @@ describe("ModelRuntime live catalog auth gate", () => {
 		expect((await runtime.getAuth("openrouter"))?.auth.apiKey).toBe("test");
 	});
 });
+
+describe("ModelRuntime official shard fetch", () => {
+	it("create() does not fetch; refresh fetches shards only for stored providers", async () => {
+		const fetchImpl = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			const href = String(url);
+			if (href.endsWith("/providers.json")) {
+				return new Response(JSON.stringify(["xai", "openrouter", "openai"]), { status: 200 });
+			}
+			if (href.endsWith("/providers/xai.json")) {
+				return new Response(
+					JSON.stringify({
+						"grok-4.7": {
+							id: "grok-4.7",
+							name: "Grok 4.7",
+							api: "openai-completions",
+							provider: "xai",
+							baseUrl: "https://api.x.ai/v1",
+							reasoning: true,
+							input: ["text", "image"],
+							cost: { input: 3, output: 9, cacheRead: 0.5, cacheWrite: 0 },
+							contextWindow: 600000,
+							maxTokens: 600000,
+							compat: { thinkingFormat: "openrouter" },
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (href.includes("/models")) {
+				return new Response(JSON.stringify({ data: [] }), { status: 200 });
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory({
+				xai: { type: "api_key", key: "stored-xai" },
+			}),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: true,
+		});
+		expect(fetchImpl).not.toHaveBeenCalled();
+
+		await runtime.refresh({ allowNetwork: true });
+		const officialUrls = fetchImpl.mock.calls
+			.map((call) => String(call[0]))
+			.filter((href) => href.includes("/catalog/"));
+		expect(officialUrls.some((href) => href.endsWith("/providers.json"))).toBe(true);
+		expect(officialUrls.some((href) => href.endsWith("/providers/xai.json"))).toBe(true);
+		expect(officialUrls.some((href) => href.includes("/providers/openrouter.json"))).toBe(false);
+		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ thinkingFormat: "openrouter" });
+	});
+});

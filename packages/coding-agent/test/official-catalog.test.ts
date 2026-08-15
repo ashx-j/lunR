@@ -1,8 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BUNDLED_OFFICIAL_CATALOG, loadOfficialCatalog, parseOfficialCatalog } from "../src/core/official-catalog.ts";
+import {
+	BUNDLED_OFFICIAL_CATALOG,
+	loadOfficialCatalog,
+	officialCatalogUrlFor,
+	officialEntryToModel,
+	parseOfficialCatalog,
+} from "../src/core/official-catalog.ts";
 
 const tempDirs: string[] = [];
 
@@ -21,24 +28,59 @@ function tempDir(): string {
 	return dir;
 }
 
+const grok46 = {
+	id: "grok-4.6",
+	name: "Grok 4.6",
+	api: "openai-completions" as const,
+	provider: "xai",
+	baseUrl: "https://api.x.ai/v1",
+	reasoning: true,
+	input: ["text", "image"] as ("text" | "image")[],
+	cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+	contextWindow: 500000,
+	maxTokens: 500000,
+};
+
+const grok47 = {
+	id: "grok-4.7",
+	name: "Grok 4.7",
+	api: "openai-completions" as const,
+	provider: "xai",
+	baseUrl: "https://api.x.ai/v1",
+	reasoning: true,
+	input: ["text", "image"] as ("text" | "image")[],
+	cost: { input: 3, output: 9, cacheRead: 0.5, cacheWrite: 0 },
+	contextWindow: 600000,
+	maxTokens: 600000,
+	compat: { thinkingFormat: "openrouter" as const, supportsStore: false },
+	thinkingLevelMap: { high: "high", low: "low" },
+};
+
 const githubCatalog = {
 	version: 1,
 	updatedAt: "2026-08-16T00:00:00Z",
-	models: [
-		{
-			id: "grok-4.7",
-			name: "Grok 4.7",
-			api: "openai-completions",
-			provider: "xai",
-			baseUrl: "https://api.x.ai/v1",
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 3, output: 9, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: 600000,
-			maxTokens: 600000,
-		},
-	],
+	models: [grok47],
 };
+
+function jsonResponse(body: unknown, status = 200): Response {
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: { "content-type": "application/json" },
+	});
+}
+
+function shardFetch(handlers: Record<string, unknown | number>): typeof fetch {
+	return (async (url: string | URL) => {
+		const href = String(url);
+		for (const [suffix, payload] of Object.entries(handlers)) {
+			if (href.endsWith(suffix)) {
+				if (typeof payload === "number") return new Response("error", { status: payload });
+				return jsonResponse(payload);
+			}
+		}
+		return new Response("missing", { status: 404 });
+	}) as typeof fetch;
+}
 
 describe("parseOfficialCatalog", () => {
 	it("parses the seeded document and ignores junk rows", () => {
@@ -51,9 +93,83 @@ describe("parseOfficialCatalog", () => {
 		expect(parsed?.models[0]).toMatchObject({ id: "grok-4.6", provider: "xai", contextWindow: 500000 });
 	});
 
+	it("parses keyed models.json and keeps compat + thinkingLevelMap", () => {
+		const parsed = parseOfficialCatalog({
+			xai: { "grok-4.7": grok47 },
+			anthropic: {
+				"claude-opus": {
+					id: "claude-opus",
+					name: "Claude Opus",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					baseUrl: "https://api.anthropic.com",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+					contextWindow: 200000,
+					maxTokens: 32000,
+					compat: { supportsFineGrainedToolStreaming: false },
+					thinkingLevelMap: { max: "max" },
+				},
+			},
+		});
+		expect(parsed?.models).toHaveLength(2);
+		const grok = parsed?.models.find((model) => model.id === "grok-4.7");
+		const claude = parsed?.models.find((model) => model.id === "claude-opus");
+		expect(grok?.compat).toEqual({ thinkingFormat: "openrouter", supportsStore: false });
+		expect(grok?.thinkingLevelMap).toEqual({ high: "high", low: "low" });
+		expect(claude?.compat).toEqual({ supportsFineGrainedToolStreaming: false });
+		expect(claude?.thinkingLevelMap).toEqual({ max: "max" });
+	});
+
+	it("parses a provider shard keyed by model id", () => {
+		const parsed = parseOfficialCatalog({ "grok-4.7": grok47, junk: { nope: true } });
+		expect(parsed?.models).toHaveLength(1);
+		expect(parsed?.models[0]?.id).toBe("grok-4.7");
+		expect(parsed?.models[0]?.compat).toEqual({ thinkingFormat: "openrouter", supportsStore: false });
+	});
+
+	it("fills provider/id from keyed maps when the row omits them", () => {
+		const parsed = parseOfficialCatalog({
+			xai: { "grok-4.6": { ...grok46, id: undefined, provider: undefined } },
+		});
+		expect(parsed?.models[0]).toMatchObject({ id: "grok-4.6", provider: "xai" });
+	});
+
 	it("returns undefined for a wrong shape", () => {
 		expect(parseOfficialCatalog({ models: "nope" })).toBeUndefined();
 		expect(parseOfficialCatalog(null)).toBeUndefined();
+		expect(parseOfficialCatalog({})).toBeUndefined();
+	});
+});
+
+describe("officialEntryToModel", () => {
+	it("uses compat and thinkingLevelMap from the official row, not only the template", () => {
+		const template: Model<"openai-completions"> = {
+			...grok46,
+			compat: { thinkingFormat: "openai" },
+			thinkingLevelMap: { high: "template" },
+		};
+		const model = officialEntryToModel(
+			{
+				...grok47,
+				api: "openai-completions",
+			},
+			template,
+		);
+		expect(model.compat).toEqual({ thinkingFormat: "openrouter", supportsStore: false });
+		expect(model.thinkingLevelMap).toEqual({ high: "high", low: "low" });
+	});
+
+	it("falls back to the baked-in template when the official row has no compat", () => {
+		const template: Model<"openai-completions"> = {
+			...grok46,
+			compat: { thinkingFormat: "openai" },
+			thinkingLevelMap: { high: "template" },
+		};
+		const model = officialEntryToModel(grok46, template);
+		expect(model.compat).toEqual({ thinkingFormat: "openai" });
+		expect(model.thinkingLevelMap).toEqual({ high: "template" });
 	});
 });
 
@@ -64,6 +180,7 @@ describe("loadOfficialCatalog", () => {
 			allowNetwork: false,
 			bundled: BUNDLED_OFFICIAL_CATALOG,
 			fetchImpl: fetchImpl as unknown as typeof fetch,
+			providerIds: ["xai"],
 		});
 		expect(loaded.source).toBe("bundled");
 		expect(loaded.catalog.models.map((model) => model.id)).toEqual(["grok-4.6"]);
@@ -74,6 +191,7 @@ describe("loadOfficialCatalog", () => {
 		const loaded404 = await loadOfficialCatalog({
 			allowNetwork: true,
 			bundled: BUNDLED_OFFICIAL_CATALOG,
+			providerIds: ["xai"],
 			fetchImpl: async () => new Response("missing", { status: 404 }),
 		});
 		expect(loaded404.source).toBe("bundled");
@@ -82,43 +200,77 @@ describe("loadOfficialCatalog", () => {
 		const loadedTimeout = await loadOfficialCatalog({
 			allowNetwork: true,
 			bundled: BUNDLED_OFFICIAL_CATALOG,
+			providerIds: ["xai"],
 			timeoutMs: 20,
 			fetchImpl: () => new Promise(() => {}),
 		});
 		expect(loadedTimeout.source).toBe("bundled");
 	});
 
-	it("replaces the bundled catalog with a GitHub payload and caches it", async () => {
+	it("fetches providers.json then only requested shards and caches the merge", async () => {
 		const dir = tempDir();
 		const cachePath = join(dir, "official-catalog-cache.json");
+		const fetchImpl = vi.fn(
+			shardFetch({
+				"/providers.json": ["xai", "anthropic", "openai"],
+				"/providers/xai.json": { "grok-4.7": grok47 },
+				"/providers/openai.json": 404,
+			}),
+		);
 		const loaded = await loadOfficialCatalog({
 			allowNetwork: true,
 			bundled: BUNDLED_OFFICIAL_CATALOG,
 			cachePath,
-			fetchImpl: async () =>
-				new Response(JSON.stringify(githubCatalog), {
-					status: 200,
-					headers: { "content-type": "application/json" },
-				}),
+			providerIds: ["xai", "openai"],
+			fetchImpl,
 		});
 		expect(loaded.source).toBe("github");
 		expect(loaded.catalog.models.map((model) => model.id)).toEqual(["grok-4.7"]);
+		expect(loaded.catalog.models[0]?.compat).toEqual({ thinkingFormat: "openrouter", supportsStore: false });
 		expect(JSON.parse(readFileSync(cachePath, "utf-8")).models[0].id).toBe("grok-4.7");
+		const urls = fetchImpl.mock.calls.map((call) => String(call[0])).sort();
+		expect(urls).toEqual(
+			[
+				officialCatalogUrlFor("providers.json"),
+				officialCatalogUrlFor("providers/openai.json"),
+				officialCatalogUrlFor("providers/xai.json"),
+			].sort(),
+		);
 	});
 
-	it("honors LUNR_OFFICIAL_CATALOG_URL", async () => {
-		vi.stubEnv("LUNR_OFFICIAL_CATALOG_URL", "https://example.test/official.json");
-		const fetchImpl = vi.fn(async (url: string | URL) => {
-			expect(String(url)).toBe("https://example.test/official.json");
-			return new Response(JSON.stringify(githubCatalog), { status: 200 });
-		});
+	it("honors LUNR_OFFICIAL_CATALOG_URL as a directory base", async () => {
+		vi.stubEnv("LUNR_OFFICIAL_CATALOG_URL", "https://example.test/catalog/");
+		const fetchImpl = vi.fn(
+			shardFetch({
+				"/providers.json": ["xai"],
+				"/providers/xai.json": { "grok-4.7": grok47 },
+			}),
+		);
 		const loaded = await loadOfficialCatalog({
 			allowNetwork: true,
 			bundled: BUNDLED_OFFICIAL_CATALOG,
-			fetchImpl: fetchImpl as unknown as typeof fetch,
+			providerIds: ["xai"],
+			fetchImpl,
 		});
 		expect(loaded.source).toBe("github");
-		expect(fetchImpl).toHaveBeenCalledOnce();
+		expect(fetchImpl.mock.calls.map((call) => String(call[0])).sort()).toEqual([
+			"https://example.test/catalog/providers.json",
+			"https://example.test/catalog/providers/xai.json",
+		]);
+	});
+
+	it("skips a 404 shard and falls back when no requested shard succeeds", async () => {
+		const loaded = await loadOfficialCatalog({
+			allowNetwork: true,
+			bundled: BUNDLED_OFFICIAL_CATALOG,
+			providerIds: ["xai"],
+			fetchImpl: shardFetch({
+				"/providers.json": ["xai", "openai"],
+				"/providers/xai.json": 404,
+			}),
+		});
+		expect(loaded.source).toBe("bundled");
+		expect(loaded.catalog.models[0]?.id).toBe("grok-4.6");
 	});
 
 	it("falls back to last cache when bundled is empty and GitHub fails", async () => {
@@ -129,6 +281,7 @@ describe("loadOfficialCatalog", () => {
 			allowNetwork: true,
 			bundled: { version: 1, updatedAt: "", models: [] },
 			cachePath,
+			providerIds: ["xai"],
 			fetchImpl: async () => new Response("nope", { status: 500 }),
 		});
 		expect(loaded.source).toBe("cache");

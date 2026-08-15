@@ -1,14 +1,17 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { getAgentDir, getPackageDir, VERSION } from "../config.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 
-export const OFFICIAL_CATALOG_DEFAULT_URL =
-	"https://raw.githubusercontent.com/ashx-j/lunR/master/catalog/official-models.json";
+/** Directory on GitHub raw (`providers.json` + `providers/{id}.json`). Override with `LUNR_OFFICIAL_CATALOG_URL`. */
+export const OFFICIAL_CATALOG_DEFAULT_URL = "https://raw.githubusercontent.com/ashx-j/lunR/master/catalog";
 export const OFFICIAL_CATALOG_TIMEOUT_MS = 4000;
 export const OFFICIAL_CATALOG_CACHE_FILENAME = "official-catalog-cache.json";
+
+const THINKING_LEVEL_KEYS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const META_KEYS = new Set(["version", "updatedAt", "generatedAt", "sourceCommit", "providerCount", "modelCount"]);
 
 export interface OfficialModelCost {
 	input: number;
@@ -28,6 +31,9 @@ export interface OfficialModelEntry {
 	cost: OfficialModelCost;
 	contextWindow: number;
 	maxTokens: number;
+	compat?: Model<Api>["compat"];
+	thinkingLevelMap?: ThinkingLevelMap;
+	headers?: Record<string, string>;
 }
 
 export interface OfficialCatalogFile {
@@ -67,8 +73,20 @@ export function officialCatalogCachePath(agentDir: string = getAgentDir()): stri
 	return join(agentDir, OFFICIAL_CATALOG_CACHE_FILENAME);
 }
 
+/** Base URL (no trailing slash). `LUNR_OFFICIAL_CATALOG_URL` overrides the directory, not a single file. */
+export function officialCatalogBaseUrl(override?: string): string {
+	const raw = (override ?? process.env.LUNR_OFFICIAL_CATALOG_URL)?.trim() || OFFICIAL_CATALOG_DEFAULT_URL;
+	return raw.replace(/\/+$/, "");
+}
+
+/** @deprecated Use officialCatalogBaseUrl. Kept as an alias for the directory base. */
 export function officialCatalogUrl(): string {
-	return process.env.LUNR_OFFICIAL_CATALOG_URL?.trim() || OFFICIAL_CATALOG_DEFAULT_URL;
+	return officialCatalogBaseUrl();
+}
+
+export function officialCatalogUrlFor(path: string, base?: string): string {
+	const normalized = path.replace(/^\/+/, "");
+	return `${officialCatalogBaseUrl(base)}/${normalized}`;
 }
 
 export function modelKey(provider: string, id: string): string {
@@ -110,6 +128,29 @@ function parseInput(value: unknown): ("text" | "image")[] | undefined {
 	return input.length > 0 ? input : undefined;
 }
 
+function parseThinkingLevelMap(value: unknown): ThinkingLevelMap | undefined {
+	if (!isRecord(value)) return undefined;
+	const map: ThinkingLevelMap = {};
+	let any = false;
+	for (const level of THINKING_LEVEL_KEYS) {
+		const mapped = value[level];
+		if (mapped === null || typeof mapped === "string") {
+			map[level] = mapped;
+			any = true;
+		}
+	}
+	return any ? map : undefined;
+}
+
+function parseHeaders(value: unknown): Record<string, string> | undefined {
+	if (!isRecord(value)) return undefined;
+	const headers: Record<string, string> = {};
+	for (const [name, headerValue] of Object.entries(value)) {
+		if (typeof headerValue === "string") headers[name] = headerValue;
+	}
+	return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
 function parseOfficialEntry(value: unknown): OfficialModelEntry | undefined {
 	if (!isRecord(value)) return undefined;
 	const id = typeof value.id === "string" ? value.id.trim() : "";
@@ -120,10 +161,13 @@ function parseOfficialEntry(value: unknown): OfficialModelEntry | undefined {
 	const baseUrl = typeof value.baseUrl === "string" ? value.baseUrl.trim() : "";
 	const cost = parseCost(value.cost) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	const input = parseInput(value.input) ?? ["text"];
+	const compat = isRecord(value.compat) ? (value.compat as Model<Api>["compat"]) : undefined;
+	const thinkingLevelMap = parseThinkingLevelMap(value.thinkingLevelMap);
+	const headers = parseHeaders(value.headers);
 	return {
 		id,
 		name,
-		api,
+		api: api as Api,
 		provider,
 		baseUrl,
 		reasoning: value.reasoning === true,
@@ -131,20 +175,58 @@ function parseOfficialEntry(value: unknown): OfficialModelEntry | undefined {
 		cost,
 		contextWindow: asFiniteNumber(value.contextWindow) ?? 128000,
 		maxTokens: asFiniteNumber(value.maxTokens) ?? 8192,
+		...(compat ? { compat } : {}),
+		...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+		...(headers ? { headers } : {}),
 	};
+}
+
+function catalogFile(models: OfficialModelEntry[], value?: Record<string, unknown>): OfficialCatalogFile {
+	const version = value ? (asFiniteNumber(value.version) ?? 1) : 1;
+	const updatedAt = value && typeof value.updatedAt === "string" && value.updatedAt.trim() ? value.updatedAt : "";
+	return { version, updatedAt, models };
+}
+
+function parseKeyedCatalog(value: Record<string, unknown>): OfficialCatalogFile | undefined {
+	const models: OfficialModelEntry[] = [];
+	for (const [key, entry] of Object.entries(value)) {
+		if (META_KEYS.has(key) || !isRecord(entry)) continue;
+		if (typeof entry.id === "string") {
+			const parsed = parseOfficialEntry(entry);
+			if (parsed) models.push(parsed);
+			continue;
+		}
+		for (const [modelId, model] of Object.entries(entry)) {
+			if (!isRecord(model)) continue;
+			const parsed = parseOfficialEntry({
+				...model,
+				id: typeof model.id === "string" && model.id.trim() ? model.id : modelId,
+				provider: typeof model.provider === "string" && model.provider.trim() ? model.provider : key,
+			});
+			if (parsed) models.push(parsed);
+		}
+	}
+	return models.length > 0 ? catalogFile(models, value) : undefined;
 }
 
 /** Parse an official catalog document. Returns undefined on a bad shape (never throws). */
 export function parseOfficialCatalog(value: unknown): OfficialCatalogFile | undefined {
-	if (!isRecord(value) || !Array.isArray(value.models)) return undefined;
-	const models: OfficialModelEntry[] = [];
-	for (const entry of value.models) {
-		const parsed = parseOfficialEntry(entry);
-		if (parsed) models.push(parsed);
+	if (!isRecord(value)) return undefined;
+	if (Array.isArray(value.models)) {
+		const models: OfficialModelEntry[] = [];
+		for (const entry of value.models) {
+			const parsed = parseOfficialEntry(entry);
+			if (parsed) models.push(parsed);
+		}
+		return catalogFile(models, value);
 	}
-	const version = asFiniteNumber(value.version) ?? 1;
-	const updatedAt = typeof value.updatedAt === "string" && value.updatedAt.trim() ? value.updatedAt : "";
-	return { version, updatedAt, models };
+	if ("models" in value) return undefined;
+	return parseKeyedCatalog(value);
+}
+
+function parseProviderIndex(value: unknown): string[] | undefined {
+	if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return undefined;
+	return value;
 }
 
 function readCatalogFile(path: string): OfficialCatalogFile | undefined {
@@ -160,12 +242,17 @@ function bundledCatalogCandidates(): string[] {
 	const here = dirname(fileURLToPath(import.meta.url));
 	const packageDir = getPackageDir();
 	return [
-		join(here, "official-models.json"),
-		join(here, "../catalog/official-models.json"),
-		join(packageDir, "catalog", "official-models.json"),
+		join(packageDir, "dist", "catalog", "models.json"),
+		join(packageDir, "..", "..", "catalog", "models.json"),
+		join(here, "../../../../catalog/models.json"),
+		join(packageDir, "catalog", "models.json"),
+		join(here, "../catalog/models.json"),
+		join(here, "models.json"),
 		join(packageDir, "dist", "catalog", "official-models.json"),
 		join(packageDir, "..", "..", "catalog", "official-models.json"),
 		join(here, "../../../../catalog/official-models.json"),
+		join(here, "official-models.json"),
+		join(here, "../catalog/official-models.json"),
 	];
 }
 
@@ -219,8 +306,9 @@ export function officialEntryToModel(entry: OfficialModelEntry, template?: Model
 		cost: entry.cost ?? template?.cost ?? ZERO_COST,
 		contextWindow: entry.contextWindow,
 		maxTokens: entry.maxTokens,
-		compat: template?.compat,
-		thinkingLevelMap: template?.thinkingLevelMap,
+		compat: entry.compat ?? template?.compat,
+		thinkingLevelMap: entry.thinkingLevelMap ?? template?.thinkingLevelMap,
+		headers: entry.headers ?? template?.headers,
 	};
 }
 
@@ -228,10 +316,13 @@ export interface LoadOfficialCatalogOptions {
 	allowNetwork?: boolean;
 	cachePath?: string;
 	bundled?: OfficialCatalogFile;
+	/** Catalog directory base (not a single-file URL). */
 	url?: string;
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	fetchImpl?: typeof fetch;
+	/** Stored-credential provider ids. Only these shards are fetched. */
+	providerIds?: readonly string[];
 }
 
 function fallbackCatalog(bundled: OfficialCatalogFile, cachePath?: string): OfficialCatalogLoadResult {
@@ -241,9 +332,50 @@ function fallbackCatalog(bundled: OfficialCatalogFile, cachePath?: string): Offi
 	return { catalog: BUNDLED_OFFICIAL_CATALOG, source: "bundled" };
 }
 
+async function fetchJson(
+	url: string,
+	options: {
+		timeoutMs: number;
+		signal?: AbortSignal;
+		fetchImpl: typeof fetch;
+		headers: Record<string, string>;
+	},
+): Promise<{ ok: true; value: unknown } | { ok: false; status?: number }> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+	const onParentAbort = () => controller.abort();
+	options.signal?.addEventListener("abort", onParentAbort, { once: true });
+	if (options.signal?.aborted) controller.abort();
+	try {
+		const abortError = () => {
+			const error = new Error("The operation was aborted");
+			error.name = "AbortError";
+			return error;
+		};
+		const response = await Promise.race([
+			options.fetchImpl(url, {
+				headers: options.headers,
+				signal: controller.signal,
+			}),
+			new Promise<never>((_, reject) => {
+				controller.signal.addEventListener("abort", () => reject(abortError()), { once: true });
+				if (controller.signal.aborted) reject(abortError());
+			}),
+		]);
+		if (!response.ok) return { ok: false, status: response.status };
+		return { ok: true, value: await response.json() };
+	} catch {
+		return { ok: false };
+	} finally {
+		clearTimeout(timer);
+		options.signal?.removeEventListener("abort", onParentAbort);
+	}
+}
+
 /**
  * Load the official overlay. Network only when allowNetwork is true.
- * 404 / timeout / any error falls back to bundled, then last disk cache. Never throws.
+ * Fetches providers.json, then providers/{id}.json for stored-credential providers.
+ * 404 / timeout / any error falls back to cache, then bundled. Never throws.
  */
 export async function loadOfficialCatalog(
 	options: LoadOfficialCatalogOptions = {},
@@ -255,38 +387,46 @@ export async function loadOfficialCatalog(
 	}
 
 	const timeoutMs = options.timeoutMs ?? OFFICIAL_CATALOG_TIMEOUT_MS;
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	const onParentAbort = () => controller.abort();
-	options.signal?.addEventListener("abort", onParentAbort, { once: true });
-	if (options.signal?.aborted) controller.abort();
+	const fetchImpl = options.fetchImpl ?? fetch;
+	const headers = {
+		accept: "application/json",
+		"User-Agent": getPiUserAgent(VERSION),
+	};
+	const fetchOptions = { timeoutMs, signal: options.signal, fetchImpl, headers };
+	const base = options.url ?? officialCatalogBaseUrl();
 
 	try {
-		const fetchImpl = options.fetchImpl ?? fetch;
-		const response = await Promise.race([
-			fetchImpl(options.url ?? officialCatalogUrl(), {
-				headers: {
-					accept: "application/json",
-					"User-Agent": getPiUserAgent(VERSION),
-				},
-				signal: controller.signal,
+		const indexResult = await fetchJson(officialCatalogUrlFor("providers.json", base), fetchOptions);
+		if (!indexResult.ok) return fallbackCatalog(bundled, cachePath);
+		const index = parseProviderIndex(indexResult.value);
+		if (!index) return fallbackCatalog(bundled, cachePath);
+
+		const wanted = new Set(index);
+		const requested = options.providerIds ?? [];
+		const shardIds = requested.filter((providerId) => wanted.has(providerId));
+		if (shardIds.length === 0) return fallbackCatalog(bundled, cachePath);
+
+		const shards = await Promise.all(
+			shardIds.map(async (providerId) => {
+				const result = await fetchJson(
+					officialCatalogUrlFor(`providers/${encodeURIComponent(providerId)}.json`, base),
+					fetchOptions,
+				);
+				if (!result.ok) return [];
+				return parseOfficialCatalog(result.value)?.models ?? [];
 			}),
-			new Promise<never>((_, reject) => {
-				const abortError = new Error("The operation was aborted");
-				abortError.name = "AbortError";
-				controller.signal.addEventListener("abort", () => reject(abortError), { once: true });
-				if (controller.signal.aborted) reject(abortError);
-			}),
-		]);
-		if (!response.ok) return fallbackCatalog(bundled, cachePath);
-		const parsed = parseOfficialCatalog(await response.json());
-		if (!parsed) return fallbackCatalog(bundled, cachePath);
-		if (cachePath) writeOfficialCatalogCache(parsed, cachePath);
-		return { catalog: parsed, source: "github" };
+		);
+		const models = shards.flat();
+		if (models.length === 0) return fallbackCatalog(bundled, cachePath);
+
+		const catalog: OfficialCatalogFile = {
+			version: 1,
+			updatedAt: new Date().toISOString(),
+			models,
+		};
+		if (cachePath) writeOfficialCatalogCache(catalog, cachePath);
+		return { catalog, source: "github" };
 	} catch {
 		return fallbackCatalog(bundled, cachePath);
-	} finally {
-		clearTimeout(timer);
-		options.signal?.removeEventListener("abort", onParentAbort);
 	}
 }
