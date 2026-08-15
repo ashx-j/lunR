@@ -282,9 +282,35 @@ export class ModelRuntime implements Models {
 		};
 	}
 
+	private async listStoredProviderIds(): Promise<Set<string>> {
+		const credentials = await this.credentials.list();
+		return new Set(credentials.map((entry) => entry.providerId));
+	}
+
+	/** `/model` lists stored creds + models.json/extension keys, never ambient envApiKeyAuth. */
+	private configuredProviderIds(storedProviders: ReadonlySet<string>): Set<string> {
+		const configured = new Set(storedProviders);
+		for (const provider of this.models.getProviders()) {
+			if (
+				configuredRequestAuthStatus(this.config.getProvider(provider.id), this.extensionProviders.get(provider.id))
+					?.configured
+			) {
+				configured.add(provider.id);
+			}
+		}
+		return configured;
+	}
+
+	private userModelsForStoredProviders(storedProviders: ReadonlySet<string>): Model<Api>[] {
+		return this.userModels
+			.list()
+			.filter((row) => storedProviders.has(row.provider))
+			.map(userEntryToModel);
+	}
+
 	private async runAvailabilityRefresh(): Promise<void> {
 		const providers = this.models.getProviders();
-		const [available, checks, credentials] = await Promise.all([
+		const [available, checks, storedProviders] = await Promise.all([
 			this.models.getAvailable(),
 			Promise.all(
 				providers.map(
@@ -294,19 +320,15 @@ export class ModelRuntime implements Models {
 					],
 				),
 			),
-			this.credentials.list(),
+			this.listStoredProviderIds(),
 		]);
 		const auth = new Map(checks);
-		const configuredProviders = new Set(
-			checks
-				.filter((entry): entry is [string, AuthCheck] => entry[1] !== undefined)
-				.map(([providerId]) => providerId),
-		);
+		const configuredProviders = this.configuredProviderIds(storedProviders);
 		this.snapshot = {
 			all: [...this.models.getModels()],
-			available: [...available],
+			available: available.filter((model) => configuredProviders.has(model.provider)),
 			configuredProviders,
-			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
+			storedProviders,
 			auth,
 		};
 		this.availabilityError = undefined;
@@ -555,6 +577,9 @@ export class ModelRuntime implements Models {
 
 	async logout(providerId: string): Promise<void> {
 		await this.models.logout(providerId);
+		await this.modelsStore.delete(providerId);
+		this.userModels.evictProvider(providerId);
+		this.overlay.setLive(providerId, []);
 		// Reset credential-dependent compatibility projections before the unconfigured provider is skipped by refresh.
 		this.recomposeProvider(providerId);
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
@@ -615,7 +640,7 @@ export class ModelRuntime implements Models {
 
 	persistUserModels(rows: readonly UserModelEntry[]): void {
 		this.userModels.upsert(rows);
-		this.overlay.setUser(this.userModels.list().map(userEntryToModel));
+		this.overlay.setUser(this.userModelsForStoredProviders(this.snapshot.storedProviders));
 		this.updateModelSnapshot();
 	}
 
@@ -637,15 +662,17 @@ export class ModelRuntime implements Models {
 			return officialEntryToModel(entry, templateByProvider.get(entry.provider));
 		});
 		this.overlay.setOfficial(officialModels);
-		this.overlay.setUser(this.userModels.list().map(userEntryToModel));
+		this.overlay.setUser(this.userModelsForStoredProviders(await this.listStoredProviderIds()));
 		return { ...loaded, evictedUserRows: evicted.length };
 	}
 
 	private async restoreLiveCatalogs(): Promise<LiveCatalogResult[]> {
+		const storedProviders = await this.listStoredProviderIds();
 		const results: LiveCatalogResult[] = [];
 		for (const providerId of LIVE_LIST_PROVIDER_IDS) {
-			const stored = await this.modelsStore.read(providerId);
+			const stored = storedProviders.has(providerId) ? await this.modelsStore.read(providerId) : undefined;
 			if (stored?.models) this.overlay.setLive(providerId, stored.models);
+			else this.overlay.setLive(providerId, []);
 			results.push({
 				providerId,
 				status: "skipped",
@@ -659,6 +686,7 @@ export class ModelRuntime implements Models {
 	}
 
 	private async refreshLiveCatalogs(officialKeys: Set<string>, signal?: AbortSignal): Promise<LiveCatalogResult[]> {
+		const storedProviders = await this.listStoredProviderIds();
 		const known = knownModelKeys(
 			LIVE_LIST_PROVIDER_IDS.flatMap((id) => this.bakedInModels(id)),
 			officialKeys,
@@ -667,6 +695,18 @@ export class ModelRuntime implements Models {
 
 		const results = await Promise.all(
 			LIVE_LIST_PROVIDER_IDS.map(async (providerId) => {
+				if (!storedProviders.has(providerId)) {
+					this.overlay.setLive(providerId, []);
+					return {
+						providerId,
+						status: "skipped" as const,
+						discoveries: [],
+						added: 0,
+						total: 0,
+						incomplete: [],
+					};
+				}
+
 				const stored = await this.modelsStore.read(providerId);
 				if (stored?.models) this.overlay.setLive(providerId, stored.models);
 				if (signal?.aborted) {

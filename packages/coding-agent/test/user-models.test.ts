@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	evictUserModelsByProvider,
 	evictUserModelsOnOfficial,
 	readUserModels,
+	UserModelsStore,
 	upsertUserModels,
 	writeUserModels,
 } from "../src/core/user-models.ts";
@@ -68,5 +70,22 @@ describe("user-models", () => {
 		]);
 		expect(next.models).toHaveLength(2);
 		expect(next.models.find((model) => model.id === "grok-new")?.contextWindow).toBe(200000);
+	});
+
+	it("evicts every row for a provider and keeps siblings", () => {
+		const { next, evicted } = evictUserModelsByProvider(
+			{ version: 1, models: [userRow("a", "openrouter"), userRow("b", "openrouter"), userRow("c")] },
+			"openrouter",
+		);
+		expect(evicted.map((model) => `${model.provider}/${model.id}`)).toEqual(["openrouter/a", "openrouter/b"]);
+		expect(next.models.map((model) => `${model.provider}/${model.id}`)).toEqual(["xai/c"]);
+	});
+
+	it("UserModelsStore.evictProvider persists the remaining rows", () => {
+		const path = join(tempDir(), "user-models.json");
+		writeUserModels({ version: 1, models: [userRow("gone", "openrouter"), userRow("stay")] }, path);
+		const store = new UserModelsStore(path);
+		expect(store.evictProvider("openrouter").map((model) => model.id)).toEqual(["gone"]);
+		expect(readUserModels(path).models.map((model) => model.id)).toEqual(["stay"]);
 	});
 });

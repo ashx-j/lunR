@@ -116,6 +116,19 @@ export function evictUserModelsOnOfficial(
 	return { next: { version: user.version, models: kept }, evicted };
 }
 
+export function evictUserModelsByProvider(
+	user: UserModelsFile,
+	providerId: string,
+): { next: UserModelsFile; evicted: UserModelEntry[] } {
+	const kept: UserModelEntry[] = [];
+	const evicted: UserModelEntry[] = [];
+	for (const model of user.models) {
+		if (model.provider === providerId) evicted.push(model);
+		else kept.push(model);
+	}
+	return { next: { version: user.version, models: kept }, evicted };
+}
+
 export function upsertUserModels(existing: UserModelsFile, rows: readonly UserModelEntry[]): UserModelsFile {
 	const byKey = new Map(existing.models.map((model) => [modelKey(model.provider, model.id), model]));
 	for (const row of rows) byKey.set(modelKey(row.provider, row.id), { ...row, source: "user" });
@@ -180,6 +193,15 @@ export class UserModelsStore {
 
 	evictOfficial(officialKeys: Iterable<string>): UserModelEntry[] {
 		const { next, evicted } = evictUserModelsOnOfficial(this.file, officialKeys);
+		if (evicted.length > 0) {
+			this.file = next;
+			this.persist();
+		}
+		return evicted;
+	}
+
+	evictProvider(providerId: string): UserModelEntry[] {
+		const { next, evicted } = evictUserModelsByProvider(this.file, providerId);
 		if (evicted.length > 0) {
 			this.file = next;
 			this.persist();
