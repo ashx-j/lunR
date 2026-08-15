@@ -204,3 +204,105 @@ describe("ModelRuntime official shard fetch", () => {
 		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ thinkingFormat: "openrouter" });
 	});
 });
+
+function requestHref(input: unknown): string {
+	if (typeof input === "string") return input;
+	if (input instanceof URL) return input.toString();
+	if (input instanceof Request) return input.url;
+	return String(input);
+}
+
+function requestAuthorization(init: RequestInit | undefined): string | undefined {
+	const headers = init?.headers;
+	if (!headers) return undefined;
+	if (headers instanceof Headers) return headers.get("Authorization") ?? undefined;
+	if (Array.isArray(headers)) {
+		const match = headers.find(([name]) => name.toLowerCase() === "authorization");
+		return match?.[1];
+	}
+	return (headers as Record<string, string>).Authorization ?? (headers as Record<string, string>).authorization;
+}
+
+describe("ModelRuntime live catalog OAuth refresh", () => {
+	it("refreshes an expired xAI OAuth token before GET /models", async () => {
+		const credentials = AuthStorage.inMemory({
+			xai: { type: "oauth", access: "stale", refresh: "refresh-token", expires: 0 },
+		});
+		const fetchImpl = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			const href = requestHref(url);
+			if (href.includes("auth.x.ai/oauth2/token")) {
+				return new Response(
+					JSON.stringify({ access_token: "fresh", refresh_token: "rotated", expires_in: 21600 }),
+					{ status: 200 },
+				);
+			}
+			if (href.endsWith("/providers.json")) {
+				return new Response(JSON.stringify(["xai"]), { status: 200 });
+			}
+			if (href.endsWith("/providers/xai.json")) {
+				return new Response(JSON.stringify({}), { status: 200 });
+			}
+			if (href.includes("api.x.ai/v1/models")) {
+				if (requestAuthorization(init) !== "Bearer fresh") {
+					return new Response(JSON.stringify({ error: "The OAuth2 access token could not be validated." }), {
+						status: 403,
+					});
+				}
+				return new Response(JSON.stringify({ object: "list", data: [{ id: "grok-live-only" }] }), { status: 200 });
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: true,
+		});
+		expect(fetchImpl).not.toHaveBeenCalled();
+
+		const result = await runtime.refresh({ allowNetwork: true });
+		const xai = result.live.find((entry) => entry.providerId === "xai");
+		expect(xai?.status).toBe("ok");
+		expect(
+			result.live.filter((entry) => entry.providerId !== "xai").every((entry) => entry.status === "skipped"),
+		).toBe(true);
+		expect(await credentials.read("xai")).toMatchObject({ type: "oauth", access: "fresh" });
+		expect(runtime.getModel("xai", "grok-live-only")).toBeDefined();
+	});
+
+	it("keeps a failed xAI token refresh as a per-provider error", async () => {
+		const credentials = AuthStorage.inMemory({
+			xai: { type: "oauth", access: "stale", refresh: "refresh-token", expires: 0 },
+		});
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			const href = requestHref(url);
+			if (href.includes("auth.x.ai/oauth2/token")) {
+				return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+			}
+			if (href.endsWith("/providers.json")) {
+				return new Response(JSON.stringify(["xai"]), { status: 200 });
+			}
+			if (href.endsWith("/providers/xai.json")) {
+				return new Response(JSON.stringify({}), { status: 200 });
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: true,
+		});
+
+		const result = await runtime.refresh({ allowNetwork: true });
+		expect(result.live.find((entry) => entry.providerId === "xai")).toMatchObject({
+			status: "error",
+			error: expect.stringMatching(/oauth refresh failed for xai/i),
+		});
+		expect(
+			result.live.filter((entry) => entry.providerId !== "xai").every((entry) => entry.status === "skipped"),
+		).toBe(true);
+	});
+});

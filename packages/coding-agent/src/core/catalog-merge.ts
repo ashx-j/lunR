@@ -126,7 +126,7 @@ export function formatCatalogRefreshSummary(input: CatalogRefreshSummaryInput): 
 		} else if (provider.status === "timeout") {
 			failed.push(`${provider.id} timed out (cached)`);
 		} else if (provider.status === "error") {
-			failed.push(`${provider.id} failed`);
+			failed.push(provider.error ? `${provider.id} failed (${provider.error})` : `${provider.id} failed`);
 		}
 	}
 
@@ -137,13 +137,7 @@ export function formatCatalogRefreshSummary(input: CatalogRefreshSummaryInput): 
 	}
 
 	if (failed.length > 0) {
-		if (refreshed.length > 0) {
-			parts.push(`${failed.join("; ")}.`);
-		} else {
-			parts.push(
-				`Refreshed ${input.providers.filter((p) => p.status !== "static").length} providers; ${failed.join("; ")}.`,
-			);
-		}
+		parts.push(`${failed.join("; ")}.`);
 	}
 
 	if (input.asked && input.asked.length > 0) {

@@ -28,6 +28,7 @@ Last updated: 2026-08-15. Branch `feat/pi-style-model-catalog` from local `maste
 ## On `feat/pi-style-model-catalog`
 
 - **2026-08-15 Pi-style generated catalog:** `packages/ai/scripts/generate-models.ts --strict --json-only` writes `.artifacts/model-catalog`; `scripts/sync-model-catalog.mjs` validates (providers.json matches models.json + shards; require anthropic+openai+openrouter; refuse <500 models) and copies to `catalog/` (`models.json`, `providers.json`, `providers/*.json`, `publication.json`). GitHub raw `master/catalog/` is the CDN — no R2, no pi.dev. `/refresh` GETs `providers.json` (4s) then `providers/{id}.json` in parallel only for **stored-credential** providers in the index (4s each; skip 404). Merged overlay caches at `~/.lunr/agent/official-catalog-cache.json`; fallback cache → bundled `catalog/` (copy-assets → `dist/catalog/`). Parser accepts keyed `models.json`, a provider shard, and the old flat `{ models: [] }`. `OfficialModelEntry` keeps `compat` + `thinkingLevelMap`; `officialEntryToModel` prefers the official row. `create()` stays `refresh({ allowNetwork: false })`. `/model` stored-cred gate unchanged. Root scripts: `generate:model-catalog`, `sync:model-catalog` (generate+sync), `check:model-catalog` (validate artifact or `catalog/`). CI `.github/workflows/publish-model-catalog.yml` every 4h + dispatch: generate → validate → sync → commit `chore: refresh generated model catalog` (PR if push rejected). Humans maintain `generate-models.ts`, not the JSON. Replaced 1-row `catalog/official-models.json`. Tests: official-catalog + sync-model-catalog + catalog-auth + startup.
+- **2026-08-15 `/refresh` OAuth refresh:** live-list `refreshCredentialFor` now calls `getAuth` first so expired SuperGrok tokens are refreshed before `GET /models`. A failed token refresh stays a per-provider error. `/refresh` toast no longer counts skipped live-list slots as “N providers” and includes `error` (`xai failed (HTTP 403)`). Tests: catalog-auth + catalog-merge.
 
 ## On local `master` (not pushed)
 
@@ -157,6 +158,7 @@ Still pi (deferred): `@earendil-works/pi-*` scopes, `pi.dev` share/catalog URLs,
 - 2026-08-15: `/refresh` is local provider `/models` + official GitHub overlay. Refresh must work on a fresh download with no work from us; official rows overwrite user-filled guesses.
 - 2026-08-15: Gate `/model` on stored creds, not `checkAuth` env resolve — leftover env keys from other tools were listing 300+ OpenRouter models without `/login`.
 - 2026-08-15: Official catalog is generated (`generate-models.ts` → `catalog/` via `sync-model-catalog.mjs`). GitHub raw on `master/catalog/` is the CDN. `/refresh` pulls `providers.json` then shards for stored-credential providers only. Humans maintain `generate-models.ts`, not the JSON. No R2 / no pi.dev.
+- 2026-08-15: `/refresh` live list must refresh expired OAuth the same way `getAuth` does; xAI 403 was a stale SuperGrok access token, not a bad `/models` URL.
 
 # Deferred
 
