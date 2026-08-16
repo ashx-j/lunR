@@ -27,8 +27,10 @@ export interface LocalServerSpec {
 	dummyKey: string;
 }
 
-const OLLAMA_ORIGIN = "http://localhost:11434";
-const LM_STUDIO_ORIGIN = "http://localhost:1234";
+// Use IPv4 loopback. `localhost` can prefer ::1 and hang on Windows when the
+// server only listens on 127.0.0.1.
+const OLLAMA_ORIGIN = "http://127.0.0.1:11434";
+const LM_STUDIO_ORIGIN = "http://127.0.0.1:1234";
 
 export const OLLAMA_LOCAL: LocalServerSpec = {
 	providerId: "ollama-local",

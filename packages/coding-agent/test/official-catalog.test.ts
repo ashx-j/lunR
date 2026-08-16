@@ -207,9 +207,25 @@ describe("loadOfficialCatalog", () => {
 		expect(loadedTimeout.source).toBe("bundled");
 	});
 
-	it("fetches providers.json then only requested shards and caches the merge", async () => {
+	it("merges a successful shard into cache and keeps failed providers", async () => {
 		const dir = tempDir();
 		const cachePath = join(dir, "official-catalog-cache.json");
+		const openaiCached = {
+			id: "gpt-cached",
+			name: "GPT Cached",
+			api: "openai-completions" as const,
+			provider: "openai",
+			baseUrl: "https://api.openai.com/v1",
+			reasoning: false,
+			input: ["text"] as ("text" | "image")[],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		writeFileSync(
+			cachePath,
+			`${JSON.stringify({ version: 1, updatedAt: "2026-08-15T00:00:00Z", models: [grok46, openaiCached] })}\n`,
+		);
 		const fetchImpl = vi.fn(
 			shardFetch({
 				"/providers.json": ["xai", "anthropic", "openai"],
@@ -225,9 +241,19 @@ describe("loadOfficialCatalog", () => {
 			fetchImpl,
 		});
 		expect(loaded.source).toBe("github");
-		expect(loaded.catalog.models.map((model) => model.id)).toEqual(["grok-4.7"]);
-		expect(loaded.catalog.models[0]?.compat).toEqual({ thinkingFormat: "openrouter", supportsStore: false });
-		expect(JSON.parse(readFileSync(cachePath, "utf-8")).models[0].id).toBe("grok-4.7");
+		expect(loaded.catalog.models.map((model) => `${model.provider}/${model.id}`).sort()).toEqual([
+			"openai/gpt-cached",
+			"xai/grok-4.7",
+		]);
+		expect(loaded.catalog.models.find((model) => model.id === "grok-4.7")?.compat).toEqual({
+			thinkingFormat: "openrouter",
+			supportsStore: false,
+		});
+		expect(
+			JSON.parse(readFileSync(cachePath, "utf-8"))
+				.models.map((model: { provider: string; id: string }) => `${model.provider}/${model.id}`)
+				.sort(),
+		).toEqual(["openai/gpt-cached", "xai/grok-4.7"]);
 		const urls = fetchImpl.mock.calls.map((call) => String(call[0])).sort();
 		expect(urls).toEqual(
 			[
@@ -259,18 +285,23 @@ describe("loadOfficialCatalog", () => {
 		]);
 	});
 
-	it("skips a 404 shard and falls back when no requested shard succeeds", async () => {
+	it("does not write cache when every requested shard fails", async () => {
+		const dir = tempDir();
+		const cachePath = join(dir, "official-catalog-cache.json");
+		writeFileSync(cachePath, `${JSON.stringify(githubCatalog)}\n`);
 		const loaded = await loadOfficialCatalog({
 			allowNetwork: true,
 			bundled: BUNDLED_OFFICIAL_CATALOG,
+			cachePath,
 			providerIds: ["xai"],
 			fetchImpl: shardFetch({
-				"/providers.json": ["xai", "openai"],
+				"/providers.json": ["xai"],
 				"/providers/xai.json": 404,
 			}),
 		});
-		expect(loaded.source).toBe("bundled");
-		expect(loaded.catalog.models[0]?.id).toBe("grok-4.6");
+		expect(loaded.source).toBe("cache");
+		expect(loaded.catalog.models[0]?.id).toBe("grok-4.7");
+		expect(JSON.parse(readFileSync(cachePath, "utf-8")).models[0].id).toBe("grok-4.7");
 	});
 
 	it("falls back to last cache when bundled is empty and GitHub fails", async () => {

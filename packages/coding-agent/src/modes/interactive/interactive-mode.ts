@@ -94,6 +94,7 @@ import {
 	upsertCustomProvider,
 } from "../../core/model-config-writer.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import {
@@ -137,6 +138,7 @@ import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { collectUsageHistory, type UsageHistory } from "../../core/usage-history.ts";
+import { time } from "../../core/timings.ts";
 import { getPlanUsageResult } from "../../core/usage-service.ts";
 import { modelToUserEntry } from "../../core/user-models.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -144,7 +146,7 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
 import { parseGitUrl } from "../../utils/git.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
-import { ensureTool } from "../../utils/tools-manager.ts";
+import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
@@ -801,10 +803,16 @@ export class InteractiveMode {
 
 		this.registerSignalHandlers();
 
-		// Ensure fd and rg are available (downloads if missing, adds to PATH via getBinDir)
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands
-		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
-		this.fdPath = fdPath;
+		// Use already-installed fd immediately. Download in the background so a
+		// missing binary or GitHub outage cannot block first paint.
+		this.fdPath = getToolPath("fd") ?? undefined;
+		void Promise.all([ensureTool("fd"), ensureTool("rg")]).then(([fdPath]) => {
+			if (fdPath && fdPath !== this.fdPath) {
+				this.fdPath = fdPath;
+				this.setupAutocompleteProvider();
+			}
+		});
+		time("ensureTools");
 
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
 			const modelList = this.session.scopedModels
@@ -845,6 +853,7 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+		time("ui.start");
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
@@ -899,6 +908,7 @@ export class InteractiveMode {
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
+		time("rebindCurrentSession");
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
@@ -917,6 +927,7 @@ export class InteractiveMode {
 
 		// Initialize available provider count for footer display
 		await this.updateAvailableProviderCount();
+		time("updateAvailableProviderCount");
 	}
 
 	/**
@@ -4764,7 +4775,7 @@ export class InteractiveMode {
 		const cloudRefresh = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] as
 			| ((ctx: { ui: unknown }) => Promise<unknown>)
 			| undefined;
-		if (cloudRefresh) {
+		if (cloudRefresh && allowNetwork) {
 			try {
 				await cloudRefresh({ ui: runner.createCommandContext().ui });
 			} catch (error) {
@@ -4853,8 +4864,7 @@ export class InteractiveMode {
 		}
 
 		try {
-			await this.session.modelRuntime.refresh();
-			return [...(await this.session.modelRuntime.getAvailable())];
+			return [...(await refreshModelCandidatesForInit(this.session.modelRuntime))];
 		} catch {
 			return [];
 		}

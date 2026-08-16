@@ -31,6 +31,7 @@ Last updated: 2026-08-16. **`origin/master` = `8572215`**. Public npm is `@ashx-
 - **xAI SuperGrok + Grok CLI:** same OAuth client as official `grok`. lunR reads `~/.grok/auth.json` (`GROK_HOME`) when lunR's token is older/dead; refresh write-throughs both files. `/login xai` can import the Grok CLI session. `/logout xai` does not delete `~/.grok/auth.json`. `/usage` surfaces `xAI login expired. Run /login xai.` instead of omitting the plan section. Tests: grok-cli-auth + catalog-auth + usage-service.
 - **`/model` listing:** stored cred only (`auth.json` / subscriptions / `--api-key`). Ambient `OPENROUTER_API_KEY` does not list models. `getAuth`/stream still resolve env if a model is already selected. Logout deletes that provider’s `models-store` + user-models. Tests: catalog-auth.
 - **`create()` cache-only:** `refresh({ allowNetwork: false })`. No GitHub / provider lists at `ModelRuntime.create()`. `withRemoteCatalog` deleted.
+- **Cold start:** TUI init/footer uses `refreshModelCandidatesForInit` (cache-only). Official overlay on every stored-cred provider. Shard-merge cache (failed shard keeps old rows). `refresh()` is single-flight and keeps in-memory GitHub rows. Offline `/refresh` skips Ollama Cloud. Cloud `session_start` is cache-only. Local Ollama/LM Studio probes skip on `allowNetwork: false` and use `127.0.0.1`. xAI token refresh hard-caps at 4s. `lunr gateway` lazy-imports discord.js. fd/rg download is background. V8 compile cache at `~/.lunr/agent/compile-cache`. `PI_TIMING=1` now labels ModelRuntime/resourceLoader/TUI init. Tests: model-runtime-startup + official-catalog + catalog-auth + lunr-local-providers + xai-oauth.
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
 - **Model-tiers toggle:** `/settings` Enable model tiers used `pi.runtime.refreshTools()`; `pi` is `ExtensionAPI` and has no `runtime`. Fix: `pi.registerTool(tool)` + bridge swallows refresher throws. Tests: `model-tiers.test.ts`.
 - **Session wheel:** sticky chat + alt-screen has no native scrollback. TUI enables SGR 1000+1006 while pinned; wheel → `scrollChat` (±3, Ctrl+wheel pages). Shift+drag still selects. Tests: `mouse.test.ts` + `tui-pin.test.ts`.
@@ -43,7 +44,7 @@ Last updated: 2026-08-16. **`origin/master` = `8572215`**. Public npm is `@ashx-
 
 ## Not merged
 
-- **`fix/catalog-stability` @ `11940a9`:** TUI init/footer cache-only (`refreshModelCandidatesForInit`); official overlay on **every** provider; shard-merge cache (failed shard keeps old rows); single-flight `refresh()`; offline `/refresh` skips Ollama Cloud; Cloud `session_start` cache-only. Tests 28. **Merge this before treating catalog as stable.**
+- Catalog-stability + extra boot-path cuts live on `fix/cold-start` until that PR merges. `origin/master` still does a live TUI init refresh.
 
 ## Uncommitted (working tree)
 
@@ -106,10 +107,10 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-16: xAI `/usage`+`/refresh` failures were a revoked lunR refresh token after `grok login` (same client); share `~/.grok/auth.json` and fail loud.
 - 2026-08-16: model-tiers toggle must use `pi.registerTool`, not `pi.runtime` (not on ExtensionAPI); refresher errors must not be fatal.
 - 2026-08-16: after sticky chat + alt-screen, native scrollback is gone; enable SGR mouse tracking and map wheel to `scrollChat`. Do not use DECSET 1007 (collides with editor history).
+- 2026-08-16: TUI init called live `refresh()`; that plus localhost probes and uncapped OAuth made first boot after idle/reboot hang. First paint is cache-only.
 
 # Deferred
 
-- Merge `fix/catalog-stability` (`11940a9`) — init still networks twice on `483a055` until this lands.
 - Gateway cold first slash after daemon start can hang minutes.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Scope rename; `PI_CODING_AGENT*` rename; `/share` still pi.dev.

@@ -204,6 +204,84 @@ describe("ModelRuntime official shard fetch", () => {
 		expect(officialUrls.some((href) => href.includes("/providers/openrouter.json"))).toBe(false);
 		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ thinkingFormat: "openrouter" });
 	});
+
+	it("applies official overlay to a non-live-list provider when a stored cred exists", async () => {
+		const dir = tempDir();
+		writeFileSync(
+			join(dir, "official-catalog-cache.json"),
+			`${JSON.stringify({
+				version: 1,
+				updatedAt: "2026-08-16T00:00:00Z",
+				models: [
+					{
+						id: "claude-official-only",
+						name: "Claude Official Only",
+						api: "anthropic-messages",
+						provider: "anthropic",
+						baseUrl: "https://api.anthropic.com",
+						reasoning: true,
+						input: ["text", "image"],
+						cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+						contextWindow: 200000,
+						maxTokens: 32000,
+					},
+				],
+			})}\n`,
+		);
+		const credentials = AuthStorage.inMemory({
+			anthropic: { type: "api_key", key: "stored-anthropic" },
+		});
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			authPath: join(dir, "auth.json"),
+			subscriptions: SubscriptionManager.inMemory(credentials),
+			allowModelNetwork: false,
+		});
+		expect(runtime.getModel("anthropic", "claude-official-only")).toBeDefined();
+		expect(
+			runtime
+				.getAvailableSnapshot()
+				.some((model) => model.provider === "anthropic" && model.id === "claude-official-only"),
+		).toBe(true);
+	});
+
+	it("does not apply official overlay for a non-live-list provider without a stored cred", async () => {
+		const dir = tempDir();
+		writeFileSync(
+			join(dir, "official-catalog-cache.json"),
+			`${JSON.stringify({
+				version: 1,
+				updatedAt: "2026-08-16T00:00:00Z",
+				models: [
+					{
+						id: "claude-official-only",
+						name: "Claude Official Only",
+						api: "anthropic-messages",
+						provider: "anthropic",
+						baseUrl: "https://api.anthropic.com",
+						reasoning: true,
+						input: ["text", "image"],
+						cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+						contextWindow: 200000,
+						maxTokens: 32000,
+					},
+				],
+			})}\n`,
+		);
+		const credentials = AuthStorage.inMemory({});
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			authPath: join(dir, "auth.json"),
+			subscriptions: SubscriptionManager.inMemory(credentials),
+			allowModelNetwork: false,
+		});
+		expect(runtime.getModel("anthropic", "claude-official-only")).toBeUndefined();
+		expect(runtime.getAvailableSnapshot().some((model) => model.provider === "anthropic")).toBe(false);
+	});
 });
 
 function requestHref(input: unknown): string {
