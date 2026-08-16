@@ -508,7 +508,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		| undefined;
 	modelTierBridge?.registerToolDescriptionRefresher?.(() => {
 		tool.description = buildSubagentToolDescription(config);
-		pi.runtime.refreshTools();
+		// pi.runtime is not on ExtensionAPI; registerTool refreshes the live registry.
+		pi.registerTool(tool);
 	});
 
 	registerWaitTool(pi, state, waitToolConfig.enabled);
