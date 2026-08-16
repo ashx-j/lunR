@@ -153,7 +153,12 @@ export function formatCatalogRefreshSummary(input: CatalogRefreshSummaryInput): 
 }
 
 function formatLiveProviderError(provider: CatalogRefreshProviderSummary): string {
-	if (provider.id === "xai" && provider.error && /invalid_grant|oauth refresh failed/i.test(provider.error)) {
+	if (
+		provider.id === "xai" &&
+		provider.error &&
+		/invalid_grant|refresh token revoked/i.test(provider.error) &&
+		!/timed out|aborted|cancelled|ECONN|ENOTFOUND|network/i.test(provider.error)
+	) {
 		return "xai login expired (run /login xai)";
 	}
 	return provider.error ? `${provider.id} failed (${provider.error})` : `${provider.id} failed`;

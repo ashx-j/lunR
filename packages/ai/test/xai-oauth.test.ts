@@ -329,6 +329,11 @@ describe("xAI OAuth device flow", () => {
 	});
 
 	it("times out a hung token refresh instead of waiting forever", async () => {
+		const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+			const controller = new AbortController();
+			queueMicrotask(() => controller.abort());
+			return controller.signal;
+		});
 		vi.stubGlobal(
 			"fetch",
 			vi.fn((_input: unknown, init?: RequestInit) => {
@@ -346,8 +351,7 @@ describe("xAI OAuth device flow", () => {
 				});
 			}),
 		);
-		const started = Date.now();
 		await expect(refreshXaiForTest("old-refresh")).rejects.toThrow(/timed out|aborted|Login cancelled/i);
-		expect(Date.now() - started).toBeLessThan(8000);
+		expect(timeout).toHaveBeenCalledWith(30_000);
 	});
 });

@@ -285,9 +285,18 @@ describe("usage service failure paths", () => {
 		expect(await getPlanUsageResult("xai", xaiRuntime())).toEqual({
 			error: "xAI login expired. Run /login xai.",
 		});
-		expect(planUsageAuthError(new ModelsError("oauth", "OAuth refresh failed for xai"))).toBe(
-			"xAI login expired. Run /login xai.",
-		);
+		expect(
+			planUsageAuthError(
+				new ModelsError("oauth", "OAuth refresh failed for xai", {
+					cause: new Error("invalid_grant: refresh token revoked"),
+				}),
+			),
+		).toBe("xAI login expired. Run /login xai.");
+		expect(planUsageAuthError(new ModelsError("oauth", "OAuth refresh failed for xai"))).toBeUndefined();
+		expect(
+			planUsageAuthError(new ModelsError("oauth", "xAI billing rejected the session (HTTP 403)")),
+		).toBeUndefined();
+		expect(planUsageAuthError(new ModelsError("oauth", "OAuth refresh failed for xai: aborted"))).toBeUndefined();
 	});
 
 	it("does not cache xAI auth errors as empty plan data", async () => {

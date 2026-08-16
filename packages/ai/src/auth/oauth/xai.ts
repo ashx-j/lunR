@@ -12,8 +12,12 @@ const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 // Refresh slightly before the reported expiry to avoid using a token that dies mid-request.
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
-/** Hard cap so a dead token endpoint cannot hang `/refresh` or a live catalog fetch. */
-export const XAI_TOKEN_REFRESH_TIMEOUT_MS = 4000;
+/**
+ * Safety cap for the refresh POST only. 4s was aborting after xAI had already
+ * rotated the refresh token, so lunR discarded the new family and forced /login.
+ * Catalog fetches still time out separately; this must outlast a sleepy NIC.
+ */
+export const XAI_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
 
 type JsonObject = Record<string, unknown>;
 

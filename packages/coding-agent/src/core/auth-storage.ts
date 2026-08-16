@@ -4,7 +4,7 @@
  */
 
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.ts";
@@ -19,6 +19,37 @@ type LockResult<T> = {
 };
 
 const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf-8", mode: 0o600 } as const;
+/** OAuth refresh holds this lock for the IdP round-trip. 30s made a sleepy refresh look stale and let a second process spend the same token. */
+const AUTH_LOCK_STALE_MS = 120_000;
+
+function writeAuthFileAtomic(authPath: string, contents: string): void {
+	const tmp = `${authPath}.${process.pid}.${Date.now()}.tmp`;
+	writeFileSync(tmp, contents, AUTH_FILE_WRITE_OPTIONS);
+	try {
+		chmodSync(tmp, 0o600);
+	} catch {
+		// mode bits are best-effort on Windows.
+	}
+	try {
+		if (process.platform === "win32" && existsSync(authPath)) {
+			writeFileSync(authPath, contents, AUTH_FILE_WRITE_OPTIONS);
+			chmodSync(authPath, 0o600);
+			return;
+		}
+		renameSync(tmp, authPath);
+		try {
+			chmodSync(authPath, 0o600);
+		} catch {
+			// mode bits are best-effort on Windows.
+		}
+	} finally {
+		try {
+			unlinkSync(tmp);
+		} catch {
+			// tmp already renamed, or never created.
+		}
+	}
+}
 
 export interface AuthStorageBackend {
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
@@ -53,7 +84,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
-				return lockfile.lockSync(path, { realpath: false });
+				return lockfile.lockSync(path, { realpath: false, stale: AUTH_LOCK_STALE_MS });
 			} catch (error) {
 				const code =
 					typeof error === "object" && error !== null && "code" in error
@@ -83,8 +114,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 			const { result, next } = fn(current);
 			if (next !== undefined) {
-				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
-				chmodSync(this.authPath, 0o600);
+				writeAuthFileAtomic(this.authPath, next);
 			}
 			return result;
 		} finally {
@@ -116,7 +146,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 					maxTimeout: 10000,
 					randomize: true,
 				},
-				stale: 30000,
+				stale: AUTH_LOCK_STALE_MS,
 				onCompromised: (err) => {
 					lockCompromised = true;
 					lockCompromisedError = err;
@@ -128,8 +158,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const { result, next } = await fn(current);
 			throwIfCompromised();
 			if (next !== undefined) {
-				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
-				chmodSync(this.authPath, 0o600);
+				writeAuthFileAtomic(this.authPath, next);
 			}
 			throwIfCompromised();
 			return result;
