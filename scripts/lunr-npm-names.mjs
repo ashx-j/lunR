@@ -18,6 +18,17 @@ export function npmNameFor(workspaceName) {
 	return WORKSPACE_TO_NPM[workspaceName];
 }
 
+const REPLACEMENTS = Object.entries(WORKSPACE_TO_NPM).sort((a, b) => b[0].length - a[0].length);
+
+/** Rewrite import/require specifiers in compiled JS (and similar text). */
+export function rewriteWorkspaceSpecifiers(text) {
+	let out = text;
+	for (const [from, to] of REPLACEMENTS) {
+		out = out.split(from).join(to);
+	}
+	return out;
+}
+
 export function assertNoEarendil(value, label = "package") {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
 	if (text.includes("@earendil-works/")) {

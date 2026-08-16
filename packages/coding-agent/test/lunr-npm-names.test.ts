@@ -6,6 +6,7 @@ import {
 	assertNoEarendil,
 	NPM_CLI_PACKAGE,
 	rewritePackageJsonForNpm,
+	rewriteWorkspaceSpecifiers,
 	WORKSPACE_TO_NPM,
 } from "../../../scripts/lunr-npm-names.mjs";
 
@@ -36,6 +37,14 @@ describe("lunR npm publish names", () => {
 		expect(rewritten.name).toBe("@ashx-j/lunr-agent");
 		expect(rewritten.dependencies["@ashx-j/lunr-ai"]).toBeDefined();
 		assertNoEarendil(rewritten);
+	});
+
+	it("rewrites compiled import specifiers", () => {
+		const src = 'import { modelsAreEqual } from "@earendil-works/pi-ai";\nfrom "@earendil-works/pi-agent-core";';
+		const out = rewriteWorkspaceSpecifiers(src);
+		expect(out).toContain('from "@ashx-j/lunr-ai"');
+		expect(out).toContain('from "@ashx-j/lunr-agent"');
+		expect(out).not.toContain("@earendil-works");
 	});
 
 	it("refuses leftover @earendil-works strings", () => {

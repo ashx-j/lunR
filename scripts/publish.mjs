@@ -7,10 +7,40 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { npmNameFor, rewritePackageJsonForNpm } from "./lunr-npm-names.mjs";
+import { assertNoEarendil, npmNameFor, rewritePackageJsonForNpm, rewriteWorkspaceSpecifiers } from "./lunr-npm-names.mjs";
+
+const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
+
+function shouldRewriteFile(filePath) {
+	const norm = filePath.replaceAll("\\", "/");
+	if (norm.includes("/node_modules/")) return false;
+	for (const ext of REWRITE_EXT) {
+		if (norm.endsWith(ext)) return true;
+	}
+	return false;
+}
+
+function rewritePublishedTree(root) {
+	const stack = [root];
+	while (stack.length > 0) {
+		const dir = stack.pop();
+		for (const name of readdirSync(dir)) {
+			const full = join(dir, name);
+			if (statSync(full).isDirectory()) {
+				if (name === "node_modules") continue;
+				stack.push(full);
+				continue;
+			}
+			if (!shouldRewriteFile(full)) continue;
+			const before = readFileSync(full, "utf8");
+			const after = rewriteWorkspaceSpecifiers(before);
+			if (after !== before) writeFileSync(full, after, "utf8");
+		}
+	}
+}
 
 const packages = [
 	{ directory: "packages/ai", workspaceName: "@earendil-works/pi-ai" },
@@ -90,6 +120,11 @@ function copyPackageForPublish(directory) {
 		delete rewritten.repository.directory;
 	}
 	writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`, "utf8");
+	rewritePublishedTree(dest);
+	const stagedMain = join(dest, "dist", "main.js");
+	if (existsSync(stagedMain)) {
+		assertNoEarendil(readFileSync(stagedMain, "utf8"), `${rewritten.name} dist/main.js`);
+	}
 	return { dest, publishedName: rewritten.name, version: rewritten.version };
 }
 
