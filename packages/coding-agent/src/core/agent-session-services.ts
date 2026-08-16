@@ -14,6 +14,7 @@ import {
 import { type CreateAgentSessionOptions, type CreateAgentSessionResult, createAgentSession } from "./sdk.ts";
 import type { SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
+import { time } from "./timings.ts";
 
 /**
  * Non-fatal issues collected while creating services or sessions.
@@ -142,6 +143,7 @@ export async function createAgentSessionServices(
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 		}));
+	time("ModelRuntime.create");
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
@@ -150,6 +152,7 @@ export async function createAgentSessionServices(
 		settingsManager,
 	});
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
+	time("resourceLoader.reload");
 
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
@@ -166,6 +169,7 @@ export async function createAgentSessionServices(
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
 	await modelRuntime.refresh({ allowNetwork: false });
+	time("modelRuntime.refresh(cache-only)");
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
 
 	return {

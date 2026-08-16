@@ -327,4 +327,31 @@ describe("xAI OAuth device flow", () => {
 			"xAI OAuth token refresh failed (HTTP 400): invalid_grant: refresh token revoked",
 		);
 	});
+
+	it("times out a hung token refresh instead of waiting forever", async () => {
+		const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+			const controller = new AbortController();
+			queueMicrotask(() => controller.abort());
+			return controller.signal;
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((_input: unknown, init?: RequestInit) => {
+				return new Promise((_resolve, reject) => {
+					const abort = () => {
+						const error = new Error("The operation was aborted");
+						error.name = "AbortError";
+						reject(error);
+					};
+					if (init?.signal?.aborted) {
+						abort();
+						return;
+					}
+					init?.signal?.addEventListener("abort", abort, { once: true });
+				});
+			}),
+		);
+		await expect(refreshXaiForTest("old-refresh")).rejects.toThrow(/timed out|aborted|Login cancelled/i);
+		expect(timeout).toHaveBeenCalledWith(30_000);
+	});
 });

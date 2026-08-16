@@ -20,9 +20,8 @@
  * Startup behavior:
  *   - Missing cache: uses baked-in GENERATED_MODELS (manually generated via
  *     `npm run generate-models` and committed to the repo).
- *   - Stale cache (>30 days): uses the cached data immediately and triggers a visible refresh
- *     on session_start that shows progress in the UI widget.
- *   - Fresh cache: uses cached data directly, no refresh triggered.
+ *   - Stale or fresh cache: uses the cached data immediately. Cloud fetch only
+ *     from /refresh when network is allowed (session_start stays cache-only).
  *
  * Only models with "tools" capability are registered.
  */
@@ -65,19 +64,7 @@ function createRefreshProgressUi(ctx: Pick<ExtensionCommandContext, "ui">) {
     update(progress: RefreshProgress) {
       const current = progress.current ?? 0;
       const total = progress.total ?? 0;
-      const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-      const failed = progress.failed ? `, ${progress.failed} failed` : "";
-      const stage =
-        progress.stage === "list"
-          ? "Discovering models"
-          : progress.stage === "details"
-            ? "Fetching model details"
-            : "Done";
-      const summary = total > 0 ? `${current}/${total} (${percent}%${failed})` : progress.message;
-      const line = `☁ Ollama Cloud - ${stage} — ${summary} ${renderProgressBar(current, total)}`;
-
-      ctx.ui.setWorkingMessage(`Refreshing Ollama Cloud models - ${stage.toLowerCase()}`);
-      ctx.ui.setWidget(key, [line], { placement: "belowEditor" });
+      ctx.ui.setWidget(key, [renderProgressBar(current, total)], { placement: "belowEditor" });
     },
     clear() {
       ctx.ui.setWidget(key, undefined);
@@ -112,10 +99,9 @@ async function runRefresh(pi: ExtensionAPI, ctx: Pick<ExtensionCommandContext, "
 
 export default async function (pi: ExtensionAPI) {
   const cacheState = readCacheState();
-  // Auto-refresh only when the disk cache is stale (>30 days).
   // When cache is missing, GENERATED_MODELS serves as the cache —
   // it is manually generated via `npm run generate-models` and committed to the repo.
-  const needsStartupRefresh = cacheState.status === "stale";
+  // Stale cache is used immediately; Cloud fetch only from /refresh (when network is allowed).
   // GENERATED_MODELS ships with the package (36 tool-capable models from
   // the build script). Used when no local cache exists. A fresh user cache
   // from /refresh takes precedence over the generated list.
@@ -128,13 +114,4 @@ export default async function (pi: ExtensionAPI) {
   (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] = (
     ctx: Pick<ExtensionCommandContext, "ui">,
   ) => runRefresh(pi, ctx);
-
-  if (needsStartupRefresh) {
-    let started = false;
-    pi.on("session_start", async (_event, ctx) => {
-      if (started) return;
-      started = true;
-      await runRefresh(pi, ctx);
-    });
-  }
 }

@@ -127,8 +127,22 @@ describe("formatCatalogRefreshSummary", () => {
 	it("maps a revoked xAI refresh to a re-login hint", () => {
 		expect(
 			formatCatalogRefreshSummary({
-				providers: [{ id: "xai", status: "error", error: "OAuth refresh failed for xai" }],
+				providers: [
+					{
+						id: "xai",
+						status: "error",
+						error: "OAuth refresh failed for xai: invalid_grant: refresh token revoked",
+					},
+				],
 			}),
 		).toBe("xai login expired (run /login xai).");
+	});
+
+	it("does not treat a timed-out xAI refresh as a dead login", () => {
+		expect(
+			formatCatalogRefreshSummary({
+				providers: [{ id: "xai", status: "error", error: "OAuth refresh failed for xai: The operation was aborted" }],
+			}),
+		).toBe("xai failed (OAuth refresh failed for xai: The operation was aborted).");
 	});
 });

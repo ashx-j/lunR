@@ -12,6 +12,12 @@ const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 // Refresh slightly before the reported expiry to avoid using a token that dies mid-request.
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
+/**
+ * Safety cap for the refresh POST only. 4s was aborting after xAI had already
+ * rotated the refresh token, so lunR discarded the new family and forced /login.
+ * Catalog fetches still time out separately; this must outlast a sleepy NIC.
+ */
+export const XAI_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -75,6 +81,10 @@ async function postForm(url: string, fields: Record<string, string>, signal?: Ab
 		});
 	} catch (error) {
 		if (signal?.aborted) {
+			const reason = signal.reason;
+			if (reason && typeof reason === "object" && "name" in reason && reason.name === "TimeoutError") {
+				throw new Error("xAI OAuth request timed out");
+			}
 			throw new Error("Login cancelled");
 		}
 		throw error;
@@ -211,6 +221,8 @@ async function loginXai(interaction: AuthInteraction): Promise<OAuthCredential> 
 }
 
 async function refreshXaiToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredential> {
+	const timeout = AbortSignal.timeout(XAI_TOKEN_REFRESH_TIMEOUT_MS);
+	const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 	const response = await postForm(
 		XAI_TOKEN_URL,
 		{
@@ -218,7 +230,7 @@ async function refreshXaiToken(refreshToken: string, signal?: AbortSignal): Prom
 			client_id: XAI_CLIENT_ID,
 			refresh_token: refreshToken,
 		},
-		signal,
+		combined,
 	);
 	if (!response.ok) {
 		throw requestFailure("token refresh", response);

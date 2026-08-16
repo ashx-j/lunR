@@ -60,12 +60,10 @@ function errorChain(error: unknown): string {
 /** Classify adapter/getAuth failures that mean the SuperGrok session is dead. */
 export function planUsageAuthError(error: unknown): string | undefined {
 	const chain = errorChain(error);
-	if (/invalid_grant|oauth refresh failed for xai|xai billing rejected/i.test(chain)) {
-		return XAI_RELOGIN;
-	}
-	if (error instanceof ModelsError && (error.code === "oauth" || error.code === "auth") && /xai/i.test(chain)) {
-		return XAI_RELOGIN;
-	}
+	if (/timed out|aborted|cancelled|ECONN|ENOTFOUND|network/i.test(chain)) return undefined;
+	// 403 on billing is often entitlement, not a dead refresh token.
+	if (/xai billing rejected the session \(HTTP 401\)/i.test(chain)) return XAI_RELOGIN;
+	if (/invalid_grant|refresh token revoked/i.test(chain)) return XAI_RELOGIN;
 	return undefined;
 }
 

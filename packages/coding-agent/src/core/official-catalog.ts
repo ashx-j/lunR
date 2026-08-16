@@ -288,6 +288,40 @@ export function officialModelsByProvider(catalog: OfficialCatalogFile): Map<stri
 	return byProvider;
 }
 
+/** Replace or add per-provider rows. Existing providers not in `replacements` are kept. */
+export function mergeOfficialCatalogByProvider(
+	base: OfficialCatalogFile,
+	replacements: ReadonlyMap<string, OfficialModelEntry[]>,
+	updatedAt?: string,
+): OfficialCatalogFile {
+	const byProvider = officialModelsByProvider(base);
+	for (const [providerId, models] of replacements) {
+		byProvider.set(providerId, models);
+	}
+	return {
+		version: base.version || 1,
+		updatedAt: updatedAt ?? new Date().toISOString(),
+		models: [...byProvider.values()].flat(),
+	};
+}
+
+/** Bundled as the floor; cache rows win per provider. */
+export function officialCatalogBase(bundled: OfficialCatalogFile, cachePath?: string): OfficialCatalogFile {
+	const cached = loadCachedOfficialCatalog(cachePath);
+	if (!cached) return bundled;
+	return mergeOfficialCatalogByProvider(bundled, officialModelsByProvider(cached), cached.updatedAt);
+}
+
+/** A completed GitHub overlay must not be replaced by cache/bundled. */
+export function preferOfficialCatalog(
+	previous: OfficialCatalogLoadResult | undefined,
+	next: OfficialCatalogLoadResult,
+): OfficialCatalogLoadResult {
+	if (next.source === "github") return next;
+	if (previous?.source === "github") return previous;
+	return next;
+}
+
 export function officialModelKeys(catalog: OfficialCatalogFile): Set<string> {
 	return new Set(catalog.models.map((model) => modelKey(model.provider, model.id)));
 }
@@ -375,7 +409,8 @@ async function fetchJson(
 /**
  * Load the official overlay. Network only when allowNetwork is true.
  * Fetches providers.json, then providers/{id}.json for stored-credential providers.
- * 404 / timeout / any error falls back to cache, then bundled. Never throws.
+ * Successful shards replace that provider only; failed shards keep cache/bundled rows.
+ * All requested shards failed → cache, then bundled. Never writes a worse cache. Never throws.
  */
 export async function loadOfficialCatalog(
 	options: LoadOfficialCatalogOptions = {},
@@ -406,24 +441,22 @@ export async function loadOfficialCatalog(
 		const shardIds = requested.filter((providerId) => wanted.has(providerId));
 		if (shardIds.length === 0) return fallbackCatalog(bundled, cachePath);
 
-		const shards = await Promise.all(
+		const replacements = new Map<string, OfficialModelEntry[]>();
+		await Promise.all(
 			shardIds.map(async (providerId) => {
 				const result = await fetchJson(
 					officialCatalogUrlFor(`providers/${encodeURIComponent(providerId)}.json`, base),
 					fetchOptions,
 				);
-				if (!result.ok) return [];
-				return parseOfficialCatalog(result.value)?.models ?? [];
+				if (!result.ok) return;
+				const parsed = parseOfficialCatalog(result.value);
+				if (!parsed || parsed.models.length === 0) return;
+				replacements.set(providerId, parsed.models);
 			}),
 		);
-		const models = shards.flat();
-		if (models.length === 0) return fallbackCatalog(bundled, cachePath);
+		if (replacements.size === 0) return fallbackCatalog(bundled, cachePath);
 
-		const catalog: OfficialCatalogFile = {
-			version: 1,
-			updatedAt: new Date().toISOString(),
-			models,
-		};
+		const catalog = mergeOfficialCatalogByProvider(officialCatalogBase(bundled, cachePath), replacements);
 		if (cachePath) writeOfficialCatalogCache(catalog, cachePath);
 		return { catalog, source: "github" };
 	} catch {

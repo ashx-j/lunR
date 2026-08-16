@@ -38,7 +38,6 @@ import {
 	buildLiveOverlay,
 	fetchLiveProviderModels,
 	type IncompleteLiveModel,
-	isLiveListProvider,
 	LIVE_LIST_PROVIDER_IDS,
 	type LiveCatalogResult,
 } from "./live-catalog.ts";
@@ -50,6 +49,7 @@ import {
 	officialCatalogCachePath,
 	officialEntryToModel,
 	officialModelKeys,
+	preferOfficialCatalog,
 } from "./official-catalog.ts";
 import {
 	type AuthStatus,
@@ -150,6 +150,9 @@ export class ModelRuntime implements Models {
 	private readonly userModels: UserModelsStore;
 	private readonly officialCachePath: string | undefined;
 	private lastCatalogRefresh: CatalogRefreshResult = { aborted: false, errors: new Map(), live: [], incomplete: [] };
+	private lastOfficial: OfficialCatalogLoadResult | undefined;
+	private catalogRefresh: Promise<CatalogRefreshResult> | undefined;
+	private catalogRefreshAllowsNetwork = false;
 	private readonly grokHome: string | undefined;
 
 	private constructor(
@@ -275,7 +278,7 @@ export class ModelRuntime implements Models {
 	}
 
 	private withLocalCatalog(provider: Provider): Provider {
-		return isLiveListProvider(provider.id) ? withCatalogOverlay(provider, this.overlay) : provider;
+		return withCatalogOverlay(provider, this.overlay);
 	}
 
 	private bakedInModels(providerId: string): Model<Api>[] {
@@ -621,10 +624,31 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<CatalogRefreshResult> {
-		const refreshOptions = {
-			...options,
-			allowNetwork: options.allowNetwork ?? this.allowModelNetwork,
-		};
+		const allowNetwork = options.allowNetwork ?? this.allowModelNetwork;
+		if (this.catalogRefresh) {
+			// Join an in-flight refresh that is at least as capable. A cache-only
+			// flight must not swallow a later network refresh.
+			if (this.catalogRefreshAllowsNetwork || !allowNetwork) {
+				return this.catalogRefresh;
+			}
+			await this.catalogRefresh.catch(() => {});
+			return this.refresh({ ...options, allowNetwork });
+		}
+
+		const run = this.executeCatalogRefresh({ ...options, allowNetwork }).finally(() => {
+			if (this.catalogRefresh === run) {
+				this.catalogRefresh = undefined;
+				this.catalogRefreshAllowsNetwork = false;
+			}
+		});
+		this.catalogRefresh = run;
+		this.catalogRefreshAllowsNetwork = allowNetwork;
+		return run;
+	}
+
+	private async executeCatalogRefresh(
+		refreshOptions: ModelsRefreshOptions & { allowNetwork: boolean },
+	): Promise<CatalogRefreshResult> {
 		const official = await this.refreshOfficialCatalog(refreshOptions.allowNetwork, refreshOptions.signal);
 		const live = refreshOptions.allowNetwork
 			? await this.refreshLiveCatalogs(
@@ -677,20 +701,26 @@ export class ModelRuntime implements Models {
 		signal?: AbortSignal,
 	): Promise<(OfficialCatalogLoadResult & { evictedUserRows: number }) | undefined> {
 		const storedProviders = await this.listStoredProviderIds();
-		const loaded = await loadOfficialCatalog({
-			allowNetwork,
-			cachePath: this.officialCachePath,
-			signal,
-			providerIds: [...storedProviders],
-		});
+		const loaded = preferOfficialCatalog(
+			this.lastOfficial,
+			await loadOfficialCatalog({
+				allowNetwork,
+				cachePath: this.officialCachePath,
+				signal,
+				providerIds: [...storedProviders],
+			}),
+		);
+		this.lastOfficial = loaded;
 		const evicted = this.userModels.evictOfficial(officialModelKeys(loaded.catalog));
 		const templateByProvider = new Map<string, Model<Api> | undefined>();
-		const officialModels = loaded.catalog.models.map((entry) => {
-			if (!templateByProvider.has(entry.provider)) {
-				templateByProvider.set(entry.provider, this.bakedInModels(entry.provider)[0]);
-			}
-			return officialEntryToModel(entry, templateByProvider.get(entry.provider));
-		});
+		const officialModels = loaded.catalog.models
+			.filter((entry) => storedProviders.has(entry.provider))
+			.map((entry) => {
+				if (!templateByProvider.has(entry.provider)) {
+					templateByProvider.set(entry.provider, this.bakedInModels(entry.provider)[0]);
+				}
+				return officialEntryToModel(entry, templateByProvider.get(entry.provider));
+			});
 		this.overlay.setOfficial(officialModels);
 		this.overlay.setUser(this.userModelsForStoredProviders(storedProviders));
 		return { ...loaded, evictedUserRows: evicted.length };
@@ -867,4 +897,12 @@ export class ModelRuntime implements Models {
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });
 	}
+}
+
+/** TUI init / footer / rebind: cache-only. Live refresh is `/refresh` and the model picker. */
+export async function refreshModelCandidatesForInit(
+	runtime: Pick<ModelRuntime, "refresh" | "getAvailableSnapshot">,
+): Promise<readonly Model<Api>[]> {
+	await runtime.refresh({ allowNetwork: false });
+	return runtime.getAvailableSnapshot();
 }

@@ -86,11 +86,32 @@ export default function lunrLocalProviders(pi: ExtensionAPI): void {
 			api: "openai-completions",
 			models: state.models,
 			refreshModels: async (context) => {
-				// Probe even when allowNetwork is false: localhost fails fast
-				// (connection refused in ~ms), so the registration-time offline
-				// refresh still populates models whenever the server is up.
+				// Cache-only refresh must not probe localhost. A hung IPv6
+				// localhost on Windows can sit until REFRESH_TIMEOUT_MS.
+				if (!context.allowNetwork) {
+					const stored = await context.store.read();
+					if (stored?.models?.length) {
+						state.models = stored.models.map((model) => toModelConfig(model.id));
+					}
+					return state.models;
+				}
 				const ids = await fetchLocalModelIds(spec, REFRESH_TIMEOUT_MS, context.signal);
 				state.models = (ids ?? []).map(toModelConfig);
+				if (state.models.length > 0) {
+					try {
+						await context.store.write({
+							models: state.models.map((model) => ({
+								...model,
+								api: "openai-completions" as const,
+								provider: spec.providerId,
+								baseUrl: spec.baseUrl,
+							})),
+							checkedAt: Date.now(),
+						});
+					} catch {
+						// Store write is best-effort.
+					}
+				}
 				if (state.justLoggedIn && state.models.length > 0) {
 					state.justLoggedIn = false;
 					scheduleAutoSelect();
