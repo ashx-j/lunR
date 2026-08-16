@@ -126,7 +126,7 @@ export function formatCatalogRefreshSummary(input: CatalogRefreshSummaryInput): 
 		} else if (provider.status === "timeout") {
 			failed.push(`${provider.id} timed out (cached)`);
 		} else if (provider.status === "error") {
-			failed.push(provider.error ? `${provider.id} failed (${provider.error})` : `${provider.id} failed`);
+			failed.push(formatLiveProviderError(provider));
 		}
 	}
 
@@ -150,6 +150,13 @@ export function formatCatalogRefreshSummary(input: CatalogRefreshSummaryInput): 
 
 	if (parts.length === 0) return "Model catalogs refreshed.";
 	return parts.join(" ");
+}
+
+function formatLiveProviderError(provider: CatalogRefreshProviderSummary): string {
+	if (provider.id === "xai" && provider.error && /invalid_grant|oauth refresh failed/i.test(provider.error)) {
+		return "xai login expired (run /login xai)";
+	}
+	return provider.error ? `${provider.id} failed (${provider.error})` : `${provider.id} failed`;
 }
 
 export function knownModelKeys(

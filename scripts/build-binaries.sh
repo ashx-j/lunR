@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build pi binaries for all platforms locally.
+# Build lunR binaries for all platforms locally.
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
@@ -15,12 +15,12 @@
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
-#     pi-windows-arm64.zip
+#     lunr-darwin-arm64.tar.gz
+#     lunr-darwin-x64.tar.gz
+#     lunr-linux-x64.tar.gz
+#     lunr-linux-arm64.tar.gz
+#     lunr-windows-x64.zip
+#     lunr-windows-arm64.zip
 
 set -euo pipefail
 
@@ -134,9 +134,9 @@ for platform in "${PLATFORMS[@]}"; do
     # explicit build entrypoints. The runtime can still use new URL(...), but the
     # worker must be present in the compiled executable.
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
+        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/lunr.exe"
     else
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/lunr"
     fi
 done
 
@@ -155,6 +155,10 @@ for platform in "${PLATFORMS[@]}"; do
     cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
     cp -r docs "$OUTPUT_DIR/$platform/"
     cp -r examples "$OUTPUT_DIR/$platform/"
+    # Official catalog overlay (getPackageDir()/catalog/models.json). Without this
+    # the public binary falls back to the one-model BUNDLED_OFFICIAL_CATALOG seed.
+    mkdir -p "$OUTPUT_DIR/$platform/catalog"
+    cp -R ../../catalog/. "$OUTPUT_DIR/$platform/catalog/"
 
     case "$platform" in
         darwin-arm64)
@@ -208,15 +212,17 @@ done
 cd "$OUTPUT_DIR"
 
 for platform in "${PLATFORMS[@]}"; do
+    # Every archive is rooted at lunr/ so one extract rule works on all platforms.
+    echo "Wrapping $platform as lunr/..."
+    mv "$platform" lunr
     if [[ "$platform" == windows-* ]]; then
-        # Windows (zip)
-        echo "Creating pi-$platform.zip..."
-        (cd "$platform" && zip -r ../pi-$platform.zip .)
+        echo "Creating lunr-$platform.zip..."
+        zip -r "lunr-$platform.zip" lunr
     else
-        # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
-        echo "Creating pi-$platform.tar.gz..."
-        mv "$platform" pi && tar -czf pi-$platform.tar.gz pi && mv pi "$platform"
+        echo "Creating lunr-$platform.tar.gz..."
+        tar -czf "lunr-$platform.tar.gz" lunr
     fi
+    mv lunr "$platform"
 done
 
 # Extract archives for easy local testing
@@ -224,9 +230,9 @@ echo "==> Extracting archives for testing..."
 for platform in "${PLATFORMS[@]}"; do
     rm -rf "$platform"
     if [[ "$platform" == windows-* ]]; then
-        mkdir -p "$platform" && (cd "$platform" && unzip -q ../pi-$platform.zip)
+        unzip -q "lunr-$platform.zip" && mv lunr "$platform"
     else
-        tar -xzf pi-$platform.tar.gz && mv pi "$platform"
+        tar -xzf "lunr-$platform.tar.gz" && mv lunr "$platform"
     fi
 done
 
@@ -238,8 +244,8 @@ echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
-        echo "  $OUTPUT_DIR/$platform/pi.exe"
+        echo "  $OUTPUT_DIR/$platform/lunr.exe"
     else
-        echo "  $OUTPUT_DIR/$platform/pi"
+        echo "  $OUTPUT_DIR/$platform/lunr"
     fi
 done

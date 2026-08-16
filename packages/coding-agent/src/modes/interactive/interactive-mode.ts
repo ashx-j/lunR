@@ -75,6 +75,7 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
+import { hasGrokCliXaiAuth } from "../../core/grok-cli-auth.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
@@ -136,7 +137,7 @@ import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { collectUsageHistory, type UsageHistory } from "../../core/usage-history.ts";
-import { getPlanUsage } from "../../core/usage-service.ts";
+import { getPlanUsageResult } from "../../core/usage-service.ts";
 import { modelToUserEntry } from "../../core/user-models.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -5547,6 +5548,34 @@ export class InteractiveMode {
 			}
 		}
 		if (providerOption.authType === "oauth") {
+			if (providerOption.id === "xai" && hasGrokCliXaiAuth()) {
+				const choice = await this.showExtensionSelector("xAI SuperGrok is already signed in via Grok CLI.", [
+					"Use existing Grok CLI login",
+					"Sign in again",
+				]);
+				if (choice === undefined) return;
+				if (choice === "Use existing Grok CLI login") {
+					try {
+						const imported = await this.session.modelRuntime.importGrokCliXaiAuth();
+						if (!imported) {
+							this.showError("Could not read the Grok CLI SuperGrok session. Run /login xai again.");
+							return;
+						}
+						await this.completeProviderAuthentication(
+							providerOption.id,
+							providerOption.name,
+							"oauth",
+							this.session.model,
+							{ actionLabel: "Imported Grok CLI login", savedNote: "Using ~/.grok/auth.json" },
+						);
+					} catch (error: unknown) {
+						this.showError(
+							`Failed to import Grok CLI login: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+					return;
+				}
+			}
 			await this.showLoginDialog(providerOption.id, providerOption.name);
 		} else if (providerOption.method?.login) {
 			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name);
@@ -6915,12 +6944,16 @@ export class InteractiveMode {
 
 		const context = this.session.getContextUsage();
 		const provider = this.session.model?.provider;
-		const plan = provider ? await getPlanUsage(provider, this.session.modelRuntime) : undefined;
+		const planResult = provider ? await getPlanUsageResult(provider, this.session.modelRuntime) : {};
 		const history = this.collectUsageHistorySafe();
 
-		const lines = renderUsageBox({ sessionTotals, context, plan, history }, this.ui.terminal.columns);
+		const lines = renderUsageBox(
+			{ sessionTotals, context, plan: planResult.usage, history },
+			this.ui.terminal.columns,
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		if (planResult.error) this.showStatus(planResult.error);
 		this.ui.requestRender();
 	}
 

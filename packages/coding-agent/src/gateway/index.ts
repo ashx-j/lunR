@@ -14,6 +14,7 @@
  *   lunr gateway status                           config/token/session summary
  */
 
+import { isFeatureEnabled } from "../core/install-features.ts";
 import { DiscordAdapter } from "./adapters/discord.ts";
 import { TelegramAdapter } from "./adapters/telegram.ts";
 import { AgentBridge } from "./agent-bridge.ts";
@@ -123,6 +124,9 @@ function runPairList(): number {
 
 function runStatus(): number {
 	const cfg = loadGatewayConfig();
+	console.log(
+		`chat-platforms: ${isFeatureEnabled("chat-platforms") ? "enabled" : "disabled"} (install-features.json)`,
+	);
 	console.log("lunR gateway status:");
 	for (const platform of KNOWN_PLATFORMS) {
 		const platformCfg = platformConfigFor(cfg, platform);
@@ -139,6 +143,11 @@ function runStatus(): number {
 }
 
 async function runDaemon(): Promise<number> {
+	if (!isFeatureEnabled("chat-platforms")) {
+		console.error("lunR gateway: chat platforms are not enabled.");
+		console.error("Enable with: lunr features enable chat-platforms");
+		return 1;
+	}
 	const cfg = loadGatewayConfig();
 	const adapters = new Map<string, PlatformAdapter>();
 	const skipped: string[] = [];

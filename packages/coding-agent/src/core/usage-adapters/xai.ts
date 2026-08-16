@@ -16,6 +16,7 @@
  * after xAI changes the billing payload.
  */
 
+import { ModelsError } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../model-runtime.ts";
 import type { PlanUsage, PlanUsageWindow } from "../usage-service.ts";
 import {
@@ -62,6 +63,9 @@ export async function fetchXaiPlanUsage(runtime: ModelRuntime): Promise<PlanUsag
 			"x-xai-token-auth": "xai-grok-cli",
 		},
 	});
+	if (response.status === 401 || response.status === 403) {
+		throw new ModelsError("oauth", `xAI billing rejected the session (HTTP ${response.status})`);
+	}
 	if (!response.ok) return undefined;
 	const payload = asObject(await response.json());
 	if (!payload) return undefined;
