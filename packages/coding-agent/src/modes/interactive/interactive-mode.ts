@@ -7393,6 +7393,7 @@ export class InteractiveMode {
 | \`${jumpForward}\` | Jump forward to character |
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
+| Mouse wheel | Scroll session (Ctrl+wheel pages) |
 
 **Editing**
 | Key | Action |

@@ -1,7 +1,27 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { MOUSE_TRACKING_DISABLE, MOUSE_TRACKING_ENABLE } from "../src/mouse.ts";
 import { type Component, TUI } from "../src/tui.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
+
+class RecordingTerminal extends VirtualTerminal {
+	writes: string[] = [];
+	override write(data: string): void {
+		this.writes.push(data);
+		super.write(data);
+	}
+}
+
+class RecordingInput implements Component {
+	received: string[] = [];
+	handleInput(data: string): void {
+		this.received.push(data);
+	}
+	render(): string[] {
+		return ["DOCK"];
+	}
+	invalidate(): void {}
+}
 
 class Lines implements Component {
 	private lines: string[];
@@ -206,5 +226,133 @@ describe("TUI pinFrom dock", () => {
 		tui.pinFrom(null);
 		assert.ok(!tui.isPinned());
 		assert.deepStrictEqual(tui.render(20), ["C0", "C1", "D0", "D1"]);
+	});
+
+	it("enables SGR mouse tracking while pinned and disables on unpin/stop", () => {
+		const terminal = new RecordingTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+
+		assert.ok(
+			terminal.writes.some((w) => w.includes(MOUSE_TRACKING_ENABLE)),
+			"should enable 1000+1006 while pinned",
+		);
+
+		tui.pinFrom(null);
+		assert.ok(
+			terminal.writes.some((w) => w.includes(MOUSE_TRACKING_DISABLE)),
+			"should disable mouse tracking when unpinned",
+		);
+
+		tui.pinFrom(dock);
+		const disableCountBeforeStop = terminal.writes.filter((w) => w.includes(MOUSE_TRACKING_DISABLE)).length;
+		tui.stop();
+		const disableCountAfterStop = terminal.writes.filter((w) => w.includes(MOUSE_TRACKING_DISABLE)).length;
+		assert.ok(disableCountAfterStop > disableCountBeforeStop, "should disable mouse tracking on stop");
+	});
+
+	it("wheel up on a tall pinned chat shows older lines; dock stays last rows", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+
+		terminal.sendInput("\x1b[<64;1;1M");
+		const viewport = await renderPinned(tui, terminal);
+		assert.strictEqual(tui.getChatScroll(), 3);
+		assert.deepStrictEqual(tui.render(20), ["C1", "C2", "C3", "C4", "C5", "C6", "D0", "D1"]);
+		assert.ok(viewport.includes("C1"));
+		assert.ok(!viewport.includes("C9"));
+		assert.strictEqual(viewport[viewport.length - 1], "D1");
+
+		terminal.sendInput("\x1b[<65;1;1M");
+		await renderPinned(tui, terminal);
+		assert.strictEqual(tui.getChatScroll(), 0);
+
+		tui.stop();
+	});
+
+	it("ctrl+wheel pages by the chat viewport height", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(20, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+
+		const viewH = tui.getChatViewportHeight();
+		terminal.sendInput("\x1b[<80;1;1M");
+		await renderPinned(tui, terminal);
+		assert.strictEqual(tui.getChatScroll(), viewH);
+
+		tui.stop();
+	});
+
+	it("does not leak mouse sequences into the focused dock input", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new RecordingInput();
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.setFocus(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+
+		terminal.sendInput("\x1b[<64;1;1M");
+		terminal.sendInput("\x1b[<0;2;2M");
+		await renderPinned(tui, terminal);
+		assert.deepStrictEqual(dock.received, []);
+		assert.strictEqual(tui.getChatScroll(), 3);
+
+		tui.stop();
+	});
+
+	it("does not scroll chat when a capturing overlay has focus", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.showOverlay(new SimpleOverlay());
+		tui.start();
+		await renderPinned(tui, terminal);
+
+		terminal.sendInput("\x1b[<64;1;1M");
+		await renderPinned(tui, terminal);
+		assert.strictEqual(tui.getChatScroll(), 0);
+
+		tui.stop();
+	});
+
+	it("ignores wheel when unpinned", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		tui.addChild(chat);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<64;1;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(tui.getChatScroll(), 0);
+
+		tui.stop();
 	});
 });
