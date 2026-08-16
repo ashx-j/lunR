@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import lunrCron from "../src/builtin-extensions/lunr-cron.ts";
+import { ENV_AGENT_DIR } from "../src/config.ts";
 import { beginCronFire, endCronFire, isCronFire } from "../src/core/cron/fire-guard.ts";
 import { type CronJob, createJob, getJob, setCronBaseDir } from "../src/core/cron/jobs.ts";
 import { currentOrigin, runWithOrigin } from "../src/core/cron/origin-context.ts";
+import { saveInstallFeatures } from "../src/core/install-features.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
 import { createPlatformDeliverer, startGatewayCron, wrapCronContent } from "../src/gateway/cron.ts";
 import type { ButtonSpec, CallbackEvent, PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
@@ -57,16 +59,33 @@ class FakeAdapter implements PlatformAdapter {
 }
 
 let dir: string;
+let prevAgentDir: string | undefined;
 const stoppers: Array<() => void> = [];
+
+function enableChatPlatforms(): void {
+	saveInstallFeatures({
+		schemaVersion: 1,
+		installerVersion: "0.1.0",
+		installMethod: "binary",
+		installedAt: "2026-01-01T00:00:00.000Z",
+		updatedAt: "2026-01-01T00:00:00.000Z",
+		features: { "chat-platforms": { enabled: true, options: {} } },
+	});
+}
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "lunr-gw-cron-"));
+	prevAgentDir = process.env[ENV_AGENT_DIR];
+	process.env[ENV_AGENT_DIR] = dir;
 	setCronBaseDir(dir);
+	enableChatPlatforms();
 });
 
 afterEach(() => {
 	for (const stop of stoppers.splice(0)) stop();
 	setCronBaseDir(undefined);
+	if (prevAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
+	else process.env[ENV_AGENT_DIR] = prevAgentDir;
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -505,6 +524,20 @@ describe("startGatewayCron", () => {
 		stoppers.push(cron.stop);
 
 		await expect(createJob({ prompt: "p", schedule: "30m", deliver: "telegram" })).rejects.toThrow(/no homeChannel/);
+	});
+
+	it("rejects telegram/discord deliver targets when chat-platforms is disabled", async () => {
+		saveInstallFeatures({
+			schemaVersion: 1,
+			installerVersion: "0.1.0",
+			installMethod: "binary",
+			installedAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			features: { "chat-platforms": { enabled: false, options: {} } },
+		});
+		await expect(createJob({ prompt: "p", schedule: "30m", deliver: "telegram:123" })).rejects.toThrow(
+			/lunr features enable chat-platforms/,
+		);
 	});
 
 	it("allows deliver='origin' for a job with an origin", async () => {

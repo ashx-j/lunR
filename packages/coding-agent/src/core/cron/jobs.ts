@@ -18,6 +18,11 @@ import { homedir } from "node:os";
 import { isAbsolute, join, normalize, resolve } from "node:path";
 import { Cron } from "croner";
 import { getAgentDir } from "../../config.ts";
+import {
+	chatPlatformDeliverBlockedMessage,
+	deliverMentionsChatPlatform,
+	isFeatureEnabled,
+} from "../install-features.ts";
 
 // ---------------------------------------------------------------------------
 // Model
@@ -352,6 +357,9 @@ function validateWorkdir(workdir: string): string | undefined {
 }
 
 function runDeliverValidation(deliver: string, origin?: CronJobOrigin | null): string | undefined {
+	if (deliverMentionsChatPlatform(deliver) && !isFeatureEnabled("chat-platforms")) {
+		return chatPlatformDeliverBlockedMessage();
+	}
 	return deliverValidator?.(deliver, origin);
 }
 

@@ -15,7 +15,7 @@
  * 6. Commit and tag the release
  * 7. Add new [Unreleased] section to changelogs
  * 8. Commit next-cycle changelog updates
- * 9. Push main and the tag to trigger CI publishing
+ * 9. Push master and the tag to trigger the GitHub Release workflow
  */
 
 import { execSync } from "child_process";
@@ -165,9 +165,9 @@ updateChangelogsForRelease(version);
 console.log();
 
 // 4. Regenerate release artifacts
+// Do not run packages/ai generate-models here — that drifts the baked-in
+// catalog. Refresh JSON only via explicit `npm run sync:model-catalog`.
 console.log("Regenerating release artifacts...");
-run("npm --prefix packages/ai run generate-models");
-run("npm --prefix packages/ai run generate-image-models");
 run("npm run shrinkwrap:coding-agent");
 run("npm run install-lock:coding-agent");
 console.log();
@@ -201,8 +201,8 @@ console.log();
 
 // 9. Push
 console.log("Pushing to remote...");
-run("git push origin main");
+run("git push origin master");
 run(`git push origin v${version}`);
 console.log();
 
-console.log(`=== Prepared release v${version}; CI publishing starts after the tag push ===`);
+console.log(`=== Prepared release v${version}; tag push starts the GitHub Release workflow (no npm publish) ===`);

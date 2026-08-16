@@ -226,13 +226,16 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} install <source> [-l]     Install extension source and add to settings
-  ${APP_NAME} remove <source> [-l]      Remove extension source from settings
-  ${APP_NAME} uninstall <source> [-l]   Alias for remove
-  ${APP_NAME} list                      List installed extensions from settings
-  ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-  ${APP_NAME} gateway [pair approve|pair list|status]  Run the chat gateway daemon
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/list/config
+  ${APP_NAME} setup                      First-run / reconfigure optional features
+  ${APP_NAME} features [list|enable|disable]
+  ${APP_NAME} uninstall                  Remove this ${APP_NAME} install (keeps agent dir unless --purge)
+  ${APP_NAME} uninstall <source> [-l]    Remove an extension package (alias for remove)
+  ${APP_NAME} install <source> [-l]      Install extension source and add to settings
+  ${APP_NAME} remove <source> [-l]       Remove extension source from settings
+  ${APP_NAME} list                       List installed extensions from settings
+  ${APP_NAME} config [-l]                Open TUI to enable/disable package resources (Tab switches scope)
+  ${APP_NAME} gateway […]                Chat gateway daemon (requires chat-platforms feature)
+  ${APP_NAME} <command> --help           Show help for install/remove/uninstall/list/config
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
