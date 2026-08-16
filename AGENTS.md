@@ -22,9 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-16. **`origin/master` = `8f00cb4`**. Public npm is `@ashx-j/lunr@0.1.3` (tag `v0.1.3`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-16. **`origin/master` = `8dd2ee2`**. Public npm is `@ashx-j/lunr@0.1.4` (tag `v0.1.4`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
-## On origin/master (`8f00cb4`)
+## On origin/master (`8dd2ee2`)
 
 - **Catalog (pi-style):** `generate-models.ts --strict --json-only` → `.artifacts/model-catalog`; `scripts/sync-model-catalog.mjs` validates (≥500 models; require anthropic/openai/openrouter) → `catalog/` (`models.json` minified, `providers.json`, `providers/{id}.json`, `publication.json`). CDN = GitHub raw `master/catalog/`. `/refresh` GETs `providers.json` (4s) then shards only for **stored-cred** providers (4s; skip 404). Fallback: `~/.lunr/agent/official-catalog-cache.json` → bundled `catalog/` (`copy-assets` → `dist/catalog/`). Merge: official > user-models > live `/models` > baked-in `*.models.ts`. New live ids can prompt (cap 8); official id evicts user row. Humans edit the **generator**, not the JSON. CI `.github/workflows/publish-model-catalog.yml` every 4h + dispatch. `npm run sync:model-catalog`. No R2, no `pi.dev`. `catalog/official-models.json` gone.
 - **`/refresh` OAuth:** live list calls `getAuth` before `GET /models` so expired SuperGrok tokens refresh (`ec59883` / PR #4). Toast reports only attempted providers and includes `error`. Revoked xAI refresh → `xai login expired (run /login xai)`. Tests: catalog-auth + catalog-merge.
@@ -33,10 +33,11 @@ Last updated: 2026-08-16. **`origin/master` = `8f00cb4`**. Public npm is `@ashx-
 - **`create()` cache-only:** `refresh({ allowNetwork: false })`. No GitHub / provider lists at `ModelRuntime.create()`. `withRemoteCatalog` deleted.
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
 - **Model-tiers toggle:** `/settings` Enable model tiers used `pi.runtime.refreshTools()`; `pi` is `ExtensionAPI` and has no `runtime`. Fix: `pi.registerTool(tool)` + bridge swallows refresher throws. Tests: `model-tiers.test.ts`.
+- **Session wheel:** sticky chat + alt-screen has no native scrollback. TUI enables SGR 1000+1006 while pinned; wheel → `scrollChat` (±3, Ctrl+wheel pages). Shift+drag still selects. Tests: `mouse.test.ts` + `tui-pin.test.ts`.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.1.3**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.1.4**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -52,7 +53,7 @@ Last updated: 2026-08-16. **`origin/master` = `8f00cb4`**. Public npm is `@ashx-
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.1.3**. **Rebuild coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.1.4**. **Rebuild coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 
@@ -75,6 +76,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 # Notes
 
 - Theme: `moon.json` is the builtin; `default.json` untracked/unwired. Glyphs `promptMoon`/`promptArrow`; `promptSymbol` is master on/off.
+- Mouse tracking is on while the chat dock is pinned. Shift+drag to copy; wheel without Shift scrolls the session.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
 - Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`.
 - Process registry: direct children only; `nohup &` grandchildren untracked.
@@ -103,6 +105,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-16: public install is `npm i -g @ashx-j/lunr`; publish-time rewrite of package.json **and** dist imports (0.1.0 missed JS; 0.1.1). Do not publish `@earendil-works/*`.
 - 2026-08-16: xAI `/usage`+`/refresh` failures were a revoked lunR refresh token after `grok login` (same client); share `~/.grok/auth.json` and fail loud.
 - 2026-08-16: model-tiers toggle must use `pi.registerTool`, not `pi.runtime` (not on ExtensionAPI); refresher errors must not be fatal.
+- 2026-08-16: after sticky chat + alt-screen, native scrollback is gone; enable SGR mouse tracking and map wheel to `scrollChat`. Do not use DECSET 1007 (collides with editor history).
 
 # Deferred
 

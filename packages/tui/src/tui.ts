@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
+import { MOUSE_TRACKING_DISABLE, MOUSE_TRACKING_ENABLE, type ParsedMouseEvent, parseMouseEvent } from "./mouse.ts";
 import type { Terminal } from "./terminal.ts";
 import {
 	isOsc11BackgroundColorResponse,
@@ -333,6 +334,8 @@ export class TUI extends Container {
 	private lastChatScrollMax = 0;
 	private alternateScreen = false;
 	private alternateScreenActive = false;
+	private mouseTrackingActive = false;
+	private static readonly WHEEL_LINES = 3;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
@@ -383,6 +386,7 @@ export class TUI extends Container {
 			this.lastChatViewportHeight = Math.max(1, this.terminal.rows);
 			this.lastChatScrollMax = 0;
 		}
+		this.syncMouseTracking();
 		if (this.started) this.requestRender();
 	}
 
@@ -800,6 +804,7 @@ export class TUI extends Container {
 			this.terminal.write("\x1b[?1049h");
 			this.alternateScreenActive = true;
 		}
+		this.syncMouseTracking();
 		this.terminal.hideCursor();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
@@ -856,6 +861,7 @@ export class TUI extends Container {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
 		}
+		this.disableMouseTracking();
 		if (this.alternateScreenActive) {
 			this.terminal.write("\x1b[?1049l");
 			this.alternateScreenActive = false;
@@ -924,11 +930,45 @@ export class TUI extends Container {
 		}, delay);
 	}
 
+	private syncMouseTracking(): void {
+		if (this.started && this.pinComponent) {
+			this.enableMouseTracking();
+		} else {
+			this.disableMouseTracking();
+		}
+	}
+
+	private enableMouseTracking(): void {
+		if (this.mouseTrackingActive) return;
+		this.terminal.write(MOUSE_TRACKING_ENABLE);
+		this.mouseTrackingActive = true;
+	}
+
+	private disableMouseTracking(): void {
+		if (!this.mouseTrackingActive) return;
+		this.terminal.write(MOUSE_TRACKING_DISABLE);
+		this.mouseTrackingActive = false;
+	}
+
+	private handleMouseEvent(mouse: ParsedMouseEvent): void {
+		if (mouse.kind !== "wheel" || mouse.delta === 0) return;
+		if (!this.pinComponent || this.getPinIndex() < 0) return;
+		if (this.hasCapturingOverlayFocus()) return;
+		const amount = mouse.ctrl ? this.getChatViewportHeight() : TUI.WHEEL_LINES;
+		this.scrollChat(mouse.delta * amount);
+	}
+
 	private handleInput(data: string): void {
 		if (this.consumeOsc11BackgroundResponse(data)) {
 			return;
 		}
 		if (this.consumeTerminalColorSchemeReport(data)) {
+			return;
+		}
+
+		const mouse = parseMouseEvent(data);
+		if (mouse) {
+			this.handleMouseEvent(mouse);
 			return;
 		}
 

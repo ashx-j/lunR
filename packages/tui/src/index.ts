@@ -57,6 +57,14 @@ export {
 	parseKey,
 	setKittyProtocolActive,
 } from "./keys.ts";
+// Mouse (SGR / X10) — used for in-app chat wheel scroll
+export {
+	MOUSE_TRACKING_DISABLE,
+	MOUSE_TRACKING_ENABLE,
+	type MouseKind,
+	type ParsedMouseEvent,
+	parseMouseEvent,
+} from "./mouse.ts";
 // Input buffering for batch splitting
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.ts";
 // Terminal interface and implementations
