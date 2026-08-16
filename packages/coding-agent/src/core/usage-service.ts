@@ -9,9 +9,11 @@
  *   fall back to hiding the cost meter.
  * - ollama-cloud: no usage API exists.
  *
- * All adapter/network errors resolve to `undefined` — callers omit the UI.
+ * Adapter/network errors resolve to `undefined` (callers omit the plan UI).
+ * Auth failures are different: they return `error` and are not cached as empty.
  */
 
+import { ModelsError } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { fetchKimiPlanUsage } from "./usage-adapters/kimi-coding.ts";
 import { fetchCodexPlanUsage } from "./usage-adapters/openai-codex.ts";
@@ -29,6 +31,42 @@ export interface PlanUsage {
 	provider: string;
 	planLabel?: string;
 	windows: PlanUsageWindow[];
+}
+
+export interface PlanUsageResult {
+	usage?: PlanUsage;
+	/** Actionable auth failure. Not cached as an empty success. */
+	error?: string;
+}
+
+const XAI_RELOGIN = "xAI login expired. Run /login xai.";
+
+function errorChain(error: unknown): string {
+	const parts: string[] = [];
+	let current: unknown = error;
+	const seen = new Set<unknown>();
+	while (current && typeof current === "object" && !seen.has(current)) {
+		seen.add(current);
+		if (current instanceof Error) {
+			parts.push(current.message);
+			current = current.cause;
+			continue;
+		}
+		break;
+	}
+	return parts.join(" ");
+}
+
+/** Classify adapter/getAuth failures that mean the SuperGrok session is dead. */
+export function planUsageAuthError(error: unknown): string | undefined {
+	const chain = errorChain(error);
+	if (/invalid_grant|oauth refresh failed for xai|xai billing rejected/i.test(chain)) {
+		return XAI_RELOGIN;
+	}
+	if (error instanceof ModelsError && (error.code === "oauth" || error.code === "auth") && /xai/i.test(chain)) {
+		return XAI_RELOGIN;
+	}
+	return undefined;
 }
 
 type UsageAdapter = (runtime: ModelRuntime) => Promise<PlanUsage | undefined>;
@@ -51,19 +89,26 @@ export function hasPlanUsageAdapter(providerId: string): boolean {
 
 /** Plan usage for a provider, or undefined when unsupported/unavailable. Never throws. */
 export async function getPlanUsage(providerId: string, runtime: ModelRuntime): Promise<PlanUsage | undefined> {
+	return (await getPlanUsageResult(providerId, runtime)).usage;
+}
+
+/** Like getPlanUsage, but surfaces SuperGrok/auth failures instead of hiding them. */
+export async function getPlanUsageResult(providerId: string, runtime: ModelRuntime): Promise<PlanUsageResult> {
 	const adapter = ADAPTERS[providerId];
-	if (!adapter) return undefined;
+	if (!adapter) return {};
 	const now = Date.now();
 	const cached = cache.get(providerId);
-	if (cached && cached.expiresAt > now) return cached.value;
-	let value: PlanUsage | undefined;
+	if (cached && cached.expiresAt > now) return { usage: cached.value };
 	try {
-		value = await adapter(runtime);
-	} catch {
-		value = undefined;
+		const value = await adapter(runtime);
+		cache.set(providerId, { expiresAt: now + PLAN_USAGE_CACHE_TTL_MS, value });
+		return { usage: value };
+	} catch (error) {
+		const authError = planUsageAuthError(error);
+		if (authError) return { error: authError };
+		cache.set(providerId, { expiresAt: now + PLAN_USAGE_CACHE_TTL_MS, value: undefined });
+		return {};
 	}
-	cache.set(providerId, { expiresAt: now + PLAN_USAGE_CACHE_TTL_MS, value });
-	return value;
 }
 
 /** Clear the adapter cache (tests, /login changes). */

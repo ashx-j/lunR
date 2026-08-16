@@ -123,4 +123,12 @@ describe("formatCatalogRefreshSummary", () => {
 			}),
 		).toBe("xai timed out (cached).");
 	});
+
+	it("maps a revoked xAI refresh to a re-login hint", () => {
+		expect(
+			formatCatalogRefreshSummary({
+				providers: [{ id: "xai", status: "error", error: "OAuth refresh failed for xai" }],
+			}),
+		).toBe("xai login expired (run /login xai).");
+	});
 });

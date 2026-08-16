@@ -22,22 +22,22 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-16. **`origin/master` = `483a055`**. Local branch `release/lunr-binaries-no-npm` (PR 1 of installer). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-16. **`origin/master` = `61de836`**. Public npm is `@ashx-j/lunr@0.1.1` (tag `v0.1.1` on `release/lunr-binaries-no-npm`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 ## On origin/master (`483a055`)
 
 - **Catalog (pi-style):** `generate-models.ts --strict --json-only` → `.artifacts/model-catalog`; `scripts/sync-model-catalog.mjs` validates (≥500 models; require anthropic/openai/openrouter) → `catalog/` (`models.json` minified, `providers.json`, `providers/{id}.json`, `publication.json`). CDN = GitHub raw `master/catalog/`. `/refresh` GETs `providers.json` (4s) then shards only for **stored-cred** providers (4s; skip 404). Fallback: `~/.lunr/agent/official-catalog-cache.json` → bundled `catalog/` (`copy-assets` → `dist/catalog/`). Merge: official > user-models > live `/models` > baked-in `*.models.ts`. New live ids can prompt (cap 8); official id evicts user row. Humans edit the **generator**, not the JSON. CI `.github/workflows/publish-model-catalog.yml` every 4h + dispatch. `npm run sync:model-catalog`. No R2, no `pi.dev`. `catalog/official-models.json` gone.
-- **`/refresh` OAuth:** live list calls `getAuth` before `GET /models` so expired SuperGrok tokens refresh (`ec59883` / PR #4). Toast reports only attempted providers and includes `error`. Tests: catalog-auth + catalog-merge.
+- **`/refresh` OAuth:** live list calls `getAuth` before `GET /models` so expired SuperGrok tokens refresh (`ec59883` / PR #4). Toast reports only attempted providers and includes `error`. Revoked xAI refresh → `xai login expired (run /login xai)`. Tests: catalog-auth + catalog-merge.
+- **xAI SuperGrok + Grok CLI:** same OAuth client as official `grok`. lunR reads `~/.grok/auth.json` (`GROK_HOME`) when lunR's token is older/dead; refresh write-throughs both files. `/login xai` can import the Grok CLI session. `/logout xai` does not delete `~/.grok/auth.json`. `/usage` surfaces `xAI login expired. Run /login xai.` instead of omitting the plan section. Tests: grok-cli-auth + catalog-auth + usage-service.
 - **`/model` listing:** stored cred only (`auth.json` / subscriptions / `--api-key`). Ambient `OPENROUTER_API_KEY` does not list models. `getAuth`/stream still resolve env if a model is already selected. Logout deletes that provider’s `models-store` + user-models. Tests: catalog-auth.
 - **`create()` cache-only:** `refresh({ allowNetwork: false })`. No GitHub / provider lists at `ModelRuntime.create()`. `withRemoteCatalog` deleted.
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
 
-## Installer (this branch, not on origin)
+## Installer
 
-- **Public install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Workspace names stay `@earendil-works/pi-*`; `scripts/publish.mjs` rewrites tarballs to `@ashx-j/lunr{,-ai,-tui,-agent}` and refuses leftover `@earendil-works/*`. Shrinkwrap is omitted from the published CLI package.
-- **CI:** `.github/workflows/publish-npm.yml` on `v*` uses `secrets.NPM_TOKEN`. Builds with `tsgo` (no `packages/ai` `generate-models`).
-- **Setup CLI:** `lunr setup` / `features` / product `uninstall`. npm installs print `npm rm -g @ashx-j/lunr`. Gateway daemon gated on `chat-platforms`.
-- **Parked:** Bun `lunr-*` GitHub Release archives (not the v0.1.0 documented path).
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.1.1**.
+- Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
+- CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
 ## Not merged
 
@@ -46,13 +46,12 @@ Last updated: 2026-08-16. **`origin/master` = `483a055`**. Local branch `release
 ## Uncommitted (working tree)
 
 - Ollama Cloud `/refresh` widget = bar only (no ☁ / “Ollama Cloud”).
-- xAI `/usage` weekly SuperGrok pool (`usage-adapters/xai.ts`).
 
 ## Build & run
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` → 0.80.11. **Rebuild coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.1.1**. **Rebuild coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 
@@ -100,8 +99,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-14: plan is a permission mode; Shift+Tab `manual→yolo→plan→auto`; sticky chatbox in `packages/tui`; xAI `/usage` = weekly SuperGrok pool; usage bars use 70/90.
 - 2026-08-15: `create()` cache-only (no first-paint hang). `/model` = stored cred, not env. Catalog generated + 4h CI. Official overwrites user-filled rows.
 - 2026-08-15: `/refresh` live list must refresh expired OAuth the same way `getAuth` does; xAI 403 was a stale SuperGrok access token, not a bad `/models` URL.
-- 2026-08-16: first public ship is GitHub Release binaries, not npm — workspace names are still `@earendil-works/pi-*`.
-- 2026-08-16: v0.1.0 documented install is `npm i -g @ashx-j/lunr`; publish-time rewrite only — do not publish `@earendil-works/*`.
+- 2026-08-16: public install is `npm i -g @ashx-j/lunr`; publish-time rewrite of package.json **and** dist imports (0.1.0 missed JS; 0.1.1). Do not publish `@earendil-works/*`.
+- 2026-08-16: xAI `/usage`+`/refresh` failures were a revoked lunR refresh token after `grok login` (same client); share `~/.grok/auth.json` and fail loud.
 
 # Deferred
 

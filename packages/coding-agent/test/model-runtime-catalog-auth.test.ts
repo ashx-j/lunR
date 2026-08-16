@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryModelsStore, type Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { grokAuthPath, grokOidcEntryKey, readGrokCliXaiOAuth } from "../src/core/grok-cli-auth.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SubscriptionManager } from "../src/core/subscriptions.ts";
 import { readUserModels, writeUserModels } from "../src/core/user-models.ts";
@@ -304,5 +305,108 @@ describe("ModelRuntime live catalog OAuth refresh", () => {
 		expect(
 			result.live.filter((entry) => entry.providerId !== "xai").every((entry) => entry.status === "skipped"),
 		).toBe(true);
+	});
+
+	it("adopts a live Grok CLI SuperGrok token when lunR refresh is revoked", async () => {
+		const grokHome = tempDir();
+		writeFileSync(
+			grokAuthPath(grokHome),
+			`${JSON.stringify({
+				[grokOidcEntryKey()]: {
+					key: "grok-access",
+					refresh_token: "grok-refresh",
+					expires_at: Date.now() + 60 * 60 * 1000,
+					email: "user@example.com",
+				},
+			})}\n`,
+		);
+		const credentials = AuthStorage.inMemory({
+			xai: { type: "oauth", access: "stale", refresh: "revoked", expires: 0 },
+		});
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			const href = requestHref(url);
+			if (href.includes("auth.x.ai/oauth2/token")) {
+				return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+			}
+			if (href.endsWith("/providers.json")) {
+				return new Response(JSON.stringify(["xai"]), { status: 200 });
+			}
+			if (href.endsWith("/providers/xai.json")) {
+				return new Response(JSON.stringify({}), { status: 200 });
+			}
+			if (href.includes("api.x.ai/v1/models")) {
+				if (requestAuthorization(init) !== "Bearer grok-access") {
+					return new Response("nope", { status: 403 });
+				}
+				return new Response(JSON.stringify({ object: "list", data: [{ id: "grok-from-cli" }] }), { status: 200 });
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		const runtime = await ModelRuntime.create({
+			credentials,
+			grokHome,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: true,
+		});
+		const result = await runtime.refresh({ allowNetwork: true });
+		expect(result.live.find((entry) => entry.providerId === "xai")).toMatchObject({ status: "ok" });
+		expect(await credentials.read("xai")).toMatchObject({ type: "oauth", access: "grok-access" });
+		expect(runtime.getModel("xai", "grok-from-cli")).toBeDefined();
+	});
+
+	it("write-throughs a shared SuperGrok refresh to ~/.grok/auth.json", async () => {
+		const grokHome = tempDir();
+		writeFileSync(
+			grokAuthPath(grokHome),
+			`${JSON.stringify({
+				[grokOidcEntryKey()]: {
+					key: "grok-access",
+					refresh_token: "grok-refresh",
+					expires_at: 1,
+					email: "user@example.com",
+					user_id: "user-1",
+				},
+			})}\n`,
+		);
+		const credentials = AuthStorage.inMemory({
+			xai: { type: "oauth", access: "grok-access", refresh: "grok-refresh", expires: 0 },
+		});
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			const href = requestHref(url);
+			if (href.includes("auth.x.ai/oauth2/token")) {
+				return new Response(
+					JSON.stringify({ access_token: "fresh", refresh_token: "rotated", expires_in: 21600 }),
+					{ status: 200 },
+				);
+			}
+			if (href.endsWith("/providers.json")) {
+				return new Response(JSON.stringify(["xai"]), { status: 200 });
+			}
+			if (href.endsWith("/providers/xai.json")) {
+				return new Response(JSON.stringify({}), { status: 200 });
+			}
+			if (href.includes("api.x.ai/v1/models")) {
+				if (requestAuthorization(init) !== "Bearer fresh") {
+					return new Response("nope", { status: 403 });
+				}
+				return new Response(JSON.stringify({ object: "list", data: [{ id: "grok-live-only" }] }), { status: 200 });
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		const runtime = await ModelRuntime.create({
+			credentials,
+			grokHome,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: true,
+		});
+		const result = await runtime.refresh({ allowNetwork: true });
+		expect(result.live.find((entry) => entry.providerId === "xai")?.status).toBe("ok");
+		expect(readGrokCliXaiOAuth({ grokHome })).toMatchObject({ access: "fresh", refresh: "rotated" });
+		const raw = JSON.parse(readFileSync(grokAuthPath(grokHome), "utf-8")) as Record<string, Record<string, unknown>>;
+		expect(raw[grokOidcEntryKey()]).toMatchObject({ email: "user@example.com", user_id: "user-1" });
 	});
 });

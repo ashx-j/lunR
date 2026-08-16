@@ -1,7 +1,13 @@
+import { ModelsError } from "@earendil-works/pi-ai";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
-import { clearPlanUsageCache, getPlanUsage } from "../src/core/usage-service.ts";
+import {
+	clearPlanUsageCache,
+	getPlanUsage,
+	getPlanUsageResult,
+	planUsageAuthError,
+} from "../src/core/usage-service.ts";
 import {
 	formatResetCountdown,
 	renderUsageBox,
@@ -269,6 +275,33 @@ describe("usage service failure paths", () => {
 		);
 		expect(await getPlanUsage("zai", fakeRuntime({ apiKey: "k" }))).toBeUndefined();
 		expect(await getPlanUsage("xai", xaiRuntime())).toBeUndefined();
+	});
+
+	it("surfaces a revoked xAI session instead of hiding plan usage", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("nope", { status: 401 })),
+		);
+		expect(await getPlanUsageResult("xai", xaiRuntime())).toEqual({
+			error: "xAI login expired. Run /login xai.",
+		});
+		expect(planUsageAuthError(new ModelsError("oauth", "OAuth refresh failed for xai"))).toBe(
+			"xAI login expired. Run /login xai.",
+		);
+	});
+
+	it("does not cache xAI auth errors as empty plan data", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("nope", { status: 401 }))
+			.mockResolvedValueOnce(jsonResponse(XAI_PAYLOAD));
+		vi.stubGlobal("fetch", fetchMock);
+		expect((await getPlanUsageResult("xai", xaiRuntime())).error).toBeDefined();
+		expect(await getPlanUsage("xai", xaiRuntime())).toMatchObject({
+			provider: "xai",
+			planLabel: "supergrok",
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("returns undefined on malformed payloads", async () => {

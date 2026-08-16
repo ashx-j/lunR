@@ -33,6 +33,7 @@ import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "../config.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { CatalogOverlaySource, knownModelKeys, withCatalogOverlay } from "./catalog-merge.ts";
+import { readGrokCliXaiOAuth, wrapXaiGrokCliCredentials } from "./grok-cli-auth.ts";
 import {
 	buildLiveOverlay,
 	fetchLiveProviderModels,
@@ -62,6 +63,7 @@ import {
 } from "./provider-composer.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 import { SubscriptionManager } from "./subscriptions.ts";
+import { clearPlanUsageCache } from "./usage-service.ts";
 import { type UserModelEntry, UserModelsStore, userEntryToModel, userModelsPath } from "./user-models.ts";
 
 interface ModelRuntimeSnapshot {
@@ -86,6 +88,12 @@ export interface CreateModelRuntimeOptions {
 	catalogBaseUrl?: string;
 	/** lunr: subscription-key pool. Defaults to subscriptions.json next to authPath (in-memory for custom stores). */
 	subscriptions?: SubscriptionManager;
+	/**
+	 * Grok CLI home (`~/.grok`) used as a SuperGrok OAuth fallback.
+	 * `null` disables the fallback. Custom `credentials` default to disabled
+	 * unless this is an explicit path.
+	 */
+	grokHome?: string | null;
 }
 
 export interface CatalogRefreshResult extends ModelsRefreshResult {
@@ -142,6 +150,7 @@ export class ModelRuntime implements Models {
 	private readonly userModels: UserModelsStore;
 	private readonly officialCachePath: string | undefined;
 	private lastCatalogRefresh: CatalogRefreshResult = { aborted: false, errors: new Map(), live: [], incomplete: [] };
+	private readonly grokHome: string | undefined;
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -152,6 +161,7 @@ export class ModelRuntime implements Models {
 		allowModelNetwork: boolean,
 		subscriptionManager: SubscriptionManager,
 		catalogDir: string | undefined,
+		grokHome: string | undefined,
 	) {
 		this.credentials = credentials;
 		this.config = config;
@@ -161,6 +171,7 @@ export class ModelRuntime implements Models {
 		this.subscriptionManager = subscriptionManager;
 		this.userModels = new UserModelsStore(catalogDir ? userModelsPath(catalogDir) : undefined);
 		this.officialCachePath = catalogDir ? officialCatalogCachePath(catalogDir) : undefined;
+		this.grokHome = grokHome;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
 		this.models = createModels({ credentials, modelsStore });
@@ -171,7 +182,11 @@ export class ModelRuntime implements Models {
 		// lunr: keep the underlying store — the SubscriptionManager mirrors rotated
 		// keys into it directly, NOT through the RuntimeCredentials overlay (a runtime
 		// --api-key override would shadow the mirror there).
-		const baseStore = options.credentials ?? DefaultAuthStorage.create(options.authPath);
+		const rawStore = options.credentials ?? DefaultAuthStorage.create(options.authPath);
+		const grokHomeDisabled =
+			options.grokHome === null || (options.grokHome === undefined && options.credentials !== undefined);
+		const grokHome = grokHomeDisabled ? undefined : (options.grokHome ?? undefined);
+		const baseStore = grokHomeDisabled ? rawStore : wrapXaiGrokCliCredentials(rawStore, { grokHome });
 		const credentials = new RuntimeCredentials(baseStore);
 		// Pool persistence: subscriptions.json next to auth.json. A custom credential
 		// store without an authPath (tests, SDK embeddings) gets a process-local pool
@@ -203,6 +218,7 @@ export class ModelRuntime implements Models {
 			options.allowModelNetwork ?? process.env.PI_OFFLINE === undefined,
 			subscriptionManager,
 			catalogDir,
+			grokHome,
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
@@ -571,6 +587,7 @@ export class ModelRuntime implements Models {
 
 	async login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential> {
 		const credential = await this.models.login(providerId, type, interaction);
+		clearPlanUsageCache();
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 		return credential;
 	}
@@ -582,7 +599,18 @@ export class ModelRuntime implements Models {
 		this.overlay.setLive(providerId, []);
 		// Reset credential-dependent compatibility projections before the unconfigured provider is skipped by refresh.
 		this.recomposeProvider(providerId);
+		clearPlanUsageCache();
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
+	}
+
+	/** Copy a live Grok CLI SuperGrok session into lunR `auth.json`. */
+	async importGrokCliXaiAuth(): Promise<Credential | undefined> {
+		const grok = readGrokCliXaiOAuth({ grokHome: this.grokHome });
+		if (!grok) return undefined;
+		const stored = await this.credentials.modify("xai", async () => grok);
+		clearPlanUsageCache();
+		await this.refresh({ allowNetwork: this.allowModelNetwork });
+		return stored;
 	}
 
 	async reloadConfig(): Promise<void> {
