@@ -53,6 +53,7 @@ import {
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { handleGatewayCommand } from "./gateway/command.ts";
@@ -549,6 +550,9 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	// lunr: parent-delegated children inherit plan or auto before any tool call.
+	// Non-child print/json stays fail-closed (module default manual, no handler).
+	applyInheritedSubagentPermissions();
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();

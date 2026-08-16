@@ -34,6 +34,7 @@ Last updated: 2026-08-16. **`origin/master` = `8572215`**. Public npm is `@ashx-
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
 - **Model-tiers toggle:** `/settings` Enable model tiers used `pi.runtime.refreshTools()`; `pi` is `ExtensionAPI` and has no `runtime`. Fix: `pi.registerTool(tool)` + bridge swallows refresher throws. Tests: `model-tiers.test.ts`.
 - **Session wheel:** sticky chat + alt-screen has no native scrollback. TUI enables SGR 1000+1006 while pinned; wheel → `scrollChat` (±3, Ctrl+wheel pages). Shift+drag still selects. Tests: `mouse.test.ts` + `tui-pin.test.ts`.
+- **Child permission inherit:** parent snapshot `PI_SUBAGENT_PARENT_PERMISSION_MODE` at spawn. Child `PI_SUBAGENT_CHILD=1` resets to `plan` or `auto` in `main.ts` before tools. Plan parent fails writer/write-tool launches (`PLAN_MODE_WRITE_SPAWN_ERROR`); read-only children stay blocked for writes. Non-child `lunr -p` stays fail-closed. Tests: `subagent-permission-inherit.test.ts` + permissions fail-closed.
 
 ## Installer
 
@@ -106,6 +107,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-16: xAI `/usage`+`/refresh` failures were a revoked lunR refresh token after `grok login` (same client); share `~/.grok/auth.json` and fail loud.
 - 2026-08-16: model-tiers toggle must use `pi.registerTool`, not `pi.runtime` (not on ExtensionAPI); refresher errors must not be fatal.
 - 2026-08-16: after sticky chat + alt-screen, native scrollback is gone; enable SGR mouse tracking and map wheel to `scrollChat`. Do not use DECSET 1007 (collides with editor history).
+- 2026-08-16: parent-delegated children inherit plan or auto; plan parents fail writer spawns; non-child print stays fail-closed.
 
 # Deferred
 

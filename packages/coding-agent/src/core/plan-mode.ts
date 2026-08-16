@@ -170,11 +170,19 @@ const EXECUTING_NODE_FLAGS = new Set([
 ]);
 const EXECUTING_PYTHON_FLAGS = new Set(["-c", "-m", "-i", "--interactive"]);
 
+/** Apply-mode rewrite only. Default / omitted `dry_run` is preview and stays allowed. */
+export function isCodeRewriteMutating(input: unknown): boolean {
+	return (input as { dry_run?: unknown } | undefined)?.dry_run === false;
+}
+
 /**
  * Returns the block reason when plan mode should block this tool call, else undefined.
  */
 export function planModeBlockReason(toolName: string, input: unknown): string | undefined {
 	if (BLOCKED_TOOLS.has(toolName)) {
+		return PLAN_MODE_BLOCK_MESSAGE;
+	}
+	if (toolName === "code_rewrite" && isCodeRewriteMutating(input)) {
 		return PLAN_MODE_BLOCK_MESSAGE;
 	}
 	if (toolName === "bash") {
