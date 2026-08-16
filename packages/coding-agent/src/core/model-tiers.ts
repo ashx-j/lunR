@@ -19,8 +19,8 @@ export interface ModelTiersBridge {
 	isTierModeEnabled(): boolean;
 	/** Ask the pi-subagents extension to rebuild its tool description from current settings. */
 	refreshToolDescription(): void;
-	/** Register the callback used by {@link refreshToolDescription}. Called by the extension once at load. */
-	registerToolDescriptionRefresher(refresher: () => void): void;
+	/** Register (or clear) the callback used by {@link refreshToolDescription}. Called by the extension once at load. */
+	registerToolDescriptionRefresher(refresher: (() => void) | undefined): void;
 }
 
 function isModelTierName(tier: string): tier is ModelTierName {
@@ -39,9 +39,18 @@ const bridge: ModelTiersBridge = {
 		return activeSettingsManager?.getModelTiersEnabled() ?? false;
 	},
 	refreshToolDescription(): void {
-		toolDescriptionRefresher?.();
+		if (!toolDescriptionRefresher) return;
+		try {
+			toolDescriptionRefresher();
+		} catch (error) {
+			// Settings UI is on the uncaughtException path; a stale/broken refresher
+			// must not kill the process. persist of the toggle already happened.
+			console.warn(
+				`[model-tiers] refreshToolDescription failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	},
-	registerToolDescriptionRefresher(refresher: () => void): void {
+	registerToolDescriptionRefresher(refresher: (() => void) | undefined): void {
 		toolDescriptionRefresher = refresher;
 	},
 };
