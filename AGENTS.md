@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-16. **`origin/master` = `f2ec97b`**. Public npm is `@ashx-j/lunr@0.1.2` (tag `v0.1.2`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-16. **`origin/master` = `5c60b27`**. Public npm is `@ashx-j/lunr@0.1.3` (tag `v0.1.3`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 ## On origin/master (`f2ec97b`)
 
@@ -32,10 +32,11 @@ Last updated: 2026-08-16. **`origin/master` = `f2ec97b`**. Public npm is `@ashx-
 - **`/model` listing:** stored cred only (`auth.json` / subscriptions / `--api-key`). Ambient `OPENROUTER_API_KEY` does not list models. `getAuth`/stream still resolve env if a model is already selected. Logout deletes that provider’s `models-store` + user-models. Tests: catalog-auth.
 - **`create()` cache-only:** `refresh({ allowNetwork: false })`. No GitHub / provider lists at `ModelRuntime.create()`. `withRemoteCatalog` deleted.
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
+- **Model-tiers toggle:** `/settings` Enable model tiers used `pi.runtime.refreshTools()`; `pi` is `ExtensionAPI` and has no `runtime`. Fix: `pi.registerTool(tool)` + bridge swallows refresher throws. Tests: `model-tiers.test.ts`.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.1.2**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.1.3**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -51,7 +52,7 @@ Last updated: 2026-08-16. **`origin/master` = `f2ec97b`**. Public npm is `@ashx-
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.1.2**. **Rebuild coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.1.3**. **Rebuild coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 
@@ -101,6 +102,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-15: `/refresh` live list must refresh expired OAuth the same way `getAuth` does; xAI 403 was a stale SuperGrok access token, not a bad `/models` URL.
 - 2026-08-16: public install is `npm i -g @ashx-j/lunr`; publish-time rewrite of package.json **and** dist imports (0.1.0 missed JS; 0.1.1). Do not publish `@earendil-works/*`.
 - 2026-08-16: xAI `/usage`+`/refresh` failures were a revoked lunR refresh token after `grok login` (same client); share `~/.grok/auth.json` and fail loud.
+- 2026-08-16: model-tiers toggle must use `pi.registerTool`, not `pi.runtime` (not on ExtensionAPI); refresher errors must not be fatal.
 
 # Deferred
 
