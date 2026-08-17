@@ -1,10 +1,9 @@
 /**
  * Built-in extensions for lunR.
  *
- * These extensions are compiled into the build and loaded as inline factories
- * on every startup. They do not appear as user-installable extensions.
- * Each entry imports the extension's default factory function and registers
- * it as a named InlineExtension so it shows as `<inline:name>` in diagnostics.
+ * Light factories stay on the first-paint graph. Heavy factories are imported
+ * only when attachDeferredBuiltinExtensions() runs after the TUI is up, or
+ * immediately for print/RPC/gateway where there is no first-paint window.
  */
 
 import type { ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
@@ -15,22 +14,12 @@ import ashxjTui from "./ashxj-tui.ts";
 import piOllamaCloud from "./pi-ollama-cloud/index.ts";
 import ashxjSpinners from "./ashxj-spinners.ts";
 import ashxjThinking from "./ashxj-thinking.ts";
-import piIntercom from "./pi-intercom/index.ts";
-import piPromptTemplateModel from "./pi-prompt-template-model/index.ts";
-import piSubagents from "./pi-subagents/index.ts";
-import piWebAccess from "./pi-web-access/index.ts";
-import piLspExtension from "./pi-lsp-extension/src/index.ts";
-import piMcpAdapter from "./pi-mcp-adapter/index.ts";
-
-// lunR-native extensions
 import lunrLocalProviders from "./lunr-local-providers/index.ts";
 import lunrCron from "./lunr-cron.ts";
 import lunrTodos from "./lunr-todos.ts";
 import lunrPlanTools from "./lunr-plan-tools.ts";
 import lunrBehavior from "./lunr-behavior.ts";
 import lunrSkillCreator from "./lunr-skill-creator/index.ts";
-
-// narumiruna extensions (pi-goal kept: plan 2's /goal footer indicator patches it)
 import narumirunaGoal from "./narumiruna-pi-goal/src/goal.ts";
 
 /**
@@ -43,22 +32,15 @@ function ext(name: string, factory: unknown): InlineExtension {
 	return { name, factory: factory as ExtensionFactory };
 }
 
-export const builtinExtensions: InlineExtension[] = [
+/** UI, local providers, and small lunR-native factories. Safe to import at CLI start. */
+export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("simple-pi-memory", simplePiMemory),
 	ext("pi-tps", piTps),
 	ext("ashxj-tui", ashxjTui),
 	ext("pi-ollama-cloud", piOllamaCloud),
 	ext("ashxj-spinners", ashxjSpinners),
 	ext("ashxj-thinking", ashxjThinking),
-	ext("pi-intercom", piIntercom),
-	ext("pi-prompt-template-model", piPromptTemplateModel),
-	ext("pi-subagents", piSubagents),
-	ext("pi-web-access", piWebAccess),
-	ext("pi-lsp-extension", piLspExtension),
-	ext("pi-mcp-adapter", piMcpAdapter),
-	// narumiruna
 	ext("narumiruna-pi-goal", narumirunaGoal),
-	// lunR-native
 	ext("lunr-local-providers", lunrLocalProviders),
 	ext("lunr-cron", lunrCron),
 	ext("lunr-todos", lunrTodos),
@@ -66,3 +48,39 @@ export const builtinExtensions: InlineExtension[] = [
 	ext("lunr-behavior", lunrBehavior),
 	ext("lunr-skill-creator", lunrSkillCreator),
 ];
+
+const DEFERRED_BUILTIN_LOADERS: Array<{
+	name: string;
+	load: () => Promise<{ default: unknown }>;
+}> = [
+	{ name: "pi-intercom", load: () => import("./pi-intercom/index.ts") },
+	{ name: "pi-prompt-template-model", load: () => import("./pi-prompt-template-model/index.ts") },
+	{ name: "pi-subagents", load: () => import("./pi-subagents/index.ts") },
+	{ name: "pi-web-access", load: () => import("./pi-web-access/index.ts") },
+	{ name: "pi-lsp-extension", load: () => import("./pi-lsp-extension/src/index.ts") },
+	{ name: "pi-mcp-adapter", load: () => import("./pi-mcp-adapter/index.ts") },
+];
+
+export const DEFERRED_BUILTIN_EXTENSION_NAMES = DEFERRED_BUILTIN_LOADERS.map((entry) => entry.name);
+
+/** Flags registered only after deferred builtins attach. Do not fail CLI parse for these. */
+export const DEFERRED_BUILTIN_FLAGS = ["mcp-config"] as const;
+
+/** Import MCP / LSP / web-access / intercom / subagents only when needed. */
+export async function loadDeferredBuiltinExtensions(): Promise<InlineExtension[]> {
+	const loaded = await Promise.all(
+		DEFERRED_BUILTIN_LOADERS.map(async ({ name, load }) => {
+			const module = await load();
+			return ext(name, module.default);
+		}),
+	);
+	return loaded;
+}
+
+/** Full roster. Print / RPC / gateway still need every factory before the first turn. */
+export async function loadAllBuiltinExtensions(): Promise<InlineExtension[]> {
+	return [...lightBuiltinExtensions, ...(await loadDeferredBuiltinExtensions())];
+}
+
+/** Eager full roster. Prefer loadAllBuiltinExtensions() so CLI start stays light. */
+export const builtinExtensions: InlineExtension[] = lightBuiltinExtensions;

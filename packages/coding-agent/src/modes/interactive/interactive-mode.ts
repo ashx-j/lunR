@@ -71,6 +71,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	InlineExtension,
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
@@ -409,6 +410,10 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
+	/** Extra inline factories to attach after first paint (MCP / LSP / web-access / intercom / subagents). */
+	deferredBuiltinFactories?: () => Promise<InlineExtension[]>;
+	/** Persist attached factories so /new and /resume recreate the full roster. */
+	onDeferredBuiltinsAttached?: (factories: InlineExtension[]) => void;
 }
 
 export class InteractiveMode {
@@ -550,6 +555,7 @@ export class InteractiveMode {
 	private options: InteractiveModeOptions;
 	private autoTrustOnReloadCwd: string | undefined;
 	private themeController: InteractiveThemeController;
+	private deferredBuiltinsAttached = false;
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -909,6 +915,8 @@ export class InteractiveMode {
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
 		time("rebindCurrentSession");
+		await this.attachDeferredBuiltinExtensions();
+		time("attachDeferredBuiltins");
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
@@ -1644,6 +1652,20 @@ export class InteractiveMode {
 	/**
 	 * Initialize the extension system with TUI-based UI context.
 	 */
+	private async attachDeferredBuiltinExtensions(): Promise<void> {
+		if (this.deferredBuiltinsAttached || !this.options.deferredBuiltinFactories) {
+			return;
+		}
+		this.deferredBuiltinsAttached = true;
+		const factories = await this.options.deferredBuiltinFactories();
+		if (factories.length === 0) return;
+		this.options.onDeferredBuiltinsAttached?.(factories);
+		await this.session.attachInlineExtensions(factories);
+		this.setupAutocompleteProvider();
+		this.setupExtensionShortcuts(this.session.extensionRunner);
+		this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
+	}
+
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		const uiContext = this.createExtensionUIContext();
 		await this.session.bindExtensions({

@@ -45,6 +45,12 @@ export interface ResourceLoader {
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(options?: ResourceLoaderReloadOptions): Promise<void>;
+	attachInlineExtensions?(factories: InlineExtension[]): Promise<LoadExtensionsResult>;
+}
+
+function inlineExtensionPath(input: InlineExtension, index: number): string {
+	const isNamed = typeof input !== "function";
+	return `<inline:${isNamed ? input.name : index + 1}>`;
 }
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -285,6 +291,27 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getAppendSystemPrompt(): string[] {
 		return this.appendSystemPrompt;
+	}
+
+	async attachInlineExtensions(factories: InlineExtension[]): Promise<LoadExtensionsResult> {
+		const loaded = new Set(this.extensionsResult.extensions.map((extension) => extension.path));
+		const pending = factories.filter((factory, index) => {
+			const path = inlineExtensionPath(factory, this.extensionFactories.length + index);
+			return !loaded.has(path);
+		});
+		if (pending.length === 0) {
+			return { extensions: [], errors: [], runtime: this.extensionsResult.runtime };
+		}
+		const attached = await this.loadExtensionFactories(this.extensionsResult.runtime, pending);
+		this.extensionFactories.push(...pending);
+		this.extensionsResult.extensions.push(...attached.extensions);
+		this.extensionsResult.errors.push(...attached.errors);
+		this.addExtensionConflictDiagnostics(this.extensionsResult);
+		return {
+			extensions: attached.extensions,
+			errors: attached.errors,
+			runtime: this.extensionsResult.runtime,
+		};
 	}
 
 	extendResources(paths: ResourceExtensionPaths): void {
@@ -886,17 +913,20 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 	}
 
-	private async loadExtensionFactories(runtime: ExtensionRuntime): Promise<{
+	private async loadExtensionFactories(
+		runtime: ExtensionRuntime,
+		factories: InlineExtension[] = this.extensionFactories,
+	): Promise<{
 		extensions: Extension[];
 		errors: Array<{ path: string; error: string }>;
 	}> {
 		const extensions: Extension[] = [];
 		const errors: Array<{ path: string; error: string }> = [];
 
-		for (const [index, input] of this.extensionFactories.entries()) {
+		for (const [index, input] of factories.entries()) {
 			const isNamed = typeof input !== "function";
 			const factory = isNamed ? input.factory : input;
-			const extensionPath = `<inline:${isNamed ? input.name : index + 1}>`;
+			const extensionPath = inlineExtensionPath(input, index);
 			try {
 				const extension = await loadExtensionFromFactory(factory, this.cwd, this.eventBus, runtime, extensionPath);
 				extensions.push(extension);

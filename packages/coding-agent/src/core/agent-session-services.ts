@@ -97,9 +97,11 @@ function applyExtensionFlagValues(
 	}
 
 	const unknownFlags: string[] = [];
+	const deferredFlags = new Set(["mcp-config"]);
 	for (const [name, value] of extensionFlagValues) {
 		const flag = registeredFlags.get(name);
 		if (!flag) {
+			if (deferredFlags.has(name)) continue;
 			unknownFlags.push(name);
 			continue;
 		}

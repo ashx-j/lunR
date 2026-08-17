@@ -68,7 +68,7 @@ const KNOWN_PLATFORMS = ["telegram", "discord"] as const;
 /** Default factory: fresh in-memory headless session, mirroring agent-bridge's wiring. */
 async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModelRef): Promise<BridgeSession> {
 	const [
-		{ builtinExtensions },
+		{ loadAllBuiltinExtensions },
 		{ getAgentDir },
 		{ registerCustomizeBridge },
 		{ registerMemoryCapBridge },
@@ -105,7 +105,7 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 		cwd,
 		agentDir,
 		settingsManager,
-		resourceLoaderOptions: { extensionFactories: [...builtinExtensions] },
+		resourceLoaderOptions: { extensionFactories: await loadAllBuiltinExtensions() },
 	});
 	// Fallback-model attempts pin the session model explicitly; an unresolvable
 	// or unauthenticated override fails the attempt so the next fallback runs.
