@@ -12,10 +12,17 @@ interface TimingNamespace {
 type TimingLabel = "main" | "extensions";
 
 const timingNamespaces = new Map<TimingLabel, TimingNamespace>();
+let importMainMs: number | undefined;
+
+export function noteImportMain(ms: number): void {
+	importMainMs = ms;
+}
 
 export function resetTimings(namespace: TimingLabel = "main"): void {
 	if (!ENABLED) return;
-	timingNamespaces.set(namespace, { timings: [], lastTime: Date.now() });
+	const timings =
+		namespace === "main" && importMainMs !== undefined ? [{ label: "import:main", ms: importMainMs }] : [];
+	timingNamespaces.set(namespace, { timings, lastTime: Date.now() });
 }
 
 export function time(label: string, namespace: TimingLabel = "main"): void {

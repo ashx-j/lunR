@@ -16,6 +16,7 @@ type SubmitContext = {
 	flushPendingBashComponents: () => void;
 	onInputCallback?: (text: string) => void;
 	pendingUserInputs: string[];
+	ui: { setChatScroll: (n: number) => void };
 };
 
 type InputContext = {
@@ -45,6 +46,7 @@ function createSubmitContext(): SubmitContext {
 		},
 		flushPendingBashComponents: vi.fn(),
 		pendingUserInputs: [],
+		ui: { setChatScroll: vi.fn() },
 	};
 }
 
@@ -68,5 +70,46 @@ describe("InteractiveMode startup input", () => {
 		await expect(interactiveModePrototype.getUserInput.call(context)).resolves.toBe("queued prompt");
 		expect(context.onInputCallback).toBeUndefined();
 		expect(context.pendingUserInputs).toEqual([]);
+	});
+
+	it("waits for deferred builtins before session.prompt but not getUserInput", async () => {
+		let resolveAttach: (() => void) | undefined;
+		const attach = new Promise<void>((resolve) => {
+			resolveAttach = resolve;
+		});
+		const prompt = vi.fn(async () => {});
+		const context = {
+			deferredBuiltinAttachPromise: attach,
+			session: { prompt },
+			awaitDeferredBuiltinsForPrompt() {
+				return proto.waitForDeferredBuiltins.call(this);
+			},
+		};
+		const proto = InteractiveMode.prototype as unknown as {
+			waitForDeferredBuiltins(this: { deferredBuiltinAttachPromise?: Promise<void> }): Promise<void>;
+			promptAfterDeferredBuiltins(
+				this: {
+					awaitDeferredBuiltinsForPrompt(): Promise<void>;
+					session: { prompt: typeof prompt };
+				},
+				text: string,
+			): Promise<void>;
+		};
+
+		const wait = proto.waitForDeferredBuiltins.call(context);
+		let waitSettled = false;
+		void wait.then(() => {
+			waitSettled = true;
+		});
+		await Promise.resolve();
+		expect(waitSettled).toBe(false);
+
+		const queued = proto.promptAfterDeferredBuiltins.call(context, "hello");
+		await Promise.resolve();
+		expect(prompt).not.toHaveBeenCalled();
+
+		resolveAttach?.();
+		await queued;
+		expect(prompt).toHaveBeenCalledWith("hello", undefined);
 	});
 });

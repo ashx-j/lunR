@@ -58,7 +58,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { handleGatewayCommand } from "./gateway/command.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { InteractiveMode } from "./modes/interactive/interactive-mode.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
@@ -69,22 +69,57 @@ const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP
  * Read all content from piped stdin.
  * Returns undefined if stdin is a TTY (interactive terminal).
  */
-async function readPipedStdin(): Promise<string | undefined> {
-	// If stdin is a TTY, we're running interactively - don't read stdin
-	if (process.stdin.isTTY) {
+const PIPED_STDIN_FIRST_CHUNK_MS = 50;
+const PIPED_STDIN_IDLE_MS = 2000;
+
+/**
+ * Read piped stdin. A non-TTY that never emits data (Windows console, leftover
+ * redirected handle) must not block interactive start forever.
+ */
+export async function readPipedStdin(
+	stream: NodeJS.ReadStream = process.stdin,
+	options: { firstChunkMs?: number; idleMs?: number } = {},
+): Promise<string | undefined> {
+	if (stream.isTTY) {
 		return undefined;
 	}
 
+	const firstChunkMs = options.firstChunkMs ?? PIPED_STDIN_FIRST_CHUNK_MS;
+	const idleMs = options.idleMs ?? PIPED_STDIN_IDLE_MS;
+
 	return new Promise((resolve) => {
 		let data = "";
-		process.stdin.setEncoding("utf8");
-		process.stdin.on("data", (chunk) => {
-			data += chunk;
-		});
-		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
-		});
-		process.stdin.resume();
+		let settled = false;
+		let sawData = false;
+		let idleTimer: ReturnType<typeof setTimeout> | undefined;
+		const firstChunkTimer = setTimeout(() => {
+			if (!sawData) finish(undefined);
+		}, firstChunkMs);
+
+		const finish = (value: string | undefined) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(firstChunkTimer);
+			if (idleTimer) clearTimeout(idleTimer);
+			stream.off("data", onData);
+			stream.off("end", onEnd);
+			stream.off("error", onEnd);
+			resolve(value);
+		};
+
+		const onEnd = () => finish(data.trim() || undefined);
+		const onData = (chunk: string | Buffer) => {
+			sawData = true;
+			data += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+			if (idleTimer) clearTimeout(idleTimer);
+			idleTimer = setTimeout(onEnd, idleMs);
+		};
+
+		stream.setEncoding("utf8");
+		stream.on("data", onData);
+		stream.on("end", onEnd);
+		stream.on("error", onEnd);
+		stream.resume();
 	});
 }
 
@@ -117,6 +152,11 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	}
 	if (parsed.mode === "json") {
 		return "json";
+	}
+	// PI_STARTUP_BENCHMARK=1 times interactive first paint even when stdin/stdout
+	// are not TTYs (repo npx, CI, redirected logs).
+	if (isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK) && !parsed.print) {
+		return "interactive";
 	}
 	if (parsed.print || !stdinIsTTY || !stdoutIsTTY) {
 		return "print";
@@ -697,6 +737,7 @@ export async function main(args: string[], options?: MainOptions) {
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+		const skipMissingPackageInstall = isInitialRuntime && appMode === "interactive";
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,
@@ -704,6 +745,7 @@ export async function main(args: string[], options?: MainOptions) {
 			extensionFlagValues: parsed.unknownFlags,
 			resourceLoaderReloadOptions: shouldResolveProjectTrust
 				? {
+						skipMissingPackageInstall,
 						resolveProjectTrust: async ({ extensionsResult }) => {
 							const trusted = await resolveProjectTrusted({
 								cwd,
@@ -725,7 +767,9 @@ export async function main(args: string[], options?: MainOptions) {
 							return trusted;
 						},
 					}
-				: undefined,
+				: skipMissingPackageInstall
+					? { skipMissingPackageInstall }
+					: undefined,
 			resourceLoaderOptions: {
 				additionalExtensionPaths: resolvedExtensionPaths,
 				additionalSkillPaths: resolvedSkillPaths,
@@ -837,9 +881,11 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
+	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC.
+	// Startup benchmark must stay interactive even if a leftover redirected handle has bytes.
 	let stdinContent: string | undefined;
-	if (appMode !== "rpc") {
+	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+	if (appMode !== "rpc" && !startupBenchmark) {
 		stdinContent = await readPipedStdin();
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
@@ -876,13 +922,13 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
 	if (startupBenchmark && appMode !== "interactive") {
 		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
 		process.exit(1);
 	}
 
 	if (appMode === "rpc") {
+		const { runRpcMode } = await import("./modes/rpc/rpc-mode.ts");
 		printTimings();
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
@@ -901,6 +947,8 @@ export async function main(args: string[], options?: MainOptions) {
 		if (startupBenchmark) {
 			await interactiveMode.init();
 			time("interactiveMode.init");
+			await interactiveMode.waitForDeferredBuiltins();
+			time("attachDeferredBuiltins");
 			// Give the TUI's stdin handler a brief chance to consume terminal query replies
 			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
 			await new Promise((resolve) => setTimeout(resolve, 150));
@@ -916,9 +964,12 @@ export async function main(args: string[], options?: MainOptions) {
 			return;
 		}
 
+		await interactiveMode.init();
+		time("interactiveMode.init");
 		printTimings();
 		await interactiveMode.run();
 	} else {
+		const { runPrintMode } = await import("./modes/print-mode.ts");
 		printTimings();
 		const exitCode = await runPrintMode(runtime, {
 			mode: toPrintOutputMode(appMode),

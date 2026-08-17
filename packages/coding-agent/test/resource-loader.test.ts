@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
@@ -734,6 +734,20 @@ export default function(pi: ExtensionAPI) {
 			expect(runner.getCommand("deploy:1")?.description).toBe("explicit command");
 			expect(runner.getCommand("deploy:2")?.description).toBe("global command");
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
+		});
+
+		it("skips missing package install when skipMissingPackageInstall is set", async () => {
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setPackages(["npm:missing-package"]);
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			const install = vi
+				.spyOn(
+					(loader as unknown as { packageManager: { installParsedSource: () => Promise<void> } }).packageManager,
+					"installParsedSource",
+				)
+				.mockResolvedValue();
+			await loader.reload({ skipMissingPackageInstall: true });
+			expect(install).not.toHaveBeenCalled();
 		});
 	});
 });

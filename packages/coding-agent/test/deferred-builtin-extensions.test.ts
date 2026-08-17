@@ -7,7 +7,11 @@ import { createAgentSessionFromServices, createAgentSessionServices } from "../s
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { DEFERRED_BUILTIN_EXTENSION_NAMES, lightBuiltinExtensions } from "../src/builtin-extensions/index.ts";
+import {
+	DEFERRED_BUILTIN_EXTENSION_NAMES,
+	lightBuiltinExtensions,
+	loadAllBuiltinExtensions,
+} from "../src/builtin-extensions/index.ts";
 
 describe("deferred builtin extensions", () => {
 	const dirs: string[] = [];
@@ -26,6 +30,18 @@ describe("deferred builtin extensions", () => {
 		for (const name of DEFERRED_BUILTIN_EXTENSION_NAMES) {
 			expect(lightNames).not.toContain(name);
 		}
+		expect(lightNames).not.toContain("pi-ollama-cloud");
+		expect(lightNames).not.toContain("narumiruna-pi-goal");
+		expect(lightNames).not.toContain("lunr-cron");
+	});
+
+	it("keeps goal / cron / ollama-cloud on the full roster", async () => {
+		const all = await loadAllBuiltinExtensions();
+		const names = all.map((entry) => ("name" in entry ? entry.name : ""));
+		expect(names).toContain("pi-ollama-cloud");
+		expect(names).toContain("narumiruna-pi-goal");
+		expect(names).toContain("lunr-cron");
+		expect(names).toContain("pi-mcp-adapter");
 	});
 
 	it("attaches a late inline factory after first bind without restarting earlier extensions", async () => {

@@ -35,8 +35,9 @@ import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath 
 import { isStdoutTakenOver } from "./output-guard.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
-const NETWORK_TIMEOUT_MS = 10000;
-const PACKAGE_INSTALL_TIMEOUT_MS = 30_000;
+export const NETWORK_TIMEOUT_MS = 10000;
+export const PACKAGE_INSTALL_TIMEOUT_MS = 30_000;
+export const SYNC_COMMAND_TIMEOUT_MS = 10_000;
 const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
@@ -1714,7 +1715,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	private async ensureGitRef(targetDir: string, fetchArgs: string[], ref: string): Promise<void> {
 		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
-		await this.runCommand("git", fetchArgs, { cwd: targetDir });
+		await this.runCommand("git", fetchArgs, { cwd: targetDir, timeoutMs: NETWORK_TIMEOUT_MS });
 
 		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
 			cwd: targetDir,
@@ -2505,16 +2506,21 @@ export class DefaultPackageManager implements PackageManager {
 		});
 	}
 
-	private runCommandSync(command: string, args: string[]): string {
+	private runCommandSync(command: string, args: string[], options?: { timeoutMs?: number }): string {
 		const env = getEnv();
+		const timeoutMs = options?.timeoutMs ?? SYNC_COMMAND_TIMEOUT_MS;
 		const result = spawnProcessSync(command, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			encoding: "utf-8",
 			env,
+			timeout: timeoutMs,
 		});
 		if (result.error || result.status !== 0) {
+			const timedOut = result.error && "code" in result.error && result.error.code === "ETIMEDOUT";
 			throw new Error(
-				`Failed to run ${command} ${args.join(" ")}: ${result.error?.message || result.stderr || result.stdout}`,
+				timedOut
+					? `${command} ${args.join(" ")} timed out after ${timeoutMs}ms`
+					: `Failed to run ${command} ${args.join(" ")}: ${result.error?.message || result.stderr || result.stdout}`,
 			);
 		}
 		return (result.stdout || result.stderr || "").trim();

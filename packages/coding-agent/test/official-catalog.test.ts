@@ -187,6 +187,42 @@ describe("loadOfficialCatalog", () => {
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 
+	it("prefers a cache file over bundled models.json when network is disabled", async () => {
+		const dir = tempDir();
+		const cachePath = join(dir, "official-catalog-cache.json");
+		const cachedOnly = {
+			id: "cached-only",
+			name: "Cached Only",
+			api: "openai-completions" as const,
+			provider: "xai",
+			baseUrl: "https://api.x.ai/v1",
+			reasoning: false,
+			input: ["text"] as ("text" | "image")[],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1000,
+			maxTokens: 100,
+		};
+		writeFileSync(
+			cachePath,
+			`${JSON.stringify({ version: 1, updatedAt: "2026-08-17T00:00:00Z", models: [cachedOnly] })}\n`,
+		);
+		const loaded = await loadOfficialCatalog({
+			allowNetwork: false,
+			cachePath,
+			bundled: {
+				version: 1,
+				updatedAt: "2026-01-01T00:00:00Z",
+				models: [{
+					...cachedOnly,
+					id: "bundled-only",
+					name: "Bundled Only",
+				}],
+			},
+		});
+		expect(loaded.source).toBe("cache");
+		expect(loaded.catalog.models.map((model) => model.id)).toEqual(["cached-only"]);
+	});
+
 	it("falls back to bundled on 404 and timeout", async () => {
 		const loaded404 = await loadOfficialCatalog({
 			allowNetwork: true,

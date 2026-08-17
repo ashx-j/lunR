@@ -19,11 +19,14 @@ try {
 	// Node < 22.8 or unwritable cache dir.
 }
 
-const [{ APP_NAME }, { configureHttpDispatcher }, { main }] = await Promise.all([
+const importStarted = Date.now();
+const [{ APP_NAME }, { configureHttpDispatcher }, { main }, { noteImportMain }] = await Promise.all([
 	import("./config.ts"),
 	import("./core/http-dispatcher.ts"),
 	import("./main.ts"),
+	import("./core/timings.ts"),
 ]);
+noteImportMain(Date.now() - importStarted);
 
 process.title = APP_NAME;
 process.env.PI_CODING_AGENT = "true";

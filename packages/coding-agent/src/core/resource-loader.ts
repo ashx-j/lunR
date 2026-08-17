@@ -33,6 +33,8 @@ export interface ResourceExtensionPaths {
 
 export interface ResourceLoaderReloadOptions {
 	resolveProjectTrust?: (input: { extensionsResult: LoadExtensionsResult }) => Promise<boolean>;
+	/** Skip npm/git auto-install for missing configured packages. Startup interactive only. */
+	skipMissingPackageInstall?: boolean;
 }
 
 export interface ResourceLoader {
@@ -354,12 +356,22 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 	}
 
-	async loadProjectTrustExtensions(): Promise<LoadExtensionsResult> {
+	private resolveOnMissing(
+		skipMissingPackageInstall: boolean | undefined,
+	): ((source: string) => Promise<"skip">) | undefined {
+		if (!skipMissingPackageInstall) return undefined;
+		return async () => "skip";
+	}
+
+	async loadProjectTrustExtensions(options?: ResourceLoaderReloadOptions): Promise<LoadExtensionsResult> {
 		// Force untrusted project settings for the bootstrap pass. This keeps project-local
 		// extensions/packages out while still loading user/global and temporary CLI extensions.
 		this.settingsManager.setProjectTrusted(false);
 		await this.settingsManager.reload();
-		return this.loadCurrentExtensionSet({ includeInlineFactories: true });
+		return this.loadCurrentExtensionSet({
+			includeInlineFactories: true,
+			skipMissingPackageInstall: options?.skipMissingPackageInstall,
+		});
 	}
 
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
@@ -371,14 +383,14 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		let preTrustExtensions: LoadExtensionsResult | undefined;
 		if (options?.resolveProjectTrust) {
-			preTrustExtensions = await this.loadProjectTrustExtensions();
+			preTrustExtensions = await this.loadProjectTrustExtensions(options);
 			const projectTrusted = await options.resolveProjectTrust({ extensionsResult: preTrustExtensions });
 			this.settingsManager.setProjectTrusted(projectTrusted);
 		}
 
 		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
 		await this.settingsManager.reload();
-		const resolvedPaths = await this.packageManager.resolve();
+		const resolvedPaths = await this.packageManager.resolve(this.resolveOnMissing(options?.skipMissingPackageInstall));
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
@@ -516,8 +528,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.loaded = true;
 	}
 
-	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {
-		const resolvedPaths = await this.packageManager.resolve();
+	private async loadCurrentExtensionSet(options: {
+		includeInlineFactories: boolean;
+		skipMissingPackageInstall?: boolean;
+	}): Promise<LoadExtensionsResult> {
+		const resolvedPaths = await this.packageManager.resolve(
+			this.resolveOnMissing(options.skipMissingPackageInstall),
+		);
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});

@@ -359,10 +359,16 @@ export interface LoadOfficialCatalogOptions {
 	providerIds?: readonly string[];
 }
 
-function fallbackCatalog(bundled: OfficialCatalogFile, cachePath?: string): OfficialCatalogLoadResult {
+function resolveBundledCatalog(bundled?: OfficialCatalogFile): OfficialCatalogFile {
+	if (bundled) return bundled;
+	return loadBundledOfficialCatalog();
+}
+
+function fallbackCatalog(bundled: OfficialCatalogFile | undefined, cachePath?: string): OfficialCatalogLoadResult {
 	const cached = loadCachedOfficialCatalog(cachePath);
 	if (cached) return { catalog: cached, source: "cache" };
-	if (bundled.models.length > 0) return { catalog: bundled, source: "bundled" };
+	const resolved = resolveBundledCatalog(bundled);
+	if (resolved.models.length > 0) return { catalog: resolved, source: "bundled" };
 	return { catalog: BUNDLED_OFFICIAL_CATALOG, source: "bundled" };
 }
 
@@ -415,12 +421,13 @@ async function fetchJson(
 export async function loadOfficialCatalog(
 	options: LoadOfficialCatalogOptions = {},
 ): Promise<OfficialCatalogLoadResult> {
-	const bundled = options.bundled ?? loadBundledOfficialCatalog();
 	const cachePath = options.cachePath;
+	// Cache-only: prefer the on-disk cache and skip parsing bundled models.json.
 	if (!options.allowNetwork) {
-		return fallbackCatalog(bundled, cachePath);
+		return fallbackCatalog(options.bundled, cachePath);
 	}
 
+	const bundled = resolveBundledCatalog(options.bundled);
 	const timeoutMs = options.timeoutMs ?? OFFICIAL_CATALOG_TIMEOUT_MS;
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const headers = {

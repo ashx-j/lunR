@@ -556,6 +556,7 @@ export class InteractiveMode {
 	private autoTrustOnReloadCwd: string | undefined;
 	private themeController: InteractiveThemeController;
 	private deferredBuiltinsAttached = false;
+	private deferredBuiltinAttachPromise: Promise<void> | undefined;
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -912,14 +913,15 @@ export class InteractiveMode {
 		}
 		this.ui.requestRender();
 
-		// Initialize extensions first so resources are shown before messages
+		// Light extensions first so resources are shown before messages. Deferred
+		// MCP/LSP/web/intercom attach in the background so the editor is usable.
 		await this.rebindCurrentSession();
 		time("rebindCurrentSession");
-		await this.attachDeferredBuiltinExtensions();
-		time("attachDeferredBuiltins");
-
-		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
+		this.deferredBuiltinAttachPromise = this.attachDeferredBuiltinExtensions();
+		void this.deferredBuiltinAttachPromise.then(() => {
+			time("attachDeferredBuiltins");
+		});
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -933,9 +935,17 @@ export class InteractiveMode {
 			this.ui.requestRender();
 		});
 
-		// Initialize available provider count for footer display
-		await this.updateAvailableProviderCount();
-		time("updateAvailableProviderCount");
+		// Cache-only footer snapshot. Do not hold time-to-type on it.
+		void this.updateAvailableProviderCount().then(() => {
+			time("updateAvailableProviderCount");
+		});
+	}
+
+	/** Wait until deferred builtins have attached (or were skipped). */
+	async waitForDeferredBuiltins(): Promise<void> {
+		if (this.deferredBuiltinAttachPromise) {
+			await this.deferredBuiltinAttachPromise;
+		}
 	}
 
 	/**
@@ -956,7 +966,9 @@ export class InteractiveMode {
 	 * Initializes the UI, shows warnings, processes initial messages, and starts the interactive loop.
 	 */
 	async run(): Promise<void> {
-		await this.init();
+		if (!this.isInitialized) {
+			await this.init();
+		}
 
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
@@ -986,7 +998,7 @@ export class InteractiveMode {
 		// Process initial messages
 		if (initialMessage) {
 			try {
-				await this.session.prompt(initialMessage, { images: initialImages });
+				await this.promptAfterDeferredBuiltins(initialMessage, { images: initialImages });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -996,7 +1008,7 @@ export class InteractiveMode {
 		if (initialMessages) {
 			for (const message of initialMessages) {
 				try {
-					await this.session.prompt(message);
+					await this.promptAfterDeferredBuiltins(message);
 				} catch (error: unknown) {
 					const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 					this.showError(errorMessage);
@@ -1008,7 +1020,7 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.session.prompt(userInput);
+				await this.promptAfterDeferredBuiltins(userInput);
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -1652,18 +1664,44 @@ export class InteractiveMode {
 	/**
 	 * Initialize the extension system with TUI-based UI context.
 	 */
+	private async awaitDeferredBuiltinsForPrompt(): Promise<void> {
+		await this.waitForDeferredBuiltins();
+	}
+
+	private async promptAfterDeferredBuiltins(
+		text: string,
+		options?: Parameters<AgentSession["prompt"]>[1],
+	): Promise<void> {
+		await this.awaitDeferredBuiltinsForPrompt();
+		await this.session.prompt(text, options);
+	}
+
+	private async sendUserMessageAfterDeferredBuiltins(text: string): Promise<void> {
+		await this.awaitDeferredBuiltinsForPrompt();
+		await this.session.sendUserMessage(text);
+	}
+
 	private async attachDeferredBuiltinExtensions(): Promise<void> {
 		if (this.deferredBuiltinsAttached || !this.options.deferredBuiltinFactories) {
 			return;
 		}
-		this.deferredBuiltinsAttached = true;
-		const factories = await this.options.deferredBuiltinFactories();
-		if (factories.length === 0) return;
-		this.options.onDeferredBuiltinsAttached?.(factories);
-		await this.session.attachInlineExtensions(factories);
-		this.setupAutocompleteProvider();
-		this.setupExtensionShortcuts(this.session.extensionRunner);
-		this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
+		this.setExtensionStatus("deferred-builtins", "loading tools…");
+		try {
+			const factories = await this.options.deferredBuiltinFactories();
+			this.deferredBuiltinsAttached = true;
+			if (factories.length === 0) return;
+			this.options.onDeferredBuiltinsAttached?.(factories);
+			await this.session.attachInlineExtensions(factories);
+			this.setupAutocompleteProvider();
+			this.setupExtensionShortcuts(this.session.extensionRunner);
+			this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
+		} catch (error) {
+			this.deferredBuiltinsAttached = false;
+			const message = error instanceof Error ? error.message : String(error);
+			this.showError(`Failed to load deferred extensions: ${message}`);
+		} finally {
+			this.setExtensionStatus("deferred-builtins", undefined);
+		}
 	}
 
 	private async bindCurrentSessionExtensions(): Promise<void> {
@@ -1782,6 +1820,7 @@ export class InteractiveMode {
 	}
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
+		await this.waitForDeferredBuiltins();
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -1797,7 +1836,7 @@ export class InteractiveMode {
 			await this.bindCurrentSessionExtensions();
 			this.subscribeToAgent();
 		}
-		await this.updateAvailableProviderCount();
+		void this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
 	}
@@ -2960,7 +2999,7 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(text)) {
 					this.editor.addToHistory?.(text);
 					this.editor.setText("");
-					await this.session.prompt(text);
+					await this.promptAfterDeferredBuiltins(text);
 				} else {
 					this.queueCompactionMessage(text, "steer");
 				}
@@ -2972,7 +3011,7 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer" });
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -4008,7 +4047,7 @@ export class InteractiveMode {
 			if (this.isExtensionCommand(text)) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text);
+				await this.promptAfterDeferredBuiltins(text);
 			} else {
 				this.queueCompactionMessage(text, "followUp");
 			}
@@ -4020,7 +4059,7 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "followUp" });
 			this.updatePendingMessagesDisplay();
 			this.ui.requestRender();
 		}
@@ -4331,7 +4370,7 @@ export class InteractiveMode {
 				// When retry is pending, queue messages for the retry turn
 				for (const message of queuedMessages) {
 					if (this.isExtensionCommand(message.text)) {
-						await this.session.prompt(message.text);
+						await this.promptAfterDeferredBuiltins(message.text);
 					} else if (message.mode === "followUp") {
 						await this.session.followUp(message.text);
 					} else {
@@ -4347,7 +4386,7 @@ export class InteractiveMode {
 			if (firstPromptIndex === -1) {
 				// All extension commands - execute them all
 				for (const message of queuedMessages) {
-					await this.session.prompt(message.text);
+					await this.promptAfterDeferredBuiltins(message.text);
 				}
 				return;
 			}
@@ -4358,18 +4397,18 @@ export class InteractiveMode {
 			const rest = queuedMessages.slice(firstPromptIndex + 1);
 
 			for (const message of preCommands) {
-				await this.session.prompt(message.text);
+				await this.promptAfterDeferredBuiltins(message.text);
 			}
 
 			// Send first prompt (starts streaming)
-			const promptPromise = this.session.prompt(firstPrompt.text).catch((error) => {
+			const promptPromise = this.promptAfterDeferredBuiltins(firstPrompt.text).catch((error) => {
 				restoreQueue(error);
 			});
 
 			// Queue remaining messages
 			for (const message of rest) {
 				if (this.isExtensionCommand(message.text)) {
-					await this.session.prompt(message.text);
+					await this.promptAfterDeferredBuiltins(message.text);
 				} else if (message.mode === "followUp") {
 					await this.session.followUp(message.text);
 				} else {
@@ -6298,7 +6337,7 @@ export class InteractiveMode {
 			}
 		}
 
-		await this.session.sendUserMessage(prompt);
+		await this.sendUserMessageAfterDeferredBuiltins(prompt);
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
 	}
 
@@ -6320,7 +6359,7 @@ export class InteractiveMode {
 
 		this.swarmMode = true;
 		this.setExtensionStatus("swarm", "swarm ● active");
-		await this.session.sendUserMessage(buildSwarmPrompt(task));
+		await this.sendUserMessageAfterDeferredBuiltins(buildSwarmPrompt(task));
 	}
 
 	private async handleResearchCommand(args: string): Promise<void> {
@@ -6369,7 +6408,7 @@ export class InteractiveMode {
 
 		this.researchMode = true;
 		this.setExtensionStatus("research", "research ● active");
-		await this.session.sendUserMessage(buildResearchPrompt(question, depth, breadth));
+		await this.sendUserMessageAfterDeferredBuiltins(buildResearchPrompt(question, depth, breadth));
 	}
 
 	// lunr: /undo persists the rewind by forking the session to just before the
@@ -7054,7 +7093,7 @@ export class InteractiveMode {
 			} else {
 				this.applyPermissionMode("plan");
 			}
-			await this.session.sendUserMessage(args);
+			await this.sendUserMessageAfterDeferredBuiltins(args);
 			return;
 		}
 
@@ -7491,6 +7530,8 @@ ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` 
 	private async handleClearCommand(): Promise<void> {
 		this.clearStatusIndicator();
 		this.ui.setChatScroll(0);
+		// Deferred factories must be on builtinRoster before /new rebuilds the runtime.
+		await this.waitForDeferredBuiltins();
 		// lunr: preserve the in-flight model across /new so a /model switch survives.
 		const previousModel = this.session.model;
 		try {

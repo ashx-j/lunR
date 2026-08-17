@@ -11,16 +11,13 @@ import type { ExtensionFactory, InlineExtension } from "../core/extensions/types
 import simplePiMemory from "./simple-pi-memory.ts";
 import piTps from "./pi-tps.ts";
 import ashxjTui from "./ashxj-tui.ts";
-import piOllamaCloud from "./pi-ollama-cloud/index.ts";
 import ashxjSpinners from "./ashxj-spinners.ts";
 import ashxjThinking from "./ashxj-thinking.ts";
 import lunrLocalProviders from "./lunr-local-providers/index.ts";
-import lunrCron from "./lunr-cron.ts";
 import lunrTodos from "./lunr-todos.ts";
 import lunrPlanTools from "./lunr-plan-tools.ts";
 import lunrBehavior from "./lunr-behavior.ts";
 import lunrSkillCreator from "./lunr-skill-creator/index.ts";
-import narumirunaGoal from "./narumiruna-pi-goal/src/goal.ts";
 
 /**
  * Wrap a raw factory function as a named InlineExtension.
@@ -37,12 +34,9 @@ export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("simple-pi-memory", simplePiMemory),
 	ext("pi-tps", piTps),
 	ext("ashxj-tui", ashxjTui),
-	ext("pi-ollama-cloud", piOllamaCloud),
 	ext("ashxj-spinners", ashxjSpinners),
 	ext("ashxj-thinking", ashxjThinking),
-	ext("narumiruna-pi-goal", narumirunaGoal),
 	ext("lunr-local-providers", lunrLocalProviders),
-	ext("lunr-cron", lunrCron),
 	ext("lunr-todos", lunrTodos),
 	ext("lunr-plan-tools", lunrPlanTools),
 	ext("lunr-behavior", lunrBehavior),
@@ -53,6 +47,9 @@ const DEFERRED_BUILTIN_LOADERS: Array<{
 	name: string;
 	load: () => Promise<{ default: unknown }>;
 }> = [
+	{ name: "pi-ollama-cloud", load: () => import("./pi-ollama-cloud/index.ts") },
+	{ name: "narumiruna-pi-goal", load: () => import("./narumiruna-pi-goal/src/goal.ts") },
+	{ name: "lunr-cron", load: () => import("./lunr-cron.ts") },
 	{ name: "pi-intercom", load: () => import("./pi-intercom/index.ts") },
 	{ name: "pi-prompt-template-model", load: () => import("./pi-prompt-template-model/index.ts") },
 	{ name: "pi-subagents", load: () => import("./pi-subagents/index.ts") },
