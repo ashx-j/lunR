@@ -41,6 +41,7 @@ export const SUBAGENT_PARENT_DEPTH_ENV = "PI_SUBAGENT_PARENT_DEPTH";
 export const SUBAGENT_PARENT_PATH_ENV = "PI_SUBAGENT_PARENT_PATH";
 export const SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV = "PI_SUBAGENT_PARENT_CAPABILITY_TOKEN";
 export const SUBAGENT_PARENT_SESSION_ENV = "PI_SUBAGENT_PARENT_SESSION";
+export const SUBAGENT_PARENT_PERMISSION_MODE_ENV = "PI_SUBAGENT_PARENT_PERMISSION_MODE";
 export const SUBAGENT_STEER_INBOX_ENV = "PI_SUBAGENT_STEER_INBOX";
 export const SUBAGENT_STEER_CAPABILITY_ENV = "PI_SUBAGENT_STEER_CAPABILITY";
 export const SUBAGENT_STEER_ACK_DIR_ENV = "PI_SUBAGENT_STEER_ACK_DIR";
@@ -89,6 +90,7 @@ interface BuildPiArgsInput {
 	toolBudget?: ResolvedToolBudget;
 	childWatchdog?: ChildWatchdogConfig;
 	waitToolEnabled?: boolean;
+	parentPermissionMode?: string;
 }
 
 interface BuildPiArgsResult {
@@ -207,6 +209,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		env[CHILD_TOOL_DIAGNOSTIC_PATH_ENV] = toolDiagnosticPath;
 	}
 	env[SUBAGENT_CHILD_ENV] = "1";
+	env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] = input.parentPermissionMode ?? process.env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] ?? "";
 	env[SUBAGENT_FANOUT_CHILD_ENV] = fanoutAuthorized ? "1" : "0";
 	if (input.waitToolEnabled !== undefined) {
 		env[WAIT_TOOL_ENABLED_ENV] = input.waitToolEnabled ? "true" : "false";

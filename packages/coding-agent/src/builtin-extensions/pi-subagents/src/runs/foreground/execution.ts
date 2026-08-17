@@ -52,6 +52,7 @@ import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { filterToolsForInheritedChild, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
@@ -206,6 +207,7 @@ async function runSingleAttempt(
 			childIndex: options.index ?? 0,
 		})
 		: undefined;
+	const parentPermissionMode = snapshotParentPermissionMode(options.parentSessionId);
 	const { args, env: sharedEnv, tempDir, toolDiagnosticPath } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
@@ -218,7 +220,7 @@ async function runSingleAttempt(
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritSkills: agent.inheritSkills,
 		requireReadTool: Boolean(shared.resolvedSkillNames?.length),
-		tools: agent.tools,
+		tools: filterToolsForInheritedChild(agent.tools, parentPermissionMode),
 		extensions: agent.extensions,
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,
 		systemPrompt: appendTurnBudgetSystemPrompt(shared.systemPrompt, options.turnBudget),
@@ -239,6 +241,7 @@ async function runSingleAttempt(
 		toolBudget: options.toolBudget,
 		childWatchdog,
 		waitToolEnabled: options.waitToolEnabled,
+		parentPermissionMode,
 	});
 
 	const result: SingleResult = {

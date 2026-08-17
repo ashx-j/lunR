@@ -35,6 +35,7 @@ Last updated: 2026-08-16. **`origin/master` = `8572215`**. Public npm is `@ashx-
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
 - **Model-tiers toggle:** `/settings` Enable model tiers used `pi.runtime.refreshTools()`; `pi` is `ExtensionAPI` and has no `runtime`. Fix: `pi.registerTool(tool)` + bridge swallows refresher throws. Tests: `model-tiers.test.ts`.
 - **Session wheel:** sticky chat + alt-screen has no native scrollback. TUI enables SGR 1000+1006 while pinned; wheel → `scrollChat` (±3, Ctrl+wheel pages). Shift+drag still selects. Tests: `mouse.test.ts` + `tui-pin.test.ts`.
+- **Child permission inherit:** parent snapshot `PI_SUBAGENT_PARENT_PERMISSION_MODE` at spawn. Child `PI_SUBAGENT_CHILD=1` resets to `plan` or `auto` in `main.ts` before tools. Plan parent fails writer/write-tool launches (`PLAN_MODE_WRITE_SPAWN_ERROR`); read-only children stay blocked for writes. Non-child `lunr -p` stays fail-closed. Tests: `subagent-permission-inherit.test.ts` + permissions fail-closed.
 
 ## Installer
 
@@ -44,11 +45,11 @@ Last updated: 2026-08-16. **`origin/master` = `8572215`**. Public npm is `@ashx-
 
 ## Not merged
 
-- Catalog-stability + extra boot-path cuts live on `fix/cold-start` until that PR merges. `origin/master` still does a live TUI init refresh.
+- None for product. Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
 
 ## Uncommitted (working tree)
 
-- Ollama Cloud `/refresh` widget = bar only (no ☁ / “Ollama Cloud”).
+- Stashed off this cut: gateway `/new` abort, cron deliver allowlist, models-store corrupt-JSON parse, plan-mode `code_rewrite` + git-flag walk.
 
 ## Build & run
 
@@ -109,6 +110,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-16: after sticky chat + alt-screen, native scrollback is gone; enable SGR mouse tracking and map wheel to `scrollChat`. Do not use DECSET 1007 (collides with editor history).
 - 2026-08-16: TUI init called live `refresh()`; that plus localhost probes and uncapped OAuth made first boot after idle/reboot hang. First paint is cache-only.
 - 2026-08-16: intermittent `/login xai` was refresh-token reuse, not a dead session. Do not adopt Grok on `modify(undefined)`, do not write epoch `expires_at`, do not abort refresh at 4s, do not remap timeout/403 to re-login.
+- 2026-08-16: parent-delegated children inherit plan or auto; plan parents fail writer spawns; non-child print stays fail-closed.
 
 # Deferred
 

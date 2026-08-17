@@ -86,6 +86,19 @@ describe("permissions", () => {
 		});
 	});
 
+	it("print mode without the child env stays fail-closed", async () => {
+		// lunr -p / cron / gateway headless: module default is manual and no handler is registered.
+		expect(getPermissionMode()).toBe("manual");
+		expect(await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd")).toEqual({
+			block: true,
+			reason: "Mutating tool blocked in manual mode: no approval channel available.",
+		});
+		expect(await gateToolCall("write", { path: "/cwd/b.ts" }, "/cwd")).toEqual({
+			block: true,
+			reason: "Mutating tool blocked in manual mode: no approval channel available.",
+		});
+	});
+
 	it("behavior_add triggers the approval dialog in manual mode", async () => {
 		setPermissionMode("manual");
 		let received: import("../src/core/permissions.ts").ApprovalRequest | undefined;

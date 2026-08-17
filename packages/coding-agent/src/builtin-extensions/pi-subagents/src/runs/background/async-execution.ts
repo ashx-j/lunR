@@ -13,6 +13,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
+import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
@@ -621,6 +622,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const model = applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
 		return {
 			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+			parentPermissionMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
 			agent: s.agent,
 			task,
 			phase: s.phase,
@@ -1178,6 +1180,7 @@ export function executeAsyncSingle(
 				steps: [
 					{
 						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+						parentPermissionMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
 						agent,
 						task: taskWithOutputInstruction,
 						cwd: runnerCwd,

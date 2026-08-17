@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
+import { planModeWriteSpawnError, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
@@ -784,6 +785,17 @@ function appendStepToAsyncChain(input: {
 	const scope: AgentScope = resolveExecutionAgentScope(input.params.agentScope);
 	const discoveredForAppend = input.deps.discoverAgents(input.requestCwd, scope);
 	const agents = discoveredForAppend.agents;
+	const appendWriteSpawnError = planModeWriteSpawnError(
+		snapshotParentPermissionMode(input.deps.state.currentSessionId),
+		collectRequestedAgents(input.params, agents),
+	);
+	if (appendWriteSpawnError) {
+		return {
+			content: [{ type: "text", text: appendWriteSpawnError }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	const contextPolicy = resolveExplicitContextPolicy(input.params);
 	const chainSkillInput = normalizeSkillInput(input.params.skill);
 	const chainSkills = chainSkillInput === false ? [] : (chainSkillInput ?? []);
@@ -1567,6 +1579,17 @@ function collectRequestedAgentNames(params: SubagentParamsLike): string[] {
 	for (const task of params.tasks ?? []) names.push(task.agent);
 	for (const step of params.chain ?? []) names.push(...getStepAgents(step));
 	return names;
+}
+
+function collectRequestedAgents(
+	params: SubagentParamsLike,
+	agents: AgentConfig[],
+): Array<{ name: string; tools?: string[] }> {
+	const byName = new Map(agents.map((agent) => [agent.name, agent]));
+	return collectRequestedAgentNames(params).map((name) => {
+		const agent = byName.get(name);
+		return { name, tools: agent?.tools };
+	});
 }
 
 function shouldForkAgent(contextPolicy: AgentDefaultContextPolicy, agentName: string): boolean {
@@ -3574,6 +3597,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			allowClarifyTaskPrompt,
 		);
 		if (validationError) return validationError;
+
+		const parentPermissionMode = snapshotParentPermissionMode(deps.state.currentSessionId);
+		const writeSpawnError = planModeWriteSpawnError(
+			parentPermissionMode,
+			collectRequestedAgents(effectiveParams, agents),
+		);
+		if (writeSpawnError) return buildRequestedModeError(effectiveParams, writeSpawnError);
 
 		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
 		let forkThinkingOverrideForIndex: (idx?: number) => AgentConfig["thinking"] | undefined = () => undefined;

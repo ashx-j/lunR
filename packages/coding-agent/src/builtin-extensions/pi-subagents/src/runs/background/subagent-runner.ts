@@ -59,6 +59,7 @@ import {
 	Semaphore,
 } from "../shared/parallel-utils.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { filterToolsForInheritedChild, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
@@ -1116,6 +1117,7 @@ async function runSingleStep(
 				childIndex: ctx.flatIndex,
 			})
 			: undefined;
+		const parentPermissionMode = step.parentPermissionMode ?? snapshotParentPermissionMode(step.parentSessionId);
 		const { args, env, tempDir, toolDiagnosticPath } = buildPiArgs({
 			parentSessionId: step.parentSessionId,
 			baseArgs: ["--mode", "json", "-p"],
@@ -1127,7 +1129,7 @@ async function runSingleStep(
 			inheritProjectContext: step.inheritProjectContext,
 			inheritSkills: step.inheritSkills,
 			requireReadTool: Boolean(step.skills?.length),
-			tools: step.tools,
+			tools: filterToolsForInheritedChild(step.tools, parentPermissionMode),
 			extensions: step.extensions,
 			subagentOnlyExtensions: step.subagentOnlyExtensions,
 			systemPrompt: appendTurnBudgetSystemPrompt(step.systemPrompt ?? "", ctx.turnBudget),
@@ -1151,6 +1153,7 @@ async function runSingleStep(
 			toolBudget: step.toolBudget,
 			childWatchdog,
 			waitToolEnabled: step.waitToolEnabled,
+			parentPermissionMode,
 		});
 		const run = await runPiStreaming(
 			args,
