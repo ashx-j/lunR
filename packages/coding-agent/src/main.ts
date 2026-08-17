@@ -8,7 +8,7 @@
 import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import chalk from "chalk";
-import { builtinExtensions } from "./builtin-extensions/index.ts";
+import { lightBuiltinExtensions, loadAllBuiltinExtensions } from "./builtin-extensions/index.ts";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
@@ -665,6 +665,19 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
+	let builtinRoster =
+		appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const rememberAttachedFactories = (factories: InlineExtension[]) => {
+		const seen = new Set(
+			builtinRoster.map((entry) => (typeof entry === "function" ? undefined : entry.name)).filter(Boolean),
+		);
+		for (const factory of factories) {
+			const name = typeof factory === "function" ? undefined : factory.name;
+			if (name && seen.has(name)) continue;
+			if (name) seen.add(name);
+			builtinRoster.push(factory);
+		}
+	};
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -725,7 +738,7 @@ export async function main(args: string[], options?: MainOptions) {
 				noContextFiles: parsed.noContextFiles,
 				systemPrompt: parsed.systemPrompt,
 				appendSystemPrompt: parsed.appendSystemPrompt,
-				extensionFactories: [...builtinExtensions, ...(options?.extensionFactories ?? [])],
+				extensionFactories: [...builtinRoster, ...(options?.extensionFactories ?? [])],
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
@@ -762,8 +775,10 @@ export async function main(args: string[], options?: MainOptions) {
 					message: "--api-key requires a model to be specified via --model, --provider/--model, or --models",
 				});
 			} else {
-				await modelRuntime.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey);
-				await services.modelRuntime.getAvailable();
+				// Cache-only: do not wait on GitHub / provider /v1/models before first paint.
+				await modelRuntime.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey, {
+					allowNetwork: false,
+				});
 			}
 		}
 
@@ -871,6 +886,7 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
+		const { loadDeferredBuiltinExtensions } = await import("./builtin-extensions/index.ts");
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,
 			modelFallbackMessage,
@@ -879,6 +895,8 @@ export async function main(args: string[], options?: MainOptions) {
 			initialImages,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
+			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensions,
+			onDeferredBuiltinsAttached: rememberAttachedFactories,
 		});
 		if (startupBenchmark) {
 			await interactiveMode.init();

@@ -97,6 +97,7 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { gateToolCall } from "./permissions.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import type { Extension, InlineExtension } from "./extensions/types.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -2343,6 +2344,77 @@ export class AgentSession {
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+	}
+
+	/**
+	 * Load extra inline factories into the current runner after first paint.
+	 * New factories receive the current session_start event so late tools/commands exist
+	 * before the first prompt. Already-bound extensions are not restarted.
+	 */
+	async attachInlineExtensions(factories: InlineExtension[]): Promise<void> {
+		if (factories.length === 0) return;
+		const attach = this._resourceLoader.attachInlineExtensions;
+		if (!attach) {
+			throw new Error("Resource loader does not support attaching inline extensions");
+		}
+		const alreadyBound = new Set(this._extensionRunner.getExtensionPaths());
+		const attached = await attach.call(this._resourceLoader, factories);
+		const fresh = attached.extensions.filter((extension) => !alreadyBound.has(extension.path));
+		if (fresh.length === 0) return;
+		this._extensionRunner.appendExtensions(fresh);
+		this._applyExtensionBindings(this._extensionRunner);
+		this.applyDeferredExtensionFlags(fresh);
+		await this.emitSessionStartForExtensions(fresh);
+		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		this._refreshToolRegistry({
+			activeToolNames: this.getActiveToolNames(),
+			includeAllExtensionTools: true,
+		});
+	}
+
+	private applyDeferredExtensionFlags(extensions: Extension[]): void {
+		const runtime = this._resourceLoader.getExtensions().runtime;
+		const argv = process.argv;
+		for (const ext of extensions) {
+			for (const [name, flag] of ext.flags) {
+				const prefix = `--${name}`;
+				const eqArg = argv.find((arg) => arg.startsWith(`${prefix}=`));
+				if (eqArg) {
+					runtime.flagValues.set(name, eqArg.slice(prefix.length + 1));
+					continue;
+				}
+				const idx = argv.indexOf(prefix);
+				if (idx < 0) continue;
+				const next = argv[idx + 1];
+				if (flag.type === "string" && next && !next.startsWith("-")) {
+					runtime.flagValues.set(name, next);
+				} else {
+					runtime.flagValues.set(name, true);
+				}
+			}
+		}
+	}
+
+	private async emitSessionStartForExtensions(extensions: Extension[]): Promise<void> {
+		const ctx = this._extensionRunner.createContext();
+		for (const ext of extensions) {
+			const handlers = ext.handlers.get("session_start");
+			if (!handlers) continue;
+			for (const handler of handlers) {
+				try {
+					await handler(this._sessionStartEvent, ctx);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this._extensionRunner.emitError({
+						extensionPath: ext.path,
+						event: "session_start",
+						error: message,
+						stack,
+					});
+				}
+			}
+		}
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {

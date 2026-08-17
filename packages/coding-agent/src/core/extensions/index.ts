@@ -87,6 +87,7 @@ export type {
 	GrepToolCallEvent,
 	GrepToolResultEvent,
 	InlineExtension,
+	NamedInlineExtension,
 	// Events - Input
 	InputEvent,
 	InputEventResult,

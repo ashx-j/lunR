@@ -36,6 +36,7 @@ import { isStdoutTakenOver } from "./output-guard.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
+const PACKAGE_INSTALL_TIMEOUT_MS = 30_000;
 const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
@@ -1600,7 +1601,10 @@ export class DefaultPackageManager implements PackageManager {
 
 	private async runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void> {
 		const npmCommand = this.getNpmCommand();
-		await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
+		await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], {
+			...options,
+			timeoutMs: PACKAGE_INSTALL_TIMEOUT_MS,
+		});
 	}
 
 	private getGitDependencyInstallArgs(): string[] {
@@ -1679,9 +1683,12 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		mkdirSync(dirname(targetDir), { recursive: true });
 
-		await this.runCommand("git", ["clone", source.repo, targetDir]);
+		await this.runCommand("git", ["clone", source.repo, targetDir], { timeoutMs: PACKAGE_INSTALL_TIMEOUT_MS });
 		if (source.ref) {
-			await this.runCommand("git", ["checkout", source.ref], { cwd: targetDir });
+			await this.runCommand("git", ["checkout", source.ref], {
+				cwd: targetDir,
+				timeoutMs: PACKAGE_INSTALL_TIMEOUT_MS,
+			});
 		}
 		const packageJsonPath = join(targetDir, "package.json");
 		if (existsSync(packageJsonPath)) {
@@ -2464,11 +2471,31 @@ export class DefaultPackageManager implements PackageManager {
 		});
 	}
 
-	private runCommand(command: string, args: string[], options?: { cwd?: string }): Promise<void> {
+	private runCommand(
+		command: string,
+		args: string[],
+		options?: { cwd?: string; timeoutMs?: number },
+	): Promise<void> {
 		return new Promise((resolvePromise, reject) => {
 			const child = this.spawnCommand(command, args, options);
-			child.on("error", reject);
+			let timedOut = false;
+			const timeout =
+				typeof options?.timeoutMs === "number"
+					? setTimeout(() => {
+							timedOut = true;
+							child.kill();
+						}, options.timeoutMs)
+					: undefined;
+			child.on("error", (error) => {
+				if (timeout) clearTimeout(timeout);
+				reject(error);
+			});
 			child.on("exit", (code) => {
+				if (timeout) clearTimeout(timeout);
+				if (timedOut) {
+					reject(new Error(`${command} ${args.join(" ")} timed out after ${options?.timeoutMs}ms`));
+					return;
+				}
 				if (code === 0) {
 					resolvePromise();
 				} else {

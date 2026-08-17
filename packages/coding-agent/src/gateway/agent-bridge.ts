@@ -137,7 +137,7 @@ interface CacheEntry {
  */
 async function defaultSessionFactory(key: string, reopen: { sessionFile: string } | undefined): Promise<AgentSession> {
 	const [
-		{ builtinExtensions },
+		{ loadAllBuiltinExtensions },
 		{ getAgentDir },
 		{ registerCustomizeBridge },
 		{ registerMemoryCapBridge },
@@ -182,7 +182,7 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		cwd,
 		agentDir,
 		settingsManager,
-		resourceLoaderOptions: { extensionFactories: [...builtinExtensions] },
+		resourceLoaderOptions: { extensionFactories: await loadAllBuiltinExtensions() },
 	});
 	const { session } = await createAgentSessionFromServices({ services, sessionManager });
 	await session.bindExtensions({

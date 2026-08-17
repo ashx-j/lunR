@@ -419,6 +419,18 @@ export class ExtensionRunner {
 		return this.extensions.map((e) => e.path);
 	}
 
+	/** Append already-loaded extensions to this runner. Bindings stay on the existing runtime. */
+	appendExtensions(extensions: Extension[]): void {
+		const existing = new Set(this.extensions);
+		const existingPaths = new Set(this.extensions.map((extension) => extension.path));
+		for (const extension of extensions) {
+			if (existing.has(extension) || existingPaths.has(extension.path)) continue;
+			this.extensions.push(extension);
+			existing.add(extension);
+			existingPaths.add(extension.path);
+		}
+	}
+
 	/** Get all registered tools from all extensions (first registration per name wins). */
 	getAllRegisteredTools(): RegisteredTool[] {
 		const toolsByName = new Map<string, RegisteredTool>();
