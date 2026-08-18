@@ -1235,7 +1235,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "smooth-streaming",
 				label: "Smooth streaming",
-				description: "Reveal responses character by character",
+				description: "Reveal responses grapheme by grapheme (~30 FPS typewriter)",
 				currentValue: config.smoothStreaming ? "true" : "false",
 				values: ["true", "false"],
 			},

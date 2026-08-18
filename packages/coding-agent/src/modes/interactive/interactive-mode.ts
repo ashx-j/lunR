@@ -201,7 +201,13 @@ import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
-import { countMessageGraphemes, sliceMessageContent } from "./smooth-streaming.ts";
+import {
+	computeSmoothRevealStep,
+	countGraphemesBeforeToolCall,
+	countMessageGraphemes,
+	sliceMessageContent,
+	type SmoothStreamingOptions,
+} from "./smooth-streaming.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -465,7 +471,6 @@ export class InteractiveMode {
 	// flashing whole chunks.
 	private streamingTargetMessage: AssistantMessage | undefined = undefined;
 	private streamingDisplayedLength = 0;
-	private lastSmoothRenderAt = 0;
 	private smoothStreamingTimer: NodeJS.Timeout | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
@@ -3040,9 +3045,19 @@ export class InteractiveMode {
 		};
 	}
 
-	/** Smooth streaming tick rate (ms) and base reveal speed (graphemes per tick). */
-	private static readonly SMOOTH_STREAMING_TICK_MS = 20;
-	private static readonly SMOOTH_STREAMING_BASE_GRAPHEMES_PER_TICK = 4;
+	/** Smooth streaming tick rate (~30 FPS). TUI already caps paints at 16ms. */
+	private static readonly SMOOTH_STREAMING_TICK_MS = 33;
+
+	private getSmoothStreamingOptions(): SmoothStreamingOptions {
+		return { hideThinking: this.hideThinkingBlock };
+	}
+
+	private clearSmoothStreamingTimer(): void {
+		if (this.smoothStreamingTimer) {
+			clearInterval(this.smoothStreamingTimer);
+			this.smoothStreamingTimer = undefined;
+		}
+	}
 
 	private startSmoothStreaming(): void {
 		if (this.smoothStreamingTimer) return;
@@ -3053,41 +3068,107 @@ export class InteractiveMode {
 		this.smoothStreamingTimer.unref?.();
 	}
 
+	/** Apply the current reveal slice and sync tool cards that have crossed the frontier. */
+	private paintSmoothStreamingFrame(): void {
+		const target = this.streamingTargetMessage;
+		if (!this.streamingComponent || !target) return;
+		const opts = this.getSmoothStreamingOptions();
+		const revealed = sliceMessageContent(target, this.streamingDisplayedLength, opts);
+		this.streamingComponent.updateContent(revealed);
+		this.syncRevealedStreamingTools(revealed, target);
+		this.ui.requestRender();
+	}
+
+	/**
+	 * Create/update tool cards only once smooth streaming has revealed past their
+	 * leading text. Args always come from the full target so later arg deltas apply.
+	 */
+	private syncRevealedStreamingTools(revealed: AssistantMessage, target: AssistantMessage): void {
+		const revealedIds = new Set<
+			string
+		>();
+		for (const block of revealed.content) {
+			if (block.type === "toolCall") revealedIds.add(block.id);
+		}
+		for (const content of target.content) {
+			if (content.type !== "toolCall" || !revealedIds.has(content.id)) continue;
+			if (!this.pendingTools.has(content.id)) {
+				const component = new ToolExecutionComponent(
+					content.name,
+					content.id,
+					content.arguments,
+					{
+						showImages: this.settingsManager.getShowImages(),
+						imageWidthCells: this.settingsManager.getImageWidthCells(),
+					},
+					this.getRegisteredToolDefinition(content.name),
+					this.ui,
+					this.sessionManager.getCwd(),
+				);
+				component.setExpanded(this.toolOutputExpanded);
+				this.addToolComponentToChat(component);
+				this.pendingTools.set(content.id, component);
+			} else {
+				const component = this.pendingTools.get(content.id);
+				if (component) {
+					component.updateArgs(content.arguments);
+				}
+			}
+		}
+	}
+
 	private advanceSmoothStreaming(): void {
 		const target = this.streamingTargetMessage;
 		if (!this.streamingComponent || !target) {
 			this.stopSmoothStreaming();
 			return;
 		}
-		const total = countMessageGraphemes(target);
-		if (this.streamingDisplayedLength >= total) return;
-		// Catch-up acceleration: the further the display lags behind the model,
-		// the more graphemes each tick reveals.
+		const opts = this.getSmoothStreamingOptions();
+		const total = countMessageGraphemes(target, opts);
+		if (this.streamingDisplayedLength >= total) {
+			// Caught up: stop the interval until new backlog arrives.
+			this.clearSmoothStreamingTimer();
+			return;
+		}
 		const backlog = total - this.streamingDisplayedLength;
-		this.streamingDisplayedLength += Math.max(
-			InteractiveMode.SMOOTH_STREAMING_BASE_GRAPHEMES_PER_TICK,
-			Math.ceil(backlog / 8),
-		);
+		this.streamingDisplayedLength += computeSmoothRevealStep(backlog);
 		if (this.streamingDisplayedLength > total) {
 			this.streamingDisplayedLength = total;
 		}
-		this.streamingComponent.updateContent(sliceMessageContent(target, this.streamingDisplayedLength));
-		// Throttle renders to ~30 FPS so the TUI isn't redrawn every 20 ms tick.
-		const now = Date.now();
-		if (now - this.lastSmoothRenderAt >= 33) {
-			this.lastSmoothRenderAt = now;
-			this.ui.requestRender();
+		this.paintSmoothStreamingFrame();
+		if (this.streamingDisplayedLength >= total) {
+			this.clearSmoothStreamingTimer();
 		}
 	}
 
 	private stopSmoothStreaming(): void {
-		if (this.smoothStreamingTimer) {
-			clearInterval(this.smoothStreamingTimer);
-			this.smoothStreamingTimer = undefined;
-		}
+		this.clearSmoothStreamingTimer();
 		this.streamingTargetMessage = undefined;
 		this.streamingDisplayedLength = 0;
-		this.lastSmoothRenderAt = 0;
+	}
+
+	/** Apply a mid-stream smoothStreaming setting change without rewinding. */
+	private applySmoothStreamingSettingChange(enabled: boolean): void {
+		this.settingsManager.setSmoothStreaming(enabled);
+		if (!this.streamingComponent || !this.streamingMessage) return;
+
+		if (enabled) {
+			// Already showing the full live message; start the reveal cursor at the
+			// current visible length so the next deltas only animate new text.
+			this.streamingTargetMessage = this.streamingMessage;
+			const opts = this.getSmoothStreamingOptions();
+			this.streamingDisplayedLength = countMessageGraphemes(this.streamingMessage, opts);
+			this.paintSmoothStreamingFrame();
+			this.startSmoothStreaming();
+			return;
+		}
+
+		// Off: stop the timer and snap to the full target immediately.
+		this.clearSmoothStreamingTimer();
+		this.streamingTargetMessage = this.streamingMessage;
+		this.streamingComponent.updateContent(this.streamingMessage);
+		this.syncRevealedStreamingTools(this.streamingMessage, this.streamingMessage);
+		this.ui.requestRender();
 	}
 
 	private subscribeToAgent(): void {
@@ -3185,7 +3266,9 @@ export class InteractiveMode {
 					this.streamingDisplayedLength = 0;
 					this.chatContainer.addChild(this.streamingComponent);
 					if (this.settingsManager.getSmoothStreaming()) {
-						this.streamingComponent.updateContent(sliceMessageContent(this.streamingMessage, 0));
+						this.streamingComponent.updateContent(
+							sliceMessageContent(this.streamingMessage, 0, this.getSmoothStreamingOptions()),
+						);
 					} else {
 						this.streamingComponent.updateContent(this.streamingMessage);
 					}
@@ -3201,47 +3284,30 @@ export class InteractiveMode {
 					// so smooth-streaming reveal lag doesn't inflate durations.
 					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), false);
 					if (this.settingsManager.getSmoothStreaming()) {
-						// Smooth streaming: only track the target here; the timer
-						// reveals it grapheme by grapheme.
-						this.startSmoothStreaming();
+						// Smooth streaming: timer reveals graphemes. Tool cards sync from
+						// the reveal frontier so they don't jump ahead of leading text.
+						const opts = this.getSmoothStreamingOptions();
+						const total = countMessageGraphemes(this.streamingMessage, opts);
+						if (this.streamingDisplayedLength >= total) {
+							// Already caught up (or tool-only): paint so new tool cards appear.
+							this.paintSmoothStreamingFrame();
+							this.clearSmoothStreamingTimer();
+						} else {
+							this.startSmoothStreaming();
+						}
 					} else {
 						this.streamingComponent.updateContent(this.streamingMessage);
+						this.syncRevealedStreamingTools(this.streamingMessage, this.streamingMessage);
+						this.ui.requestRender();
 					}
-
-					for (const content of this.streamingMessage.content) {
-						if (content.type === "toolCall") {
-							if (!this.pendingTools.has(content.id)) {
-								const component = new ToolExecutionComponent(
-									content.name,
-									content.id,
-									content.arguments,
-									{
-										showImages: this.settingsManager.getShowImages(),
-										imageWidthCells: this.settingsManager.getImageWidthCells(),
-									},
-									this.getRegisteredToolDefinition(content.name),
-									this.ui,
-									this.sessionManager.getCwd(),
-								);
-								component.setExpanded(this.toolOutputExpanded);
-								this.addToolComponentToChat(component);
-								this.pendingTools.set(content.id, component);
-							} else {
-								const component = this.pendingTools.get(content.id);
-								if (component) {
-									component.updateArgs(content.arguments);
-								}
-							}
-						}
-					}
-					this.ui.requestRender();
 				}
 				break;
 
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
-					// Stop the reveal timer and render the full message immediately.
+					// Snap remaining graphemes on end (abort/error and normal stop).
+					// Avoids multi-second leftover animation; paint always follows below.
 					this.stopSmoothStreaming();
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -3285,6 +3351,24 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				// If smooth streaming still has leading text unrevealed, flush through
+				// this tool so the running card is not hidden behind the typewriter.
+				if (
+					this.settingsManager.getSmoothStreaming() &&
+					this.streamingTargetMessage &&
+					this.streamingComponent
+				) {
+					const opts = this.getSmoothStreamingOptions();
+					const needed = countGraphemesBeforeToolCall(
+						this.streamingTargetMessage,
+						event.toolCallId,
+						opts,
+					);
+					if (this.streamingDisplayedLength < needed) {
+						this.streamingDisplayedLength = needed;
+					}
+					this.paintSmoothStreamingFrame();
+				}
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
 					component = new ToolExecutionComponent(
@@ -3847,7 +3931,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.stopSmoothStreaming?.();
+		this.stopSmoothStreaming();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -4175,10 +4259,24 @@ export class InteractiveMode {
 		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 
-		// If streaming, re-add the streaming component with updated visibility and re-render
+		// If streaming, re-add the streaming component with updated visibility and re-render.
+		// Re-slice to the current revealed length so hide-thinking does not dump the tail.
 		if (this.streamingComponent && this.streamingMessage) {
 			this.streamingComponent.setHideThinkingBlock(this.hideThinkingBlock);
-			this.streamingComponent.updateContent(this.streamingMessage);
+			if (this.settingsManager.getSmoothStreaming() && this.streamingTargetMessage) {
+				const opts = this.getSmoothStreamingOptions();
+				const total = countMessageGraphemes(this.streamingTargetMessage, opts);
+				if (this.streamingDisplayedLength > total) {
+					this.streamingDisplayedLength = total;
+				}
+				this.paintSmoothStreamingFrame();
+				// Restart the timer if new (or still-pending) backlog exists.
+				if (this.streamingDisplayedLength < total) {
+					this.startSmoothStreaming();
+				}
+			} else {
+				this.streamingComponent.updateContent(this.streamingMessage);
+			}
 			this.chatContainer.addChild(this.streamingComponent);
 		}
 
@@ -4608,7 +4706,7 @@ export class InteractiveMode {
 						this.settingsManager.setQuietStartup(enabled);
 					},
 					onSmoothStreamingChange: (enabled) => {
-						this.settingsManager.setSmoothStreaming(enabled);
+						this.applySmoothStreamingSettingChange(enabled);
 					},
 					onSessionRetentionDaysChange: (days) => {
 						this.settingsManager.setSessionRetentionDays(days);
