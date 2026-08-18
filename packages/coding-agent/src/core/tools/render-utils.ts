@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
@@ -108,4 +109,12 @@ export function renderToolPath(
 	const value = rawPath || options?.emptyFallback;
 	if (!value) return theme.fg("toolOutput", "...");
 	return linkPath(theme.fg("accent", shortenPath(value)), value, cwd);
+}
+
+/** Basename-only path for compact tool headers. Still hyperlinked to the absolute file. */
+export function renderToolFileName(rawPath: string | null, theme: Theme, cwd: string): string {
+	if (rawPath === null) return invalidArgText(theme);
+	if (!rawPath) return theme.fg("toolOutput", "...");
+	const name = basename(rawPath) || rawPath;
+	return linkPath(theme.fg("accent", name), rawPath, cwd);
 }

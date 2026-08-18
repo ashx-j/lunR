@@ -8,7 +8,7 @@ import { normalizeFetchContentParams } from "./fetch-params.ts";
 import { clearCloneCache } from "./github-extract.ts";
 import { search, type SearchProvider, type ResolvedSearchProvider } from "./gemini-search.ts";
 import type { SearchResult } from "./perplexity.ts";
-import { formatSeconds, getWebSearchConfigDir, getWebSearchConfigPath } from "./utils.ts";
+import { getWebSearchConfigDir, getWebSearchConfigPath } from "./utils.ts";
 import {
 	clearResults,
 	deleteResult,
@@ -44,6 +44,14 @@ import { isOpenAISearchAvailable } from "./openai-search.ts";
 import { isParallelAvailable } from "./parallel.ts";
 import { isTavilyAvailable } from "./tavily.ts";
 import { buildSearchErrorPlan, type SearchErrorDetails, type SearchErrorPlan } from "./render-search-error.ts";
+import {
+	collectFetchUrls,
+	collectSearchQueries,
+	formatFetchCallTitle,
+	formatFetchChrome,
+	formatSearchCallTitle,
+	formatSearchChrome,
+} from "./render-search-chrome.ts";
 import { loadEnabledModelPatterns, modelMatchesEnabledPatterns } from "./summary-model-scope.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
@@ -171,13 +179,7 @@ function resolveWorkflow(input: unknown, hasUI: boolean): WebSearchWorkflow {
 }
 
 function normalizeQueryList(queryList: unknown[]): string[] {
-	const normalized: string[] = [];
-	for (const query of queryList) {
-		if (typeof query !== "string") continue;
-		const trimmed = query.trim();
-		if (trimmed.length > 0) normalized.push(trimmed);
-	}
-	return normalized;
+	return collectSearchQueries({ queries: queryList });
 }
 
 function getCuratorTimeoutSeconds(): number {
@@ -1546,12 +1548,10 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme) {
-			const input = args as { query?: unknown; queries?: unknown };
-			const rawQueryList: unknown[] = Array.isArray(input.queries)
-				? input.queries
-				: (input.query !== undefined ? [input.query] : []);
-			const queryList = normalizeQueryList(rawQueryList);
-			if (queryList.length === 0) {
+			// lunr: collapsed header is title-only. Query list lives in expanded renderResult.
+			const queryList = collectSearchQueries(args as { query?: unknown; queries?: unknown });
+			const call = formatSearchCallTitle(queryList);
+			if (call.empty) {
 				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
 			}
 			if (queryList.length === 1) {
@@ -1559,18 +1559,10 @@ export default function (pi: ExtensionAPI) {
 				const display = q.length > 60 ? q.slice(0, 57) + "..." : q;
 				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `"${display}"`), 0, 0);
 			}
-			const lines = [theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `${queryList.length} queries`)];
-			for (const q of queryList.slice(0, 5)) {
-				const display = q.length > 50 ? q.slice(0, 47) + "..." : q;
-				lines.push(theme.fg("muted", `  "${display}"`));
-			}
-			if (queryList.length > 5) {
-				lines.push(theme.fg("muted", `  ... and ${queryList.length - 5} more`));
-			}
-			return new Text(lines.join("\n"), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `${queryList.length} queries`), 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			type QueryDetail = {
 				query: string;
 				provider: string | null;
@@ -1661,141 +1653,16 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
 			}
 
-			let statusLine: string;
-			const queryInfo = details?.queryCount === 1 ? "" : `${details?.successfulQueries}/${details?.queryCount} queries, `;
-			statusLine = theme.fg("success", `${queryInfo}${details?.totalResults ?? 0} sources`);
-			if (details?.curated && details?.curatedFrom) {
-				statusLine += theme.fg("muted", ` (${details.queryCount}/${details.curatedFrom} queries curated)`);
-			}
-			if (details?.fetchId && details?.fetchUrls) {
-				statusLine += theme.fg("muted", ` (fetching ${details.fetchUrls.length} URLs)`);
-			} else if (details?.fetchId) {
-				statusLine += theme.fg("muted", " (content ready)");
-			}
-
-			// Build expanded lines first so collapsed view can reference total count
-			const lines = [statusLine];
-			if (details?.summary?.text) {
-				lines.push("");
-				lines.push(theme.fg("accent", `── Summary (${details.summary.workflow}) ` + "─".repeat(32)));
-				lines.push("");
-				for (const line of details.summary.text.split("\n")) {
-					lines.push(`  ${line}`);
-				}
-				lines.push("");
-				const metaParts = [
-					details.summary.model ? `model=${details.summary.model}` : "model=deterministic",
-					`duration=${details.summary.durationMs}ms`,
-					`tokens~${details.summary.tokenEstimate}`,
-					details.summary.fallbackUsed ? "fallback=true" : "fallback=false",
-					details.summary.edited ? "edited=true" : "edited=false",
-				];
-				if (details.summary.fallbackReason) {
-					metaParts.push(`reason=${details.summary.fallbackReason}`);
-				}
-				lines.push(theme.fg("dim", "  " + metaParts.join(" · ")));
-			}
-
-			const queryDetails = details?.curatedQueries;
-			if (queryDetails?.length) {
-				const kept = queryDetails.length;
-				const from = details?.curatedFrom ?? kept;
-				lines.push("");
-				lines.push(theme.fg("accent", `\u2500\u2500 Curated Results (${kept} of ${from} queries kept) ` + "\u2500".repeat(24)));
-
-				for (const cq of queryDetails) {
-					lines.push("");
-					const dq = cq.query.length > 65 ? cq.query.slice(0, 62) + "..." : cq.query;
-					const providerLabel = cq.provider ? ` (${cq.provider})` : "";
-					lines.push(theme.fg("accent", `  "${dq}"${providerLabel}`));
-
-					if (cq.error) {
-						lines.push(theme.fg("error", `  ${cq.error}`));
-					} else if (cq.answer) {
-						lines.push("");
-						for (const line of cq.answer.split("\n")) {
-							lines.push(`  ${line}`);
-						}
-					}
-
-					if (cq.sources.length > 0) {
-						lines.push("");
-						for (const s of cq.sources) {
-							const domain = s.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-							const title = s.title.length > 50 ? s.title.slice(0, 47) + "..." : s.title;
-							lines.push(theme.fg("muted", `  \u25b8 ${title}`) + theme.fg("dim", ` \u00b7 ${domain}`));
-						}
-					}
-				}
-				lines.push("");
-			} else {
-				const textContent = result.content.find((c) => c.type === "text")?.text || "";
-				const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-				for (const line of preview.split("\n")) {
-					lines.push(theme.fg("dim", line));
-				}
-			}
-
-			if (details?.fetchUrls && details.fetchUrls.length > 0) {
-				if (details.curated) {
-					lines.push(theme.fg("muted", `Fetching ${details.fetchUrls.length} URLs in background`));
-				} else {
-					lines.push(theme.fg("muted", "Fetching:"));
-					for (const u of details.fetchUrls.slice(0, 5)) {
-						const display = u.length > 60 ? u.slice(0, 57) + "..." : u;
-						lines.push(theme.fg("dim", "  " + display));
-					}
-					if (details.fetchUrls.length > 5) {
-						lines.push(theme.fg("dim", `  ... and ${details.fetchUrls.length - 5} more`));
-					}
-				}
-			}
-
-			const totalLines = lines.length;
-
-			if (!expanded) {
-				const box = new Box(1, 0, (t) => theme.bg("toolSuccessBg", t));
-				box.addChild(new Text(statusLine, 0, 0));
-
-				let collapsedLines = 1; // statusLine
-				const summaryPreview = details?.summary?.text?.trim() || "";
-				if (summaryPreview) {
-					const preview = summaryPreview.length > 120 ? summaryPreview.slice(0, 117) + "..." : summaryPreview;
-					box.addChild(new Text(theme.fg("dim", preview), 0, 0));
-					collapsedLines++;
-				} else if (details?.curatedQueries?.length) {
-					for (const cq of details.curatedQueries.slice(0, 3)) {
-						const dq = cq.query.length > 55 ? cq.query.slice(0, 52) + "..." : cq.query;
-						const srcCount = cq.sources?.length ?? 0;
-						const suffix = cq.error ? theme.fg("error", " (error)") : theme.fg("dim", ` · ${srcCount} sources`);
-						box.addChild(new Text(theme.fg("accent", `  "${dq}"`) + suffix, 0, 0));
-						collapsedLines++;
-					}
-					if (details.curatedQueries.length > 3) {
-						box.addChild(new Text(theme.fg("dim", `  ... and ${details.curatedQueries.length - 3} more`), 0, 0));
-						collapsedLines++;
-					}
-				} else {
-					const textContent = result.content.find((c) => c.type === "text")?.text || "";
-					const firstContentLine = textContent.split("\n").find(l => {
-						const t = l.trim();
-						return t && !t.startsWith("[") && !t.startsWith("#") && !t.startsWith("---");
-					});
-					const fallbackLine = (firstContentLine?.trim() || "").replace(/\*\*/g, "");
-					if (fallbackLine) {
-						const preview = fallbackLine.length > 120 ? fallbackLine.slice(0, 117) + "..." : fallbackLine;
-						box.addChild(new Text(theme.fg("dim", preview), 0, 0));
-						collapsedLines++;
-					}
-				}
-				const moreLines = Math.max(0, totalLines - collapsedLines);
-				if (moreLines > 0) {
-					box.addChild(new Text(theme.fg("muted", `\n... (${moreLines} more lines, ${totalLines} total, ctrl+o to expand)`), 0, 0));
-				}
-				return box;
-			}
-
-			return new Text(lines.join("\n"), 0, 0);
+			// lunr: collapsed = status/count only. Expanded = query list, no answers/sources/summary.
+			const queryList = collectSearchQueries(context?.args);
+			const fallbackQueries = (details?.curatedQueries ?? []).map((cq) => cq.query).filter(Boolean);
+			const chrome = formatSearchChrome({
+				queries: queryList.length > 0 ? queryList : fallbackQueries,
+				details,
+				expanded,
+			});
+			const statusColor = expanded ? "accent" : "success";
+			return new Text(chrome.result.map((line) => theme.fg(statusColor, line)).join("\n"), 0, 0);
 		},
 	});
 
@@ -1927,42 +1794,20 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme) {
-			const { url, urls, prompt, timestamp, frames, model } = args as { url?: string; urls?: string[]; prompt?: string; timestamp?: string; frames?: number; model?: string };
-			const urlList = urls ?? (url ? [url] : []);
-			if (urlList.length === 0) {
+			// lunr: collapsed header is title-only. URL list lives in expanded renderResult.
+			const urlList = collectFetchUrls(args as { url?: string; urls?: string[] });
+			const call = formatFetchCallTitle(urlList);
+			if (call.empty) {
 				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
 			}
-			const lines: string[] = [];
 			if (urlList.length === 1) {
 				const display = urlList[0].length > 60 ? urlList[0].slice(0, 57) + "..." : urlList[0];
-				lines.push(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", display));
-			} else {
-				lines.push(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", `${urlList.length} URLs`));
-				for (const u of urlList.slice(0, 5)) {
-					const display = u.length > 60 ? u.slice(0, 57) + "..." : u;
-					lines.push(theme.fg("muted", "  " + display));
-				}
-				if (urlList.length > 5) {
-					lines.push(theme.fg("muted", `  ... and ${urlList.length - 5} more`));
-				}
+				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", display), 0, 0);
 			}
-			if (timestamp) {
-				lines.push(theme.fg("dim", "  timestamp: ") + theme.fg("warning", timestamp));
-			}
-			if (typeof frames === "number") {
-				lines.push(theme.fg("dim", "  frames: ") + theme.fg("warning", String(frames)));
-			}
-			if (prompt) {
-				const display = prompt.length > 250 ? prompt.slice(0, 247) + "..." : prompt;
-				lines.push(theme.fg("dim", "  prompt: ") + theme.fg("muted", `"${display}"`));
-			}
-			if (model) {
-				lines.push(theme.fg("dim", "  model: ") + theme.fg("warning", model));
-			}
-			return new Text(lines.join("\n"), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", `${urlList.length} URLs`), 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			const details = result.details as {
 				urlCount?: number;
 				successful?: number;
@@ -2003,50 +1848,18 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
 			}
 
-			if (details?.urlCount === 1) {
-				const title = details?.title || "Untitled";
-				const imgCount = details?.imageCount ?? (details?.hasImage ? 1 : 0);
-				const imageBadge = imgCount > 1
-					? theme.fg("accent", ` [${imgCount} images]`)
-					: imgCount === 1
-						? theme.fg("accent", " [image]")
-						: "";
-				let statusLine = theme.fg("success", title) + theme.fg("muted", ` (${details?.totalChars ?? 0} chars)`) + imageBadge;
-				if (details?.truncated) {
-					statusLine += theme.fg("warning", " [truncated]");
-				}
-				if (typeof details?.duration === "number") {
-					statusLine += theme.fg("muted", ` | ${formatSeconds(Math.floor(details.duration))} total`);
-				}
-				const textContent = result.content.find((c) => c.type === "text")?.text || "";
-				if (!expanded) {
-					const brief = textContent.length > 200 ? textContent.slice(0, 200) + "..." : textContent;
-					return new Text(statusLine + "\n" + theme.fg("dim", brief), 0, 0);
-				}
-				const lines = [statusLine];
-				if (details?.prompt) {
-					const display = details.prompt.length > 250 ? details.prompt.slice(0, 247) + "..." : details.prompt;
-					lines.push(theme.fg("dim", `  prompt: "${display}"`));
-				}
-				if (details?.timestamp) {
-					lines.push(theme.fg("dim", `  timestamp: ${details.timestamp}`));
-				}
-				if (typeof details?.frames === "number") {
-					lines.push(theme.fg("dim", `  frames: ${details.frames}`));
-				}
-				const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-				lines.push(theme.fg("dim", preview));
-				return new Text(lines.join("\n"), 0, 0);
-			}
-
-			const countColor = (details?.successful ?? 0) > 0 ? "success" : "error";
-			const statusLine = theme.fg(countColor, `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", " (content stored)");
-			if (!expanded) {
-				return new Text(statusLine, 0, 0);
-			}
-			const textContent = result.content.find((c) => c.type === "text")?.text || "";
-			const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-			return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+			// lunr: collapsed = count/status only. Expanded = URL list, no markdown/prompt/frames.
+			const urlList = collectFetchUrls(context?.args);
+			const fallbackUrls = Array.isArray((details as { urls?: string[] })?.urls)
+				? (details as { urls?: string[] }).urls
+				: [];
+			const chrome = formatFetchChrome({
+				urls: urlList.length > 0 ? urlList : fallbackUrls,
+				details,
+				expanded,
+			});
+			const statusColor = expanded ? "accent" : ((details?.successful ?? 0) > 0 || details?.urlCount === 1 ? "success" : "error");
+			return new Text(chrome.result.map((line) => theme.fg(statusColor, line)).join("\n"), 0, 0);
 		},
 	});
 

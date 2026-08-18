@@ -127,7 +127,10 @@ describe("readClipboardImage", () => {
 			if (command === "powershell.exe") {
 				const spawnOptions = options as { env?: NodeJS.ProcessEnv };
 				expect(spawnOptions.env?.PI_WSL_CLIPBOARD_IMAGE_PATH).toBeUndefined();
-				expect(args[2]).toContain("$path = 'C:\\Users\\O''Hare\\clip.png'");
+				expect(args).toContain("-STA");
+				expect(args).toContain("-NoProfile");
+				const script = args[args.indexOf("-Command") + 1];
+				expect(script).toContain("$path = 'C:\\Users\\O''Hare\\clip.png'");
 				if (!tmpFile) {
 					throw new Error("wslpath should be called before powershell.exe");
 				}
@@ -205,7 +208,11 @@ describe("readClipboardImage", () => {
 				throw new Error("wslpath should not be called on native win32");
 			}
 			if (command === "powershell.exe") {
-				const script = args[2];
+				expect(args).toContain("-STA");
+				expect(args).toContain("-NoProfile");
+				const script = args[args.indexOf("-Command") + 1];
+				expect(script).toContain("Get-Clipboard -Format Image");
+				expect(script).toContain("[System.Windows.Forms.Clipboard]::GetImage()");
 				const match = script.match(/\$path = '((?:[^']|'')+)'/);
 				if (!match) {
 					throw new Error(`Could not find $path in script: ${script}`);
@@ -232,7 +239,7 @@ describe("readClipboardImage", () => {
 		writeFileSync(fixture, Buffer.from([14, 15]));
 
 		mocks.spawnSync.mockImplementation((command, args, _options) => {
-			if (command === "powershell.exe" && args[2].includes("FileDropList")) {
+			if (command === "powershell.exe" && args.includes("-STA") && args[args.indexOf("-Command") + 1].includes("FileDropList")) {
 				return spawnOk(Buffer.from(`C:\\Users\\test\\notes.txt\r\n${fixture}\r\n`, "utf-8"));
 			}
 			if (command === "powershell.exe") {

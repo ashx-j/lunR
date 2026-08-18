@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
@@ -403,23 +403,42 @@ describe("ToolExecutionComponent parity", () => {
 	});
 
 	test("collapses ordinary read results until expanded", () => {
+		const longPath = join(
+			process.cwd(),
+			"OneDrive",
+			"Desktop",
+			"PROJECTS",
+			"lunR",
+			"session-manager.ts",
+		);
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-ordinary-read-collapsed",
-			{ path: "notes.txt" },
+			{ path: longPath, offset: 1310, limit: 80 },
 			{},
 			createReadToolDefinition(process.cwd()),
 			createFakeTui(),
 			process.cwd(),
 		);
 		component.updateResult(
-			{ content: [{ type: "text", text: "hidden content" }], details: undefined, isError: false },
+			{
+				content: [
+					{
+						type: "text",
+						text: "hidden content\n\n[235 more lines in file. Use offset=1390 to continue.]",
+					},
+				],
+				details: undefined,
+				isError: false,
+			},
 			false,
 		);
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
-		expect(collapsed).toContain("read");
-		expect(collapsed).toContain("notes.txt");
+		expect(collapsed).toContain("read session-manager.ts");
+		expect(collapsed).not.toContain("OneDrive");
+		expect(collapsed).not.toContain(":1310-");
+		expect(collapsed).not.toContain("more lines in file");
 		expect(collapsed).not.toContain("hidden content");
 
 		component.setExpanded(true);
@@ -490,10 +509,10 @@ describe("ToolExecutionComponent parity", () => {
 	}
 
 	for (const scenario of [
-		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },
-		{ title: "Pi documentation", path: getReadmePath(), compact: "read docs README.md:120-329" },
+		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio" },
+		{ title: "Pi documentation", path: getReadmePath(), compact: "read docs README.md" },
 	] as const) {
-		test(`shows the read line range in compact ${scenario.title} reads before the expand hint`, () => {
+		test(`compact ${scenario.title} reads stay name-only without a range or expand hint`, () => {
 			const component = new ToolExecutionComponent(
 				"read",
 				`tool-compact-range-${scenario.title}`,
@@ -506,7 +525,8 @@ describe("ToolExecutionComponent parity", () => {
 
 			const collapsed = stripAnsi(component.render(120).join("\n"));
 			expect(collapsed).toContain(scenario.compact);
-			expect(collapsed.indexOf(":120-329")).toBeLessThan(collapsed.indexOf("to expand"));
+			expect(collapsed).not.toContain(":120-329");
+			expect(collapsed).not.toContain("to expand");
 		});
 	}
 });
@@ -546,6 +566,39 @@ describe("ToolExecutionComponent density", () => {
 		expect(component.render(80).length).toBe(defaultLines - 1);
 		component.setGroupContinuation(false);
 		expect(component.render(80).length).toBe(defaultLines);
+	});
+
+	test("consecutive compact reads sit flush with no blank line between headers", () => {
+		const first = new ToolExecutionComponent(
+			"read",
+			"tool-read-a",
+			{ path: "resolve.ts" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const second = new ToolExecutionComponent(
+			"read",
+			"tool-read-b",
+			{ path: "model-runtime.ts" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		first.updateResult({ content: [{ type: "text", text: "a" }], details: undefined, isError: false }, false);
+		second.updateResult({ content: [{ type: "text", text: "b" }], details: undefined, isError: false }, false);
+		second.setGroupContinuation(true);
+
+		const parent = new Container();
+		parent.addChild(first);
+		parent.addChild(second);
+		const lines = parent.render(80).map((line) => stripAnsi(line).trimEnd());
+		const firstIdx = lines.findIndex((line) => line.includes("read resolve.ts"));
+		const secondIdx = lines.findIndex((line) => line.includes("read model-runtime.ts"));
+		expect(firstIdx).toBeGreaterThanOrEqual(0);
+		expect(secondIdx).toBe(firstIdx + 1);
 	});
 
 	test("finished successful bash calls render a single compact header with duration", () => {

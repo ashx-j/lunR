@@ -97,6 +97,19 @@ Add to `keybindings.json`:
 }
 ```
 
+On Windows, lunR pastes clipboard images with `Alt+V` (`app.clipboard.pasteImage`). VS Code owns `Ctrl+V` and right-click paste (text only). If `Alt+V` produces no toast in the lunR editor, VS Code swallowed the key. Forward it with:
+
+```json
+{
+  "key": "alt+v",
+  "command": "workbench.action.terminal.sendSequence",
+  "args": { "text": "\u001b[118;3u" },
+  "when": "terminalFocus"
+}
+```
+
+A successful paste toasts `Pasted clipboard image → pi-clipboard-….png` and inserts that temp path. `Clipboard contains no image or text` means the key arrived but the OS clipboard had no image.
+
 ## Windows Terminal
 
 Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward the modified Enter keys pi uses:

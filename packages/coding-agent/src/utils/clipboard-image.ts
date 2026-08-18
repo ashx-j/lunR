@@ -177,15 +177,19 @@ function readClipboardImageViaPowerShell(useWslpath: boolean): ClipboardImage | 
 		}
 
 		const psQuotedWinPath = winPath.replaceAll("'", "''");
+		// -STA: System.Windows.Forms.Clipboard::GetImage() is empty in MTA.
+		// Prefer Get-Clipboard -Format Image (Win+Shift+S / VS Code PNG/DIB), then GetImage().
 		const psScript = [
 			"Add-Type -AssemblyName System.Windows.Forms",
 			"Add-Type -AssemblyName System.Drawing",
 			`$path = '${psQuotedWinPath}'`,
-			"$img = [System.Windows.Forms.Clipboard]::GetImage()",
+			"$img = $null",
+			"try { $img = Get-Clipboard -Format Image } catch {}",
+			"if (-not $img) { $img = [System.Windows.Forms.Clipboard]::GetImage() }",
 			"if ($img) { $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output 'ok' } else { Write-Output 'empty' }",
 		].join("; ");
 
-		const result = runCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
+		const result = runCommand("powershell.exe", ["-NoProfile", "-STA", "-Command", psScript], {
 			timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
 		});
 		if (!result.ok) {
@@ -229,7 +233,7 @@ const FILE_DROP_IMAGE_MIME_TYPES: Record<string, string> = {
  * Return the first image file from the drop list. Only used on native Windows.
  */
 function readClipboardImageFileDropViaPowerShell(): ClipboardImage | null {
-	const result = runCommand("powershell.exe", ["-NoProfile", "-Command", "Get-Clipboard -Format FileDropList"], {
+	const result = runCommand("powershell.exe", ["-NoProfile", "-STA", "-Command", "Get-Clipboard -Format FileDropList"], {
 		timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
 	});
 	if (!result.ok || result.stdout.length === 0) {

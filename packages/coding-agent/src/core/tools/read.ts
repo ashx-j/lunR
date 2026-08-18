@@ -6,7 +6,7 @@ import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.ts";
-import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.ts";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { processImage } from "../../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
@@ -14,9 +14,8 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
 import {
-	extractTrailingNotice,
 	getTextOutput,
-	renderToolPath,
+	renderToolFileName,
 	replaceTabs,
 	str,
 	toolStatusDotFromContext,
@@ -78,9 +77,15 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 	return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 
-function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme, cwd: string): string {
-	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
+function formatReadCall(
+	args: ReadRenderArgs | undefined,
+	theme: Theme,
+	cwd: string,
+	expanded = false,
+): string {
+	const pathDisplay = renderToolFileName(str(args?.file_path ?? args?.path), theme, cwd);
+	const range = expanded ? formatReadLineRange(args, theme) : "";
+	return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${range}`;
 }
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
@@ -144,27 +149,17 @@ function getCompactReadClassification(
 	return undefined;
 }
 
-function formatCompactReadCall(
-	classification: CompactReadClassification,
-	args: ReadRenderArgs | undefined,
-	theme: Theme,
-): string {
-	const expandHint = theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
+function formatCompactReadCall(classification: CompactReadClassification, theme: Theme): string {
 	if (classification.kind === "skill") {
 		return (
-			theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) +
-			theme.fg("customMessageText", classification.label) +
-			formatReadLineRange(args, theme) +
-			expandHint
+			theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) + theme.fg("customMessageText", classification.label)
 		);
 	}
 
 	return (
 		theme.fg("toolTitle", theme.bold(`read ${classification.kind}`)) +
 		" " +
-		theme.fg("accent", classification.label) +
-		formatReadLineRange(args, theme) +
-		expandHint
+		theme.fg("accent", classification.label)
 	);
 }
 
@@ -337,19 +332,18 @@ export function createReadToolDefinition(
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			const classification = !context.expanded ? getCompactReadClassification(args, context.cwd) : undefined;
 			const callText = classification
-				? formatCompactReadCall(classification, args, theme)
-				: formatReadCall(args, theme, context.cwd);
+				? formatCompactReadCall(classification, theme)
+				: formatReadCall(args, theme, context.cwd, context.expanded);
 			text.setText(`${toolStatusDotFromContext(context, theme)} ${callText}`);
 			return text;
 		},
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result); a trailing
-			// truncation/limit notice stays visible.
+			// render header-only (ctrl+o reveals the full result). Continuation
+			// notices stay in execute() output for the model, not in TUI chrome.
 			if (!options.isPartial && !options.expanded && !context.isError) {
-				const notice = extractTrailingNotice(getTextOutput(result as any, context.showImages));
-				text.setText(notice ? `\n${theme.fg("warning", notice)}` : "");
+				text.setText("");
 				return text;
 			}
 			text.setText(

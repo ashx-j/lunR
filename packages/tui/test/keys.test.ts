@@ -294,6 +294,12 @@ describe("matchesKey", () => {
 			assert.strictEqual(matchesKey("\x1b[27;7;104~", "ctrl+alt+h"), true);
 			assert.strictEqual(parseKey("\x1b[27;7;104~"), "ctrl+alt+h");
 		});
+
+		it("should match Alt+V via Kitty CSI-u (VS Code sendSequence)", () => {
+			setKittyProtocolActive(true);
+			assert.strictEqual(matchesKey("\x1b[118;3u", "alt+v"), true);
+			assert.strictEqual(parseKey("\x1b[118;3u"), "alt+v");
+		});
 	});
 
 	describe("Legacy key matching", () => {
