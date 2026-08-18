@@ -22,9 +22,11 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-18. **`origin/master` = `6a812ee`**. Public npm is `@ashx-j/lunr@0.1.7` (tag `v0.1.7`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-19. **`origin/master` pending push of v0.2.0**. Public npm is `@ashx-j/lunr@0.2.0` (tag `v0.2.0`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Open UX notes (`fix/open-ux-notes`):** `present_plan` appends a full Plan chat card then a short Approve/Decline dock. Footer active goal is `goal`. `/usage` is this-session context (no Last 30 days); `/token-usage` removed. Completed todos prune on the next user turn (no `✓ N done`). Pinned chat has a 1-col scrollbar; user/assistant drag-select copies without Shift (1002 motion). `/goal` forces session auto. Compact subagent rows show model + thinking. `subagent models` result is hidden. Goal complete is one agent message. Tests: usage-view + context-breakdown + lunr-todos + compact-row + permission-mode-control + plan-message + tui-pin + mouse.
+- **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch show a count until ctrl+o lists queries or URLs. Tool boxes drop vertical pad so same-tool rows sit flush. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys.
+- **Smooth streaming (`fix/smooth-streaming-review`):** interactive TUI typewriter (`settings.smoothStreaming`, default off). Per-block append-only grapheme cache (providers mutate `block.text` in place). Always paint after reveal ticks (~30 FPS, no extra 33ms gate). Mid-stream toggle applies immediately without rewind. Hide-thinking re-slices instead of dumping the tail. Stop timer when caught up. Hidden thinking excluded from budget. Tool cards gated on reveal frontier (flush on `tool_execution_start`). Catch-up step capped. Settings copy matches grapheme/~30 FPS. Tests: `smooth-streaming.test.ts`. Print/RPC/gateway stay unsmoothed.
 
 ## On origin/master (`a698e57`)
 
@@ -41,7 +43,7 @@ Last updated: 2026-08-18. **`origin/master` = `6a812ee`**. Public npm is `@ashx-
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.1.7**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.0**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -57,10 +59,11 @@ Last updated: 2026-08-18. **`origin/master` = `6a812ee`**. Public npm is `@ashx-
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.1.7**. **Rebuild coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.2.0**. **Rebuild coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
+- Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
 
 ---
 
@@ -93,6 +96,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Catalog: `models.json` is one minified line on purpose; `/refresh` does not download it (shards only). Cache-only create prefers `official-catalog-cache.json` over parsing bundled `models.json`.
 - Repo `npx lunr` is the workspace bin, not `%AppData%\Roaming\npm\lunr` (`@ashx-j/lunr`). Do not treat local npx as a published smoke test.
 - **Stop proposing boot-screen art.** Slim box only; ask first.
+- Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 
 # Decisions (keep; why in one line)
 
@@ -118,6 +122,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-17: catalog cache-only was not the remaining hang. First paint still imported MCP/LSP/web-access/intercom/subagents; defer those until after `ui.start()`. Pi stays slow from live `pi.dev` + jiti of `~/.pi` packages.
 - 2026-08-17: published 0.1.6 still hung because `init()` awaited deferred attach, startup auto-installed packages, and the Node import graph pulled jiti/providers/all/print-RPC. Time-to-type = `ui.start()` + light rebind; gate prompt/`/new`, not the editor. Skip missing-package install only on initial interactive reload.
 - 2026-08-18: plan body is a chat card not a dock message; `/usage` is this-session context; `/token-usage` removed; completed todos prune on next user turn; mouse tracking stays on and messages select in-app; `/goal` forces session auto; compact subagent rows show model/thinking; goal complete is one agent message; pinned chat has a 1-col scrollbar.
+- 2026-08-18: smoothStreaming must cache grapheme ends per content-block identity with append-only re-segment (message WeakMap went stale when providers did `block.text += delta`); always `requestRender` after reveal ticks and apply mid-stream toggle/hide-thinking without dumping unrevealed tail.
+- 2026-08-19: v0.2.0 ships the three leftover product branches (open UX notes, compact tool chrome, smooth-streaming review). Already-on-master catalog/startup/permission work stays as-is; do not merge `archive/extension-absorption-DO-NOT-MERGE`.
 
 # Deferred
 
