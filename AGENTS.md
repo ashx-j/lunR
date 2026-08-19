@@ -28,6 +28,7 @@ Last updated: 2026-08-19. **`origin/master` = `d41af9d`**. Public npm is `@ashx-
 - **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch show a count until ctrl+o lists queries or URLs. Consecutive same-name cards collapse facing box pad + top spacer only; singletons and mixed neighbors keep `Box(1,1)`. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys + box.
 - **Smooth streaming (`fix/smooth-streaming-review`):** interactive TUI typewriter (`settings.smoothStreaming`, default off). Per-block append-only grapheme cache (providers mutate `block.text` in place). Always paint after reveal ticks (~30 FPS, no extra 33ms gate). Mid-stream toggle applies immediately without rewind. Hide-thinking re-slices instead of dumping the tail. Stop timer when caught up. Hidden thinking excluded from budget. Tool cards gated on reveal frontier (flush on `tool_execution_start`). Catch-up step capped. Settings copy matches grapheme/~30 FPS. Tests: `smooth-streaming.test.ts`. Print/RPC/gateway stay unsmoothed.
 - **Same-tool spacing (`fix/same-tool-spacing`):** consecutive same-name cards collapse facing box pad + top spacer only. Singletons and mixed neighbors keep `Box(1,1)`. Tests: box + tool-execution-component density.
+- **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 
 ## On origin/master (`a698e57`)
 
@@ -98,6 +99,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Repo `npx lunr` is the workspace bin, not `%AppData%\Roaming\npm\lunr` (`@ashx-j/lunr`). Do not treat local npx as a published smoke test.
 - **Stop proposing boot-screen art.** Slim box only; ask first.
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
+- Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 
 # Decisions (keep; why in one line)
 
@@ -126,6 +128,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-18: smoothStreaming must cache grapheme ends per content-block identity with append-only re-segment (message WeakMap went stale when providers did `block.text += delta`); always `requestRender` after reveal ticks and apply mid-stream toggle/hide-thinking without dumping unrevealed tail.
 - 2026-08-19: v0.2.0 ships the three leftover product branches (open UX notes, compact tool chrome, smooth-streaming review). Already-on-master catalog/startup/permission work stays as-is; do not merge `archive/extension-absorption-DO-NOT-MERGE`.
 - 2026-08-19: same-name tool rows collapse facing pad only; do not zero `paddingY` on every tool box.
+- 2026-08-19: wheel/page/thumb only change `chatScrollOffset`; reuse pinned chat line cache. Do not sync-render in `setChatScroll`; do not width-probe every tall frame (Markdown single-width cache thrash).
 
 # Deferred
 

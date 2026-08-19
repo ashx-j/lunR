@@ -40,11 +40,24 @@ class Lines implements Component {
 		this.lines = lines;
 	}
 
+	getLines(): string[] {
+		return this.lines;
+	}
+
 	render(): string[] {
 		return this.lines;
 	}
 
 	invalidate(): void {}
+}
+
+class CountingLines extends Lines {
+	renders = 0;
+
+	override render(): string[] {
+		this.renders++;
+		return super.render();
+	}
 }
 
 class SimpleOverlay implements Component {
@@ -398,5 +411,97 @@ describe("TUI pinFrom dock", () => {
 		assert.ok(topThumbStart >= 0);
 		assert.ok(topThumbStart < bottomThumbStart);
 		assert.strictEqual(tui.getChatViewportHeight(), 6);
+	});
+
+	it("setChatScroll does not re-render chat children when only the offset changes", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new CountingLines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		tui.render(20);
+		const afterLayout = chat.renders;
+		assert.ok(afterLayout >= 1);
+
+		for (let i = 0; i < 10; i++) {
+			tui.setChatScroll(i);
+		}
+		const frame = tui.render(20);
+		assert.strictEqual(chat.renders, afterLayout);
+		assert.ok(frame[0]!.startsWith("C0"));
+		assert.deepStrictEqual(frame.slice(6), ["D0", "D1"]);
+	});
+
+	it("wheel burst does not re-layout chat children", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new CountingLines(40, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await terminal.waitForRender();
+
+		const afterLayout = chat.renders;
+		assert.ok(afterLayout >= 1);
+		for (let i = 0; i < 10; i++) {
+			terminal.sendInput("\x1b[<64;1;1M");
+		}
+		await terminal.waitForRender();
+
+		assert.strictEqual(chat.renders, afterLayout);
+		assert.strictEqual(tui.getChatScroll(), 30);
+		tui.stop();
+	});
+
+	it("keeps the gutter without a second width collect, and drops it when chat hugs again", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new CountingLines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		const tall = tui.render(20);
+		assert.ok(tall.slice(0, 6).every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
+		const afterOverflow = chat.renders;
+		assert.ok(afterOverflow >= 1);
+
+		tui.setChatScroll(2);
+		const scrolled = tui.render(20);
+		assert.strictEqual(chat.renders, afterOverflow);
+		assert.ok(scrolled[0]!.startsWith("C2"));
+		assert.ok(scrolled.slice(0, 6).every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
+
+		chat.setLines(["C0", "C1", "C2"]);
+		tui.requestRender();
+		const hug = tui.render(20);
+		assert.deepStrictEqual(hug, ["C0", "C1", "C2", "D0", "D1"]);
+		assert.ok(hug.every((line) => lastVisible(line) !== "│" && lastVisible(line) !== "█"));
+	});
+
+	it("scrollbar glyphs are not written back into cached chat lines", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		const bottom = tui.render(20);
+		tui.setChatScroll(4);
+		const top = tui.render(20);
+
+		assert.ok(bottom.slice(0, 6).every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
+		assert.ok(top.slice(0, 6).every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
+		assert.ok(chat.getLines().every((line) => !line.includes("█") && !line.includes("│")));
+		assert.ok(top[0]!.startsWith("C0"));
+		assert.ok(bottom[0]!.startsWith("C4"));
 	});
 });
