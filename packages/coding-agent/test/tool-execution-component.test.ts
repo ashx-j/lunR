@@ -7,7 +7,7 @@ import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
+import { applySameToolGrouping, ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -28,6 +28,39 @@ function createFakeTui(): TUI {
 	return {
 		requestRender: () => {},
 	} as unknown as TUI;
+}
+
+function isBlank(line: string | undefined): boolean {
+	return line !== undefined && stripAnsi(line).trim() === "";
+}
+
+function headerIndex(lines: string[], needle: string): number {
+	return lines.findIndex((line) => stripAnsi(line).includes(needle));
+}
+
+function compactRead(toolCallId: string, path: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"read",
+		toolCallId,
+		{ path },
+		{},
+		createReadToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult({ content: [{ type: "text", text: path }], details: undefined, isError: false }, false);
+	return component;
+}
+
+function renderGroupedTools(...components: ToolExecutionComponent[]): string[] {
+	const parent = new Container();
+	let previous: ToolExecutionComponent | undefined;
+	for (const component of components) {
+		applySameToolGrouping(previous, component);
+		parent.addChild(component);
+		previous = component;
+	}
+	return parent.render(80);
 }
 
 describe("ToolExecutionComponent parity", () => {
@@ -403,14 +436,7 @@ describe("ToolExecutionComponent parity", () => {
 	});
 
 	test("collapses ordinary read results until expanded", () => {
-		const longPath = join(
-			process.cwd(),
-			"OneDrive",
-			"Desktop",
-			"PROJECTS",
-			"lunR",
-			"session-manager.ts",
-		);
+		const longPath = join(process.cwd(), "OneDrive", "Desktop", "PROJECTS", "lunR", "session-manager.ts");
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-ordinary-read-collapsed",
@@ -550,7 +576,7 @@ describe("ToolExecutionComponent density", () => {
 		expect(component.getToolName()).toBe("bash");
 	});
 
-	test("setGroupContinuation(true) removes the leading spacer line", () => {
+	test("setGroupContinuation(true) removes the leading spacer and top pad", () => {
 		const component = new ToolExecutionComponent(
 			"bash",
 			"tool-group",
@@ -563,42 +589,66 @@ describe("ToolExecutionComponent density", () => {
 
 		const defaultLines = component.render(80).length;
 		component.setGroupContinuation(true);
-		expect(component.render(80).length).toBe(defaultLines - 1);
+		expect(component.render(80).length).toBe(defaultLines - 2);
 		component.setGroupContinuation(false);
 		expect(component.render(80).length).toBe(defaultLines);
 	});
 
-	test("consecutive compact reads sit flush with no blank line between headers", () => {
-		const first = new ToolExecutionComponent(
-			"read",
-			"tool-read-a",
-			{ path: "resolve.ts" },
-			{},
-			createReadToolDefinition(process.cwd()),
-			createFakeTui(),
-			process.cwd(),
-		);
-		const second = new ToolExecutionComponent(
-			"read",
-			"tool-read-b",
-			{ path: "model-runtime.ts" },
-			{},
-			createReadToolDefinition(process.cwd()),
-			createFakeTui(),
-			process.cwd(),
-		);
-		first.updateResult({ content: [{ type: "text", text: "a" }], details: undefined, isError: false }, false);
-		second.updateResult({ content: [{ type: "text", text: "b" }], details: undefined, isError: false }, false);
-		second.setGroupContinuation(true);
-
-		const parent = new Container();
-		parent.addChild(first);
-		parent.addChild(second);
-		const lines = parent.render(80).map((line) => stripAnsi(line).trimEnd());
-		const firstIdx = lines.findIndex((line) => line.includes("read resolve.ts"));
-		const secondIdx = lines.findIndex((line) => line.includes("read model-runtime.ts"));
-		expect(firstIdx).toBeGreaterThanOrEqual(0);
+	test("consecutive compact reads sit flush with pad above the first and below the last", () => {
+		const first = compactRead("tool-read-a", "resolve.ts");
+		const second = compactRead("tool-read-b", "model-runtime.ts");
+		const lines = renderGroupedTools(first, second);
+		const firstIdx = headerIndex(lines, "read resolve.ts");
+		const secondIdx = headerIndex(lines, "read model-runtime.ts");
+		expect(firstIdx).toBeGreaterThan(0);
 		expect(secondIdx).toBe(firstIdx + 1);
+		expect(isBlank(lines[firstIdx - 1])).toBe(true);
+		expect(isBlank(lines[secondIdx + 1])).toBe(true);
+	});
+
+	test("three compact reads stay flush with pad only at the group edges", () => {
+		const lines = renderGroupedTools(
+			compactRead("tool-read-a", "resolve.ts"),
+			compactRead("tool-read-b", "model-runtime.ts"),
+			compactRead("tool-read-c", "usage-service.ts"),
+		);
+		const a = headerIndex(lines, "read resolve.ts");
+		const b = headerIndex(lines, "read model-runtime.ts");
+		const c = headerIndex(lines, "read usage-service.ts");
+		expect(a).toBeGreaterThan(0);
+		expect(b).toBe(a + 1);
+		expect(c).toBe(b + 1);
+		expect(isBlank(lines[a - 1])).toBe(true);
+		expect(isBlank(lines[c + 1])).toBe(true);
+	});
+
+	test("mixed read then bash keeps a blank line between headers", () => {
+		const read = compactRead("tool-read-mixed", "resolve.ts");
+		const bash = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-mixed",
+			{ command: "echo hi" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		bash.markExecutionStarted();
+		bash.updateResult({ content: [{ type: "text", text: "hi" }], details: undefined, isError: false }, false);
+		const lines = renderGroupedTools(read, bash);
+		const readIdx = headerIndex(lines, "read resolve.ts");
+		const bashIdx = headerIndex(lines, "$ echo hi");
+		expect(readIdx).toBeGreaterThanOrEqual(0);
+		expect(bashIdx).toBeGreaterThan(readIdx + 1);
+		expect(lines.slice(readIdx + 1, bashIdx).some(isBlank)).toBe(true);
+	});
+
+	test("a lone compact read keeps pad above and below the header", () => {
+		const lines = renderGroupedTools(compactRead("tool-read-lone", "resolve.ts"));
+		const idx = headerIndex(lines, "read resolve.ts");
+		expect(idx).toBeGreaterThan(0);
+		expect(isBlank(lines[idx - 1])).toBe(true);
+		expect(isBlank(lines[idx + 1])).toBe(true);
 	});
 
 	test("finished successful bash calls render a single compact header with duration", () => {

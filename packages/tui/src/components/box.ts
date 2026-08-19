@@ -14,7 +14,8 @@ type RenderCache = {
 export class Box implements Component {
 	children: Component[] = [];
 	private paddingX: number;
-	private paddingY: number;
+	private paddingTop: number;
+	private paddingBottom: number;
 	private bgFn?: (text: string) => string;
 
 	// Cache for rendered output
@@ -22,8 +23,26 @@ export class Box implements Component {
 
 	constructor(paddingX = 1, paddingY = 1, bgFn?: (text: string) => string) {
 		this.paddingX = paddingX;
-		this.paddingY = paddingY;
+		this.paddingTop = paddingY;
+		this.paddingBottom = paddingY;
 		this.bgFn = bgFn;
+	}
+
+	setPadding(paddingX: number, paddingY: number): void {
+		this.paddingX = paddingX;
+		this.paddingTop = paddingY;
+		this.paddingBottom = paddingY;
+		this.invalidateCache();
+	}
+
+	setPaddingTop(paddingTop: number): void {
+		this.paddingTop = paddingTop;
+		this.invalidateCache();
+	}
+
+	setPaddingBottom(paddingBottom: number): void {
+		this.paddingBottom = paddingBottom;
+		this.invalidateCache();
 	}
 
 	addChild(component: Component): void {
@@ -104,7 +123,7 @@ export class Box implements Component {
 		const result: string[] = [];
 
 		// Top padding
-		for (let i = 0; i < this.paddingY; i++) {
+		for (let i = 0; i < this.paddingTop; i++) {
 			result.push(this.applyBg("", width));
 		}
 
@@ -114,7 +133,7 @@ export class Box implements Component {
 		}
 
 		// Bottom padding
-		for (let i = 0; i < this.paddingY; i++) {
+		for (let i = 0; i < this.paddingBottom; i++) {
 			result.push(this.applyBg("", width));
 		}
 

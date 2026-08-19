@@ -194,7 +194,7 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
-import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { applySameToolGrouping, ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
@@ -4241,13 +4241,11 @@ export class InteractiveMode {
 
 	// lunr: consecutive same-tool grouping — a tool component appended right after
 	// another component for the SAME tool becomes a group continuation (no top
-	// spacer), so adjacent same-bg boxes merge into one continuous background.
-	// Adjacency is decided at add time only; later arrivals naturally break the run.
+	// spacer / top pad); the previous card drops its bottom pad. Mixed neighbors
+	// and singletons keep Box(1, 1). Adjacency is decided at add time only.
 	private addToolComponentToChat(component: ToolExecutionComponent): void {
 		const last = this.chatContainer.children[this.chatContainer.children.length - 1];
-		if (last instanceof ToolExecutionComponent && last.getToolName() === component.getToolName()) {
-			component.setGroupContinuation(true);
-		}
+		applySameToolGrouping(last instanceof ToolExecutionComponent ? last : undefined, component);
 		this.chatContainer.addChild(component);
 	}
 

@@ -25,8 +25,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 Last updated: 2026-08-19. **`origin/master` = `d41af9d`**. Public npm is `@ashx-j/lunr@0.2.0` (tag `v0.2.0`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Open UX notes (`fix/open-ux-notes`):** `present_plan` appends a full Plan chat card then a short Approve/Decline dock. Footer active goal is `goal`. `/usage` is this-session context (no Last 30 days); `/token-usage` removed. Completed todos prune on the next user turn (no `✓ N done`). Pinned chat has a 1-col scrollbar; user/assistant drag-select copies without Shift (1002 motion). `/goal` forces session auto. Compact subagent rows show model + thinking. `subagent models` result is hidden. Goal complete is one agent message. Tests: usage-view + context-breakdown + lunr-todos + compact-row + permission-mode-control + plan-message + tui-pin + mouse.
-- **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch show a count until ctrl+o lists queries or URLs. Tool boxes drop vertical pad so same-tool rows sit flush. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys.
+- **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch show a count until ctrl+o lists queries or URLs. Consecutive same-name cards collapse facing box pad + top spacer only; singletons and mixed neighbors keep `Box(1,1)`. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys + box.
 - **Smooth streaming (`fix/smooth-streaming-review`):** interactive TUI typewriter (`settings.smoothStreaming`, default off). Per-block append-only grapheme cache (providers mutate `block.text` in place). Always paint after reveal ticks (~30 FPS, no extra 33ms gate). Mid-stream toggle applies immediately without rewind. Hide-thinking re-slices instead of dumping the tail. Stop timer when caught up. Hidden thinking excluded from budget. Tool cards gated on reveal frontier (flush on `tool_execution_start`). Catch-up step capped. Settings copy matches grapheme/~30 FPS. Tests: `smooth-streaming.test.ts`. Print/RPC/gateway stay unsmoothed.
+- **Same-tool spacing (`fix/same-tool-spacing`):** consecutive same-name cards collapse facing box pad + top spacer only. Singletons and mixed neighbors keep `Box(1,1)`. Tests: box + tool-execution-component density.
 
 ## On origin/master (`a698e57`)
 
@@ -124,6 +125,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-18: plan body is a chat card not a dock message; `/usage` is this-session context; `/token-usage` removed; completed todos prune on next user turn; mouse tracking stays on and messages select in-app; `/goal` forces session auto; compact subagent rows show model/thinking; goal complete is one agent message; pinned chat has a 1-col scrollbar.
 - 2026-08-18: smoothStreaming must cache grapheme ends per content-block identity with append-only re-segment (message WeakMap went stale when providers did `block.text += delta`); always `requestRender` after reveal ticks and apply mid-stream toggle/hide-thinking without dumping unrevealed tail.
 - 2026-08-19: v0.2.0 ships the three leftover product branches (open UX notes, compact tool chrome, smooth-streaming review). Already-on-master catalog/startup/permission work stays as-is; do not merge `archive/extension-absorption-DO-NOT-MERGE`.
+- 2026-08-19: same-name tool rows collapse facing pad only; do not zero `paddingY` on every tool box.
 
 # Deferred
 
