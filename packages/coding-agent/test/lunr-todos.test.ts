@@ -39,10 +39,10 @@ describe("buildTodoWidgetLines", () => {
 		expect(buildTodoWidgetLines([], true)).toEqual([]);
 	});
 
-	test("collapsed: in-progress first, then pending, done summary", () => {
+	test("collapsed: in-progress first, then pending, no done summary", () => {
 		const todos = [todo("1", "later", "pending"), todo("2", "now", "in_progress"), todo("3", "old", "completed")];
 		const lines = buildTodoWidgetLines(todos, false);
-		expect(lines.map((l) => l.text)).toEqual(["● now", "○ later", "✓ 1 done"]);
+		expect(lines.map((l) => l.text)).toEqual(["● now", "○ later"]);
 	});
 
 	test("collapsed: caps active rows and appends a hint line", () => {
@@ -59,7 +59,7 @@ describe("buildTodoWidgetLines", () => {
 		const rows = lines.filter((l) => l.kind === "todo");
 		expect(rows).toHaveLength(TODO_WIDGET_COLLAPSED_ROWS);
 		expect(rows.map((l) => l.text)).toEqual(["● a", "○ b", "○ c"]);
-		expect(lines.some((l) => l.kind === "summary" && l.text === "✓ 2 done")).toBe(true);
+		expect(lines.some((l) => l.kind === "summary")).toBe(false);
 		expect(lines.some((l) => l.kind === "hint" && l.text === "+2 more (ctrl+o to expand)")).toBe(true);
 	});
 
@@ -70,9 +70,9 @@ describe("buildTodoWidgetLines", () => {
 		expect(lines.some((l) => l.kind === "summary")).toBe(false);
 	});
 
-	test("collapsed: only completed items still show the done summary", () => {
+	test("collapsed: only completed items hide the widget", () => {
 		const lines = buildTodoWidgetLines([todo("1", "a", "completed"), todo("2", "b", "completed")], false);
-		expect(lines).toEqual([{ kind: "summary", text: "✓ 2 done" }]);
+		expect(lines).toEqual([]);
 	});
 
 	test("expanded: shows every row, completed included, no hint or summary", () => {
@@ -123,6 +123,9 @@ function createHarness() {
 		toolDef: () => toolDef,
 		ctx,
 		fireSessionStart: () => handlers.get("session_start")?.({ type: "session_start" }, ctx),
+		fireMessageStart: (role: string) =>
+			handlers.get("message_start")?.({ type: "message_start", message: { role } }, ctx),
+		fireTurnStart: () => handlers.get("turn_start")?.({ type: "turn_start" }, ctx),
 		fireSessionShutdown: () => handlers.get("session_shutdown")?.({ type: "session_shutdown" }),
 		widgetLines(): string[] {
 			const entry = widgets.get("todos");
@@ -156,7 +159,7 @@ describe("lunr-todos extension", () => {
 			h.ctx,
 		);
 		expect(result.content[0].text).toBe("3 todos: 1 in progress, 1 pending, 1 completed");
-		expect(h.widgetLines()).toEqual(["● write tests", "○ run build", "✓ 1 done"]);
+		expect(h.widgetLines()).toEqual(["● write tests", "○ run build"]);
 	});
 
 	test("full-replace: second call replaces, empty array clears and removes the widget", async () => {
@@ -201,7 +204,7 @@ describe("lunr-todos extension", () => {
 		await h.toolDef().execute("c1", { todos }, null, null, h.ctx);
 		const collapsed = h.widgetLines();
 		expect(collapsed.filter((l) => l.startsWith("●") || l.startsWith("○"))).toHaveLength(3);
-		expect(collapsed.some((l) => l === "✓ 1 done")).toBe(true);
+		expect(collapsed.some((l) => l === "✓ 1 done")).toBe(false);
 		expect(collapsed.some((l) => l.startsWith("+1 more") && l.includes("to expand"))).toBe(true);
 
 		(globalThis as any)[BRIDGE]?.(true);
@@ -209,6 +212,27 @@ describe("lunr-todos extension", () => {
 
 		(globalThis as any)[BRIDGE]?.(false);
 		expect(h.widgetLines().some((l) => l.startsWith("+1 more"))).toBe(true);
+	});
+
+	test("user message_start prunes completed items from the expanded widget", async () => {
+		const h = createHarness();
+		h.fireSessionStart();
+		await h.toolDef().execute(
+			"c1",
+			{
+				todos: [todo("1", "a", "completed"), todo("2", "b", "completed")],
+			},
+			null,
+			null,
+			h.ctx,
+		);
+		(globalThis as any)[BRIDGE]?.(true);
+		expect(h.widgetLines()).toEqual(["✓ a", "✓ b"]);
+		h.fireTurnStart();
+		h.fireMessageStart("assistant");
+		expect(h.widgetLines()).toEqual(["✓ a", "✓ b"]);
+		h.fireMessageStart("user");
+		expect(h.widgetRemoved()).toBe(true);
 	});
 
 	test("session_shutdown removes the widget and unregisters the bridge", async () => {

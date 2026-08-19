@@ -1,24 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { UsageHistory } from "../src/core/usage-history.ts";
-import { renderTokenUsageBox, renderUsageBox } from "../src/modes/interactive/components/usage-view.ts";
+import { computeContextBreakdown } from "../src/core/context-breakdown.ts";
+import { renderUsageBox } from "../src/modes/interactive/components/usage-view.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 beforeEach(() => {
 	initTheme("moon");
 });
-
-function makeHistory(overrides: Partial<UsageHistory> = {}): UsageHistory {
-	return {
-		perModel: [],
-		perDay: [],
-		categories: { user: 0, assistantText: 0, thinking: 0, toolCalls: 0, toolResults: 0, summaries: 0, total: 0 },
-		includesSystemPrompt: false,
-		filesScanned: 0,
-		filesParsed: 0,
-		sessionsWithUsage: 0,
-		...overrides,
-	};
-}
 
 /** Strip ANSI codes so assertions can match plain text. */
 function plain(lines: string[]): string {
@@ -54,101 +41,53 @@ describe("renderUsageBox", () => {
 		expect(missing).toContain("No usage data yet.");
 	});
 
-	it("renders a 30-day aggregate total without per-model rows", () => {
-		const history = makeHistory({
-			perModel: [
-				{ model: "kimi-coding/k2", input: 1000, output: 500, cacheRead: 100, cacheWrite: 0, total: 1600 },
-				{ model: "openai-codex/gpt-5.3", input: 2000, output: 400, cacheRead: 0, cacheWrite: 0, total: 2400 },
-			],
-			filesScanned: 2,
-			sessionsWithUsage: 2,
-		});
-		const out = plain(renderUsageBox({ sessionTotals: undefined, context: undefined, plan: undefined, history }, 80));
-		expect(out).toContain("Last 30 days");
-		// input stays uncached (1000+2000); cacheRead 100 → cached 100 (3%)
-		expect(out).toContain("input 3.0k");
-		expect(out).toContain("output 900");
-		expect(out).toContain("total 4.0k");
-		expect(out).toContain("cached 100 (3%)");
-		expect(out).not.toContain("kimi-coding/k2");
-		expect(out).not.toContain("openai-codex/gpt-5.3");
-	});
-
-	it("renders the estimated category breakdown with the system-prompt note", () => {
-		const history = makeHistory({
-			categories: {
-				user: 400,
-				assistantText: 400,
-				thinking: 0,
-				toolCalls: 0,
-				toolResults: 200,
-				summaries: 0,
-				total: 1000,
-			},
-		});
-		const out = plain(renderUsageBox({ sessionTotals: undefined, context: undefined, plan: undefined, history }, 80));
-		expect(out).toContain("Last 30 days by category");
-		expect(out).toContain("User messages");
-		expect(out).toContain("Tool results");
-		expect(out).not.toContain("Thinking"); // zero-token categories are hidden
-		expect(out).toContain("system prompt/tools not stored per session");
-		// Estimated category rows are counts only — no share-of-pie bars.
-		expect(out).not.toContain("█");
-		expect(out).not.toContain("░");
-	});
-});
-
-describe("renderTokenUsageBox", () => {
-	it("renders per-model session rows", () => {
+	it("does not render a Last 30 days section", () => {
 		const out = plain(
-			renderTokenUsageBox(
+			renderUsageBox(
 				{
-					sessionRows: [
-						{ model: "kimi-coding/k2", input: 12000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 15000 },
-					],
+					sessionTotals: { input: 100, output: 20, total: 120 },
+					context: undefined,
+					plan: undefined,
 				},
 				80,
 			),
 		);
-		expect(out).toContain("Session");
-		expect(out).toContain("kimi-coding/k2");
-		expect(out).toContain("input 12k");
+		expect(out).not.toContain("Last 30 days");
 	});
 
-	it("filters out zero-token rows", () => {
+	it("renders a Context section with system prompt and an AGENTS.md row", () => {
+		const prompt = [
+			"You are an expert coding assistant.",
+			"",
+			"<project_context>",
+			"",
+			'<project_instructions path="C:/repo/AGENTS.md">',
+			"Use exact verbs.",
+			"</project_instructions>",
+			"",
+			"</project_context>",
+		].join("\n");
+		const breakdown = computeContextBreakdown({
+			systemPrompt: prompt,
+			tools: [],
+			messages: [],
+			contextWindow: 200_000,
+		});
 		const out = plain(
-			renderTokenUsageBox(
+			renderUsageBox(
 				{
-					sessionRows: [
-						{ model: "kimi-coding/k2", input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						{ model: "zai/glm-5.2", input: 500, output: 100, cacheRead: 0, cacheWrite: 0, total: 600 },
-					],
-					history: makeHistory({
-						perModel: [{ model: "xai/grok-4", input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }],
-					}),
+					sessionTotals: undefined,
+					context: { tokens: 10, contextWindow: 200_000, percent: 1 },
+					plan: undefined,
+					breakdown,
 				},
 				80,
 			),
 		);
-		expect(out).not.toContain("kimi-coding/k2");
-		expect(out).not.toContain("xai/grok-4");
-		expect(out).toContain("zai/glm-5.2");
-	});
-
-	it("renders 30-day per-model rows with a cache hit-rate suffix", () => {
-		const history = makeHistory({
-			perModel: [{ model: "kimi-coding/k2", input: 1000, output: 500, cacheRead: 100, cacheWrite: 0, total: 1600 }],
-			sessionsWithUsage: 1,
-		});
-		const out = plain(renderTokenUsageBox({ sessionRows: [], history }, 80));
-		expect(out).toContain("Last 30 days");
-		expect(out).toContain("kimi-coding/k2");
-		expect(out).toContain("input 1.0k");
-		expect(out).toContain("cached 100 (9%)");
-	});
-
-	it("renders the empty state when nothing has usage", () => {
-		const out = plain(renderTokenUsageBox({ sessionRows: [] }, 80));
-		expect(out).toContain("No token usage yet.");
+		expect(out).toContain("Context");
+		expect(out).toContain("System prompt");
+		expect(out).toContain("AGENTS.md");
+		expect(out).not.toContain("Last 30 days");
+		expect(out).not.toContain("System prompt + files");
 	});
 });

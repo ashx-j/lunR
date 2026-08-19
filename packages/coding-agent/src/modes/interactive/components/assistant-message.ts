@@ -17,6 +17,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
+	selectable = true;
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	// lunr: collapsible reasoning — when true, a completed thinking run renders as

@@ -392,6 +392,8 @@ export interface AgentProgress {
 	currentToolArgs?: string;
 	currentToolStartedAt?: number;
 	currentPath?: string;
+	model?: string;
+	thinking?: string;
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
 	toolCount: number;
@@ -599,6 +601,7 @@ export interface SingleResult {
 	messages?: Message[];
 	usage: Usage;
 	model?: string;
+	thinking?: string;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	controlEvents?: ControlEvent[];

@@ -5,6 +5,7 @@ import { defineTool } from "../../../core/extensions/types.js";
 import { isCronFire } from "../../../core/cron/fire-guard.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { currentTokenTotal } from "./accounting.js";
 import { completeGoalArguments, parseCommand } from "./command.js";
 import { GoalCommandController } from "./commands.js";
@@ -57,6 +58,7 @@ interface GoalOptions {
 	settingsPath?: string;
 }
 
+const GOAL_COMPLETE_MESSAGE_TYPE = "goal-complete";
 const EXPERIMENTAL_GOALS_WARNING =
 	"Experimental ordered goals are enabled for pi-goal. Queue behavior and persisted state may change.";
 const MAX_BLOCKER_REASON_LENGTH = 1_000;
@@ -108,6 +110,30 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	) => runtime.sendOwnedGoalPrompt(ctx, goalId, prompt);
 	const dispatchPendingQueueActionIfSettled =
 		commands.dispatchPendingQueueActionIfSettled.bind(commands);
+
+	const emitGoalCompleteMessage = (summary: string) => {
+		const text = summary.startsWith("Goal complete") ? summary : summary;
+		pi.sendMessage({
+			customType: GOAL_COMPLETE_MESSAGE_TYPE,
+			content: [{ type: "text", text }],
+			display: true,
+		});
+	};
+
+	pi.registerMessageRenderer(GOAL_COMPLETE_MESSAGE_TYPE, (message, _options, theme) => {
+		const raw =
+			typeof message.content === "string"
+				? message.content
+				: message.content
+						.filter((block) => block.type === "text")
+						.map((block) => ("text" in block ? block.text : ""))
+						.join("\n");
+		const c = new Container();
+		c.addChild(new Markdown(`● ${raw}`, 1, 0, undefined, {
+			color: (content) => theme.fg("text", content),
+		}));
+		return c;
+	});
 
 	const goalCompleteTool = defineTool({
 		name: GOAL_COMPLETE_TOOL,
@@ -226,7 +252,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			if (runtime.pendingQueueAction?.kind === "prioritize") {
 				persistGoal(runtime.activeGoal);
 				ctx.ui.setStatus(STATUS_KEY, "complete");
-				ctx.ui.notify(`Goal complete: ${goal}. Priority goal waits for Pi to settle.`, "info");
+				emitGoalCompleteMessage(summary);
 				return {
 					content: [{ type: "text", text: `Goal complete: ${summary}` }],
 					details: {
@@ -246,10 +272,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				};
 				persistGoal(runtime.activeGoal);
 				ctx.ui.setStatus(STATUS_KEY, "complete");
-				ctx.ui.notify(
-					`Goal complete: ${goal}. Next goal queued: ${runtime.queuedGoals[0]?.text}`,
-					"info",
-				);
+				emitGoalCompleteMessage(summary);
 				return {
 					content: [
 						{
@@ -270,13 +293,17 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			ctx.ui.setStatus(STATUS_KEY, formatStatus(runtime.activeGoal));
 			clearActiveGoal(ctx);
 			showCompletionStatus(ctx);
-			ctx.ui.notify(`Goal complete: ${goal}`, "info");
+			emitGoalCompleteMessage(summary);
 
 			return {
 				content: [{ type: "text", text: `Goal complete: ${summary}` }],
 				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
 				terminate: true,
 			};
+		},
+		renderResult(_result, { isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "Completing goal..."), 0, 0);
+			return { render: () => [], invalidate() {} };
 		},
 	});
 

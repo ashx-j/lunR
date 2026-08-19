@@ -58,6 +58,11 @@ function strip(line: string): string {
 	return line.replace(/\s+$/, "");
 }
 
+function lastVisible(line: string): string {
+	const plain = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s+$/, "");
+	return plain.slice(-1);
+}
+
 async function renderPinned(tui: TUI, terminal: VirtualTerminal): Promise<string[]> {
 	tui.requestRender();
 	await terminal.waitForRender();
@@ -77,6 +82,7 @@ describe("TUI pinFrom dock", () => {
 
 		const frame = tui.render(20);
 		assert.deepStrictEqual(frame, ["C0", "C1", "C2", "D0", "D1", "D2"]);
+		assert.ok(frame.slice(0, 3).every((line) => lastVisible(line) !== "│" && lastVisible(line) !== "█"));
 
 		const viewport = await renderPinned(tui, terminal);
 		assert.strictEqual(viewport[0], "C0");
@@ -101,11 +107,14 @@ describe("TUI pinFrom dock", () => {
 
 		const frame = tui.render(20);
 		assert.strictEqual(frame.length, 8);
-		assert.deepStrictEqual(frame, ["C4", "C5", "C6", "C7", "C8", "C9", "D0", "D1"]);
-		assert.ok(!viewport.includes("C0"));
-		assert.ok(!viewport.includes("C3"));
-		assert.ok(viewport.includes("C4"));
-		assert.ok(viewport.includes("C9"));
+		assert.ok(frame[0]!.startsWith("C4"));
+		assert.ok(frame[5]!.startsWith("C9"));
+		assert.deepStrictEqual(frame.slice(6), ["D0", "D1"]);
+		assert.ok(frame.slice(0, 6).every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
+		assert.ok(!viewport.some((line) => line.includes("C0")));
+		assert.ok(!viewport.some((line) => line.includes("C3")));
+		assert.ok(viewport.some((line) => line.includes("C4")));
+		assert.ok(viewport.some((line) => line.includes("C9")));
 		assert.strictEqual(viewport[viewport.length - 1], "D1");
 		assert.ok(!frame.includes(""));
 		assert.strictEqual(tui.getChatViewportHeight(), 6);
@@ -127,10 +136,13 @@ describe("TUI pinFrom dock", () => {
 		tui.setChatScroll(3);
 		const viewport = await renderPinned(tui, terminal);
 		assert.strictEqual(tui.getChatScroll(), 3);
-		assert.deepStrictEqual(tui.render(20), ["C1", "C2", "C3", "C4", "C5", "C6", "D0", "D1"]);
-		assert.ok(viewport.includes("C1"));
-		assert.ok(!viewport.includes("C0"));
-		assert.ok(!viewport.includes("C9"));
+		const scrolled = tui.render(20);
+		assert.ok(scrolled[0]!.startsWith("C1"));
+		assert.ok(scrolled[5]!.startsWith("C6"));
+		assert.deepStrictEqual(scrolled.slice(6), ["D0", "D1"]);
+		assert.ok(viewport.some((line) => line.includes("C1")));
+		assert.ok(!viewport.some((line) => line.includes("C0")));
+		assert.ok(!viewport.some((line) => line.includes("C9")));
 		assert.strictEqual(viewport[viewport.length - 1], "D1");
 		assert.strictEqual(viewport[viewport.length - 2], "D0");
 
@@ -157,9 +169,12 @@ describe("TUI pinFrom dock", () => {
 		dock.setLines(["D0", "D1", "D2", "D3"]);
 		const viewport = await renderPinned(tui, terminal);
 		assert.strictEqual(tui.getChatViewportHeight(), 4);
-		assert.deepStrictEqual(tui.render(20), ["C6", "C7", "C8", "C9", "D0", "D1", "D2", "D3"]);
-		assert.ok(!viewport.includes("C5"));
-		assert.ok(viewport.includes("C6"));
+		const grown = tui.render(20);
+		assert.ok(grown[0]!.startsWith("C6"));
+		assert.ok(grown[3]!.startsWith("C9"));
+		assert.deepStrictEqual(grown.slice(4), ["D0", "D1", "D2", "D3"]);
+		assert.ok(!viewport.some((line) => line.includes("C5")));
+		assert.ok(viewport.some((line) => line.includes("C6")));
 		assert.strictEqual(viewport[viewport.length - 1], "D3");
 		assert.strictEqual(viewport.length, 8);
 
@@ -240,7 +255,7 @@ describe("TUI pinFrom dock", () => {
 
 		assert.ok(
 			terminal.writes.some((w) => w.includes(MOUSE_TRACKING_ENABLE)),
-			"should enable 1000+1006 while pinned",
+			"should enable 1000+1002+1006 while pinned",
 		);
 
 		tui.pinFrom(null);
@@ -270,9 +285,11 @@ describe("TUI pinFrom dock", () => {
 		terminal.sendInput("\x1b[<64;1;1M");
 		const viewport = await renderPinned(tui, terminal);
 		assert.strictEqual(tui.getChatScroll(), 3);
-		assert.deepStrictEqual(tui.render(20), ["C1", "C2", "C3", "C4", "C5", "C6", "D0", "D1"]);
-		assert.ok(viewport.includes("C1"));
-		assert.ok(!viewport.includes("C9"));
+		const wheeled = tui.render(20);
+		assert.ok(wheeled[0]!.startsWith("C1"));
+		assert.deepStrictEqual(wheeled.slice(6), ["D0", "D1"]);
+		assert.ok(viewport.some((line) => line.includes("C1")));
+		assert.ok(!viewport.some((line) => line.includes("C9")));
 		assert.strictEqual(viewport[viewport.length - 1], "D1");
 
 		terminal.sendInput("\x1b[<65;1;1M");
@@ -354,5 +371,32 @@ describe("TUI pinFrom dock", () => {
 		assert.strictEqual(tui.getChatScroll(), 0);
 
 		tui.stop();
+	});
+
+	it("draws a scrollbar on tall chat and moves the thumb when scrolling up", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		const bottom = tui.render(20);
+		assert.deepStrictEqual(bottom.slice(6), ["D0", "D1"]);
+		const bottomThumb = bottom.slice(0, 6).map(lastVisible);
+		assert.ok(bottomThumb.includes("█"));
+		assert.ok(bottomThumb.includes("│"));
+		const bottomThumbStart = bottomThumb.indexOf("█");
+
+		tui.setChatScroll(4);
+		const top = tui.render(20);
+		assert.ok(top[0]!.startsWith("C0"));
+		assert.deepStrictEqual(top.slice(6), ["D0", "D1"]);
+		const topThumb = top.slice(0, 6).map(lastVisible);
+		const topThumbStart = topThumb.indexOf("█");
+		assert.ok(topThumbStart >= 0);
+		assert.ok(topThumbStart < bottomThumbStart);
+		assert.strictEqual(tui.getChatViewportHeight(), 6);
 	});
 });

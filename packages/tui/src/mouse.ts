@@ -7,8 +7,8 @@
  * Wheel: bit 6 set. low bits 0=up, 1=down, 2=left, 3=right.
  */
 
-export const MOUSE_TRACKING_ENABLE = "\x1b[?1000h\x1b[?1006h";
-export const MOUSE_TRACKING_DISABLE = "\x1b[?1006l\x1b[?1000l";
+export const MOUSE_TRACKING_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+export const MOUSE_TRACKING_DISABLE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
 export type MouseKind = "wheel" | "button" | "move";
 

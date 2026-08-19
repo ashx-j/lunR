@@ -291,6 +291,25 @@ function taskSummaryText(task: string | undefined, max = 60): string {
 	return `${first.slice(0, max - 1)}…`;
 }
 
+const TASK_CHROME_LINE_RE = /^\[(?:Read from|Write to):\s*.*\]\s*$/;
+
+/** Drop leading [Read from: …] / [Write to: …] lines from a child task. */
+export function stripTaskChrome(task: string | undefined): string {
+	if (!task) return "";
+	const lines = task.split("\n");
+	while (lines.length > 0 && TASK_CHROME_LINE_RE.test(lines[0]!.trim())) {
+		lines.shift();
+	}
+	return lines.join("\n").trim();
+}
+
+/** Compact-row lead: model + thinking when known, else the chrome-stripped task. */
+export function compactRowLead(result: { task?: string; model?: string; thinking?: string }): string {
+	const badge = formatModelThinking(result.model, result.thinking);
+	if (badge) return badge;
+	return taskSummaryText(stripTaskChrome(result.task));
+}
+
 function resultStatusLine(result: Details["results"][number], output: string): string {
 	if (result.detached) return result.detachedReason ? `Detached: ${result.detachedReason}` : "Detached";
 	if (result.stopped) return "Stopped";
@@ -1313,7 +1332,8 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
+	const lead = compactRowLead({ task: r.task, model: r.model ?? progress?.model, thinking: r.thinking ?? progress?.thinking });
+	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
 
 	if (isRunning && r.progress) {
 		const progressSnapshotNow = snapshotNowForProgress(r.progress);
@@ -1412,9 +1432,10 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
 		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
+		const lead = compactRowLead({ task: r.task, model: r.model ?? (rProg && "model" in rProg ? rProg.model : undefined), thinking: r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined) });
 		c.addChild(animatedLine((f) => {
 			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
-			return truncLine(`  ${glyph} ${taskSummaryText(r.task)} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
+			return truncLine(`  ${glyph} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
 		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
 			const activity = compactCurrentActivity(rProg);

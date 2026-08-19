@@ -28,9 +28,21 @@ export interface ContextBreakdownInput {
 	contextWindow: number;
 }
 
+export interface ContextFileBreakdown {
+	/** Basename of the context file (AGENTS.md, CLAUDE.md, …). */
+	label: string;
+	/** Path from the <project_instructions path="…"> wrapper, when present. */
+	path?: string;
+	tokens: number;
+}
+
 export interface ContextBreakdown {
-	/** System prompt, including appended project context files (AGENTS.md etc.). */
+	/** System prompt minus <project_context> and the skills block. */
 	systemPrompt: number;
+	/** Each AGENTS.md / context file from <project_instructions>. */
+	contextFiles: ContextFileBreakdown[];
+	/** formatSkillsForPrompt section, if present. */
+	skills: number;
 	/** Serialized tool schemas (name + description + JSON parameter schema). */
 	toolDefinitions: number;
 	/** User and extension ("custom") messages. */
@@ -62,6 +74,50 @@ export interface ContextBreakdown {
 }
 
 const CHARS_PER_TOKEN = 4;
+const PROJECT_CONTEXT_RE = /<project_context>[\s\S]*?<\/project_context>/;
+const PROJECT_INSTRUCTIONS_RE = /<project_instructions(?:\s+path="([^"]*)")?>([\s\S]*?)<\/project_instructions>/g;
+const SKILLS_BLOCK_RE =
+	/\n\nThe following skills provide specialized instructions for specific tasks\.[\s\S]*<\/available_skills>/;
+
+function estimateChars(text: string): number {
+	return text.length === 0 ? 0 : Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+function contextFileLabel(filePath: string | undefined): string {
+	if (!filePath) return "AGENTS.md";
+	const normalized = filePath.replace(/\\/g, "/");
+	const slash = normalized.lastIndexOf("/");
+	return slash === -1 ? normalized : normalized.slice(slash + 1);
+}
+
+/** Split a live system prompt into base / context-file / skills parts. */
+export function splitSystemPromptSections(systemPrompt: string): {
+	base: string;
+	contextFiles: Array<{ path?: string; content: string }>;
+	skills: string;
+} {
+	let remaining = systemPrompt;
+	const contextFiles: Array<{ path?: string; content: string }> = [];
+	const contextMatch = remaining.match(PROJECT_CONTEXT_RE);
+	if (contextMatch) {
+		const block = contextMatch[0];
+		PROJECT_INSTRUCTIONS_RE.lastIndex = 0;
+		for (const match of block.matchAll(PROJECT_INSTRUCTIONS_RE)) {
+			contextFiles.push({
+				path: match[1],
+				content: match[2] ?? "",
+			});
+		}
+		remaining = remaining.replace(block, "");
+	}
+	let skills = "";
+	const skillsMatch = remaining.match(SKILLS_BLOCK_RE);
+	if (skillsMatch) {
+		skills = skillsMatch[0];
+		remaining = remaining.replace(skills, "");
+	}
+	return { base: remaining, contextFiles, skills };
+}
 
 /**
  * Estimate the token cost of the tool definitions sent to the model.
@@ -86,7 +142,14 @@ export function estimateToolDefinitionTokens(tools: ReadonlyArray<ContextBreakdo
  * All numbers are chars/4 estimates, matching `estimateTokens`.
  */
 export function computeContextBreakdown(input: ContextBreakdownInput): ContextBreakdown {
-	const systemPrompt = Math.ceil(input.systemPrompt.length / CHARS_PER_TOKEN);
+	const sections = splitSystemPromptSections(input.systemPrompt);
+	const systemPrompt = estimateChars(sections.base);
+	const contextFiles = sections.contextFiles.map((file) => ({
+		label: contextFileLabel(file.path),
+		path: file.path,
+		tokens: estimateChars(file.content),
+	}));
+	const skills = estimateChars(sections.skills);
 	const toolDefinitions = estimateToolDefinitionTokens(input.tools);
 
 	let user = 0;
@@ -146,9 +209,22 @@ export function computeContextBreakdown(input: ContextBreakdownInput): ContextBr
 		}
 	}
 
-	const total = systemPrompt + toolDefinitions + user + assistantText + thinking + toolCalls + toolResults + summaries;
+	const contextFileTokens = contextFiles.reduce((sum, file) => sum + file.tokens, 0);
+	const total =
+		systemPrompt +
+		contextFileTokens +
+		skills +
+		toolDefinitions +
+		user +
+		assistantText +
+		thinking +
+		toolCalls +
+		toolResults +
+		summaries;
 	return {
 		systemPrompt,
+		contextFiles,
+		skills,
 		toolDefinitions,
 		user,
 		assistantText,

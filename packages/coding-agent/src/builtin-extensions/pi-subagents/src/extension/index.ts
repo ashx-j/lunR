@@ -474,9 +474,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 
 		renderResult(result, options, theme, context) {
-			// lunr: hide the `subagent list` result body — the call row already shows
-			// the action; the roster stays in the transcript for the model.
-			if ((context.args as { action?: string } | undefined)?.action === "list") {
+			// lunr: hide `subagent list` / `subagent models` result bodies — the call
+			// row already shows the action; the dump stays in the transcript for the model.
+			const action = (context.args as { action?: string } | undefined)?.action;
+			if (action === "list" || action === "models") {
 				return { render: () => [], invalidate() {} };
 			}
 			if (subagentResultIsRunning(result)) {

@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-17. **`origin/master` = `a698e57`**. Public npm is `@ashx-j/lunr@0.1.7` (tag `v0.1.7`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-18. **`origin/master` = `6a812ee`**. Public npm is `@ashx-j/lunr@0.1.7` (tag `v0.1.7`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Open UX notes (`fix/open-ux-notes`):** `present_plan` appends a full Plan chat card then a short Approve/Decline dock. Footer active goal is `goal`. `/usage` is this-session context (no Last 30 days); `/token-usage` removed. Completed todos prune on the next user turn (no `✓ N done`). Pinned chat has a 1-col scrollbar; user/assistant drag-select copies without Shift (1002 motion). `/goal` forces session auto. Compact subagent rows show model + thinking. `subagent models` result is hidden. Goal complete is one agent message. Tests: usage-view + context-breakdown + lunr-todos + compact-row + permission-mode-control + plan-message + tui-pin + mouse.
 
 ## On origin/master (`a698e57`)
 
@@ -102,7 +104,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-06: subscriptions sibling file; auth.json = active key; `autoManageSubscriptions` is manual switch only.
 - 2026-08-07: yolo does not bypass swarm gate; detect via `[SWARM MODE]` prefix.
 - 2026-08-08: `thinkingCollapse` layered on `hideThinkingBlock`; `/exit` = `/quit`.
-- 2026-08-13: todos = extension, full-replace; plan approval = `present_plan`; custom provider writes models.json then login; `/usage` totals vs `/token-usage` per-model.
+- 2026-08-13: todos = extension, full-replace; plan approval = `present_plan`; custom provider writes models.json then login.
 - 2026-08-14: plan is a permission mode; Shift+Tab `manual→yolo→plan→auto`; sticky chatbox in `packages/tui`; xAI `/usage` = weekly SuperGrok pool; usage bars use 70/90.
 - 2026-08-15: `create()` cache-only (no first-paint hang). `/model` = stored cred, not env. Catalog generated + 4h CI. Official overwrites user-filled rows.
 - 2026-08-15: `/refresh` live list must refresh expired OAuth the same way `getAuth` does; xAI 403 was a stale SuperGrok access token, not a bad `/models` URL.
@@ -115,6 +117,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-16: parent-delegated children inherit plan or auto; plan parents fail writer spawns; non-child print stays fail-closed.
 - 2026-08-17: catalog cache-only was not the remaining hang. First paint still imported MCP/LSP/web-access/intercom/subagents; defer those until after `ui.start()`. Pi stays slow from live `pi.dev` + jiti of `~/.pi` packages.
 - 2026-08-17: published 0.1.6 still hung because `init()` awaited deferred attach, startup auto-installed packages, and the Node import graph pulled jiti/providers/all/print-RPC. Time-to-type = `ui.start()` + light rebind; gate prompt/`/new`, not the editor. Skip missing-package install only on initial interactive reload.
+- 2026-08-18: plan body is a chat card not a dock message; `/usage` is this-session context; `/token-usage` removed; completed todos prune on next user turn; mouse tracking stays on and messages select in-app; `/goal` forces session auto; compact subagent rows show model/thinking; goal complete is one agent message; pinned chat has a 1-col scrollbar.
 
 # Deferred
 

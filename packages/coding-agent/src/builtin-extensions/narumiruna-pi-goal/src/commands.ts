@@ -244,12 +244,9 @@ export class GoalCommandController {
 			: undefined;
 		if (!this.runtime.activeGoal) {
 			this.runtime.clearActiveGoal(ctx);
-			ctx.ui.notify(
-				reason === "complete"
-					? `Goal complete: ${previousText}. No goals remain.`
-					: `Goal skipped: ${previousText}. No goals remain.`,
-				"info",
-			);
+			if (reason !== "complete") {
+				ctx.ui.notify(`Goal skipped: ${previousText}. No goals remain.`, "info");
+			}
 			return true;
 		}
 
@@ -259,10 +256,12 @@ export class GoalCommandController {
 			if (blocksStaleGoalToolCalls(this.runtime.activeGoal.status)) {
 				this.runtime.blockStaleGoalToolCalls();
 			}
-			ctx.ui.notify(
-				`${reason === "complete" ? "Goal complete" : "Goal skipped"}: ${previousText}. Next goal remains ${this.runtime.activeGoal.status}: ${this.runtime.activeGoal.text}`,
-				"info",
-			);
+			if (reason !== "complete") {
+				ctx.ui.notify(
+					`Goal skipped: ${previousText}. Next goal remains ${this.runtime.activeGoal.status}: ${this.runtime.activeGoal.text}`,
+					"info",
+				);
+			}
 			return true;
 		}
 
@@ -293,10 +292,9 @@ export class GoalCommandController {
 			);
 			return false;
 		}
-		ctx.ui.notify(
-			`${reason === "complete" ? "Goal complete" : "Goal skipped"}: ${previousText}. Started next goal: ${activatedGoal.text}`,
-			"info",
-		);
+		if (reason !== "complete") {
+			ctx.ui.notify(`Goal skipped: ${previousText}. Started next goal: ${activatedGoal.text}`, "info");
+		}
 		return true;
 	}
 

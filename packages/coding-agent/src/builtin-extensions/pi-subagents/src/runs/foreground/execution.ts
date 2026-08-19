@@ -4,6 +4,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { splitKnownThinkingSuffix } from "../../shared/model-info.ts";
 import { existsSync, unlinkSync } from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
@@ -244,6 +245,7 @@ async function runSingleAttempt(
 		parentPermissionMode,
 	});
 
+	const thinkingFromModel = modelArg ? splitKnownThinkingSuffix(modelArg).thinkingSuffix.slice(1) || undefined : undefined;
 	const result: SingleResult = {
 		agent: agent.name,
 		task: shared.originalTask ?? task,
@@ -251,6 +253,7 @@ async function runSingleAttempt(
 		messages: [],
 		usage: emptyUsage(),
 		model: modelArg,
+		thinking: thinkingFromModel,
 		artifactPaths: shared.artifactPaths,
 		transcriptPath: shared.transcriptWriter ? shared.artifactPaths?.transcriptPath : undefined,
 		skills: shared.resolvedSkillNames,
@@ -285,6 +288,8 @@ async function runSingleAttempt(
 		status: "running",
 		task,
 		skills: shared.resolvedSkillNames,
+		model: modelArg,
+		thinking: thinkingFromModel,
 		recentTools: [],
 		recentOutput: [...shared.attemptNotes],
 		toolCount: 0,
@@ -743,7 +748,13 @@ async function runSingleAttempt(
 						result.usage.cost += u.cost?.total || 0;
 						progress.tokens = result.usage.input + result.usage.output;
 					}
-					if (!result.model && evt.message.model) result.model = evt.message.model;
+					if (!result.model && evt.message.model) {
+						result.model = evt.message.model;
+						const parsed = splitKnownThinkingSuffix(evt.message.model);
+						if (parsed.thinkingSuffix) result.thinking = parsed.thinkingSuffix.slice(1);
+						progress.model = result.model;
+						progress.thinking = result.thinking;
+					}
 					if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
 					const assistantText = extractTextFromContent(evt.message.content);
 					appendRecentOutput(progress, assistantText.split("\n").slice(-10));

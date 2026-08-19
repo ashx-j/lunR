@@ -9,6 +9,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  * Component that renders a user message
  */
 export class UserMessageComponent extends Container {
+	selectable = true;
 	private text: string;
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;

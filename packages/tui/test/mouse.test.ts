@@ -1,6 +1,8 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { parseMouseEvent } from "../src/mouse.ts";
+import { MOUSE_TRACKING_DISABLE, MOUSE_TRACKING_ENABLE, parseMouseEvent } from "../src/mouse.ts";
+import { type Component, TUI } from "../src/tui.ts";
+import { VirtualTerminal } from "./virtual-terminal.ts";
 
 describe("parseMouseEvent", () => {
 	it("parses SGR wheel up", () => {
@@ -99,5 +101,94 @@ describe("parseMouseEvent", () => {
 		assert.strictEqual(parseMouseEvent("\x1b[<64;1M"), undefined);
 		assert.strictEqual(parseMouseEvent("\x1b[M"), undefined);
 		assert.strictEqual(parseMouseEvent(""), undefined);
+	});
+
+	it("enable/disable sequences include button-motion (1002)", () => {
+		assert.ok(MOUSE_TRACKING_ENABLE.includes("?1002h"));
+		assert.ok(MOUSE_TRACKING_DISABLE.includes("?1002l"));
+	});
+});
+
+class SelectableLines implements Component {
+	selectable = true;
+	private lines: string[];
+	constructor(lines: string[]) {
+		this.lines = lines;
+	}
+	render(): string[] {
+		return this.lines;
+	}
+	invalidate(): void {}
+}
+
+class StaticLines implements Component {
+	private lines: string[];
+	constructor(lines: string[]) {
+		this.lines = lines;
+	}
+	render(): string[] {
+		return this.lines;
+	}
+	invalidate(): void {}
+}
+
+describe("in-app message selection", () => {
+	it("press+drag+release over a selectable child yields joined text", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const selected: string[] = [];
+		tui.onTextSelected = (text) => selected.push(text);
+		tui.addChild(new SelectableLines(["hello", "world", "again"]));
+		tui.addChild(new StaticLines(["DOCK"]));
+		tui.pinFrom(tui.children[1]!);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;1;2M");
+		terminal.sendInput("\x1b[<0;1;2m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(selected, ["hello\nworld"]);
+		tui.stop();
+	});
+
+	it("click without drag copies nothing", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const selected: string[] = [];
+		tui.onTextSelected = (text) => selected.push(text);
+		tui.addChild(new SelectableLines(["hello", "world"]));
+		tui.addChild(new StaticLines(["DOCK"]));
+		tui.pinFrom(tui.children[1]!);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<0;1;1m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(selected, []);
+		tui.stop();
+	});
+
+	it("press on a non-selectable child does not copy", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const selected: string[] = [];
+		tui.onTextSelected = (text) => selected.push(text);
+		tui.addChild(new StaticLines(["tool row", "more"]));
+		tui.addChild(new StaticLines(["DOCK"]));
+		tui.pinFrom(tui.children[1]!);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;1;2M");
+		terminal.sendInput("\x1b[<0;1;2m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(selected, []);
+		tui.stop();
 	});
 });

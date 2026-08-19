@@ -98,6 +98,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
+import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import {
 	type ApprovalResponse,
 	AUTO_MODE_ADDENDUM,
@@ -136,10 +137,9 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import type { SubEntry } from "../../core/subscriptions.ts";
 // lunr: moved to core/swarm.ts so the gateway can reuse it.
 import { buildSwarmPrompt } from "../../core/swarm.ts";
+import { time } from "../../core/timings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
-import { collectUsageHistory, type UsageHistory } from "../../core/usage-history.ts";
-import { time } from "../../core/timings.ts";
 import { getPlanUsageResult } from "../../core/usage-service.ts";
 import { modelToUserEntry } from "../../core/user-models.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -175,6 +175,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -196,7 +197,7 @@ import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/t
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { renderTokenUsageBox, renderUsageBox, type UsageSessionRow } from "./components/usage-view.ts";
+import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -503,6 +504,10 @@ export class InteractiveMode {
 	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
 	private previousPermissionMode: PermissionMode | undefined;
 
+	// lunr: mode in effect before `/goal` forced session auto. Dedicated so it cannot
+	// collide with plan restore.
+	private preGoalPermissionMode: PermissionMode | undefined;
+
 	// lunr: in-memory redo stack for /undo and /redo (leaf entry ids; cleared on any
 	// new user message, never persisted — undone turns reappear after restart)
 	private redoStack: string[] = [];
@@ -580,6 +585,7 @@ export class InteractiveMode {
 			this.resetExtensionUI();
 			// lunr: reset permission mode to configured default + clear session approvals
 			this.previousPermissionMode = undefined;
+			this.preGoalPermissionMode = undefined;
 			resetPermissions(this.settingsManager.getDefaultPermissionMode());
 			// lunr: clear process registry and rollback state
 			processRegistry.clearRegistry();
@@ -599,9 +605,18 @@ export class InteractiveMode {
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+		this.ui.onTextSelected = (text) => {
+			void copyToClipboard(text)
+				.then(() => this.showStatus("Copied."))
+				.catch((error) => this.showError(error instanceof Error ? error.message : String(error)));
+		};
 
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
 		registerPermissionModeBridge(() => getPermissionMode());
+		registerPermissionModeControlBridge({
+			enterGoalAuto: () => this.enterGoalAuto(),
+			leaveGoalAuto: () => this.leaveGoalAuto(),
+		});
 		// lunr: reset permission mode to configured default on startup.
 		resetPermissions(this.settingsManager.getDefaultPermissionMode());
 		this.headerContainer = new Container();
@@ -2836,11 +2851,6 @@ export class InteractiveMode {
 			if (text === "/usage") {
 				this.editor.setText("");
 				await this.handleUsageCommand();
-				return;
-			}
-			if (text === "/token-usage") {
-				this.editor.setText("");
-				this.handleTokenUsageCommand();
 				return;
 			}
 			if (text === "/context") {
@@ -6965,41 +6975,24 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: shared per-model session aggregation for /usage and /token-usage.
-	private collectSessionModelRows(): UsageSessionRow[] {
-		const perModelMap = new Map<string, UsageSessionRow>();
-		for (const entry of this.sessionManager.getEntries()) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			const message = entry.message;
-			const usage = message.usage;
-			const key = `${message.provider}/${message.responseModel ?? message.model}`;
-			let row = perModelMap.get(key);
-			if (!row) {
-				row = { model: key, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-				perModelMap.set(key, row);
-			}
-			row.input += usage.input;
-			row.output += usage.output;
-			row.cacheRead += usage.cacheRead;
-			row.cacheWrite += usage.cacheWrite;
-			row.total += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-		}
-		return Array.from(perModelMap.values()).sort((a, b) => b.total - a.total);
+	private collectUsageBreakdown(): ReturnType<typeof computeContextBreakdown> | undefined {
+		const model = this.session.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (!model || contextWindow <= 0) return undefined;
+		const tools = this.session
+			.getActiveToolNames()
+			.map((name) => this.session.getToolDefinition(name))
+			.filter((definition) => definition !== undefined);
+		return computeContextBreakdown({
+			systemPrompt: this.session.systemPrompt,
+			tools,
+			messages: this.session.messages,
+			contextWindow,
+		});
 	}
 
-	// lunr: 30-day history from session files on disk; best-effort — on any
-	// error the section is simply omitted.
-	private collectUsageHistorySafe(): UsageHistory | undefined {
-		try {
-			return collectUsageHistory({ sinceMs: Date.now() - 30 * 24 * 60 * 60 * 1000 });
-		} catch {
-			return undefined;
-		}
-	}
-
-	// lunr: /usage — simple token totals (session + last 30 days), context window
-	// bar, and subscription plan usage (when the current provider has a usage
-	// adapter). Per-model rows live in /token-usage.
+	// lunr: /usage — current session only: token totals, live context split,
+	// context-window bar, and subscription plan usage.
 	private async handleUsageCommand(): Promise<void> {
 		const stats = this.session.getSessionStats();
 		const sessionTotals =
@@ -7016,27 +7009,15 @@ export class InteractiveMode {
 		const context = this.session.getContextUsage();
 		const provider = this.session.model?.provider;
 		const planResult = provider ? await getPlanUsageResult(provider, this.session.modelRuntime) : {};
-		const history = this.collectUsageHistorySafe();
+		const breakdown = this.collectUsageBreakdown();
 
 		const lines = renderUsageBox(
-			{ sessionTotals, context, plan: planResult.usage, history },
+			{ sessionTotals, context, plan: planResult.usage, breakdown },
 			this.ui.terminal.columns,
 		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		if (planResult.error) this.showStatus(planResult.error);
-		this.ui.requestRender();
-	}
-
-	// lunr: /token-usage — per-model token breakdown for the current session and
-	// the last 30 days (from session files on disk).
-	private handleTokenUsageCommand(): void {
-		const sessionRows = this.collectSessionModelRows();
-		const history = this.collectUsageHistorySafe();
-
-		const lines = renderTokenUsageBox({ sessionRows, history }, this.ui.terminal.columns);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
 	}
 
@@ -7052,17 +7033,11 @@ export class InteractiveMode {
 			return;
 		}
 
-		const tools = this.session
-			.getActiveToolNames()
-			.map((name) => this.session.getToolDefinition(name))
-			.filter((definition) => definition !== undefined);
-
-		const breakdown = computeContextBreakdown({
-			systemPrompt: this.session.systemPrompt,
-			tools,
-			messages: this.session.messages,
-			contextWindow,
-		});
+		const breakdown = this.collectUsageBreakdown();
+		if (!breakdown) {
+			this.showStatus("No model selected or context window unknown.");
+			return;
+		}
 
 		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
 		this.chatContainer.addChild(new Spacer(1));
@@ -7161,6 +7136,23 @@ export class InteractiveMode {
 			enableRollbackForSession(this.sessionManager.getSessionId());
 		} else {
 			this.session.setSystemPromptAppend(undefined);
+		}
+	}
+
+	// lunr: `/goal` forces session auto without writing settings.
+	private enterGoalAuto(): void {
+		const next = nextModeForGoal(getPermissionMode(), "enter", this.preGoalPermissionMode);
+		this.preGoalPermissionMode = next.saved;
+		if (next.mode !== getPermissionMode()) {
+			this.applyPermissionMode(next.mode, { silent: true });
+		}
+	}
+
+	private leaveGoalAuto(): void {
+		const next = nextModeForGoal(getPermissionMode(), "leave", this.preGoalPermissionMode);
+		this.preGoalPermissionMode = next.saved;
+		if (next.mode !== getPermissionMode()) {
+			this.applyPermissionMode(next.mode, { silent: true });
 		}
 	}
 
@@ -7273,7 +7265,21 @@ export class InteractiveMode {
 	// lunr: approval dialog for present_plan (plan mode). The "with feedback"
 	// options collect a one-line note via showExtensionInput that becomes part of
 	// the result text the model sees. Esc/close counts as Decline.
+	private showPlanInChat(summary: string): void {
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(
+			new PlanMessageComponent(
+				summary,
+				this.getMarkdownThemeWithSettings(),
+				this.outputPad,
+				this.settingsManager.getGutterRail(),
+			),
+		);
+		this.ui.requestRender();
+	}
+
 	private async showPlanApprovalDialog(summary: string): Promise<ApprovalResponse> {
+		this.showPlanInChat(summary);
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
@@ -7302,7 +7308,6 @@ export class InteractiveMode {
 						done();
 						resolve("reject");
 					},
-					{ message: summary.slice(0, 500) },
 				);
 				return { component: selector, focus: selector };
 			});

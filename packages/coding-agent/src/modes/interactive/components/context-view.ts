@@ -38,7 +38,9 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	content.push("");
 
 	const rows: BreakdownRow[] = [
-		{ label: "System prompt + files", tokens: breakdown.systemPrompt },
+		{ label: "System prompt", tokens: breakdown.systemPrompt },
+		...breakdown.contextFiles.map((file) => ({ label: file.label, tokens: file.tokens })),
+		{ label: "Skills", tokens: breakdown.skills },
 		{ label: "Tool definitions", tokens: breakdown.toolDefinitions },
 		{ label: "User messages", tokens: breakdown.user, count: breakdown.counts.user },
 		{ label: "Assistant text", tokens: breakdown.assistantText, count: breakdown.counts.assistantText },

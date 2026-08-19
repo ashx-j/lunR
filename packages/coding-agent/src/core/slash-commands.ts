@@ -29,7 +29,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "title", description: "Set session display name (alias of /name)" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "usage", description: "Show token totals, context, and plan usage" },
-	{ name: "token-usage", description: "Show per-model token usage (session + last 30 days)" },
 	{ name: "context", description: "Show estimated context window breakdown" },
 	{
 		name: "plan",

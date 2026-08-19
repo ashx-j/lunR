@@ -22,6 +22,7 @@ import {
 } from "./persistence.js";
 import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
 import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "./settings.js";
+import { enterGoalAuto, leaveGoalAuto } from "../../../core/permission-mode-control.js";
 
 export type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
@@ -227,8 +228,14 @@ export class GoalRuntime {
 		);
 	}
 
+	syncGoalPermissionMode(goal?: ActiveGoal) {
+		if (goal?.status === "active") enterGoalAuto();
+		else leaveGoalAuto();
+	}
+
 	updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 		this.clearCompletionStatusTimer();
+		this.syncGoalPermissionMode(goal);
 		ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
 		// lunr: refresh the footer every 30s while a goal is active so the elapsed time ticks
 		this.clearStatusRefreshTimer();
@@ -426,6 +433,7 @@ export class GoalRuntime {
 
 	clearActiveGoal(ctx: StatusContext) {
 		this.clearStatusRefreshTimer(); // lunr: stop the footer refresh when the goal is cleared
+		this.syncGoalPermissionMode(undefined);
 		this.cancelContinuationWork();
 		this.clearGoalRecovery();
 		this.clearBudgetWrapUp();
@@ -584,6 +592,7 @@ export class GoalRuntime {
 	showCompletionStatus(ctx: StatusContext) {
 		this.clearCompletionStatusTimer();
 		this.clearStatusRefreshTimer(); // lunr: stop the footer refresh on completion
+		this.syncGoalPermissionMode(undefined);
 		// lunr: enriched footer status format
 		ctx.ui.setStatus(STATUS_KEY, "goal ✓ complete");
 		this.completionStatusTimer = setTimeout(() => {
@@ -680,7 +689,7 @@ export function incrementGoal(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
 }
 
-// lunr: enriched footer status — `goal ● active · 3m · 2 turns` (rendered by ashxj-tui)
+// lunr: footer status — active is just `goal` (elapsed/turns stay on paused)
 export function formatStatus(goal: ActiveGoal | undefined) {
 	if (!goal) return undefined;
 	if (goal.status === "complete") return "goal ✓ complete";
@@ -691,9 +700,9 @@ export function formatStatus(goal: ActiveGoal | undefined) {
 	if (goal.status === "blocked") return "goal ✗ blocked";
 	if (goal.status === "usage_limited") return "goal usage-limited";
 	if (goal.status === "budget_limited") return `goal budget ${formatBudget(goal)}`;
-	const status = `goal ● active · ${formatGoalElapsed(goal)} · ${formatGoalTurns(goal)}`;
-	if (goal.tokenBudget !== undefined) return `${status} · ${formatBudget(goal)}`;
-	return status;
+	// lunr: active (and budget-suffixed active) display text is exactly `goal`
+	if (goal.tokenBudget !== undefined) return `goal · ${formatBudget(goal)}`;
+	return "goal";
 }
 
 // lunr: live elapsed = accumulated active time + the in-progress active segment

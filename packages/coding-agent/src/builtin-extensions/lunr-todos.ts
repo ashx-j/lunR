@@ -12,8 +12,9 @@
  *  - After every state change the list is mirrored into a `todos` widget above
  *    the editor (component factory, so MAX_WIDGET_LINES string truncation does
  *    not apply). Collapsed: up to 3 active rows (in-progress first, then
- *    pending) + a `✓ N done` summary + a `+N more (<key> to expand)` hint.
- *    Expanded: every row, completed included.
+ *    pending). Completed items never appear collapsed. `+N more (<key> to
+ *    expand)` still applies to hidden active rows. Expanded: every row,
+ *    completed included until the next user turn prunes them.
  *  - Expansion follows the global ctrl+o toggle via the
  *    `@lunr/tools-expanded-changed` bridge, invoked from
  *    interactive-mode.ts `setToolsExpanded` (initial state is read from
@@ -74,10 +75,10 @@ export function summarizeTodos(todos: TodoItem[]): string {
 
 /**
  * Widget lines for the current list. Collapsed mode shows up to
- * TODO_WIDGET_COLLAPSED_ROWS active rows (in-progress first, then pending),
- * collapses completed items into a `✓ N done` summary, and appends a
- * `+N more (<expandKey> to expand)` hint when active rows are hidden.
- * Expanded mode shows every row. Empty list → no lines (widget removed).
+ * TODO_WIDGET_COLLAPSED_ROWS active rows (in-progress first, then pending)
+ * and never emits a `✓ N done` summary. A `+N more (<expandKey> to expand)`
+ * hint is appended when active rows are hidden. Expanded mode shows every
+ * row, completed included. Empty list / all-completed collapsed → no lines.
  */
 export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expandKey = "ctrl+o"): TodoWidgetLine[] {
 	if (todos.length === 0) return [];
@@ -95,9 +96,6 @@ export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expan
 		return [...active.map(row), ...done.map(row)];
 	}
 	const lines: TodoWidgetLine[] = active.slice(0, TODO_WIDGET_COLLAPSED_ROWS).map(row);
-	if (done.length > 0) {
-		lines.push({ kind: "summary", text: `✓ ${done.length} done` });
-	}
 	const hidden = active.length - TODO_WIDGET_COLLAPSED_ROWS;
 	if (hidden > 0) {
 		lines.push({ kind: "hint", text: `+${hidden} more (${expandKey} to expand)` });
@@ -127,16 +125,23 @@ export default function (pi: ExtensionAPI): void {
 	function refreshWidget(): void {
 		const ctx = lastCtx;
 		if (!ctx?.hasUI) return;
-		if (todos.length === 0) {
+		const lines = buildTodoWidgetLines(todos, expanded, keyText("app.tools.expand"));
+		if (todos.length === 0 || lines.length === 0) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			return;
 		}
-		const lines = buildTodoWidgetLines(todos, expanded, keyText("app.tools.expand"));
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(_tui: unknown, theme: any) => new Text(lines.map((l) => colorize(l, theme)).join("\n"), 1, 0),
 			{ placement: "aboveEditor" },
 		);
+	}
+
+	function pruneCompleted(): void {
+		const next = todos.filter((t) => t.status !== "completed");
+		if (next.length === todos.length) return;
+		todos = next;
+		refreshWidget();
 	}
 
 	// --- Expansion bridge (interactive-mode setToolsExpanded invokes this) ---
@@ -155,6 +160,14 @@ export default function (pi: ExtensionAPI): void {
 		expanded = ctx.hasUI ? (ctx.ui.getToolsExpanded?.() ?? false) : false;
 		registerExpandedBridge();
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
+	});
+
+	// lunr: prune completed items on the next real user message, not slash
+	// commands or agent follow-up turns.
+	pi.on("message_start", (event, ctx) => {
+		if (event.message?.role !== "user") return;
+		lastCtx = ctx;
+		pruneCompleted();
 	});
 
 	pi.on("session_shutdown", () => {

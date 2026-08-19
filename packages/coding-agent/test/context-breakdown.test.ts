@@ -2,7 +2,11 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { estimateContextTokens, estimateTokens } from "../src/core/compaction/index.ts";
-import { computeContextBreakdown, estimateToolDefinitionTokens } from "../src/core/context-breakdown.ts";
+import {
+	computeContextBreakdown,
+	estimateToolDefinitionTokens,
+	splitSystemPromptSections,
+} from "../src/core/context-breakdown.ts";
 import { renderContextBox } from "../src/modes/interactive/components/context-view.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -199,7 +203,7 @@ describe("renderContextBox", () => {
 		expect(text).toContain("Context");
 		expect(text).toContain("anthropic/claude-sonnet-4-5");
 		expect(text).toContain("Estimated (chars/4), current session only");
-		expect(text).toContain("System prompt + files");
+		expect(text).toContain("System prompt");
 		expect(text).toContain("Tool definitions");
 		expect(text).toContain("User messages (1)");
 		expect(text).toContain("Assistant text (1)");
@@ -236,5 +240,54 @@ describe("renderContextBox", () => {
 		const estimate = estimateContextTokens(messages);
 		expect(estimate.lastUsageIndex).toBeNull();
 		expect(breakdown.user).toBe(estimate.tokens);
+	});
+});
+
+describe("splitSystemPromptSections", () => {
+	it("splits base prompt, one context file, and skills", () => {
+		const prompt = [
+			"You are an expert coding assistant.",
+			"",
+			"<project_context>",
+			"",
+			'<project_instructions path="C:/repo/AGENTS.md">',
+			"Use exact verbs.",
+			"</project_instructions>",
+			"",
+			"</project_context>",
+			"",
+			"The following skills provide specialized instructions for specific tasks.",
+			"Use the read tool to load a skill's file when the task matches its description.",
+			"When a skill file references a relative path, resolve it against the skill directory.",
+			"",
+			"<available_skills>",
+			"  <skill>",
+			"    <name>frontend-design</name>",
+			"    <description>UI</description>",
+			"    <location>/skills/frontend-design/SKILL.md</location>",
+			"  </skill>",
+			"</available_skills>",
+			"Current working directory: /tmp",
+		].join("\n");
+		const sections = splitSystemPromptSections(prompt);
+		expect(sections.base).toContain("You are an expert coding assistant.");
+		expect(sections.base).not.toContain("<project_instructions");
+		expect(sections.base).not.toContain("<available_skills>");
+		expect(sections.contextFiles).toHaveLength(1);
+		expect(sections.contextFiles[0]?.path).toBe("C:/repo/AGENTS.md");
+		expect(sections.contextFiles[0]?.content).toContain("Use exact verbs.");
+		expect(sections.skills).toContain("<available_skills>");
+
+		const breakdown = computeContextBreakdown({
+			systemPrompt: prompt,
+			tools: [],
+			messages: [],
+			contextWindow: 200_000,
+		});
+		expect(breakdown.systemPrompt).toBeGreaterThan(0);
+		expect(breakdown.contextFiles).toEqual([
+			expect.objectContaining({ label: "AGENTS.md", tokens: expect.any(Number) }),
+		]);
+		expect(breakdown.skills).toBeGreaterThan(0);
 	});
 });
