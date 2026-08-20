@@ -432,6 +432,12 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	showImages: boolean;
 	/** Whether the current result is an error. */
 	isError: boolean;
+	/** Current tool result, when one exists. Call renderers can fold compact status into the header. */
+	result?: {
+		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+		details?: unknown;
+		isError: boolean;
+	};
 }
 
 /**

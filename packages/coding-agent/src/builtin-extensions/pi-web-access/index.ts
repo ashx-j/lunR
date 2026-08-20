@@ -1547,19 +1547,20 @@ export default function (pi: ExtensionAPI) {
 			});
 		},
 
-		renderCall(args, theme) {
-			// lunr: collapsed header is title-only. Query list lives in expanded renderResult.
+		renderCall(args, theme, context) {
+			// lunr: collapsed header is one line (title · count). Query list lives in expanded renderResult.
 			const queryList = collectSearchQueries(args as { query?: unknown; queries?: unknown });
+			const compact = Boolean(context && !context.isPartial && !context.expanded && !context.isError);
+			const chrome = formatSearchChrome({
+				queries: queryList,
+				details: compact ? context?.result?.details : undefined,
+				expanded: false,
+			});
 			const call = formatSearchCallTitle(queryList);
 			if (call.empty) {
 				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
 			}
-			if (queryList.length === 1) {
-				const q = queryList[0];
-				const display = q.length > 60 ? q.slice(0, 57) + "..." : q;
-				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `"${display}"`), 0, 0);
-			}
-			return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `${queryList.length} queries`), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold(chrome.call)), 0, 0);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {
@@ -1793,18 +1794,20 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args, theme) {
-			// lunr: collapsed header is title-only. URL list lives in expanded renderResult.
+		renderCall(args, theme, context) {
+			// lunr: collapsed header is one line (title · count). URL list lives in expanded renderResult.
 			const urlList = collectFetchUrls(args as { url?: string; urls?: string[] });
+			const compact = Boolean(context && !context.isPartial && !context.expanded && !context.isError);
+			const chrome = formatFetchChrome({
+				urls: urlList,
+				details: compact ? context?.result?.details : undefined,
+				expanded: false,
+			});
 			const call = formatFetchCallTitle(urlList);
 			if (call.empty) {
 				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
 			}
-			if (urlList.length === 1) {
-				const display = urlList[0].length > 60 ? urlList[0].slice(0, 57) + "..." : urlList[0];
-				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", display), 0, 0);
-			}
-			return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", `${urlList.length} URLs`), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold(chrome.call)), 0, 0);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {

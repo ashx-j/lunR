@@ -11,9 +11,9 @@ import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
-	extractTrailingNotice,
 	getTextOutput,
 	invalidArgText,
+	renderCollapsedSearchPath,
 	shortenPath,
 	str,
 	toolStatusDotFromContext,
@@ -75,18 +75,25 @@ export interface GrepToolOptions {
 function formatGrepCall(
 	args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
 	theme: Theme,
+	cwd: string,
+	compact = false,
 ): string {
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
-	const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
 	const glob = str(args?.glob);
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
 	let text =
 		theme.fg("toolTitle", theme.bold("grep")) +
 		" " +
-		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`)) +
-		theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
+		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`));
+	if (compact) {
+		const collapsedPath = renderCollapsedSearchPath(rawPath, theme, cwd);
+		if (collapsedPath) text += theme.fg("toolOutput", " in ") + collapsedPath;
+	} else {
+		const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
+		text += theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
+	}
 	if (glob) text += theme.fg("toolOutput", ` (${glob})`);
 	if (limit !== undefined) text += theme.fg("toolOutput", ` limit ${limit}`);
 	return text;
@@ -376,17 +383,18 @@ export function createGrepToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(`${toolStatusDotFromContext(context, theme)} ${formatGrepCall(args, theme)}`);
+			text.setText(
+				`${toolStatusDotFromContext(context, theme)} ${formatGrepCall(args, theme, context.cwd, !context.expanded)}`,
+			);
 			return text;
 		},
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result); a trailing
-			// truncation/limit notice stays visible.
+			// render header-only (ctrl+o reveals the full result). Notices stay in
+			// execute() output for the model, not in TUI chrome.
 			if (!options.isPartial && !options.expanded && !context.isError) {
-				const notice = extractTrailingNotice(getTextOutput(result as any, context.showImages));
-				text.setText(notice ? `\n${theme.fg("warning", notice)}` : "");
+				text.setText("");
 				return text;
 			}
 			text.setText(formatGrepResult(result as any, options, theme, context.showImages));

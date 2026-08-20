@@ -21,16 +21,13 @@ describe("web_search chrome", () => {
 		],
 	};
 
-	test("collapsed 4-query search is title plus count, no query/summary/expand footer", () => {
+	test("collapsed 4-query search is a single title line that includes the count", () => {
 		const chrome = formatSearchChrome({ queries, details, expanded: false });
-		const result = chrome.result.join("\n");
-		expect(chrome.call).toBe("search 4 queries");
-		expect(result).toContain("4/4 queries");
-		expect(result).toContain("20 sources");
-		expect(result).not.toContain('"');
-		expect(result).not.toContain(queries[0]);
-		expect(result).not.toContain("Summary");
-		expect(result).not.toContain("ctrl+o to expand");
+		expect(chrome.call).toContain("search 4 queries");
+		expect(chrome.call).toContain("4/4 queries");
+		expect(chrome.call).toContain("20 sources");
+		expect(chrome.result).toEqual([]);
+		expect(chrome.call).not.toContain(queries[0]);
 	});
 
 	test("expanded 4-query search lists queries only", () => {
@@ -48,17 +45,16 @@ describe("web_search chrome", () => {
 describe("fetch_content chrome", () => {
 	const urls = ["https://example.com/a", "https://example.com/b", "https://example.com/c"];
 
-	test("collapsed multi-URL fetch is title plus count", () => {
+	test("collapsed multi-URL fetch is a single title line that includes the count", () => {
 		const chrome = formatFetchChrome({
 			urls,
 			details: { urlCount: 3, successful: 3 },
 			expanded: false,
 		});
-		const result = chrome.result.join("\n");
-		expect(chrome.call).toBe("fetch 3 URLs");
-		expect(result).toContain("3/3 URLs");
-		expect(result).not.toContain("https://example.com/a");
-		expect(result).not.toContain("ctrl+o to expand");
+		expect(chrome.call).toContain("fetch 3 URLs");
+		expect(chrome.call).toContain("3/3 URLs");
+		expect(chrome.result).toEqual([]);
+		expect(chrome.call).not.toContain("https://example.com/a");
 	});
 
 	test("expanded multi-URL fetch lists URLs only", () => {

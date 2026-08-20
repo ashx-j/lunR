@@ -25,9 +25,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 Last updated: 2026-08-20. **`origin/master` = `f80972f`**. Public npm is `@ashx-j/lunr@0.2.1` (tag `v0.2.1`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Open UX notes (`fix/open-ux-notes`):** `present_plan` appends a full Plan chat card then a short Approve/Decline dock. Footer active goal is `goal`. `/usage` is this-session context (no Last 30 days); `/token-usage` removed. Completed todos prune on the next user turn (no `✓ N done`). Pinned chat has a 1-col scrollbar; user/assistant drag-select copies without Shift (1002 motion). `/goal` forces session auto. Compact subagent rows show model + thinking. `subagent models` result is hidden. Goal complete is one agent message. Tests: usage-view + context-breakdown + lunr-todos + compact-row + permission-mode-control + plan-message + tui-pin + mouse.
-- **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch show a count until ctrl+o lists queries or URLs. Consecutive same-name cards collapse facing box pad + top spacer only; singletons and mixed neighbors keep `Box(1,1)`. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys + box.
+- **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch fold the count into the header; `ctrl+o` lists queries or URLs. Consecutive same-name cards collapse facing box pad + top spacer only; singletons and mixed neighbors keep `Box(1,1)`. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys + box.
 - **Smooth streaming (`fix/smooth-streaming-review`):** interactive TUI typewriter (`settings.smoothStreaming`, default off). Per-block append-only grapheme cache (providers mutate `block.text` in place). Always paint after reveal ticks (~30 FPS, no extra 33ms gate). Mid-stream toggle applies immediately without rewind. Hide-thinking re-slices instead of dumping the tail. Stop timer when caught up. Hidden thinking excluded from budget. Tool cards gated on reveal frontier (flush on `tool_execution_start`). Catch-up step capped. Settings copy matches grapheme/~30 FPS. Tests: `smooth-streaming.test.ts`. Print/RPC/gateway stay unsmoothed.
 - **Same-tool spacing (`fix/same-tool-spacing`):** consecutive same-name cards collapse facing box pad + top spacer only. Singletons and mixed neighbors keep `Box(1,1)`. Tests: box + tool-execution-component density.
+- **Same-tool stack all (`fix/same-tool-stack-all-tools`):** collapsed finished success is header-only for every default-shell tool (not just `read`). Grep/find/ls notices and MCP/todo bodies wait for `ctrl+o`. Search/fetch count folds into the header. `edit` (`renderShell: "self"`) honors continuation/followed pad. Fallback `contentText` gets the same facing pad. Subagent compact widgets stay. Tests: tool-execution-component density + render-search-chrome + tui text pad.
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 
 ## On origin/master (`a698e57`)
@@ -51,7 +52,8 @@ Last updated: 2026-08-20. **`origin/master` = `f80972f`**. Public npm is `@ashx-
 
 ## Not merged
 
-- None for product. Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
+- **`fix/same-tool-stack-all-tools`:** header-only compact chrome + grouping for every same-name tool (not just `read`). Not on master.
+- Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
 
 ## Uncommitted (working tree)
 
@@ -100,6 +102,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - **Stop proposing boot-screen art.** Slim box only; ask first.
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
+- Collapsed same-name tool rows are header-only; `ctrl+o` reveals bodies/notices. Subagent compact widgets are the exception.
 
 # Decisions (keep; why in one line)
 
@@ -130,6 +133,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-19: same-name tool rows collapse facing pad only; do not zero `paddingY` on every tool box.
 - 2026-08-19: wheel/page/thumb only change `chatScrollOffset`; reuse pinned chat line cache. Do not sync-render in `setChatScroll`; do not width-probe every tall frame (Markdown single-width cache thrash).
 - 2026-08-20: v0.2.1 ships same-tool spacing (#10) and pinned chat scroll cache (#11).
+- 2026-08-20: consecutive same-name collapsed cards are header-only for every default-shell tool; subagent widgets stay; do not group by family.
 
 # Deferred
 

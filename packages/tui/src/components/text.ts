@@ -7,7 +7,8 @@ import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.
 export class Text implements Component {
 	private text: string;
 	private paddingX: number; // Left/right padding
-	private paddingY: number; // Top/bottom padding
+	private paddingTop: number;
+	private paddingBottom: number;
 	private customBgFn?: (text: string) => string;
 
 	// Cache for rendered output
@@ -18,15 +19,31 @@ export class Text implements Component {
 	constructor(text: string = "", paddingX: number = 1, paddingY: number = 1, customBgFn?: (text: string) => string) {
 		this.text = text;
 		this.paddingX = paddingX;
-		this.paddingY = paddingY;
+		this.paddingTop = paddingY;
+		this.paddingBottom = paddingY;
 		this.customBgFn = customBgFn;
+	}
+
+	setPadding(paddingX: number, paddingY: number): void {
+		this.paddingX = paddingX;
+		this.paddingTop = paddingY;
+		this.paddingBottom = paddingY;
+		this.invalidate();
+	}
+
+	setPaddingTop(paddingTop: number): void {
+		this.paddingTop = paddingTop;
+		this.invalidate();
+	}
+
+	setPaddingBottom(paddingBottom: number): void {
+		this.paddingBottom = paddingBottom;
+		this.invalidate();
 	}
 
 	setText(text: string): void {
 		this.text = text;
-		this.cachedText = undefined;
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
+		this.invalidate();
 	}
 
 	setCustomBgFn(customBgFn?: (text: string) => string): void {
@@ -88,13 +105,17 @@ export class Text implements Component {
 
 		// Add top/bottom padding (empty lines)
 		const emptyLine = " ".repeat(width);
-		const emptyLines: string[] = [];
-		for (let i = 0; i < this.paddingY; i++) {
-			const line = this.customBgFn ? applyBackgroundToLine(emptyLine, width, this.customBgFn) : emptyLine;
-			emptyLines.push(line);
+		const paddedEmpty = this.customBgFn ? applyBackgroundToLine(emptyLine, width, this.customBgFn) : emptyLine;
+		const topPad: string[] = [];
+		for (let i = 0; i < this.paddingTop; i++) {
+			topPad.push(paddedEmpty);
+		}
+		const bottomPad: string[] = [];
+		for (let i = 0; i < this.paddingBottom; i++) {
+			bottomPad.push(paddedEmpty);
 		}
 
-		const result = [...emptyLines, ...contentLines, ...emptyLines];
+		const result = [...topPad, ...contentLines, ...bottomPad];
 
 		// Update cache
 		this.cachedText = this.text;

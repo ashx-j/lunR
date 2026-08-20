@@ -21,7 +21,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { renderToolPath, str, type ToolStatusDotState, toolStatusDot } from "./render-utils.ts";
+import { renderToolFileName, renderToolPath, str, type ToolStatusDotState, toolStatusDot } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -192,8 +192,14 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 	return null;
 }
 
-function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd: string): string {
-	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
+function formatEditCall(
+	args: RenderableEditArgs | undefined,
+	theme: Theme,
+	cwd: string,
+	compact = false,
+): string {
+	const rawPath = str(args?.file_path ?? args?.path);
+	const pathDisplay = compact ? renderToolFileName(rawPath, theme, cwd) : renderToolPath(rawPath, theme, cwd);
 	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
 }
 
@@ -255,7 +261,7 @@ function buildEditCallComponent(
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
-	component.addChild(new Text(`${toolStatusDot(dotState, theme)} ${formatEditCall(args, theme, cwd)}`, 0, 0));
+	component.addChild(new Text(`${toolStatusDot(dotState, theme)} ${formatEditCall(args, theme, cwd, compact)}`, 0, 0));
 
 	if (compact || !component.preview) {
 		return component;
