@@ -69,9 +69,9 @@ export class ToolExecutionComponent extends Container {
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
 		// contentText is reserved for generic fallback rendering when no tool definition exists.
-		// lunr: compact tool chrome — no vertical box pad. Consecutive same-tool
-		// rows sit flush; mixed-tool neighbors stay one-line compact too.
-		this.contentBox = new Box(1, 0, (text: string) => theme.bg("toolPendingBg", text));
+		// lunr: default Box(1, 1). Same-name neighbors collapse facing pad only
+		// (setGroupContinuation / setGroupFollowed); mixed and lone cards keep air.
+		this.contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
 		this.contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
 		this.selfRenderContainer = new Container();
 
@@ -224,10 +224,18 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	// lunr: consecutive same-tool grouping — continuation calls hide the top
-	// spacer so adjacent same-bg boxes read as one continuous background; each
-	// call's content still renders normally inside its own box.
+	// spacer and top box pad so adjacent same-bg boxes read as one continuous
+	// background; the last card in a run keeps its bottom pad.
 	setGroupContinuation(on: boolean): void {
 		this.topSpacer.setLines(on ? 0 : 1);
+		this.contentBox.setPaddingTop(on ? 0 : 1);
+		this.invalidate();
+	}
+
+	// lunr: previous card in a same-name run drops its bottom pad so the next
+	// header sits flush. Singletons and mixed neighbors keep paddingBottom = 1.
+	setGroupFollowed(on: boolean): void {
+		this.contentBox.setPaddingBottom(on ? 0 : 1);
 		this.invalidate();
 	}
 
@@ -401,5 +409,16 @@ export class ToolExecutionComponent extends Container {
 			text += `\n${output}`;
 		}
 		return text;
+	}
+}
+
+/** Collapse facing pad when `next` is appended after a same-name tool card. */
+export function applySameToolGrouping(
+	previous: ToolExecutionComponent | undefined,
+	next: ToolExecutionComponent,
+): void {
+	if (previous && previous.getToolName() === next.getToolName()) {
+		previous.setGroupFollowed(true);
+		next.setGroupContinuation(true);
 	}
 }
