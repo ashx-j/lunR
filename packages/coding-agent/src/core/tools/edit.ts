@@ -21,7 +21,15 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { renderToolFileName, renderToolPath, str, type ToolStatusDotState, toolStatusDot } from "./render-utils.ts";
+import {
+	formatGroupedCall,
+	renderToolFileName,
+	renderToolPath,
+	str,
+	type ToolGroupRole,
+	type ToolStatusDotState,
+	toolStatusDot,
+} from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -199,8 +207,7 @@ function formatEditCall(
 	compact = false,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
-	const pathDisplay = compact ? renderToolFileName(rawPath, theme, cwd) : renderToolPath(rawPath, theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
+	return compact ? renderToolFileName(rawPath, theme, cwd) : renderToolPath(rawPath, theme, cwd);
 }
 
 function formatEditResult(
@@ -258,10 +265,24 @@ function buildEditCallComponent(
 	// lunr: compact-by-default — finished, successful, non-expanded calls render
 	// header-only; the diff preview stays while streaming and when expanded.
 	compact = false,
+	role: ToolGroupRole = "singleton",
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
-	component.addChild(new Text(`${toolStatusDot(dotState, theme)} ${formatEditCall(args, theme, cwd, compact)}`, 0, 0));
+	const pathDisplay = formatEditCall(args, theme, cwd, compact);
+	component.addChild(
+		new Text(
+			formatGroupedCall({
+				role,
+				compact,
+				dot: toolStatusDot(dotState, theme),
+				title: theme.fg("toolTitle", theme.bold("edit")),
+				detail: pathDisplay,
+			}),
+			0,
+			0,
+		),
+	);
 
 	if (compact || !component.preview) {
 		return component;
@@ -403,6 +424,7 @@ export function createEditToolDefinition(
 				context.isPartial ? "pending" : context.isError ? "error" : "success",
 				// lunr: compact-by-default
 				!context.isPartial && !context.expanded && !context.isError,
+				context.groupRole ?? "singleton",
 			);
 		},
 		renderResult(result, _options, theme, context) {
@@ -437,6 +459,7 @@ export function createEditToolDefinition(
 						context.cwd,
 						context.isPartial ? "pending" : context.isError ? "error" : "success",
 						compact,
+						context.groupRole ?? "singleton",
 					);
 				}
 			}

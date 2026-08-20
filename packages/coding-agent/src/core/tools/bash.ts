@@ -18,7 +18,7 @@ import {
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { markExited as markProcessExited, register as registerProcess } from "../process-registry.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
-import { getTextOutput, invalidArgText, str, toolStatusDotFromContext } from "./render-utils.ts";
+import { formatGroupedCall, getTextOutput, invalidArgText, str, toolStatusDotFromContext } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
@@ -234,7 +234,10 @@ function formatBashCall(
 		const base = capped ? firstLine.slice(0, MAX_COLLAPSED_COMMAND_CHARS) : firstLine;
 		commandDisplay = capped || base.length < command.length ? `${base} …` : base;
 	}
-	return theme.fg("toolTitle", theme.bold(`$ ${commandDisplay}`)) + timeoutSuffix;
+	if (command) {
+		commandDisplay = theme.fg("toolTitle", theme.bold(commandDisplay));
+	}
+	return commandDisplay + timeoutSuffix;
 }
 
 function rebuildBashResultRenderComponent(
@@ -462,12 +465,20 @@ export function createBashToolDefinition(
 			// lunr: compact-by-default — a finished, successful, non-expanded call
 			// renders as a single slim header line with the duration folded in.
 			const compact = !context.isPartial && !context.expanded && !context.isError;
-			let header = `${toolStatusDotFromContext(context, theme)} ${formatBashCall(args, { expanded: context.expanded, compact })}`;
+			let detail = formatBashCall(args, { expanded: context.expanded, compact });
 			if (compact && state.startedAt !== undefined && state.endedAt !== undefined) {
-				header += theme.fg("muted", ` — Took ${formatDuration(state.endedAt - state.startedAt)}`);
+				detail += theme.fg("muted", ` — Took ${formatDuration(state.endedAt - state.startedAt)}`);
 			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(header);
+			text.setText(
+				formatGroupedCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					dot: toolStatusDotFromContext(context, theme),
+					title: theme.fg("toolTitle", theme.bold("$")),
+					detail,
+				}),
+			);
 			return text;
 		},
 		renderResult(result, options, _theme, context) {

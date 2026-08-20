@@ -10,6 +10,7 @@ import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
 	normalizeDisplayText,
+	formatGroupedCall,
 	renderToolFileName,
 	renderToolPath,
 	replaceTabs,
@@ -247,17 +248,34 @@ export function createWriteToolDefinition(
 			} else {
 				component.cache = undefined;
 			}
-			component.setText(
-				`${toolStatusDotFromContext(context, theme)} ${formatWriteCall(
-					renderArgs,
-					{ expanded: context.expanded, isPartial: context.isPartial },
-					theme,
-					component.cache,
-					context.cwd,
-					// lunr: compact-by-default
-					!context.isPartial && !context.expanded && !context.isError,
-				)}`,
-			);
+			const compact = !context.isPartial && !context.expanded && !context.isError;
+			if (compact) {
+				const pathDisplay = renderToolFileName(rawPath, theme, context.cwd);
+				let detail = pathDisplay;
+				if (fileContent === null) {
+					detail += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
+				}
+				component.setText(
+					formatGroupedCall({
+						role: context.groupRole ?? "singleton",
+						compact: true,
+						dot: toolStatusDotFromContext(context, theme),
+						title: theme.fg("toolTitle", theme.bold("write")),
+						detail,
+					}),
+				);
+			} else {
+				component.setText(
+					`${toolStatusDotFromContext(context, theme)} ${formatWriteCall(
+						renderArgs,
+						{ expanded: context.expanded, isPartial: context.isPartial },
+						theme,
+						component.cache,
+						context.cwd,
+						false,
+					)}`,
+				);
+			}
 			return component;
 		},
 		renderResult(result, _options, theme, context) {

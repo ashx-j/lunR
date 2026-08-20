@@ -29,6 +29,7 @@ Last updated: 2026-08-20. **`origin/master` = `3db3030`**. Public npm is `@ashx-
 - **Smooth streaming (`fix/smooth-streaming-review`):** interactive TUI typewriter (`settings.smoothStreaming`, default off). Per-block append-only grapheme cache (providers mutate `block.text` in place). Always paint after reveal ticks (~30 FPS, no extra 33ms gate). Mid-stream toggle applies immediately without rewind. Hide-thinking re-slices instead of dumping the tail. Stop timer when caught up. Hidden thinking excluded from budget. Tool cards gated on reveal frontier (flush on `tool_execution_start`). Catch-up step capped. Settings copy matches grapheme/~30 FPS. Tests: `smooth-streaming.test.ts`. Print/RPC/gateway stay unsmoothed.
 - **Same-tool spacing (`fix/same-tool-spacing`):** consecutive same-name cards collapse facing box pad + top spacer only. Singletons and mixed neighbors keep `Box(1,1)`. Tests: box + tool-execution-component density.
 - **Same-tool stack all (`fix/same-tool-stack-all-tools`):** collapsed finished success is header-only for every default-shell tool (not just `read`). Grep/find/ls notices and MCP/todo bodies wait for `ctrl+o`. Search/fetch count folds into the header. `edit` (`renderShell: "self"`) honors continuation/followed pad. Fallback `contentText` gets the same facing pad. Subagent compact widgets stay. Tests: tool-execution-component density + render-search-chrome + tui text pad.
+- **Same-tool tree (`fix/same-tool-tree-chrome`):** a consecutive same-name compact run prints the verb once, then hangs details off `├─` / `└─`. Singletons stay `● read file`. Tests: format-grouped-call + tool-execution-component density.
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 
 ## On origin/master (`a698e57`)
@@ -52,7 +53,8 @@ Last updated: 2026-08-20. **`origin/master` = `3db3030`**. Public npm is `@ashx-
 
 ## Not merged
 
-- None for product. Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
+- **`fix/same-tool-tree-chrome`:** quieter same-name tree (`● read` once, then `├─` files). Not on master.
+- Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
 
 ## Uncommitted (working tree)
 
@@ -134,6 +136,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: v0.2.1 ships same-tool spacing (#10) and pinned chat scroll cache (#11).
 - 2026-08-20: consecutive same-name collapsed cards are header-only for every default-shell tool; subagent widgets stay; do not group by family.
 - 2026-08-20: v0.2.2 ships same-tool stack for all tools (#12).
+- 2026-08-20: consecutive same-name compact cards print the verb once and tree the details; do not repeat `● read` on every row.
 
 # Deferred
 

@@ -11,6 +11,7 @@ import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
+	formatGroupedCall,
 	getTextOutput,
 	invalidArgText,
 	renderCollapsedSearchPath,
@@ -83,10 +84,7 @@ function formatGrepCall(
 	const glob = str(args?.glob);
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
-	let text =
-		theme.fg("toolTitle", theme.bold("grep")) +
-		" " +
-		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`));
+	let text = pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`);
 	if (compact) {
 		const collapsedPath = renderCollapsedSearchPath(rawPath, theme, cwd);
 		if (collapsedPath) text += theme.fg("toolOutput", " in ") + collapsedPath;
@@ -383,8 +381,15 @@ export function createGrepToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const compact = !context.isPartial && !context.expanded && !context.isError;
 			text.setText(
-				`${toolStatusDotFromContext(context, theme)} ${formatGrepCall(args, theme, context.cwd, !context.expanded)}`,
+				formatGroupedCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					dot: toolStatusDotFromContext(context, theme),
+					title: theme.fg("toolTitle", theme.bold("grep")),
+					detail: formatGrepCall(args, theme, context.cwd, !context.expanded),
+				}),
 			);
 			return text;
 		},

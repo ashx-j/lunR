@@ -404,6 +404,9 @@ export interface ToolRenderResultOptions {
 	isPartial: boolean;
 }
 
+/** Position of a tool card in a consecutive same-name run. */
+export type ToolGroupRole = "singleton" | "first" | "middle" | "last";
+
 /** Context passed to tool renderers. */
 export interface ToolRenderContext<TState = any, TArgs = any> {
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
@@ -438,6 +441,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 		details?: unknown;
 		isError: boolean;
 	};
+	/** Consecutive same-name run position. Compact cards use this for tree chrome. */
+	groupRole?: ToolGroupRole;
 }
 
 /**

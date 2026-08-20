@@ -11,7 +11,8 @@ import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
 import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
-import { formatSearchChrome } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
+import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
+import { formatGroupedCall } from "../src/core/tools/render-utils.ts";
 import { applySameToolGrouping, ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -176,12 +177,20 @@ function compactSearch(toolCallId: string, query: string, totalResults: number):
 	const toolDefinition: ToolDefinition = {
 		...createBaseToolDefinition("web_search"),
 		renderCall: (args, theme, context) => {
-			const chrome = formatSearchChrome({
-				queries: [String((args as { query?: string }).query ?? "")],
-				details: context.result?.details,
-				expanded: context.expanded,
-			});
-			return new Text(chrome.call, 0, 0);
+			const queries = [String((args as { query?: string }).query ?? "")];
+			const compact = !context.isPartial && !context.expanded && !context.isError;
+			const detail = formatSearchDetail(queries, compact ? context.result?.details : undefined);
+			return new Text(
+				formatGroupedCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					dot: "●",
+					title: theme.fg("toolTitle", theme.bold("search")),
+					detail: theme.fg("accent", detail),
+				}),
+				0,
+				0,
+			);
 		},
 		renderResult: (_result, options) => new Text(options.expanded ? "query-list" : "count-line", 0, 0),
 	};
@@ -219,13 +228,23 @@ function compactFallback(toolCallId: string, name: string): ToolExecutionCompone
 	return component;
 }
 
-function assertFlushPair(lines: string[], firstNeedle: string, secondNeedle: string): void {
-	const firstIdx = headerIndex(lines, firstNeedle);
-	const secondIdx = headerIndex(lines, secondNeedle);
-	expect(firstIdx).toBeGreaterThan(0);
-	expect(secondIdx).toBe(firstIdx + 1);
-	expect(isBlank(lines[firstIdx - 1])).toBe(true);
-	expect(isBlank(lines[secondIdx + 1])).toBe(true);
+function visibleLine(line: string | undefined): string {
+	return stripAnsi(line ?? "").trimEnd();
+}
+
+function assertTreeGroup(lines: string[], title: string, leaves: string[]): void {
+	const visible = lines.map((line) => visibleLine(line));
+	const titleIdx = visible.findIndex((line) => line.trim() === `● ${title}`);
+	expect(titleIdx).toBeGreaterThan(0);
+	expect(isBlank(lines[titleIdx - 1])).toBe(true);
+	for (let i = 0; i < leaves.length; i++) {
+		const branch = i === leaves.length - 1 ? "└─" : "├─";
+		const idx = titleIdx + 1 + i;
+		expect(visible[idx]?.trim().startsWith(branch)).toBe(true);
+		expect(visible[idx]).toContain(leaves[i]);
+	}
+	expect(isBlank(lines[titleIdx + leaves.length + 1])).toBe(true);
+	expect(visible.filter((line) => line.trim() === `● ${title}`)).toHaveLength(1);
 }
 
 function renderGroupedTools(...components: ToolExecutionComponent[]): string[] {
@@ -802,32 +821,22 @@ describe("ToolExecutionComponent density", () => {
 		expect(component.render(80).length).toBe(defaultLines);
 	});
 
-	test("consecutive compact reads sit flush with pad above the first and below the last", () => {
-		const first = compactRead("tool-read-a", "resolve.ts");
-		const second = compactRead("tool-read-b", "model-runtime.ts");
-		const lines = renderGroupedTools(first, second);
-		const firstIdx = headerIndex(lines, "read resolve.ts");
-		const secondIdx = headerIndex(lines, "read model-runtime.ts");
-		expect(firstIdx).toBeGreaterThan(0);
-		expect(secondIdx).toBe(firstIdx + 1);
-		expect(isBlank(lines[firstIdx - 1])).toBe(true);
-		expect(isBlank(lines[secondIdx + 1])).toBe(true);
+	test("consecutive compact reads print the verb once and hang files off a tree", () => {
+		const lines = renderGroupedTools(
+			compactRead("tool-read-a", "resolve.ts"),
+			compactRead("tool-read-b", "model-runtime.ts"),
+		);
+		assertTreeGroup(lines, "read", ["resolve.ts", "model-runtime.ts"]);
+		expect(lines.map(visibleLine).join("\n")).not.toContain("read resolve.ts");
 	});
 
-	test("three compact reads stay flush with pad only at the group edges", () => {
+	test("three compact reads stay a single tree with pad only at the group edges", () => {
 		const lines = renderGroupedTools(
 			compactRead("tool-read-a", "resolve.ts"),
 			compactRead("tool-read-b", "model-runtime.ts"),
 			compactRead("tool-read-c", "usage-service.ts"),
 		);
-		const a = headerIndex(lines, "read resolve.ts");
-		const b = headerIndex(lines, "read model-runtime.ts");
-		const c = headerIndex(lines, "read usage-service.ts");
-		expect(a).toBeGreaterThan(0);
-		expect(b).toBe(a + 1);
-		expect(c).toBe(b + 1);
-		expect(isBlank(lines[a - 1])).toBe(true);
-		expect(isBlank(lines[c + 1])).toBe(true);
+		assertTreeGroup(lines, "read", ["resolve.ts", "model-runtime.ts", "usage-service.ts"]);
 	});
 
 	test("mixed read then bash keeps a blank line between headers", () => {
@@ -1030,47 +1039,47 @@ describe("ToolExecutionComponent density", () => {
 		expect(expanded).toContain("[50 matches limit reached");
 	});
 
-	test("consecutive compact bash calls sit flush with pad at the group edges", () => {
+	test("consecutive compact bash calls print $ once and hang commands off a tree", () => {
 		const lines = renderGroupedTools(compactBash("tool-bash-a", "echo one"), compactBash("tool-bash-b", "echo two"));
-		assertFlushPair(lines, "$ echo one", "$ echo two");
+		assertTreeGroup(lines, "$", ["echo one", "echo two"]);
 	});
 
-	test("consecutive compact writes sit flush with basename headers", () => {
+	test("consecutive compact writes print write once and hang files off a tree", () => {
 		const lines = renderGroupedTools(compactWrite("tool-write-a", "a.ts"), compactWrite("tool-write-b", "b.ts"));
-		assertFlushPair(lines, "write a.ts", "write b.ts");
+		assertTreeGroup(lines, "write", ["a.ts", "b.ts"]);
 	});
 
-	test("consecutive compact greps with truncation notices sit flush", () => {
+	test("consecutive compact greps with truncation notices hang patterns off a tree", () => {
 		const lines = renderGroupedTools(
 			compactGrep("tool-grep-a", "foo", true),
 			compactGrep("tool-grep-b", "bar", true),
 		);
-		assertFlushPair(lines, "grep /foo/", "grep /bar/");
+		assertTreeGroup(lines, "grep", ["/foo/", "/bar/"]);
 		expect(lines.join("\n")).not.toContain("matches limit reached");
 	});
 
-	test("consecutive compact finds sit flush", () => {
+	test("consecutive compact finds hang patterns off a tree", () => {
 		const lines = renderGroupedTools(compactFind("tool-find-a", "*.ts"), compactFind("tool-find-b", "*.js"));
-		assertFlushPair(lines, "find *.ts", "find *.js");
+		assertTreeGroup(lines, "find", ["*.ts", "*.js"]);
 	});
 
-	test("consecutive compact ls calls sit flush", () => {
+	test("consecutive compact ls calls hang paths off a tree", () => {
 		const lines = renderGroupedTools(compactLs("tool-ls-a", "src"), compactLs("tool-ls-b", "test"));
-		assertFlushPair(lines, "ls src", "ls test");
+		assertTreeGroup(lines, "ls", ["src", "test"]);
 	});
 
-	test("consecutive compact edits sit flush", () => {
+	test("consecutive compact edits hang files off a tree", () => {
 		const lines = renderGroupedTools(compactEdit("tool-edit-a", "a.ts"), compactEdit("tool-edit-b", "b.ts"));
-		assertFlushPair(lines, "edit a.ts", "edit b.ts");
+		assertTreeGroup(lines, "edit", ["a.ts", "b.ts"]);
 	});
 
-	test("consecutive compact searches sit flush with the count folded into the header", () => {
+	test("consecutive compact searches hang queries off a tree with counts on the leaves", () => {
 		const lines = renderGroupedTools(
 			compactSearch("tool-search-a", "oauth", 12),
 			compactSearch("tool-search-b", "catalog", 4),
 		);
-		assertFlushPair(lines, 'search "oauth"', 'search "catalog"');
-		expect(headerIndex(lines, "12 sources")).toBe(headerIndex(lines, 'search "oauth"'));
+		assertTreeGroup(lines, "search", ['"oauth"', '"catalog"']);
+		expect(headerIndex(lines, "12 sources")).toBe(headerIndex(lines, '"oauth"'));
 		expect(headerIndex(lines, "count-line")).toBe(-1);
 	});
 

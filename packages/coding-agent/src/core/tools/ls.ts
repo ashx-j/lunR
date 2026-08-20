@@ -8,6 +8,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import {
+	formatGroupedCall,
 	getTextOutput,
 	renderToolFileName,
 	renderToolPath,
@@ -66,7 +67,7 @@ function formatLsCall(
 	const pathDisplay = compact
 		? renderToolFileName(rawPath || ".", theme, cwd)
 		: renderToolPath(rawPath, theme, cwd, { emptyFallback: "." });
-	let text = `${theme.fg("toolTitle", theme.bold("ls"))} ${pathDisplay}`;
+	let text = pathDisplay;
 	if (limit !== undefined) {
 		text += theme.fg("toolOutput", ` (limit ${limit})`);
 	}
@@ -223,8 +224,15 @@ export function createLsToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const compact = !context.isPartial && !context.expanded && !context.isError;
 			text.setText(
-				`${toolStatusDotFromContext(context, theme)} ${formatLsCall(args, theme, context.cwd, !context.expanded)}`,
+				formatGroupedCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					dot: toolStatusDotFromContext(context, theme),
+					title: theme.fg("toolTitle", theme.bold("ls")),
+					detail: formatLsCall(args, theme, context.cwd, !context.expanded),
+				}),
 			);
 			return text;
 		},

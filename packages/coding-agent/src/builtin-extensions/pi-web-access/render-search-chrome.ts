@@ -81,6 +81,20 @@ export function formatFetchStatusLine(details) {
 	return `${successful}/${urlCount} URLs`;
 }
 
+export function formatSearchDetail(queries, details) {
+	const call = formatSearchCallTitle(queries);
+	const rest = call.title.replace(/^search\s+/, "");
+	const status = details ? formatSearchStatusLine(details) : "";
+	return status ? `${rest} · ${status}` : rest;
+}
+
+export function formatFetchDetail(urls, details) {
+	const call = formatFetchCallTitle(urls);
+	const rest = call.title.replace(/^fetch\s+/, "");
+	const status = details ? formatFetchStatusLine(details) : "";
+	return status ? `${rest} · ${status}` : rest;
+}
+
 export function formatSearchChrome(options) {
 	const call = formatSearchCallTitle(options.queries);
 	if (options.expanded) {
