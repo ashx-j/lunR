@@ -17,6 +17,11 @@ import type {
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "../src/types.ts";
+import {
+	parseXaiGrok4Minor,
+	XAI_GROK45_THINKING_LEVEL_MAP,
+	XAI_GROK46_THINKING_LEVEL_MAP,
+} from "../src/xai-effort.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -315,10 +320,6 @@ const XAI_BUILTIN_EXCLUDED_MODEL_IDS = new Set([
 	"grok-4.20-0309-reasoning",
 	"grok-code-fast-1",
 ]);
-const XAI_RESPONSES_EFFORT_LEVEL_MAP = {
-	off: null,
-	minimal: null,
-} as const;
 const XAI_RESPONSES_COMPAT: OpenAIResponsesCompat = {
 	supportsLongCacheRetention: false,
 };
@@ -606,8 +607,16 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	) {
 		mergeThinkingLevelMap(model, { off: "none" });
 	}
-	if (model.provider === "xai" && model.api === "openai-responses" && model.id === XAI_RESPONSES_MODEL_ID) {
-		mergeThinkingLevelMap(model, XAI_RESPONSES_EFFORT_LEVEL_MAP);
+	if (model.provider === "xai") {
+		const grokMinor = parseXaiGrok4Minor(model.id);
+		if (grokMinor === 5) {
+			mergeThinkingLevelMap(model, XAI_GROK45_THINKING_LEVEL_MAP);
+		} else if (grokMinor !== undefined && grokMinor >= 6) {
+			mergeThinkingLevelMap(model, XAI_GROK46_THINKING_LEVEL_MAP);
+			if (model.api === "openai-completions") {
+				mergeOpenAICompletionsCompat(model, { supportsReasoningEffort: true });
+			}
+		}
 	}
 	if (supportsOpenAiXhigh(model.id)) {
 		mergeThinkingLevelMap(model, { xhigh: "xhigh" });

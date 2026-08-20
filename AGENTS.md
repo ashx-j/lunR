@@ -33,6 +33,7 @@ Last updated: 2026-08-20. **`origin/master` = `7c3965b`**. Public npm is `@ashx-
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 - **Thinking aliases:** `/thinking` picker copy has no fake token budgets. `/effort` and `/reasoning` are full-parity aliases of `/thinking` (TUI extension + gateway). Tests: ashxj-thinking + gateway-commands.
 - **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
+- **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` + `supportsReasoningEffort` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 
 ## On origin/master (`a698e57`)
 
@@ -106,6 +107,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 - Collapsed same-name tool rows are header-only; `ctrl+o` reveals bodies/notices. Subagent compact widgets are the exception.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
+- xAI effort maps live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`). Humans do not edit `catalog/providers/xai.json`.
 
 # Decisions (keep; why in one line)
 
@@ -144,6 +146,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: v0.2.4 ships thinking aliases (#14).
 - 2026-08-20: chatbox thinking indicator prints and tints xhigh/max; `/thinking` uses getSupportedThinkingLevels so it cannot advertise a level the session will clamp to high.
 - 2026-08-20: v0.2.5 ships thinking chatbox levels (#15).
+- 2026-08-20: grok-4.6+ xhigh is a generate-models overlay + catalog contract test; do not hand-edit `catalog/providers/xai.json`.
 
 # Deferred
 
