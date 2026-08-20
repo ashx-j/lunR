@@ -32,6 +32,7 @@ Last updated: 2026-08-20. **`origin/master` = `845cc98`**. Public npm is `@ashx-
 - **Same-tool tree (`fix/same-tool-tree-chrome`):** a consecutive same-name compact run prints the verb once, then hangs details off `├─` / `└─`. Singletons stay `● read file`. Tests: format-grouped-call + tool-execution-component density.
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 - **Thinking aliases:** `/thinking` picker copy has no fake token budgets. `/effort` and `/reasoning` are full-parity aliases of `/thinking` (TUI extension + gateway). Tests: ashxj-thinking + gateway-commands.
+- **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
 
 ## On origin/master (`a698e57`)
 
@@ -104,6 +105,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 - Collapsed same-name tool rows are header-only; `ctrl+o` reveals bodies/notices. Subagent compact widgets are the exception.
+- Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
 
 # Decisions (keep; why in one line)
 
@@ -140,6 +142,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: v0.2.3 ships the quieter same-name tool tree (#13).
 - 2026-08-20: thinking-level copy drops fake token budgets; `/effort` and `/reasoning` alias `/thinking` (provider "reasoning effort" wording).
 - 2026-08-20: v0.2.4 ships thinking aliases (#14).
+- 2026-08-20: chatbox thinking indicator prints and tints xhigh/max; `/thinking` uses getSupportedThinkingLevels so it cannot advertise a level the session will clamp to high.
 
 # Deferred
 

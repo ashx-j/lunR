@@ -89,6 +89,33 @@ function lunrPromptGlyph(theme: Theme | undefined): string {
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Theme token for the chatbox thinking-level border / effort chip. */
+export function thinkingThemeToken(level: ThinkingLevel): string {
+	switch (level) {
+		case "off":
+			return "thinkingOff";
+		case "minimal":
+			return "thinkingMinimal";
+		case "low":
+			return "thinkingLow";
+		case "medium":
+			return "thinkingMedium";
+		case "high":
+			return "thinkingHigh";
+		case "xhigh":
+			return "thinkingXhigh";
+		case "max":
+			return "thinkingMax";
+		default:
+			return "thinkingOff";
+	}
+}
+
+/** Chip effort label — identity, locked so xhigh/max are never mapped down to high. */
+export function formatChipEffort(level: ThinkingLevel): string {
+	return level;
+}
+
 /** Trimmed view of pi's `Theme` — only the methods we use. */
 interface Theme {
 	fg(token: string, text: string): string;
@@ -441,11 +468,21 @@ function formatProviderLabel(provider: string | undefined): string {
 // The chip: `model · provider · effort`
 // ---------------------------------------------------------------------------
 
-function buildChip(ctx: ExtensionContextLike, pi: ExtensionAPI): string {
+function colorEffort(theme: Theme | undefined, level: ThinkingLevel, text: string): string {
+	const token = thinkingThemeToken(level);
+	const painted = color(theme, token, text);
+	if (token === "thinkingMax" && painted === text) {
+		return color(theme, "thinkingXhigh", text);
+	}
+	return painted;
+}
+
+function buildChip(ctx: ExtensionContextLike, pi: ExtensionAPI): { left: string; effort: string; level: ThinkingLevel } {
 	const modelId = ctx.model?.id ?? "no-model";
 	const providerLabel = formatProviderLabel(ctx.model?.provider);
-	const effort = pi.getThinkingLevel();
-	return `${modelId} \u00b7 ${providerLabel} \u00b7 ${effort}`;
+	const level = pi.getThinkingLevel();
+	const effort = formatChipEffort(level);
+	return { left: `${modelId} \u00b7 ${providerLabel} \u00b7 `, effort, level };
 }
 
 // ---------------------------------------------------------------------------
@@ -470,9 +507,8 @@ class ChatboxEditor extends CustomEditor {
 		});
 		this.ctx = ctx;
 		this.pi = pi;
-		// `borderColor` is used internally by the base editor; route it through our
-		// theme so any internal use stays consistent with the frame.
-		this.borderColor = (s: string) => this.color("border", s);
+		// lunr: do not clobber borderColor — InteractiveMode.updateEditorBorderColor()
+		// owns it (thinkingOff…thinkingMax, or bashMode).
 	}
 
 	private color(token: string, text: string): string {
@@ -522,7 +558,7 @@ class ChatboxEditor extends CustomEditor {
 		const inner = frame.length >= 2 ? frame.slice(1, frame.length - 1) : frame;
 		const body = inner.length > 0 ? inner : [""];
 
-		const border = (s: string): string => this.color("border", s);
+		const border = (s: string): string => this.borderColor(s);
 
 		// Top border: ╭─…─╮
 		const top = border("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
@@ -543,16 +579,14 @@ class ChatboxEditor extends CustomEditor {
 	}
 
 	private renderBottomBorder(width: number): string {
-		const border = (s: string): string => this.color("border", s);
-		let chip = buildChip(this.ctx, this.pi);
-		let chipW = displayWidth(chip);
-
-		// Overhead with zero dashes: ╰ + " " + chip + " " + ╯  => 4 columns.
+		const border = (s: string): string => this.borderColor(s);
+		const parts = buildChip(this.ctx, this.pi);
+		const plain = parts.left + parts.effort;
 		const overhead = 4;
-		if (chipW > width - overhead) {
-			chip = truncatePlain(chip, Math.max(0, width - overhead));
-			chipW = displayWidth(chip);
-		}
+		const maxChip = Math.max(0, width - overhead);
+		const truncated = displayWidth(plain) > maxChip;
+		const chipPlain = truncated ? truncatePlain(plain, maxChip) : plain;
+		const chipW = displayWidth(chipPlain);
 		const dashTotal = Math.max(0, width - overhead - chipW);
 		// Right-align the chip: a single trailing dash before the corner, the
 		// rest lead (right-aligns the chip near the corner).
@@ -561,7 +595,13 @@ class ChatboxEditor extends CustomEditor {
 
 		const left = "\u2570" + "\u2500".repeat(leftDashes) + " ";
 		const right = " " + "\u2500".repeat(rightDashes) + "\u256f";
-		return border(left) + this.color("white", chip) + border(right); // lunr: theme-polish — model/provider/thinking chip white (was dim)
+		const theme = this.ctx.ui?.theme;
+		// Truncated chips may have lost the effort token — paint all white.
+		// Otherwise model/provider stay white and the effort uses the thinking token.
+		const chip = truncated
+			? this.color("white", chipPlain)
+			: this.color("white", parts.left) + colorEffort(theme, parts.level, parts.effort);
+		return border(left) + chip + border(right);
 	}
 }
 
