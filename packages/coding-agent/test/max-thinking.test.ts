@@ -42,4 +42,12 @@ describe("max thinking level", () => {
 			legacyTheme.getThinkingBorderColor("xhigh")("border"),
 		);
 	});
+
+	it("moon thinkingMax is distinct from thinkingXhigh and thinkingHigh", () => {
+		const currentDir = dirname(fileURLToPath(import.meta.url));
+		const moon = loadThemeFromPath(join(currentDir, "../src/modes/interactive/theme/moon.json"));
+		const maxColor = moon.getThinkingBorderColor("max")("border");
+		expect(maxColor).not.toBe(moon.getThinkingBorderColor("xhigh")("border"));
+		expect(maxColor).not.toBe(moon.getThinkingBorderColor("high")("border"));
+	});
 });

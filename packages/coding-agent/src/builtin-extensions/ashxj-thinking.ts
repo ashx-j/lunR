@@ -82,9 +82,8 @@ interface ExtensionAPI {
 // Thinking level config
 // ---------------------------------------------------------------------------
 
-/** All known levels, in display order. */
-// lunr: "max" appended (lunR supports it; filtered per-model below when unsupported).
-const ALL_LEVELS_7: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/** All known levels, in display order. Mirrors `EXTENDED_THINKING_LEVELS` in pi-ai. */
+const ALL_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 /** Default 5 — used when the active model is undefined (we don't know whether `xhigh`/`max` are supported). */
 const ALL_LEVELS_5: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
@@ -100,16 +99,16 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	max: "Maximum reasoning",
 };
 
-/** Returns the levels valid for the given model, in display order. */
+/** Returns the levels valid for the given model, in display order.
+ *  Mirrors `getSupportedThinkingLevels` in pi-ai: `xhigh`/`max` are opt-in
+ *  (non-null map entry); other levels drop only on an explicit null. */
 function availableLevelsFor(model: ModelLike | undefined): readonly ThinkingLevel[] {
 	if (!model) return ALL_LEVELS_5;
 	if (model.reasoning === false) return ["off" as const];
-	// Filter out levels the model marks as unsupported (null entry).
-	return ALL_LEVELS_7.filter((lvl) => {
-		const m = model.thinkingLevelMap;
-		if (m && Object.prototype.hasOwnProperty.call(m, lvl) && (m as Record<string, string | null>)[lvl] === null) {
-			return false;
-		}
+	return ALL_LEVELS.filter((level) => {
+		const mapped = model.thinkingLevelMap?.[level];
+		if (mapped === null) return false;
+		if (level === "xhigh" || level === "max") return mapped !== undefined;
 		return true;
 	});
 }
@@ -349,7 +348,7 @@ export default function (pi: ExtensionAPI): void {
 				}
 				if (level === currentLevel) return; // no-op
 				pi.setThinkingLevel(level);
-				ctx.ui.notify(`Thinking level: ${level}`, "info");
+				ctx.ui.notify(`Thinking level: ${pi.getThinkingLevel()}`, "info");
 				return;
 			}
 
@@ -367,7 +366,7 @@ export default function (pi: ExtensionAPI): void {
 				return;
 			}
 			pi.setThinkingLevel(requested);
-			ctx.ui.notify(`Thinking level: ${requested}`, "info");
+			ctx.ui.notify(`Thinking level: ${pi.getThinkingLevel()}`, "info");
 		},
 	};
 
