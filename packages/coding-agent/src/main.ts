@@ -33,6 +33,7 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+import { reconcileBehaviorPreset, registerBehaviorPresetBridge } from "./core/behavior-preset.ts";
 import { registerCustomizeBridge } from "./core/customize.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
@@ -620,6 +621,8 @@ export async function main(args: string[], options?: MainOptions) {
 	// lunr: same for the simple-pi-memory character cap — extensions read it via the
 	// bridge at load/runtime; re-pointed to the runtime settings manager below.
 	registerMemoryCapBridge(startupSettingsManager);
+	registerBehaviorPresetBridge(startupSettingsManager);
+	reconcileBehaviorPreset(startupSettingsManager, agentDir);
 	// lunr: TUI customize settings (spinner, dividers, rail, prompt symbol) read by
 	// ashxj-spinners and ashxj-tui via the bridge; re-pointed to runtime below.
 	registerCustomizeBridge(startupSettingsManager);
@@ -865,6 +868,8 @@ export async function main(args: string[], options?: MainOptions) {
 	// changes take effect without a restart.
 	registerModelTierBridge(settingsManager);
 	registerMemoryCapBridge(settingsManager);
+	registerBehaviorPresetBridge(settingsManager);
+	reconcileBehaviorPreset(settingsManager, agentDir);
 	registerCustomizeBridge(settingsManager);
 
 	if (parsed.help) {

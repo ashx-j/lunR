@@ -4,7 +4,8 @@
  *
  * Mirrors simple-pi-memory: one file, injected into the system prompt every
  * turn (before_agent_start), shares the existing `memoryCharCap` setting via
- * the `@lunr/memory-cap` bridge. Tools: behavior_add, behavior_remove,
+ * the `@lunr/memory-cap` bridge. Built-in presets (default/humanizer/concise)
+ * skip the character cap; custom is capped. Tools: behavior_add, behavior_remove,
  * behavior_load.
  *
  * Unlike memory, behavior lines do NOT get a date prefix (plain append, dedup
@@ -60,6 +61,26 @@ function readCap(): number {
 	const bridge = getCapBridge();
 	if (bridge) return bridge.getCharCap();
 	return DEFAULT_CHAR_CAP;
+}
+
+interface BehaviorPresetBridge {
+	getPreset(): string;
+	isCapExempt(): boolean;
+	syncFromFile(fileText: string): string;
+}
+
+function getPresetBridge(): BehaviorPresetBridge | undefined {
+	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/behavior-preset")] as
+		| BehaviorPresetBridge
+		| undefined;
+}
+
+function isCapExempt(): boolean {
+	return getPresetBridge()?.isCapExempt() ?? false;
+}
+
+function syncPresetFromFile(text: string): void {
+	getPresetBridge()?.syncFromFile(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +154,7 @@ export default function (pi: ExtensionAPI): void {
 	// --- Inject behavior rules into the system prompt every turn ---
 	pi.on("before_agent_start", async (event) => {
 		const content = readBehavior();
+		syncPresetFromFile(content);
 		if (!content.trim()) return; // inject nothing when empty
 		// Strip the header comment from the injected text
 		const body = content
@@ -153,7 +175,7 @@ export default function (pi: ExtensionAPI): void {
 		description: [
 			"Add one behavior rule line to the behavior file (~/.lunr/agent/behavior.md).",
 			"Each rule is a single line; no date prefix is added.",
-			"Refuses if the line already exists (exact match) or if the file is at the character cap.",
+			"Refuses if the line already exists (exact match) or if a custom behavior file is at the character cap. Built-in presets skip the cap.",
 		].join("\n"),
 		parameters: Type.Object({
 			content: Type.String({
@@ -171,13 +193,12 @@ export default function (pi: ExtensionAPI): void {
 			}
 			const cap = readCap();
 			const existing = readBehavior();
-			const hasHeader = existing.startsWith(HEADER_COMMENT);
-			const baseText = hasHeader
+			const baseText = existing.startsWith(HEADER_COMMENT)
 				? existing.slice(HEADER_COMMENT.length)
 				: existing;
 			const sep = baseText.trim().length > 0 ? "\n" : "";
-			const prospective = (hasHeader ? HEADER_COMMENT : HEADER_COMMENT) + baseText.trimEnd() + sep + line + "\n";
-			if (prospective.length > cap) {
+			const prospective = HEADER_COMMENT + baseText.trimEnd() + sep + line + "\n";
+			if (!isCapExempt() && prospective.length > cap) {
 				return {
 					content: [
 						{
@@ -188,10 +209,10 @@ export default function (pi: ExtensionAPI): void {
 				};
 			}
 			writeBehaviorRaw(prospective);
+			syncPresetFromFile(prospective);
+			const capNote = isCapExempt() ? "cap skipped (built-in preset)" : `${prospective.length}/${cap} chars`;
 			return {
-				content: [
-					{ type: "text", text: `Added behavior rule (${prospective.length}/${cap} chars): ${line}` },
-				],
+				content: [{ type: "text", text: `Added behavior rule (${capNote}): ${line}` }],
 			};
 		},
 	});
@@ -220,7 +241,9 @@ export default function (pi: ExtensionAPI): void {
 			if (remaining.length === lines.length) {
 				return { content: [{ type: "text", text: `Not found (no exact match): ${target}` }] };
 			}
-			writeBehaviorRaw(HEADER_COMMENT + (remaining.length > 0 ? remaining.join("\n") + "\n" : ""));
+			const next = HEADER_COMMENT + (remaining.length > 0 ? remaining.join("\n") + "\n" : "");
+			writeBehaviorRaw(next);
+			syncPresetFromFile(next);
 			return { content: [{ type: "text", text: `Removed behavior rule: ${target}` }] };
 		},
 	});
@@ -236,9 +259,11 @@ export default function (pi: ExtensionAPI): void {
 		parameters: Type.Object({}),
 		async execute() {
 			const raw = readBehavior();
+			syncPresetFromFile(raw);
 			const cap = readCap();
+			const capNote = isCapExempt() ? `${raw.length} chars, cap skipped (built-in preset)` : `${raw.length}/${cap} chars`;
 			if (!raw.trim()) {
-				return { content: [{ type: "text", text: `Behavior file is empty (0/${cap} chars).` }] };
+				return { content: [{ type: "text", text: `Behavior file is empty (${capNote}).` }] };
 			}
 			// Strip header comment for display
 			const display = raw
@@ -247,9 +272,7 @@ export default function (pi: ExtensionAPI): void {
 				.join("\n")
 				.trimEnd();
 			return {
-				content: [
-					{ type: "text", text: `Behavior (${raw.length}/${cap} chars):\n${display}` },
-				],
+				content: [{ type: "text", text: `Behavior (${capNote}):\n${display}` }],
 			};
 		},
 	});

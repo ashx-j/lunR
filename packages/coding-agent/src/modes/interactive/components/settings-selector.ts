@@ -14,6 +14,7 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
+import { type BehaviorPreset, detectBehaviorPreset, readBehaviorFile } from "../../../core/behavior-preset.ts";
 import { getCustomizeBridge } from "../../../core/customize.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
@@ -96,6 +97,7 @@ export interface SettingsConfig {
 	showTerminalProgress: boolean;
 	modelTiers: ModelTiersSettings;
 	memoryCharCap: number;
+	behaviorPreset: BehaviorPreset;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
@@ -151,6 +153,7 @@ export interface SettingsCallbacks {
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onMemoryCharCapChange: (cap: number) => void;
+	onBehaviorPresetChange: (preset: BehaviorPreset) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
 	onGutterRailChange: (enabled: boolean) => void;
@@ -320,6 +323,91 @@ class MemoryCharCapSubmenu extends Container {
 }
 
 const SEARCH_CURATOR_VALUES: SearchCuratorSetting[] = ["off", "on", "auto-summary"];
+
+const BEHAVIOR_PRESET_ITEMS: SelectItem[] = [
+	{
+		value: "default",
+		label: "default",
+		description: "Empty built-in. Selecting this writes a blank behavior.md.",
+	},
+	{
+		value: "humanizer",
+		label: "humanizer",
+		description: "Write like a person. Strip AI tells. Skips the character cap.",
+	},
+	{
+		value: "concise",
+		label: "concise",
+		description: "Fragments, tables, numbered next steps last. Skips the character cap.",
+	},
+	{
+		value: "custom",
+		label: "custom",
+		description: "Keep the current behavior.md. Edit the file or use the behavior tools.",
+	},
+];
+
+/**
+ * Built-in vs custom behavior.md picker.
+ * Selecting a built-in while the file no longer matches a template asks before overwrite.
+ * Custom never writes. No in-app editor; the file is the source of truth.
+ */
+class BehaviorPresetSubmenu extends Container {
+	private inner: Component;
+
+	constructor(currentValue: string, done: (selectedValue?: string) => void) {
+		super();
+		this.inner = this.buildList(currentValue, done);
+		this.addChild(this.inner);
+	}
+
+	private buildList(currentValue: string, done: (selectedValue?: string) => void): SelectSubmenu {
+		return new SelectSubmenu(
+			"Behavior preset",
+			"Built-in options replace ~/.lunr/agent/behavior.md. Custom keeps the file. Cap skipped for built-ins.",
+			BEHAVIOR_PRESET_ITEMS,
+			currentValue,
+			(value) => {
+				if (value === currentValue) {
+					done();
+					return;
+				}
+				if (value !== "custom" && detectBehaviorPreset(readBehaviorFile()) === "custom") {
+					this.showOverwriteConfirm(value, done);
+					return;
+				}
+				done(value);
+			},
+			() => done(),
+		);
+	}
+
+	private showOverwriteConfirm(preset: string, done: (selectedValue?: string) => void): void {
+		this.clear();
+		this.inner = new SelectSubmenu(
+			"Overwrite behavior.md",
+			`Replace the custom behavior file with the ${preset} preset? This cannot be undone from settings.`,
+			[
+				{ value: "cancel", label: "Cancel" },
+				{ value: "overwrite", label: `Overwrite with ${preset}` },
+			],
+			"cancel",
+			(value) => {
+				if (value === "overwrite") {
+					done(preset);
+					return;
+				}
+				done();
+			},
+			() => done(),
+		);
+		this.addChild(this.inner);
+	}
+
+	handleInput(data: string): void {
+		this.inner.handleInput?.(data);
+	}
+}
 
 // lunr: Customize submenu — toggles for the lunR TUI customize settings.
 class CustomizeSubmenu extends Container {
@@ -1242,9 +1330,17 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "memory-char-cap",
 				label: "Memory character cap",
-				description: `Max characters in the simple-pi-memory memory file AND the behavior file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				description: `Max characters in the simple-pi-memory memory file AND a custom behavior file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Built-in behavior presets skip the cap. Also settable via /memory-char-cap.`,
 				currentValue: String(config.memoryCharCap),
 				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
+			},
+			{
+				id: "behavior-preset",
+				label: "Behavior preset",
+				description:
+					"Built-in options replace ~/.lunr/agent/behavior.md (default / humanizer / concise). Custom keeps the file. Built-ins skip the character cap.",
+				currentValue: config.behaviorPreset,
+				submenu: (currentValue, submenuDone) => new BehaviorPresetSubmenu(currentValue, submenuDone),
 			},
 			{
 				id: "search-curator",
@@ -1543,6 +1639,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "memory-char-cap":
 						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "behavior-preset":
+						callbacks.onBehaviorPresetChange(newValue as BehaviorPreset);
 						break;
 					case "search-curator":
 						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);

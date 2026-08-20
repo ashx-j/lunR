@@ -35,6 +35,7 @@ Last updated: 2026-08-20. **`origin/master` = `6952428`**. Public npm is `@ashx-
 - **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` + `supportsReasoningEffort` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
+- **Behavior presets (`feat/behavior-presets`):** `/settings` Behavior preset = default (empty, fill later) / humanizer / concise / custom. Built-ins replace `~/.lunr/agent/behavior.md`. Custom keeps the file; no in-app editor; no `fs.watch`. Fingerprint (header stripped) on `/settings` open and each `before_agent_start` / behavior tool write. Drift off a template flips to custom. Overwrite confirm when replacing a custom file with a built-in. Built-ins skip `memoryCharCap`; custom is capped. Tests: `behavior-preset.test.ts`.
 
 ## On origin/master (`a698e57`)
 
@@ -107,6 +108,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 - Collapsed same-name tool rows are header-only; `ctrl+o` reveals bodies/notices. Subagent compact widgets are the exception.
+- Behavior preset custom does not open an editor. Edit `~/.lunr/agent/behavior.md` or use the behavior tools. Do not add `fs.watch`.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
 - xAI effort maps live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`). Humans do not edit `catalog/providers/xai.json`. `withXaiEffortMetadata` also runs in `mergeCatalogLayers`.
 
@@ -151,6 +153,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: stamp Grok 4.6+ xhigh in mergeCatalogLayers and rebind session.model after /refresh; catalog-only overlay is not enough while the session holds a stale Model object.
 - 2026-08-20: v0.2.6 ships Grok 4.6 xhigh at catalog merge + session rebind (#17).
 - 2026-08-20: v0.2.7 ships the same (0.2.6 failed tsgo on withXaiEffortMetadata compat unions).
+- 2026-08-20: behavior presets write templates into behavior.md; custom is the file; fingerprint instead of a watcher; built-ins skip the char cap because humanizer exceeds 5000.
 
 # Deferred
 
