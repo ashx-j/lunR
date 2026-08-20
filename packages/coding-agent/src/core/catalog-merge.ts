@@ -30,7 +30,7 @@ export function mergeCatalogLayers(args: {
 		result.push(winner);
 		seen.add(model.id);
 	}
-	return result.map((model) => withXaiEffortMetadata(model) as Model<Api>);
+	return result.map((model) => withXaiEffortMetadata(model));
 }
 
 export class CatalogOverlaySource {
