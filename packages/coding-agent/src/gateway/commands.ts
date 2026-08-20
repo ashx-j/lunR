@@ -623,6 +623,7 @@ const compactCommand: ChatCommand = {
 
 const thinkingCommand: ChatCommand = {
 	name: "thinking",
+	aliases: ["effort", "reasoning"],
 	description: "get or set the thinking level",
 	bypassBusy: false,
 	needsSession: true,

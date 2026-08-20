@@ -7,6 +7,7 @@
  *
  * `/thinking [level]` slash command to view or set the reasoning level,
  * plus `/thinking show|hide|toggle` for thinking-block visibility.
+ * `/effort` and `/reasoning` are full-parity aliases.
  *
  * Loaded by pi via jiti — no build step, plain TypeScript.
  *
@@ -90,11 +91,11 @@ const ALL_LEVELS_5: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium
 /** Per-level descriptions. Mirrored from `THINKING_DESCRIPTIONS` in settings-selector.ts. */
 const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	off: "No reasoning",
-	minimal: "Very brief reasoning (~1k tokens)",
-	low: "Light reasoning (~2k tokens)",
-	medium: "Moderate reasoning (~8k tokens)",
-	high: "Deep reasoning (~16k tokens)",
-	xhigh: "Extra-high reasoning (~32k tokens)",
+	minimal: "Very brief reasoning",
+	low: "Light reasoning",
+	medium: "Moderate reasoning",
+	high: "Deep reasoning",
+	xhigh: "Extra-high reasoning",
 	// lunr: added — mirrors settings-selector.ts.
 	max: "Maximum reasoning",
 };
@@ -254,9 +255,12 @@ function writeHideThinkingBlock(hide: boolean): {
 // Extension entry point
 // ---------------------------------------------------------------------------
 
+const THINKING_COMMAND_DESCRIPTION =
+	"View or set the reasoning level for the current model, or toggle thinking-block visibility with show/hide/toggle";
+
 export default function (pi: ExtensionAPI): void {
-	pi.registerCommand("thinking", {
-		description: "View or set the reasoning level for the current model, or toggle thinking-block visibility with show/hide/toggle",
+	const thinkingSpec = {
+		description: THINKING_COMMAND_DESCRIPTION,
 		getArgumentCompletions(prefix: string): AutocompleteItem[] {
 			const lower = prefix.toLowerCase();
 			// Visibility sub-options first, filtered by prefix, alongside the levels.
@@ -365,6 +369,17 @@ export default function (pi: ExtensionAPI): void {
 			pi.setThinkingLevel(requested);
 			ctx.ui.notify(`Thinking level: ${requested}`, "info");
 		},
+	};
+
+	pi.registerCommand("thinking", thinkingSpec);
+	// lunr: /effort and /reasoning are full-parity aliases (same handler + completions).
+	pi.registerCommand("effort", {
+		...thinkingSpec,
+		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
+	});
+	pi.registerCommand("reasoning", {
+		...thinkingSpec,
+		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
 	});
 }
 
