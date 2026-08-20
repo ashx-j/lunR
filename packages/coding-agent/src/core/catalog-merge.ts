@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, type Model, withXaiEffortMetadata } from "@earendil-works/pi-ai";
 import { modelKey, type OfficialCatalogSource } from "./official-catalog.ts";
 
 export type CatalogProviderRefreshStatus = "ok" | "timeout" | "error" | "skipped" | "static";
@@ -30,7 +30,7 @@ export function mergeCatalogLayers(args: {
 		result.push(winner);
 		seen.add(model.id);
 	}
-	return result;
+	return result.map((model) => withXaiEffortMetadata(model) as Model<Api>);
 }
 
 export class CatalogOverlaySource {

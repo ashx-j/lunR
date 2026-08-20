@@ -43,3 +43,9 @@ export * from "./utils/overflow.ts";
 export * from "./utils/retry.ts";
 export * from "./utils/typebox-helpers.ts";
 export * from "./utils/validation.ts";
+export {
+	parseXaiGrok4Minor,
+	withXaiEffortMetadata,
+	XAI_GROK45_THINKING_LEVEL_MAP,
+	XAI_GROK46_THINKING_LEVEL_MAP,
+} from "./xai-effort.ts";

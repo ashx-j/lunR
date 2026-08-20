@@ -34,6 +34,17 @@ describe("catalog merge precedence", () => {
 		]);
 	});
 
+	it("stamps grok-4.6 xhigh even when live omitted the map", () => {
+		const live = model("grok-4.6", "live");
+		const merged = mergeCatalogLayers({
+			bakedIn: [model("grok-4.3", "baked")],
+			live: [live],
+		});
+		const grok = merged.find((entry) => entry.id === "grok-4.6");
+		expect(grok?.thinkingLevelMap).toMatchObject({ off: null, minimal: null, xhigh: "xhigh" });
+		expect(grok?.compat).toMatchObject({ supportsReasoningEffort: true });
+	});
+
 	it("keeps baked-in models that a live list omitted", () => {
 		const merged = mergeCatalogLayers({
 			bakedIn: [model("grok-4.3", "baked"), model("grok-4.5", "baked")],
@@ -141,7 +152,9 @@ describe("formatCatalogRefreshSummary", () => {
 	it("does not treat a timed-out xAI refresh as a dead login", () => {
 		expect(
 			formatCatalogRefreshSummary({
-				providers: [{ id: "xai", status: "error", error: "OAuth refresh failed for xai: The operation was aborted" }],
+				providers: [
+					{ id: "xai", status: "error", error: "OAuth refresh failed for xai: The operation was aborted" },
+				],
 			}),
 		).toBe("xai failed (OAuth refresh failed for xai: The operation was aborted).");
 	});

@@ -4949,6 +4949,7 @@ export class InteractiveMode {
 				ollama = `ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 			}
 		}
+		this.session.refreshModelFromRegistry();
 		this.showStatus(
 			formatCatalogRefreshSummary({
 				official: result.official

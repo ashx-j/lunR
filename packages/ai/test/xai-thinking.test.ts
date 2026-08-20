@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { getModel, getSupportedThinkingLevels } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
-import { parseXaiGrok4Minor } from "../src/xai-effort.ts";
+import { parseXaiGrok4Minor, withXaiEffortMetadata } from "../src/xai-effort.ts";
 
 const catalogPath = join(dirname(fileURLToPath(import.meta.url)), "../../../catalog/providers/xai.json");
 
@@ -27,6 +27,29 @@ describe("parseXaiGrok4Minor", () => {
 		expect(parseXaiGrok4Minor("grok-build-0.1")).toBeUndefined();
 		expect(parseXaiGrok4Minor("grok-4-fast-reasoning")).toBeUndefined();
 		expect(parseXaiGrok4Minor("grok-3")).toBeUndefined();
+	});
+});
+
+describe("withXaiEffortMetadata", () => {
+	it("adds xhigh and reasoning effort on grok-4.6 completions rows that omitted them", () => {
+		const stamped = withXaiEffortMetadata({
+			id: "grok-4.6",
+			provider: "xai",
+			api: "openai-completions",
+			compat: { supportsStore: false, supportsReasoningEffort: false },
+		});
+		expect(stamped.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+		expect(stamped.compat).toMatchObject({ supportsStore: false, supportsReasoningEffort: true });
+	});
+
+	it("does not add xhigh on grok-4.5", () => {
+		const stamped = withXaiEffortMetadata({
+			id: "grok-4.5",
+			provider: "xai",
+			api: "openai-responses",
+			thinkingLevelMap: { off: null, minimal: null },
+		});
+		expect(stamped.thinkingLevelMap?.xhigh).toBeUndefined();
 	});
 });
 
