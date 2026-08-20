@@ -258,12 +258,17 @@ describe("command registry", () => {
 		const text = formatHelpText();
 		expect(text).toContain("/swarm");
 		expect(text).toContain("/thinking");
+		expect(text).toContain("/effort");
+		expect(text).toContain("/reasoning");
 		expect(text).toContain("/undo");
 	});
 
 	it("botCommandSpecs covers every command, aliases skipped, Telegram-safe names", () => {
 		const specs = botCommandSpecs();
 		expect(specs.map((s) => s.name)).toEqual(CHAT_COMMANDS.map((c) => c.name));
+		expect(specs.map((s) => s.name)).toContain("thinking");
+		expect(specs.map((s) => s.name)).not.toContain("effort");
+		expect(specs.map((s) => s.name)).not.toContain("reasoning");
 		for (const spec of specs) {
 			expect(spec.name).toMatch(/^[a-z0-9_]{1,32}$/);
 			expect(spec.description.trim().length).toBeGreaterThan(0);
@@ -484,6 +489,18 @@ describe("/thinking", () => {
 		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
 		const ctx = makeCtx("/thinking high");
 		await runChatCommand(findCommand("thinking"), ctx);
+		expect(bridge.session?.thinkingLevel).toBe("high");
+		expect(adapter.sent[0].text).toContain("Thinking → high");
+	});
+
+	it.each(["effort", "reasoning"] as const)("sets a valid level via /%s alias", async (alias) => {
+		bridge.session!.model = fakeModel(
+			"claude-opus-4",
+			"anthropic",
+			true,
+		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
+		const ctx = makeCtx(`/${alias} high`);
+		await runChatCommand(findCommand(alias), ctx);
 		expect(bridge.session?.thinkingLevel).toBe("high");
 		expect(adapter.sent[0].text).toContain("Thinking → high");
 	});

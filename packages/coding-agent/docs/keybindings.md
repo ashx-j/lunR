@@ -112,7 +112,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` | Cycle to previous model |
 | `app.mode.cycle` | `shift+tab` | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
-| `app.thinking.cycle` | *(unbound)* | Cycle thinking level (`/thinking` and `/settings` still set it) |
+| `app.thinking.cycle` | *(unbound)* | Cycle thinking level (`/thinking`, `/effort`, `/reasoning`, and `/settings` still set it) |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
 ### Display and Message Queue

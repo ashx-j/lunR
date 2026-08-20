@@ -31,6 +31,7 @@ Last updated: 2026-08-20. **`origin/master` = `3f2ade0`**. Public npm is `@ashx-
 - **Same-tool stack all (`fix/same-tool-stack-all-tools`):** collapsed finished success is header-only for every default-shell tool (not just `read`). Grep/find/ls notices and MCP/todo bodies wait for `ctrl+o`. Search/fetch count folds into the header. `edit` (`renderShell: "self"`) honors continuation/followed pad. Fallback `contentText` gets the same facing pad. Subagent compact widgets stay. Tests: tool-execution-component density + render-search-chrome + tui text pad.
 - **Same-tool tree (`fix/same-tool-tree-chrome`):** a consecutive same-name compact run prints the verb once, then hangs details off `├─` / `└─`. Singletons stay `● read file`. Tests: format-grouped-call + tool-execution-component density.
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
+- **Thinking aliases:** `/thinking` picker copy has no fake token budgets. `/effort` and `/reasoning` are full-parity aliases of `/thinking` (TUI extension + gateway). Tests: ashxj-thinking + gateway-commands.
 
 ## On origin/master (`a698e57`)
 
@@ -137,6 +138,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: v0.2.2 ships same-tool stack for all tools (#12).
 - 2026-08-20: consecutive same-name compact cards print the verb once and tree the details; do not repeat `● read` on every row.
 - 2026-08-20: v0.2.3 ships the quieter same-name tool tree (#13).
+- 2026-08-20: thinking-level copy drops fake token budgets; `/effort` and `/reasoning` alias `/thinking` (provider "reasoning effort" wording).
 
 # Deferred
 
