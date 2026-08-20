@@ -1819,11 +1819,34 @@ export class AgentSession {
 
 	/**
 	 * Get available thinking levels for current model.
-	 * The provider will clamp to what the specific model supports internally.
+	 * Uses the registry row when /refresh has a newer copy than the session object.
 	 */
 	getAvailableThinkingLevels(): ThinkingLevel[] {
-		if (!this.model) return THINKING_LEVELS;
-		return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
+		const model = this.resolvedCatalogModel();
+		if (!model) return THINKING_LEVELS;
+		return getSupportedThinkingLevels(model) as ThinkingLevel[];
+	}
+
+	/** Replace the session model with the current registry copy after a catalog refresh. */
+	refreshModelFromRegistry(): void {
+		this._refreshCurrentModelFromRegistry();
+	}
+
+	private resolvedCatalogModel(): Model<any> | undefined {
+		const current = this.model;
+		if (!current) return undefined;
+		const registry = this._modelRuntime.getModel(current.provider, current.id);
+		if (!registry || registry === current) return current;
+		const thinkingLevelMap =
+			current.thinkingLevelMap || registry.thinkingLevelMap
+				? { ...current.thinkingLevelMap, ...registry.thinkingLevelMap }
+				: current.thinkingLevelMap;
+		return {
+			...current,
+			...registry,
+			compat: { ...current.compat, ...registry.compat },
+			thinkingLevelMap,
+		};
 	}
 
 	/**
@@ -2570,7 +2593,7 @@ export class AgentSession {
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
 			},
 			{
-				getModel: () => this.model,
+				getModel: () => this.resolvedCatalogModel(),
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,
