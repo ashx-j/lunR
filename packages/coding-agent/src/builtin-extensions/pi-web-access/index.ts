@@ -49,9 +49,12 @@ import {
 	collectSearchQueries,
 	formatFetchCallTitle,
 	formatFetchChrome,
+	formatFetchDetail,
 	formatSearchCallTitle,
 	formatSearchChrome,
+	formatSearchDetail,
 } from "./render-search-chrome.ts";
+import { formatGroupedCall, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
 import { loadEnabledModelPatterns, modelMatchesEnabledPatterns } from "./summary-model-scope.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
@@ -1551,16 +1554,22 @@ export default function (pi: ExtensionAPI) {
 			// lunr: collapsed header is one line (title · count). Query list lives in expanded renderResult.
 			const queryList = collectSearchQueries(args as { query?: unknown; queries?: unknown });
 			const compact = Boolean(context && !context.isPartial && !context.expanded && !context.isError);
-			const chrome = formatSearchChrome({
-				queries: queryList,
-				details: compact ? context?.result?.details : undefined,
-				expanded: false,
-			});
 			const call = formatSearchCallTitle(queryList);
 			if (call.empty) {
 				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
 			}
-			return new Text(theme.fg("toolTitle", theme.bold(chrome.call)), 0, 0);
+			const detail = formatSearchDetail(queryList, compact ? context?.result?.details : undefined);
+			return new Text(
+				formatGroupedCall({
+					role: context?.groupRole ?? "singleton",
+					compact,
+					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
+					title: theme.fg("toolTitle", theme.bold("search")),
+					detail: theme.fg("accent", detail),
+				}),
+				0,
+				0,
+			);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {
@@ -1798,16 +1807,22 @@ export default function (pi: ExtensionAPI) {
 			// lunr: collapsed header is one line (title · count). URL list lives in expanded renderResult.
 			const urlList = collectFetchUrls(args as { url?: string; urls?: string[] });
 			const compact = Boolean(context && !context.isPartial && !context.expanded && !context.isError);
-			const chrome = formatFetchChrome({
-				urls: urlList,
-				details: compact ? context?.result?.details : undefined,
-				expanded: false,
-			});
 			const call = formatFetchCallTitle(urlList);
 			if (call.empty) {
 				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
 			}
-			return new Text(theme.fg("toolTitle", theme.bold(chrome.call)), 0, 0);
+			const detail = formatFetchDetail(urlList, compact ? context?.result?.details : undefined);
+			return new Text(
+				formatGroupedCall({
+					role: context?.groupRole ?? "singleton",
+					compact,
+					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
+					title: theme.fg("toolTitle", theme.bold("fetch")),
+					detail: theme.fg("accent", detail),
+				}),
+				0,
+				0,
+			);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {

@@ -10,6 +10,7 @@ import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import {
+	formatGroupedCall,
 	getTextOutput,
 	invalidArgText,
 	renderCollapsedSearchPath,
@@ -73,10 +74,7 @@ function formatFindCall(
 	const rawPath = str(args?.path);
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
-	let text =
-		theme.fg("toolTitle", theme.bold("find")) +
-		" " +
-		(pattern === null ? invalidArg : theme.fg("accent", pattern || ""));
+	let text = pattern === null ? invalidArg : theme.fg("accent", pattern || "");
 	if (compact) {
 		const collapsedPath = renderCollapsedSearchPath(rawPath, theme, cwd);
 		if (collapsedPath) text += theme.fg("toolOutput", " in ") + collapsedPath;
@@ -375,8 +373,15 @@ export function createFindToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const compact = !context.isPartial && !context.expanded && !context.isError;
 			text.setText(
-				`${toolStatusDotFromContext(context, theme)} ${formatFindCall(args, theme, context.cwd, !context.expanded)}`,
+				formatGroupedCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					dot: toolStatusDotFromContext(context, theme),
+					title: theme.fg("toolTitle", theme.bold("find")),
+					detail: formatFindCall(args, theme, context.cwd, !context.expanded),
+				}),
 			);
 			return text;
 		},

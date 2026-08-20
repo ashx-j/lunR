@@ -1,7 +1,12 @@
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
-import { getTextOutput as getRenderedTextOutput, toolStatusDot } from "../../../core/tools/render-utils.ts";
+import {
+	formatGroupedCall,
+	getTextOutput as getRenderedTextOutput,
+	toolGroupRole,
+	toolStatusDot,
+} from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 
@@ -141,6 +146,7 @@ export class ToolExecutionComponent extends Container {
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 			result: this.result,
+			groupRole: toolGroupRole(this.groupContinuation, this.groupFollowed),
 		};
 	}
 
@@ -150,7 +156,16 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private createCallFallback(): Component {
-		return new Text(`${this.getStatusDot()} ${theme.fg("toolTitle", theme.bold(this.toolName))}`, 0, 0);
+		return new Text(
+			formatGroupedCall({
+				role: toolGroupRole(this.groupContinuation, this.groupFollowed),
+				compact: !this.isPartial && !this.expanded && !this.result?.isError,
+				dot: this.getStatusDot(),
+				title: theme.fg("toolTitle", theme.bold(this.toolName)),
+			}),
+			0,
+			0,
+		);
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -438,8 +453,14 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private formatToolExecution(): string {
-		let text = `${this.getStatusDot()} ${theme.fg("toolTitle", theme.bold(this.toolName))}`;
-		if (!this.isPartial && !this.expanded && !this.result?.isError) {
+		const compact = !this.isPartial && !this.expanded && !this.result?.isError;
+		let text = formatGroupedCall({
+			role: toolGroupRole(this.groupContinuation, this.groupFollowed),
+			compact,
+			dot: this.getStatusDot(),
+			title: theme.fg("toolTitle", theme.bold(this.toolName)),
+		});
+		if (compact) {
 			return text;
 		}
 		const content = JSON.stringify(this.args, null, 2);

@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
+import type { ToolGroupRole } from "../extensions/types.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
@@ -85,6 +86,45 @@ export function extractTrailingNotice(text: string): string | undefined {
 }
 
 export type ToolStatusDotState = "pending" | "success" | "error";
+
+export type { ToolGroupRole };
+
+export function toolGroupRole(continuation: boolean, followed: boolean): ToolGroupRole {
+	if (!continuation && followed) return "first";
+	if (continuation && followed) return "middle";
+	if (continuation && !followed) return "last";
+	return "singleton";
+}
+
+/**
+ * Quieter same-name chrome: the verb is printed once, then files hang off a tree.
+ *
+ * ```
+ * ● read
+ *   ├─ resolve.ts
+ *   └─ usage-service.ts
+ * ```
+ *
+ * Singletons, streaming, errors, and expanded rows keep `● title detail` on one line.
+ */
+export function formatGroupedCall(opts: {
+	role: ToolGroupRole;
+	compact: boolean;
+	dot: string;
+	title: string;
+	detail?: string;
+}): string {
+	const detail = opts.detail?.trim() ? opts.detail : "";
+	const useTree = opts.compact && opts.role !== "singleton" && detail.length > 0;
+	if (!useTree) {
+		return detail ? `${opts.dot} ${opts.title} ${detail}` : `${opts.dot} ${opts.title}`;
+	}
+	const branch = opts.role === "last" ? "└─" : "├─";
+	if (opts.role === "first") {
+		return `${opts.dot} ${opts.title}\n  ${branch} ${detail}`;
+	}
+	return `  ${branch} ${detail}`;
+}
 
 /**
  * Colored status dot used as the sole state indicator on tool titles (moon theme:

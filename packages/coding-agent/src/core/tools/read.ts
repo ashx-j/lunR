@@ -14,6 +14,7 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
 import {
+	formatGroupedCall,
 	getTextOutput,
 	renderToolFileName,
 	replaceTabs,
@@ -77,7 +78,7 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 	return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 
-function formatReadCall(
+function formatReadDetail(
 	args: ReadRenderArgs | undefined,
 	theme: Theme,
 	cwd: string,
@@ -85,7 +86,7 @@ function formatReadCall(
 ): string {
 	const pathDisplay = renderToolFileName(str(args?.file_path ?? args?.path), theme, cwd);
 	const range = expanded ? formatReadLineRange(args, theme) : "";
-	return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${range}`;
+	return `${pathDisplay}${range}`;
 }
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
@@ -147,20 +148,6 @@ function getCompactReadClassification(
 	}
 
 	return undefined;
-}
-
-function formatCompactReadCall(classification: CompactReadClassification, theme: Theme): string {
-	if (classification.kind === "skill") {
-		return (
-			theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) + theme.fg("customMessageText", classification.label)
-		);
-	}
-
-	return (
-		theme.fg("toolTitle", theme.bold(`read ${classification.kind}`)) +
-		" " +
-		theme.fg("accent", classification.label)
-	);
 }
 
 function formatReadResult(
@@ -330,11 +317,28 @@ export function createReadToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const compact = !context.isPartial && !context.expanded && !context.isError;
 			const classification = !context.expanded ? getCompactReadClassification(args, context.cwd) : undefined;
-			const callText = classification
-				? formatCompactReadCall(classification, theme)
-				: formatReadCall(args, theme, context.cwd, context.expanded);
-			text.setText(`${toolStatusDotFromContext(context, theme)} ${callText}`);
+			let title = theme.fg("toolTitle", theme.bold("read"));
+			let detail: string;
+			if (classification?.kind === "skill") {
+				title = theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m`);
+				detail = theme.fg("customMessageText", classification.label);
+			} else if (classification) {
+				title = theme.fg("toolTitle", theme.bold(`read ${classification.kind}`));
+				detail = theme.fg("accent", classification.label);
+			} else {
+				detail = formatReadDetail(args, theme, context.cwd, context.expanded);
+			}
+			text.setText(
+				formatGroupedCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					dot: toolStatusDotFromContext(context, theme),
+					title,
+					detail,
+				}),
+			);
 			return text;
 		},
 		renderResult(result, options, theme, context) {
