@@ -264,6 +264,14 @@ type ActiveOverlayFocusRestoreState = EligibleOverlayFocusRestoreState | Blocked
 type OverlayFocusRestoreState = { status: "inactive" } | ActiveOverlayFocusRestoreState;
 type OverlayFocusRestorePolicy = "clear" | "preserve";
 
+type ChatHitRegion = { y0: number; y1: number; lines: string[] };
+type ChatLayoutCache = {
+	epoch: number;
+	chatWidth: number;
+	scrollLines: string[];
+	hitRegionsUnshifted: ChatHitRegion[];
+};
+
 /**
  * Container - a component that contains other components
  */
@@ -347,11 +355,16 @@ export class TUI extends Container {
 	private chatScrollOffset = 0;
 	private lastChatViewportHeight = 1;
 	private lastChatScrollMax = 0;
+	private chatLaidOut = false;
+	private chatUsesGutter = false;
+	/** Bumped on non-scroll `requestRender` so offset-only paints can reuse chat layout. */
+	private contentEpoch = 0;
+	private chatLayoutCache: ChatLayoutCache | undefined;
 	private alternateScreen = false;
 	private alternateScreenActive = false;
 	private mouseTrackingActive = false;
 	private static readonly WHEEL_LINES = 3;
-	private chatHitRegions: Array<{ y0: number; y1: number; lines: string[] }> = [];
+	private chatHitRegions: ChatHitRegion[] = [];
 	private chatScrollbar: { x: number; y0: number; y1: number; viewH: number; scrollMax: number } | undefined;
 	private selection: { anchorY: number; focusY: number } | undefined;
 
@@ -399,6 +412,9 @@ export class TUI extends Container {
 	 */
 	pinFrom(component: Component | null): void {
 		this.pinComponent = component;
+		this.chatLayoutCache = undefined;
+		this.chatUsesGutter = false;
+		this.chatLaidOut = false;
 		if (!component) {
 			this.chatScrollOffset = 0;
 			this.lastChatViewportHeight = Math.max(1, this.terminal.rows);
@@ -415,14 +431,17 @@ export class TUI extends Container {
 	/** `0` follows the latest chat. Larger values scroll up into history. */
 	setChatScroll(offset: number): void {
 		const next = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
-		this.chatScrollOffset = next;
-		if (this.getPinIndex() >= 0) {
-			this.render(this.terminal.columns);
-		} else {
+		if (this.getPinIndex() < 0) {
+			const changed = this.chatScrollOffset !== 0 || this.lastChatScrollMax !== 0;
 			this.chatScrollOffset = 0;
 			this.lastChatScrollMax = 0;
+			if (changed && this.started) this.requestRender();
+			return;
 		}
-		if (this.started) this.requestRender();
+		const clamped = this.chatLaidOut ? Math.min(next, this.lastChatScrollMax) : next;
+		if (clamped === this.chatScrollOffset) return;
+		this.chatScrollOffset = clamped;
+		if (this.started) this.requestRenderFromScroll();
 	}
 
 	/** Positive delta scrolls up (older). Negative scrolls toward the latest. */
@@ -645,6 +664,9 @@ export class TUI extends Container {
 		if (pinIndex < 0) {
 			this.chatHitRegions = [];
 			this.chatScrollbar = undefined;
+			this.chatLayoutCache = undefined;
+			this.chatUsesGutter = false;
+			this.chatLaidOut = false;
 			return super.render(width);
 		}
 
@@ -659,15 +681,44 @@ export class TUI extends Container {
 
 		const viewH = Math.max(minView, rows - dockLines.length);
 		this.lastChatViewportHeight = viewH;
+		this.chatLaidOut = true;
 
-		this.chatHitRegions = [];
-		const chatWidthProbe = this.collectChildLines(0, pinIndex, width);
-		const showScrollbar = chatWidthProbe.length > viewH;
-		const chatWidth = showScrollbar ? Math.max(1, width - 1) : width;
-		let scrollLines = chatWidthProbe;
-		if (showScrollbar) {
+		let chatWidth = this.chatUsesGutter ? Math.max(1, width - 1) : width;
+		let scrollLines: string[];
+		let fromCache = false;
+		const cache = this.chatLayoutCache;
+		if (cache && cache.epoch === this.contentEpoch && cache.chatWidth === chatWidth) {
+			scrollLines = cache.scrollLines;
+			this.chatHitRegions = this.copyHitRegions(cache.hitRegionsUnshifted);
+			fromCache = true;
+		} else {
 			this.chatHitRegions = [];
 			scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
+		}
+
+		if (this.chatUsesGutter) {
+			if (scrollLines.length <= viewH) {
+				this.chatUsesGutter = false;
+				chatWidth = width;
+				this.chatHitRegions = [];
+				scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
+				fromCache = false;
+			}
+		} else if (scrollLines.length > viewH) {
+			this.chatUsesGutter = true;
+			chatWidth = Math.max(1, width - 1);
+			this.chatHitRegions = [];
+			scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
+			fromCache = false;
+		}
+
+		if (!fromCache) {
+			this.chatLayoutCache = {
+				epoch: this.contentEpoch,
+				chatWidth,
+				scrollLines,
+				hitRegionsUnshifted: this.copyHitRegions(this.chatHitRegions),
+			};
 		}
 
 		let chatSlice: string[];
@@ -677,7 +728,7 @@ export class TUI extends Container {
 			this.chatScrollOffset = 0;
 			this.lastChatScrollMax = 0;
 			this.chatScrollbar = undefined;
-			chatSlice = scrollLines;
+			chatSlice = scrollLines.slice();
 		} else {
 			this.lastChatScrollMax = scrollLines.length - viewH;
 			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.lastChatScrollMax));
@@ -707,14 +758,19 @@ export class TUI extends Container {
 		if (this.selection) {
 			const lo = Math.min(this.selection.anchorY, this.selection.focusY);
 			const hi = Math.max(this.selection.anchorY, this.selection.focusY);
+			const highlightWidth = this.chatUsesGutter ? chatWidth : width;
 			for (let y = lo; y <= hi; y++) {
 				const idx = y - 1;
 				if (idx < 0 || idx >= chatSlice.length) continue;
-				chatSlice[idx] = applySelectionHighlight(chatSlice[idx] ?? "", showScrollbar ? chatWidth : width);
+				chatSlice[idx] = applySelectionHighlight(chatSlice[idx] ?? "", highlightWidth);
 			}
 		}
 
 		return [...chatSlice, ...dockLines];
+	}
+
+	private copyHitRegions(regions: ChatHitRegion[]): ChatHitRegion[] {
+		return regions.map((region) => ({ y0: region.y0, y1: region.y1, lines: region.lines }));
 	}
 
 	private shiftHitRegions(delta: number): void {
@@ -959,6 +1015,15 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
+		this.contentEpoch++;
+		this.queueRender(force);
+	}
+
+	private requestRenderFromScroll(): void {
+		this.queueRender(false);
+	}
+
+	private queueRender(force: boolean): void {
 		if (force) {
 			this.previousLines = [];
 			this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
@@ -1076,7 +1141,7 @@ export class TUI extends Container {
 		}
 	}
 
-	private hitSelectable(y: number): { y0: number; y1: number; lines: string[] } | undefined {
+	private hitSelectable(y: number): ChatHitRegion | undefined {
 		return this.chatHitRegions.find((region) => y >= region.y0 + 1 && y <= region.y1 + 1);
 	}
 
