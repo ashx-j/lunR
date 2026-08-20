@@ -42,6 +42,8 @@ export class ToolExecutionComponent extends Container {
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
+	private groupContinuation = false;
+	private groupFollowed = false;
 
 	constructor(
 		toolName: string,
@@ -138,6 +140,7 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
+			result: this.result,
 		};
 	}
 
@@ -227,16 +230,41 @@ export class ToolExecutionComponent extends Container {
 	// spacer and top box pad so adjacent same-bg boxes read as one continuous
 	// background; the last card in a run keeps its bottom pad.
 	setGroupContinuation(on: boolean): void {
+		this.groupContinuation = on;
 		this.topSpacer.setLines(on ? 0 : 1);
-		this.contentBox.setPaddingTop(on ? 0 : 1);
+		this.applyGroupPadding();
 		this.invalidate();
 	}
 
 	// lunr: previous card in a same-name run drops its bottom pad so the next
 	// header sits flush. Singletons and mixed neighbors keep paddingBottom = 1.
 	setGroupFollowed(on: boolean): void {
-		this.contentBox.setPaddingBottom(on ? 0 : 1);
+		this.groupFollowed = on;
+		this.applyGroupPadding();
 		this.invalidate();
+	}
+
+	private applyGroupPadding(): void {
+		const top = this.groupContinuation ? 0 : 1;
+		const bottom = this.groupFollowed ? 0 : 1;
+		this.contentBox.setPaddingTop(top);
+		this.contentBox.setPaddingBottom(bottom);
+		this.contentText.setPaddingTop(top);
+		this.contentText.setPaddingBottom(bottom);
+		if (this.getRenderShell() === "self" && this.callRendererComponent instanceof Box) {
+			this.callRendererComponent.setPaddingTop(top);
+			this.callRendererComponent.setPaddingBottom(bottom);
+		}
+	}
+
+	private shouldSkipCompactResult(): boolean {
+		return (
+			this.getRenderShell() === "default" &&
+			this.result !== undefined &&
+			!this.isPartial &&
+			!this.expanded &&
+			!this.result.isError
+		);
 	}
 
 	setShowImages(show: boolean): void {
@@ -267,7 +295,9 @@ export class ToolExecutionComponent extends Container {
 
 			const lines: string[] = [];
 			if (contentLines.length > 0) {
-				lines.push("");
+				if (!this.groupContinuation) {
+					lines.push("");
+				}
 				lines.push(...contentLines);
 			}
 			for (let i = 0; i < this.imageComponents.length; i++) {
@@ -320,12 +350,15 @@ export class ToolExecutionComponent extends Container {
 			}
 
 			if (this.result) {
+				const skipCompactBody = this.shouldSkipCompactResult();
 				const resultRenderer = this.getResultRenderer();
 				if (!resultRenderer) {
-					const component = this.createResultFallback();
-					if (component) {
-						renderContainer.addChild(component);
-						hasContent = true;
+					if (!skipCompactBody) {
+						const component = this.createResultFallback();
+						if (component) {
+							renderContainer.addChild(component);
+							hasContent = true;
+						}
 					}
 				} else {
 					try {
@@ -336,14 +369,18 @@ export class ToolExecutionComponent extends Container {
 							this.getRenderContext(this.resultRendererComponent),
 						);
 						this.resultRendererComponent = component;
-						renderContainer.addChild(component);
-						hasContent = true;
-					} catch {
-						this.resultRendererComponent = undefined;
-						const component = this.createResultFallback();
-						if (component) {
+						if (!skipCompactBody) {
 							renderContainer.addChild(component);
 							hasContent = true;
+						}
+					} catch {
+						this.resultRendererComponent = undefined;
+						if (!skipCompactBody) {
+							const component = this.createResultFallback();
+							if (component) {
+								renderContainer.addChild(component);
+								hasContent = true;
+							}
 						}
 					}
 				}
@@ -392,6 +429,8 @@ export class ToolExecutionComponent extends Container {
 		if (this.hasRendererDefinition() && !hasContent && this.imageComponents.length === 0) {
 			this.hideComponent = true;
 		}
+
+		this.applyGroupPadding();
 	}
 
 	private getTextOutput(): string {
@@ -400,6 +439,9 @@ export class ToolExecutionComponent extends Container {
 
 	private formatToolExecution(): string {
 		let text = `${this.getStatusDot()} ${theme.fg("toolTitle", theme.bold(this.toolName))}`;
+		if (!this.isPartial && !this.expanded && !this.result?.isError) {
+			return text;
+		}
 		const content = JSON.stringify(this.args, null, 2);
 		if (content) {
 			text += `\n\n${content}`;

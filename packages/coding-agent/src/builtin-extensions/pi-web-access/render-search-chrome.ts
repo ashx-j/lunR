@@ -86,7 +86,8 @@ export function formatSearchChrome(options) {
 	if (options.expanded) {
 		return { call: call.title, result: options.queries.slice() };
 	}
-	return { call: call.title, result: [formatSearchStatusLine(options.details)] };
+	const status = options.details ? formatSearchStatusLine(options.details) : "";
+	return { call: status ? `${call.title} · ${status}` : call.title, result: [] };
 }
 
 export function formatFetchChrome(options) {
@@ -94,5 +95,6 @@ export function formatFetchChrome(options) {
 	if (options.expanded) {
 		return { call: call.title, result: options.urls.slice() };
 	}
-	return { call: call.title, result: [formatFetchStatusLine(options.details)] };
+	const status = options.details ? formatFetchStatusLine(options.details) : "";
+	return { call: status ? `${call.title} · ${status}` : call.title, result: [] };
 }

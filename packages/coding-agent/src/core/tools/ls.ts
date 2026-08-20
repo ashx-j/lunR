@@ -7,7 +7,13 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
-import { extractTrailingNotice, getTextOutput, renderToolPath, str, toolStatusDotFromContext } from "./render-utils.ts";
+import {
+	getTextOutput,
+	renderToolFileName,
+	renderToolPath,
+	str,
+	toolStatusDotFromContext,
+} from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -49,9 +55,17 @@ export interface LsToolOptions {
 	operations?: LsOperations;
 }
 
-function formatLsCall(args: { path?: string; limit?: number } | undefined, theme: Theme, cwd: string): string {
+function formatLsCall(
+	args: { path?: string; limit?: number } | undefined,
+	theme: Theme,
+	cwd: string,
+	compact = false,
+): string {
 	const limit = args?.limit;
-	const pathDisplay = renderToolPath(str(args?.path), theme, cwd, { emptyFallback: "." });
+	const rawPath = str(args?.path);
+	const pathDisplay = compact
+		? renderToolFileName(rawPath || ".", theme, cwd)
+		: renderToolPath(rawPath, theme, cwd, { emptyFallback: "." });
 	let text = `${theme.fg("toolTitle", theme.bold("ls"))} ${pathDisplay}`;
 	if (limit !== undefined) {
 		text += theme.fg("toolOutput", ` (limit ${limit})`);
@@ -209,17 +223,18 @@ export function createLsToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(`${toolStatusDotFromContext(context, theme)} ${formatLsCall(args, theme, context.cwd)}`);
+			text.setText(
+				`${toolStatusDotFromContext(context, theme)} ${formatLsCall(args, theme, context.cwd, !context.expanded)}`,
+			);
 			return text;
 		},
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result); a trailing
-			// truncation/limit notice stays visible.
+			// render header-only (ctrl+o reveals the full result). Notices stay in
+			// execute() output for the model, not in TUI chrome.
 			if (!options.isPartial && !options.expanded && !context.isError) {
-				const notice = extractTrailingNotice(getTextOutput(result as any, context.showImages));
-				text.setText(notice ? `\n${theme.fg("warning", notice)}` : "");
+				text.setText("");
 				return text;
 			}
 			text.setText(formatLsResult(result as any, options, theme, context.showImages));

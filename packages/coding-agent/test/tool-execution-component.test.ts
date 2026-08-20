@@ -5,8 +5,13 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
+import { createEditToolDefinition } from "../src/core/tools/edit.ts";
+import { createFindToolDefinition } from "../src/core/tools/find.ts";
+import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
+import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import { formatSearchChrome } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
 import { applySameToolGrouping, ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -52,6 +57,177 @@ function compactRead(toolCallId: string, path: string): ToolExecutionComponent {
 	return component;
 }
 
+function compactBash(toolCallId: string, command: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"bash",
+		toolCallId,
+		{ command },
+		{},
+		createBashToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.markExecutionStarted();
+	component.updateResult({ content: [{ type: "text", text: "ok" }], details: undefined, isError: false }, false);
+	return component;
+}
+
+function compactWrite(toolCallId: string, path: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"write",
+		toolCallId,
+		{ path, content: "hello" },
+		{},
+		createWriteToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult(
+		{ content: [{ type: "text", text: `Successfully wrote 5 bytes to ${path}` }], details: undefined, isError: false },
+		false,
+	);
+	return component;
+}
+
+function compactGrep(toolCallId: string, pattern: string, withNotice = false): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"grep",
+		toolCallId,
+		{ pattern },
+		{},
+		createGrepToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	const body = withNotice
+		? `src/a.ts:10: ${pattern}\n\n[50 matches limit reached. Use limit=100 for more, or refine pattern]`
+		: `src/a.ts:10: ${pattern}`;
+	component.updateResult(
+		{
+			content: [{ type: "text", text: body }],
+			details: withNotice ? { matchLimitReached: 50 } : undefined,
+			isError: false,
+		},
+		false,
+	);
+	return component;
+}
+
+function compactFind(toolCallId: string, pattern: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"find",
+		toolCallId,
+		{ pattern },
+		{},
+		createFindToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult(
+		{
+			content: [{ type: "text", text: `src/${pattern}\n\n[1000 files limit reached]` }],
+			details: { truncation: { truncated: true } },
+			isError: false,
+		},
+		false,
+	);
+	return component;
+}
+
+function compactLs(toolCallId: string, path: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"ls",
+		toolCallId,
+		{ path },
+		{},
+		createLsToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult(
+		{ content: [{ type: "text", text: "a.ts\nb.ts\n\n[500 entries limit reached]" }], details: undefined, isError: false },
+		false,
+	);
+	return component;
+}
+
+function compactEdit(toolCallId: string, path: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"edit",
+		toolCallId,
+		{ path, edits: [{ oldText: "a", newText: "b" }] },
+		{},
+		createEditToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult(
+		{
+			content: [{ type: "text", text: `Successfully replaced 1 block(s) in ${path}` }],
+			details: { diff: "+b", patch: "", firstChangedLine: 1 },
+			isError: false,
+		},
+		false,
+	);
+	return component;
+}
+
+function compactSearch(toolCallId: string, query: string, totalResults: number): ToolExecutionComponent {
+	const toolDefinition: ToolDefinition = {
+		...createBaseToolDefinition("web_search"),
+		renderCall: (args, theme, context) => {
+			const chrome = formatSearchChrome({
+				queries: [String((args as { query?: string }).query ?? "")],
+				details: context.result?.details,
+				expanded: context.expanded,
+			});
+			return new Text(chrome.call, 0, 0);
+		},
+		renderResult: (_result, options) => new Text(options.expanded ? "query-list" : "count-line", 0, 0),
+	};
+	const component = new ToolExecutionComponent(
+		"web_search",
+		toolCallId,
+		{ query },
+		{},
+		toolDefinition,
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult(
+		{
+			content: [{ type: "text", text: "ok" }],
+			details: { queryCount: 1, successfulQueries: 1, totalResults },
+			isError: false,
+		},
+		false,
+	);
+	return component;
+}
+
+function compactFallback(toolCallId: string, name: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		name,
+		toolCallId,
+		{ foo: "bar" },
+		{},
+		undefined,
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult({ content: [{ type: "text", text: "body" }], details: {}, isError: false }, false);
+	return component;
+}
+
+function assertFlushPair(lines: string[], firstNeedle: string, secondNeedle: string): void {
+	const firstIdx = headerIndex(lines, firstNeedle);
+	const secondIdx = headerIndex(lines, secondNeedle);
+	expect(firstIdx).toBeGreaterThan(0);
+	expect(secondIdx).toBe(firstIdx + 1);
+	expect(isBlank(lines[firstIdx - 1])).toBe(true);
+	expect(isBlank(lines[secondIdx + 1])).toBe(true);
+}
+
 function renderGroupedTools(...components: ToolExecutionComponent[]): string[] {
 	const parent = new Container();
 	let previous: ToolExecutionComponent | undefined;
@@ -95,9 +271,14 @@ describe("ToolExecutionComponent parity", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("custom call");
-		expect(rendered).toContain("custom result");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("custom call");
+		expect(collapsed).not.toContain("custom result");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("custom call");
+		expect(expanded).toContain("custom result");
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {
@@ -278,6 +459,12 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("read");
+		expect(collapsed).toContain("README.md");
+		expect(collapsed).not.toContain("override result");
+
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("read");
 		expect(rendered).toContain("README.md");
@@ -300,6 +487,11 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("override call");
+		expect(collapsed).not.toContain("override result");
+
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("override call");
 		expect(rendered).toContain("override result");
@@ -323,6 +515,11 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("wrapped override call");
+		expect(collapsed).not.toContain("wrapped override result");
+
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("wrapped override call");
 		expect(rendered).toContain("wrapped override result");
@@ -351,6 +548,11 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("custom call shared-token");
+		expect(collapsed).not.toContain("custom result shared-token");
+
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call shared-token");
 		expect(rendered).toContain("custom result shared-token");
@@ -374,6 +576,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("arg:bar");
 	});
@@ -393,6 +596,11 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("custom_tool");
+		expect(collapsed).not.toContain("done");
+
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom_tool");
 		expect(rendered).toContain("done");
@@ -789,7 +997,7 @@ describe("ToolExecutionComponent density", () => {
 		expect(expanded).toContain("usage here");
 	});
 
-	test("compact grep results keep a trailing truncation/limit notice", () => {
+	test("compact grep results hide the trailing truncation/limit notice until expanded", () => {
 		const component = new ToolExecutionComponent(
 			"grep",
 			"tool-grep-notice",
@@ -813,9 +1021,71 @@ describe("ToolExecutionComponent density", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).not.toContain("usage here");
-		expect(rendered).toContain("[50 matches limit reached");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).not.toContain("usage here");
+		expect(collapsed).not.toContain("[50 matches limit reached");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("[50 matches limit reached");
+	});
+
+	test("consecutive compact bash calls sit flush with pad at the group edges", () => {
+		const lines = renderGroupedTools(compactBash("tool-bash-a", "echo one"), compactBash("tool-bash-b", "echo two"));
+		assertFlushPair(lines, "$ echo one", "$ echo two");
+	});
+
+	test("consecutive compact writes sit flush with basename headers", () => {
+		const lines = renderGroupedTools(compactWrite("tool-write-a", "a.ts"), compactWrite("tool-write-b", "b.ts"));
+		assertFlushPair(lines, "write a.ts", "write b.ts");
+	});
+
+	test("consecutive compact greps with truncation notices sit flush", () => {
+		const lines = renderGroupedTools(
+			compactGrep("tool-grep-a", "foo", true),
+			compactGrep("tool-grep-b", "bar", true),
+		);
+		assertFlushPair(lines, "grep /foo/", "grep /bar/");
+		expect(lines.join("\n")).not.toContain("matches limit reached");
+	});
+
+	test("consecutive compact finds sit flush", () => {
+		const lines = renderGroupedTools(compactFind("tool-find-a", "*.ts"), compactFind("tool-find-b", "*.js"));
+		assertFlushPair(lines, "find *.ts", "find *.js");
+	});
+
+	test("consecutive compact ls calls sit flush", () => {
+		const lines = renderGroupedTools(compactLs("tool-ls-a", "src"), compactLs("tool-ls-b", "test"));
+		assertFlushPair(lines, "ls src", "ls test");
+	});
+
+	test("consecutive compact edits sit flush", () => {
+		const lines = renderGroupedTools(compactEdit("tool-edit-a", "a.ts"), compactEdit("tool-edit-b", "b.ts"));
+		assertFlushPair(lines, "edit a.ts", "edit b.ts");
+	});
+
+	test("consecutive compact searches sit flush with the count folded into the header", () => {
+		const lines = renderGroupedTools(
+			compactSearch("tool-search-a", "oauth", 12),
+			compactSearch("tool-search-b", "catalog", 4),
+		);
+		assertFlushPair(lines, 'search "oauth"', 'search "catalog"');
+		expect(headerIndex(lines, "12 sources")).toBe(headerIndex(lines, 'search "oauth"'));
+		expect(headerIndex(lines, "count-line")).toBe(-1);
+	});
+
+	test("consecutive fallback tools sit flush", () => {
+		const lines = renderGroupedTools(
+			compactFallback("tool-fb-a", "unknown_tool"),
+			compactFallback("tool-fb-b", "unknown_tool"),
+		);
+		const indexes = lines
+			.map((line, index) => (stripAnsi(line).includes("unknown_tool") ? index : -1))
+			.filter((index) => index >= 0);
+		expect(indexes).toHaveLength(2);
+		expect(indexes[1]).toBe(indexes[0]! + 1);
+		expect(isBlank(lines[indexes[0]! - 1])).toBe(true);
+		expect(isBlank(lines[indexes[1]! + 1])).toBe(true);
 	});
 
 	test("errored grep calls render the full result", () => {

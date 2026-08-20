@@ -118,3 +118,14 @@ export function renderToolFileName(rawPath: string | null, theme: Theme, cwd: st
 	const name = basename(rawPath) || rawPath;
 	return linkPath(theme.fg("accent", name), rawPath, cwd);
 }
+
+/**
+ * Collapsed grep/find path. Omits cwd (`.` / empty) so the header stays one line.
+ * Other paths are basename-only and hyperlinked.
+ */
+export function renderCollapsedSearchPath(rawPath: string | null, theme: Theme, cwd: string): string | undefined {
+	if (rawPath === null) return invalidArgText(theme);
+	const value = rawPath.trim();
+	if (!value || value === "." || value === "./") return undefined;
+	return renderToolFileName(value, theme, cwd);
+}
