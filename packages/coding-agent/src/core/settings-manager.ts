@@ -149,6 +149,7 @@ export interface Settings {
 	footerContext?: boolean; // default: true - show the context-usage pct/window segment
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research/tps status segments
+	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
 	// lunr: rollback settings
@@ -1053,6 +1054,16 @@ export class SettingsManager {
 	setFooterStatuses(enabled: boolean): void {
 		this.globalSettings.footerStatuses = enabled;
 		this.markModified("footerStatuses");
+		this.save();
+	}
+
+	getFooterGit(): boolean {
+		return this.settings.footerGit ?? true;
+	}
+
+	setFooterGit(enabled: boolean): void {
+		this.globalSettings.footerGit = enabled;
+		this.markModified("footerGit");
 		this.save();
 	}
 

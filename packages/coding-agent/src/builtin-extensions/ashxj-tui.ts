@@ -44,6 +44,7 @@ interface CustomizeBridgeForPrompt {
 	getFooterContext?(): boolean;
 	getFooterTokens?(): boolean;
 	getFooterStatuses?(): boolean;
+	getFooterGit?(): boolean;
 }
 interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
@@ -59,7 +60,14 @@ function lunrPromptSymbolEnabled(): boolean {
 }
 // lunr: footer toggles, read at render time. Bridgeless / missing-getter fallback
 // matches the settings-manager defaults: MCP on, LSP off, everything else on.
-function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; tokens: boolean; statuses: boolean } {
+function lunrFooterToggles(): {
+	mcp: boolean;
+	lsp: boolean;
+	context: boolean;
+	tokens: boolean;
+	statuses: boolean;
+	git: boolean;
+} {
 	const bridge = lunrCustomizeBridge();
 	return {
 		mcp: bridge?.getFooterMcp?.() ?? true,
@@ -67,6 +75,7 @@ function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; to
 		context: bridge?.getFooterContext?.() ?? true,
 		tokens: bridge?.getFooterTokens?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
+		git: bridge?.getFooterGit?.() ?? true,
 	};
 }
 // lunr: permission mode for the footer safety indicator (always shown).
@@ -147,6 +156,7 @@ interface AutocompleteListLike {
 /** Trimmed view of pi's `ReadonlyFooterDataProvider`. */
 interface ReadonlyFooterDataProvider {
 	getGitBranch(): string | null;
+	getGitDiffstat?(): { added: number; removed: number } | null;
 	getExtensionStatuses(): ReadonlyMap<string, string>;
 	getAvailableProviderCount(): number;
 	onBranchChange(callback: () => void): () => void;
@@ -657,6 +667,20 @@ function renderStatsLine(
 	}
 	if (modeZone.length > 0) {
 		parts.unshift(modeZone.join(color(theme, "dim", " · ")));
+	}
+
+	// lunr: git branch + working-tree +/- vs HEAD (gated on footerGit).
+	if (footerToggles.git) {
+		const branch = footerData.getGitBranch?.();
+		if (branch) {
+			const diff = footerData.getGitDiffstat?.();
+			let gitSeg = color(theme, "white", branch);
+			if (diff && (diff.added !== 0 || diff.removed !== 0)) {
+				gitSeg +=
+					` ${color(theme, "success", `+${diff.added}`)} ${color(theme, "error", `-${diff.removed}`)}`;
+			}
+			parts.push(gitSeg);
+		}
 	}
 
 	// 2) Context usage: `pct/window` (lunr: gated on footerContext).

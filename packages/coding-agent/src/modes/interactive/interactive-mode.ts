@@ -4621,6 +4621,7 @@ export class InteractiveMode {
 					footerContext: this.settingsManager.getFooterContext(),
 					footerTokens: this.settingsManager.getFooterTokens(),
 					footerStatuses: this.settingsManager.getFooterStatuses(),
+					footerGit: this.settingsManager.getFooterGit(),
 					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
 					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
 					rollbackTurns: this.settingsManager.getRollbackTurns(),
@@ -4822,6 +4823,9 @@ export class InteractiveMode {
 					},
 					onFooterStatusesChange: (enabled) => {
 						this.settingsManager.setFooterStatuses(enabled);
+					},
+					onFooterGitChange: (enabled) => {
+						this.settingsManager.setFooterGit(enabled);
 					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);

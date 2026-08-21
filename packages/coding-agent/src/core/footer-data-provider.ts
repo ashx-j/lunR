@@ -58,6 +58,60 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
 	return branch || null;
 }
 
+/** Sum added/removed columns from `git diff --numstat`. Binary rows (`-`) are ignored. */
+export function parseGitNumstat(stdout: string): { added: number; removed: number } {
+	let added = 0;
+	let removed = 0;
+	for (const line of stdout.split(/\r?\n/)) {
+		if (!line) continue;
+		const tab1 = line.indexOf("\t");
+		if (tab1 <= 0) continue;
+		const tab2 = line.indexOf("\t", tab1 + 1);
+		if (tab2 < 0) continue;
+		const addTok = line.slice(0, tab1);
+		const delTok = line.slice(tab1 + 1, tab2);
+		if (addTok !== "-") {
+			const n = Number(addTok);
+			if (Number.isFinite(n)) added += n;
+		}
+		if (delTok !== "-") {
+			const n = Number(delTok);
+			if (Number.isFinite(n)) removed += n;
+		}
+	}
+	return { added, removed };
+}
+
+function resolveDiffstatWithGitSync(repoDir: string): { added: number; removed: number } | null {
+	const result = spawnSync("git", ["--no-optional-locks", "diff", "--numstat", "HEAD"], {
+		cwd: repoDir,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	if (result.status !== 0) return null;
+	return parseGitNumstat(result.stdout ?? "");
+}
+
+function resolveDiffstatWithGitAsync(repoDir: string): Promise<{ added: number; removed: number } | null> {
+	return new Promise((resolvePromise) => {
+		execFile(
+			"git",
+			["--no-optional-locks", "diff", "--numstat", "HEAD"],
+			{
+				cwd: repoDir,
+				encoding: "utf8",
+			},
+			(error: ExecFileException | null, stdout: string) => {
+				if (error) {
+					resolvePromise(null);
+					return;
+				}
+				resolvePromise(parseGitNumstat(stdout));
+			},
+		);
+	});
+}
+
 /** Ask git for the current branch asynchronously. Returns null on detached HEAD or if git is unavailable. */
 function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
 	return new Promise((resolvePromise) => {
@@ -102,6 +156,7 @@ export class FooterDataProvider {
 
 	private extensionStatuses = new Map<string, string>();
 	private cachedBranch: string | null | undefined = undefined;
+	private cachedDiffstat: { added: number; removed: number } | null | undefined = undefined;
 	private gitPaths: GitPaths | null | undefined = undefined;
 	private headWatcher: FSWatcher | null = null;
 	private headWatchFilePath: string | null = null;
@@ -129,6 +184,14 @@ export class FooterDataProvider {
 			this.cachedBranch = this.resolveGitBranchSync();
 		}
 		return this.cachedBranch;
+	}
+
+	/** Staged + unstaged added/removed vs HEAD. Null when not a repo or git failed. */
+	getGitDiffstat(): { added: number; removed: number } | null {
+		if (this.cachedDiffstat === undefined) {
+			this.cachedDiffstat = this.gitPaths ? resolveDiffstatWithGitSync(this.gitPaths.repoDir) : null;
+		}
+		return this.cachedDiffstat;
 	}
 
 	/** Extension status texts set via ctx.ui.setStatus() */
@@ -178,6 +241,7 @@ export class FooterDataProvider {
 		}
 		this.clearGitWatchers();
 		this.cachedBranch = undefined;
+		this.cachedDiffstat = undefined;
 		this.gitPaths = findGitPaths(cwd);
 		this.setupGitWatcher();
 		this.notifyBranchChange();
@@ -220,13 +284,18 @@ export class FooterDataProvider {
 		this.refreshInFlight = true;
 		try {
 			const nextBranch = await this.resolveGitBranchAsync();
+			const nextDiff = this.gitPaths ? await resolveDiffstatWithGitAsync(this.gitPaths.repoDir) : null;
 			if (this.disposed) return;
-			if (this.cachedBranch !== undefined && this.cachedBranch !== nextBranch) {
-				this.cachedBranch = nextBranch;
-				this.notifyBranchChange();
-				return;
-			}
+			const branchChanged = this.cachedBranch !== undefined && this.cachedBranch !== nextBranch;
+			const prevDiff = this.cachedDiffstat;
+			const diffChanged =
+				prevDiff !== undefined &&
+				(prevDiff?.added !== nextDiff?.added || prevDiff?.removed !== nextDiff?.removed);
 			this.cachedBranch = nextBranch;
+			this.cachedDiffstat = nextDiff;
+			if (branchChanged || diffChanged) {
+				this.notifyBranchChange();
+			}
 		} finally {
 			this.refreshInFlight = false;
 			if (this.refreshPending && !this.disposed) {
@@ -316,7 +385,7 @@ export class FooterDataProvider {
 		this.headWatcher = watchWithErrorHandler(
 			dirname(this.gitPaths.headPath),
 			(_eventType, filename) => {
-				if (!filename || filename === "HEAD") {
+				if (!filename || filename === "HEAD" || filename === "index") {
 					this.scheduleRefresh();
 				}
 			},
@@ -384,5 +453,5 @@ export class FooterDataProvider {
 /** Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose */
 export type ReadonlyFooterDataProvider = Pick<
 	FooterDataProvider,
-	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange"
+	"getGitBranch" | "getGitDiffstat" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange"
 >;

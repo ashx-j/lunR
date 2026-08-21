@@ -106,6 +106,7 @@ export interface SettingsConfig {
 	footerContext: boolean;
 	footerTokens: boolean;
 	footerStatuses: boolean;
+	footerGit: boolean;
 	// lunr: permission mode default
 	defaultPermissionMode: DefaultPermissionMode;
 	// lunr: rollback settings
@@ -162,6 +163,7 @@ export interface SettingsCallbacks {
 	onFooterContextChange: (enabled: boolean) => void;
 	onFooterTokensChange: (enabled: boolean) => void;
 	onFooterStatusesChange: (enabled: boolean) => void;
+	onFooterGitChange: (enabled: boolean) => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
 	// lunr: rollback callbacks
@@ -432,6 +434,13 @@ class CustomizeSubmenu extends Container {
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
+			{
+				id: "footer-git",
+				label: "Footer: git branch",
+				description: "Show the current git branch and added/removed line counts in the footer stats line.",
+				currentValue: (bridge?.getFooterGit() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
 		];
 
 		this.settingsList = new SettingsList(
@@ -460,6 +469,9 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "footer-statuses":
 						callbacks.onFooterStatusesChange(newValue === "on");
+						break;
+					case "footer-git":
+						callbacks.onFooterGitChange(newValue === "on");
 						break;
 				}
 			},
