@@ -235,6 +235,14 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	handleClick(_localY: number, _width: number): boolean {
+		if (this.isPartial) return false;
+		if (this.toolName === "subagent" || this.toolName === "subagent_wait") return false;
+		this.setExpanded(!this.expanded);
+		this.ui.requestRender();
+		return true;
+	}
+
 	// lunr: consecutive same-tool grouping — exposes the tool name so the caller
 	// can detect adjacency.
 	getToolName(): string {

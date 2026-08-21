@@ -171,6 +171,22 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("First sentence of reasoning. More detail follows here.");
 	});
 
+	test("handleClick on the thought header expands just that run", () => {
+		initTheme("moon");
+
+		const component = createCollapsedThinkingComponent();
+		const before = component.render(80);
+		const y = before.findIndex((line) => stripAnsi(line).includes("Thought"));
+		expect(y).toBeGreaterThanOrEqual(0);
+		expect(component.handleClick(y, 80)).toBe(true);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("More detail follows here.");
+		expect(component.handleClick(y, 80)).toBe(true);
+		const collapsed = stripAnsi(component.render(80).join("\n"));
+		expect(collapsed).toContain("✻ Thought");
+		expect(collapsed).not.toContain("More detail follows here.");
+	});
+
 	test("setExpanded(false) re-collapses the thinking run", () => {
 		initTheme("moon");
 

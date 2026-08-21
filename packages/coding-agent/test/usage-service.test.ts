@@ -6,6 +6,8 @@ import {
 	clearPlanUsageCache,
 	getPlanUsage,
 	getPlanUsageResult,
+	footerPlanLabel,
+	pickPlanWindow,
 	planUsageAuthError,
 } from "../src/core/usage-service.ts";
 import {
@@ -429,6 +431,33 @@ describe("renderUsageBox", () => {
 function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
+
+describe("pickPlanWindow", () => {
+	const weekly = { label: "Weekly", usedPercent: 32 };
+	const fiveH = { label: "5h", usedPercent: 71 };
+	const extra = { label: "Extra", usedPercent: 10 };
+
+	it("prefers 5h and falls back to weekly when 5h is absent", () => {
+		expect(pickPlanWindow({ provider: "xai", windows: [weekly] }, "5h")).toEqual(weekly);
+		expect(pickPlanWindow({ provider: "openai-codex", windows: [weekly, fiveH] }, "5h")).toEqual(fiveH);
+	});
+
+	it("prefers weekly and falls back to 5h", () => {
+		expect(pickPlanWindow({ provider: "openai-codex", windows: [weekly, fiveH] }, "weekly")).toEqual(weekly);
+		expect(pickPlanWindow({ provider: "openai-codex", windows: [fiveH] }, "weekly")).toEqual(fiveH);
+	});
+
+	it("skips Extra windows and returns undefined when empty", () => {
+		expect(pickPlanWindow({ provider: "xai", windows: [weekly, extra] }, "weekly")).toEqual(weekly);
+		expect(pickPlanWindow({ provider: "xai", windows: [] }, "weekly")).toBeUndefined();
+		expect(pickPlanWindow(undefined, "weekly")).toBeUndefined();
+	});
+
+	it("labels 5h and weekly compactly", () => {
+		expect(footerPlanLabel(fiveH)).toBe("5h");
+		expect(footerPlanLabel(weekly)).toBe("wk");
+	});
+});
 
 describe("usage view helpers", () => {
 	it("usageBar renders 20 cells proportional to the percent", () => {

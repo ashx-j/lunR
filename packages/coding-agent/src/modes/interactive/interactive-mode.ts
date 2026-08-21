@@ -9,7 +9,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt, Credential } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
+import {
+	type AssistantMessage,
+	getSupportedThinkingLevels,
+	type ImageContent,
+	type Message,
+	type Model,
+} from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -97,6 +103,8 @@ import {
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
+import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
+import { getUsageServiceBridge } from "../../core/usage-service.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import {
@@ -876,6 +884,8 @@ export class InteractiveMode {
 		this.ui.start();
 		this.isInitialized = true;
 		time("ui.start");
+		void this.maybeNotifyCliUpdate();
+		this.startPlanUsagePolling();
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
@@ -960,6 +970,37 @@ export class InteractiveMode {
 	async waitForDeferredBuiltins(): Promise<void> {
 		if (this.deferredBuiltinAttachPromise) {
 			await this.deferredBuiltinAttachPromise;
+		}
+	}
+
+	private planUsageTimer: ReturnType<typeof setInterval> | undefined;
+
+	private startPlanUsagePolling(): void {
+		const bridge = getUsageServiceBridge();
+		if (!bridge) return;
+		bridge.setOnUpdate(() => this.ui.requestRender());
+		const tick = () => {
+			const provider = this.session.model?.provider;
+			if (provider) bridge.prefetch(provider);
+		};
+		tick();
+		this.planUsageTimer = setInterval(tick, 60_000);
+		this.planUsageTimer.unref?.();
+	}
+
+	/** Background npm version check. Never blocks first paint. Workspace installs skip. */
+	private async maybeNotifyCliUpdate(): Promise<void> {
+		try {
+			const result = await checkForUpdate({
+				currentVersion: VERSION,
+				agentDir: getAgentDir(),
+				offline: process.env.PI_OFFLINE === "1",
+			});
+			if (!result?.notice) return;
+			this.showStatus(result.notice);
+			markUpdateNotified(getAgentDir(), result.latest);
+		} catch {
+			// Version check is best-effort.
 		}
 	}
 
@@ -2702,7 +2743,7 @@ export class InteractiveMode {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => void this.showModelSelector());
-		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
+		// lunr: tool/thinking expand is per-item click; ctrl+o is not bound (tree filter still uses ctrl+o).
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
 		this.defaultEditor.onAction("app.message.copy", () => void this.handleCopyCommand());
@@ -3923,6 +3964,11 @@ export class InteractiveMode {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
 		this.stopSmoothStreaming();
+		if (this.planUsageTimer) {
+			clearInterval(this.planUsageTimer);
+			this.planUsageTimer = undefined;
+		}
+		getUsageServiceBridge()?.setOnUpdate(undefined);
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -4597,6 +4643,10 @@ export class InteractiveMode {
 					footerContext: this.settingsManager.getFooterContext(),
 					footerTokens: this.settingsManager.getFooterTokens(),
 					footerStatuses: this.settingsManager.getFooterStatuses(),
+					footerGit: this.settingsManager.getFooterGit(),
+					footerPlan: this.settingsManager.getFooterPlan(),
+					footerPlanBar: this.settingsManager.getFooterPlanBar(),
+					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
 					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
 					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
 					rollbackTurns: this.settingsManager.getRollbackTurns(),
@@ -4761,6 +4811,14 @@ export class InteractiveMode {
 					onModelTierModelChange: (tier, model) => {
 						this.settingsManager.setTierModel(tier, model);
 					},
+					onModelTierThinkingChange: (tier, level) => {
+						this.settingsManager.setTierThinking(tier, level);
+					},
+					getTierThinkingLevels: (tier) => {
+						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));
+						if (model) return getSupportedThinkingLevels(model);
+						return this.session.getAvailableThinkingLevels();
+					},
 					onMemoryCharCapChange: (cap) => {
 						this.settingsManager.setMemoryCharCap(cap);
 					},
@@ -4790,6 +4848,18 @@ export class InteractiveMode {
 					},
 					onFooterStatusesChange: (enabled) => {
 						this.settingsManager.setFooterStatuses(enabled);
+					},
+					onFooterGitChange: (enabled) => {
+						this.settingsManager.setFooterGit(enabled);
+					},
+					onFooterPlanChange: (enabled) => {
+						this.settingsManager.setFooterPlan(enabled);
+					},
+					onFooterPlanBarChange: (enabled) => {
+						this.settingsManager.setFooterPlanBar(enabled);
+					},
+					onPlanUsageWindowChange: (window) => {
+						this.settingsManager.setPlanUsageWindow(window);
 					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);
@@ -7541,7 +7611,7 @@ export class InteractiveMode {
 		const cyclePermissionMode = this.getAppKeyDisplay("app.mode.cycle");
 		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
 		const selectModel = this.getAppKeyDisplay("app.model.select");
-		const expandTools = this.getAppKeyDisplay("app.tools.expand");
+		const expandTools = "click";
 		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
@@ -7587,7 +7657,7 @@ export class InteractiveMode {
 | \`${cyclePermissionMode}\` | Cycle permission mode |
 ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Toggle tool output expansion |
+| \`${expandTools}\` | Expand or collapse a thinking/tool card |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |

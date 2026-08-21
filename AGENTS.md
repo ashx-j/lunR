@@ -37,6 +37,8 @@ Last updated: 2026-08-21. **`origin/master` = `28cf67d`**. Public npm is `@ashx-
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` + `supportsReasoningEffort` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
 - **OpenCode Zen free models (`feat/opencode-zen-free-models`):** generator intersects `GET https://opencode.ai/zen/v1/models` (and `/zen/go/v1/models`) with models.dev — keep deprecated-if-live, drop not-on-live, synthesize live ids missing from models.dev. Do not add a second Zen provider; `/model` still needs `/login opencode`. Tests: `opencode-catalog.test.ts`.
+- **Behavior presets (`feat/behavior-presets`, `7d6f011`):** `/settings` Behavior preset writes baked-in templates (`default` / `humanizer` / `concise`) into `~/.lunr/agent/behavior.md`; `custom` keeps the file. Fingerprint drift flips the setting without a watcher. Built-in presets skip `memoryCharCap` so humanizer can exceed 5000. **Not in 0.2.8 — merge and ship with the next npm (`0.2.9+`).** Tests: `behavior-preset.test.ts`.
+- **Product UX (`feat/lunr-product-ux`):** tab title is `lunr` (OSC 0 + `process.title` before main import; ashxj-spinners no longer `setTitle("ashxj")`). Subagent turns prefix the working row `Orchestrating…` between spinner and kaomoji. Advertised subagents are always fresh (`lunr-child-context.ts`; fork internals stay). Model tiers have per-tier thinking (unset = parent session). `lunr update` + 24h npm check of `@ashx-j/lunr` (workspace npx skips). Footer shows git branch + `+/-` vs HEAD and a compact plan bar (5h preferred falls back to weekly; 60s cache; Customize can hide both). Click a ✻ Thought or tool card to expand/collapse that item; `app.tools.expand` is unbound (tree `ctrl+o` stays). Tests: lunr-tab-title + ashxj-spinners-orchestrating + lunr-child-context + model-tiers + update-check + footer-data-provider + usage-service pickPlanWindow + tui mouse click + assistant-message handleClick + lunr-todos.
 
 ## On origin/master (`a698e57`)
 
@@ -59,7 +61,8 @@ Last updated: 2026-08-21. **`origin/master` = `28cf67d`**. Public npm is `@ashx-
 
 ## Not merged
 
-- None for product. Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
+- **Next npm (`0.2.9+`):** merge `feat/behavior-presets` (`7d6f011`) and `feat/lunr-product-ux` before the next publish. Local branches; not on `origin/master` / `v0.2.8`.
+- Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
 
 ## Uncommitted (working tree)
 
@@ -69,7 +72,7 @@ Last updated: 2026-08-21. **`origin/master` = `28cf67d`**. Public npm is `@ashx-
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.2.8**. **Rebuild coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.2.8**. **Rebuild tui then coding-agent `dist` after this branch** or tab title / click-expand look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
@@ -94,7 +97,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 # Notes
 
 - Theme: `moon.json` is the builtin; `default.json` untracked/unwired. Glyphs `promptMoon`/`promptArrow`; `promptSymbol` is master on/off.
-- Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
+- Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; click expands/collapses a thinking run or tool card; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
 - Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`.
 - Process registry: direct children only; `nohup &` grandchildren untracked.
@@ -108,7 +111,11 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - **Stop proposing boot-screen art.** Slim box only; ask first.
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
-- Collapsed same-name tool rows are header-only; `ctrl+o` reveals bodies/notices. Subagent compact widgets are the exception.
+- Collapsed same-name tool rows are header-only; click the card to reveal bodies/notices. Subagent compact widgets are the exception. `app.tools.expand` has no default key; `/tree` still uses `ctrl+o` to cycle filters.
+- Tab title: `process.title` + OSC 0 `lunr` in `cli.ts` before importing main; InteractiveMode then sets `lunr - [session -] cwd`. Do not call `ctx.ui.setTitle` from ashxj-spinners.
+- Advertised subagents always start fresh. `fork-context.ts` stays for upstream sync; do not advertise `context: fork` in the tool schema/description.
+- `lunr update` is npm global `@ashx-j/lunr` only. Workspace `PACKAGE_NAME !== NPM_CLI_PACKAGE` skips the nag and refuses to self-update.
+- Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. Customize → Footer: plan usage hides the whole segment; Footer: plan bar hides only the █░ fill and keeps `wk 32%`.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
 - Live thinking is a reserved 4-line tail of the **full** thinking string (not the smooth-stream prefix). Pad empty rows above while the run is open. History still collapses to `✻ Thought` + first sentence.
 - `/undo` = same-session `navigateTree` rewind, no editor paste. `/edit` = that rewind then paste. Neither forks. `/rollback` still forks.
@@ -160,6 +167,10 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-21: OpenCode Zen is already `opencode`; rotating free rows come from live `/v1/models` ∩ models.dev, not a new provider and not models.dev status.
 - 2026-08-21: left-drag does not copy; scrollbar drag + SGR reset; `/undo` stays in-session, `/edit` pastes; live thinking is a 4-line latest tail; compact subagent hangs thinking; TUI hides needs-attention cards.
 - 2026-08-21: v0.2.8 ships OpenCode Zen live free-model intersection (#18) and the TUI bug fixes.
+- 2026-08-21: `feat/behavior-presets` missed 0.2.8; ship it with the next npm.
+- 2026-08-21: hide fork from the model instead of deleting internals so upstream sync still compiles; children are forced fresh.
+- 2026-08-21: 5h plan bar preference falls back to weekly so xAI SuperGrok still shows a bar.
+- 2026-08-21: workspace `npx lunr` is not a published install; do not self-update or nag it.
 
 # Deferred
 

@@ -106,6 +106,10 @@ export interface SettingsConfig {
 	footerContext: boolean;
 	footerTokens: boolean;
 	footerStatuses: boolean;
+	footerGit: boolean;
+	footerPlan: boolean;
+	footerPlanBar: boolean;
+	planUsageWindow: "5h" | "weekly";
 	// lunr: permission mode default
 	defaultPermissionMode: DefaultPermissionMode;
 	// lunr: rollback settings
@@ -150,6 +154,8 @@ export interface SettingsCallbacks {
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
+	onModelTierThinkingChange: (tier: ModelTierName, level: ThinkingLevel | undefined) => void;
+	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
@@ -160,6 +166,10 @@ export interface SettingsCallbacks {
 	onFooterContextChange: (enabled: boolean) => void;
 	onFooterTokensChange: (enabled: boolean) => void;
 	onFooterStatusesChange: (enabled: boolean) => void;
+	onFooterGitChange: (enabled: boolean) => void;
+	onFooterPlanChange: (enabled: boolean) => void;
+	onFooterPlanBarChange: (enabled: boolean) => void;
+	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
 	// lunr: rollback callbacks
@@ -205,7 +215,15 @@ const MODEL_TIER_ROWS: { tier: ModelTierName; label: string; description: string
  */
 class ModelTiersSubmenu extends Container {
 	private settingsList: SettingsList;
-	private state: { enabled: boolean; light?: string; standard?: string; heavy?: string };
+	private state: {
+		enabled: boolean;
+		light?: string;
+		standard?: string;
+		heavy?: string;
+		lightThinking?: ThinkingLevel;
+		standardThinking?: ThinkingLevel;
+		heavyThinking?: ThinkingLevel;
+	};
 
 	constructor(
 		currentValue: string | undefined,
@@ -220,7 +238,13 @@ class ModelTiersSubmenu extends Container {
 			light: modelTiers.light,
 			standard: modelTiers.standard,
 			heavy: modelTiers.heavy,
+			lightThinking: modelTiers.lightThinking,
+			standardThinking: modelTiers.standardThinking,
+			heavyThinking: modelTiers.heavyThinking,
 		};
+
+		const thinkingKey = (tier: ModelTierName): "lightThinking" | "standardThinking" | "heavyThinking" =>
+			tier === "light" ? "lightThinking" : tier === "standard" ? "standardThinking" : "heavyThinking";
 
 		const items: SettingItem[] = [
 			{
@@ -231,16 +255,45 @@ class ModelTiersSubmenu extends Container {
 				currentValue: this.state.enabled ? "on" : "off",
 				values: ["on", "off"],
 			},
-			...MODEL_TIER_ROWS.map((row): SettingItem => {
+			...MODEL_TIER_ROWS.flatMap((row): SettingItem[] => {
 				const tier = row.tier;
-				return {
-					id: tier,
-					label: row.label,
-					description: row.description,
-					currentValue: this.state[tier] ?? "not set",
-					disabled: () => !this.state.enabled,
-					submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
-				};
+				const tKey = thinkingKey(tier);
+				return [
+					{
+						id: tier,
+						label: row.label,
+						description: row.description,
+						currentValue: this.state[tier] ?? "not set",
+						disabled: () => !this.state.enabled,
+						submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
+					},
+					{
+						id: `${tier}-thinking`,
+						label: `${row.label.replace(" model", "")} thinking`,
+						description: "Reasoning depth for this tier. Inherit uses the parent session level.",
+						currentValue: this.state[tKey] ?? "inherit",
+						disabled: () => !this.state.enabled,
+						submenu: (_currentValue, done) =>
+							new SelectSubmenu(
+								`${row.label} thinking`,
+								"Unset inherits the parent session thinking level.",
+								[
+									{ value: "inherit", label: "inherit", description: "Use the parent session thinking level" },
+									...callbacks.getTierThinkingLevels(tier).map((level) => ({
+										value: level,
+										label: level,
+										description: THINKING_DESCRIPTIONS[level],
+									})),
+								],
+								this.state[tKey] ?? "inherit",
+								(value) => {
+									callbacks.onModelTierThinkingChange(tier, value === "inherit" ? undefined : (value as ThinkingLevel));
+									done(value);
+								},
+								() => done(),
+							),
+					},
+				];
 			}),
 		];
 
@@ -252,6 +305,12 @@ class ModelTiersSubmenu extends Container {
 				if (id === "enabled") {
 					this.state.enabled = newValue === "on";
 					callbacks.onModelTiersEnabledChange(this.state.enabled);
+					return;
+				}
+				if (id.endsWith("-thinking")) {
+					const tier = id.slice(0, -"-thinking".length) as ModelTierName;
+					const tKey = thinkingKey(tier);
+					this.state[tKey] = newValue === "inherit" ? undefined : (newValue as ThinkingLevel);
 					return;
 				}
 				const tier = id as ModelTierName;
@@ -381,6 +440,27 @@ class CustomizeSubmenu extends Container {
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
+			{
+				id: "footer-git",
+				label: "Footer: git branch",
+				description: "Show the current git branch and added/removed line counts in the footer stats line.",
+				currentValue: (bridge?.getFooterGit() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-plan",
+				label: "Footer: plan usage",
+				description: "Show the live subscription usage percent when the current model is on a plan.",
+				currentValue: (bridge?.getFooterPlan() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-plan-bar",
+				label: "Footer: plan bar",
+				description: "Show the filled █░ bar next to the plan percent. Off keeps the percent only.",
+				currentValue: (bridge?.getFooterPlanBar() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
 		];
 
 		this.settingsList = new SettingsList(
@@ -409,6 +489,15 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "footer-statuses":
 						callbacks.onFooterStatusesChange(newValue === "on");
+						break;
+					case "footer-git":
+						callbacks.onFooterGitChange(newValue === "on");
+						break;
+					case "footer-plan":
+						callbacks.onFooterPlanChange(newValue === "on");
+						break;
+					case "footer-plan-bar":
+						callbacks.onFooterPlanBarChange(newValue === "on");
 						break;
 				}
 			},
@@ -1329,6 +1418,13 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.modelTiers.enabled ? "on" : "off",
 				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
 			},
+			{
+				id: "plan-usage-window",
+				label: "Plan usage window",
+				description: "Preferred subscription window for the footer bar. Missing 5h falls back to weekly.",
+				currentValue: config.planUsageWindow,
+				values: ["5h", "weekly"],
+			},
 			// lunr: Customize submenu — lunR TUI toggles (rail, prompt symbol, footer segments)
 			{
 				id: "customize",
@@ -1540,6 +1636,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "plan-usage-window":
+						callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");
 						break;
 					case "memory-char-cap":
 						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));

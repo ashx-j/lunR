@@ -126,12 +126,38 @@ function pickOther<T>(arr: readonly T[], current: T): T {
   return v;
 }
 
+const SUBAGENT_TOOL_NAMES = new Set(["subagent", "subagent_wait"]);
+
+/** True for parent-session tools that mean a child agent is in flight or being waited on. */
+export function isSubagentToolName(name: string | undefined): boolean {
+  return typeof name === "string" && SUBAGENT_TOOL_NAMES.has(name);
+}
+
+/**
+ * Working-indicator message: spinner is rendered separately (Loader puts it first).
+ * While any subagent has run this parent turn: `Orchestrating… kaomoji`.
+ */
+export function composeWorkingMessage(kaomoji: string, orchestrating: boolean): string {
+  if (!orchestrating) return kaomoji;
+  return kaomoji ? `Orchestrating… ${kaomoji}` : "Orchestrating…";
+}
+
 export default function (pi: ExtensionAPI): void {
   let state: State = "idle";
   let stateEnteredAt = 0;
   let currentKaomoji = "";
+  let liveSubagent = 0;
+  let seenSubagentThisTurn = false;
   let transientTimer: ReturnType<typeof setTimeout> | undefined;
   let rerollTimer: ReturnType<typeof setInterval> | undefined;
+
+  function orchestrating(): boolean {
+    return liveSubagent > 0 || seenSubagentThisTurn;
+  }
+
+  function publishWorkingMessage(ctx: ExtensionContext): void {
+    ctx.ui.setWorkingMessage(composeWorkingMessage(currentKaomoji, orchestrating()));
+  }
 
   function clearTransient(): void {
     if (transientTimer !== undefined) {
@@ -163,7 +189,7 @@ export default function (pi: ExtensionAPI): void {
 
     const kaomojiPool = KAOMOJI_FOR_STATE[next];
     currentKaomoji = kaomojiPool.length > 0 ? pick(kaomojiPool) : "";
-    ctx.ui.setWorkingMessage(currentKaomoji);
+    publishWorkingMessage(ctx);
 
     clearReroll();
     clearTransient();
@@ -187,7 +213,7 @@ export default function (pi: ExtensionAPI): void {
     const pool = KAOMOJI_FOR_STATE[state];
     if (pool.length <= 1) return;
     currentKaomoji = pickOther(pool, currentKaomoji);
-    ctx.ui.setWorkingMessage(currentKaomoji);
+    publishWorkingMessage(ctx);
   }
 
   function applyState(next: State, ctx: ExtensionContext, options: { force?: boolean } = {}): void {
@@ -215,7 +241,9 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("session_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    ctx.ui.setTitle("ashxj");
+    // lunr: do not ctx.ui.setTitle here — InteractiveMode owns the OSC title
+    // (`lunr - [session -] cwd`). Overwriting it with a brand string made
+    // Windows Terminal tabs say "ashxj" (or left them as "node" until this ran).
     doApplyState(event.reason === "startup" ? "startup" : "idle", ctx);
   });
 
@@ -236,6 +264,12 @@ export default function (pi: ExtensionAPI): void {
     // within its minimum display window.
     if (state === "error") return;
     const name = event.toolName;
+    // lunr: any subagent / subagent_wait this turn prefixes the working row
+    // with "Orchestrating…" (spinner is already first via Loader).
+    if (isSubagentToolName(name)) {
+      liveSubagent += 1;
+      seenSubagentThisTurn = true;
+    }
     const force = true;
     if (SEARCH_RE.test(name)) {
       applyState("searching", ctx, { force });
@@ -247,6 +281,9 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("tool_execution_end", (event, ctx) => {
+    if (isSubagentToolName(event.toolName) && liveSubagent > 0) {
+      liveSubagent -= 1;
+    }
     if (event.isError) {
       applyState("error", ctx);
     }
@@ -269,6 +306,8 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("agent_end", (event, ctx) => {
+    liveSubagent = 0;
+    seenSubagentThisTurn = false;
     const last = event.messages.at(-1);
     if (!last || last.role !== "assistant") {
       applyState("idle", ctx);
@@ -295,5 +334,7 @@ export default function (pi: ExtensionAPI): void {
     state = "idle";
     stateEnteredAt = 0;
     currentKaomoji = "";
+    liveSubagent = 0;
+    seenSubagentThisTurn = false;
   });
 }

@@ -60,7 +60,7 @@ describe("buildTodoWidgetLines", () => {
 		expect(rows).toHaveLength(TODO_WIDGET_COLLAPSED_ROWS);
 		expect(rows.map((l) => l.text)).toEqual(["● a", "○ b", "○ c"]);
 		expect(lines.some((l) => l.kind === "summary")).toBe(false);
-		expect(lines.some((l) => l.kind === "hint" && l.text === "+2 more (ctrl+o to expand)")).toBe(true);
+		expect(lines.some((l) => l.kind === "hint" && l.text === "+2 more")).toBe(true);
 	});
 
 	test("collapsed: no hint when active rows fit", () => {
@@ -205,7 +205,7 @@ describe("lunr-todos extension", () => {
 		const collapsed = h.widgetLines();
 		expect(collapsed.filter((l) => l.startsWith("●") || l.startsWith("○"))).toHaveLength(3);
 		expect(collapsed.some((l) => l === "✓ 1 done")).toBe(false);
-		expect(collapsed.some((l) => l.startsWith("+1 more") && l.includes("to expand"))).toBe(true);
+		expect(collapsed.some((l) => l.startsWith("+1 more"))).toBe(true);
 
 		(globalThis as any)[BRIDGE]?.(true);
 		expect(h.widgetLines()).toEqual(["● a", "○ b", "○ c", "○ d", "✓ e"]);

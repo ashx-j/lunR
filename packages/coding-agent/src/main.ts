@@ -40,7 +40,8 @@ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dis
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
-import { registerModelTierBridge } from "./core/model-tiers.ts";
+import { getModelTiersBridge, registerModelTierBridge } from "./core/model-tiers.ts";
+import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -60,6 +61,7 @@ import { handleGatewayCommand } from "./gateway/command.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode } from "./modes/interactive/interactive-mode.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import { handleUpdateCli } from "./cli/update-cli.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
@@ -541,6 +543,10 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
+	if (await handleUpdateCli(args)) {
+		return;
+	}
+
 	if (await handlePackageCommand(args, { extensionFactories: options?.extensionFactories })) {
 		const exitCode = process.exitCode ?? 0;
 		process.exit(exitCode);
@@ -864,8 +870,10 @@ export async function main(args: string[], options?: MainOptions) {
 	// Point the model-tier bridge at the live runtime settings manager so /settings
 	// changes take effect without a restart.
 	registerModelTierBridge(settingsManager);
+	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
 	registerMemoryCapBridge(settingsManager);
 	registerCustomizeBridge(settingsManager);
+	registerUsageServiceBridge(modelRuntime, settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

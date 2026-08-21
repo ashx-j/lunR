@@ -44,6 +44,9 @@ interface CustomizeBridgeForPrompt {
 	getFooterContext?(): boolean;
 	getFooterTokens?(): boolean;
 	getFooterStatuses?(): boolean;
+	getFooterGit?(): boolean;
+	getFooterPlan?(): boolean;
+	getFooterPlanBar?(): boolean;
 }
 interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
@@ -59,7 +62,16 @@ function lunrPromptSymbolEnabled(): boolean {
 }
 // lunr: footer toggles, read at render time. Bridgeless / missing-getter fallback
 // matches the settings-manager defaults: MCP on, LSP off, everything else on.
-function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; tokens: boolean; statuses: boolean } {
+function lunrFooterToggles(): {
+	mcp: boolean;
+	lsp: boolean;
+	context: boolean;
+	tokens: boolean;
+	statuses: boolean;
+	git: boolean;
+	plan: boolean;
+	planBar: boolean;
+} {
 	const bridge = lunrCustomizeBridge();
 	return {
 		mcp: bridge?.getFooterMcp?.() ?? true,
@@ -67,7 +79,29 @@ function lunrFooterToggles(): { mcp: boolean; lsp: boolean; context: boolean; to
 		context: bridge?.getFooterContext?.() ?? true,
 		tokens: bridge?.getFooterTokens?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
+		git: bridge?.getFooterGit?.() ?? true,
+		plan: bridge?.getFooterPlan?.() ?? true,
+		planBar: bridge?.getFooterPlanBar?.() ?? true,
 	};
+}
+
+const USAGE_SERVICE_BRIDGE = Symbol.for("@lunr/usage-service");
+interface UsageServiceBridgeForFooter {
+	pickForFooter?(providerId: string): { label: string; usedPercent: number } | undefined;
+	prefetch?(providerId: string): void;
+}
+function lunrUsageBridge(): UsageServiceBridgeForFooter | undefined {
+	return (globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE] as UsageServiceBridgeForFooter | undefined;
+}
+
+function compactPlanBar(percent: number, theme: Theme): string {
+	const cells = 8;
+	const clamped = Math.max(0, Math.min(100, percent));
+	const filled = Math.round((clamped / 100) * cells);
+	const token = clamped > 90 ? "error" : clamped > 70 ? "warning" : "success";
+	const fill = filled > 0 ? color(theme, token, "█".repeat(filled)) : "";
+	const rest = filled < cells ? color(theme, "dim", "░".repeat(cells - filled)) : "";
+	return fill + rest;
 }
 // lunr: permission mode for the footer safety indicator (always shown).
 function lunrPermissionMode(): string | undefined {
@@ -147,6 +181,7 @@ interface AutocompleteListLike {
 /** Trimmed view of pi's `ReadonlyFooterDataProvider`. */
 interface ReadonlyFooterDataProvider {
 	getGitBranch(): string | null;
+	getGitDiffstat?(): { added: number; removed: number } | null;
 	getExtensionStatuses(): ReadonlyMap<string, string>;
 	getAvailableProviderCount(): number;
 	onBranchChange(callback: () => void): () => void;
@@ -657,6 +692,36 @@ function renderStatsLine(
 	}
 	if (modeZone.length > 0) {
 		parts.unshift(modeZone.join(color(theme, "dim", " · ")));
+	}
+
+	// lunr: git branch + working-tree +/- vs HEAD (gated on footerGit).
+	if (footerToggles.git) {
+		const branch = footerData.getGitBranch?.();
+		if (branch) {
+			const diff = footerData.getGitDiffstat?.();
+			let gitSeg = color(theme, "white", branch);
+			if (diff && (diff.added !== 0 || diff.removed !== 0)) {
+				gitSeg +=
+					` ${color(theme, "success", `+${diff.added}`)} ${color(theme, "error", `-${diff.removed}`)}`;
+			}
+			parts.push(gitSeg);
+		}
+	}
+
+	// lunr: live subscription window bar (gated on footerPlan). Hidden with no plan.
+	if (footerToggles.plan) {
+		const provider = ctx.model?.provider;
+		if (provider) {
+			const usage = lunrUsageBridge();
+			usage?.prefetch?.(provider);
+			const seg = usage?.pickForFooter?.(provider);
+			if (seg) {
+				const pct = `${Math.round(seg.usedPercent)}%`;
+				const barColor = seg.usedPercent > 90 ? "error" : seg.usedPercent > 70 ? "warning" : "success";
+				const bar = footerToggles.planBar ? `${compactPlanBar(seg.usedPercent, theme)} ` : "";
+				parts.push(color(theme, "white", seg.label) + " " + bar + color(theme, barColor, pct));
+			}
+		}
 	}
 
 	// 2) Context usage: `pct/window` (lunr: gated on footerContext).

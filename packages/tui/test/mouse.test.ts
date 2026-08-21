@@ -153,6 +153,59 @@ describe("in-app message selection", () => {
 		tui.stop();
 	});
 
+	it("press+release on a handleClick child toggles it", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		let clicks = 0;
+		const clickable: Component = {
+			render: () => ["click me", "second"],
+			invalidate: () => {},
+			handleClick: () => {
+				clicks += 1;
+				return true;
+			},
+		};
+		tui.addChild(clickable);
+		tui.addChild(new StaticLines(["DOCK"]));
+		tui.pinFrom(tui.children[1]!);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<0;1;1m");
+		await terminal.waitForRender();
+
+		assert.strictEqual(clicks, 1);
+		tui.stop();
+	});
+
+	it("drag does not fire handleClick", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		let clicks = 0;
+		const clickable: Component = {
+			render: () => ["click me", "second"],
+			invalidate: () => {},
+			handleClick: () => {
+				clicks += 1;
+				return true;
+			},
+		};
+		tui.addChild(clickable);
+		tui.addChild(new StaticLines(["DOCK"]));
+		tui.pinFrom(tui.children[1]!);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;1;4M");
+		terminal.sendInput("\x1b[<0;1;4m");
+		await terminal.waitForRender();
+
+		assert.strictEqual(clicks, 0);
+		tui.stop();
+	});
+
 	it("click without drag copies nothing", async () => {
 		const terminal = new VirtualTerminal(20, 8);
 		const tui = new TUI(terminal);

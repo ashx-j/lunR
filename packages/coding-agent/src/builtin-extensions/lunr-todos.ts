@@ -12,13 +12,10 @@
  *  - After every state change the list is mirrored into a `todos` widget above
  *    the editor (component factory, so MAX_WIDGET_LINES string truncation does
  *    not apply). Collapsed: up to 3 active rows (in-progress first, then
- *    pending). Completed items never appear collapsed. `+N more (<key> to
- *    expand)` still applies to hidden active rows. Expanded: every row,
- *    completed included until the next user turn prunes them.
- *  - Expansion follows the global ctrl+o toggle via the
- *    `@lunr/tools-expanded-changed` bridge, invoked from
- *    interactive-mode.ts `setToolsExpanded` (initial state is read from
- *    `ctx.ui.getToolsExpanded()`).
+ *    pending). Completed items never appear collapsed. `+N more` still
+ *    applies to hidden active rows. Expanded: every row, completed included
+ *    until the next user turn prunes them.
+ *  - Click the widget to expand/collapse.
  *
  * The pure logic (summarizeTodos / buildTodoWidgetLines) is exported for
  * vitest — see test/lunr-todos.test.ts.
@@ -80,7 +77,7 @@ export function summarizeTodos(todos: TodoItem[]): string {
  * hint is appended when active rows are hidden. Expanded mode shows every
  * row, completed included. Empty list / all-completed collapsed → no lines.
  */
-export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expandKey = "ctrl+o"): TodoWidgetLine[] {
+export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expandKey = "click"): TodoWidgetLine[] {
 	if (todos.length === 0) return [];
 	const row = (t: TodoItem): TodoWidgetLine => ({
 		kind: "todo",
@@ -98,7 +95,7 @@ export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expan
 	const lines: TodoWidgetLine[] = active.slice(0, TODO_WIDGET_COLLAPSED_ROWS).map(row);
 	const hidden = active.length - TODO_WIDGET_COLLAPSED_ROWS;
 	if (hidden > 0) {
-		lines.push({ kind: "hint", text: `+${hidden} more (${expandKey} to expand)` });
+		lines.push({ kind: "hint", text: `+${hidden} more` });
 	}
 	return lines;
 }
@@ -132,7 +129,18 @@ export default function (pi: ExtensionAPI): void {
 		}
 		ctx.ui.setWidget(
 			WIDGET_KEY,
-			(_tui: unknown, theme: any) => new Text(lines.map((l) => colorize(l, theme)).join("\n"), 1, 0),
+			(_tui: unknown, theme: any) => {
+				const text = new Text(lines.map((l) => colorize(l, theme)).join("\n"), 1, 0);
+				return {
+					render: (width: number) => text.render(width),
+					invalidate: () => text.invalidate?.(),
+					handleClick: () => {
+						expanded = !expanded;
+						refreshWidget();
+						return true;
+					},
+				};
+			},
 			{ placement: "aboveEditor" },
 		);
 	}

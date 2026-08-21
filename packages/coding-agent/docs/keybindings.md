@@ -119,7 +119,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
+| `app.tools.expand` | (unbound) | Legacy expand-all; click a thinking/tool card instead |
 | `app.chat.pageUp` | `shift+pageUp`, `ctrl+up` | Scroll chat up |
 | `app.chat.pageDown` | `shift+pageDown`, `ctrl+down` | Scroll chat down |
 | *(mouse)* | wheel / ctrl+wheel | Scroll chat by 3 lines, or by page. Shift+drag still selects text in the terminal. |

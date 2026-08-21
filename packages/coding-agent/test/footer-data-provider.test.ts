@@ -26,6 +26,10 @@ vi.mock("child_process", () => ({
 				);
 				return;
 			}
+			if (args.includes("diff") && args.includes("--numstat")) {
+				setTimeout(() => callback(null, "3\t1\tfoo.ts\n", ""), 0);
+				return;
+			}
 			setTimeout(() => callback(new Error("unsupported"), "", ""), 0);
 		},
 	),
@@ -33,11 +37,14 @@ vi.mock("child_process", () => ({
 		if (args[1] === "symbolic-ref") {
 			return { status: resolvedBranch ? 0 : 1, stdout: resolvedBranch ? `${resolvedBranch}\n` : "", stderr: "" };
 		}
+		if (args.includes("diff") && args.includes("--numstat")) {
+			return { status: 0, stdout: "3\t1\tfoo.ts\n", stderr: "" };
+		}
 		return { status: 1, stdout: "", stderr: "" };
 	}),
 }));
 
-import { FooterDataProvider } from "../src/core/footer-data-provider.ts";
+import { FooterDataProvider, parseGitNumstat } from "../src/core/footer-data-provider.ts";
 
 type WorktreeFixture = {
 	worktreeDir: string;
@@ -87,6 +94,13 @@ async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void
 	}
 }
 
+describe("parseGitNumstat", () => {
+	it("sums added and removed columns and skips binary dashes", () => {
+		expect(parseGitNumstat("3\t1\ta.ts\n-\t-\tb.bin\n10\t2\tc.ts\n")).toEqual({ added: 13, removed: 3 });
+		expect(parseGitNumstat("")).toEqual({ added: 0, removed: 0 });
+	});
+});
+
 describe("FooterDataProvider reftable branch detection", () => {
 	let originalCwd: string;
 	let tempDir: string;
@@ -115,7 +129,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 		const provider = new FooterDataProvider(nestedDir);
 		try {
 			expect(provider.getGitBranch()).toBe("main");
-			expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
+			expect(provider.getGitDiffstat()).toEqual({ added: 3, removed: 1 });
+			expect(vi.mocked(spawnSync)).toHaveBeenCalled();
 		} finally {
 			provider.dispose();
 		}
@@ -179,9 +194,9 @@ describe("FooterDataProvider reftable branch detection", () => {
 			provider.onBranchChange(onBranchChange);
 
 			writeFileSync(join(reftableDir, "tables.list"), "1\n");
-			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
+			await waitFor(() => vi.mocked(execFile).mock.calls.length >= 2);
 
-			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(execFile).mock.calls.length).toBeGreaterThanOrEqual(2);
 			expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
 			expect(provider.getGitBranch()).toBe("main");
 			expect(onBranchChange).not.toHaveBeenCalled();
@@ -202,10 +217,10 @@ describe("FooterDataProvider reftable branch detection", () => {
 			writeFileSync(join(reftableDir, "tables.list"), "1\n");
 			writeFileSync(join(reftableDir, "tables.list"), "2\n");
 			writeFileSync(join(reftableDir, "tables.list"), "3\n");
-			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
+			await waitFor(() => vi.mocked(execFile).mock.calls.length >= 2);
 			await new Promise((resolve) => setTimeout(resolve, 650));
 
-			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(execFile).mock.calls.length).toBe(2);
 		} finally {
 			provider.dispose();
 		}
@@ -223,10 +238,9 @@ describe("FooterDataProvider reftable branch detection", () => {
 			provider.onBranchChange(onBranchChange);
 
 			writeFileSync(join(reftableDir, "tables.list"), "1\n");
-			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
 			await waitFor(() => provider.getGitBranch() === "foo");
 
-			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(execFile).mock.calls.length).toBeGreaterThanOrEqual(2);
 			expect(provider.getGitBranch()).toBe("foo");
 			expect(onBranchChange).toHaveBeenCalledTimes(1);
 		} finally {
