@@ -46,6 +46,7 @@ interface CustomizeBridgeForPrompt {
 	getFooterStatuses?(): boolean;
 	getFooterGit?(): boolean;
 	getFooterPlan?(): boolean;
+	getFooterPlanBar?(): boolean;
 }
 interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
@@ -69,6 +70,7 @@ function lunrFooterToggles(): {
 	statuses: boolean;
 	git: boolean;
 	plan: boolean;
+	planBar: boolean;
 } {
 	const bridge = lunrCustomizeBridge();
 	return {
@@ -79,6 +81,7 @@ function lunrFooterToggles(): {
 		statuses: bridge?.getFooterStatuses?.() ?? true,
 		git: bridge?.getFooterGit?.() ?? true,
 		plan: bridge?.getFooterPlan?.() ?? true,
+		planBar: bridge?.getFooterPlanBar?.() ?? true,
 	};
 }
 
@@ -715,13 +718,8 @@ function renderStatsLine(
 			if (seg) {
 				const pct = `${Math.round(seg.usedPercent)}%`;
 				const barColor = seg.usedPercent > 90 ? "error" : seg.usedPercent > 70 ? "warning" : "success";
-				parts.push(
-					color(theme, "white", seg.label) +
-						" " +
-						compactPlanBar(seg.usedPercent, theme) +
-						" " +
-						color(theme, barColor, pct),
-				);
+				const bar = footerToggles.planBar ? `${compactPlanBar(seg.usedPercent, theme)} ` : "";
+				parts.push(color(theme, "white", seg.label) + " " + bar + color(theme, barColor, pct));
 			}
 		}
 	}

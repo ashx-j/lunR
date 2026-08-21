@@ -150,7 +150,8 @@ export interface Settings {
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research/tps status segments
 	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
-	footerPlan?: boolean; // default: true - show the subscription usage bar
+	footerPlan?: boolean; // default: true - show the subscription usage segment
+	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
@@ -1076,6 +1077,16 @@ export class SettingsManager {
 	setFooterPlan(enabled: boolean): void {
 		this.globalSettings.footerPlan = enabled;
 		this.markModified("footerPlan");
+		this.save();
+	}
+
+	getFooterPlanBar(): boolean {
+		return this.settings.footerPlanBar ?? true;
+	}
+
+	setFooterPlanBar(enabled: boolean): void {
+		this.globalSettings.footerPlanBar = enabled;
+		this.markModified("footerPlanBar");
 		this.save();
 	}
 

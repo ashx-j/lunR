@@ -4645,6 +4645,7 @@ export class InteractiveMode {
 					footerStatuses: this.settingsManager.getFooterStatuses(),
 					footerGit: this.settingsManager.getFooterGit(),
 					footerPlan: this.settingsManager.getFooterPlan(),
+					footerPlanBar: this.settingsManager.getFooterPlanBar(),
 					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
 					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
 					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
@@ -4853,6 +4854,9 @@ export class InteractiveMode {
 					},
 					onFooterPlanChange: (enabled) => {
 						this.settingsManager.setFooterPlan(enabled);
+					},
+					onFooterPlanBarChange: (enabled) => {
+						this.settingsManager.setFooterPlanBar(enabled);
 					},
 					onPlanUsageWindowChange: (window) => {
 						this.settingsManager.setPlanUsageWindow(window);

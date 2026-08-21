@@ -108,6 +108,7 @@ export interface SettingsConfig {
 	footerStatuses: boolean;
 	footerGit: boolean;
 	footerPlan: boolean;
+	footerPlanBar: boolean;
 	planUsageWindow: "5h" | "weekly";
 	// lunr: permission mode default
 	defaultPermissionMode: DefaultPermissionMode;
@@ -167,6 +168,7 @@ export interface SettingsCallbacks {
 	onFooterStatusesChange: (enabled: boolean) => void;
 	onFooterGitChange: (enabled: boolean) => void;
 	onFooterPlanChange: (enabled: boolean) => void;
+	onFooterPlanBarChange: (enabled: boolean) => void;
 	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
@@ -448,8 +450,15 @@ class CustomizeSubmenu extends Container {
 			{
 				id: "footer-plan",
 				label: "Footer: plan usage",
-				description: "Show the live subscription usage bar when the current model is on a plan.",
+				description: "Show the live subscription usage percent when the current model is on a plan.",
 				currentValue: (bridge?.getFooterPlan() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "footer-plan-bar",
+				label: "Footer: plan bar",
+				description: "Show the filled █░ bar next to the plan percent. Off keeps the percent only.",
+				currentValue: (bridge?.getFooterPlanBar() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 		];
@@ -486,6 +495,9 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "footer-plan":
 						callbacks.onFooterPlanChange(newValue === "on");
+						break;
+					case "footer-plan-bar":
+						callbacks.onFooterPlanBarChange(newValue === "on");
 						break;
 				}
 			},
