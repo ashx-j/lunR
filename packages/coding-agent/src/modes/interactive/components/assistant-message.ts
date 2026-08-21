@@ -365,12 +365,13 @@ export class AssistantMessageComponent extends Container {
 }
 
 class ThinkingRunBlock extends Container {
-	constructor(
-		private readonly owner: AssistantMessageComponent,
-		private readonly runIndex: number,
-		inner: Component,
-	) {
+	private readonly owner: AssistantMessageComponent;
+	private readonly runIndex: number;
+
+	constructor(owner: AssistantMessageComponent, runIndex: number, inner: Component) {
 		super();
+		this.owner = owner;
+		this.runIndex = runIndex;
 		this.addChild(inner);
 	}
 

@@ -102,6 +102,7 @@ export async function checkForUpdate(options: {
 		}
 	}
 
+	if (!record) return undefined;
 	return toResult(options.currentVersion, record, true);
 }
 
