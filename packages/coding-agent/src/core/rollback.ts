@@ -4,7 +4,7 @@
  * Captures pre-write file content before edit/write tools mutate files, keyed
  * by user-turn and session id. `/rollback` restores the newest non-empty turn's
  * snapshots and then rewinds the conversation via a session fork (persistent,
- * unlike /undo).
+ * unlike /undo and /edit, which stay in the same session file).
  *
  * Capture modes (setting `rollbackCapture`):
  *  - copies:  snapshot pre-write content; restore = write back + delete files

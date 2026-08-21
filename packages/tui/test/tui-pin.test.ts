@@ -504,4 +504,69 @@ describe("TUI pinFrom dock", () => {
 		assert.ok(top[0]!.startsWith("C0"));
 		assert.ok(bottom[0]!.startsWith("C4"));
 	});
+
+	it("press+motion+release on the last column drags the thumb without copying", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const selected: string[] = [];
+		tui.onTextSelected = (text) => selected.push(text);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+		assert.strictEqual(tui.getChatScroll(), 0);
+
+		// Last column (x=20). At offset 0 the thumb sits on the bottom rows (y=3–6);
+		// press the thumb and drag up to scroll into older chat.
+		terminal.sendInput("\x1b[<0;20;6M");
+		terminal.sendInput("\x1b[<32;20;1M");
+		terminal.sendInput("\x1b[<0;20;1m");
+		await terminal.waitForRender();
+
+		assert.ok(tui.getChatScroll() > 0);
+		assert.deepStrictEqual(selected, []);
+		tui.stop();
+	});
+
+	it("press on the track jumps, then drag continues from there", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+
+		terminal.sendInput("\x1b[<0;20;1M");
+		await terminal.waitForRender();
+		const afterJump = tui.getChatScroll();
+		assert.ok(afterJump > 0);
+
+		terminal.sendInput("\x1b[<32;20;6M");
+		terminal.sendInput("\x1b[<0;20;6m");
+		await terminal.waitForRender();
+		assert.notStrictEqual(tui.getChatScroll(), afterJump);
+		tui.stop();
+	});
+
+	it("gutter glyphs reset SGR so red chat lines do not tint the thumb", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(Array.from({ length: 10 }, (_, i) => `\x1b[31mC${i}`));
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		const frame = tui.render(20);
+		const chatSlice = frame.slice(0, 6);
+		assert.ok(chatSlice.every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
+		assert.ok(chatSlice.some((line) => /\x1b\[0m(?:\x1b\[[0-9;]*m)*[█│]/.test(line)));
+		assert.ok(chatSlice.every((line) => !/31m[█│]/.test(line)));
+	});
 });

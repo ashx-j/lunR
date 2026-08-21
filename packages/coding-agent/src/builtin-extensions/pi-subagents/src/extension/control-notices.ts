@@ -50,10 +50,10 @@ function deliverControlNotice(input: {
 		{
 			customType: SUBAGENT_CONTROL_MESSAGE_TYPE,
 			content: noticeText,
-			display: true,
+			display: false,
 			details: { ...input.details, childIntercomTarget, noticeText },
 		},
-		{ triggerTurn: input.details.source !== "foreground" },
+		{ triggerTurn: false },
 	);
 }
 

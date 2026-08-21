@@ -33,9 +33,11 @@ export class ThinkingTailComponent implements Component {
 
 	render(width: number): string[] {
 		const lines = this.markdown.render(width);
-		if (lines.length <= this.maxLines) {
-			return lines;
+		const tail = lines.length <= this.maxLines ? lines : lines.slice(-this.maxLines);
+		if (tail.length >= this.maxLines) {
+			return tail;
 		}
-		return lines.slice(-this.maxLines);
+		const pad = this.maxLines - tail.length;
+		return [...Array.from({ length: pad }, () => ""), ...tail];
 	}
 }

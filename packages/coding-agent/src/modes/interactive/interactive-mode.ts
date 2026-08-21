@@ -206,8 +206,8 @@ import {
 	computeSmoothRevealStep,
 	countGraphemesBeforeToolCall,
 	countMessageGraphemes,
-	sliceMessageContent,
 	type SmoothStreamingOptions,
+	sliceMessageContent,
 } from "./smooth-streaming.ts";
 import {
 	getAvailableThemes,
@@ -595,7 +595,7 @@ export class InteractiveMode {
 			resetPermissions(this.settingsManager.getDefaultPermissionMode());
 			// lunr: clear process registry and rollback state
 			processRegistry.clearRegistry();
-			// lunr: on fork (/rollback, /undo, tree navigation) the snapshots SURVIVE —
+			// lunr: on fork (/rollback, tree navigation) the snapshots SURVIVE —
 			// the caller migrates them to the forked session id (migrateRollbackSession).
 			// Any other replacement wipes only the session being torn down.
 			if (reason !== "fork") {
@@ -611,11 +611,6 @@ export class InteractiveMode {
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
-		this.ui.onTextSelected = (text) => {
-			void copyToClipboard(text)
-				.then(() => this.showStatus("Copied."))
-				.catch((error) => this.showError(error instanceof Error ? error.message : String(error)));
-		};
 
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
 		registerPermissionModeBridge(() => getPermissionMode());
@@ -2894,6 +2889,11 @@ export class InteractiveMode {
 				await this.handleUndoCommand();
 				return;
 			}
+			if (text === "/edit") {
+				this.editor.setText("");
+				await this.handleEditCommand();
+				return;
+			}
 			if (text === "/redo") {
 				this.editor.setText("");
 				await this.handleRedoCommand();
@@ -3075,7 +3075,7 @@ export class InteractiveMode {
 		if (!this.streamingComponent || !target) return;
 		const opts = this.getSmoothStreamingOptions();
 		const revealed = sliceMessageContent(target, this.streamingDisplayedLength, opts);
-		this.streamingComponent.updateContent(revealed);
+		this.streamingComponent.updateContent(revealed, { thinkingSource: target });
 		this.syncRevealedStreamingTools(revealed, target);
 		this.ui.requestRender();
 	}
@@ -3085,9 +3085,7 @@ export class InteractiveMode {
 	 * leading text. Args always come from the full target so later arg deltas apply.
 	 */
 	private syncRevealedStreamingTools(revealed: AssistantMessage, target: AssistantMessage): void {
-		const revealedIds = new Set<
-			string
-		>();
+		const revealedIds = new Set<string>();
 		for (const block of revealed.content) {
 			if (block.type === "toolCall") revealedIds.add(block.id);
 		}
@@ -3269,6 +3267,7 @@ export class InteractiveMode {
 					if (this.settingsManager.getSmoothStreaming()) {
 						this.streamingComponent.updateContent(
 							sliceMessageContent(this.streamingMessage, 0, this.getSmoothStreamingOptions()),
+							{ thinkingSource: this.streamingMessage },
 						);
 					} else {
 						this.streamingComponent.updateContent(this.streamingMessage);
@@ -3354,17 +3353,9 @@ export class InteractiveMode {
 			case "tool_execution_start": {
 				// If smooth streaming still has leading text unrevealed, flush through
 				// this tool so the running card is not hidden behind the typewriter.
-				if (
-					this.settingsManager.getSmoothStreaming() &&
-					this.streamingTargetMessage &&
-					this.streamingComponent
-				) {
+				if (this.settingsManager.getSmoothStreaming() && this.streamingTargetMessage && this.streamingComponent) {
 					const opts = this.getSmoothStreamingOptions();
-					const needed = countGraphemesBeforeToolCall(
-						this.streamingTargetMessage,
-						event.toolCallId,
-						opts,
-					);
+					const needed = countGraphemesBeforeToolCall(this.streamingTargetMessage, event.toolCallId, opts);
 					if (this.streamingDisplayedLength < needed) {
 						this.streamingDisplayedLength = needed;
 					}
@@ -6532,17 +6523,16 @@ export class InteractiveMode {
 		await this.sendUserMessageAfterDeferredBuiltins(buildResearchPrompt(question, depth, breadth));
 	}
 
-	// lunr: /undo persists the rewind by forking the session to just before the
-	// last user message (same fork mechanism /rollback uses, but WITHOUT touching files).
-	// The branched session file survives restart/`-c`, so undone turns stay gone.
-	// /redo stays ephemeral and cannot redo across a fork, so the redo stack is cleared.
-	private async handleUndoCommand(): Promise<void> {
+	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
+	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
+	// pops the previous leaf and navigates back.
+	private async rewindLastTurn(command: "undo" | "edit"): Promise<{ editorText?: string } | undefined> {
 		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /undo.");
-			return;
+			this.showWarning(`Wait for the current response to finish before running /${command}.`);
+			return undefined;
 		}
 
-		// Find the last user message on the current branch (root → leaf order)
+		const nothingLabel = command === "undo" ? "Nothing to undo" : "Nothing to edit";
 		const branch = this.sessionManager.getBranch();
 		let lastUserIndex = -1;
 		for (let i = branch.length - 1; i >= 0; i--) {
@@ -6553,18 +6543,17 @@ export class InteractiveMode {
 			}
 		}
 		if (lastUserIndex === -1) {
-			this.showStatus("Nothing to undo");
-			return;
+			this.showStatus(nothingLabel);
+			return undefined;
 		}
 
 		const lastUser = branch[lastUserIndex];
 		const leafId = this.sessionManager.getLeafId();
 		let targetId: string;
 		if (lastUser.id === leafId) {
-			// User message with no response yet (e.g. aborted stream) — undo to its parent.
 			if (!lastUser.parentId) {
-				this.showStatus("Nothing to undo");
-				return;
+				this.showStatus(nothingLabel);
+				return undefined;
 			}
 			targetId = lastUser.parentId;
 		} else {
@@ -6572,29 +6561,35 @@ export class InteractiveMode {
 		}
 
 		try {
-			// Fork to just before the target — writes a branched session file so the
-			// rewind survives restart. Unlike /rollback, this must NOT touch files.
-			// lunr: fork teardown skips the rollback wipe (reason === "fork"), so carry
-			// the surviving snapshots over to the forked session id.
-			const oldSid = this.sessionManager.getSessionId();
-			const forkResult = await this.runtimeHost.fork(targetId, { position: "before" });
-			if (forkResult.cancelled) {
-				this.showStatus("Undo cancelled");
-				return;
+			const result = await this.session.navigateTree(targetId, {});
+			if (result.cancelled) {
+				this.showStatus(command === "undo" ? "Undo cancelled" : "Edit cancelled");
+				return undefined;
 			}
-			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
-			// /redo cannot redo across a fork — clear the ephemeral redo stack.
-			this.redoStack.length = 0;
+			if (leafId) {
+				this.redoStack.push(leafId);
+			}
 			this.chatContainer.clear();
 			this.renderInitialMessages();
-			if (forkResult.selectedText && !this.editor.getText().trim()) {
-				this.editor.setText(forkResult.selectedText);
-			}
-			this.showStatus("Undone — branched session created (persistent). /redo unavailable after a fork.");
 			void this.flushCompactionQueue({ willRetry: false });
+			return { editorText: result.editorText };
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
+			return undefined;
 		}
+	}
+
+	private async handleUndoCommand(): Promise<void> {
+		const result = await this.rewindLastTurn("undo");
+		if (!result) return;
+		this.showStatus("Undone. /redo to restore.");
+	}
+
+	private async handleEditCommand(): Promise<void> {
+		const result = await this.rewindLastTurn("edit");
+		if (!result) return;
+		this.editor.setText(result.editorText ?? "");
+		this.showStatus("Editing last message. /redo to restore.");
 	}
 
 	private async handleRedoCommand(): Promise<void> {
