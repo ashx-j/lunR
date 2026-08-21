@@ -394,6 +394,7 @@ export interface AgentProgress {
 	currentPath?: string;
 	model?: string;
 	thinking?: string;
+	thinkingText?: string;
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
 	toolCount: number;

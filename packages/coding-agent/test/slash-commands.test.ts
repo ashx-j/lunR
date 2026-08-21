@@ -6,4 +6,12 @@ describe("BUILTIN_SLASH_COMMANDS", () => {
 		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "token-usage")).toBe(false);
 		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "usage")).toBe(true);
 	});
+
+	it("includes /edit and describes /undo as same-session rewind", () => {
+		const edit = BUILTIN_SLASH_COMMANDS.find((command) => command.name === "edit");
+		const undo = BUILTIN_SLASH_COMMANDS.find((command) => command.name === "undo");
+		expect(edit?.description).toContain("chat box");
+		expect(undo?.description).toContain("same session");
+		expect(undo?.description).toContain("/redo");
+	});
 });
