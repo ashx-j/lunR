@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import {
 	formatThoughtDuration,
@@ -23,9 +23,9 @@ export class AssistantMessageComponent extends Container {
 	// lunr: collapsible reasoning — when true, a completed thinking run renders as
 	// "✻ Thought for Xs" + its first sentence instead of the full block.
 	private thinkingCollapse: boolean;
-	// lunr: ctrl+o expansion — when true, collapsed thinking runs render in full
-	// (wired into the global app.tools.expand toggle via the Expandable interface).
+	// lunr: per-run expand. `expanded` still means "all runs" for setExpanded().
 	private expanded = false;
+	private expandedRuns = new Set<number>();
 	// lunr: live per-run timings from interactive-mode; undefined = history message
 	// (always treated as final, rendered without durations).
 	private thinkingTimings?: ThinkingRunTiming[];
@@ -90,13 +90,51 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	// lunr: ctrl+o expansion — Expandable interface hook; expanded collapsed thinking
-	// runs render as full Markdown blocks again.
+	// lunr: Expandable hook; true expands every thinking run, false collapses all.
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+		if (!expanded) this.expandedRuns.clear();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
+	}
+
+	private isRunExpanded(runIndex: number): boolean {
+		return this.expanded || this.expandedRuns.has(runIndex);
+	}
+
+	toggleThinkingRun(runIndex: number): void {
+		if (this.expanded) {
+			this.expanded = false;
+			this.expandedRuns.clear();
+			const count = this.lastMessage ? collectThinkingRuns(this.lastMessage.content).length : 0;
+			for (let i = 0; i < count; i++) {
+				if (i !== runIndex) this.expandedRuns.add(i);
+			}
+		} else if (this.expandedRuns.has(runIndex)) {
+			this.expandedRuns.delete(runIndex);
+		} else {
+			this.expandedRuns.add(runIndex);
+		}
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
+		}
+	}
+
+	handleClick(localY: number, width: number): boolean {
+		const contentWidth = this.gutterRail ? Math.max(1, width - 2) : width;
+		let y = 0;
+		for (const child of this.contentContainer.children) {
+			const h = child.render(contentWidth).length;
+			if (localY >= y && localY < y + h) {
+				if (typeof child.handleClick === "function") {
+					return child.handleClick(localY - y, contentWidth);
+				}
+				return false;
+			}
+			y += h;
+		}
+		return false;
 	}
 
 	setThinkingTimings(timings: ThinkingRunTiming[] | undefined): void {
@@ -281,26 +319,29 @@ export class AssistantMessageComponent extends Container {
 			this.thinkingTimings?.[thinkingRunIndex],
 			this.thinkingTimings !== undefined,
 		);
-		if (this.thinkingCollapse && !this.expanded && runComplete) {
+		const wrap = (inner: Component): void => {
+			this.contentContainer.addChild(new ThinkingRunBlock(this, thinkingRunIndex, inner));
+		};
+		if (this.thinkingCollapse && !this.isRunExpanded(thinkingRunIndex) && runComplete) {
 			const timing = this.thinkingTimings?.[thinkingRunIndex];
 			const label =
 				timing?.end !== undefined
 					? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
 					: "✻ Thought";
-			this.contentContainer.addChild(new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0));
+			const block = new Container();
+			block.addChild(new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0));
 			const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
 			if (snippet) {
-				this.contentContainer.addChild(
-					new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0),
-				);
+				block.addChild(new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0));
 			}
+			wrap(block);
 			if (hasVisibleContentAfter) {
 				this.contentContainer.addChild(new Spacer(1));
 			}
 			return;
 		}
-		if (!runComplete && !this.expanded) {
-			this.contentContainer.addChild(
+		if (!runComplete && !this.isRunExpanded(thinkingRunIndex)) {
+			wrap(
 				new ThinkingTailComponent(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("thinkingText", text),
 					italic: true,
@@ -311,7 +352,7 @@ export class AssistantMessageComponent extends Container {
 			}
 			return;
 		}
-		this.contentContainer.addChild(
+		wrap(
 			new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
 				color: (text: string) => theme.fg("thinkingText", text),
 				italic: true,
@@ -320,6 +361,22 @@ export class AssistantMessageComponent extends Container {
 		if (hasVisibleContentAfter) {
 			this.contentContainer.addChild(new Spacer(1));
 		}
+	}
+}
+
+class ThinkingRunBlock extends Container {
+	constructor(
+		private readonly owner: AssistantMessageComponent,
+		private readonly runIndex: number,
+		inner: Component,
+	) {
+		super();
+		this.addChild(inner);
+	}
+
+	handleClick(_localY: number, _width: number): boolean {
+		this.owner.toggleThinkingRun(this.runIndex);
+		return true;
 	}
 }
 

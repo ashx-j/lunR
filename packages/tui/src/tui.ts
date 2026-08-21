@@ -87,6 +87,12 @@ export interface Component {
 	selectable?: boolean;
 
 	/**
+	 * Optional click handler. `localY` is 0-based within this component's last render.
+	 * Return true if the click was handled.
+	 */
+	handleClick?(localY: number, width: number): boolean;
+
+	/**
 	 * Invalidate any cached rendering state.
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
@@ -256,10 +262,17 @@ type ActiveOverlayFocusRestoreState = EligibleOverlayFocusRestoreState | Blocked
 type OverlayFocusRestoreState = { status: "inactive" } | ActiveOverlayFocusRestoreState;
 type OverlayFocusRestorePolicy = "clear" | "preserve";
 
+type ChatHitRange = {
+	component: Component;
+	start: number;
+	end: number;
+};
+
 type ChatLayoutCache = {
 	epoch: number;
 	chatWidth: number;
 	scrollLines: string[];
+	ranges: ChatHitRange[];
 };
 
 type ChatScrollbar = {
@@ -308,6 +321,21 @@ export class Container implements Component {
 			}
 		}
 		return lines;
+	}
+
+	handleClick(localY: number, width: number): boolean {
+		let y = 0;
+		for (const child of this.children) {
+			const h = child.render(width).length;
+			if (localY >= y && localY < y + h) {
+				if (typeof child.handleClick === "function") {
+					return child.handleClick(localY - y, width);
+				}
+				return false;
+			}
+			y += h;
+		}
+		return false;
 	}
 }
 
@@ -366,6 +394,9 @@ export class TUI extends Container {
 	private static readonly WHEEL_LINES = 3;
 	private chatScrollbar: ChatScrollbar | undefined;
 	private scrollbarDrag: { grabY: number; startOffset: number } | undefined;
+	private pendingClick: { x: number; y: number } | undefined;
+	private lastChatStart = 0;
+	private lastChatSliceHeight = 0;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
@@ -616,27 +647,29 @@ export class TUI extends Container {
 		return this.children.indexOf(this.pinComponent);
 	}
 
-	private collectChildLines(from: number, to: number, width: number): string[] {
+	private collectChildLines(from: number, to: number, width: number, ranges?: ChatHitRange[]): string[] {
 		const lines: string[] = [];
 		for (let i = from; i < to; i++) {
 			const child = this.children[i];
 			if (!child) continue;
-			this.appendRenderedChild(lines, child, width);
+			this.appendRenderedChild(lines, child, width, ranges);
 		}
 		return lines;
 	}
 
-	private appendRenderedChild(lines: string[], child: Component, width: number): void {
+	private appendRenderedChild(lines: string[], child: Component, width: number, ranges?: ChatHitRange[]): void {
 		const nested = "children" in child && Array.isArray((child as Container).children);
 		if (nested && (child as Container).children.length > 0 && child.render === Container.prototype.render) {
 			for (const nestedChild of (child as Container).children) {
-				this.appendRenderedChild(lines, nestedChild, width);
+				this.appendRenderedChild(lines, nestedChild, width, ranges);
 			}
 			return;
 		}
+		const start = lines.length;
 		for (const line of child.render(width)) {
 			lines.push(line);
 		}
+		ranges?.push({ component: child, start, end: lines.length });
 	}
 
 	private snapStartToKittyImageHeader(lines: string[], start: number): number {
@@ -680,26 +713,31 @@ export class TUI extends Container {
 
 		let chatWidth = this.chatUsesGutter ? Math.max(1, width - 1) : width;
 		let scrollLines: string[];
+		let ranges: ChatHitRange[];
 		let fromCache = false;
 		const cache = this.chatLayoutCache;
 		if (cache && cache.epoch === this.contentEpoch && cache.chatWidth === chatWidth) {
 			scrollLines = cache.scrollLines;
+			ranges = cache.ranges;
 			fromCache = true;
 		} else {
-			scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
+			ranges = [];
+			scrollLines = this.collectChildLines(0, pinIndex, chatWidth, ranges);
 		}
 
 		if (this.chatUsesGutter) {
 			if (scrollLines.length <= viewH) {
 				this.chatUsesGutter = false;
 				chatWidth = width;
-				scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
+				ranges = [];
+				scrollLines = this.collectChildLines(0, pinIndex, chatWidth, ranges);
 				fromCache = false;
 			}
 		} else if (scrollLines.length > viewH) {
 			this.chatUsesGutter = true;
 			chatWidth = Math.max(1, width - 1);
-			scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
+			ranges = [];
+			scrollLines = this.collectChildLines(0, pinIndex, chatWidth, ranges);
 			fromCache = false;
 		}
 
@@ -708,6 +746,7 @@ export class TUI extends Container {
 				epoch: this.contentEpoch,
 				chatWidth,
 				scrollLines,
+				ranges,
 			};
 		}
 
@@ -720,12 +759,14 @@ export class TUI extends Container {
 			this.chatScrollbar = undefined;
 			this.scrollbarDrag = undefined;
 			chatSlice = scrollLines.slice();
+			this.lastChatStart = 0;
 		} else {
 			this.lastChatScrollMax = scrollLines.length - viewH;
 			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.lastChatScrollMax));
 			start = scrollLines.length - viewH - this.chatScrollOffset;
 			start = this.snapStartToKittyImageHeader(scrollLines, start);
 			start = Math.max(0, start);
+			this.lastChatStart = start;
 			chatSlice = scrollLines.slice(start, start + viewH);
 			while (chatSlice.length < viewH) {
 				chatSlice.push("");
@@ -755,6 +796,7 @@ export class TUI extends Container {
 			}
 		}
 
+		this.lastChatSliceHeight = chatSlice.length;
 		return [...chatSlice, ...dockLines];
 	}
 
@@ -1103,8 +1145,66 @@ export class TUI extends Container {
 				this.setChatScroll(Math.round((1 - rel) * sb.scrollMax));
 			}
 			this.scrollbarDrag = { grabY: y, startOffset: this.chatScrollOffset };
+			this.pendingClick = undefined;
 			return;
 		}
+
+		if (mouse.kind === "button" && mouse.button === 0 && !mouse.release) {
+			this.pendingClick = { x: mouse.x, y: mouse.y };
+			return;
+		}
+
+		if (mouse.kind === "move" && this.pendingClick) {
+			const dx = Math.abs(mouse.x - this.pendingClick.x);
+			const dy = Math.abs(mouse.y - this.pendingClick.y);
+			if (dx + dy > 1) {
+				this.pendingClick = undefined;
+			}
+			return;
+		}
+
+		if (mouse.kind === "button" && mouse.button === 0 && mouse.release) {
+			const pending = this.pendingClick;
+			this.pendingClick = undefined;
+			if (!pending) return;
+			if (this.dispatchChatClick(pending.y) || this.dispatchDockClick(pending.y)) {
+				this.requestRender();
+			}
+		}
+	}
+
+	private dispatchChatClick(mouseY: number): boolean {
+		const cache = this.chatLayoutCache;
+		if (!cache || mouseY < 1 || mouseY > this.lastChatSliceHeight) return false;
+		const lineIndex = this.lastChatStart + (mouseY - 1);
+		const hit = cache.ranges.find((range) => lineIndex >= range.start && lineIndex < range.end);
+		if (!hit || typeof hit.component.handleClick !== "function") return false;
+		return hit.component.handleClick(lineIndex - hit.start, cache.chatWidth) === true;
+	}
+
+	private dispatchDockClick(mouseY: number): boolean {
+		if (mouseY <= this.lastChatSliceHeight) return false;
+		const pin = this.getPinIndex();
+		if (pin < 0) return false;
+		const width = this.terminal.columns;
+		let y = this.lastChatSliceHeight;
+		const local = mouseY - 1;
+		for (let i = pin; i < this.children.length; i++) {
+			const child = this.children[i];
+			if (!child) continue;
+			const h = child.render(width).length;
+			if (local >= y && local < y + h) {
+				if (typeof child.handleClick === "function") {
+					return child.handleClick(local - y, width);
+				}
+				if (child instanceof Container) {
+					return child.handleClick(local - y, width);
+				}
+				return false;
+			}
+			y += h;
+		}
+		return false;
 	}
 
 	private dragScrollbarTo(mouseY: number): void {
