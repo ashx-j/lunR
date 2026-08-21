@@ -164,7 +164,7 @@ export function buildSearchErrorPlan(details: SearchErrorDetails | undefined | n
 	// --- expand hint ---
 	const hiddenLines = Math.max(0, expanded.length - (1 + collapsed.length)); // headline + preview shown when collapsed
 	const expandHint = hiddenLines > 0
-		? `... (${hiddenLines} more lines, ${expanded.length} total, ctrl+o to expand)`
+		? `... (${hiddenLines} more lines, ${expanded.length} total)`
 		: null;
 
 	return { expanded, collapsed, expandHint };

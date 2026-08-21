@@ -65,6 +65,23 @@ describe("model-tiers settings", () => {
 		expect(reloaded.getTierModel("standard")).toBe("anthropic/claude-sonnet-4-20250514");
 		expect(reloaded.getTierModel("heavy")).toBe("anthropic/claude-opus-4-20250514");
 	});
+
+	it("persists per-tier thinking and clears inherit", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		manager.setModelTiersEnabled(true);
+		manager.setTierThinking("light", "off");
+		manager.setTierThinking("heavy", "high");
+		await manager.flush();
+
+		const reloaded = SettingsManager.create(projectDir, agentDir);
+		expect(reloaded.getTierThinking("light")).toBe("off");
+		expect(reloaded.getTierThinking("standard")).toBeUndefined();
+		expect(reloaded.getTierThinking("heavy")).toBe("high");
+
+		reloaded.setTierThinking("light", undefined);
+		await reloaded.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getTierThinking("light")).toBeUndefined();
+	});
 });
 
 describe("model-tiers bridge", () => {
@@ -172,10 +189,17 @@ describe("resolveTierModelOverride", () => {
 		clearModelTiersBridge();
 	});
 
-	function installBridge(opts: { enabled: boolean; models?: Record<string, string | undefined> }): void {
+	function installBridge(opts: {
+		enabled: boolean;
+		models?: Record<string, string | undefined>;
+		thinking?: Record<string, string | undefined>;
+		parentThinking?: string;
+	}): void {
 		(globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] = {
 			isTierModeEnabled: () => opts.enabled,
 			getTierModel: (tier: string) => opts.models?.[tier],
+			getTierThinking: (tier: string) => opts.thinking?.[tier],
+			getParentThinking: () => opts.parentThinking,
 		};
 	}
 
@@ -200,5 +224,34 @@ describe("resolveTierModelOverride", () => {
 		installBridge({ enabled: true, models: { light: "xai/grok-4", heavy: "  anthropic/claude-opus-4-20250514  " } });
 		expect(resolveTierModelOverride("light")).toBe("xai/grok-4");
 		expect(resolveTierModelOverride("heavy")).toBe("anthropic/claude-opus-4-20250514");
+	});
+
+	it("appends parent thinking when the tier thinking is unset", () => {
+		installBridge({
+			enabled: true,
+			models: { light: "xai/grok-4" },
+			parentThinking: "high",
+		});
+		expect(resolveTierModelOverride("light")).toBe("xai/grok-4:high");
+	});
+
+	it("uses the tier thinking over the parent session level", () => {
+		installBridge({
+			enabled: true,
+			models: { light: "xai/grok-4" },
+			thinking: { light: "off" },
+			parentThinking: "high",
+		});
+		expect(resolveTierModelOverride("light")).toBe("xai/grok-4:off");
+	});
+
+	it("does not apply thinking when tiers are disabled", () => {
+		installBridge({
+			enabled: false,
+			models: { light: "xai/grok-4" },
+			thinking: { light: "high" },
+			parentThinking: "high",
+		});
+		expect(resolveTierModelOverride("light")).toBeUndefined();
 	});
 });

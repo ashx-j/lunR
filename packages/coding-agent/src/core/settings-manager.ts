@@ -55,6 +55,10 @@ export interface ModelTiersSettings {
 	light?: string; // provider/model string (same format as /model)
 	standard?: string;
 	heavy?: string;
+	/** Unset = inherit the parent session thinking level. */
+	lightThinking?: ThinkingLevel;
+	standardThinking?: ThinkingLevel;
+	heavyThinking?: ThinkingLevel;
 }
 
 export interface ThinkingBudgetsSettings {
@@ -149,6 +153,10 @@ export interface Settings {
 	footerContext?: boolean; // default: true - show the context-usage pct/window segment
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research/tps status segments
+	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
+	footerPlan?: boolean; // default: true - show the subscription usage segment
+	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
+	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
 	// lunr: rollback settings
@@ -1067,6 +1075,46 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getFooterGit(): boolean {
+		return this.settings.footerGit ?? true;
+	}
+
+	setFooterGit(enabled: boolean): void {
+		this.globalSettings.footerGit = enabled;
+		this.markModified("footerGit");
+		this.save();
+	}
+
+	getFooterPlan(): boolean {
+		return this.settings.footerPlan ?? true;
+	}
+
+	setFooterPlan(enabled: boolean): void {
+		this.globalSettings.footerPlan = enabled;
+		this.markModified("footerPlan");
+		this.save();
+	}
+
+	getFooterPlanBar(): boolean {
+		return this.settings.footerPlanBar ?? true;
+	}
+
+	setFooterPlanBar(enabled: boolean): void {
+		this.globalSettings.footerPlanBar = enabled;
+		this.markModified("footerPlanBar");
+		this.save();
+	}
+
+	getPlanUsageWindow(): "5h" | "weekly" {
+		return this.settings.planUsageWindow === "5h" ? "5h" : "weekly";
+	}
+
+	setPlanUsageWindow(window: "5h" | "weekly"): void {
+		this.globalSettings.planUsageWindow = window;
+		this.markModified("planUsageWindow");
+		this.save();
+	}
+
 	getDefaultProjectTrust(): DefaultProjectTrust {
 		const value = this.globalSettings.defaultProjectTrust;
 		return value === "always" || value === "never" ? value : "ask";
@@ -1472,4 +1520,28 @@ export class SettingsManager {
 		this.markModified("modelTiers", tier);
 		this.save();
 	}
+
+	getTierThinking(tier: ModelTierName): ThinkingLevel | undefined {
+		return this.settings.modelTiers?.[tierThinkingKey(tier)];
+	}
+
+	setTierThinking(tier: ModelTierName, level: ThinkingLevel | undefined): void {
+		if (!this.globalSettings.modelTiers) {
+			this.globalSettings.modelTiers = {};
+		}
+		const key = tierThinkingKey(tier);
+		if (level === undefined) {
+			delete this.globalSettings.modelTiers[key];
+		} else {
+			this.globalSettings.modelTiers[key] = level;
+		}
+		this.markModified("modelTiers", key);
+		this.save();
+	}
+}
+
+function tierThinkingKey(tier: ModelTierName): "lightThinking" | "standardThinking" | "heavyThinking" {
+	if (tier === "light") return "lightThinking";
+	if (tier === "standard") return "standardThinking";
+	return "heavyThinking";
 }

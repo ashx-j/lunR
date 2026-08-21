@@ -42,6 +42,7 @@ import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOu
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
 import { validateExecutionAcceptance } from "../shared/acceptance.ts";
 import { createForkContextResolver, forkedChildRequiresThinkingOff } from "../../shared/fork-context.ts";
+import { lunrContextPolicy } from "../../shared/lunr-child-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
@@ -1549,28 +1550,14 @@ interface AgentDefaultContextPolicy {
 	usesFork: boolean;
 }
 
-function resolveAgentDefaultContextPolicy(params: SubagentParamsLike, agents: AgentConfig[]): AgentDefaultContextPolicy {
-	if (params.context !== undefined) {
-		return resolveExplicitContextPolicy(params);
-	}
-	const byName = new Map(agents.map((agent) => [agent.name, agent]));
-	const contextForAgent = (agentName: string): "fresh" | "fork" =>
-		byName.get(agentName)?.defaultContext === "fork" ? "fork" : "fresh";
-	const usesFork = collectRequestedAgentNames(params).some((name) => contextForAgent(name) === "fork");
-	return {
-		params: usesFork ? { ...params, context: "fork" } : params,
-		contextForAgent,
-		usesFork,
-	};
+function resolveAgentDefaultContextPolicy(params: SubagentParamsLike, _agents: AgentConfig[]): AgentDefaultContextPolicy {
+	// lunr: hide fork from the model; force every child to fresh. Fork internals stay.
+	return lunrContextPolicy(params);
 }
 
 function resolveExplicitContextPolicy(params: SubagentParamsLike): AgentDefaultContextPolicy {
-	const context = params.context === "fork" ? "fork" : "fresh";
-	return {
-		params,
-		contextForAgent: () => context,
-		usesFork: context === "fork",
-	};
+	// lunr: `context: "fork"` from the model is coerced to fresh.
+	return lunrContextPolicy(params);
 }
 
 function collectRequestedAgentNames(params: SubagentParamsLike): string[] {

@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ModelTierName, SettingsManager } from "./settings-manager.ts";
 
 /**
@@ -15,6 +16,12 @@ export const MODEL_TIERS_BRIDGE_SYMBOL = Symbol.for("@lunr/model-tiers");
 export interface ModelTiersBridge {
 	/** Resolve a tier to its configured "provider/model" string, or undefined if unset/unknown. */
 	getTierModel(tier: string): string | undefined;
+	/** Per-tier thinking level, or undefined to inherit the parent session. */
+	getTierThinking(tier: string): ThinkingLevel | undefined;
+	/** Parent session thinking level (live). Undefined when no session is bound. */
+	getParentThinking(): ThinkingLevel | undefined;
+	/** Bind (or clear) the live parent-session thinking reader. */
+	setParentThinkingProvider(provider: (() => ThinkingLevel | undefined) | undefined): void;
 	/** Whether tier-based subagent routing is enabled in settings. */
 	isTierModeEnabled(): boolean;
 	/** Ask the pi-subagents extension to rebuild its tool description from current settings. */
@@ -29,11 +36,22 @@ function isModelTierName(tier: string): tier is ModelTierName {
 
 let activeSettingsManager: SettingsManager | undefined;
 let toolDescriptionRefresher: (() => void) | undefined;
+let parentThinkingProvider: (() => ThinkingLevel | undefined) | undefined;
 
 const bridge: ModelTiersBridge = {
 	getTierModel(tier: string): string | undefined {
 		if (!activeSettingsManager || !isModelTierName(tier)) return undefined;
 		return activeSettingsManager.getTierModel(tier);
+	},
+	getTierThinking(tier: string): ThinkingLevel | undefined {
+		if (!activeSettingsManager || !isModelTierName(tier)) return undefined;
+		return activeSettingsManager.getTierThinking(tier);
+	},
+	getParentThinking(): ThinkingLevel | undefined {
+		return parentThinkingProvider?.();
+	},
+	setParentThinkingProvider(provider: (() => ThinkingLevel | undefined) | undefined): void {
+		parentThinkingProvider = provider;
 	},
 	isTierModeEnabled(): boolean {
 		return activeSettingsManager?.getModelTiersEnabled() ?? false;
@@ -79,4 +97,9 @@ export function getTierModel(tier: ModelTierName): string | undefined {
 /** Whether tier-based subagent routing is enabled in settings. */
 export function isTierModeEnabled(): boolean {
 	return bridge.isTierModeEnabled();
+}
+
+/** Per-tier thinking, or undefined to inherit the parent session. */
+export function getTierThinking(tier: ModelTierName): ThinkingLevel | undefined {
+	return bridge.getTierThinking(tier);
 }

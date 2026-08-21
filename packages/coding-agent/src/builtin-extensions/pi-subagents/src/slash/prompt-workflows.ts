@@ -223,7 +223,8 @@ function splitPromptChain(input: string): string[] {
 
 function workflowParams(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): SubagentParamsLike {
 	const task = substituteArgs(workflow.body, args).trim();
-	const context = runtime.fork ? "fork" : runtime.fresh ? "fresh" : workflow.context;
+	// lunr: --fork is parsed so it is not a task word; children always start fresh.
+	const context = "fresh";
 	return {
 		agent: runtime.agentOverride ?? workflow.agent,
 		task,

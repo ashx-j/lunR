@@ -1,6 +1,6 @@
 /**
  * Plan/subscription usage service. Per-provider adapters query provider quota
- * endpoints (5-minute cache each) so /usage can show subscription windows
+ * endpoints (60-second cache each) so /usage and the footer can show subscription windows
  * alongside session/context totals.
  *
  * Deliberately absent adapters:
@@ -15,6 +15,7 @@
 
 import { ModelsError } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
+import type { SettingsManager } from "./settings-manager.ts";
 import { fetchKimiPlanUsage } from "./usage-adapters/kimi-coding.ts";
 import { fetchCodexPlanUsage } from "./usage-adapters/openai-codex.ts";
 import { fetchXaiPlanUsage } from "./usage-adapters/xai.ts";
@@ -76,9 +77,39 @@ const ADAPTERS: Readonly<Record<string, UsageAdapter>> = {
 	xai: fetchXaiPlanUsage,
 };
 
-export const PLAN_USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+export const PLAN_USAGE_CACHE_TTL_MS = 60 * 1000;
+
+export type PlanUsageWindowPreference = "5h" | "weekly";
+
+export function isWeeklyPlanWindow(window: PlanUsageWindow): boolean {
+	return /week/i.test(window.label);
+}
+
+export function isFiveHourPlanWindow(window: PlanUsageWindow): boolean {
+	return /5h/i.test(window.label) || window.label === "5h";
+}
+
+/** Preferred window, falling back to the other, skipping Extra/on-demand. */
+export function pickPlanWindow(
+	usage: PlanUsage | undefined,
+	preferred: PlanUsageWindowPreference,
+): PlanUsageWindow | undefined {
+	if (!usage?.windows.length) return undefined;
+	const usable = usage.windows.filter((w) => !/extra/i.test(w.label));
+	const weekly = usable.find(isWeeklyPlanWindow);
+	const fiveH = usable.find(isFiveHourPlanWindow);
+	if (preferred === "5h") return fiveH ?? weekly ?? usable[0] ?? usage.windows[0];
+	return weekly ?? fiveH ?? usable[0] ?? usage.windows[0];
+}
+
+export function footerPlanLabel(window: PlanUsageWindow): string {
+	if (isFiveHourPlanWindow(window)) return "5h";
+	if (isWeeklyPlanWindow(window)) return "wk";
+	return window.label.length <= 4 ? window.label : window.label.slice(0, 4);
+}
 
 const cache = new Map<string, { expiresAt: number; value: PlanUsage | undefined }>();
+const inflight = new Map<string, Promise<PlanUsageResult>>();
 
 /** Whether a plan-usage adapter exists for this provider. */
 export function hasPlanUsageAdapter(providerId: string): boolean {
@@ -97,23 +128,91 @@ export async function getPlanUsageResult(providerId: string, runtime: ModelRunti
 	const now = Date.now();
 	const cached = cache.get(providerId);
 	if (cached && cached.expiresAt > now) return { usage: cached.value };
-	try {
-		const value = await adapter(runtime);
-		cache.set(providerId, { expiresAt: now + PLAN_USAGE_CACHE_TTL_MS, value });
-		return { usage: value };
-	} catch (error) {
-		const authError = planUsageAuthError(error);
-		if (authError) return { error: authError };
-		cache.set(providerId, { expiresAt: now + PLAN_USAGE_CACHE_TTL_MS, value: undefined });
-		return {};
-	}
+	const pending = inflight.get(providerId);
+	if (pending) return pending;
+	const task = (async (): Promise<PlanUsageResult> => {
+		try {
+			const value = await adapter(runtime);
+			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value });
+			return { usage: value };
+		} catch (error) {
+			const authError = planUsageAuthError(error);
+			if (authError) return { error: authError };
+			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: undefined });
+			return {};
+		} finally {
+			inflight.delete(providerId);
+		}
+	})();
+	inflight.set(providerId, task);
+	return task;
+}
+
+/** Last fetched usage, including expired cache (footer can show stale while refetching). */
+export function peekPlanUsage(providerId: string): PlanUsage | undefined {
+	return cache.get(providerId)?.value;
 }
 
 /** Clear the adapter cache (tests, /login changes). */
 export function clearPlanUsageCache(): void {
 	cache.clear();
+	inflight.clear();
 }
 
 // ---------------------------------------------------------------------------
 // Extension bridge
 // ---------------------------------------------------------------------------
+
+export const USAGE_SERVICE_BRIDGE_SYMBOL = Symbol.for("@lunr/usage-service");
+
+export interface FooterPlanSegment {
+	label: string;
+	usedPercent: number;
+}
+
+export interface UsageServiceBridge {
+	peek(providerId: string): PlanUsage | undefined;
+	prefetch(providerId: string): void;
+	getPreferredWindow(): PlanUsageWindowPreference;
+	pickForFooter(providerId: string): FooterPlanSegment | undefined;
+	setOnUpdate(fn: (() => void) | undefined): void;
+}
+
+let activeRuntime: ModelRuntime | undefined;
+let activeUsageSettings: SettingsManager | undefined;
+let onUsageUpdate: (() => void) | undefined;
+
+function preferredWindow(): PlanUsageWindowPreference {
+	return activeUsageSettings?.getPlanUsageWindow() ?? "weekly";
+}
+
+const usageBridge: UsageServiceBridge = {
+	peek(providerId: string): PlanUsage | undefined {
+		return peekPlanUsage(providerId);
+	},
+	prefetch(providerId: string): void {
+		if (!activeRuntime || !hasPlanUsageAdapter(providerId)) return;
+		void getPlanUsage(providerId, activeRuntime).then(() => onUsageUpdate?.());
+	},
+	setOnUpdate(fn: (() => void) | undefined): void {
+		onUsageUpdate = fn;
+	},
+	getPreferredWindow(): PlanUsageWindowPreference {
+		return preferredWindow();
+	},
+	pickForFooter(providerId: string): FooterPlanSegment | undefined {
+		const window = pickPlanWindow(peekPlanUsage(providerId), preferredWindow());
+		if (!window) return undefined;
+		return { label: footerPlanLabel(window), usedPercent: window.usedPercent };
+	},
+};
+
+export function registerUsageServiceBridge(runtime: ModelRuntime, settingsManager: SettingsManager): void {
+	activeRuntime = runtime;
+	activeUsageSettings = settingsManager;
+	(globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] = usageBridge;
+}
+
+export function getUsageServiceBridge(): UsageServiceBridge | undefined {
+	return (globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] as UsageServiceBridge | undefined;
+}
