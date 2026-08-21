@@ -93,6 +93,8 @@ pi
 | Qwen Token Plan | `DASHSCOPE_TOKEN_PLAN_API_KEY` | `qwen-token-plan` |
 | Qwen Token Plan (China) | `DASHSCOPE_TOKEN_PLAN_CN_API_KEY` | `qwen-token-plan-cn` |
 
+OpenCode Zen free models still require `/login opencode` (or `OPENCODE_API_KEY`). The free set rotates; `/refresh` after login pulls the official catalog shard.
+
 Reference for environment variables and `auth.json` keys: [`const envMap`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/env-api-keys.ts) in [`packages/ai/src/env-api-keys.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/env-api-keys.ts).
 
 #### Auth File
