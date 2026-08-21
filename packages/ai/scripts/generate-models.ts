@@ -22,6 +22,15 @@ import {
 	XAI_GROK45_THINKING_LEVEL_MAP,
 	XAI_GROK46_THINKING_LEVEL_MAP,
 } from "../src/xai-effort.ts";
+import {
+	OPENCODE_GO_MODELS_URL,
+	OPENCODE_ZEN_MODELS_URL,
+	opencodeBaseUrl,
+	parseZenModelIds,
+	resolveOpencodeApi,
+	shouldIncludeOpencodeModel,
+	type OpencodeApi,
+} from "./opencode-catalog.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -775,6 +784,107 @@ async function fetchNvidiaNimModelIds(): Promise<Map<string, string>> {
 	}
 }
 
+async function fetchZenModelIds(url: string): Promise<Set<string> | null> {
+	try {
+		console.log(`Fetching models from ${url}...`);
+		const response = await fetch(url);
+		if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+		const ids = parseZenModelIds(await response.json());
+		if (ids.size === 0) throw new Error(`${url} returned no models`);
+		console.log(`Fetched ${ids.size} model IDs from ${url}`);
+		return ids;
+	} catch (error) {
+		console.error(`Failed to fetch ${url}:`, error);
+		if (generatorOptions.strict) throw error;
+		return null;
+	}
+}
+
+type OpencodeVariant = {
+	key: "opencode" | "opencode-go";
+	provider: "opencode" | "opencode-go";
+	basePath: string;
+};
+
+function pushOpencodeModel(
+	models: Model<any>[],
+	variant: OpencodeVariant,
+	args: {
+		modelId: string;
+		name?: string;
+		npm?: string;
+		reasoning?: boolean;
+		input?: ("text" | "image")[];
+		cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number };
+		contextWindow?: number;
+		maxTokens?: number;
+	},
+): void {
+	const modelId = args.modelId;
+	let api: Api = resolveOpencodeApi({ npm: args.npm, modelId });
+	let baseUrl = opencodeBaseUrl(variant.basePath, api as OpencodeApi);
+	let compat: OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
+
+	if (api === "openai-responses") {
+		compat = { sessionAffinityFormat: "openai-nosession" };
+	} else if (args.npm === "@ai-sdk/alibaba") {
+		compat = { cacheControlFormat: "anthropic" };
+	}
+
+	if (variant.provider === "opencode" && modelId === "grok-build-0.1") {
+		compat = { ...(compat ?? {}), supportsReasoningEffort: false };
+	}
+
+	if ((variant.provider === "opencode" || variant.provider === "opencode-go") && modelId === "kimi-k2.6") {
+		// OpenCode Kimi K2.6 accepts Anthropic-style thinking objects
+		// and rejects string thinking values or combined reasoning_effort.
+		compat = { ...(compat ?? {}), thinkingFormat: "deepseek", supportsReasoningEffort: false };
+	}
+
+	// Fix known mismatches between models.dev npm data and actual
+	// OpenCode Go endpoint behaviour. models.dev reports these models
+	// as @ai-sdk/anthropic, but the OpenCode Go endpoints either don't
+	// accept Anthropic SDK auth (MiniMax M2.7) or are served through
+	// the OpenAI-compatible /v1/chat/completions path (Qwen 3.5/3.6).
+	if (variant.provider === "opencode-go") {
+		if (modelId === "minimax-m2.7") {
+			api = "openai-completions";
+			baseUrl = `${variant.basePath}/v1`;
+		}
+		if (modelId === "qwen3.5-plus" || modelId === "qwen3.6-plus") {
+			api = "openai-completions";
+			baseUrl = `${variant.basePath}/v1`;
+			compat = { ...(compat ?? {}), thinkingFormat: "qwen" };
+		}
+	}
+
+	if (api === "openai-completions") {
+		compat = { ...(compat ?? {}), maxTokensField: "max_tokens" };
+		if (OPENCODE_OPENAI_COMPLETIONS_LONG_CACHE_RETENTION_UNSUPPORTED_MODELS.has(`${variant.provider}:${modelId}`)) {
+			compat = { ...compat, supportsLongCacheRetention: false };
+		}
+	}
+
+	models.push({
+		id: modelId,
+		name: args.name || modelId,
+		api,
+		provider: variant.provider,
+		baseUrl,
+		reasoning: args.reasoning === true,
+		input: args.input ?? ["text"],
+		cost: {
+			input: args.cost?.input || 0,
+			output: args.cost?.output || 0,
+			cacheRead: args.cost?.cache_read || 0,
+			cacheWrite: args.cost?.cache_write || 0,
+		},
+		...(compat ? { compat } : {}),
+		contextWindow: args.contextWindow || 4096,
+		maxTokens: args.maxTokens || 4096,
+	});
+}
+
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
@@ -1437,110 +1547,68 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
-		// Process OpenCode models (Zen and Go)
-		// API mapping based on provider.npm field:
+		// Process OpenCode models (Zen and Go).
+		// Availability = GET {zen,zen/go}/v1/models ∩ models.dev tool-capable rows
+		// (keep deprecated-if-live). API mapping from provider.npm:
 		// - @ai-sdk/openai → openai-responses
 		// - @ai-sdk/anthropic → anthropic-messages
 		// - @ai-sdk/google → google-generative-ai
 		// - null/undefined/@ai-sdk/openai-compatible → openai-completions
-		const opencodeVariants = [
+		const opencodeVariants: readonly OpencodeVariant[] = [
 			{ key: "opencode", provider: "opencode", basePath: "https://opencode.ai/zen" },
 			{ key: "opencode-go", provider: "opencode-go", basePath: "https://opencode.ai/zen/go" },
-		] as const;
+		];
+		const [opencodeLiveIds, opencodeGoLiveIds] = await Promise.all([
+			fetchZenModelIds(OPENCODE_ZEN_MODELS_URL),
+			fetchZenModelIds(OPENCODE_GO_MODELS_URL),
+		]);
+		const opencodeLiveByProvider = {
+			opencode: opencodeLiveIds,
+			"opencode-go": opencodeGoLiveIds,
+		} as const;
 
 		for (const variant of opencodeVariants) {
-			if (!data[variant.key]?.models) continue;
+			const liveIds = opencodeLiveByProvider[variant.provider];
+			const seen = new Set<string>();
 
-			for (const [modelId, model] of Object.entries(data[variant.key].models)) {
-				const m = model as ModelsDevModel & { status?: string };
-				if (m.tool_call !== true) continue;
-				if (m.status === "deprecated") continue;
-
-				const npm = m.provider?.npm;
-				let api: Api;
-				let baseUrl: string;
-				let compat: OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
-
-				if (npm === "@ai-sdk/openai") {
-					api = "openai-responses";
-					baseUrl = `${variant.basePath}/v1`;
-					compat = { sessionAffinityFormat: "openai-nosession" };
-				} else if (npm === "@ai-sdk/anthropic") {
-					api = "anthropic-messages";
-					// Anthropic SDK appends /v1/messages to baseURL
-					baseUrl = variant.basePath;
-				} else if (npm === "@ai-sdk/google") {
-					api = "google-generative-ai";
-					baseUrl = `${variant.basePath}/v1`;
-				} else if (npm === "@ai-sdk/alibaba") {
-					api = "openai-completions";
-					baseUrl = `${variant.basePath}/v1`;
-					compat = { cacheControlFormat: "anthropic" };
-				} else {
-					// null, undefined, or @ai-sdk/openai-compatible
-					api = "openai-completions";
-					baseUrl = `${variant.basePath}/v1`;
-				}
-
-				if (variant.provider === "opencode" && modelId === "grok-build-0.1") {
-					compat = { ...(compat ?? {}), supportsReasoningEffort: false };
-				}
-
-				if ((variant.provider === "opencode" || variant.provider === "opencode-go") && modelId === "kimi-k2.6") {
-					// OpenCode Kimi K2.6 accepts Anthropic-style thinking objects
-					// and rejects string thinking values or combined reasoning_effort.
-					compat = { ...(compat ?? {}), thinkingFormat: "deepseek", supportsReasoningEffort: false };
-				}
-
-				// Fix known mismatches between models.dev npm data and actual
-				// OpenCode Go endpoint behaviour. models.dev reports these models
-				// as @ai-sdk/anthropic, but the OpenCode Go endpoints either don't
-				// accept Anthropic SDK auth (MiniMax M2.7) or are served through
-				// the OpenAI-compatible /v1/chat/completions path (Qwen 3.5/3.6).
-				// Switch them to openai-completions so requests use Bearer auth
-				// and the standard /v1/chat/completions endpoint.
-				if (variant.provider === "opencode-go") {
-					if (modelId === "minimax-m2.7") {
-						api = "openai-completions";
-						baseUrl = `${variant.basePath}/v1`;
-					}
-					if (modelId === "qwen3.5-plus" || modelId === "qwen3.6-plus") {
-						api = "openai-completions";
-						baseUrl = `${variant.basePath}/v1`;
-						// Qwen/DashScope uses enable_thinking at the top level.
-						compat = { ...(compat ?? {}), thinkingFormat: "qwen" };
-					}
-				}
-
-				if (api === "openai-completions") {
-					compat = { ...(compat ?? {}), maxTokensField: "max_tokens" };
+			if (data[variant.key]?.models) {
+				for (const [modelId, model] of Object.entries(data[variant.key].models)) {
+					const m = model as ModelsDevModel & { status?: string };
 					if (
-						OPENCODE_OPENAI_COMPLETIONS_LONG_CACHE_RETENTION_UNSUPPORTED_MODELS.has(
-							`${variant.provider}:${modelId}`,
-						)
+						!shouldIncludeOpencodeModel(modelId, {
+							toolCall: m.tool_call === true,
+							liveIds,
+							deprecated: m.status === "deprecated",
+						})
 					) {
-						compat = { ...compat, supportsLongCacheRetention: false };
+						continue;
 					}
-				}
 
-				models.push({
-					id: modelId,
-					name: m.name || modelId,
-					api,
-					provider: variant.provider,
-					baseUrl,
-					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
-					...(compat ? { compat } : {}),
-					contextWindow: m.limit?.context || 4096,
-					maxTokens: m.limit?.output || 4096,
-				});
+					seen.add(modelId);
+					pushOpencodeModel(models, variant, {
+						modelId,
+						name: m.name,
+						npm: m.provider?.npm,
+						reasoning: m.reasoning === true,
+						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+						cost: m.cost,
+						contextWindow: m.limit?.context,
+						maxTokens: m.limit?.output,
+					});
+				}
+			}
+
+			if (liveIds) {
+				for (const modelId of liveIds) {
+					if (seen.has(modelId)) continue;
+					console.log(`OpenCode ${variant.provider}: synthesizing ${modelId} (live, missing from models.dev)`);
+					pushOpencodeModel(models, variant, {
+						modelId,
+						reasoning: true,
+						contextWindow: 128000,
+						maxTokens: 8192,
+					});
+				}
 			}
 		}
 
