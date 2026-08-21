@@ -104,6 +104,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
+import { getUsageServiceBridge } from "../../core/usage-service.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import {
@@ -884,6 +885,7 @@ export class InteractiveMode {
 		this.isInitialized = true;
 		time("ui.start");
 		void this.maybeNotifyCliUpdate();
+		this.startPlanUsagePolling();
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
@@ -969,6 +971,21 @@ export class InteractiveMode {
 		if (this.deferredBuiltinAttachPromise) {
 			await this.deferredBuiltinAttachPromise;
 		}
+	}
+
+	private planUsageTimer: ReturnType<typeof setInterval> | undefined;
+
+	private startPlanUsagePolling(): void {
+		const bridge = getUsageServiceBridge();
+		if (!bridge) return;
+		bridge.setOnUpdate(() => this.ui.requestRender());
+		const tick = () => {
+			const provider = this.session.model?.provider;
+			if (provider) bridge.prefetch(provider);
+		};
+		tick();
+		this.planUsageTimer = setInterval(tick, 60_000);
+		this.planUsageTimer.unref?.();
 	}
 
 	/** Background npm version check. Never blocks first paint. Workspace installs skip. */
@@ -3947,6 +3964,11 @@ export class InteractiveMode {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
 		this.stopSmoothStreaming();
+		if (this.planUsageTimer) {
+			clearInterval(this.planUsageTimer);
+			this.planUsageTimer = undefined;
+		}
+		getUsageServiceBridge()?.setOnUpdate(undefined);
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -4622,6 +4644,8 @@ export class InteractiveMode {
 					footerTokens: this.settingsManager.getFooterTokens(),
 					footerStatuses: this.settingsManager.getFooterStatuses(),
 					footerGit: this.settingsManager.getFooterGit(),
+					footerPlan: this.settingsManager.getFooterPlan(),
+					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
 					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
 					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
 					rollbackTurns: this.settingsManager.getRollbackTurns(),
@@ -4826,6 +4850,12 @@ export class InteractiveMode {
 					},
 					onFooterGitChange: (enabled) => {
 						this.settingsManager.setFooterGit(enabled);
+					},
+					onFooterPlanChange: (enabled) => {
+						this.settingsManager.setFooterPlan(enabled);
+					},
+					onPlanUsageWindowChange: (window) => {
+						this.settingsManager.setPlanUsageWindow(window);
 					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);

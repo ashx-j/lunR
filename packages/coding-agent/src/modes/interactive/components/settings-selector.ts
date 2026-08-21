@@ -107,6 +107,8 @@ export interface SettingsConfig {
 	footerTokens: boolean;
 	footerStatuses: boolean;
 	footerGit: boolean;
+	footerPlan: boolean;
+	planUsageWindow: "5h" | "weekly";
 	// lunr: permission mode default
 	defaultPermissionMode: DefaultPermissionMode;
 	// lunr: rollback settings
@@ -164,6 +166,8 @@ export interface SettingsCallbacks {
 	onFooterTokensChange: (enabled: boolean) => void;
 	onFooterStatusesChange: (enabled: boolean) => void;
 	onFooterGitChange: (enabled: boolean) => void;
+	onFooterPlanChange: (enabled: boolean) => void;
+	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
 	// lunr: rollback callbacks
@@ -441,6 +445,13 @@ class CustomizeSubmenu extends Container {
 				currentValue: (bridge?.getFooterGit() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
+			{
+				id: "footer-plan",
+				label: "Footer: plan usage",
+				description: "Show the live subscription usage bar when the current model is on a plan.",
+				currentValue: (bridge?.getFooterPlan() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
 		];
 
 		this.settingsList = new SettingsList(
@@ -472,6 +483,9 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "footer-git":
 						callbacks.onFooterGitChange(newValue === "on");
+						break;
+					case "footer-plan":
+						callbacks.onFooterPlanChange(newValue === "on");
 						break;
 				}
 			},
@@ -1392,6 +1406,13 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.modelTiers.enabled ? "on" : "off",
 				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
 			},
+			{
+				id: "plan-usage-window",
+				label: "Plan usage window",
+				description: "Preferred subscription window for the footer bar. Missing 5h falls back to weekly.",
+				currentValue: config.planUsageWindow,
+				values: ["5h", "weekly"],
+			},
 			// lunr: Customize submenu — lunR TUI toggles (rail, prompt symbol, footer segments)
 			{
 				id: "customize",
@@ -1603,6 +1624,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "plan-usage-window":
+						callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");
 						break;
 					case "memory-char-cap":
 						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));

@@ -45,6 +45,7 @@ interface CustomizeBridgeForPrompt {
 	getFooterTokens?(): boolean;
 	getFooterStatuses?(): boolean;
 	getFooterGit?(): boolean;
+	getFooterPlan?(): boolean;
 }
 interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
@@ -67,6 +68,7 @@ function lunrFooterToggles(): {
 	tokens: boolean;
 	statuses: boolean;
 	git: boolean;
+	plan: boolean;
 } {
 	const bridge = lunrCustomizeBridge();
 	return {
@@ -76,7 +78,27 @@ function lunrFooterToggles(): {
 		tokens: bridge?.getFooterTokens?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
 		git: bridge?.getFooterGit?.() ?? true,
+		plan: bridge?.getFooterPlan?.() ?? true,
 	};
+}
+
+const USAGE_SERVICE_BRIDGE = Symbol.for("@lunr/usage-service");
+interface UsageServiceBridgeForFooter {
+	pickForFooter?(providerId: string): { label: string; usedPercent: number } | undefined;
+	prefetch?(providerId: string): void;
+}
+function lunrUsageBridge(): UsageServiceBridgeForFooter | undefined {
+	return (globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE] as UsageServiceBridgeForFooter | undefined;
+}
+
+function compactPlanBar(percent: number, theme: Theme): string {
+	const cells = 8;
+	const clamped = Math.max(0, Math.min(100, percent));
+	const filled = Math.round((clamped / 100) * cells);
+	const token = clamped > 90 ? "error" : clamped > 70 ? "warning" : "success";
+	const fill = filled > 0 ? color(theme, token, "█".repeat(filled)) : "";
+	const rest = filled < cells ? color(theme, "dim", "░".repeat(cells - filled)) : "";
+	return fill + rest;
 }
 // lunr: permission mode for the footer safety indicator (always shown).
 function lunrPermissionMode(): string | undefined {
@@ -680,6 +702,27 @@ function renderStatsLine(
 					` ${color(theme, "success", `+${diff.added}`)} ${color(theme, "error", `-${diff.removed}`)}`;
 			}
 			parts.push(gitSeg);
+		}
+	}
+
+	// lunr: live subscription window bar (gated on footerPlan). Hidden with no plan.
+	if (footerToggles.plan) {
+		const provider = ctx.model?.provider;
+		if (provider) {
+			const usage = lunrUsageBridge();
+			usage?.prefetch?.(provider);
+			const seg = usage?.pickForFooter?.(provider);
+			if (seg) {
+				const pct = `${Math.round(seg.usedPercent)}%`;
+				const barColor = seg.usedPercent > 90 ? "error" : seg.usedPercent > 70 ? "warning" : "success";
+				parts.push(
+					color(theme, "white", seg.label) +
+						" " +
+						compactPlanBar(seg.usedPercent, theme) +
+						" " +
+						color(theme, barColor, pct),
+				);
+			}
 		}
 	}
 

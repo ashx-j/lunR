@@ -150,6 +150,8 @@ export interface Settings {
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research/tps status segments
 	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
+	footerPlan?: boolean; // default: true - show the subscription usage bar
+	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
 	// lunr: rollback settings
@@ -1064,6 +1066,26 @@ export class SettingsManager {
 	setFooterGit(enabled: boolean): void {
 		this.globalSettings.footerGit = enabled;
 		this.markModified("footerGit");
+		this.save();
+	}
+
+	getFooterPlan(): boolean {
+		return this.settings.footerPlan ?? true;
+	}
+
+	setFooterPlan(enabled: boolean): void {
+		this.globalSettings.footerPlan = enabled;
+		this.markModified("footerPlan");
+		this.save();
+	}
+
+	getPlanUsageWindow(): "5h" | "weekly" {
+		return this.settings.planUsageWindow === "5h" ? "5h" : "weekly";
+	}
+
+	setPlanUsageWindow(window: "5h" | "weekly"): void {
+		this.globalSettings.planUsageWindow = window;
+		this.markModified("planUsageWindow");
 		this.save();
 	}
 

@@ -41,6 +41,7 @@ import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
 import { getModelTiersBridge, registerModelTierBridge } from "./core/model-tiers.ts";
+import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -872,6 +873,7 @@ export async function main(args: string[], options?: MainOptions) {
 	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
 	registerMemoryCapBridge(settingsManager);
 	registerCustomizeBridge(settingsManager);
+	registerUsageServiceBridge(modelRuntime, settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader
