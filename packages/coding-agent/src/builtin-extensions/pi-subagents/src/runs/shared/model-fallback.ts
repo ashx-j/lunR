@@ -2,6 +2,7 @@
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import type { Usage } from "../../shared/types.ts";
 import { checkModelScope, type ModelScopeConfig, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
+import { applyThinkingSuffix } from "./pi-args.ts";
 
 export type { AvailableModelInfo };
 
@@ -253,11 +254,19 @@ export function resolveTierModelOverride(tier: unknown): string | undefined {
 		}
 		if (bridge.isTierModeEnabled() !== true) return undefined;
 		const model = bridge.getTierModel(tierName);
-		if (typeof model === "string" && model.trim()) return model.trim();
-		if (process.env.PI_SUBAGENTS_DEBUG) {
-			console.warn(`[pi-subagents] model tier '${tierName}' has no configured model; inheriting parent model.`);
+		if (typeof model !== "string" || !model.trim()) {
+			if (process.env.PI_SUBAGENTS_DEBUG) {
+				console.warn(`[pi-subagents] model tier '${tierName}' has no configured model; inheriting parent model.`);
+			}
+			return undefined;
 		}
-		return undefined;
+		const trimmed = model.trim();
+		const thinking =
+			typeof bridge.getTierThinking === "function" ? bridge.getTierThinking(tierName) : undefined;
+		const parent = typeof bridge.getParentThinking === "function" ? bridge.getParentThinking() : undefined;
+		const level = (typeof thinking === "string" && thinking ? thinking : undefined) ?? (typeof parent === "string" && parent ? parent : undefined);
+		if (!level) return trimmed;
+		return applyThinkingSuffix(trimmed, level, true) ?? trimmed;
 	} catch (error) {
 		if (process.env.PI_SUBAGENTS_DEBUG) {
 			console.warn(

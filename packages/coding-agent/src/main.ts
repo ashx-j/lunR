@@ -40,7 +40,7 @@ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dis
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
-import { registerModelTierBridge } from "./core/model-tiers.ts";
+import { getModelTiersBridge, registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -864,6 +864,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// Point the model-tier bridge at the live runtime settings manager so /settings
 	// changes take effect without a restart.
 	registerModelTierBridge(settingsManager);
+	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
 	registerMemoryCapBridge(settingsManager);
 	registerCustomizeBridge(settingsManager);
 

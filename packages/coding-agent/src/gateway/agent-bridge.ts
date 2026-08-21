@@ -141,7 +141,7 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		{ getAgentDir },
 		{ registerCustomizeBridge },
 		{ registerMemoryCapBridge },
-		{ registerModelTierBridge },
+		{ getModelTiersBridge, registerModelTierBridge },
 		{ createAgentSessionFromServices, createAgentSessionServices },
 		{ SessionManager },
 		{ SettingsManager },
@@ -185,6 +185,7 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		resourceLoaderOptions: { extensionFactories: await loadAllBuiltinExtensions() },
 	});
 	const { session } = await createAgentSessionFromServices({ services, sessionManager });
+	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
 	await session.bindExtensions({
 		mode: "print",
 		onError: (err) => console.error(`[gateway] extension error (${err.extensionPath}): ${err.error}`),

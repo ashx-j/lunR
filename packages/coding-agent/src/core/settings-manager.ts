@@ -52,6 +52,10 @@ export interface ModelTiersSettings {
 	light?: string; // provider/model string (same format as /model)
 	standard?: string;
 	heavy?: string;
+	/** Unset = inherit the parent session thinking level. */
+	lightThinking?: ThinkingLevel;
+	standardThinking?: ThinkingLevel;
+	heavyThinking?: ThinkingLevel;
 }
 
 export interface ThinkingBudgetsSettings {
@@ -1457,4 +1461,28 @@ export class SettingsManager {
 		this.markModified("modelTiers", tier);
 		this.save();
 	}
+
+	getTierThinking(tier: ModelTierName): ThinkingLevel | undefined {
+		return this.settings.modelTiers?.[tierThinkingKey(tier)];
+	}
+
+	setTierThinking(tier: ModelTierName, level: ThinkingLevel | undefined): void {
+		if (!this.globalSettings.modelTiers) {
+			this.globalSettings.modelTiers = {};
+		}
+		const key = tierThinkingKey(tier);
+		if (level === undefined) {
+			delete this.globalSettings.modelTiers[key];
+		} else {
+			this.globalSettings.modelTiers[key] = level;
+		}
+		this.markModified("modelTiers", key);
+		this.save();
+	}
+}
+
+function tierThinkingKey(tier: ModelTierName): "lightThinking" | "standardThinking" | "heavyThinking" {
+	if (tier === "light") return "lightThinking";
+	if (tier === "standard") return "standardThinking";
+	return "heavyThinking";
 }

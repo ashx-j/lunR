@@ -9,7 +9,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt, Credential } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
+import {
+	type AssistantMessage,
+	getSupportedThinkingLevels,
+	type ImageContent,
+	type Message,
+	type Model,
+} from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -4760,6 +4766,14 @@ export class InteractiveMode {
 					},
 					onModelTierModelChange: (tier, model) => {
 						this.settingsManager.setTierModel(tier, model);
+					},
+					onModelTierThinkingChange: (tier, level) => {
+						this.settingsManager.setTierThinking(tier, level);
+					},
+					getTierThinkingLevels: (tier) => {
+						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));
+						if (model) return getSupportedThinkingLevels(model);
+						return this.session.getAvailableThinkingLevels();
 					},
 					onMemoryCharCapChange: (cap) => {
 						this.settingsManager.setMemoryCharCap(cap);

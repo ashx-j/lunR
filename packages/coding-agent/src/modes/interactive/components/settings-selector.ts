@@ -150,6 +150,8 @@ export interface SettingsCallbacks {
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
+	onModelTierThinkingChange: (tier: ModelTierName, level: ThinkingLevel | undefined) => void;
+	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
@@ -205,7 +207,15 @@ const MODEL_TIER_ROWS: { tier: ModelTierName; label: string; description: string
  */
 class ModelTiersSubmenu extends Container {
 	private settingsList: SettingsList;
-	private state: { enabled: boolean; light?: string; standard?: string; heavy?: string };
+	private state: {
+		enabled: boolean;
+		light?: string;
+		standard?: string;
+		heavy?: string;
+		lightThinking?: ThinkingLevel;
+		standardThinking?: ThinkingLevel;
+		heavyThinking?: ThinkingLevel;
+	};
 
 	constructor(
 		currentValue: string | undefined,
@@ -220,7 +230,13 @@ class ModelTiersSubmenu extends Container {
 			light: modelTiers.light,
 			standard: modelTiers.standard,
 			heavy: modelTiers.heavy,
+			lightThinking: modelTiers.lightThinking,
+			standardThinking: modelTiers.standardThinking,
+			heavyThinking: modelTiers.heavyThinking,
 		};
+
+		const thinkingKey = (tier: ModelTierName): "lightThinking" | "standardThinking" | "heavyThinking" =>
+			tier === "light" ? "lightThinking" : tier === "standard" ? "standardThinking" : "heavyThinking";
 
 		const items: SettingItem[] = [
 			{
@@ -231,16 +247,45 @@ class ModelTiersSubmenu extends Container {
 				currentValue: this.state.enabled ? "on" : "off",
 				values: ["on", "off"],
 			},
-			...MODEL_TIER_ROWS.map((row): SettingItem => {
+			...MODEL_TIER_ROWS.flatMap((row): SettingItem[] => {
 				const tier = row.tier;
-				return {
-					id: tier,
-					label: row.label,
-					description: row.description,
-					currentValue: this.state[tier] ?? "not set",
-					disabled: () => !this.state.enabled,
-					submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
-				};
+				const tKey = thinkingKey(tier);
+				return [
+					{
+						id: tier,
+						label: row.label,
+						description: row.description,
+						currentValue: this.state[tier] ?? "not set",
+						disabled: () => !this.state.enabled,
+						submenu: (_currentValue, done) => callbacks.createModelTierPicker(tier, this.state[tier], done),
+					},
+					{
+						id: `${tier}-thinking`,
+						label: `${row.label.replace(" model", "")} thinking`,
+						description: "Reasoning depth for this tier. Inherit uses the parent session level.",
+						currentValue: this.state[tKey] ?? "inherit",
+						disabled: () => !this.state.enabled,
+						submenu: (_currentValue, done) =>
+							new SelectSubmenu(
+								`${row.label} thinking`,
+								"Unset inherits the parent session thinking level.",
+								[
+									{ value: "inherit", label: "inherit", description: "Use the parent session thinking level" },
+									...callbacks.getTierThinkingLevels(tier).map((level) => ({
+										value: level,
+										label: level,
+										description: THINKING_DESCRIPTIONS[level],
+									})),
+								],
+								this.state[tKey] ?? "inherit",
+								(value) => {
+									callbacks.onModelTierThinkingChange(tier, value === "inherit" ? undefined : (value as ThinkingLevel));
+									done(value);
+								},
+								() => done(),
+							),
+					},
+				];
 			}),
 		];
 
@@ -252,6 +297,12 @@ class ModelTiersSubmenu extends Container {
 				if (id === "enabled") {
 					this.state.enabled = newValue === "on";
 					callbacks.onModelTiersEnabledChange(this.state.enabled);
+					return;
+				}
+				if (id.endsWith("-thinking")) {
+					const tier = id.slice(0, -"-thinking".length) as ModelTierName;
+					const tKey = thinkingKey(tier);
+					this.state[tKey] = newValue === "inherit" ? undefined : (newValue as ThinkingLevel);
 					return;
 				}
 				const tier = id as ModelTierName;
