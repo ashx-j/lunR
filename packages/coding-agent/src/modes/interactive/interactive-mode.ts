@@ -59,6 +59,7 @@ import {
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import { applyBehaviorPreset, reconcileBehaviorPreset } from "../../core/behavior-preset.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -4634,6 +4635,7 @@ export class InteractiveMode {
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					modelTiers: this.settingsManager.getModelTiers(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
+					behaviorPreset: reconcileBehaviorPreset(this.settingsManager),
 					searchCurator: getSearchCuratorSetting(),
 					// lunr: TUI customize settings
 					gutterRail: this.settingsManager.getGutterRail(),
@@ -4821,6 +4823,18 @@ export class InteractiveMode {
 					},
 					onMemoryCharCapChange: (cap) => {
 						this.settingsManager.setMemoryCharCap(cap);
+					},
+					onBehaviorPresetChange: (preset) => {
+						const result = applyBehaviorPreset(this.settingsManager, preset, getAgentDir(), {
+							overwrite: true,
+						});
+						if (result.ok) {
+							this.showStatus(
+								preset === "custom"
+									? "Behavior preset: custom (file is source of truth)"
+									: `Behavior preset: ${preset}`,
+							);
+						}
 					},
 					onSearchCuratorChange: (setting) => {
 						if (!setSearchCuratorSetting(setting)) {

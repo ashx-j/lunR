@@ -37,8 +37,8 @@ Last updated: 2026-08-21. **`origin/master` = `28cf67d`**. Public npm is `@ashx-
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` + `supportsReasoningEffort` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
 - **OpenCode Zen free models (`feat/opencode-zen-free-models`):** generator intersects `GET https://opencode.ai/zen/v1/models` (and `/zen/go/v1/models`) with models.dev — keep deprecated-if-live, drop not-on-live, synthesize live ids missing from models.dev. Do not add a second Zen provider; `/model` still needs `/login opencode`. Tests: `opencode-catalog.test.ts`.
-- **Behavior presets (`feat/behavior-presets`, `7d6f011`):** `/settings` Behavior preset writes baked-in templates (`default` / `humanizer` / `concise`) into `~/.lunr/agent/behavior.md`; `custom` keeps the file. Fingerprint drift flips the setting without a watcher. Built-in presets skip `memoryCharCap` so humanizer can exceed 5000. **Not in 0.2.8 — merge and ship with the next npm (`0.2.9+`).** Tests: `behavior-preset.test.ts`.
-- **Product UX (`feat/lunr-product-ux`):** tab title is `lunr` (OSC 0 + `process.title` before main import; ashxj-spinners no longer `setTitle("ashxj")`). Subagent turns prefix the working row `Orchestrating…` between spinner and kaomoji. Advertised subagents are always fresh (`lunr-child-context.ts`; fork internals stay). Model tiers have per-tier thinking (unset = parent session). `lunr update` + 24h npm check of `@ashx-j/lunr` (workspace npx skips). Footer shows git branch + `+/-` vs HEAD and a compact plan bar (5h preferred falls back to weekly; 60s cache; Customize can hide both). Click a ✻ Thought or tool card to expand/collapse that item; `app.tools.expand` is unbound (tree `ctrl+o` stays). Tests: lunr-tab-title + ashxj-spinners-orchestrating + lunr-child-context + model-tiers + update-check + footer-data-provider + usage-service pickPlanWindow + tui mouse click + assistant-message handleClick + lunr-todos.
+- **Behavior presets (`feat/behavior-presets`):** `/settings` Behavior preset = default (empty, fill later) / humanizer / concise / custom. Built-ins replace `~/.lunr/agent/behavior.md`. Custom keeps the file; no in-app editor; no `fs.watch`. Fingerprint (header stripped) on `/settings` open and each `before_agent_start` / behavior tool write. Drift off a template flips to custom. Overwrite confirm when replacing a custom file with a built-in. Built-ins skip `memoryCharCap`; custom is capped. Tests: `behavior-preset.test.ts`.
+- **Product UX (`feat/lunr-product-ux`):** tab title is `lunr` (OSC 0 + `process.title` before main import; ashxj-spinners no longer `setTitle("ashxj")`). Subagent turns prefix the working row `Orchestrating…` between spinner and kaomoji. Advertised subagents are always fresh (`lunr-child-context.ts`; fork internals stay). Model tiers have per-tier thinking (unset = parent session). `lunr update` + 24h npm check of `@ashx-j/lunr` (workspace npx skips). Footer shows git branch + `+/-` vs HEAD and a compact plan bar (5h preferred falls back to weekly; 60s cache). Customize → Footer: plan usage hides the segment; Footer: plan bar hides only the █░ fill and keeps the percent. Click a ✻ Thought or tool card to expand/collapse that item; `app.tools.expand` is unbound (tree `ctrl+o` stays). Tests: lunr-tab-title + ashxj-spinners-orchestrating + lunr-child-context + model-tiers + update-check + footer-data-provider + usage-service pickPlanWindow + tui mouse click + assistant-message handleClick + lunr-todos.
 
 ## On origin/master (`a698e57`)
 
@@ -61,8 +61,7 @@ Last updated: 2026-08-21. **`origin/master` = `28cf67d`**. Public npm is `@ashx-
 
 ## Not merged
 
-- **Next npm (`0.2.9+`):** merge `feat/behavior-presets` (`7d6f011`) and `feat/lunr-product-ux` before the next publish. Local branches; not on `origin/master` / `v0.2.8`.
-- Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
+- **Next npm (`0.2.9+`):** `feat/behavior-presets` (#20) and `feat/lunr-product-ux` (#19). Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
 
 ## Uncommitted (working tree)
 
@@ -112,6 +111,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 - Collapsed same-name tool rows are header-only; click the card to reveal bodies/notices. Subagent compact widgets are the exception. `app.tools.expand` has no default key; `/tree` still uses `ctrl+o` to cycle filters.
+- Behavior preset custom does not open an editor. Edit `~/.lunr/agent/behavior.md` or use the behavior tools. Do not add `fs.watch`.
 - Tab title: `process.title` + OSC 0 `lunr` in `cli.ts` before importing main; InteractiveMode then sets `lunr - [session -] cwd`. Do not call `ctx.ui.setTitle` from ashxj-spinners.
 - Advertised subagents always start fresh. `fork-context.ts` stays for upstream sync; do not advertise `context: fork` in the tool schema/description.
 - `lunr update` is npm global `@ashx-j/lunr` only. Workspace `PACKAGE_NAME !== NPM_CLI_PACKAGE` skips the nag and refuses to self-update.
@@ -164,6 +164,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: stamp Grok 4.6+ xhigh in mergeCatalogLayers and rebind session.model after /refresh; catalog-only overlay is not enough while the session holds a stale Model object.
 - 2026-08-20: v0.2.6 ships Grok 4.6 xhigh at catalog merge + session rebind (#17).
 - 2026-08-20: v0.2.7 ships the same (0.2.6 failed tsgo on withXaiEffortMetadata compat unions).
+- 2026-08-20: behavior presets write templates into behavior.md; custom is the file; fingerprint instead of a watcher; built-ins skip the char cap because humanizer exceeds 5000.
 - 2026-08-21: OpenCode Zen is already `opencode`; rotating free rows come from live `/v1/models` ∩ models.dev, not a new provider and not models.dev status.
 - 2026-08-21: left-drag does not copy; scrollbar drag + SGR reset; `/undo` stays in-session, `/edit` pastes; live thinking is a 4-line latest tail; compact subagent hangs thinking; TUI hides needs-attention cards.
 - 2026-08-21: v0.2.8 ships OpenCode Zen live free-model intersection (#18) and the TUI bug fixes.

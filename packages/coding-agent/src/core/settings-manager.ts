@@ -6,8 +6,11 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { type BehaviorPreset, isBehaviorPreset } from "./behavior-preset.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+
+export type { BehaviorPreset };
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -140,6 +143,7 @@ export interface Settings {
 	modelTiers?: ModelTiersSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
+	behaviorPreset?: BehaviorPreset; // default: "default" - built-in behavior.md preset; custom = file is source of truth
 	// lunr: TUI customize settings (gutter rail, prompt symbol)
 	gutterRail?: boolean; // default: true - render a thin left rail around each turn
 	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line
@@ -985,6 +989,17 @@ export class SettingsManager {
 	setMemoryCharCap(cap: number): void {
 		this.globalSettings.memoryCharCap = Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(cap)));
 		this.markModified("memoryCharCap");
+		this.save();
+	}
+
+	getBehaviorPreset(): BehaviorPreset {
+		const value = this.settings.behaviorPreset;
+		return isBehaviorPreset(value) ? value : "default";
+	}
+
+	setBehaviorPreset(preset: BehaviorPreset): void {
+		this.globalSettings.behaviorPreset = preset;
+		this.markModified("behaviorPreset");
 		this.save();
 	}
 
