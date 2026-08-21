@@ -272,8 +272,8 @@ const SubagentParamsSchema = Type.Object({
 	})),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential steps; each result becomes {previous}. append-step takes one tail step and may use {chain_dir}/{outputs.name}." })),
 	context: Type.Optional(Type.String({
-		enum: ["fresh", "fork"],
-		description: "'fresh' or 'fork' to branch from parent session. Explicit context overrides every child in the invocation. If omitted, each requested agent uses its own defaultContext; agents without defaultContext: 'fork' run fresh.",
+		enum: ["fresh"],
+		description: "Children always start with a fresh session. Fork context is not available.",
 	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent chain artifact directory; defaults to user-scoped temp storage." })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),

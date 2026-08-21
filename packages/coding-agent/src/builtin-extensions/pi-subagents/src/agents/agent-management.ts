@@ -22,6 +22,7 @@ import {
 	removeBuiltinAgentOverrideFields,
 } from "./agents.ts";
 import { serializeAgent } from "./agent-serializer.ts";
+import { advertisedDefaultContext } from "../shared/lunr-child-context.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
 import { serializeChain, serializeJsonChain } from "./chain-serializer.ts";
 import { discoverAvailableSkills, resolveSkills } from "./skills.ts";
@@ -567,7 +568,7 @@ function formatAgentDetail(agent: AgentConfig): string {
 	lines.push(`System prompt mode: ${agent.systemPromptMode}`);
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);
-	if (agent.defaultContext) lines.push(`Default context: ${agent.defaultContext}`);
+	lines.push(`Default context: ${advertisedDefaultContext(agent.defaultContext)}`);
 	if (agent.defaultAsync !== undefined) lines.push(`Async: ${agent.defaultAsync ? "true" : "false"}`);
 	if (agent.defaultTimeoutMs !== undefined) lines.push(`Timeout: ${agent.defaultTimeoutMs}ms`);
 	if (agent.defaultTurnBudget) lines.push(`Turn budget: ${JSON.stringify(agent.defaultTurnBudget)}`);
@@ -655,7 +656,7 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 	const lines = [
 		"Executable agents:",
 		...(agents.length
-			? agents.map((a) => `- ${a.name} (${a.source}${a.defaultContext ? `, context: ${a.defaultContext}` : ""}): ${a.description}`)
+			? agents.map((a) => `- ${a.name} (${a.source}, context: ${advertisedDefaultContext(a.defaultContext)}): ${a.description}`)
 			: ["- (none)"]),
 		"",
 		"Chains:",
