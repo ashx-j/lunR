@@ -60,6 +60,7 @@ import { handleGatewayCommand } from "./gateway/command.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode } from "./modes/interactive/interactive-mode.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import { handleUpdateCli } from "./cli/update-cli.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
@@ -538,6 +539,10 @@ export async function main(args: string[], options?: MainOptions) {
 	configureHttpDispatcher();
 
 	if (await handleInstallCli(args)) {
+		return;
+	}
+
+	if (await handleUpdateCli(args)) {
 		return;
 	}
 

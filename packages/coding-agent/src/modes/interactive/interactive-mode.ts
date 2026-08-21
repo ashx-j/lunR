@@ -103,6 +103,7 @@ import {
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
+import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import {
@@ -882,6 +883,7 @@ export class InteractiveMode {
 		this.ui.start();
 		this.isInitialized = true;
 		time("ui.start");
+		void this.maybeNotifyCliUpdate();
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
@@ -966,6 +968,22 @@ export class InteractiveMode {
 	async waitForDeferredBuiltins(): Promise<void> {
 		if (this.deferredBuiltinAttachPromise) {
 			await this.deferredBuiltinAttachPromise;
+		}
+	}
+
+	/** Background npm version check. Never blocks first paint. Workspace installs skip. */
+	private async maybeNotifyCliUpdate(): Promise<void> {
+		try {
+			const result = await checkForUpdate({
+				currentVersion: VERSION,
+				agentDir: getAgentDir(),
+				offline: process.env.PI_OFFLINE === "1",
+			});
+			if (!result?.notice) return;
+			this.showStatus(result.notice);
+			markUpdateNotified(getAgentDir(), result.latest);
+		} catch {
+			// Version check is best-effort.
 		}
 	}
 
