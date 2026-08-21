@@ -333,9 +333,19 @@ function resultGlyph(result: Details["results"][number], output: string, theme: 
 	return theme.fg("success", "✓");
 }
 
-function compactCurrentActivity(progress: AgentProgress): string {
-	const snapshotNow = snapshotNowForProgress(progress);
-	return formatCurrentToolLine(progress, getTermWidth() - 4, false, snapshotNow) ?? buildLiveStatusLine(progress, snapshotNow) ?? "thinking…";
+/** Collapse thinking onto one visual line for the compact hang row. */
+export function collapseCompactThinkingText(text: string | undefined): string {
+	const collapsed = (text ?? "").replace(/\s+/g, " ").trim();
+	return collapsed.length > 0 ? collapsed : "thinking…";
+}
+
+export function formatCompactThinkingHangLine(
+	thinkingText: string | undefined,
+	width: number,
+	paint: (s: string) => string = (s) => s,
+	prefix = "  ⎿  ",
+): string {
+	return truncLine(paint(`${prefix}${collapseCompactThinkingText(thinkingText)}`), width);
 }
 
 export function widgetRenderKey(job: AsyncJobState): string {
@@ -1336,11 +1346,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
 
 	if (isRunning && r.progress) {
-		const progressSnapshotNow = snapshotNowForProgress(r.progress);
-		const activity = compactCurrentActivity(r.progress);
-		c.addChild(new Text(truncLine(theme.fg("dim", `  ⎿  ${activity}`), width), 0, 0));
-		const liveStatus = buildLiveStatusLine(r.progress, progressSnapshotNow);
-		if (liveStatus && liveStatus !== activity) c.addChild(new Text(truncLine(theme.fg("dim", `     ${liveStatus}`), width), 0, 0));
+		c.addChild(new Text(formatCompactThinkingHangLine(r.progress.thinkingText, width, (s) => theme.fg("dim", s)), 0, 0));
 		return c;
 	}
 
@@ -1438,8 +1444,12 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 			return truncLine(`  ${glyph} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
 		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
-			const activity = compactCurrentActivity(rProg);
-			c.addChild(new Text(truncLine(theme.fg("dim", `    ⎿  ${activity}`), width), 0, 0));
+			c.addChild(new Text(formatCompactThinkingHangLine(
+				"thinkingText" in rProg ? rProg.thinkingText : undefined,
+				width,
+				(s) => theme.fg("dim", s),
+				"    ⎿  ",
+			), 0, 0));
 		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
 		}

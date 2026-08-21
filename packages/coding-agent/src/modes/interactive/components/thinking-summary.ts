@@ -108,14 +108,15 @@ export function updateThinkingRunTimings(
 /**
  * Whether a thinking run is complete and may collapse. Note: partial streaming
  * messages carry `stopReason: "stop"` from the start, so stopReason cannot be
- * used. Instead: a run is complete when a block follows it, when its live
- * timing has an `end`, or when no timings are attached at all (history /
- * resumed messages are always final).
+ * used. History / resumed messages have no timings and are always final. A
+ * live run stays open until its timing records `end` — a following empty
+ * block must not collapse it early.
  */
 export function isThinkingRunComplete(
-	hasFollowingBlock: boolean,
+	_hasFollowingBlock: boolean,
 	timing: ThinkingRunTiming | undefined,
 	timingsAttached: boolean,
 ): boolean {
-	return hasFollowingBlock || timing?.end !== undefined || !timingsAttached;
+	if (!timingsAttached) return true;
+	return timing?.end !== undefined;
 }

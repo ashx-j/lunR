@@ -147,6 +147,19 @@ function stripAcceptanceReportsFromMessages(messages: Message[] | undefined): vo
 	}
 }
 
+function extractThinkingText(content: unknown): string | undefined {
+	if (!Array.isArray(content)) return undefined;
+	let latest = "";
+	for (const part of content) {
+		if (!part || typeof part !== "object") continue;
+		if ("type" in part && part.type === "thinking" && "thinking" in part && typeof part.thinking === "string") {
+			const text = part.thinking.trim();
+			if (text) latest = part.thinking;
+		}
+	}
+	return latest || undefined;
+}
+
 function snapshotProgress(progress: AgentProgress): AgentProgress {
 	return {
 		...progress,
@@ -692,6 +705,12 @@ async function runSingleAttempt(
 			progress.durationMs = now - startTime;
 			progress.lastActivityAt = now;
 			updateActivityState(now);
+
+			if ((evt.type === "message_update" || evt.type === "message_start") && evt.message) {
+				const thinkingText = extractThinkingText(evt.message.content);
+				if (thinkingText) progress.thinkingText = thinkingText;
+				fireUpdate();
+			}
 
 			if (evt.type === "tool_execution_start") {
 				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
