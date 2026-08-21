@@ -215,7 +215,9 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("session_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    ctx.ui.setTitle("ashxj");
+    // lunr: do not ctx.ui.setTitle here — InteractiveMode owns the OSC title
+    // (`lunr - [session -] cwd`). Overwriting it with a brand string made
+    // Windows Terminal tabs say "ashxj" (or left them as "node" until this ran).
     doApplyState(event.reason === "startup" ? "startup" : "idle", ctx);
   });
 
