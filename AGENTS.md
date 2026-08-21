@@ -22,9 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-20. **`origin/master` = `6952428`**. Public npm is `@ashx-j/lunr@0.2.7` (tag `v0.2.7`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-21. **`origin/master` = `1956908`**. Public npm is `@ashx-j/lunr@0.2.7` (tag `v0.2.7`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
-- **Open UX notes (`fix/open-ux-notes`):** `present_plan` appends a full Plan chat card then a short Approve/Decline dock. Footer active goal is `goal`. `/usage` is this-session context (no Last 30 days); `/token-usage` removed. Completed todos prune on the next user turn (no `✓ N done`). Pinned chat has a 1-col scrollbar; user/assistant drag-select copies without Shift (1002 motion). `/goal` forces session auto. Compact subagent rows show model + thinking. `subagent models` result is hidden. Goal complete is one agent message. Tests: usage-view + context-breakdown + lunr-todos + compact-row + permission-mode-control + plan-message + tui-pin + mouse.
+- **TUI bugs (`fix/tui-bugs`):** scrollbar thumb drags (capture + last-column hit) and resets SGR so error/thinking colors do not bleed. Left-drag does not select or copy; Shift+drag stays native. `/undo` rewinds the same session (no fork, no editor paste); `/edit` is the same rewind then pastes; `/redo` works. Live thinking is a 4-line slot of the latest rendered tail (full string, not the typewriter prefix). Compact running subagent rows hang one truncated thinking line (no activity / no third status). TUI hides `⚠ Subagent needs attention` cards (`display: false`, no `triggerTurn`). Tests: tui-pin + mouse + thinking-tail + assistant-message + undo-edit + slash-commands + compact-row + control-notice.
+- **Open UX notes (`fix/open-ux-notes`):** `present_plan` appends a full Plan chat card then a short Approve/Decline dock. Footer active goal is `goal`. `/usage` is this-session context (no Last 30 days); `/token-usage` removed. Completed todos prune on the next user turn (no `✓ N done`). Pinned chat has a 1-col scrollbar. `/goal` forces session auto. Compact subagent rows show model + thinking. `subagent models` result is hidden. Goal complete is one agent message. Tests: usage-view + context-breakdown + lunr-todos + compact-row + permission-mode-control + plan-message + tui-pin + mouse.
 - **Tool view (`fix/tool-view-fixes`):** collapsed reads are basename-only. Search/fetch fold the count into the header; `ctrl+o` lists queries or URLs. Consecutive same-name cards collapse facing box pad + top spacer only; singletons and mixed neighbors keep `Box(1,1)`. PowerShell clipboard fallback uses `-STA`. Tests: render-search-chrome + tool-execution-component + clipboard-image + tui keys + box.
 - **Smooth streaming (`fix/smooth-streaming-review`):** interactive TUI typewriter (`settings.smoothStreaming`, default off). Per-block append-only grapheme cache (providers mutate `block.text` in place). Always paint after reveal ticks (~30 FPS, no extra 33ms gate). Mid-stream toggle applies immediately without rewind. Hide-thinking re-slices instead of dumping the tail. Stop timer when caught up. Hidden thinking excluded from budget. Tool cards gated on reveal frontier (flush on `tool_execution_start`). Catch-up step capped. Settings copy matches grapheme/~30 FPS. Tests: `smooth-streaming.test.ts`. Print/RPC/gateway stay unsmoothed.
 - **Same-tool spacing (`fix/same-tool-spacing`):** consecutive same-name cards collapse facing box pad + top spacer only. Singletons and mixed neighbors keep `Box(1,1)`. Tests: box + tool-execution-component density.
@@ -35,6 +36,7 @@ Last updated: 2026-08-20. **`origin/master` = `6952428`**. Public npm is `@ashx-
 - **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` + `supportsReasoningEffort` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
+- **OpenCode Zen free models (`feat/opencode-zen-free-models`):** generator intersects `GET https://opencode.ai/zen/v1/models` (and `/zen/go/v1/models`) with models.dev — keep deprecated-if-live, drop not-on-live, synthesize live ids missing from models.dev. Do not add a second Zen provider; `/model` still needs `/login opencode`. Tests: `opencode-catalog.test.ts`.
 
 ## On origin/master (`a698e57`)
 
@@ -83,7 +85,7 @@ Last updated: 2026-08-20. **`origin/master` = `6952428`**. Public npm is `@ashx-
 - **Gateway:** Telegram long-poll + Discord (mention-gated, no GuildMembers intent). Authz fail-closed. `ADAPTER_FACTORIES`.
 - **Footer:** ashxj-tui `setFooter` only. Toggles are render-time `CustomizeBridge` reads.
 - **Permissions:** `manual | yolo | plan | auto`; Shift+Tab cycles that order. Plan = `gateToolCall` + `PLAN_MODE_ADDENDUM`. Fail-closed without handler. Swarm (>2 parallel in one call) gated in manual AND yolo.
-- **Rollback:** per-turn snapshots; persistent rewind via `fork`; `/undo` forks, no file restore.
+- **Rollback:** per-turn snapshots; `/rollback` forks and restores files. `/undo` and `/edit` stay in the same session via `navigateTree` (no fork).
 
 # Renamed vs still "pi"
 
@@ -92,7 +94,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 # Notes
 
 - Theme: `moon.json` is the builtin; `default.json` untracked/unwired. Glyphs `promptMoon`/`promptArrow`; `promptSymbol` is master on/off.
-- Mouse tracking is on while the chat dock is pinned. Shift+drag to copy; wheel without Shift scrolls the session.
+- Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
 - Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`.
 - Process registry: direct children only; `nohup &` grandchildren untracked.
@@ -108,7 +110,11 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 - Collapsed same-name tool rows are header-only; `ctrl+o` reveals bodies/notices. Subagent compact widgets are the exception.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
+- Live thinking is a reserved 4-line tail of the **full** thinking string (not the smooth-stream prefix). Pad empty rows above while the run is open. History still collapses to `✻ Thought` + first sentence.
+- `/undo` = same-session `navigateTree` rewind, no editor paste. `/edit` = that rewind then paste. Neither forks. `/rollback` still forks.
+- Compact running subagent row is header + one truncated `⎿` thinking line. Do not print activity or `⚠ Subagent needs attention` TUI cards (`display: false`).
 - xAI effort maps live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`). Humans do not edit `catalog/providers/xai.json`. `withXaiEffortMetadata` also runs in `mergeCatalogLayers`.
+- OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 
 # Decisions (keep; why in one line)
 
@@ -151,6 +157,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-20: stamp Grok 4.6+ xhigh in mergeCatalogLayers and rebind session.model after /refresh; catalog-only overlay is not enough while the session holds a stale Model object.
 - 2026-08-20: v0.2.6 ships Grok 4.6 xhigh at catalog merge + session rebind (#17).
 - 2026-08-20: v0.2.7 ships the same (0.2.6 failed tsgo on withXaiEffortMetadata compat unions).
+- 2026-08-21: OpenCode Zen is already `opencode`; rotating free rows come from live `/v1/models` ∩ models.dev, not a new provider and not models.dev status.
+- 2026-08-21: left-drag does not copy; scrollbar drag + SGR reset; `/undo` stays in-session, `/edit` pastes; live thinking is a 4-line latest tail; compact subagent hangs thinking; TUI hides needs-attention cards.
 
 # Deferred
 

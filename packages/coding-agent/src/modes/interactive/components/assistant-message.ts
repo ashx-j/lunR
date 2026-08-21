@@ -35,6 +35,7 @@ export class AssistantMessageComponent extends Container {
 	private hiddenThinkingLabel: string;
 	private outputPad: number;
 	private lastMessage?: AssistantMessage;
+	private thinkingSource?: AssistantMessage;
 	private hasToolCalls = false;
 	// lunr: gutter rail — prefix rendered lines with a dim │; the last line uses ╰
 	// when this component closes the turn (no tool calls follow).
@@ -70,14 +71,14 @@ export class AssistantMessageComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
 	}
 
@@ -85,7 +86,7 @@ export class AssistantMessageComponent extends Container {
 	setThinkingCollapse(collapse: boolean): void {
 		this.thinkingCollapse = collapse;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
 	}
 
@@ -94,7 +95,7 @@ export class AssistantMessageComponent extends Container {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
 	}
 
@@ -110,14 +111,14 @@ export class AssistantMessageComponent extends Container {
 	setHiddenThinkingLabel(label: string): void {
 		this.hiddenThinkingLabel = label;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
 	}
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
 	}
 
@@ -152,15 +153,24 @@ export class AssistantMessageComponent extends Container {
 		return lines;
 	}
 
-	updateContent(message: AssistantMessage): void {
+	private thinkingSourceOptions(): { thinkingSource?: AssistantMessage } | undefined {
+		return this.thinkingSource ? { thinkingSource: this.thinkingSource } : undefined;
+	}
+
+	updateContent(message: AssistantMessage, options?: { thinkingSource?: AssistantMessage }): void {
 		this.lastMessage = message;
+		this.thinkingSource = options?.thinkingSource;
 
 		// Clear content container
 		this.contentContainer.clear();
 
-		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
-		);
+		const sourceMessage = this.thinkingSource ?? message;
+		const sourceThinkingRuns = collectThinkingRuns(sourceMessage.content);
+		const hasVisibleContent =
+			message.content.some(
+				(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+			) ||
+			(!this.hideThinkingBlock && sourceThinkingRuns.some((run) => run.length > 0));
 
 		if (hasVisibleContent) {
 			this.contentContainer.addChild(new Spacer(1));
@@ -169,6 +179,7 @@ export class AssistantMessageComponent extends Container {
 		// Render content in order
 		let isFirstTextBlock = true;
 		let thinkingRunIndex = -1;
+		let renderedThinking = false;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
@@ -188,7 +199,7 @@ export class AssistantMessageComponent extends Container {
 				);
 			} else if (content.type === "thinking") {
 				thinkingRunIndex++;
-				const thinkingBlocks: string[] = [];
+				const displayBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
 					const thinkingContent = message.content[i];
 					if (thinkingContent.type !== "thinking") {
@@ -196,79 +207,26 @@ export class AssistantMessageComponent extends Container {
 					}
 					const thinking = thinkingContent.thinking.trim();
 					if (thinking) {
-						thinkingBlocks.push(thinking);
+						displayBlocks.push(thinking);
 					}
 				}
 				i--;
 
-				if (thinkingBlocks.length === 0) {
+				const thinkingBlocks = sourceThinkingRuns[thinkingRunIndex] ?? displayBlocks;
+				if (thinkingBlocks.length === 0 || this.hideThinkingBlock) {
 					continue;
 				}
 
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
-					.slice(i + 1)
-					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
+				renderedThinking = true;
+				this.renderThinkingRun(thinkingRunIndex, thinkingBlocks, message, i);
+			}
+		}
 
-				if (this.hideThinkingBlock) {
-					// lunr: thinking blocks are hidden — render nothing (the "Thinking..." label is
-					// removed; an alternative hidden indicator will be designed separately).
-				} else {
-					// lunr: a run is complete when a block follows it, its timing closed, or no
-					// timings are attached (history). Incomplete = still streaming.
-					const runComplete = isThinkingRunComplete(
-						i < message.content.length - 1,
-						this.thinkingTimings?.[thinkingRunIndex],
-						this.thinkingTimings !== undefined,
-					);
-					if (this.thinkingCollapse && !this.expanded && runComplete) {
-						// lunr: collapsible reasoning — a completed run collapses to
-						// "✻ Thought for Xs" (duration only from live timings) + its first sentence.
-						const timing = this.thinkingTimings?.[thinkingRunIndex];
-						const label =
-							timing?.end !== undefined
-								? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
-								: "✻ Thought";
-						this.contentContainer.addChild(
-							new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0),
-						);
-						const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
-						if (snippet) {
-							this.contentContainer.addChild(
-								new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0),
-							);
-						}
-						if (hasVisibleContentAfter) {
-							this.contentContainer.addChild(new Spacer(1));
-						}
-					} else if (!runComplete && !this.expanded) {
-						// lunr: rolling window — a still-streaming run shows only its last
-						// THINKING_TAIL_LINES rendered lines; older lines disappear as new
-						// ones stream in. ctrl+o expand (or completion) renders in full.
-						this.contentContainer.addChild(
-							new ThinkingTailComponent(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-								color: (text: string) => theme.fg("thinkingText", text),
-								italic: true,
-							}),
-						);
-						if (hasVisibleContentAfter) {
-							this.contentContainer.addChild(new Spacer(1));
-						}
-					} else {
-						// Render each run of thinking blocks as one Markdown section.
-						this.contentContainer.addChild(
-							new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-								color: (text: string) => theme.fg("thinkingText", text),
-								italic: true,
-							}),
-						);
-						// lunr: only add the spacer when thinking is visible (avoids stray blank line when hidden).
-						if (hasVisibleContentAfter) {
-							this.contentContainer.addChild(new Spacer(1));
-						}
-					}
-				}
+		if (!this.hideThinkingBlock && !renderedThinking && sourceThinkingRuns.length > 0) {
+			thinkingRunIndex = 0;
+			const thinkingBlocks = sourceThinkingRuns[0] ?? [];
+			if (thinkingBlocks.length > 0) {
+				this.renderThinkingRun(thinkingRunIndex, thinkingBlocks, message, -1);
 			}
 		}
 
@@ -304,4 +262,83 @@ export class AssistantMessageComponent extends Container {
 			}
 		}
 	}
+
+	private renderThinkingRun(
+		thinkingRunIndex: number,
+		thinkingBlocks: string[],
+		displayMessage: AssistantMessage,
+		displayIndex: number,
+	): void {
+		const hasVisibleContentAfter =
+			displayIndex >= 0
+				? displayMessage.content
+						.slice(displayIndex + 1)
+						.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()))
+				: displayMessage.content.some((c) => c.type === "text" && c.text.trim());
+
+		const runComplete = isThinkingRunComplete(
+			false,
+			this.thinkingTimings?.[thinkingRunIndex],
+			this.thinkingTimings !== undefined,
+		);
+		if (this.thinkingCollapse && !this.expanded && runComplete) {
+			const timing = this.thinkingTimings?.[thinkingRunIndex];
+			const label =
+				timing?.end !== undefined
+					? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
+					: "✻ Thought";
+			this.contentContainer.addChild(new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0));
+			const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
+			if (snippet) {
+				this.contentContainer.addChild(
+					new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0),
+				);
+			}
+			if (hasVisibleContentAfter) {
+				this.contentContainer.addChild(new Spacer(1));
+			}
+			return;
+		}
+		if (!runComplete && !this.expanded) {
+			this.contentContainer.addChild(
+				new ThinkingTailComponent(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+					color: (text: string) => theme.fg("thinkingText", text),
+					italic: true,
+				}),
+			);
+			if (hasVisibleContentAfter) {
+				this.contentContainer.addChild(new Spacer(1));
+			}
+			return;
+		}
+		this.contentContainer.addChild(
+			new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+				color: (text: string) => theme.fg("thinkingText", text),
+				italic: true,
+			}),
+		);
+		if (hasVisibleContentAfter) {
+			this.contentContainer.addChild(new Spacer(1));
+		}
+	}
+}
+
+function collectThinkingRuns(content: AssistantMessage["content"]): string[][] {
+	const runs: string[][] = [];
+	for (let i = 0; i < content.length; i++) {
+		const block = content[i];
+		if (block.type !== "thinking") continue;
+		const blocks: string[] = [];
+		for (; i < content.length; i++) {
+			const thinkingContent = content[i];
+			if (thinkingContent.type !== "thinking") {
+				i--;
+				break;
+			}
+			const thinking = thinkingContent.thinking.trim();
+			if (thinking) blocks.push(thinking);
+		}
+		if (blocks.length > 0) runs.push(blocks);
+	}
+	return runs;
 }

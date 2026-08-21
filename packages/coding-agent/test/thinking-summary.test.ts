@@ -137,8 +137,9 @@ describe("updateThinkingRunTimings", () => {
 });
 
 describe("isThinkingRunComplete", () => {
-	test("complete when a block follows the run", () => {
-		expect(isThinkingRunComplete(true, undefined, true)).toBe(true);
+	test("stays incomplete while timings are attached and end is unset, even with a following block", () => {
+		expect(isThinkingRunComplete(true, { start: 1 }, true)).toBe(false);
+		expect(isThinkingRunComplete(true, undefined, true)).toBe(false);
 	});
 
 	test("complete when the live timing has an end", () => {

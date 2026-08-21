@@ -1,7 +1,9 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import { THINKING_TAIL_LINES } from "../src/modes/interactive/components/thinking-tail.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
+import { sliceMessageContent } from "../src/modes/interactive/smooth-streaming.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -217,5 +219,54 @@ describe("AssistantMessageComponent", () => {
 		for (const n of ["01", "05", "10"]) {
 			expect(lines.some((line) => line.includes(`streamed thought ${n}`))).toBe(true);
 		}
+	});
+
+	test("a streaming thinking run occupies THINKING_TAIL_LINES and shows the latest chunk", () => {
+		initTheme("moon");
+
+		const thinking = `${"alpha ".repeat(8).trim()}\nlatest-chunk-xyz`;
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		component.setThinkingTimings([{ start: Date.now() }]);
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]));
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		const thinkingLines = lines.filter((line) => line.trim().length > 0 && !line.includes("●"));
+
+		expect(lines.join("\n")).not.toContain("✻ Thought");
+		expect(thinkingLines.length).toBeLessThanOrEqual(THINKING_TAIL_LINES);
+		expect(lines.some((line) => line.includes("latest-chunk-xyz"))).toBe(true);
+	});
+
+	test("smooth-sliced prefix still shows the tail of the full thinking string", () => {
+		initTheme("moon");
+
+		const thinking = `${"A".repeat(80)} UNIQUE_TAIL_CHUNK`;
+		const full = createAssistantMessage([{ type: "thinking", thinking }]);
+		const sliced = sliceMessageContent(full, 10, {});
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		component.setThinkingTimings([{ start: Date.now() }]);
+		component.updateContent(sliced, { thinkingSource: full });
+		const rendered = stripAnsi(component.render(40).join("\n"));
+
+		expect(rendered).not.toContain("✻ Thought");
+		expect(rendered).toContain("UNIQUE_TAIL_CHUNK");
+	});
+
+	test("history messages still collapse when thinkingCollapse is true", () => {
+		initTheme("moon");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "Old reasoning. Details follow." }]),
+			false,
+			undefined,
+			"Thinking...",
+			1,
+			false,
+			true,
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("✻ Thought");
+		expect(rendered).toContain("Old reasoning.");
+		expect(rendered).not.toContain("Details follow.");
 	});
 });

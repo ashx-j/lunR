@@ -8,15 +8,15 @@ function renderPlain(component: ThinkingTailComponent, width: number): string[] 
 }
 
 describe("ThinkingTailComponent", () => {
-	test("renders short input in full (fewer lines than the window)", () => {
+	test("pads short input to THINKING_TAIL_LINES with content at the bottom", () => {
 		initTheme("moon");
 
-		const component = new ThinkingTailComponent("line one\nline two", 1, 0, getMarkdownTheme());
+		const component = new ThinkingTailComponent("line one", 1, 0, getMarkdownTheme());
 		const lines = renderPlain(component, 80);
 
-		expect(lines.length).toBeLessThanOrEqual(THINKING_TAIL_LINES);
-		expect(lines.some((line) => line.includes("line one"))).toBe(true);
-		expect(lines.some((line) => line.includes("line two"))).toBe(true);
+		expect(lines).toHaveLength(THINKING_TAIL_LINES);
+		expect(lines.slice(0, -1).every((line) => line.trim() === "")).toBe(true);
+		expect(lines[lines.length - 1]).toContain("line one");
 	});
 
 	test("keeps only the last rendered lines of long input", () => {
@@ -38,11 +38,13 @@ describe("ThinkingTailComponent", () => {
 		initTheme("moon");
 
 		// One long source line that wraps to many rendered lines at width 20.
-		const longLine = "wrap ".repeat(40).trim();
+		const longLine = `STARTTOKEN ${"wrap ".repeat(40).trim()} ENDTOKEN`;
 		const component = new ThinkingTailComponent(longLine, 1, 0, getMarkdownTheme());
-		const lines = component.render(20);
+		const lines = renderPlain(component, 20);
 
 		expect(lines).toHaveLength(THINKING_TAIL_LINES);
+		expect(lines.some((line) => line.includes("STARTTOKEN"))).toBe(false);
+		expect(lines.some((line) => line.includes("ENDTOKEN"))).toBe(true);
 	});
 
 	test("invalidate delegates to the child and re-renders cleanly", () => {

@@ -133,7 +133,7 @@ class StaticLines implements Component {
 }
 
 describe("in-app message selection", () => {
-	it("press+drag+release over a selectable child yields joined text", async () => {
+	it("press+drag+release over a selectable child does not copy", async () => {
 		const terminal = new VirtualTerminal(20, 8);
 		const tui = new TUI(terminal);
 		const selected: string[] = [];
@@ -149,7 +149,7 @@ describe("in-app message selection", () => {
 		terminal.sendInput("\x1b[<0;1;2m");
 		await terminal.waitForRender();
 
-		assert.deepStrictEqual(selected, ["hello\nworld"]);
+		assert.deepStrictEqual(selected, []);
 		tui.stop();
 	});
 

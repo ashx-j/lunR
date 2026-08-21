@@ -17,14 +17,7 @@ import {
 	type TerminalColorScheme,
 } from "./terminal-colors.ts";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
-import {
-	extractAnsiCode,
-	extractSegments,
-	normalizeTerminalOutput,
-	sliceByColumn,
-	sliceWithWidth,
-	visibleWidth,
-} from "./utils.ts";
+import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 
@@ -89,8 +82,7 @@ export interface Component {
 	wantsKeyRelease?: boolean;
 
 	/**
-	 * When true, pinned chat can start an in-app text selection on this
-	 * component without holding Shift. Default false.
+	 * Unused. Left-drag no longer selects; Shift+drag is native terminal selection.
 	 */
 	selectable?: boolean;
 
@@ -264,12 +256,20 @@ type ActiveOverlayFocusRestoreState = EligibleOverlayFocusRestoreState | Blocked
 type OverlayFocusRestoreState = { status: "inactive" } | ActiveOverlayFocusRestoreState;
 type OverlayFocusRestorePolicy = "clear" | "preserve";
 
-type ChatHitRegion = { y0: number; y1: number; lines: string[] };
 type ChatLayoutCache = {
 	epoch: number;
 	chatWidth: number;
 	scrollLines: string[];
-	hitRegionsUnshifted: ChatHitRegion[];
+};
+
+type ChatScrollbar = {
+	x: number;
+	y0: number;
+	y1: number;
+	viewH: number;
+	scrollMax: number;
+	thumbTop: number;
+	thumbH: number;
 };
 
 /**
@@ -325,7 +325,7 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
-	/** Called with selected user/assistant text after an in-app drag-release. */
+	/** Kept for callers; left-drag no longer selects. Shift+drag stays native terminal selection. */
 	public onTextSelected?: (text: string) => void;
 	private renderRequested = false;
 	private renderTimer: NodeJS.Timeout | undefined;
@@ -364,9 +364,8 @@ export class TUI extends Container {
 	private alternateScreenActive = false;
 	private mouseTrackingActive = false;
 	private static readonly WHEEL_LINES = 3;
-	private chatHitRegions: ChatHitRegion[] = [];
-	private chatScrollbar: { x: number; y0: number; y1: number; viewH: number; scrollMax: number } | undefined;
-	private selection: { anchorY: number; focusY: number } | undefined;
+	private chatScrollbar: ChatScrollbar | undefined;
+	private scrollbarDrag: { grabY: number; startOffset: number } | undefined;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
@@ -635,12 +634,8 @@ export class TUI extends Container {
 			}
 			return;
 		}
-		const start = lines.length;
 		for (const line of child.render(width)) {
 			lines.push(line);
-		}
-		if (child.selectable && lines.length > start) {
-			this.chatHitRegions.push({ y0: start, y1: lines.length - 1, lines: lines.slice(start) });
 		}
 	}
 
@@ -662,8 +657,8 @@ export class TUI extends Container {
 	override render(width: number): string[] {
 		const pinIndex = this.getPinIndex();
 		if (pinIndex < 0) {
-			this.chatHitRegions = [];
 			this.chatScrollbar = undefined;
+			this.scrollbarDrag = undefined;
 			this.chatLayoutCache = undefined;
 			this.chatUsesGutter = false;
 			this.chatLaidOut = false;
@@ -689,10 +684,8 @@ export class TUI extends Container {
 		const cache = this.chatLayoutCache;
 		if (cache && cache.epoch === this.contentEpoch && cache.chatWidth === chatWidth) {
 			scrollLines = cache.scrollLines;
-			this.chatHitRegions = this.copyHitRegions(cache.hitRegionsUnshifted);
 			fromCache = true;
 		} else {
-			this.chatHitRegions = [];
 			scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
 		}
 
@@ -700,14 +693,12 @@ export class TUI extends Container {
 			if (scrollLines.length <= viewH) {
 				this.chatUsesGutter = false;
 				chatWidth = width;
-				this.chatHitRegions = [];
 				scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
 				fromCache = false;
 			}
 		} else if (scrollLines.length > viewH) {
 			this.chatUsesGutter = true;
 			chatWidth = Math.max(1, width - 1);
-			this.chatHitRegions = [];
 			scrollLines = this.collectChildLines(0, pinIndex, chatWidth);
 			fromCache = false;
 		}
@@ -717,7 +708,6 @@ export class TUI extends Container {
 				epoch: this.contentEpoch,
 				chatWidth,
 				scrollLines,
-				hitRegionsUnshifted: this.copyHitRegions(this.chatHitRegions),
 			};
 		}
 
@@ -728,6 +718,7 @@ export class TUI extends Container {
 			this.chatScrollOffset = 0;
 			this.lastChatScrollMax = 0;
 			this.chatScrollbar = undefined;
+			this.scrollbarDrag = undefined;
 			chatSlice = scrollLines.slice();
 		} else {
 			this.lastChatScrollMax = scrollLines.length - viewH;
@@ -739,45 +730,32 @@ export class TUI extends Container {
 			while (chatSlice.length < viewH) {
 				chatSlice.push("");
 			}
-			this.chatScrollbar = { x: width, y0: 1, y1: viewH, viewH, scrollMax: this.lastChatScrollMax };
 			const thumbH = Math.max(1, Math.round((viewH * viewH) / scrollLines.length));
 			const travel = Math.max(0, viewH - thumbH);
 			const thumbTop =
 				this.lastChatScrollMax === 0
 					? viewH - thumbH
 					: Math.round(travel * (1 - this.chatScrollOffset / this.lastChatScrollMax));
-			const track = "\x1b[2m│\x1b[22m";
-			const thumb = "\x1b[1m█\x1b[22m";
+			this.chatScrollbar = {
+				x: width,
+				y0: 1,
+				y1: viewH,
+				viewH,
+				scrollMax: this.lastChatScrollMax,
+				thumbTop,
+				thumbH,
+			};
+			// Reset SGR so error/thinking colors cannot bleed into the gutter.
+			const RESET = "\x1b[0m";
+			const track = `${RESET}\x1b[2m│\x1b[0m`;
+			const thumb = `${RESET}\x1b[1m█\x1b[0m`;
 			for (let i = 0; i < chatSlice.length; i++) {
 				const glyph = i >= thumbTop && i < thumbTop + thumbH ? thumb : track;
 				chatSlice[i] = `${padToWidth(chatSlice[i] ?? "", chatWidth)}${glyph}`;
 			}
 		}
 
-		this.shiftHitRegions(-start);
-		if (this.selection) {
-			const lo = Math.min(this.selection.anchorY, this.selection.focusY);
-			const hi = Math.max(this.selection.anchorY, this.selection.focusY);
-			const highlightWidth = this.chatUsesGutter ? chatWidth : width;
-			for (let y = lo; y <= hi; y++) {
-				const idx = y - 1;
-				if (idx < 0 || idx >= chatSlice.length) continue;
-				chatSlice[idx] = applySelectionHighlight(chatSlice[idx] ?? "", highlightWidth);
-			}
-		}
-
 		return [...chatSlice, ...dockLines];
-	}
-
-	private copyHitRegions(regions: ChatHitRegion[]): ChatHitRegion[] {
-		return regions.map((region) => ({ y0: region.y0, y1: region.y1, lines: region.lines }));
-	}
-
-	private shiftHitRegions(delta: number): void {
-		for (const region of this.chatHitRegions) {
-			region.y0 += delta;
-			region.y1 += delta;
-		}
 	}
 
 	/**
@@ -1104,62 +1082,39 @@ export class TUI extends Container {
 		// Shift+drag stays with the terminal's native selection.
 		if (mouse.shift) return;
 
-		if (mouse.kind === "button" && !mouse.release && this.chatScrollbar && mouse.x === this.chatScrollbar.x) {
-			const viewH = this.chatScrollbar.viewH;
-			const y = Math.max(this.chatScrollbar.y0, Math.min(mouse.y, this.chatScrollbar.y1));
-			const rel = (y - this.chatScrollbar.y0) / Math.max(1, viewH - 1);
-			this.setChatScroll(Math.round((1 - rel) * this.chatScrollbar.scrollMax));
-			this.selection = undefined;
-			return;
-		}
-
-		if (mouse.kind === "button" && !mouse.release) {
-			const region = this.hitSelectable(mouse.y);
-			if (!region) {
-				this.selection = undefined;
+		if (this.scrollbarDrag) {
+			if (mouse.kind === "move") {
+				this.dragScrollbarTo(mouse.y);
 				return;
 			}
-			this.selection = { anchorY: mouse.y, focusY: mouse.y };
-			this.requestRender();
-			return;
-		}
-
-		if (!this.selection) return;
-
-		if (mouse.kind === "move") {
-			this.selection.focusY = mouse.y;
-			this.requestRender();
-			return;
-		}
-
-		if (mouse.kind === "button" && mouse.release) {
-			this.selection.focusY = mouse.y;
-			const text = this.selectedText();
-			this.selection = undefined;
-			this.requestRender();
-			if (text) this.onTextSelected?.(text);
-		}
-	}
-
-	private hitSelectable(y: number): ChatHitRegion | undefined {
-		return this.chatHitRegions.find((region) => y >= region.y0 + 1 && y <= region.y1 + 1);
-	}
-
-	private selectedText(): string | undefined {
-		if (!this.selection) return undefined;
-		const lo = Math.min(this.selection.anchorY, this.selection.focusY);
-		const hi = Math.max(this.selection.anchorY, this.selection.focusY);
-		if (lo === hi) return undefined;
-		const lines: string[] = [];
-		for (const region of this.chatHitRegions) {
-			for (let i = 0; i < region.lines.length; i++) {
-				const y = region.y0 + i + 1;
-				if (y < lo || y > hi) continue;
-				lines.push(stripAnsiForCopy(region.lines[i] ?? ""));
+			if (mouse.kind === "button" && mouse.release) {
+				this.scrollbarDrag = undefined;
 			}
+			return;
 		}
-		const text = lines.join("\n").trim();
-		return text.length > 0 ? text : undefined;
+
+		if (mouse.kind === "button" && !mouse.release && this.chatScrollbar && mouse.x >= this.chatScrollbar.x) {
+			const sb = this.chatScrollbar;
+			const y = Math.max(sb.y0, Math.min(mouse.y, sb.y1));
+			const row = y - sb.y0;
+			const onThumb = row >= sb.thumbTop && row < sb.thumbTop + sb.thumbH;
+			if (!onThumb) {
+				const rel = (y - sb.y0) / Math.max(1, sb.viewH - 1);
+				this.setChatScroll(Math.round((1 - rel) * sb.scrollMax));
+			}
+			this.scrollbarDrag = { grabY: y, startOffset: this.chatScrollOffset };
+			return;
+		}
+	}
+
+	private dragScrollbarTo(mouseY: number): void {
+		if (!this.scrollbarDrag || !this.chatScrollbar) return;
+		const { viewH, thumbH, scrollMax, y0, y1 } = this.chatScrollbar;
+		const travel = viewH - thumbH;
+		if (travel <= 0 || scrollMax <= 0) return;
+		const y = Math.max(y0, Math.min(mouseY, y1));
+		const deltaY = y - this.scrollbarDrag.grabY;
+		this.setChatScroll(this.scrollbarDrag.startOffset - Math.round((deltaY * scrollMax) / travel));
 	}
 
 	private handleInput(data: string): void {
@@ -2136,24 +2091,4 @@ function padToWidth(line: string, width: number): string {
 	const vis = visibleWidth(line);
 	if (vis >= width) return line;
 	return line + " ".repeat(width - vis);
-}
-
-function applySelectionHighlight(line: string, width: number): string {
-	const padded = padToWidth(line, width);
-	return `\x1b[7m${padded}\x1b[27m`;
-}
-
-function stripAnsiForCopy(line: string): string {
-	let out = "";
-	let i = 0;
-	while (i < line.length) {
-		const ansi = extractAnsiCode(line, i);
-		if (ansi) {
-			i += ansi.length;
-			continue;
-		}
-		out += line[i];
-		i++;
-	}
-	return out.replace(/\s+$/, "");
 }
