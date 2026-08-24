@@ -48,3 +48,6 @@ todo.md
 plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
+
+# Local review output (not part of the product)
+reviews/

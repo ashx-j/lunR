@@ -382,14 +382,58 @@ function isMutatingSegment(segment: string): boolean {
 	return !ALLOWED_COMMANDS.has(command);
 }
 
-function isMutatingGit(args: string[]): boolean {
-	// Skip global flags like --no-pager / -C <dir> / -c key=val crudely: find the first
-	// token that doesn't start with "-" (imperfect for -C/-c values; conservative is fine).
+/** Global git options that take no value. Unknown leading flags are treated as mutating. */
+const GIT_GLOBAL_FLAGS = new Set([
+	"--no-pager",
+	"--paginate",
+	"-p",
+	"--version",
+	"--help",
+	"-h",
+	"--bare",
+	"--no-replace-objects",
+	"--no-optional-locks",
+	"--literal-pathspecs",
+	"--glob-pathspecs",
+	"--noglob-pathspecs",
+	"--icase-pathspecs",
+]);
+
+/** Walk past known `git` globals. Returns the subcommand index, or -1 to block. */
+function gitSubcommandIndex(args: string[]): number {
 	let index = 0;
-	while (args[index] === "--no-pager") index++;
+	while (index < args.length) {
+		const token = args[index];
+		if (!token.startsWith("-")) return index;
+		if (token === "--") return index + 1;
+		if (GIT_GLOBAL_FLAGS.has(token)) {
+			index++;
+			continue;
+		}
+		if (token === "-C" || token === "-c" || token === "--git-dir" || token === "--work-tree" || token === "--namespace") {
+			if (args[index + 1] === undefined) return -1;
+			index += 2;
+			continue;
+		}
+		if (
+			token.startsWith("--git-dir=") ||
+			token.startsWith("--work-tree=") ||
+			token.startsWith("--namespace=") ||
+			token.startsWith("--config-env=")
+		) {
+			index++;
+			continue;
+		}
+		return -1;
+	}
+	return index;
+}
+
+function isMutatingGit(args: string[]): boolean {
+	const index = gitSubcommandIndex(args);
+	if (index < 0) return true;
 	const subcommand = args[index]?.toLowerCase();
 	if (!subcommand) return false;
-	if (subcommand.startsWith("-")) return false; // bare `git --version` etc. is read-only
 
 	if (MUTATING_GIT_SUBCOMMANDS.has(subcommand)) return true;
 	if (CONDITIONAL_GIT_SUBCOMMANDS.has(subcommand)) {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -47,5 +47,27 @@ describe("FileModelsStore", () => {
 		await reloaded.delete("one");
 		expect(await reloaded.read("one")).toBeUndefined();
 		expect((await reloaded.read("two"))?.models.map((entry) => entry.id)).toEqual(["m2"]);
+	});
+
+	it("treats empty, truncated, and NUL-filled store files as empty instead of throwing", async () => {
+		const dir = join(tmpdir(), `pi-models-store-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDirs.push(dir);
+		mkdirSync(dir, { recursive: true });
+
+		const emptyPath = join(dir, "empty.json");
+		writeFileSync(emptyPath, "");
+		expect(await new FileModelsStore(emptyPath).read("one")).toBeUndefined();
+
+		const truncatedPath = join(dir, "truncated.json");
+		writeFileSync(truncatedPath, '{"one":{"models":[');
+		expect(await new FileModelsStore(truncatedPath).read("one")).toBeUndefined();
+
+		const nulPath = join(dir, "nul.json");
+		writeFileSync(nulPath, Buffer.alloc(64, 0));
+		const store = new FileModelsStore(nulPath);
+		expect(await store.read("one")).toBeUndefined();
+
+		await store.write("one", { models: [model("one", "m1")], checkedAt: 1 });
+		expect((await store.read("one"))?.models.map((entry) => entry.id)).toEqual(["m1"]);
 	});
 });

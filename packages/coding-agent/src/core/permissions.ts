@@ -20,8 +20,8 @@
  */
 
 import { resolve } from "node:path";
-import { planModeBlockReason } from "./plan-mode.ts";
-import { effectiveSwarmCount, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
+import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
+import { effectiveSwarmCountForTurn, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
 
 /** Shift+Tab cycle order. */
 export const PERMISSION_MODES = ["manual", "yolo", "plan", "auto"] as const;
@@ -125,6 +125,8 @@ interface PermissionContext {
 const contexts = new Map<string, PermissionContext>();
 let defaultContext: PermissionContext = { mode: "manual", approvals: new Set() };
 let approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined;
+/** One swarm prompt covers every sibling SINGLE `subagent` on the same assistant message. */
+const turnSwarmDecisions = new WeakMap<object, { decision: ApprovalDecision; feedback?: string }>();
 
 function getContext(sessionId?: string): PermissionContext {
 	if (!sessionId) return defaultContext;
@@ -229,28 +231,55 @@ function isMutatingTool(toolName: string): boolean {
 	return MUTATING_TOOLS.has(toolName);
 }
 
+function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
+	if (isMutatingTool(toolName)) return true;
+	return toolName === "code_rewrite" && isCodeRewriteMutating(input);
+}
+
 export interface GateOptions {
 	/** True when the current turn started from an explicit /swarm prompt — the
 	 *  user already asked for the swarm, so the swarm approval gate is skipped. */
 	explicitSwarmTurn?: boolean;
+	/** Assistant message that issued this tool call. Same-turn sibling SINGLE
+	 *  `subagent` calls count toward the swarm threshold. */
+	assistantMessage?: {
+		content?: ReadonlyArray<{ type?: string; name?: string; arguments?: unknown }>;
+	};
 }
 
-/** First task text of a parallel fan-out, used as the dialog summary line. */
-function swarmTaskSummary(input: Record<string, unknown>): string {
-	if (!Array.isArray(input.tasks)) return "";
-	for (const task of input.tasks) {
-		const text = task && typeof task === "object" ? (task as { task?: unknown }).task : undefined;
-		if (typeof text === "string" && text.trim()) return sanitizeDetail(text);
+function firstTaskText(value: unknown): string {
+	if (typeof value === "string" && value.trim()) return sanitizeDetail(value);
+	return "";
+}
+
+/** First task text of a parallel fan-out or sibling SINGLE, used as the dialog summary. */
+function swarmTaskSummary(input: Record<string, unknown>, assistantMessage?: GateOptions["assistantMessage"]): string {
+	if (Array.isArray(input.tasks)) {
+		for (const task of input.tasks) {
+			const text = task && typeof task === "object" ? firstTaskText((task as { task?: unknown }).task) : "";
+			if (text) return text;
+		}
+	}
+	const own = firstTaskText(input.task);
+	if (own) return own;
+	for (const block of assistantMessage?.content ?? []) {
+		if (block.type !== "toolCall" || block.name !== "subagent") continue;
+		const args =
+			block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
+				? (block.arguments as Record<string, unknown>)
+				: undefined;
+		const text = firstTaskText(args?.task);
+		if (text) return text;
 	}
 	return "";
 }
 
 /**
- * Agent-swarm gate. An auto-activated swarm (one `subagent` call launching more
- * than SWARM_APPROVAL_THRESHOLD parallel subagents) requires user approval in
- * manual AND yolo modes; auto mode runs it unconditionally and explicit /swarm
- * turns are pre-approved. Fail-closed without an approval handler, same as the
- * mutating-tool gate.
+ * Agent-swarm gate. An auto-activated swarm (more than SWARM_APPROVAL_THRESHOLD
+ * parallel subagents in one `tasks`/`chain.parallel` call, or that many same-turn
+ * SINGLE `subagent` calls) requires user approval in manual AND yolo modes; auto
+ * mode runs it unconditionally and explicit /swarm turns are pre-approved.
+ * Fail-closed without an approval handler, same as the mutating-tool gate.
  */
 async function gateSwarmCall(
 	input: Record<string, unknown>,
@@ -259,15 +288,24 @@ async function gateSwarmCall(
 ): Promise<{ block: true; reason: string } | undefined> {
 	if (ctx.mode === "auto") return undefined;
 	if (options?.explicitSwarmTurn) return undefined;
-	const count = effectiveSwarmCount(input);
+	const count = effectiveSwarmCountForTurn(input, options?.assistantMessage);
 	if (count <= SWARM_APPROVAL_THRESHOLD) return undefined;
 	if (ctx.approvals.has(SWARM_ACTION)) return undefined;
+
+	const turnKey = options?.assistantMessage;
+	const cached = turnKey ? turnSwarmDecisions.get(turnKey) : undefined;
+	if (cached) {
+		if (cached.decision === "reject") {
+			return { block: true, reason: cached.feedback ? `${SWARM_REJECT_REASON} ${cached.feedback}` : SWARM_REJECT_REASON };
+		}
+		return undefined;
+	}
 
 	if (!approvalHandler) {
 		return { block: true, reason: NO_SWARM_HANDLER_REASON };
 	}
 
-	const summary = swarmTaskSummary(input);
+	const summary = swarmTaskSummary(input, options?.assistantMessage);
 	let resp: ApprovalResponse;
 	try {
 		resp = await approvalHandler({
@@ -282,12 +320,13 @@ async function gateSwarmCall(
 	}
 
 	const decision = typeof resp === "string" ? resp : resp.decision;
+	const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
+	if (turnKey) turnSwarmDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}) });
 	if (decision === "session") {
 		ctx.approvals.add(SWARM_ACTION);
 		return undefined;
 	}
 	if (decision === "reject") {
-		const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
 		return { block: true, reason: feedback ? `${SWARM_REJECT_REASON} ${feedback}` : SWARM_REJECT_REASON };
 	}
 	return undefined;
@@ -328,7 +367,7 @@ export async function gateToolCall(
 	}
 
 	if (ctx.mode !== "manual") return undefined;
-	if (!isMutatingTool(toolName)) return undefined;
+	if (!requiresManualApproval(toolName, input)) return undefined;
 
 	let action: string;
 	let detail: string;
@@ -350,6 +389,9 @@ export async function gateToolCall(
 	} else if (toolName === "cron") {
 		action = "cron";
 		detail = sanitizeDetail(input.action);
+	} else if (toolName === "code_rewrite") {
+		action = "code_rewrite";
+		detail = sanitizeDetail(input.path ?? input.pattern);
 	} else {
 		// All other mutating tools fall back to the tool name with no extra detail.
 		action = toolName;

@@ -986,7 +986,8 @@ export interface ForegroundResumeRun {
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
-	subagentInProgress?: boolean;
+	/** Live foreground `subagent` tool calls. Caps same-turn overlap. */
+	foregroundSubagentInFlight?: number;
 	subagentSpawns?: { sessionId: string | null; count: number };
 	asyncJobs: Map<string, AsyncJobState>;
 	/** Current-session active and recent async runs for the native fleet inspector. */

@@ -34,10 +34,13 @@ import {
 	pauseJob,
 	removeJob,
 	resumeJob,
+	setCronDeliverValidator,
 	updateJob,
 } from "../core/cron/jobs.ts";
 import { currentOrigin } from "../core/cron/origin-context.ts";
 import { executeJob, startScheduler } from "../core/cron/scheduler.ts";
+import { loadGatewayConfig } from "../gateway/config.ts";
+import { createDeliverValidator } from "../gateway/cron.ts";
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -110,6 +113,10 @@ function formatStatus(): string {
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI): void {
+	// Same allowlist the gateway uses, so a TUI session cannot persist a job
+	// that later posts to a chat the bot can reach but is not allowed.
+	setCronDeliverValidator(createDeliverValidator(loadGatewayConfig()));
+
 	// --- Local delivery bridge (Phase 4 gateway replaces this) ---
 	(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = async (job: { name: string }, _content: string) => {
 		try {

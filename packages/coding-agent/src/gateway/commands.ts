@@ -206,7 +206,8 @@ const newCommand: ChatCommand = {
 	name: "new",
 	aliases: ["reset"],
 	description: "start a fresh session for this chat",
-	bypassBusy: false,
+	// lunr: busy-session /new must bypass the guard (same as /stop).
+	bypassBusy: true,
 	needsSession: false,
 	async handler(ctx) {
 		await ctx.bridge.reset(ctx.key);

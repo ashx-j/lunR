@@ -34,7 +34,7 @@ import type { MessageEvent, PlatformAdapter } from "./types.ts";
 export interface BridgeLike {
 	runTurn(key: string, event: MessageEvent, callbacks: TurnCallbacks): Promise<string>;
 	abort(key: string): Promise<void> | void;
-	reset(key: string): void;
+	reset(key: string): void | Promise<void>;
 	getStatus(key: string): BridgeSessionStatus;
 	getSession(key: string): Promise<BridgeSession | null>;
 	switchSession(key: string, sessionFile: string): Promise<void>;

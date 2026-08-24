@@ -30,7 +30,16 @@ export class FileModelsStore implements ModelsStore {
 	}
 
 	private parse(content: string | undefined): StoredModels {
-		return content ? (JSON.parse(content) as StoredModels) : {};
+		const trimmed = content?.replace(/^\uFEFF/, "").trim();
+		if (!trimmed) return {};
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+			return parsed as StoredModels;
+		} catch {
+			// Mid-write / power-loss can leave NULs or truncated JSON.
+			return {};
+		}
 	}
 
 	async read(providerId: string): Promise<ModelsStoreEntry | undefined> {

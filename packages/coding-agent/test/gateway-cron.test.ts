@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import lunrCron from "../src/builtin-extensions/lunr-cron.ts";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { beginCronFire, endCronFire, isCronFire } from "../src/core/cron/fire-guard.ts";
-import { type CronJob, createJob, getJob, setCronBaseDir } from "../src/core/cron/jobs.ts";
+import { type CronJob, createJob, getJob, resetCronValidators, setCronBaseDir } from "../src/core/cron/jobs.ts";
 import { currentOrigin, runWithOrigin } from "../src/core/cron/origin-context.ts";
 import { saveInstallFeatures } from "../src/core/install-features.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
@@ -83,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	for (const stop of stoppers.splice(0)) stop();
+	resetCronValidators();
 	setCronBaseDir(undefined);
 	if (prevAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
 	else process.env[ENV_AGENT_DIR] = prevAgentDir;
@@ -235,6 +236,18 @@ describe("lunr-cron tool", () => {
 		expect(job.origin).toBeNull();
 	});
 
+	it("rejects an explicit telegram deliver that is not in gateway.json", async () => {
+		const tool = loadCronTool();
+		const result = await tool.execute(
+			"t5",
+			{ action: "create", prompt: "check deploy", schedule: "every 30m", deliver: "telegram:attackerChat" },
+			null,
+			null,
+			idleCtx,
+		);
+		expect(result.content[0].text).toMatch(/not an allowed chat|createJob/);
+	});
+
 	it("an explicit deliver param beats the origin default", async () => {
 		const tool = loadCronTool();
 		const origin = { platform: "telegram", chatId: "chat9" };
@@ -321,7 +334,10 @@ describe("createPlatformDeliverer", () => {
 
 	it("explicit 'telegram:123:456' targets chat 123 with thread 456", async () => {
 		const adapter = new FakeAdapter("telegram");
-		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), makeConfig());
+		const cfg = makeConfig((c) => {
+			c.telegram.allowedChats = ["123"];
+		});
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
 		const err = await deliver(fakeJob({ deliver: "telegram:123:456" }), "hi");
 		expect(err).toBeNull();
 		expect(adapter.sent[0]).toMatchObject({ chatId: "123" });
@@ -330,12 +346,50 @@ describe("createPlatformDeliverer", () => {
 
 	it("comma targets: local is skipped, explicit target still delivered", async () => {
 		const adapter = new FakeAdapter("telegram");
-		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), makeConfig());
+		const cfg = makeConfig((c) => {
+			c.telegram.allowedChats = ["123"];
+		});
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
 		const err = await deliver(fakeJob({ deliver: "local, telegram:123" }), "hi");
 		expect(err).toBeNull();
 		expect(adapter.sent).toHaveLength(1);
 		expect(adapter.sent[0].chatId).toBe("123");
 		expect(adapter.sent[0].opts?.threadId).toBeUndefined();
+	});
+
+	it("refuses a persisted explicit chat that is not homeChannel, allowedChats, or origin", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const cfg = makeConfig((c) => {
+			c.telegram.homeChannel = "homeChat";
+			c.telegram.allowedChats = ["allowed1"];
+		});
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
+		const err = await deliver(
+			fakeJob({
+				deliver: "telegram:attackerChat",
+				origin: { platform: "telegram", chatId: "originChat" },
+			}),
+			"hi",
+		);
+		expect(err).toContain("not an allowed chat");
+		expect(adapter.sent).toEqual([]);
+	});
+
+	it("allows send to the job origin even when that chat is not in allowedChats", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const cfg = makeConfig((c) => {
+			c.telegram.homeChannel = "homeChat";
+		});
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
+		const err = await deliver(
+			fakeJob({
+				deliver: "telegram:originChat",
+				origin: { platform: "telegram", chatId: "originChat" },
+			}),
+			"hi",
+		);
+		expect(err).toBeNull();
+		expect(adapter.sent[0].chatId).toBe("originChat");
 	});
 
 	it("unknown platform returns an error string", async () => {
@@ -364,7 +418,10 @@ describe("createPlatformDeliverer", () => {
 				["telegram", telegram],
 				["discord", discord],
 			]),
-			makeConfig(),
+			makeConfig((c) => {
+				c.telegram.allowedChats = ["1"];
+				c.discord.allowedChats = ["2"];
+			}),
 		);
 		const err = await deliver(fakeJob({ deliver: "telegram:1,discord:2" }), "hi");
 		expect(err).toContain("telegram send failed: boom");
@@ -373,7 +430,10 @@ describe("createPlatformDeliverer", () => {
 
 	it("wraps content and splits to the adapter's maxMessageLength", async () => {
 		const adapter = new FakeAdapter("telegram", 40);
-		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), makeConfig());
+		const cfg = makeConfig((c) => {
+			c.telegram.allowedChats = ["1"];
+		});
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
 		const body = "word ".repeat(30).trim();
 		const err = await deliver(fakeJob({ deliver: "telegram:1" }), body);
 		expect(err).toBeNull();
@@ -475,7 +535,14 @@ describe("startGatewayCron", () => {
 			content: string,
 		) => Promise<string | null>;
 		expect(bridge).toBeTypeOf("function");
-		const err = await bridge(fakeJob({ deliver: "telegram:321", name: "bridgejob" }), "via bridge");
+		const err = await bridge(
+			fakeJob({
+				deliver: "telegram:321",
+				name: "bridgejob",
+				origin: { platform: "telegram", chatId: "321" },
+			}),
+			"via bridge",
+		);
 		expect(err).toBeNull();
 		expect(adapter.sent[0].chatId).toBe("321");
 		expect(adapter.sent[0].text).toBe("☾ Cron: bridgejob\n———\nvia bridge");

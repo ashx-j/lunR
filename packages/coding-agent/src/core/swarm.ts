@@ -20,10 +20,10 @@ status.`;
  * lunR: agent-swarm auto-activation gate helpers.
  *
  * When the model launches more than SWARM_APPROVAL_THRESHOLD parallel subagents
- * in a single `subagent` tool call, that counts as an auto-activated agent swarm
- * and requires user approval in every permission mode except `auto` (see
- * core/permissions.ts). An explicit /swarm turn is pre-approved because the user
- * already asked for the swarm.
+ * in one `subagent` `tasks`/`chain.parallel` call, or that many same-turn SINGLE
+ * `subagent` calls, that counts as an auto-activated agent swarm and requires
+ * user approval in every permission mode except `auto` (see core/permissions.ts).
+ * An explicit /swarm turn is pre-approved because the user already asked for the swarm.
  */
 
 /** Parallel-subagent count above which the swarm approval gate engages. */
@@ -32,6 +32,14 @@ export const SWARM_APPROVAL_THRESHOLD = 2;
 function countEntry(item: unknown): number {
 	const count = item && typeof item === "object" ? (item as { count?: unknown }).count : undefined;
 	return typeof count === "number" && Number.isInteger(count) && count >= 1 ? count : 1;
+}
+
+function isManagementCall(args: Record<string, unknown>): boolean {
+	return typeof args.action === "string" && args.action.length > 0;
+}
+
+function isAsyncDetached(args: Record<string, unknown>): boolean {
+	return args.async === true && args.clarify !== true;
 }
 
 /**
@@ -54,6 +62,38 @@ export function effectiveSwarmCount(args: Record<string, unknown>): number {
 		}
 	}
 	return total;
+}
+
+function siblingSingleCount(args: Record<string, unknown>): number {
+	if (isManagementCall(args) || isAsyncDetached(args)) return 0;
+	if (Array.isArray(args.tasks) || Array.isArray(args.chain)) return 0;
+	return typeof args.agent === "string" && args.agent.length > 0 ? 1 : 0;
+}
+
+interface AssistantMessageLike {
+	content?: ReadonlyArray<{ type?: string; name?: string; arguments?: unknown }>;
+}
+
+/**
+ * Parallel subagent count for the swarm gate. Uses this call's `tasks` / chain
+ * `parallel` blocks, plus every other same-turn SINGLE `subagent` call so three
+ * sibling singles still trip the >2 approval gate.
+ */
+export function effectiveSwarmCountForTurn(
+	args: Record<string, unknown>,
+	assistantMessage?: AssistantMessageLike,
+): number {
+	const own = effectiveSwarmCount(args);
+	const siblingSingles = (assistantMessage?.content ?? []).reduce((total, block) => {
+		if (block.type !== "toolCall" || block.name !== "subagent") return total;
+		const siblingArgs =
+			block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
+				? (block.arguments as Record<string, unknown>)
+				: undefined;
+		if (!siblingArgs) return total;
+		return total + siblingSingleCount(siblingArgs);
+	}, 0);
+	return Math.max(own, siblingSingles);
 }
 
 interface BranchEntryLike {

@@ -3231,12 +3231,11 @@ function inferExecutionMode(params: SubagentParamsLike): SubagentRunMode {
 	return "single";
 }
 
-function duplicateSubagentCallResult(params: SubagentParamsLike): AgentToolResult<Details> {
+function foregroundCapacityResult(params: SubagentParamsLike, inFlight: number, limit: number): AgentToolResult<Details> {
 	return {
 		content: [{
 			type: "text",
-			// lunr: guide the model to the tasks array (parallel) or async:true.
-			text: "A subagent call is already running in this turn. To run several subagents at once, use ONE subagent call with tasks: [{agent, task}, …] (parallel mode), or set async: true on each call.",
+			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, use ONE subagent call with tasks: [{agent, task}, …], or set async: true.`,
 		}],
 		isError: true,
 		details: { mode: inferExecutionMode(params), results: [] },
@@ -3864,12 +3863,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const dispatchParams = applyForceTopLevelAsyncOverride(requestParams, depth, deps.config.forceTopLevelAsync === true);
 		const runsForeground = dispatchParams.clarify === true || (dispatchParams.async ?? deps.asyncByDefault) !== true;
 		if (!runsForeground) return execute(id, requestParams, signal, onUpdate, ctx);
-		if (deps.state.subagentInProgress === true) return duplicateSubagentCallResult(requestParams);
-		deps.state.subagentInProgress = true;
+		const limit = resolveTopLevelParallelConcurrency(undefined, deps.config.parallel?.concurrency);
+		const inFlight = deps.state.foregroundSubagentInFlight ?? 0;
+		if (inFlight >= limit) return foregroundCapacityResult(requestParams, inFlight, limit);
+		deps.state.foregroundSubagentInFlight = inFlight + 1;
 		try {
 			return await execute(id, requestParams, signal, onUpdate, ctx);
 		} finally {
-			deps.state.subagentInProgress = false;
+			deps.state.foregroundSubagentInFlight = Math.max(0, (deps.state.foregroundSubagentInFlight ?? 1) - 1);
 		}
 	};
 
