@@ -363,9 +363,18 @@ export class AgentBridge {
 	}
 
 	/** Drop the cached session (disposing it) and forget the store entry (/new, /reset). */
-	reset(key: string): void {
+	async reset(key: string): Promise<void> {
 		const entry = this.cache.get(key);
 		if (entry) {
+			// lunr: /new while busy must stop the live turn and drop queued follow-ups
+			// before dispose, otherwise drainQueue can still fire on the torn-down entry.
+			entry.queue.length = 0;
+			entry.dropped = 0;
+			try {
+				await entry.session.abort();
+			} catch {
+				// best-effort; dispose still tears the session down
+			}
 			entry.unsubscribe?.();
 			this.cache.delete(key);
 			entry.session.dispose?.();

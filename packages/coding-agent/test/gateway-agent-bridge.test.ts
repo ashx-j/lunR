@@ -156,4 +156,35 @@ describe("AgentBridge LRU eviction", () => {
 		release?.();
 		await first;
 	});
+
+	it("reset aborts a busy session, drops the queue, then disposes", async () => {
+		let release: (() => void) | undefined;
+		const session = {
+			...fakeSession(),
+			prompt: () =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		};
+		const bridge = new AgentBridge({
+			cacheCap: 2,
+			sessionFactory: async () => session,
+		});
+
+		const first = bridge.runTurn("k1", makeEvent("k1"));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await bridge.runTurn("k1", makeEvent("k1 follow-up"));
+		expect(bridge.getStatus("k1").busy).toBe(true);
+		expect(bridge.getStatus("k1").queueDepth).toBe(1);
+
+		await bridge.reset("k1");
+
+		expect(session.abort).toHaveBeenCalled();
+		expect(session.dispose).toHaveBeenCalled();
+		expect(bridge.getStatus("k1").busy).toBe(false);
+		expect(bridge.getStatus("k1").queueDepth).toBe(0);
+
+		release?.();
+		await first.catch(() => {});
+	});
 });

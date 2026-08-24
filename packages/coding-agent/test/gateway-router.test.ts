@@ -320,6 +320,20 @@ describe("router: slash subset (bypasses the busy guard)", () => {
 		).toBe(true);
 	});
 
+	it("/new resets even while busy", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		bridge.status.busy = true;
+		await router.handleEvent(dmEvent("/new"));
+		expect(bridge.resets).toHaveLength(1);
+		expect(
+			adapter.sent
+				.map((m) => m.text)
+				.some((t) => t.includes("Session reset — next message starts a fresh session.")),
+		).toBe(true);
+		expect(adapter.sent.map((m) => m.text).some((t) => t.includes("busy"))).toBe(false);
+		expect(bridge.calls).toEqual([]);
+	});
+
 	it("/status reports platform, state and queue depth", async () => {
 		const { adapter, router } = makeDeps(makeConfig());
 		await router.handleEvent(dmEvent("/status"));

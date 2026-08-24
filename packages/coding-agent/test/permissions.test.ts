@@ -17,7 +17,7 @@ import {
 	setPermissionMode,
 } from "../src/core/permissions.ts";
 import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
-import { effectiveSwarmCount, isExplicitSwarmTurn, SWARM_APPROVAL_THRESHOLD } from "../src/core/swarm.ts";
+import { effectiveSwarmCount, effectiveSwarmCountForTurn, isExplicitSwarmTurn, SWARM_APPROVAL_THRESHOLD } from "../src/core/swarm.ts";
 
 describe("permissions", () => {
 	beforeEach(() => {
@@ -122,6 +122,31 @@ describe("permissions", () => {
 		expect(cron).toEqual({ block: true, reason: "Rejected by user (permission mode: manual)." });
 	});
 
+	it("prompts for apply-mode code_rewrite and allows dry-run in manual mode", async () => {
+		setPermissionMode("manual");
+		let received: ApprovalRequest | undefined;
+		registerApprovalHandler(async (req) => {
+			received = req;
+			return "once" as ApprovalResponse;
+		});
+		expect(await gateToolCall("code_rewrite", { dry_run: true, pattern: "Foo" }, "/cwd")).toBeUndefined();
+		expect(received).toBeUndefined();
+		expect(await gateToolCall("code_rewrite", { pattern: "Foo" }, "/cwd")).toBeUndefined();
+		expect(received).toBeUndefined();
+		const apply = await gateToolCall("code_rewrite", { dry_run: false, path: "src/a.ts", pattern: "Foo" }, "/cwd");
+		expect(apply).toBeUndefined();
+		expect(received?.toolName).toBe("code_rewrite");
+		expect(received?.action).toBe("code_rewrite");
+		expect(received?.detail).toBe("src/a.ts");
+
+		registerApprovalHandler(undefined);
+		const failClosed = await gateToolCall("code_rewrite", { dry_run: false, pattern: "Foo" }, "/cwd");
+		expect(failClosed).toEqual({
+			block: true,
+			reason: "Mutating tool blocked in manual mode: no approval channel available.",
+		});
+	});
+
 	it("resetPermissions restores default mode and clears approvals", async () => {
 		setPermissionMode("auto");
 		registerApprovalHandler(async () => "session" as ApprovalResponse);
@@ -195,6 +220,29 @@ describe("swarm helpers", () => {
 		expect(effectiveSwarmCount({ agent: "scout", task: "x" })).toBe(0);
 		expect(effectiveSwarmCount({ action: "list" })).toBe(0);
 		expect(effectiveSwarmCount({ chain: [{ agent: "a" }, { agent: "b" }] })).toBe(0);
+	});
+
+	it("counts same-turn sibling SINGLE calls toward the swarm threshold", () => {
+		const assistantMessage = {
+			content: [
+				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "reviewer", task: "three" } },
+			],
+		};
+		expect(effectiveSwarmCountForTurn({ agent: "scout", task: "one" }, assistantMessage)).toBe(3);
+		expect(effectiveSwarmCountForTurn({ tasks: [{ agent: "a" }, { agent: "b" }] }, assistantMessage)).toBe(3);
+	});
+
+	it("ignores async and management siblings when counting same-turn singles", () => {
+		const assistantMessage = {
+			content: [
+				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two", async: true } },
+				{ type: "toolCall", name: "subagent", arguments: { action: "list" } },
+			],
+		};
+		expect(effectiveSwarmCountForTurn({ agent: "scout", task: "one" }, assistantMessage)).toBe(1);
 	});
 
 	it("detects explicit /swarm turns from the last user message", () => {
@@ -305,6 +353,51 @@ describe("agent-swarm gate", () => {
 			reason: "Agent swarm rejected by user. too many agents, use one",
 		});
 	});
+
+	it("prompts once for three same-turn SINGLE subagent calls", async () => {
+		setPermissionMode("manual");
+		const assistantMessage = {
+			content: [
+				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "reviewer", task: "three" } },
+			],
+		};
+		let calls = 0;
+		registerApprovalHandler(async (req) => {
+			calls++;
+			expect(req.kind).toBe("swarm");
+			expect(req.detail).toContain("agent swarm (3 subagents)");
+			return "once" as ApprovalResponse;
+		});
+		const options = { assistantMessage };
+		expect(await gateToolCall("subagent", { agent: "scout", task: "one" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(await gateToolCall("subagent", { agent: "worker", task: "two" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(await gateToolCall("subagent", { agent: "reviewer", task: "three" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(calls).toBe(1);
+	});
+
+	it("one reject covers every sibling SINGLE on the same assistant message", async () => {
+		setPermissionMode("yolo");
+		const assistantMessage = {
+			content: [
+				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two" } },
+				{ type: "toolCall", name: "subagent", arguments: { agent: "reviewer", task: "three" } },
+			],
+		};
+		let calls = 0;
+		registerApprovalHandler(async () => {
+			calls++;
+			return { decision: "reject", feedback: "use tasks" };
+		});
+		const options = { assistantMessage };
+		const first = await gateToolCall("subagent", { agent: "scout", task: "one" }, "/cwd", undefined, options);
+		const second = await gateToolCall("subagent", { agent: "worker", task: "two" }, "/cwd", undefined, options);
+		expect(first).toEqual({ block: true, reason: "Agent swarm rejected by user. use tasks" });
+		expect(second).toEqual({ block: true, reason: "Agent swarm rejected by user. use tasks" });
+		expect(calls).toBe(1);
+	});
 });
 
 describe("plan permission mode", () => {
@@ -354,6 +447,22 @@ describe("plan permission mode", () => {
 		setPermissionMode("plan");
 		expect(await gateToolCall("read", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("ls", {}, "/cwd")).toBeUndefined();
+	});
+
+	it("hard-blocks apply-mode code_rewrite and allows dry-run", async () => {
+		setPermissionMode("plan");
+		let calls = 0;
+		registerApprovalHandler(async () => {
+			calls++;
+			return "once";
+		});
+		expect(await gateToolCall("code_rewrite", { dry_run: false, pattern: "x" }, "/cwd")).toEqual({
+			block: true,
+			reason: PLAN_MODE_BLOCK_MESSAGE,
+		});
+		expect(await gateToolCall("code_rewrite", { dry_run: true, pattern: "x" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("code_rewrite", { pattern: "x" }, "/cwd")).toBeUndefined();
+		expect(calls).toBe(0);
 	});
 });
 

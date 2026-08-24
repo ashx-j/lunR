@@ -19,9 +19,9 @@ export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate to subagents or manage a
 
 EXECUTION (use exactly ONE mode):
 • Before executing, use { action: "list" } to inspect configured agents/chains. Only execute agents listed as executable/non-disabled.
-• SINGLE: { agent, task? } - one task; omit task for self-contained agents
-• CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
-• PARALLEL: { tasks: [{agent,task,count?,output?,reads?,progress?}, ...], concurrency?: number, worktree?: true } - concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
+• SINGLE: { agent, task? } - one task; omit task for self-contained agents. Multiple SINGLE calls in the same turn run concurrently (capped).
+• CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
+• PARALLEL: { tasks: [{agent,task,count?,output?,reads?,progress?}, ...], concurrency?: number, worktree?: true } - one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
 • Children always start with a fresh session (no inherited parent transcript). Model strings accept a thinking suffix (provider/model:off|minimal|low|medium|high|xhigh|max).
 • Optional timeout: { timeoutMs } or { maxRuntimeMs } sets a run-level max runtime for foreground and async/background runs
 • If { action: "list" } shows proactive skill subagent suggestions, consider a small fresh-context fanout for broad tasks where one of those skills would materially help
@@ -77,7 +77,7 @@ export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = `Delegate to subagents or manag
 
 EXECUTE:
 • Before execution, call { action: "list" }; run only executable/non-disabled configured agents/chains.
-• SINGLE {agent, task?}; PARALLEL {tasks:[{agent,task,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{agent,task?},{parallel:[...]}]}.
+• SINGLE {agent, task?} (same-turn singles overlap); PARALLEL {tasks:[{agent,task,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{agent,task?},{parallel:[...]}]} for sequential work.
 • Children always start with a fresh session. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
 • Chain templates may use {task}, {previous}, {chain_dir}, and named outputs. Parallel worktree isolation requires a clean git repo.
 • Chain example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {parallel: [{agent:"agent-b", task:"Check {previous}", count: 3}]}] }

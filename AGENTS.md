@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-24. **`origin/master` = `4187a4a`**. Public npm is `@ashx-j/lunr@0.2.10` (tag `v0.2.10`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-24. **`origin/master` = `5ab2d00`**. Public npm target is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
 - **Image paste chips:** clipboard paste inserts atomic `[image_1]` / `[image_2]` instead of a temp path. Submit keeps the labels in the chat card and attaches `ImageContent`. `/edit` restores chips + files. Tests: tui editor image chips + image-paste-markers + startup-input.
 
@@ -65,23 +67,23 @@ Last updated: 2026-08-24. **`origin/master` = `4187a4a`**. Public npm is `@ashx-
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.10**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.11**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
 ## Not merged
 
-- Dirty working-tree stash on `fix/cold-start`: gateway `/new` while busy, cron deliver allowlist, models-store parse harden, plan-mode `code_rewrite`/`git` flags.
+- None for 0.2.11 leftover stashes. `{0}`/`{1}` are 0.2.10 copies. `{4}` is local notes/artifacts.
 
 ## Uncommitted (working tree)
 
-- None for 0.2.10. Still stashed (not this release): same-turn SINGLE swarm gate; gateway `/new` abort + cron deliver allowlist + models-store parse + git-flag walk.
+- None for 0.2.11.
 
 ## Build & run
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.2.10**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.2.11**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
@@ -96,7 +98,7 @@ Last updated: 2026-08-24. **`origin/master` = `4187a4a`**. Public npm is `@ashx-
 - **Cron:** `core/cron` in TUI (live session) and gateway (fresh headless session). One `jobs.json` `~/.lunr/agent/cron/`. `runWithOrigin` ALS. Gateway fallback: `cronFallbackModels`.
 - **Gateway:** Telegram long-poll + Discord (mention-gated, no GuildMembers intent). Authz fail-closed. `ADAPTER_FACTORIES`.
 - **Footer:** ashxj-tui `setFooter` only. Toggles are render-time `CustomizeBridge` reads.
-- **Permissions:** `manual | yolo | plan | auto`; Shift+Tab cycles that order. Plan = `gateToolCall` + `PLAN_MODE_ADDENDUM`. Fail-closed without handler. Swarm (>2 parallel in one call) gated in manual AND yolo.
+- **Permissions:** `manual | yolo | plan | auto`; Shift+Tab cycles that order. Plan = `gateToolCall` + `PLAN_MODE_ADDENDUM`. Fail-closed without handler. Swarm (>2 parallel in one `tasks`/`chain.parallel` call, or that many same-turn SINGLE `subagent` calls) gated in manual AND yolo.
 - **Rollback:** per-turn snapshots; `/rollback` forks and restores files. `/undo` and `/edit` stay in the same session via `navigateTree` (no fork).
 
 # Renamed vs still "pi"
@@ -192,6 +194,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-23: collapsed same-name errors stay in the tree; hoist their bodies under the last leaf so the file list is not split.
 - 2026-08-23: clipboard image paste shows `[image_n]` chips; keep the file off-screen and attach ImageContent on submit.
 - 2026-08-23: v0.2.10 ships image chips, VS Code Alt+V, quieter subagent compact rows, unlimited parallel defaults, and grok-4.5+ Responses.
+- 2026-08-24: same-turn SINGLE `subagent` calls count toward the swarm gate; one once/reject covers that assistant message. Sequential work stays `chain`.
+- 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
 
 # Deferred
 

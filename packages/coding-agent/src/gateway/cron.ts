@@ -190,7 +190,21 @@ function resolveTarget(target: string, job: CronJob, cfg: GatewayConfig): Resolv
 	return { platform, chatId: home };
 }
 
-function createDeliverValidator(
+/** True when a resolved chat may receive cron output for this job. */
+export function isAllowedDeliverChat(
+	cfg: GatewayConfig,
+	platform: string,
+	chatId: string,
+	origin?: CronJobOrigin | null,
+): boolean {
+	const platformCfg = platformConfigFor(cfg, platform);
+	if (!platformCfg) return false;
+	if (platformCfg.homeChannel && platformCfg.homeChannel === chatId) return true;
+	if (platformCfg.allowedChats?.includes(chatId)) return true;
+	return origin?.platform === platform && origin.chatId === chatId;
+}
+
+export function createDeliverValidator(
 	cfg: GatewayConfig,
 ): (deliver: string, origin?: CronJobOrigin | null) => string | undefined {
 	return (deliver, origin) => {
@@ -206,15 +220,7 @@ function createDeliverValidator(
 			const platformCfg = platformConfigFor(cfg, platform);
 			if (!platformCfg) return `unknown platform "${explicit ? explicit[1] : target}"`;
 			if (explicit) {
-				const chatId = explicit[2];
-				const allowed = new Set(
-					[
-						platformCfg.homeChannel,
-						...(platformCfg.allowedChats ?? []),
-						...(origin?.platform === platform ? [origin.chatId] : []),
-					].filter((x): x is string => !!x),
-				);
-				if (!allowed.has(chatId)) {
+				if (!isAllowedDeliverChat(cfg, platform, explicit[2], origin)) {
 					return `deliver target "${target}" is not an allowed chat for ${platform}`;
 				}
 			} else if (!platformCfg.homeChannel) {
@@ -246,6 +252,10 @@ export function createPlatformDeliverer(adapters: Map<string, PlatformAdapter>, 
 			const resolved = resolveTarget(target, job, cfg);
 			if (typeof resolved === "string") {
 				firstError ??= resolved;
+				continue;
+			}
+			if (!isAllowedDeliverChat(cfg, resolved.platform, resolved.chatId, job.origin)) {
+				firstError ??= `deliver target "${target}" is not an allowed chat for ${resolved.platform}`;
 				continue;
 			}
 			const adapter = adapters.get(resolved.platform);

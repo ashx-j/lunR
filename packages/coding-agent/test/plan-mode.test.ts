@@ -18,6 +18,12 @@ describe("planModeBlockReason", () => {
 		}
 	});
 
+	it("blocks apply-mode code_rewrite and allows dry-run preview", () => {
+		expect(planModeBlockReason("code_rewrite", { dry_run: false, pattern: "x" })).toBe(PLAN_MODE_BLOCK_MESSAGE);
+		expect(planModeBlockReason("code_rewrite", { dry_run: true, pattern: "x" })).toBeUndefined();
+		expect(planModeBlockReason("code_rewrite", { pattern: "x" })).toBeUndefined();
+	});
+
 	it("allows read tools", () => {
 		expect(planModeBlockReason("read", { path: "a.ts" })).toBeUndefined();
 		expect(planModeBlockReason("grep", { pattern: "x" })).toBeUndefined();
@@ -150,6 +156,22 @@ describe("isMutatingBashCommand", () => {
 			"git remote add origin url",
 		]) {
 			expect(isMutatingBashCommand(command), command).toBe(true);
+		}
+	});
+
+	it("walks past known git globals and blocks unknown leading flags", () => {
+		for (const command of [
+			"git -C /tmp add .",
+			"git -C /tmp commit -m x",
+			"git --git-dir=.git commit -m x",
+			"git --git-dir .git commit -m x",
+			"git --work-tree=/tmp add .",
+			"git --exec-path=/tmp add .",
+		]) {
+			expect(isMutatingBashCommand(command), command).toBe(true);
+		}
+		for (const command of ["git --no-pager status", "git -C /tmp status", "git --git-dir=.git log"]) {
+			expect(isMutatingBashCommand(command), command).toBe(false);
 		}
 	});
 
