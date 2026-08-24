@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-23. **`origin/master` = `e591b89`**. Public npm target is `@ashx-j/lunr@0.2.10` (tag `v0.2.10`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-24. **`origin/master` = `4187a4a`**. Public npm is `@ashx-j/lunr@0.2.10` (tag `v0.2.10`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Image paste chips:** clipboard paste inserts atomic `[image_1]` / `[image_2]` instead of a temp path. Submit keeps the labels in the chat card and attaches `ImageContent`. `/edit` restores chips + files. Tests: tui editor image chips + image-paste-markers + startup-input.
 
