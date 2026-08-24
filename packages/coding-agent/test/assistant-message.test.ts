@@ -237,7 +237,7 @@ describe("AssistantMessageComponent", () => {
 		}
 	});
 
-	test("a streaming thinking run occupies THINKING_TAIL_LINES and shows the latest chunk", () => {
+	test("a streaming thinking run occupies at most THINKING_TAIL_LINES and shows the latest chunk", () => {
 		initTheme("moon");
 
 		const thinking = `${"alpha ".repeat(8).trim()}\nlatest-chunk-xyz`;
@@ -250,6 +250,19 @@ describe("AssistantMessageComponent", () => {
 		expect(lines.join("\n")).not.toContain("✻ Thought");
 		expect(thinkingLines.length).toBeLessThanOrEqual(THINKING_TAIL_LINES);
 		expect(lines.some((line) => line.includes("latest-chunk-xyz"))).toBe(true);
+	});
+
+	test("a short streaming thinking run does not reserve empty tail rows", () => {
+		initTheme("moon");
+
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		component.setThinkingTimings([{ start: Date.now() }]);
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: "one line" }]));
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		const thinkingLines = lines.filter((line) => line.includes("one line"));
+
+		expect(thinkingLines).toHaveLength(1);
+		expect(lines.length).toBeLessThan(THINKING_TAIL_LINES + 2);
 	});
 
 	test("smooth-sliced prefix still shows the tail of the full thinking string", () => {

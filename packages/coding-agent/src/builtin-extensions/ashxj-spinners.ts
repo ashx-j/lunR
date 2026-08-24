@@ -126,37 +126,22 @@ function pickOther<T>(arr: readonly T[], current: T): T {
   return v;
 }
 
-const SUBAGENT_TOOL_NAMES = new Set(["subagent", "subagent_wait"]);
-
-/** True for parent-session tools that mean a child agent is in flight or being waited on. */
-export function isSubagentToolName(name: string | undefined): boolean {
-  return typeof name === "string" && SUBAGENT_TOOL_NAMES.has(name);
-}
-
 /**
  * Working-indicator message: spinner is rendered separately (Loader puts it first).
- * While any subagent has run this parent turn: `Orchestrating… kaomoji`.
  */
-export function composeWorkingMessage(kaomoji: string, orchestrating: boolean): string {
-  if (!orchestrating) return kaomoji;
-  return kaomoji ? `Orchestrating… ${kaomoji}` : "Orchestrating…";
+export function composeWorkingMessage(kaomoji: string): string {
+  return kaomoji;
 }
 
 export default function (pi: ExtensionAPI): void {
   let state: State = "idle";
   let stateEnteredAt = 0;
   let currentKaomoji = "";
-  let liveSubagent = 0;
-  let seenSubagentThisTurn = false;
   let transientTimer: ReturnType<typeof setTimeout> | undefined;
   let rerollTimer: ReturnType<typeof setInterval> | undefined;
 
-  function orchestrating(): boolean {
-    return liveSubagent > 0 || seenSubagentThisTurn;
-  }
-
   function publishWorkingMessage(ctx: ExtensionContext): void {
-    ctx.ui.setWorkingMessage(composeWorkingMessage(currentKaomoji, orchestrating()));
+    ctx.ui.setWorkingMessage(composeWorkingMessage(currentKaomoji));
   }
 
   function clearTransient(): void {
@@ -264,12 +249,6 @@ export default function (pi: ExtensionAPI): void {
     // within its minimum display window.
     if (state === "error") return;
     const name = event.toolName;
-    // lunr: any subagent / subagent_wait this turn prefixes the working row
-    // with "Orchestrating…" (spinner is already first via Loader).
-    if (isSubagentToolName(name)) {
-      liveSubagent += 1;
-      seenSubagentThisTurn = true;
-    }
     const force = true;
     if (SEARCH_RE.test(name)) {
       applyState("searching", ctx, { force });
@@ -281,9 +260,6 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("tool_execution_end", (event, ctx) => {
-    if (isSubagentToolName(event.toolName) && liveSubagent > 0) {
-      liveSubagent -= 1;
-    }
     if (event.isError) {
       applyState("error", ctx);
     }
@@ -306,8 +282,6 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("agent_end", (event, ctx) => {
-    liveSubagent = 0;
-    seenSubagentThisTurn = false;
     const last = event.messages.at(-1);
     if (!last || last.role !== "assistant") {
       applyState("idle", ctx);
@@ -334,7 +308,5 @@ export default function (pi: ExtensionAPI): void {
     state = "idle";
     stateEnteredAt = 0;
     currentKaomoji = "";
-    liveSubagent = 0;
-    seenSubagentThisTurn = false;
   });
 }

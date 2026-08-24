@@ -19,8 +19,10 @@ import type {
 } from "../src/types.ts";
 import {
 	parseXaiGrok4Minor,
+	shouldUseXaiResponsesApi,
 	XAI_GROK45_THINKING_LEVEL_MAP,
 	XAI_GROK46_THINKING_LEVEL_MAP,
+	XAI_RESPONSES_COMPAT,
 } from "../src/xai-effort.ts";
 import {
 	OPENCODE_GO_MODELS_URL,
@@ -321,7 +323,6 @@ const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
 ]);
-const XAI_RESPONSES_MODEL_ID = "grok-4.5";
 const XAI_BUILTIN_EXCLUDED_MODEL_IDS = new Set([
 	"grok-3",
 	"grok-3-fast",
@@ -329,9 +330,6 @@ const XAI_BUILTIN_EXCLUDED_MODEL_IDS = new Set([
 	"grok-4.20-0309-reasoning",
 	"grok-code-fast-1",
 ]);
-const XAI_RESPONSES_COMPAT: OpenAIResponsesCompat = {
-	supportsLongCacheRetention: false,
-};
 
 const OPENCODE_OPENAI_COMPLETIONS_LONG_CACHE_RETENTION_UNSUPPORTED_MODELS = new Set([
 	"opencode:deepseek-v4-flash",
@@ -1323,7 +1321,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			for (const [modelId, model] of Object.entries(data.xai.models)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
-				const useResponsesApi = modelId === XAI_RESPONSES_MODEL_ID;
+				const useResponsesApi = shouldUseXaiResponsesApi(modelId);
 
 				models.push({
 					id: modelId,

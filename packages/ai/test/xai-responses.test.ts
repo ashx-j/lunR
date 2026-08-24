@@ -3,6 +3,7 @@ import type { OpenAIResponsesOptions } from "../src/api/openai-responses.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 import { XAI_MODELS } from "../src/providers/xai.models.ts";
 import { xaiProvider } from "../src/providers/xai.ts";
+import { shouldUseXaiResponsesApi } from "../src/xai-effort.ts";
 import type { Context, Model } from "../src/types.ts";
 
 type CapturedRequest = {
@@ -72,10 +73,14 @@ describe("xAI Responses provider", () => {
 		}
 	});
 
-	it("uses Responses with low/medium/high efforts only for Grok 4.5", () => {
+	it("uses Responses for baked-in Grok 4.5+ and Completions for older Grok 4", () => {
 		expect(XAI_MODELS["grok-4.5"].api).toBe("openai-responses");
 		expect(getSupportedThinkingLevels(XAI_MODELS["grok-4.5"])).toEqual(["low", "medium", "high"]);
 		expect(XAI_MODELS["grok-4.3"].api).toBe("openai-completions");
+		for (const [id, model] of Object.entries(XAI_MODELS)) {
+			if (!id.startsWith("grok-4.")) continue;
+			expect(model.api).toBe(shouldUseXaiResponsesApi(id) ? "openai-responses" : "openai-completions");
+		}
 	});
 
 	it("uses /responses with bearer auth and xAI-compatible request fields", async () => {

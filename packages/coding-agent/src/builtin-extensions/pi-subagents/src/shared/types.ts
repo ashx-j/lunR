@@ -1168,7 +1168,7 @@ export interface ExtensionConfig {
 	maxSubagentDepth?: number;
 	/** Optional cumulative session cap. Unset or 0 means unlimited. */
 	maxSubagentSpawnsPerSession?: number;
-	/** Global cap on simultaneously-running subagent tasks within a single run. Defaults to 20. */
+	/** Global cap on simultaneously-running subagent tasks within a single run. Unset means unlimited. */
 	globalConcurrencyLimit?: number;
 	control?: ControlConfig;
 	completionBatch?: CompletionBatchConfig;
@@ -1256,8 +1256,8 @@ export function resolveTempScopeId(options?: {
 	return "shared";
 }
 
-const MAX_PARALLEL = 8;
-export const MAX_CONCURRENCY = 4;
+const MAX_PARALLEL = Number.MAX_SAFE_INTEGER;
+export const MAX_CONCURRENCY = Number.MAX_SAFE_INTEGER;
 export const TEMP_ROOT_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
 export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
 export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");

@@ -16,6 +16,7 @@ import {
 	renderCollapsedSearchPath,
 	shortenPath,
 	str,
+	toolGroupTree,
 	toolStatusDotFromContext,
 } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -378,6 +379,7 @@ export function createFindToolDefinition(
 				formatGroupedCall({
 					role: context.groupRole ?? "singleton",
 					compact,
+					tree: toolGroupTree(context),
 					dot: toolStatusDotFromContext(context, theme),
 					title: theme.fg("toolTitle", theme.bold("find")),
 					detail: formatFindCall(args, theme, context.cwd, !context.expanded),

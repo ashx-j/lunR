@@ -3,11 +3,11 @@ import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
-import type { ToolGroupRole } from "../extensions/types.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
+import type { ToolGroupRole } from "../extensions/types.ts";
 
 export function shortenPath(path: unknown): string {
 	if (typeof path !== "string") return "";
@@ -105,17 +105,27 @@ export function toolGroupRole(continuation: boolean, followed: boolean): ToolGro
  *   └─ usage-service.ts
  * ```
  *
- * Singletons, streaming, errors, and expanded rows keep `● title detail` on one line.
+ * Singletons and expanded rows keep `● title detail` on one line.
+ * Collapsed errors stay in the same-name tree; the error body is hoisted
+ * under the last leaf so it does not split the file list. Grouped still-running
+ * cards share the same tree as finished ones. `compact` is header-only body
+ * hiding at the caller; pass `tree` for chrome. `isError` is accepted so
+ * callers can keep passing it, but it does not drop tree chrome.
  */
+export function toolGroupTree(context: { expanded?: boolean; isError?: boolean }): boolean {
+	return !context.expanded;
+}
+
 export function formatGroupedCall(opts: {
 	role: ToolGroupRole;
-	compact: boolean;
+	compact?: boolean;
+	tree?: boolean;
 	dot: string;
 	title: string;
 	detail?: string;
 }): string {
 	const detail = opts.detail?.trim() ? opts.detail : "";
-	const useTree = opts.compact && opts.role !== "singleton" && detail.length > 0;
+	const useTree = (opts.tree ?? opts.compact === true) && opts.role !== "singleton" && detail.length > 0;
 	if (!useTree) {
 		return detail ? `${opts.dot} ${opts.title} ${detail}` : `${opts.dot} ${opts.title}`;
 	}

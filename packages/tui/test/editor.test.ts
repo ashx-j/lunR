@@ -4048,4 +4048,71 @@ describe("Editor component", () => {
 			assert.strictEqual(submitted, pastedText);
 		});
 	});
+
+	describe("Image marker chips", () => {
+		it("inserts sequential [image_n] chips instead of a path", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.insertImageMarker({ path: "/tmp/one.png", mimeType: "image/png" });
+			editor.insertTextAtCursor(" ");
+			editor.insertImageMarker({ path: "/tmp/two.png", mimeType: "image/png" });
+			assert.strictEqual(editor.getText(), "[image_1] [image_2]");
+			assert.deepStrictEqual(
+				editor.getPendingImages().map((image) => ({ id: image.id, path: image.path })),
+				[
+					{ id: 1, path: "/tmp/one.png" },
+					{ id: 2, path: "/tmp/two.png" },
+				],
+			);
+		});
+
+		it("treats an image chip as a single backspace unit", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.handleInput("A");
+			editor.insertImageMarker({ path: "/tmp/one.png", mimeType: "image/png" });
+			editor.handleInput("B");
+			editor.handleInput("\x7f");
+			assert.strictEqual(editor.getText(), "A[image_1]");
+			editor.handleInput("\x7f");
+			assert.strictEqual(editor.getText(), "A");
+			assert.deepStrictEqual(editor.getPendingImages(), []);
+		});
+
+		it("keeps leftover chip ids stable after a delete", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.insertImageMarker({ path: "/tmp/one.png", mimeType: "image/png" });
+			editor.insertTextAtCursor(" ");
+			editor.insertImageMarker({ path: "/tmp/two.png", mimeType: "image/png" });
+			editor.handleInput("\x01");
+			editor.handleInput("\x1b[3~");
+			assert.strictEqual(editor.getText(), " [image_2]");
+			assert.deepStrictEqual(
+				editor.getPendingImages().map((image) => image.id),
+				[2],
+			);
+		});
+
+		it("submits the chip text instead of expanding it", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let submitted = "";
+			editor.onSubmit = (text) => {
+				submitted = text;
+			};
+			editor.insertImageMarker({ path: "/tmp/one.png", mimeType: "image/png" });
+			editor.insertTextAtCursor(" look");
+			editor.handleInput("\r");
+			assert.strictEqual(submitted, "[image_1] look");
+			assert.deepStrictEqual(
+				editor.takePendingImages().map((image) => image.path),
+				["/tmp/one.png"],
+			);
+		});
+
+		it("treats typed [image_1] as plain text when no chip is mapped", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			for (const ch of "[image_1]") editor.handleInput(ch);
+			assert.deepStrictEqual(editor.getPendingImages(), []);
+			editor.handleInput("\x7f");
+			assert.strictEqual(editor.getText(), "[image_1");
+		});
+	});
 });

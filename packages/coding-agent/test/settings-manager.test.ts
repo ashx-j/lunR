@@ -572,6 +572,14 @@ describe("SettingsManager", () => {
 			expect(manager.getFooterTokens()).toBe(false);
 		});
 
+		it("should default footerTps to true and persist", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterTps()).toBe(true);
+			manager.setFooterTps(false);
+			await manager.flush();
+			expect(manager.getFooterTps()).toBe(false);
+		});
+
 		it("should default footerStatuses to true and persist", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getFooterStatuses()).toBe(true);

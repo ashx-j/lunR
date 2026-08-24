@@ -5,6 +5,7 @@ import {
 	formatGroupedCall,
 	getTextOutput as getRenderedTextOutput,
 	toolGroupRole,
+	toolGroupTree,
 	toolStatusDot,
 } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
@@ -49,6 +50,8 @@ export class ToolExecutionComponent extends Container {
 	private hideComponent = false;
 	private groupContinuation = false;
 	private groupFollowed = false;
+	private groupPrev?: ToolExecutionComponent;
+	private groupNext?: ToolExecutionComponent;
 
 	constructor(
 		toolName: string,
@@ -160,6 +163,7 @@ export class ToolExecutionComponent extends Container {
 			formatGroupedCall({
 				role: toolGroupRole(this.groupContinuation, this.groupFollowed),
 				compact: !this.isPartial && !this.expanded && !this.result?.isError,
+				tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 				dot: this.getStatusDot(),
 				title: theme.fg("toolTitle", theme.bold(this.toolName)),
 			}),
@@ -204,6 +208,7 @@ export class ToolExecutionComponent extends Container {
 		this.result = result;
 		this.isPartial = isPartial;
 		this.updateDisplay();
+		this.refreshGroupTail();
 		this.maybeConvertImagesForKitty();
 	}
 
@@ -233,6 +238,7 @@ export class ToolExecutionComponent extends Container {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		this.updateDisplay();
+		this.refreshGroupTail();
 	}
 
 	handleClick(_localY: number, _width: number): boolean {
@@ -267,6 +273,13 @@ export class ToolExecutionComponent extends Container {
 		this.invalidate();
 	}
 
+	// lunr: same-name run link so a later card can hoist earlier error bodies
+	// under the last leaf instead of splitting the tree.
+	linkGroupNext(next: ToolExecutionComponent): void {
+		this.groupNext = next;
+		next.groupPrev = this;
+	}
+
 	private applyGroupPadding(): void {
 		const top = this.groupContinuation ? 0 : 1;
 		const bottom = this.groupFollowed ? 0 : 1;
@@ -280,14 +293,51 @@ export class ToolExecutionComponent extends Container {
 		}
 	}
 
-	private shouldSkipCompactResult(): boolean {
+	private shouldHideGroupedErrorBody(): boolean {
 		return (
-			this.getRenderShell() === "default" &&
-			this.result !== undefined &&
-			!this.isPartial &&
+			Boolean(this.result?.isError) &&
+			this.groupFollowed &&
 			!this.expanded &&
-			!this.result.isError
+			!this.isPartial &&
+			this.getRenderShell() === "default" &&
+			this.toolName !== "subagent" &&
+			this.toolName !== "subagent_wait"
 		);
+	}
+
+	private shouldSkipCompactResult(): boolean {
+		if (this.result === undefined || this.isPartial || this.expanded) {
+			return false;
+		}
+		// lunr: collapsed mid-group errors stay header-only so the same-name
+		// tree is not split; the last card hoists those bodies underneath.
+		if (this.result.isError) {
+			return this.shouldHideGroupedErrorBody();
+		}
+		return this.getRenderShell() === "default";
+	}
+
+	private formatHoistedGroupErrors(): string | undefined {
+		if (this.groupFollowed || this.expanded) return undefined;
+		const texts: string[] = [];
+		let prev = this.groupPrev;
+		while (prev) {
+			if (prev.shouldHideGroupedErrorBody()) {
+				const output = prev.getTextOutput().trim();
+				if (output) texts.unshift(output);
+			}
+			prev = prev.groupPrev;
+		}
+		return texts.length > 0 ? `\n${texts.join("\n")}` : undefined;
+	}
+
+	private refreshGroupTail(): void {
+		let next = this.groupNext;
+		while (next) {
+			const card = next;
+			next = next.groupNext;
+			if (!next) card.updateDisplay();
+		}
 	}
 
 	setShowImages(show: boolean): void {
@@ -407,6 +457,11 @@ export class ToolExecutionComponent extends Container {
 						}
 					}
 				}
+				const hoisted = this.formatHoistedGroupErrors();
+				if (hoisted) {
+					renderContainer.addChild(new Text(theme.fg("toolOutput", hoisted), 0, 0));
+					hasContent = true;
+				}
 			}
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
@@ -461,23 +516,28 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private formatToolExecution(): string {
-		const compact = !this.isPartial && !this.expanded && !this.result?.isError;
+		const hideGroupedErrorBody = Boolean(this.result?.isError && this.groupFollowed && !this.expanded);
+		const compact = !this.isPartial && !this.expanded && (!this.result?.isError || hideGroupedErrorBody);
 		let text = formatGroupedCall({
 			role: toolGroupRole(this.groupContinuation, this.groupFollowed),
 			compact,
+			tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 			dot: this.getStatusDot(),
 			title: theme.fg("toolTitle", theme.bold(this.toolName)),
 		});
-		if (compact) {
-			return text;
+		if (!compact) {
+			const content = JSON.stringify(this.args, null, 2);
+			if (content) {
+				text += `\n\n${content}`;
+			}
+			const output = this.getTextOutput();
+			if (output) {
+				text += `\n${output}`;
+			}
 		}
-		const content = JSON.stringify(this.args, null, 2);
-		if (content) {
-			text += `\n\n${content}`;
-		}
-		const output = this.getTextOutput();
-		if (output) {
-			text += `\n${output}`;
+		const hoisted = this.formatHoistedGroupErrors();
+		if (hoisted) {
+			text += hoisted;
 		}
 		return text;
 	}
@@ -489,6 +549,7 @@ export function applySameToolGrouping(
 	next: ToolExecutionComponent,
 ): void {
 	if (previous && previous.getToolName() === next.getToolName()) {
+		previous.linkGroupNext(next);
 		previous.setGroupFollowed(true);
 		next.setGroupContinuation(true);
 	}

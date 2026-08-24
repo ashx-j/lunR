@@ -200,7 +200,7 @@ export const ChainItem = Type.Object({
 	})),
 	expand: Type.Optional(DynamicExpandSchema),
 	collect: Type.Optional(DynamicCollectSchema),
-	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
+	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: unlimited)" })),
 	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
 	worktree: Type.Optional(Type.Boolean({
 		description: "Create isolated git worktrees for each parallel task."
@@ -266,7 +266,7 @@ const SubagentParamsSchema = Type.Object({
 		description: "Agent/chain config for create/update. Object or JSON string; presence of steps creates a chain."
 	})),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task, count?, output?, outputMode?, reads?, progress?}, ...]" })),
-	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or 4." })),
+	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or unlimited." })),
 	worktree: Type.Optional(Type.Boolean({
 		description: "Create isolated git worktrees for parallel tasks; requires clean git state."
 	})),

@@ -47,6 +47,21 @@ export interface EditorComponent extends Component {
 	insertTextAtCursor?(text: string): void;
 
 	/**
+	 * Insert an atomic `[image_n]` chip and remember the off-screen file.
+	 * Returns the chip id, or undefined if the editor does not support chips.
+	 */
+	insertImageMarker?(attachment: { path: string; mimeType: string }): number;
+
+	/** Restore previously submitted image chips into the current draft. */
+	restoreImageMarkers?(attachments: Array<{ id: number; path: string; mimeType: string }>): void;
+
+	/** Pending image chips still in the editor, in first-appearance order. */
+	getPendingImages?(): Array<{ id: number; path: string; mimeType: string }>;
+
+	/** Take and clear pending image chips after the text has been submitted. */
+	takePendingImages?(): Array<{ id: number; path: string; mimeType: string }>;
+
+	/**
 	 * Get text with any markers expanded (e.g., paste markers).
 	 * Falls back to getText() if not implemented.
 	 */

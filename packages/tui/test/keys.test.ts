@@ -300,6 +300,12 @@ describe("matchesKey", () => {
 			assert.strictEqual(matchesKey("\x1b[118;3u", "alt+v"), true);
 			assert.strictEqual(parseKey("\x1b[118;3u"), "alt+v");
 		});
+
+		it("should match leaked legacy Alt+V even when Kitty is active", () => {
+			setKittyProtocolActive(true);
+			assert.strictEqual(matchesKey("\x1bv", "alt+v"), true);
+			assert.strictEqual(parseKey("\x1bv"), "alt+v");
+		});
 	});
 
 	describe("Legacy key matching", () => {
@@ -467,6 +473,8 @@ describe("matchesKey", () => {
 			assert.strictEqual(parseKey("\x1b."), undefined);
 			assert.strictEqual(matchesKey("\x1by", "alt+y"), false);
 			assert.strictEqual(parseKey("\x1by"), undefined);
+			assert.strictEqual(matchesKey("\x1bv", "alt+v"), true);
+			assert.strictEqual(parseKey("\x1bv"), "alt+v");
 			setKittyProtocolActive(false);
 		});
 

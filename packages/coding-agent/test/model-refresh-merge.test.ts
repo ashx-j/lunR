@@ -41,8 +41,10 @@ describe("catalog merge precedence", () => {
 			live: [live],
 		});
 		const grok = merged.find((entry) => entry.id === "grok-4.6");
+		expect(grok?.api).toBe("openai-responses");
 		expect(grok?.thinkingLevelMap).toMatchObject({ off: null, minimal: null, xhigh: "xhigh" });
-		expect(grok?.compat).toMatchObject({ supportsReasoningEffort: true });
+		expect(grok?.compat).toMatchObject({ supportsLongCacheRetention: false });
+		expect(grok?.compat).not.toHaveProperty("supportsDeveloperRole");
 	});
 
 	it("keeps baked-in models that a live list omitted", () => {

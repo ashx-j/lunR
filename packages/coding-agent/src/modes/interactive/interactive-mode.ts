@@ -28,9 +28,12 @@ import type {
 	SlashCommand,
 } from "@earendil-works/pi-tui";
 import {
+	collectImageMarkerIds,
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
+	type EditorImageAttachment,
+	formatImageMarker,
 	fuzzyFilter,
 	isFocusable,
 	Markdown,
@@ -154,6 +157,7 @@ import { modelToUserEntry } from "../../core/user-models.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
+import { processImage } from "../../utils/image-process.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
@@ -266,6 +270,12 @@ class ExpandableText extends Text implements Expandable {
 type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
+	images?: ImageContent[];
+};
+
+type QueuedUserInput = {
+	text: string;
+	images?: ImageContent[];
 };
 
 type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }>;
@@ -452,8 +462,10 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
-	private onInputCallback?: (text: string) => void;
-	private pendingUserInputs: string[] = [];
+	private onInputCallback?: (input: QueuedUserInput) => void;
+	private pendingUserInputs: QueuedUserInput[] = [];
+	private stagedSubmitImages: ImageContent[] | undefined;
+	private fallbackImageAttachments = new Map<number, EditorImageAttachment>();
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -898,7 +910,7 @@ export class InteractiveMode {
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
 					this.swarmMode = true;
-					this.setExtensionStatus("swarm", "swarm ● active");
+					this.setExtensionStatus("swarm", "swarm");
 				}
 				return resp;
 			}
@@ -1077,7 +1089,7 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.promptAfterDeferredBuiltins(userInput);
+				await this.promptAfterDeferredBuiltins(userInput.text, { images: userInput.images });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -1805,7 +1817,7 @@ export class InteractiveMode {
 					this.chatContainer.clear();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
-						this.editor.setText(result.editorText);
+						this.restoreEditorFromTreeResult(result);
 					}
 					this.showStatus("Navigated to selected point");
 					void this.flushCompactionQueue({ willRetry: false });
@@ -2764,8 +2776,8 @@ export class InteractiveMode {
 		};
 
 		// Handle clipboard paste (keybinding: app.clipboard.pasteImage, Alt+V on Windows —
-		// Ctrl+V is owned by the terminal and never reaches us). Images are attached by path;
-		// otherwise, paste plain text from the system clipboard.
+		// Ctrl+V is owned by the terminal and never reaches us). Images become `[image_n]`
+		// chips; otherwise, paste plain text from the system clipboard.
 		this.defaultEditor.onPasteImage = () => {
 			void this.handleClipboardPaste();
 		};
@@ -2803,19 +2815,107 @@ export class InteractiveMode {
 		});
 	}
 
+	private writeClipboardImageFile(image: { bytes: Uint8Array; mimeType: string }): { path: string; mimeType: string } {
+		const ext = extensionForImageMimeType(image.mimeType) ?? "png";
+		const fileName = `pi-clipboard-${crypto.randomUUID()}.${ext}`;
+		const filePath = path.join(os.tmpdir(), fileName);
+		fs.writeFileSync(filePath, Buffer.from(image.bytes));
+		return { path: filePath, mimeType: image.mimeType };
+	}
+
+	private insertImageChip(attachment: { path: string; mimeType: string }): number {
+		if (this.editor.insertImageMarker) {
+			return this.editor.insertImageMarker(attachment);
+		}
+		const existing = collectImageMarkerIds(this.editor.getText());
+		const used = new Set([...existing, ...this.fallbackImageAttachments.keys()]);
+		let id = 1;
+		while (used.has(id)) id++;
+		this.fallbackImageAttachments.set(id, { id, path: attachment.path, mimeType: attachment.mimeType });
+		this.editor.insertTextAtCursor?.(formatImageMarker(id));
+		return id;
+	}
+
+	private takeSubmittedImages(submittedText?: string): EditorImageAttachment[] {
+		if (this.editor.takePendingImages) {
+			this.fallbackImageAttachments.clear();
+			return this.editor.takePendingImages();
+		}
+		if (this.editor.getPendingImages) {
+			this.fallbackImageAttachments.clear();
+			return this.editor.getPendingImages();
+		}
+		const pending: EditorImageAttachment[] = [];
+		for (const id of collectImageMarkerIds(submittedText ?? this.editor.getText())) {
+			const attachment = this.fallbackImageAttachments.get(id);
+			if (attachment) pending.push(attachment);
+		}
+		this.fallbackImageAttachments.clear();
+		return pending;
+	}
+
+	private consumeStagedSubmitImages(): ImageContent[] | undefined {
+		const staged = this.stagedSubmitImages;
+		this.stagedSubmitImages = undefined;
+		return staged;
+	}
+
+	private async loadImageAttachments(attachments: EditorImageAttachment[]): Promise<ImageContent[] | undefined> {
+		if (attachments.length === 0) return undefined;
+		const images: ImageContent[] = [];
+		const autoResizeImages = this.settingsManager.getImageAutoResize();
+		for (const attachment of attachments) {
+			try {
+				const bytes = fs.readFileSync(attachment.path);
+				const processed = await processImage(bytes, attachment.mimeType, { autoResizeImages });
+				if (!processed.ok) {
+					this.showStatus(processed.message);
+					continue;
+				}
+				images.push({
+					type: "image",
+					mimeType: processed.mimeType,
+					data: processed.data,
+				});
+			} catch (err) {
+				this.showStatus(
+					`Could not attach ${formatImageMarker(attachment.id)}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		return images.length > 0 ? images : undefined;
+	}
+
+	private restoreEditorDraft(text: string, images?: ImageContent[]): void {
+		this.editor.setText(text);
+		if (!images || images.length === 0) return;
+		const ids = collectImageMarkerIds(text);
+		if (ids.length === 0 || !this.editor.restoreImageMarkers) return;
+		const attachments: EditorImageAttachment[] = [];
+		for (let i = 0; i < Math.min(ids.length, images.length); i++) {
+			const id = ids[i]!;
+			const image = images[i]!;
+			const saved = this.writeClipboardImageFile({
+				bytes: Buffer.from(image.data, "base64"),
+				mimeType: image.mimeType,
+			});
+			attachments.push({ id, path: saved.path, mimeType: saved.mimeType });
+		}
+		this.editor.restoreImageMarkers(attachments);
+	}
+
+	private restoreEditorFromTreeResult(result: { editorText?: string; editorImages?: ImageContent[] }): void {
+		this.restoreEditorDraft(result.editorText ?? "", result.editorImages);
+	}
+
 	private async handleClipboardPaste(): Promise<void> {
 		try {
 			const image = await readClipboardImage();
 			if (image) {
-				const tmpDir = os.tmpdir();
-				const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-				const fileName = `pi-clipboard-${crypto.randomUUID()}.${ext}`;
-				const filePath = path.join(tmpDir, fileName);
-				fs.writeFileSync(filePath, Buffer.from(image.bytes));
-
-				this.editor.insertTextAtCursor?.(filePath);
+				const saved = this.writeClipboardImageFile(image);
+				const id = this.insertImageChip(saved);
 				this.ui.requestRender();
-				this.showStatus(`Pasted clipboard image → ${fileName}`);
+				this.showStatus(`Pasted ${formatImageMarker(id)}`);
 				return;
 			}
 
@@ -2835,7 +2935,12 @@ export class InteractiveMode {
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
-			if (!text) return;
+			if (!text) {
+				this.takeSubmittedImages(text);
+				return;
+			}
+			const images =
+				this.consumeStagedSubmitImages() ?? (await this.loadImageAttachments(this.takeSubmittedImages(text)));
 			this.ui.setChatScroll(0);
 
 			// Handle commands
@@ -3058,7 +3163,7 @@ export class InteractiveMode {
 					this.editor.setText("");
 					await this.promptAfterDeferredBuiltins(text);
 				} else {
-					this.queueCompactionMessage(text, "steer");
+					this.queueCompactionMessage(text, "steer", images);
 				}
 				return;
 			}
@@ -3068,7 +3173,7 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer" });
+				await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer", images });
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -3079,9 +3184,9 @@ export class InteractiveMode {
 			this.flushPendingBashComponents();
 
 			if (this.onInputCallback) {
-				this.onInputCallback(text);
+				this.onInputCallback({ text, images });
 			} else {
-				this.pendingUserInputs.push(text);
+				this.pendingUserInputs.push({ text, images });
 			}
 			this.editor.addToHistory?.(text);
 		};
@@ -3916,16 +4021,16 @@ export class InteractiveMode {
 		);
 	}
 
-	async getUserInput(): Promise<string> {
+	async getUserInput(): Promise<QueuedUserInput> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
 			return queuedInput;
 		}
 
 		return new Promise((resolve) => {
-			this.onInputCallback = (text: string) => {
+			this.onInputCallback = (input: QueuedUserInput) => {
 				this.onInputCallback = undefined;
-				resolve(text);
+				resolve(input);
 			};
 		});
 	}
@@ -4181,7 +4286,8 @@ export class InteractiveMode {
 				this.editor.setText("");
 				await this.promptAfterDeferredBuiltins(text);
 			} else {
-				this.queueCompactionMessage(text, "followUp");
+				const images = await this.loadImageAttachments(this.takeSubmittedImages(text));
+				this.queueCompactionMessage(text, "followUp", images);
 			}
 			return;
 		}
@@ -4189,14 +4295,17 @@ export class InteractiveMode {
 		// Alt+Enter queues a follow-up message (waits until agent finishes)
 		// This handles extension commands (execute immediately), prompt template expansion, and queueing
 		if (this.session.isStreaming) {
+			const images = await this.loadImageAttachments(this.takeSubmittedImages(text));
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "followUp" });
+			await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "followUp", images });
 			this.updatePendingMessagesDisplay();
 			this.ui.requestRender();
 		}
 		// If not streaming, Alt+Enter acts like regular Enter (trigger onSubmit)
 		else if (this.editor.onSubmit) {
+			const images = await this.loadImageAttachments(this.takeSubmittedImages(text));
+			this.stagedSubmitImages = images;
 			this.editor.setText("");
 			this.editor.onSubmit(text);
 		}
@@ -4471,8 +4580,8 @@ export class InteractiveMode {
 		return allQueued.length;
 	}
 
-	private queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.compactionQueuedMessages.push({ text, mode });
+	private queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		this.compactionQueuedMessages.push({ text, mode, images });
 		this.editor.addToHistory?.(text);
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
@@ -4516,9 +4625,9 @@ export class InteractiveMode {
 					if (this.isExtensionCommand(message.text)) {
 						await this.promptAfterDeferredBuiltins(message.text);
 					} else if (message.mode === "followUp") {
-						await this.session.followUp(message.text);
+						await this.session.followUp(message.text, message.images);
 					} else {
-						await this.session.steer(message.text);
+						await this.session.steer(message.text, message.images);
 					}
 				}
 				this.updatePendingMessagesDisplay();
@@ -4545,7 +4654,9 @@ export class InteractiveMode {
 			}
 
 			// Send first prompt (starts streaming)
-			const promptPromise = this.promptAfterDeferredBuiltins(firstPrompt.text).catch((error) => {
+			const promptPromise = this.promptAfterDeferredBuiltins(firstPrompt.text, {
+				images: firstPrompt.images,
+			}).catch((error) => {
 				restoreQueue(error);
 			});
 
@@ -4554,9 +4665,9 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(message.text)) {
 					await this.promptAfterDeferredBuiltins(message.text);
 				} else if (message.mode === "followUp") {
-					await this.session.followUp(message.text);
+					await this.session.followUp(message.text, message.images);
 				} else {
-					await this.session.steer(message.text);
+					await this.session.steer(message.text, message.images);
 				}
 			}
 			this.updatePendingMessagesDisplay();
@@ -4644,6 +4755,7 @@ export class InteractiveMode {
 					footerLsp: this.settingsManager.getFooterLsp(),
 					footerContext: this.settingsManager.getFooterContext(),
 					footerTokens: this.settingsManager.getFooterTokens(),
+					footerTps: this.settingsManager.getFooterTps(),
 					footerStatuses: this.settingsManager.getFooterStatuses(),
 					footerGit: this.settingsManager.getFooterGit(),
 					footerPlan: this.settingsManager.getFooterPlan(),
@@ -4859,6 +4971,9 @@ export class InteractiveMode {
 					},
 					onFooterTokensChange: (enabled) => {
 						this.settingsManager.setFooterTokens(enabled);
+					},
+					onFooterTpsChange: (enabled) => {
+						this.settingsManager.setFooterTps(enabled);
 					},
 					onFooterStatusesChange: (enabled) => {
 						this.settingsManager.setFooterStatuses(enabled);
@@ -5570,7 +5685,7 @@ export class InteractiveMode {
 						this.chatContainer.clear();
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
-							this.editor.setText(result.editorText);
+							this.restoreEditorFromTreeResult(result);
 						}
 						this.showStatus("Navigated to selected point");
 						void this.flushCompactionQueue({ willRetry: false });
@@ -6540,7 +6655,7 @@ export class InteractiveMode {
 		}
 
 		this.swarmMode = true;
-		this.setExtensionStatus("swarm", "swarm ● active");
+		this.setExtensionStatus("swarm", "swarm");
 		await this.sendUserMessageAfterDeferredBuiltins(buildSwarmPrompt(task));
 	}
 
@@ -6596,7 +6711,9 @@ export class InteractiveMode {
 	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
 	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
 	// pops the previous leaf and navigates back.
-	private async rewindLastTurn(command: "undo" | "edit"): Promise<{ editorText?: string } | undefined> {
+	private async rewindLastTurn(
+		command: "undo" | "edit",
+	): Promise<{ editorText?: string; editorImages?: ImageContent[] } | undefined> {
 		if (this.session.isStreaming) {
 			this.showWarning(`Wait for the current response to finish before running /${command}.`);
 			return undefined;
@@ -6642,7 +6759,7 @@ export class InteractiveMode {
 			this.chatContainer.clear();
 			this.renderInitialMessages();
 			void this.flushCompactionQueue({ willRetry: false });
-			return { editorText: result.editorText };
+			return { editorText: result.editorText, editorImages: result.editorImages };
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 			return undefined;
@@ -6658,7 +6775,10 @@ export class InteractiveMode {
 	private async handleEditCommand(): Promise<void> {
 		const result = await this.rewindLastTurn("edit");
 		if (!result) return;
-		this.editor.setText(result.editorText ?? "");
+		this.restoreEditorFromTreeResult({
+			editorText: result.editorText ?? "",
+			editorImages: result.editorImages,
+		});
 		this.showStatus("Editing last message. /redo to restore.");
 	}
 
@@ -6684,7 +6804,7 @@ export class InteractiveMode {
 			this.chatContainer.clear();
 			this.renderInitialMessages();
 			if (result.editorText && !this.editor.getText().trim()) {
-				this.editor.setText(result.editorText);
+				this.restoreEditorFromTreeResult(result);
 			}
 			this.showStatus("Redone");
 			void this.flushCompactionQueue({ willRetry: false });

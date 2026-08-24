@@ -709,7 +709,10 @@ async function runSingleAttempt(
 			if ((evt.type === "message_update" || evt.type === "message_start") && evt.message) {
 				const thinkingText = extractThinkingText(evt.message.content);
 				if (thinkingText) progress.thinkingText = thinkingText;
-				fireUpdate();
+				// lunr: compact rows no longer show thinking. Skip per-token
+				// invalidates on message_update so the running glyph is not rebuilt
+				// on every stream delta.
+				if (evt.type === "message_start") fireUpdate();
 			}
 
 			if (evt.type === "tool_execution_start") {

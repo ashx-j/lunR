@@ -21,7 +21,7 @@ EXECUTION (use exactly ONE mode):
 • Before executing, use { action: "list" } to inspect configured agents/chains. Only execute agents listed as executable/non-disabled.
 • SINGLE: { agent, task? } - one task; omit task for self-contained agents
 • CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
-• PARALLEL: { tasks: [{agent,task,count?,output?,reads?,progress?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
+• PARALLEL: { tasks: [{agent,task,count?,output?,reads?,progress?}, ...], concurrency?: number, worktree?: true } - concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
 • Children always start with a fresh session (no inherited parent transcript). Model strings accept a thinking suffix (provider/model:off|minimal|low|medium|high|xhigh|max).
 • Optional timeout: { timeoutMs } or { maxRuntimeMs } sets a run-level max runtime for foreground and async/background runs
 • If { action: "list" } shows proactive skill subagent suggestions, consider a small fresh-context fanout for broad tasks where one of those skills would materially help

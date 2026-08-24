@@ -144,15 +144,9 @@ function runningGlyph(seed?: number): string {
 
 function progressRunningSeed(progress: ProgressSeedSource | undefined): number | undefined {
 	if (!progress) return undefined;
-	return runningSeed(
-		progress.index,
-		progress.toolCount,
-		progress.tokens,
-		progress.durationMs,
-		progress.lastActivityAt,
-		progress.currentToolStartedAt,
-		progress.turnCount,
-	);
+	// lunr: seed only the row identity. Tokens / duration / lastActivityAt
+	// change on every thinking token and used to advance the glyph faster than the 80ms timer.
+	return runningSeed(progress.index);
 }
 
 interface LegacyResultAnimationContext {
@@ -303,10 +297,12 @@ export function stripTaskChrome(task: string | undefined): string {
 	return lines.join("\n").trim();
 }
 
-/** Compact-row lead: model + thinking when known, else the chrome-stripped task. */
-export function compactRowLead(result: { task?: string; model?: string; thinking?: string }): string {
-	const badge = formatModelThinking(result.model, result.thinking);
-	if (badge) return badge;
+/** Compact-row lead: model name only (no thinking level), else the chrome-stripped task. */
+export function compactRowLead(result: { task?: string; model?: string }): string {
+	const badge = formatModelThinking(result.model);
+	const cut = badge.indexOf(" · thinking ");
+	const modelOnly = cut === -1 ? badge : badge.slice(0, cut);
+	if (modelOnly) return modelOnly;
 	return taskSummaryText(stripTaskChrome(result.task));
 }
 
@@ -333,19 +329,22 @@ function resultGlyph(result: Details["results"][number], output: string, theme: 
 	return theme.fg("success", "✓");
 }
 
-/** Collapse thinking onto one visual line for the compact hang row. */
-export function collapseCompactThinkingText(text: string | undefined): string {
-	const collapsed = (text ?? "").replace(/\s+/g, " ").trim();
-	return collapsed.length > 0 ? collapsed : "thinking…";
-}
-
-export function formatCompactThinkingHangLine(
-	thinkingText: string | undefined,
+/** Compact hang row: tool count, tokens, elapsed time. */
+export function formatCompactStatsHangLine(
+	progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs"> | undefined,
 	width: number,
 	paint: (s: string) => string = (s) => s,
 	prefix = "  ⎿  ",
 ): string {
-	return truncLine(paint(`${prefix}${collapseCompactThinkingText(thinkingText)}`), width);
+	const toolCount = progress?.toolCount ?? 0;
+	const tokens = progress?.tokens ?? 0;
+	const durationMs = progress?.durationMs ?? 0;
+	const body = [
+		formatToolUseStat(toolCount),
+		formatTokenStat(tokens),
+		durationMs > 0 ? formatDuration(durationMs) : "0ms",
+	].join(" · ");
+	return truncLine(paint(`${prefix}${body}`), width);
 }
 
 export function widgetRenderKey(job: AsyncJobState): string {
@@ -411,16 +410,7 @@ function widgetActivity(job: AsyncJobState): string {
 }
 
 function widgetStepRunningSeed(step: NonNullable<AsyncJobState["steps"]>[number], fallbackIndex?: number): number | undefined {
-	return runningSeed(
-		fallbackIndex,
-		step.index,
-		step.toolCount,
-		step.turnCount,
-		step.tokens?.total,
-		step.lastActivityAt,
-		step.currentToolStartedAt,
-		step.durationMs,
-	);
+	return runningSeed(fallbackIndex, step.index);
 }
 
 function widgetStepsRunningSeed(steps: Array<NonNullable<AsyncJobState["steps"]>[number]> | undefined): number | undefined {
@@ -430,17 +420,7 @@ function widgetStepsRunningSeed(steps: Array<NonNullable<AsyncJobState["steps"]>
 }
 
 function widgetJobRunningSeed(job: AsyncJobState): number | undefined {
-	return runningSeed(
-		job.updatedAt,
-		job.lastActivityAt,
-		job.toolCount,
-		job.turnCount,
-		job.totalTokens?.total,
-		job.currentStep,
-		job.runningSteps,
-		job.completedSteps,
-		widgetStepsRunningSeed(job.steps),
-	);
+	return runningSeed(job.currentStep, job.runningSteps, widgetStepsRunningSeed(job.steps));
 }
 
 function widgetJobsRunningSeed(jobs: AsyncJobState[]): number | undefined {
@@ -1342,11 +1322,11 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-	const lead = compactRowLead({ task: r.task, model: r.model ?? progress?.model, thinking: r.thinking ?? progress?.thinking });
+	const lead = compactRowLead({ task: r.task, model: r.model ?? progress?.model });
 	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
 
 	if (isRunning && r.progress) {
-		c.addChild(new Text(formatCompactThinkingHangLine(r.progress.thinkingText, width, (s) => theme.fg("dim", s)), 0, 0));
+		c.addChild(new Text(formatCompactStatsHangLine(r.progress, width, (s) => theme.fg("dim", s)), 0, 0));
 		return c;
 	}
 
@@ -1438,14 +1418,14 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
 		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-		const lead = compactRowLead({ task: r.task, model: r.model ?? (rProg && "model" in rProg ? rProg.model : undefined), thinking: r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined) });
+		const lead = compactRowLead({ task: r.task, model: r.model ?? (rProg && "model" in rProg ? rProg.model : undefined) });
 		c.addChild(animatedLine((f) => {
 			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
 			return truncLine(`  ${glyph} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
 		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
-			c.addChild(new Text(formatCompactThinkingHangLine(
-				"thinkingText" in rProg ? rProg.thinkingText : undefined,
+			c.addChild(new Text(formatCompactStatsHangLine(
+				rProg,
 				width,
 				(s) => theme.fg("dim", s),
 				"    ⎿  ",

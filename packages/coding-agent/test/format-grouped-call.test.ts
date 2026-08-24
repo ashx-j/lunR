@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatGroupedCall } from "../src/core/tools/render-utils.ts";
+import { formatGroupedCall, toolGroupTree } from "../src/core/tools/render-utils.ts";
 
 describe("formatGroupedCall", () => {
 	test("singletons keep verb and detail on one line", () => {
@@ -47,7 +47,7 @@ describe("formatGroupedCall", () => {
 		).toBe("  └─ usage-service.ts");
 	});
 
-	test("non-compact grouped rows keep the full one-line header", () => {
+	test("compact: false without tree keeps the full one-line header", () => {
 		expect(
 			formatGroupedCall({
 				role: "first",
@@ -57,5 +57,35 @@ describe("formatGroupedCall", () => {
 				detail: "resolve.ts",
 			}),
 		).toBe("● read resolve.ts");
+	});
+
+	test("still-running grouped rows tree when tree is true", () => {
+		expect(
+			formatGroupedCall({
+				role: "first",
+				compact: false,
+				tree: true,
+				dot: "●",
+				title: "read",
+				detail: "resolve.ts",
+			}),
+		).toBe("● read\n  ├─ resolve.ts");
+		expect(
+			formatGroupedCall({
+				role: "last",
+				compact: false,
+				tree: true,
+				dot: "●",
+				title: "read",
+				detail: "usage-service.ts",
+			}),
+		).toBe("  └─ usage-service.ts");
+	});
+
+	test("toolGroupTree is off only for expanded rows", () => {
+		expect(toolGroupTree({ expanded: false, isError: false })).toBe(true);
+		expect(toolGroupTree({ expanded: true, isError: false })).toBe(false);
+		expect(toolGroupTree({ expanded: false, isError: true })).toBe(true);
+		expect(toolGroupTree({ expanded: true, isError: true })).toBe(false);
 	});
 });

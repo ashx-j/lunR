@@ -108,7 +108,7 @@ export interface BridgeSession {
 	navigateTree(
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
-	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
+	): Promise<{ editorText?: string; editorImages?: ImageContent[]; cancelled: boolean; aborted?: boolean }>;
 	getContextUsage(): ContextUsage | undefined;
 	getSessionStats(): SessionStats;
 	setSessionName(name: string): void;

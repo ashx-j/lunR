@@ -8,15 +8,15 @@ function renderPlain(component: ThinkingTailComponent, width: number): string[] 
 }
 
 describe("ThinkingTailComponent", () => {
-	test("pads short input to THINKING_TAIL_LINES with content at the bottom", () => {
+	test("does not pad short input to THINKING_TAIL_LINES", () => {
 		initTheme("moon");
 
 		const component = new ThinkingTailComponent("line one", 1, 0, getMarkdownTheme());
 		const lines = renderPlain(component, 80);
 
-		expect(lines).toHaveLength(THINKING_TAIL_LINES);
-		expect(lines.slice(0, -1).every((line) => line.trim() === "")).toBe(true);
-		expect(lines[lines.length - 1]).toContain("line one");
+		expect(lines.length).toBeLessThan(THINKING_TAIL_LINES);
+		expect(lines.some((line) => line.includes("line one"))).toBe(true);
+		expect(lines.filter((line) => line.trim() === "")).toHaveLength(0);
 	});
 
 	test("keeps only the last rendered lines of long input", () => {

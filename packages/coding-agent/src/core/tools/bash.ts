@@ -18,7 +18,14 @@ import {
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { markExited as markProcessExited, register as registerProcess } from "../process-registry.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
-import { formatGroupedCall, getTextOutput, invalidArgText, str, toolStatusDotFromContext } from "./render-utils.ts";
+import {
+	formatGroupedCall,
+	getTextOutput,
+	invalidArgText,
+	str,
+	toolGroupTree,
+	toolStatusDotFromContext,
+} from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
@@ -472,6 +479,7 @@ export function createBashToolDefinition(
 				formatGroupedCall({
 					role: context.groupRole ?? "singleton",
 					compact,
+					tree: toolGroupTree(context),
 					dot: toolStatusDotFromContext(context, theme),
 					title: theme.fg("toolTitle", theme.bold("$")),
 					detail,
