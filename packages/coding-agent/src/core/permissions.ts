@@ -319,7 +319,8 @@ async function gateSwarmCall(
 		return { block: true, reason: message };
 	}
 
-	const decision = typeof resp === "string" ? resp : resp.decision;
+	const rawDecision = typeof resp === "string" ? resp : resp.decision;
+	const decision: ApprovalDecision = rawDecision === "approve" ? "once" : rawDecision;
 	const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
 	if (turnKey) turnSwarmDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}) });
 	if (decision === "session") {
