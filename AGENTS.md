@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-23. **`origin/master` = `e591b89`**. Public npm is `@ashx-j/lunr@0.2.9` (tag `v0.2.9`); this branch is **0.2.10**. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-23. **`origin/master` = `e591b89`**. Public npm target is `@ashx-j/lunr@0.2.10` (tag `v0.2.10`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Image paste chips:** clipboard paste inserts atomic `[image_1]` / `[image_2]` instead of a temp path. Submit keeps the labels in the chat card and attaches `ImageContent`. `/edit` restores chips + files. Tests: tui editor image chips + image-paste-markers + startup-input.
 
@@ -65,7 +65,7 @@ Last updated: 2026-08-23. **`origin/master` = `e591b89`**. Public npm is `@ashx-
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.9**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.10**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -81,7 +81,7 @@ Last updated: 2026-08-23. **`origin/master` = `e591b89`**. Public npm is `@ashx-
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.2.9**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.2.10**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
@@ -191,6 +191,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-23: VS Code image paste needs a host `sendSequence` for Alt+V; lunR cannot see a key the terminal never sends. Accept leaked `ESC v` even with Kitty on.
 - 2026-08-23: collapsed same-name errors stay in the tree; hoist their bodies under the last leaf so the file list is not split.
 - 2026-08-23: clipboard image paste shows `[image_n]` chips; keep the file off-screen and attach ImageContent on submit.
+- 2026-08-23: v0.2.10 ships image chips, VS Code Alt+V, quieter subagent compact rows, unlimited parallel defaults, and grok-4.5+ Responses.
 
 # Deferred
 
