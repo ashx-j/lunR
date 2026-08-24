@@ -95,7 +95,7 @@ export function flattenSteps(steps: RunnerStep[]): RunnerSubagentStep[] {
 	return flat;
 }
 
-export const DEFAULT_GLOBAL_CONCURRENCY_LIMIT = 20;
+export const DEFAULT_GLOBAL_CONCURRENCY_LIMIT = Number.MAX_SAFE_INTEGER;
 
 // lunr: stagger parallel cold starts so the first child's response begins
 // (creating the Anthropic cache entry) before siblings fire identical
@@ -215,4 +215,4 @@ export function aggregateParallelOutputs(
 		.join("\n\n");
 }
 
-export const MAX_PARALLEL_CONCURRENCY = 4;
+export const MAX_PARALLEL_CONCURRENCY = Number.MAX_SAFE_INTEGER;

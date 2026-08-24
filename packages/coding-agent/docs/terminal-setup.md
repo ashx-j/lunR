@@ -97,7 +97,7 @@ Add to `keybindings.json`:
 }
 ```
 
-On Windows, lunR pastes clipboard images with `Alt+V` (`app.clipboard.pasteImage`). VS Code owns `Ctrl+V` and right-click paste (text only). If `Alt+V` produces no toast in the lunR editor, VS Code swallowed the key. Forward it with:
+On Windows, lunR pastes clipboard images with `Alt+V` (`app.clipboard.pasteImage`). VS Code owns `Ctrl+V` and right-click paste (text only). VS Code also swallows `Alt+V` as the View menu mnemonic, so lunR never sees the key (no toast). Forward it with:
 
 ```json
 {
@@ -108,7 +108,7 @@ On Windows, lunR pastes clipboard images with `Alt+V` (`app.clipboard.pasteImage
 }
 ```
 
-A successful paste toasts `Pasted clipboard image → pi-clipboard-….png` and inserts that temp path. `Clipboard contains no image or text` means the key arrived but the OS clipboard had no image.
+A successful paste toasts `Pasted [image_1]` and inserts that chip in the editor. Submit keeps the label in the chat card and attaches the image to the model. `Clipboard contains no image or text` means the key arrived but the OS clipboard had no image.
 
 ## Windows Terminal
 

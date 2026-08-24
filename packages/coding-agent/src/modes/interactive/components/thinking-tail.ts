@@ -5,6 +5,7 @@ import { type Component, Markdown, type MarkdownTheme } from "@earendil-works/pi
  * Markdown block (same styling as the complete-run branch) but returns only
  * the last `maxLines` rendered lines, so at most N visual lines of reasoning
  * are on screen at a time and older lines disappear as new ones stream in.
+ * Short tails are not padded to `maxLines`. The slot grows 1→4, then rolls.
  * Applied render-time only; the transcript is untouched.
  */
 
@@ -33,11 +34,6 @@ export class ThinkingTailComponent implements Component {
 
 	render(width: number): string[] {
 		const lines = this.markdown.render(width);
-		const tail = lines.length <= this.maxLines ? lines : lines.slice(-this.maxLines);
-		if (tail.length >= this.maxLines) {
-			return tail;
-		}
-		const pad = this.maxLines - tail.length;
-		return [...Array.from({ length: pad }, () => ""), ...tail];
+		return lines.length <= this.maxLines ? lines : lines.slice(-this.maxLines);
 	}
 }

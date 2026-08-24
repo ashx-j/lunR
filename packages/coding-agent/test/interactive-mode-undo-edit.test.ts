@@ -39,6 +39,7 @@ type InteractiveModePrivate = {
 	handleEditCommand(this: UndoEditContext): Promise<void>;
 	handleRedoCommand(this: UndoEditContext): Promise<void>;
 	rewindLastTurn(this: UndoEditContext, command: "undo" | "edit"): Promise<{ editorText?: string } | undefined>;
+	restoreEditorFromTreeResult(this: UndoEditContext, result: { editorText?: string; editorImages?: unknown[] }): void;
 };
 
 const proto = InteractiveMode.prototype as unknown as InteractiveModePrivate;
@@ -77,6 +78,9 @@ function createContext(overrides: Partial<UndoEditContext> = {}): UndoEditContex
 	context.handleUndoCommand = proto.handleUndoCommand;
 	context.handleEditCommand = proto.handleEditCommand;
 	context.handleRedoCommand = proto.handleRedoCommand;
+	context.restoreEditorFromTreeResult = (result) => {
+		context.editor.setText(result.editorText ?? "");
+	};
 	return context;
 }
 

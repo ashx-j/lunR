@@ -1159,9 +1159,11 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 			if (data === `\x1b${rawCtrl}`) return true;
 		}
 
-		if (modifier === MODIFIERS.alt && !_kittyProtocolActive && (isLetter || isDigit || SYMBOL_KEYS.has(key))) {
-			// Legacy: alt+printable key is ESC followed by the key
-			if (data === `\x1b${key}`) return true;
+		if (modifier === MODIFIERS.alt && (isLetter || isDigit || SYMBOL_KEYS.has(key))) {
+			// Legacy: alt+printable key is ESC followed by the key.
+			// Always accept Alt+V this way: VS Code sendSequence and leaked
+			// menu-mnemonic Alt+V still arrive as ESC+v even when Kitty is on.
+			if (data === `\x1b${key}` && (key === "v" || !_kittyProtocolActive)) return true;
 		}
 
 		if (modifier === MODIFIERS.ctrl) {
@@ -1291,6 +1293,7 @@ export function parseKey(data: string): string | undefined {
 	if (data === "\x1b\x7f" || data === "\x1b\b") return "alt+backspace";
 	if (!_kittyProtocolActive && data === "\x1bB") return "alt+left";
 	if (!_kittyProtocolActive && data === "\x1bF") return "alt+right";
+	if (data === "\x1bv") return "alt+v";
 	if (!_kittyProtocolActive && data.length === 2 && data[0] === "\x1b") {
 		const code = data.charCodeAt(1);
 		if (code >= 1 && code <= 26) {

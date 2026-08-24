@@ -17,6 +17,7 @@ import {
 	renderCollapsedSearchPath,
 	shortenPath,
 	str,
+	toolGroupTree,
 	toolStatusDotFromContext,
 } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -386,6 +387,7 @@ export function createGrepToolDefinition(
 				formatGroupedCall({
 					role: context.groupRole ?? "singleton",
 					compact,
+					tree: toolGroupTree(context),
 					dot: toolStatusDotFromContext(context, theme),
 					title: theme.fg("toolTitle", theme.bold("grep")),
 					detail: formatGrepCall(args, theme, context.cwd, !context.expanded),

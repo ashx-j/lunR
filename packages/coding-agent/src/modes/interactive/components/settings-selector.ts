@@ -107,6 +107,7 @@ export interface SettingsConfig {
 	footerLsp: boolean;
 	footerContext: boolean;
 	footerTokens: boolean;
+	footerTps: boolean;
 	footerStatuses: boolean;
 	footerGit: boolean;
 	footerPlan: boolean;
@@ -168,6 +169,7 @@ export interface SettingsCallbacks {
 	onFooterLspChange: (enabled: boolean) => void;
 	onFooterContextChange: (enabled: boolean) => void;
 	onFooterTokensChange: (enabled: boolean) => void;
+	onFooterTpsChange: (enabled: boolean) => void;
 	onFooterStatusesChange: (enabled: boolean) => void;
 	onFooterGitChange: (enabled: boolean) => void;
 	onFooterPlanChange: (enabled: boolean) => void;
@@ -522,9 +524,16 @@ class CustomizeSubmenu extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "footer-tps",
+				label: "Footer: TPS counter",
+				description: "Show the ✓ 174.0 t/s · tokens-in-time segment in the footer stats line.",
+				currentValue: (bridge?.getFooterTps() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "footer-statuses",
 				label: "Footer: feature statuses",
-				description: "Show the plan/goal/swarm/research/tps status segments in the footer stats line.",
+				description: "Show the plan/goal/swarm/research status segments in the footer stats line.",
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
@@ -574,6 +583,9 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "footer-tokens":
 						callbacks.onFooterTokensChange(newValue === "on");
+						break;
+					case "footer-tps":
+						callbacks.onFooterTpsChange(newValue === "on");
 						break;
 					case "footer-statuses":
 						callbacks.onFooterStatusesChange(newValue === "on");

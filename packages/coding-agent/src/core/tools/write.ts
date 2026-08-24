@@ -9,12 +9,13 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
-	normalizeDisplayText,
 	formatGroupedCall,
+	normalizeDisplayText,
 	renderToolFileName,
 	renderToolPath,
 	replaceTabs,
 	str,
+	toolGroupTree,
 	toolStatusDotFromContext,
 } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -249,7 +250,8 @@ export function createWriteToolDefinition(
 				component.cache = undefined;
 			}
 			const compact = !context.isPartial && !context.expanded && !context.isError;
-			if (compact) {
+			const tree = toolGroupTree(context);
+			if (compact || (tree && context.groupRole && context.groupRole !== "singleton")) {
 				const pathDisplay = renderToolFileName(rawPath, theme, context.cwd);
 				let detail = pathDisplay;
 				if (fileContent === null) {
@@ -258,7 +260,8 @@ export function createWriteToolDefinition(
 				component.setText(
 					formatGroupedCall({
 						role: context.groupRole ?? "singleton",
-						compact: true,
+						compact,
+						tree,
 						dot: toolStatusDotFromContext(context, theme),
 						title: theme.fg("toolTitle", theme.bold("write")),
 						detail,

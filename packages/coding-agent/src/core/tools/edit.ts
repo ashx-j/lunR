@@ -28,6 +28,7 @@ import {
 	str,
 	type ToolGroupRole,
 	type ToolStatusDotState,
+	toolGroupTree,
 	toolStatusDot,
 } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -264,17 +265,21 @@ function buildEditCallComponent(
 	dotState: ToolStatusDotState,
 	// lunr: compact-by-default — finished, successful, non-expanded calls render
 	// header-only; the diff preview stays while streaming and when expanded.
+	// Grouped still-running cards tree immediately; singleton streaming keeps the preview.
 	compact = false,
 	role: ToolGroupRole = "singleton",
+	tree = compact,
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
-	const pathDisplay = formatEditCall(args, theme, cwd, compact);
+	const grouped = tree && role !== "singleton";
+	const pathDisplay = formatEditCall(args, theme, cwd, compact || grouped);
 	component.addChild(
 		new Text(
 			formatGroupedCall({
 				role,
 				compact,
+				tree,
 				dot: toolStatusDot(dotState, theme),
 				title: theme.fg("toolTitle", theme.bold("edit")),
 				detail: pathDisplay,
@@ -284,7 +289,7 @@ function buildEditCallComponent(
 		),
 	);
 
-	if (compact || !component.preview) {
+	if (compact || grouped || !component.preview) {
 		return component;
 	}
 
@@ -425,6 +430,7 @@ export function createEditToolDefinition(
 				// lunr: compact-by-default
 				!context.isPartial && !context.expanded && !context.isError,
 				context.groupRole ?? "singleton",
+				toolGroupTree(context),
 			);
 		},
 		renderResult(result, _options, theme, context) {
@@ -460,6 +466,7 @@ export function createEditToolDefinition(
 						context.isPartial ? "pending" : context.isError ? "error" : "success",
 						compact,
 						context.groupRole ?? "singleton",
+						toolGroupTree(context),
 					);
 				}
 			}

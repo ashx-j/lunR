@@ -54,7 +54,7 @@ import {
 	formatSearchChrome,
 	formatSearchDetail,
 } from "./render-search-chrome.ts";
-import { formatGroupedCall, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
+import { formatGroupedCall, toolGroupTree, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
 import { loadEnabledModelPatterns, modelMatchesEnabledPatterns } from "./summary-model-scope.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
@@ -1563,6 +1563,7 @@ export default function (pi: ExtensionAPI) {
 				formatGroupedCall({
 					role: context?.groupRole ?? "singleton",
 					compact,
+					tree: context ? toolGroupTree(context) : false,
 					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
 					title: theme.fg("toolTitle", theme.bold("search")),
 					detail: theme.fg("accent", detail),
@@ -1816,6 +1817,7 @@ export default function (pi: ExtensionAPI) {
 				formatGroupedCall({
 					role: context?.groupRole ?? "singleton",
 					compact,
+					tree: context ? toolGroupTree(context) : false,
 					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
 					title: theme.fg("toolTitle", theme.bold("fetch")),
 					detail: theme.fg("accent", detail),

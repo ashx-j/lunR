@@ -43,6 +43,7 @@ interface CustomizeBridgeForPrompt {
 	getFooterLsp?(): boolean;
 	getFooterContext?(): boolean;
 	getFooterTokens?(): boolean;
+	getFooterTps?(): boolean;
 	getFooterStatuses?(): boolean;
 	getFooterGit?(): boolean;
 	getFooterPlan?(): boolean;
@@ -67,6 +68,7 @@ function lunrFooterToggles(): {
 	lsp: boolean;
 	context: boolean;
 	tokens: boolean;
+	tps: boolean;
 	statuses: boolean;
 	git: boolean;
 	plan: boolean;
@@ -78,6 +80,7 @@ function lunrFooterToggles(): {
 		lsp: bridge?.getFooterLsp?.() ?? false,
 		context: bridge?.getFooterContext?.() ?? true,
 		tokens: bridge?.getFooterTokens?.() ?? true,
+		tps: bridge?.getFooterTps?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
 		git: bridge?.getFooterGit?.() ?? true,
 		plan: bridge?.getFooterPlan?.() ?? true,
@@ -671,9 +674,9 @@ function renderStatsLine(
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
 		// lunr: status segments are toggle-gated via the customize bridge:
-		// footerStatuses gates plan/goal/swarm/research/tps, footerMcp gates
-		// mcp/mcp-auth, footerLsp gates lsp. Publishers keep calling
-		// ctx.ui.setStatus harmlessly when their segment is hidden.
+		// footerStatuses gates plan/goal/swarm/research, footerTps gates tps,
+		// footerMcp gates mcp/mcp-auth, footerLsp gates lsp. Publishers keep
+		// calling ctx.ui.setStatus harmlessly when their segment is hidden.
 		// lunr: plan/goal/swarm/research join the mode zone; tps/mcp/lsp stay piped.
 		const modeKeys: string[] = footerToggles.statuses ? ["plan", "goal", "swarm", "research"] : [];
 		for (const key of modeKeys) {
@@ -681,7 +684,7 @@ function renderStatsLine(
 			if (v) modeZone.push(color(theme, "white", stripAnsi(v)));
 		}
 		const pipedKeys: string[] = [];
-		if (footerToggles.statuses) pipedKeys.push("tps");
+		if (footerToggles.tps) pipedKeys.push("tps");
 		if (footerToggles.mcp) pipedKeys.push("mcp", "mcp-auth");
 		if (footerToggles.lsp) pipedKeys.push("lsp");
 		for (const key of pipedKeys) {

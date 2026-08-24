@@ -3089,7 +3089,13 @@ export class AgentSession {
 	async navigateTree(
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},
-	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }> {
+	): Promise<{
+		editorText?: string;
+		editorImages?: ImageContent[];
+		cancelled: boolean;
+		aborted?: boolean;
+		summaryEntry?: BranchSummaryEntry;
+	}> {
 		const oldLeafId = this.sessionManager.getLeafId();
 
 		// No-op if already at target
@@ -3203,11 +3209,13 @@ export class AgentSession {
 			// Determine the new leaf position based on target type
 			let newLeafId: string | null;
 			let editorText: string | undefined;
+			let editorImages: ImageContent[] | undefined;
 
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
 				editorText = this._extractUserMessageText(targetEntry.message.content);
+				editorImages = this._extractUserMessageImages(targetEntry.message.content);
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
@@ -3268,7 +3276,7 @@ export class AgentSession {
 
 			// Emit to custom tools
 
-			return { editorText, cancelled: false, summaryEntry };
+			return { editorText, editorImages, cancelled: false, summaryEntry };
 		} finally {
 			this._branchSummaryAbortController = undefined;
 		}
@@ -3303,6 +3311,17 @@ export class AgentSession {
 				.join("");
 		}
 		return "";
+	}
+
+	private _extractUserMessageImages(
+		content: string | Array<{ type: string; mimeType?: string; data?: string }>,
+	): ImageContent[] | undefined {
+		if (typeof content === "string" || !Array.isArray(content)) return undefined;
+		const images = content.filter(
+			(part): part is ImageContent =>
+				part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string",
+		);
+		return images.length > 0 ? images : undefined;
 	}
 
 	/**

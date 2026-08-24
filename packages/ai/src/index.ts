@@ -45,7 +45,11 @@ export * from "./utils/typebox-helpers.ts";
 export * from "./utils/validation.ts";
 export {
 	parseXaiGrok4Minor,
+	shouldUseXaiResponsesApi,
 	withXaiEffortMetadata,
 	XAI_GROK45_THINKING_LEVEL_MAP,
 	XAI_GROK46_THINKING_LEVEL_MAP,
+	XAI_RESPONSES_COMPAT,
+	XAI_RESPONSES_EXCLUDED_MODEL_IDS,
+	XAI_RESPONSES_MIN_MINOR,
 } from "./xai-effort.ts";

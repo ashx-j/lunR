@@ -1,9 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
-	collapseCompactThinkingText,
 	compactRowLead,
-	formatCompactThinkingHangLine,
+	formatCompactStatsHangLine,
 	renderSubagentResult,
 	stripTaskChrome,
 } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
@@ -16,13 +15,13 @@ describe("stripTaskChrome", () => {
 });
 
 describe("compactRowLead", () => {
-	it("prefers model + thinking over Read from chrome", () => {
+	it("prefers the model over Read from chrome", () => {
 		expect(
 			compactRowLead({
 				task: "[Read from: C:\\foo]\nDo the work",
 				model: "xai/grok-4:high",
 			}),
-		).toBe("grok-4 · thinking high");
+		).toBe("grok-4");
 	});
 
 	it("never returns the path when there is no model", () => {
@@ -34,19 +33,27 @@ describe("compactRowLead", () => {
 	});
 });
 
-describe("compact thinking hang line", () => {
-	it("collapses newlines to a single line", () => {
-		expect(collapseCompactThinkingText("line one\n\nline two")).toBe("line one line two");
+describe("compact stats hang line", () => {
+	it("prints tool count, tokens, and elapsed time", () => {
+		expect(
+			formatCompactStatsHangLine({
+				toolCount: 52,
+				tokens: 172000,
+				durationMs: 9 * 60_000 + 56_000,
+			}, 80),
+		).toBe("  ⎿  52 tool uses · 172k token · 9m56s");
 	});
 
-	it("falls back to thinking… when empty", () => {
-		expect(collapseCompactThinkingText(undefined)).toBe("thinking…");
-		expect(collapseCompactThinkingText("   ")).toBe("thinking…");
+	it("falls back to zeros when progress is empty", () => {
+		expect(formatCompactStatsHangLine(undefined, 80)).toBe("  ⎿  0 tool uses · 0 token · 0ms");
 	});
 
 	it("truncates to terminal width without wrapping", () => {
-		const line = formatCompactThinkingHangLine("word ".repeat(80), 40);
-		expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+		const line = formatCompactStatsHangLine(
+			{ toolCount: 12, tokens: 999999, durationMs: 12_000 },
+			20,
+		);
+		expect(visibleWidth(line)).toBeLessThanOrEqual(20);
 		expect(line.split("\n")).toHaveLength(1);
 	});
 });
@@ -58,7 +65,7 @@ describe("renderSingleCompact thinking line", () => {
 		italic: (value: string) => value,
 	};
 
-	it("shows header stats and one truncated thinking line, not activity", () => {
+	it("shows header model plus one stats hang line, not thinking text", () => {
 		const result = renderSubagentResult(
 			{
 				content: [{ type: "text", text: "running" }],
@@ -98,14 +105,17 @@ describe("renderSingleCompact thinking line", () => {
 		);
 		const lines = result.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 		expect(lines[0]).toContain("grok-4.5");
-		expect(lines[0]).toContain("thinking high");
+		expect(lines[0]).not.toContain("thinking high");
 		expect(lines[0]).toContain("worker");
 		expect(lines[0]).toContain("52 tool uses");
 		expect(lines[0]).toContain("172k token");
-		expect(lines.some((line) => line.includes("Considering the next read of src/foo.ts"))).toBe(true);
+		expect(lines.some((line) => line.includes("Considering the next read of src/foo.ts"))).toBe(false);
 		expect(lines.some((line) => /needs attention/i.test(line))).toBe(false);
 		expect(lines.some((line) => /read:/.test(line))).toBe(false);
 		expect(lines.filter((line) => line.includes("⎿"))).toHaveLength(1);
+		expect(lines[1]).toContain("52 tool uses");
+		expect(lines[1]).toContain("172k token");
+		expect(lines[1]).toContain("9m56s");
 		expect(lines.length).toBe(2);
 	});
 });

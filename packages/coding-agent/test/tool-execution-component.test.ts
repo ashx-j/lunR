@@ -2,6 +2,7 @@ import { join, resolve } from "node:path";
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
+import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
@@ -10,9 +11,8 @@ import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
 import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
+import { formatGroupedCall, toolGroupTree } from "../src/core/tools/render-utils.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
-import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
-import { formatGroupedCall } from "../src/core/tools/render-utils.ts";
 import { applySameToolGrouping, ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -44,7 +44,7 @@ function headerIndex(lines: string[], needle: string): number {
 	return lines.findIndex((line) => stripAnsi(line).includes(needle));
 }
 
-function compactRead(toolCallId: string, path: string): ToolExecutionComponent {
+function compactRead(toolCallId: string, path: string, isPartial = false): ToolExecutionComponent {
 	const component = new ToolExecutionComponent(
 		"read",
 		toolCallId,
@@ -54,7 +54,23 @@ function compactRead(toolCallId: string, path: string): ToolExecutionComponent {
 		createFakeTui(),
 		process.cwd(),
 	);
-	component.updateResult({ content: [{ type: "text", text: path }], details: undefined, isError: false }, false);
+	if (!isPartial) {
+		component.updateResult({ content: [{ type: "text", text: path }], details: undefined, isError: false }, false);
+	}
+	return component;
+}
+
+function compactReadError(toolCallId: string, path: string, error: string): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(
+		"read",
+		toolCallId,
+		{ path },
+		{},
+		createReadToolDefinition(process.cwd()),
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult({ content: [{ type: "text", text: error }], details: undefined, isError: true }, false);
 	return component;
 }
 
@@ -184,6 +200,7 @@ function compactSearch(toolCallId: string, query: string, totalResults: number):
 				formatGroupedCall({
 					role: context.groupRole ?? "singleton",
 					compact,
+					tree: toolGroupTree(context),
 					dot: "●",
 					title: theme.fg("toolTitle", theme.bold("search")),
 					detail: theme.fg("accent", detail),
@@ -830,6 +847,15 @@ describe("ToolExecutionComponent density", () => {
 		expect(lines.map(visibleLine).join("\n")).not.toContain("read resolve.ts");
 	});
 
+	test("consecutive still-running reads print the verb once and hang files off a tree", () => {
+		const lines = renderGroupedTools(
+			compactRead("tool-read-pending-a", "resolve.ts", true),
+			compactRead("tool-read-pending-b", "model-runtime.ts", true),
+		);
+		assertTreeGroup(lines, "read", ["resolve.ts", "model-runtime.ts"]);
+		expect(lines.map(visibleLine).join("\n")).not.toContain("read resolve.ts");
+	});
+
 	test("three compact reads stay a single tree with pad only at the group edges", () => {
 		const lines = renderGroupedTools(
 			compactRead("tool-read-a", "resolve.ts"),
@@ -1114,5 +1140,54 @@ describe("ToolExecutionComponent density", () => {
 
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("ripgrep exited with code 2");
+	});
+
+	test("grouped read error keeps the file tree then prints the error under the last leaf", () => {
+		const error = "EISDIR: illegal operation on a directory, read";
+		const leaves = ["pi-web-access", "format-grouped-call.test.ts", "render-utils.ts"];
+		const lines = renderGroupedTools(
+			compactReadError("tool-read-err", "pi-web-access", error),
+			compactRead("tool-read-a", "format-grouped-call.test.ts"),
+			compactRead("tool-read-b", "render-utils.ts"),
+		);
+		const visible = lines.map(visibleLine);
+		const titleIdx = visible.findIndex((line) => line.trim() === "● read");
+		expect(titleIdx).toBeGreaterThan(0);
+		for (let i = 0; i < leaves.length; i++) {
+			const branch = i === leaves.length - 1 ? "└─" : "├─";
+			expect(visible[titleIdx + 1 + i]?.trim().startsWith(branch)).toBe(true);
+			expect(visible[titleIdx + 1 + i]).toContain(leaves[i]);
+		}
+		const lastLeafIdx = titleIdx + leaves.length;
+		const errorIdx = visible.findIndex((line) => line.includes(error));
+		expect(errorIdx).toBeGreaterThan(lastLeafIdx);
+		expect(visible.filter((line) => line.includes(error))).toHaveLength(1);
+		expect(visible.filter((line) => line.trim() === "● read")).toHaveLength(1);
+	});
+
+	test("singleton read error still shows the body under its own header", () => {
+		const error = "EISDIR: illegal operation on a directory, read";
+		const lines = renderGroupedTools(compactReadError("tool-read-lone-err", "pi-web-access", error));
+		const headerIdx = headerIndex(lines, "read pi-web-access");
+		const errorIdx = headerIndex(lines, error);
+		expect(headerIdx).toBeGreaterThan(0);
+		expect(errorIdx).toBeGreaterThan(headerIdx);
+		expect(lines.map(visibleLine).some((line) => line.trim() === "● read")).toBe(false);
+	});
+
+	test("expanded grouped read error keeps its body on that card", () => {
+		const error = "EISDIR: illegal operation on a directory, read";
+		const failed = compactReadError("tool-read-err-exp", "pi-web-access", error);
+		failed.setExpanded(true);
+		const lines = renderGroupedTools(failed, compactRead("tool-read-ok", "render-utils.ts"));
+		const visible = lines.map(visibleLine);
+		const joined = visible.join("\n");
+		expect(joined).toContain("read pi-web-access");
+		expect(joined).toContain(error);
+		const errorIdx = visible.findIndex((line) => line.includes(error));
+		const leafIdx = visible.findIndex((line) => line.includes("render-utils.ts"));
+		expect(errorIdx).toBeGreaterThan(0);
+		expect(leafIdx).toBeGreaterThan(errorIdx);
+		expect(visible[leafIdx]?.trim().startsWith("└─")).toBe(true);
 	});
 });

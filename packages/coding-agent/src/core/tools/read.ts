@@ -19,6 +19,7 @@ import {
 	renderToolFileName,
 	replaceTabs,
 	str,
+	toolGroupTree,
 	toolStatusDotFromContext,
 } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -334,6 +335,7 @@ export function createReadToolDefinition(
 				formatGroupedCall({
 					role: context.groupRole ?? "singleton",
 					compact,
+					tree: toolGroupTree(context),
 					dot: toolStatusDotFromContext(context, theme),
 					title,
 					detail,
