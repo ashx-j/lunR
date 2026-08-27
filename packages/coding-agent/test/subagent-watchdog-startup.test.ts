@@ -106,4 +106,54 @@ describe("subagent watchdog startup", () => {
 		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(6);
 		expect(review).toHaveBeenCalledOnce();
 	});
+
+	it("rebaselines lazily after an enabled-disabled-enabled session transition", async () => {
+		const cwd = "C:/repo";
+		let current = repoSignature(cwd, "initial-enabled-state");
+		computeWatchdogRepoChangeSignature.mockImplementation(() => current);
+		const review = vi.fn(() => ({ warnings: [] }));
+		const runtime = new MainWatchdogRuntime({
+			cwd,
+			resolveConfig: (_cwd, options) => {
+				const main = options?.session?.main;
+				const override =
+					typeof main === "object" && main !== null ? (main as { enabled?: unknown }).enabled : undefined;
+				return settings(override === undefined ? true : override === true);
+			},
+			review,
+			reviewChangesOnly: true,
+		});
+
+		runtime.bindSession({ cwd });
+		runtime.handleBeforeAgentStart({ prompt: "enabled turn" }, { cwd });
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(1);
+
+		expect(runtime.setSessionEnabled(false).enabled).toBe(false);
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(1);
+		current = repoSignature(cwd, "changed-while-disabled", ["src/changed-while-disabled.ts"]);
+		runtime.handleBeforeAgentStart({ prompt: "disabled turn" }, { cwd });
+		runtime.enqueueDelta("Edited src/changed-while-disabled.ts while disabled.");
+		await runtime.handleAgentEnd({}, { cwd });
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(1);
+		expect(review).not.toHaveBeenCalled();
+
+		expect(runtime.setSessionEnabled(true).enabled).toBe(true);
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(1);
+		runtime.handleBeforeAgentStart({ prompt: "first re-enabled turn" }, { cwd });
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(2);
+		runtime.enqueueDelta("The disabled-period edit is now the fresh baseline.");
+		await runtime.handleAgentEnd({}, { cwd });
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(3);
+		expect(review).not.toHaveBeenCalled();
+
+		runtime.handleBeforeAgentStart({ prompt: "later re-enabled turn" }, { cwd });
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(4);
+		current = repoSignature(cwd, "changed-after-reenable", ["src/changed-after-reenable.ts"]);
+		runtime.enqueueDelta("Edited src/changed-after-reenable.ts during this enabled turn.");
+		await runtime.handleAgentEnd({}, { cwd });
+
+		expect(computeWatchdogRepoChangeSignature).toHaveBeenCalledTimes(5);
+		expect(review).toHaveBeenCalledOnce();
+		expect(runtime.getSnapshot().changedPaths).toEqual(["src/changed-after-reenable.ts"]);
+	});
 });
