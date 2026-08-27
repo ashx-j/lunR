@@ -91,6 +91,7 @@ Last updated: 2026-08-28 (watchdog cold-start fix). **`origin/master` = `29908dd
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
 - Watchdog cold-start verification (2026-08-28): full tsgo sequence passed; focused Vitest 25/25; touched-file Biome passed (watchdog source remains excluded); dirty-worktree benchmark prompt-ready 2.23s, deferred attach 265ms, subagent factory 6ms. Full coding-agent Vitest: 2236 passed / 125 unrelated current-master Windows failures. Full Biome: 35 pre-existing errors + 1 warning outside touched files.
+- Watchdog PR CI caveat: the workflow still runs the forbidden `npm run build` in `packages/ai`; live catalog generation currently produces a Cloudflare transport TS2353 before reaching this patch. The explicit offline tsgo sequence above is green.
 
 ---
 
