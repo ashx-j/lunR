@@ -159,17 +159,14 @@ export class MainWatchdogRuntime {
 		this.configResult = this.resolveConfig(this.cwd);
 		this.guardMaxWarnings = this.configResult.config.maxWarnings;
 		this.guard = new WatchdogEmissionGuard({ maxWarnings: this.guardMaxWarnings });
-		this.turnStartChangeSignature = this.currentRepoChangeSignature();
-		this.lastReviewedChangeSignature = this.turnStartChangeSignature?.key;
 	}
 
 	bindSession(ctx: ContextLike): void {
 		this.cwd = ctx.cwd;
 		this.sessionOverrideEnabled = undefined;
 		this.sessionModelOverride = undefined;
-		this.reset("session_start", { clearReviewInputSignature: true, resetChangeSignature: true, clearLspLedger: true });
+		this.reset("session_start", { clearReviewInputSignature: true, clearChangeSignature: true, clearLspLedger: true });
 		this.refreshConfig(ctx.cwd);
-		this.resetRepoChangeBaseline();
 	}
 
 	refreshConfig(cwd = this.cwd): WatchdogSettingsResult {
@@ -189,7 +186,10 @@ export class MainWatchdogRuntime {
 			this.guardMaxWarnings = this.configResult.config.maxWarnings;
 			this.guard = new WatchdogEmissionGuard({ maxWarnings: this.guardMaxWarnings });
 		}
-		if (wasEnabled && !this.isEnabled()) this.invalidateActiveReview("watchdog disabled");
+		if (wasEnabled && !this.isEnabled()) {
+			this.invalidateActiveReview("watchdog disabled");
+			this.clearRepoChangeBaseline();
+		}
 		return this.configResult;
 	}
 
@@ -227,7 +227,7 @@ export class MainWatchdogRuntime {
 		return this.getSnapshot();
 	}
 
-	reset(_reason = "reset", options: { clearReviewInputSignature?: boolean; resetChangeSignature?: boolean; clearLspLedger?: boolean } = {}): void {
+	reset(_reason = "reset", options: { clearReviewInputSignature?: boolean; clearChangeSignature?: boolean; clearLspLedger?: boolean } = {}): void {
 		this.abortActiveAgentEnd();
 		this.epoch++;
 		this.status = "idle";
@@ -246,7 +246,7 @@ export class MainWatchdogRuntime {
 			this.lastLspSnapshot = undefined;
 		}
 		if (options.clearReviewInputSignature) this.lastReviewInputSignature = undefined;
-		if (options.resetChangeSignature) this.resetRepoChangeBaseline({ reviewed: true });
+		if (options.clearChangeSignature) this.clearRepoChangeBaseline();
 		this.guard.reset();
 		this.resolveWaiters(true);
 	}
@@ -262,10 +262,9 @@ export class MainWatchdogRuntime {
 		this.activeReviewId = undefined;
 		this.activeReviewWarning = undefined;
 		this.lastReviewInputSignature = undefined;
-		this.currentChangedPaths = undefined;
+		this.clearRepoChangeBaseline();
 		this.lastLspSnapshot = undefined;
 		this.lspLedger.reset();
-		this.observedRepoEditThisTurn = false;
 		this.resolveWaiters(false);
 	}
 
@@ -533,13 +532,19 @@ export class MainWatchdogRuntime {
 	}
 
 	private currentRepoChangeSignature(cwd = this.cwd): WatchdogRepoChangeSignature | undefined {
-		return this.reviewChangesOnly ? computeWatchdogRepoChangeSignature(cwd) : undefined;
+		return this.reviewChangesOnly && this.isEnabled() ? computeWatchdogRepoChangeSignature(cwd) : undefined;
 	}
 
-	private resetRepoChangeBaseline(options: { cwd?: string; reviewed?: boolean } = {}): void {
-		this.turnStartChangeSignature = this.currentRepoChangeSignature(options.cwd ?? this.cwd);
-		if (options.reviewed) this.lastReviewedChangeSignature = this.turnStartChangeSignature?.key;
-		else this.lastReviewedChangeSignature ??= this.turnStartChangeSignature?.key;
+	private clearRepoChangeBaseline(): void {
+		this.turnStartChangeSignature = undefined;
+		this.lastReviewedChangeSignature = undefined;
+		this.currentChangedPaths = undefined;
+		this.observedRepoEditThisTurn = false;
+	}
+
+	private resetRepoChangeBaseline(): void {
+		this.turnStartChangeSignature = this.currentRepoChangeSignature();
+		this.lastReviewedChangeSignature ??= this.turnStartChangeSignature?.key;
 		this.currentChangedPaths = this.turnStartChangeSignature?.changedPaths;
 		this.observedRepoEditThisTurn = false;
 	}
