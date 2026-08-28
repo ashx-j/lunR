@@ -1,115 +1,67 @@
 import { describe, expect, test } from "vitest";
+import { getDocsPath, getExamplesPath, getReadmePath } from "../src/config.ts";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
 
 describe("buildSystemPrompt", () => {
-	describe("empty tools", () => {
-		test("shows (none) for empty tools list", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: [],
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain("Available tools:\n(none)");
+	test("builds the lunR default prompt with runtime model and path values", () => {
+		const cwd = "C:\\work\\project";
+		const prompt = buildSystemPrompt({
+			modelSlug: "openai/gpt-5.6",
+			selectedTools: ["read", "bash", "edit", "write"],
+			contextFiles: [],
+			skills: [],
+			cwd,
 		});
 
-		test("includes behavior block even with no tools", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: [],
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain("Five facts drive every rule below");
-			expect(prompt).toContain("## Behavior");
-		});
+		expect(prompt).toContain(
+			"You are an expert coding assistant currently running ''openai/gpt-5.6'', operating inside lunR, a coding agent harness.",
+		);
+		expect(prompt).toContain("Current working directory: ''C:/work/project''");
+		expect(prompt).toContain("Behavior guidelines:");
+		expect(prompt).toContain("Guidelines:");
+		expect(prompt).toContain("lunR documentation");
+		expect(prompt).toContain(`- README: ${getReadmePath()}`);
+		expect(prompt).toContain(`- Documentation: ${getDocsPath()}`);
+		expect(prompt).toContain(`- Examples: ${getExamplesPath()}`);
 	});
 
-	describe("default tools", () => {
-		test("includes all default tools when snippets are provided", () => {
-			const prompt = buildSystemPrompt({
-				toolSnippets: {
-					read: "Read file contents",
-					bash: "Execute bash commands",
-					edit: "Make surgical edits",
-					write: "Create or overwrite files",
-				},
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain("- read:");
-			expect(prompt).toContain("- bash:");
-			expect(prompt).toContain("- edit:");
-			expect(prompt).toContain("- write:");
+	test("does not duplicate API tool definitions or tool prompt metadata", () => {
+		const prompt = buildSystemPrompt({
+			modelSlug: "test/model",
+			selectedTools: ["read", "dynamic_tool"],
+			toolSnippets: { dynamic_tool: "Run dynamic test behavior" },
+			promptGuidelines: ["Use dynamic_tool for project summaries."],
+			contextFiles: [],
+			skills: [],
+			cwd: process.cwd(),
 		});
 
-		test("instructs models to resolve pi docs and examples under absolute base paths", () => {
-			const prompt = buildSystemPrompt({
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain(
-				"- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
-			);
-		});
+		expect(prompt).not.toContain("Available tools:");
+		expect(prompt).not.toContain("Run dynamic test behavior");
+		expect(prompt).not.toContain("Use dynamic_tool for project summaries.");
 	});
 
-	describe("custom tool snippets", () => {
-		test("includes custom tools in available tools section when promptSnippet is provided", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "dynamic_tool"],
-				toolSnippets: {
-					dynamic_tool: "Run dynamic test behavior",
-				},
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain("- dynamic_tool: Run dynamic test behavior");
+	test("uses an explicit fallback when no model is selected", () => {
+		const prompt = buildSystemPrompt({
+			contextFiles: [],
+			skills: [],
+			cwd: process.cwd(),
 		});
 
-		test("omits custom tools from available tools section when promptSnippet is not provided", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "dynamic_tool"],
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).not.toContain("dynamic_tool");
-		});
+		expect(prompt).toContain("currently running ''no model selected''");
 	});
 
-	describe("prompt guidelines", () => {
-		test("appends promptGuidelines to default guidelines", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "dynamic_tool"],
-				promptGuidelines: ["Use dynamic_tool for project summaries."],
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt).toContain("- Use dynamic_tool for project summaries.");
+	test("keeps custom system prompt replacement behavior unchanged", () => {
+		const prompt = buildSystemPrompt({
+			customPrompt: "Custom prompt",
+			modelSlug: "test/model",
+			appendSystemPrompt: "Appended instructions",
+			contextFiles: [],
+			skills: [],
+			cwd: "C:\\custom\\cwd",
 		});
 
-		test("deduplicates and trims promptGuidelines", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "dynamic_tool"],
-				promptGuidelines: ["Use dynamic_tool for summaries.", "  Use dynamic_tool for summaries.  ", "   "],
-				contextFiles: [],
-				skills: [],
-				cwd: process.cwd(),
-			});
-
-			expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
-		});
+		expect(prompt).toBe("Custom prompt\n\nAppended instructions\nCurrent working directory: C:/custom/cwd");
+		expect(prompt).not.toContain("test/model");
 	});
 });
