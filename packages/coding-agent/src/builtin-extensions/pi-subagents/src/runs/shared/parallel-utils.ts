@@ -4,7 +4,10 @@ export interface RunnerSubagentStep {
 	parentSessionId?: string;
 	/** Live parent permission mode snapshotted at spawn. */
 	parentPermissionMode?: string;
-	agent: string;
+	agent?: string;
+	childId?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	task: string;
 	importAsyncRoot?: {
 		runId: string;

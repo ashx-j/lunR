@@ -13,16 +13,16 @@ describe("lunr child context is always fresh", () => {
 		expect(lunrChildContext("fresh")).toBe("fresh");
 	});
 
-	it("forces worker-style defaultContext fork to fresh in the policy", () => {
+	it("forces every child to a fresh session", () => {
 		const omitted = lunrContextPolicy({});
 		expect(omitted.usesFork).toBe(false);
 		expect(omitted.params.context).toBe("fresh");
-		expect(omitted.contextForAgent("worker")).toBe("fresh");
+		expect(omitted.contextForAgent("any-child")).toBe("fresh");
 
 		const explicitFork = lunrContextPolicy({ context: "fork" });
 		expect(explicitFork.usesFork).toBe(false);
 		expect(explicitFork.params.context).toBe("fresh");
-		expect(explicitFork.contextForAgent("oracle")).toBe("fresh");
+		expect(explicitFork.contextForAgent("other-child")).toBe("fresh");
 	});
 
 	it("list/get view never advertises fork", () => {

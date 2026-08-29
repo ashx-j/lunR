@@ -59,7 +59,8 @@ import {
 	Semaphore,
 } from "../shared/parallel-utils.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { filterToolsForInheritedChild, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { resolveChildExcludeTools } from "../shared/child-tools.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
@@ -1118,6 +1119,11 @@ async function runSingleStep(
 			})
 			: undefined;
 		const parentPermissionMode = step.parentPermissionMode ?? snapshotParentPermissionMode(step.parentSessionId);
+		const childPermission = step.permissions === "read-only" || parentPermissionMode === "plan" ? "read-only" : "full";
+		const excludeTools = resolveChildExcludeTools({
+			permissions: childPermission,
+			fanoutAuthorized: Array.isArray(step.tools) && step.tools.includes("subagent"),
+		});
 		const { args, env, tempDir, toolDiagnosticPath } = buildPiArgs({
 			parentSessionId: step.parentSessionId,
 			baseArgs: ["--mode", "json", "-p"],
@@ -1126,21 +1132,21 @@ async function runSingleStep(
 			sessionDir,
 			sessionFile: step.sessionFile,
 			model: candidate,
-			inheritProjectContext: step.inheritProjectContext,
-			inheritSkills: step.inheritSkills,
+			inheritProjectContext: true,
+			inheritSkills: false,
 			requireReadTool: Boolean(step.skills?.length),
-			tools: filterToolsForInheritedChild(step.tools, parentPermissionMode),
-			extensions: step.extensions,
-			subagentOnlyExtensions: step.subagentOnlyExtensions,
-			systemPrompt: appendTurnBudgetSystemPrompt(step.systemPrompt ?? "", ctx.turnBudget),
-			systemPromptMode: step.systemPromptMode,
-			mcpDirectTools: step.mcpDirectTools,
+			excludeTools,
+			childPermission,
+			childId: step.childId ?? step.agent,
+			childDescription: step.description ?? step.agent,
+			systemPrompt: appendTurnBudgetSystemPrompt(step.systemPrompt && !step.systemPrompt.includes("You are `") ? step.systemPrompt : "", ctx.turnBudget) || undefined,
+			systemPromptMode: "append",
 			cwd: step.cwd ?? ctx.cwd,
-			promptFileStem: step.agent,
+			promptFileStem: step.childId ?? step.agent,
 			intercomSessionName: ctx.childIntercomTarget,
 			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
 			runId: ctx.id,
-			childAgentName: step.agent,
+			childAgentName: step.childId ?? step.agent,
 			childIndex: ctx.flatIndex,
 			parentEventSink: ctx.nestedRoute?.eventSink,
 			parentControlInbox: ctx.nestedRoute?.controlInbox,

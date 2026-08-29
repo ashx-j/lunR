@@ -8,7 +8,8 @@ import { splitKnownThinkingSuffix } from "../../shared/model-info.ts";
 import { existsSync, unlinkSync } from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import type { AgentConfig } from "../../agents/agents.ts";
+import type { ChildSpec } from "../../shared/types.ts";
+import { childRowLabel } from "../../shared/types.ts";
 import {
 	ensureArtifactsDir,
 	getArtifactPaths,
@@ -47,13 +48,14 @@ import {
 	extractTextFromContent,
 } from "../../shared/utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../agents/skills.ts";
-import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
+import { resolveChildExcludeTools } from "../shared/child-tools.ts";
+import { normalizeSkillInput } from "../../agents/skills.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { filterToolsForInheritedChild, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { PLAN_MODE_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
@@ -193,7 +195,7 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 
 async function runSingleAttempt(
 	runtimeCwd: string,
-	agent: AgentConfig,
+	spec: ChildSpec,
 	task: string,
 	model: string | undefined,
 	options: RunSyncOptions,
@@ -210,18 +212,22 @@ async function runSingleAttempt(
 		originalTask?: string;
 	},
 ): Promise<SingleResult> {
-	const effectiveThinking = options.thinkingOverride ?? agent.thinking;
+	const effectiveThinking = options.thinkingOverride;
 	const modelArg = applyThinkingSuffix(model, effectiveThinking, options.thinkingOverride !== undefined);
 	const watchdogConfig = resolveWatchdogConfig(options.cwd ?? runtimeCwd);
 	const childWatchdog = watchdogConfig.ok
 		? resolveChildWatchdogConfig({
 			config: watchdogConfig.config,
-			agent: agent.name,
+			agent: spec.childId,
 			runId: options.runId,
 			childIndex: options.index ?? 0,
 		})
 		: undefined;
-	const parentPermissionMode = snapshotParentPermissionMode(options.parentSessionId);
+	const excludeTools = resolveChildExcludeTools({
+		permissions: spec.effectivePermissions,
+		fanoutAuthorized: spec.fanoutAuthorized,
+	});
+	const appendPrompt = appendTurnBudgetSystemPrompt(shared.systemPrompt, options.turnBudget);
 	const { args, env: sharedEnv, tempDir, toolDiagnosticPath } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
@@ -230,21 +236,21 @@ async function runSingleAttempt(
 		sessionFile: options.sessionFile,
 		model: modelArg,
 		thinking: effectiveThinking,
-		systemPromptMode: agent.systemPromptMode,
-		inheritProjectContext: agent.inheritProjectContext,
-		inheritSkills: agent.inheritSkills,
+		systemPromptMode: "append",
+		inheritProjectContext: true,
+		inheritSkills: false,
 		requireReadTool: Boolean(shared.resolvedSkillNames?.length),
-		tools: filterToolsForInheritedChild(agent.tools, parentPermissionMode),
-		extensions: agent.extensions,
-		subagentOnlyExtensions: agent.subagentOnlyExtensions,
-		systemPrompt: appendTurnBudgetSystemPrompt(shared.systemPrompt, options.turnBudget),
-		mcpDirectTools: agent.mcpDirectTools,
+		excludeTools,
+		childPermission: spec.effectivePermissions,
+		childId: spec.childId,
+		childDescription: spec.description,
+		systemPrompt: appendPrompt || undefined,
 		cwd: options.cwd ?? runtimeCwd,
-		promptFileStem: agent.name,
+		promptFileStem: spec.childId,
 		intercomSessionName: options.intercomSessionName,
 		orchestratorIntercomTarget: options.orchestratorIntercomTarget,
 		runId: options.runId,
-		childAgentName: agent.name,
+		childAgentName: spec.childId,
 		childIndex: options.index ?? 0,
 		parentEventSink: options.nestedRoute?.eventSink,
 		parentControlInbox: options.nestedRoute?.controlInbox,
@@ -255,12 +261,14 @@ async function runSingleAttempt(
 		toolBudget: options.toolBudget,
 		childWatchdog,
 		waitToolEnabled: options.waitToolEnabled,
-		parentPermissionMode,
 	});
 
 	const thinkingFromModel = modelArg ? splitKnownThinkingSuffix(modelArg).thinkingSuffix.slice(1) || undefined : undefined;
 	const result: SingleResult = {
-		agent: agent.name,
+		childId: spec.childId,
+		description: spec.description,
+		permissions: spec.effectivePermissions,
+		agent: spec.description,
 		task: shared.originalTask ?? task,
 		exitCode: 0,
 		messages: [],
@@ -297,7 +305,10 @@ async function runSingleAttempt(
 
 	const progress: AgentProgress = {
 		index: options.index ?? 0,
-		agent: agent.name,
+		childId: spec.childId,
+		description: spec.description,
+		permissions: spec.effectivePermissions,
+		agent: spec.description,
 		status: "running",
 		task,
 		skills: shared.resolvedSkillNames,
@@ -484,10 +495,10 @@ async function runSingleAttempt(
 			const hasRoute = event.runId !== undefined || event.agent !== undefined || event.childIndex !== undefined;
 			if (hasRoute) {
 				if (typeof event.runId === "string" && event.runId !== options.runId) return;
-				if (typeof event.agent === "string" && event.agent !== agent.name) return;
+				if (typeof event.agent === "string" && event.agent !== spec.childId && event.agent !== spec.description) return;
 				if (typeof event.childIndex === "number" && event.childIndex !== (options.index ?? 0)) return;
 			} else if (!intercomStarted) return;
-			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted: true, runId: options.runId, agent: agent.name, childIndex: options.index ?? 0 });
+			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted: true, runId: options.runId, agent: spec.childId, childIndex: options.index ?? 0 });
 			detachForIntercom();
 		});
 
@@ -534,7 +545,7 @@ async function runSingleAttempt(
 				from: previous,
 				to: "needs_attention",
 				runId: options.runId,
-				agent: agent.name,
+				agent: spec.description,
 				index: options.index,
 				ts: now,
 				lastActivityAt: progress.lastActivityAt,
@@ -561,10 +572,10 @@ async function runSingleAttempt(
 				from: previous,
 				to: "active_long_running",
 				runId: options.runId,
-				agent: agent.name,
+				agent: spec.description,
 				index: options.index,
 				ts: now,
-				message: `${agent.name} is still active but long-running`,
+				message: `${spec.description} is still active but long-running`,
 				reason,
 				turns: result.usage.turns,
 				tokens: progress.tokens,
@@ -685,7 +696,10 @@ async function runSingleAttempt(
 					current: childWatchdogState,
 					event: evt,
 					runId: options.runId,
-					agent: agent.name,
+					childId: spec.childId,
+		description: spec.description,
+		permissions: spec.effectivePermissions,
+		agent: spec.description,
 					childIndex: options.index ?? 0,
 				});
 				if (!next) return;
@@ -810,7 +824,7 @@ async function runSingleAttempt(
 					}, mutatingFailureWindowMs);
 					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
 						emitNeedsAttention(now, {
-							message: `${agent.name} needs attention after repeated mutating tool failures`,
+							message: `${spec.description} needs attention after repeated mutating tool failures`,
 							reason: "tool_failures",
 							currentTool: toolSnapshot.tool,
 							currentPath: toolSnapshot.path,
@@ -1112,13 +1126,12 @@ async function runSingleAttempt(
 		const note = turnBudgetSoftNote(result.turnBudget, result.turnBudget.wrapUpRequestedAtTurn ?? result.turnBudget.turnCount);
 		fullOutput = fullOutput.trim() ? `${note}\n\n${fullOutput}` : note;
 	}
-	const completionGuard = result.exitCode === 0 && !result.error && agent.completionGuard !== false
+	const completionGuard = result.exitCode === 0 && !result.error
 		? evaluateCompletionMutationGuard({
-			agent: agent.name,
+			agent: spec.effectivePermissions,
 			task: shared.originalTask ?? task,
 			messages: result.messages,
-			tools: agent.tools,
-			mcpDirectTools: agent.mcpDirectTools,
+			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
 		})
 		: undefined;
 	if (completionGuard?.triggered && !observedMutationAttempt) {
@@ -1129,11 +1142,11 @@ async function runSingleAttempt(
 		emitControlEvent(buildControlEvent({
 			from: progress.activityState,
 			to: "needs_attention",
-			runId: options.runId ?? agent.name,
-			agent: agent.name,
+			runId: options.runId ?? spec.childId,
+			agent: spec.description,
 			index: options.index,
 			ts: Date.now(),
-			message: `${agent.name} completed without making edits for an implementation task`,
+			message: `${spec.description} completed without making edits for an implementation task`,
 			reason: "completion_guard",
 		}));
 	}
@@ -1175,26 +1188,34 @@ async function runSingleAttempt(
  */
 export async function runSync(
 	runtimeCwd: string,
-	agents: AgentConfig[],
-	agentName: string,
-	task: string,
+	spec: ChildSpec,
 	options: RunSyncOptions,
 ): Promise<SingleResult> {
-	const agent = agents.find((a) => a.name === agentName);
-	if (!agent) {
+	const task = spec.task;
+	const label = childRowLabel(spec);
+	const parentMode = snapshotParentPermissionMode(options.parentSessionId);
+	const resolvedPermissions = resolveChildPermissions(parentMode, spec.requestedPermissions);
+	if (!resolvedPermissions.ok) {
+		const error = resolvedPermissions.error || PLAN_MODE_WRITE_SPAWN_ERROR;
 		return {
-			agent: agentName,
+			childId: spec.childId,
+			description: spec.description,
+			permissions: spec.effectivePermissions,
+			agent: spec.description,
 			task,
 			exitCode: 1,
 			messages: [],
 			usage: emptyUsage(),
-			error: `Unknown agent: ${agentName}`,
+			error,
 		};
 	}
-	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${agentName})`);
+	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`);
 	if (outputModeValidationError) {
 		return {
-			agent: agentName,
+			childId: spec.childId,
+			description: spec.description,
+			permissions: spec.effectivePermissions,
+			agent: spec.description,
 			task,
 			exitCode: 1,
 			messages: [],
@@ -1206,9 +1227,8 @@ export async function runSync(
 
 	const shareEnabled = options.share === true;
 	const effectiveAcceptance = resolveEffectiveAcceptance({
-		explicit: options.acceptance,
-		agentName,
-		acceptanceRole: agent.acceptanceRole,
+		explicit: options.acceptance ?? spec.acceptance,
+		permissions: spec.effectivePermissions,
 		task,
 		mode: options.acceptanceContext?.mode ?? "single",
 		async: options.acceptanceContext?.async,
@@ -1218,18 +1238,21 @@ export async function runSync(
 	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance);
 	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
-	const skillNames = options.skills ?? agent.skills ?? [];
-	const skillCwd = options.cwd ?? runtimeCwd;
+	const skillNames = options.skills ?? (spec.skill === false ? [] : (normalizeSkillInput(spec.skill) || []));
+	const skillCwd = options.cwd ?? spec.cwd ?? runtimeCwd;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
 		skillNames,
 		skillCwd,
 		runtimeCwd,
-		agent.skillPath,
-		agent.filePath ? path.dirname(agent.filePath) : skillCwd,
+		undefined,
+		skillCwd,
 	);
 	if (skillNames.some((skill) => skill.trim() === "pi-subagents") && missingSkills.includes("pi-subagents")) {
 		return {
-			agent: agentName,
+			childId: spec.childId,
+			description: spec.description,
+			permissions: spec.effectivePermissions,
+			agent: spec.description,
 			task,
 			exitCode: 1,
 			messages: [],
@@ -1237,20 +1260,17 @@ export async function runSync(
 			error: "Skills not found: pi-subagents",
 		};
 	}
-	let systemPrompt = agent.systemPrompt?.trim() || "";
+	let systemPrompt = "";
 	if (resolvedSkills.length > 0) {
-		const skillInjection = buildSkillInjection(resolvedSkills);
-		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillInjection}` : skillInjection;
+		systemPrompt = buildSkillInjection(resolvedSkills);
 	}
-	const memoryInjection = buildAgentMemoryInjection(agent, skillCwd);
-	if (memoryInjection) {
-		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${memoryInjection}` : memoryInjection;
-	}
-	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, options.outputPath, agent);
+	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, options.outputPath, {
+		tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
+	});
 
 	const candidates = buildModelCandidates(
-		options.modelOverride ?? agent.model,
-		agent.fallbackModels,
+		options.modelOverride ?? spec.model,
+		undefined,
 		options.availableModels,
 		options.preferredModelProvider,
 		{ scope: options.modelScope },
@@ -1266,10 +1286,10 @@ export async function runSync(
 	let jsonlPath: string | undefined;
 	let transcriptWriter: ChildTranscriptWriter | undefined;
 	if (options.artifactsDir && options.artifactConfig?.enabled !== false) {
-		artifactPathsResult = getArtifactPaths(options.artifactsDir, options.runId, agentName, options.index);
+		artifactPathsResult = getArtifactPaths(options.artifactsDir, options.runId, spec.childId, options.index);
 		ensureArtifactsDir(options.artifactsDir);
 		if (options.artifactConfig?.includeInput !== false) {
-				writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentName}\n\n${taskWithAcceptance}`);
+				writeArtifact(artifactPathsResult.inputPath, `# Task for ${label}\n\n${taskWithAcceptance}`);
 		}
 		if (options.artifactConfig?.includeJsonl !== false) {
 			jsonlPath = artifactPathsResult.jsonlPath;
@@ -1279,7 +1299,7 @@ export async function runSync(
 				transcriptPath: artifactPathsResult.transcriptPath,
 				source: "foreground",
 				runId: options.runId,
-				agent: agentName,
+				agent: spec.childId,
 				childIndex: options.index,
 				cwd: options.cwd ?? runtimeCwd,
 			});
@@ -1291,7 +1311,9 @@ export async function runSync(
 		if (!artifactPathsResult || options.artifactConfig?.enabled === false || options.artifactConfig?.includeMetadata === false) return;
 		writeMetadata(artifactPathsResult.metadataPath, {
 			runId: options.runId,
-			agent: agentName,
+			childId: spec.childId,
+			description: spec.description,
+			permissions: spec.effectivePermissions,
 			task,
 			exitCode: target.exitCode,
 			usage: target.usage,
@@ -1353,7 +1375,7 @@ export async function runSync(
 	for (let i = 0; i < modelsToTry.length; i++) {
 		const candidate = modelsToTry[i];
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-		const result = await runSingleAttempt(runtimeCwd, agent, taskWithAcceptance, candidate, detachedAwareOptions, {
+		const result = await runSingleAttempt(runtimeCwd, spec, taskWithAcceptance, candidate, detachedAwareOptions, {
 			sessionEnabled,
 			systemPrompt,
 			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
@@ -1373,7 +1395,7 @@ export async function runSync(
 		totalDurationMs += result.progressSummary?.durationMs ?? 0;
 		const attemptSucceeded = result.exitCode === 0 && !result.error;
 		const attempt: ModelAttempt = {
-			model: result.model ?? candidate ?? agent.model ?? "default",
+			model: result.model ?? candidate ?? spec.model ?? "default",
 			success: attemptSucceeded,
 			exitCode: result.exitCode,
 			error: result.error,
@@ -1393,7 +1415,10 @@ export async function runSync(
 	}
 
 	const result = lastResult ?? {
-		agent: agentName,
+		childId: spec.childId,
+		description: spec.description,
+		permissions: spec.effectivePermissions,
+		agent: spec.description,
 		task,
 		exitCode: 1,
 		messages: [],

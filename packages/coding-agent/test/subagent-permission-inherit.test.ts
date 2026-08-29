@@ -12,18 +12,15 @@ import {
 import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
 import {
 	applyInheritedSubagentPermissions,
-	filterToolsForInheritedChild,
-	isWriteCapableSubagent,
 	PLAN_MODE_WRITE_SPAWN_ERROR,
-	planModeWriteSpawnError,
-	resolveChildPermissionMode,
+	resolveChildPermissions,
+	resolveChildRuntimePermissionMode,
+	resolveRequestedChildPermission,
 	SUBAGENT_CHILD_ENV,
+	SUBAGENT_CHILD_PERMISSION_ENV,
 	SUBAGENT_PARENT_PERMISSION_MODE_ENV,
 	snapshotParentPermissionMode,
 } from "../src/core/subagent-permission-inherit.ts";
-
-const WORKER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
-const SCOUT_TOOLS = ["read", "grep", "find", "ls", "bash", "write"];
 
 describe("subagent permission inherit", () => {
 	beforeEach(() => {
@@ -38,17 +35,55 @@ describe("subagent permission inherit", () => {
 		registerApprovalHandler(undefined);
 	});
 
-	it("maps parent auto/manual/yolo to child auto, and parent plan to child plan", () => {
-		expect(resolveChildPermissionMode("auto")).toBe("auto");
-		expect(resolveChildPermissionMode("manual")).toBe("auto");
-		expect(resolveChildPermissionMode("yolo")).toBe("auto");
-		expect(resolveChildPermissionMode("plan")).toBe("plan");
+	it("resolves omitted permissions to full", () => {
+		expect(resolveRequestedChildPermission(undefined)).toBe("full");
+		expect(resolveRequestedChildPermission("full")).toBe("full");
+		expect(resolveRequestedChildPermission("read-only")).toBe("read-only");
 	});
 
-	it("treats missing or unknown parent mode as auto on a real child", () => {
-		expect(resolveChildPermissionMode(undefined)).toBe("auto");
-		expect(resolveChildPermissionMode("")).toBe("auto");
-		expect(resolveChildPermissionMode("weird")).toBe("auto");
+	it("maps full to child auto and read-only to child plan", () => {
+		expect(resolveChildRuntimePermissionMode("full")).toBe("auto");
+		expect(resolveChildRuntimePermissionMode("read-only")).toBe("plan");
+		expect(resolveChildRuntimePermissionMode(undefined)).toBe("auto");
+	});
+
+	it("lets manual/yolo/auto parents launch full and read-only children", () => {
+		for (const parent of ["manual", "yolo", "auto"] as const) {
+			expect(resolveChildPermissions(parent, undefined)).toEqual({
+				ok: true,
+				requested: "full",
+				effective: "full",
+			});
+			expect(resolveChildPermissions(parent, "full")).toEqual({
+				ok: true,
+				requested: "full",
+				effective: "full",
+			});
+			expect(resolveChildPermissions(parent, "read-only")).toEqual({
+				ok: true,
+				requested: "read-only",
+				effective: "read-only",
+			});
+		}
+	});
+
+	it("lets plan parents launch only explicit read-only children", () => {
+		expect(resolveChildPermissions("plan", "read-only")).toEqual({
+			ok: true,
+			requested: "read-only",
+			effective: "read-only",
+		});
+		expect(resolveChildPermissions("plan", "full")).toEqual({
+			ok: false,
+			requested: "full",
+			error: PLAN_MODE_WRITE_SPAWN_ERROR,
+		});
+		expect(resolveChildPermissions("plan", undefined)).toEqual({
+			ok: false,
+			requested: "full",
+			error: PLAN_MODE_WRITE_SPAWN_ERROR,
+		});
+		expect(PLAN_MODE_WRITE_SPAWN_ERROR).toContain('permissions: "read-only"');
 	});
 
 	it("does not apply inherit to non-child print processes", () => {
@@ -65,48 +100,38 @@ describe("subagent permission inherit", () => {
 		expect(getPermissionMode()).toBe("manual");
 	});
 
-	it("applies auto to a child when the parent-mode env is missing", () => {
+	it("applies auto to a full child when the permission env is missing", () => {
 		expect(applyInheritedSubagentPermissions({ [SUBAGENT_CHILD_ENV]: "1" })).toBe("auto");
 		expect(getPermissionMode()).toBe("auto");
 	});
 
-	it("applies plan to a child when the parent was in plan", () => {
+	it("applies plan to a read-only child", () => {
 		expect(
 			applyInheritedSubagentPermissions({
 				[SUBAGENT_CHILD_ENV]: "1",
-				[SUBAGENT_PARENT_PERMISSION_MODE_ENV]: "plan",
+				[SUBAGENT_CHILD_PERMISSION_ENV]: "read-only",
 			}),
 		).toBe("plan");
 		expect(getPermissionMode()).toBe("plan");
 	});
 
-	it("lets a child of auto/manual/yolo write without an approval handler", async () => {
-		for (const parent of ["auto", "manual", "yolo"] as const) {
-			resetPermissions("manual");
-			registerApprovalHandler(undefined);
-			applyInheritedSubagentPermissions({
-				[SUBAGENT_CHILD_ENV]: "1",
-				[SUBAGENT_PARENT_PERMISSION_MODE_ENV]: parent,
-			});
-			expect(await gateToolCall("read", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
-			expect(await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
-			expect(await gateToolCall("write", { path: "/cwd/b.ts" }, "/cwd")).toBeUndefined();
-			expect(await gateToolCall("bash", { command: "echo hi" }, "/cwd")).toBeUndefined();
-			const blocked = await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd");
-			expect(blocked?.reason).not.toBe(NO_HANDLER_REASON);
-		}
-	});
-
-	it("lets a child of a missing parent mode write without an approval handler", async () => {
-		applyInheritedSubagentPermissions({ [SUBAGENT_CHILD_ENV]: "1" });
-		expect(await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
-		expect(await gateToolCall("write", { path: "/cwd/b.ts" }, "/cwd")).toBeUndefined();
-	});
-
-	it("blocks write tools for a child of a plan parent", async () => {
+	it("lets a full child write without an approval handler", async () => {
 		applyInheritedSubagentPermissions({
 			[SUBAGENT_CHILD_ENV]: "1",
-			[SUBAGENT_PARENT_PERMISSION_MODE_ENV]: "plan",
+			[SUBAGENT_CHILD_PERMISSION_ENV]: "full",
+		});
+		expect(await gateToolCall("read", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("write", { path: "/cwd/b.ts" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("bash", { command: "echo hi" }, "/cwd")).toBeUndefined();
+		const blocked = await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd");
+		expect(blocked?.reason).not.toBe(NO_HANDLER_REASON);
+	});
+
+	it("blocks write tools for a read-only child", async () => {
+		applyInheritedSubagentPermissions({
+			[SUBAGENT_CHILD_ENV]: "1",
+			[SUBAGENT_CHILD_PERMISSION_ENV]: "read-only",
 		});
 		expect(await gateToolCall("read", { path: "/cwd/a.ts" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("ls", {}, "/cwd")).toBeUndefined();
@@ -132,49 +157,20 @@ describe("subagent permission inherit", () => {
 		expect(snapshotParentPermissionMode()).toBe("plan");
 	});
 
-	it("classifies worker/delegate/custom editors as write-capable", () => {
-		expect(isWriteCapableSubagent("worker", WORKER_TOOLS)).toBe(true);
-		expect(isWriteCapableSubagent("delegate", WORKER_TOOLS)).toBe(true);
-		expect(isWriteCapableSubagent("pkg.custom-editor", ["read", "edit"])).toBe(true);
-		expect(isWriteCapableSubagent("custom", ["read", "write"])).toBe(true);
-		expect(isWriteCapableSubagent("custom", undefined)).toBe(true);
-	});
-
-	it("does not treat scout/reviewer/researcher as write-capable", () => {
-		expect(isWriteCapableSubagent("scout", SCOUT_TOOLS)).toBe(false);
-		expect(isWriteCapableSubagent("reviewer", ["read", "grep", "bash", "edit", "write"])).toBe(false);
-		expect(isWriteCapableSubagent("researcher", ["read", "write", "web_search"])).toBe(false);
-		expect(isWriteCapableSubagent("status", ["read", "ls"])).toBe(false);
-	});
-
-	it("fails plan-parent writer launches and allows read-only agents", () => {
-		expect(planModeWriteSpawnError("plan", [{ name: "worker", tools: WORKER_TOOLS }])).toBe(
-			PLAN_MODE_WRITE_SPAWN_ERROR,
-		);
-		expect(planModeWriteSpawnError("plan", [{ name: "custom", tools: ["edit"] }])).toBe(PLAN_MODE_WRITE_SPAWN_ERROR);
-		expect(planModeWriteSpawnError("plan", [{ name: "scout", tools: SCOUT_TOOLS }])).toBeUndefined();
-		expect(planModeWriteSpawnError("plan", [{ name: "reviewer" }])).toBeUndefined();
-		expect(planModeWriteSpawnError("yolo", [{ name: "worker", tools: WORKER_TOOLS }])).toBeUndefined();
-		expect(planModeWriteSpawnError("manual", [{ name: "worker", tools: WORKER_TOOLS }])).toBeUndefined();
-	});
-
-	it("strips mutating tools from a plan child's allowlist and leaves writer tools otherwise", () => {
-		expect(filterToolsForInheritedChild(WORKER_TOOLS, "plan")).toEqual(["read", "grep", "find", "ls", "bash"]);
-		expect(filterToolsForInheritedChild(WORKER_TOOLS, "yolo")).toEqual(WORKER_TOOLS);
-		expect(filterToolsForInheritedChild(WORKER_TOOLS, "manual")).toEqual(WORKER_TOOLS);
-		expect(filterToolsForInheritedChild(["read", "code_rewrite", "write"], "plan")).toEqual(["read"]);
-	});
-
-	it("writes the parent permission mode into the child env", () => {
-		const { env } = buildPiArgs({
+	it("writes the resolved child permission into the child env", () => {
+		const { env, args } = buildPiArgs({
 			baseArgs: ["--mode", "json", "-p"],
 			task: "do the work",
 			sessionEnabled: false,
 			inheritProjectContext: true,
 			inheritSkills: false,
-			parentPermissionMode: "yolo",
+			childPermission: "full",
+			excludeTools: ["cron", "memory_add"],
 		});
 		expect(env[SUBAGENT_CHILD_ENV]).toBe("1");
-		expect(env[SUBAGENT_PARENT_PERMISSION_MODE_ENV]).toBe("yolo");
+		expect(env[SUBAGENT_CHILD_PERMISSION_ENV]).toBe("full");
+		expect(env[SUBAGENT_PARENT_PERMISSION_MODE_ENV]).toBe("");
+		expect(args).toContain("--exclude-tools");
+		expect(args.some((arg) => String(arg).includes("cron"))).toBe(true);
 	});
 });

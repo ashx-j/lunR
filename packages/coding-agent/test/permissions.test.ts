@@ -203,46 +203,46 @@ describe("permissions", () => {
 
 describe("swarm helpers", () => {
 	it("counts parallel tasks with count multipliers", () => {
-		expect(effectiveSwarmCount({ tasks: [{ agent: "a" }, { agent: "b" }] })).toBe(2);
-		expect(effectiveSwarmCount({ tasks: [{ agent: "a", count: 3 }] })).toBe(3);
-		expect(effectiveSwarmCount({ tasks: [{ agent: "a", count: 0 }, { agent: "b" }] })).toBe(2);
+		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A" }, { task: "b", description: "B" }] })).toBe(2);
+		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A", count: 3 }] })).toBe(3);
+		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A", count: 0 }, { task: "b", description: "B" }] })).toBe(2);
 	});
 
 	it("counts chain parallel fan-out blocks", () => {
 		expect(
 			effectiveSwarmCount({
-				chain: [{ agent: "a" }, { parallel: [{ agent: "b" }, { agent: "c", count: 2 }] }],
+				chain: [{ task: "a", description: "A" }, { parallel: [{ task: "b", description: "B" }, { task: "c", description: "C", count: 2 }] }],
 			}),
 		).toBe(3);
 	});
 
 	it("counts zero for single-agent and management calls", () => {
-		expect(effectiveSwarmCount({ agent: "scout", task: "x" })).toBe(0);
-		expect(effectiveSwarmCount({ action: "list" })).toBe(0);
-		expect(effectiveSwarmCount({ chain: [{ agent: "a" }, { agent: "b" }] })).toBe(0);
+		expect(effectiveSwarmCount({ task: "x", description: "Scout files" })).toBe(0);
+		expect(effectiveSwarmCount({ action: "status" })).toBe(0);
+		expect(effectiveSwarmCount({ chain: [{ task: "a", description: "A" }, { task: "b", description: "B" }] })).toBe(0);
 	});
 
 	it("counts same-turn sibling SINGLE calls toward the swarm threshold", () => {
 		const assistantMessage = {
 			content: [
-				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "reviewer", task: "three" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "one", description: "One" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "two", description: "Two" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "three", description: "Three" } },
 			],
 		};
-		expect(effectiveSwarmCountForTurn({ agent: "scout", task: "one" }, assistantMessage)).toBe(3);
-		expect(effectiveSwarmCountForTurn({ tasks: [{ agent: "a" }, { agent: "b" }] }, assistantMessage)).toBe(3);
+		expect(effectiveSwarmCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(3);
+		expect(effectiveSwarmCountForTurn({ tasks: [{ task: "a", description: "A" }, { task: "b", description: "B" }] }, assistantMessage)).toBe(3);
 	});
 
 	it("ignores async and management siblings when counting same-turn singles", () => {
 		const assistantMessage = {
 			content: [
-				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two", async: true } },
-				{ type: "toolCall", name: "subagent", arguments: { action: "list" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "one", description: "One" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "two", description: "Two", async: true } },
+				{ type: "toolCall", name: "subagent", arguments: { action: "status" } },
 			],
 		};
-		expect(effectiveSwarmCountForTurn({ agent: "scout", task: "one" }, assistantMessage)).toBe(1);
+		expect(effectiveSwarmCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(1);
 	});
 
 	it("detects explicit /swarm turns from the last user message", () => {
@@ -262,9 +262,9 @@ describe("swarm helpers", () => {
 describe("agent-swarm gate", () => {
 	const threeTasks = {
 		tasks: [
-			{ agent: "a", task: "one" },
-			{ agent: "b", task: "two" },
-			{ agent: "c", task: "three" },
+			{ task: "one", description: "One" },
+			{ task: "two", description: "Two" },
+			{ task: "three", description: "Three" },
 		],
 	};
 
@@ -281,8 +281,8 @@ describe("agent-swarm gate", () => {
 
 	it("allows subagent calls at or below the threshold without a handler", async () => {
 		setPermissionMode("manual");
-		expect(await gateToolCall("subagent", { agent: "scout", task: "x" }, "/cwd")).toBeUndefined();
-		expect(await gateToolCall("subagent", { tasks: [{ agent: "a" }, { agent: "b" }] }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("subagent", { task: "x", description: "Scout files" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("subagent", { tasks: [{ task: "a", description: "A" }, { task: "b", description: "B" }] }, "/cwd")).toBeUndefined();
 	});
 
 	it("prompts for >2 parallel subagents in manual mode", async () => {
@@ -340,7 +340,7 @@ describe("agent-swarm gate", () => {
 			return "session" as ApprovalResponse;
 		});
 		await gateToolCall("subagent", threeTasks, "/cwd");
-		expect(await gateToolCall("subagent", { tasks: [{ agent: "x", count: 5 }] }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("subagent", { tasks: [{ task: "x", description: "X", count: 5 }] }, "/cwd")).toBeUndefined();
 		expect(calls).toBe(1);
 	});
 
@@ -358,9 +358,9 @@ describe("agent-swarm gate", () => {
 		setPermissionMode("manual");
 		const assistantMessage = {
 			content: [
-				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "reviewer", task: "three" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "one", description: "One" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "two", description: "Two" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "three", description: "Three" } },
 			],
 		};
 		let calls = 0;
@@ -371,9 +371,9 @@ describe("agent-swarm gate", () => {
 			return "once" as ApprovalResponse;
 		});
 		const options = { assistantMessage };
-		expect(await gateToolCall("subagent", { agent: "scout", task: "one" }, "/cwd", undefined, options)).toBeUndefined();
-		expect(await gateToolCall("subagent", { agent: "worker", task: "two" }, "/cwd", undefined, options)).toBeUndefined();
-		expect(await gateToolCall("subagent", { agent: "reviewer", task: "three" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(await gateToolCall("subagent", { task: "one", description: "One" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(await gateToolCall("subagent", { task: "two", description: "Two" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(await gateToolCall("subagent", { task: "three", description: "Three" }, "/cwd", undefined, options)).toBeUndefined();
 		expect(calls).toBe(1);
 	});
 
@@ -381,9 +381,9 @@ describe("agent-swarm gate", () => {
 		setPermissionMode("yolo");
 		const assistantMessage = {
 			content: [
-				{ type: "toolCall", name: "subagent", arguments: { agent: "scout", task: "one" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "worker", task: "two" } },
-				{ type: "toolCall", name: "subagent", arguments: { agent: "reviewer", task: "three" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "one", description: "One" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "two", description: "Two" } },
+				{ type: "toolCall", name: "subagent", arguments: { task: "three", description: "Three" } },
 			],
 		};
 		let calls = 0;
@@ -392,8 +392,8 @@ describe("agent-swarm gate", () => {
 			return { decision: "reject", feedback: "use tasks" };
 		});
 		const options = { assistantMessage };
-		const first = await gateToolCall("subagent", { agent: "scout", task: "one" }, "/cwd", undefined, options);
-		const second = await gateToolCall("subagent", { agent: "worker", task: "two" }, "/cwd", undefined, options);
+		const first = await gateToolCall("subagent", { task: "one", description: "One" }, "/cwd", undefined, options);
+		const second = await gateToolCall("subagent", { task: "two", description: "Two" }, "/cwd", undefined, options);
 		expect(first).toEqual({ block: true, reason: "Agent swarm rejected by user. use tasks" });
 		expect(second).toEqual({ block: true, reason: "Agent swarm rejected by user. use tasks" });
 		expect(calls).toBe(1);

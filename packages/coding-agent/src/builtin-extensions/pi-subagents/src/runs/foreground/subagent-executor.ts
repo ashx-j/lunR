@@ -5,7 +5,9 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
-import { planModeWriteSpawnError, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { allocateChildId, normalizeChildSpec } from "../../shared/child-spec.ts";
+import type { ChildSpec } from "../../shared/types.ts";
 import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
@@ -100,6 +102,7 @@ import {
 	type SingleResult,
 	type ToolBudgetConfig,
 	type TurnBudgetConfig,
+	type ChildSpec,
 	type SubagentRunMode,
 	type SubagentState,
 	ASYNC_DIR,
@@ -121,8 +124,10 @@ import {
 
 const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset", "watchdog.configure"]);
 interface TaskParam {
-	agent: string;
+	agent?: string;
 	task: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	cwd?: string;
 	count?: number;
 	output?: string | boolean;
@@ -145,6 +150,8 @@ export interface SubagentParamsLike {
 	lines?: number;
 	agent?: string;
 	task?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	message?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
@@ -166,13 +173,14 @@ export interface SubagentParamsLike {
 	artifacts?: boolean;
 	includeProgress?: boolean;
 	model?: string;
+	tier?: "light" | "standard" | "heavy";
 	thinking?: string | false;
 	scope?: string;
 	target?: string;
 	skill?: string | string[] | boolean;
 	output?: string | boolean;
 	outputMode?: "inline" | "file-only";
-	agentScope?: unknown;
+	tier?: "light" | "standard" | "heavy";
 	chainDir?: string;
 	acceptance?: AcceptanceInput;
 	schedule?: string;
@@ -190,7 +198,7 @@ interface ExecutorDeps {
 	tempArtifactsDir: string;
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
-	discoverAgents: (cwd: string, scope: AgentScope) => { agents: AgentConfig[]; modelScope?: ModelScopeConfig };
+	discoverAgents?: (cwd: string, scope: AgentScope) => { agents: AgentConfig[]; modelScope?: ModelScopeConfig };
 	allowMutatingManagementActions?: boolean;
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 }
@@ -784,7 +792,7 @@ function appendStepToAsyncChain(input: {
 	}
 
 	const scope: AgentScope = resolveExecutionAgentScope(input.params.agentScope);
-	const discoveredForAppend = input.deps.discoverAgents(input.requestCwd, scope);
+	const discoveredForAppend = input.deps.discoverAgents?.(input.requestCwd, scope) ?? { agents: [] };
 	const agents = discoveredForAppend.agents;
 	const appendWriteSpawnError = planModeWriteSpawnError(
 		snapshotParentPermissionMode(input.deps.state.currentSessionId),
@@ -1143,7 +1151,7 @@ async function resumeAsyncRun(input: {
 	input.deps.state.currentSessionId = resolveCurrentSessionId(input.ctx.sessionManager);
 	const effectiveCwd = target.cwd ?? input.requestCwd;
 	const scope: AgentScope = resolveExecutionAgentScope(input.params.agentScope);
-	const discovered = input.deps.discoverAgents(effectiveCwd, scope);
+	const discovered = input.deps.discoverAgents?.(effectiveCwd, scope) ?? { agents: [] };
 	const discoveredAgents = discovered.agents;
 	const modelScope = discovered.modelScope;
 	const sessionName = resolveIntercomSessionTarget(input.deps.pi.getSessionName(), input.ctx.sessionManager.getSessionId());
@@ -1426,7 +1434,7 @@ function validateExecutionInput(
 			content: [
 				{
 					type: "text",
-					text: `Provide exactly one mode. Agents: ${agents.map((a) => a.name).join(", ") || "none"}`,
+					text: "Provide exactly one mode: { task, description, permissions? }, { tasks: [...] }, or { chain: [...] }.",
 				},
 			],
 			isError: true,
@@ -1443,9 +1451,9 @@ function validateExecutionInput(
 		};
 	}
 
-	if (hasSingle && params.agent && !agents.find((agent) => agent.name === params.agent)) {
+	if (hasSingle && !params.description) {
 		return {
-			content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
+			content: [{ type: "text", text: "description is required and must be a concise single-line label (max 80 characters)." }],
 			isError: true,
 			details: { mode: "single" as const, results: [] },
 		};
@@ -1454,9 +1462,9 @@ function validateExecutionInput(
 	if (hasTasks && params.tasks) {
 		for (let i = 0; i < params.tasks.length; i++) {
 			const task = params.tasks[i]!;
-			if (!agents.find((agent) => agent.name === task.agent)) {
+			if (!task.description) {
 				return {
-					content: [{ type: "text", text: `Unknown agent: ${task.agent} (task ${i + 1})` }],
+					content: [{ type: "text", text: `description is required (task ${i + 1})` }],
 					isError: true,
 					details: { mode: "parallel" as const, results: [] },
 				};
@@ -1497,11 +1505,18 @@ function validateExecutionInput(
 		}
 		for (let i = 0; i < params.chain.length; i++) {
 			const step = params.chain[i] as ChainStep;
-			const stepAgents = getStepAgents(step);
-			for (const agentName of stepAgents) {
-				if (!agents.find((a) => a.name === agentName)) {
+			if (!isParallelStep(step) && !isDynamicParallelStep(step) && !(step as SequentialStep).description) {
+				return {
+					content: [{ type: "text", text: `description is required (step ${i + 1})` }],
+					isError: true,
+					details: { mode: "chain" as const, results: [] },
+				};
+			}
+			if (isParallelStep(step)) {
+				const missing = step.parallel.findIndex((t) => !t.description);
+				if (missing !== -1) {
 					return {
-						content: [{ type: "text", text: `Unknown agent: ${agentName} (step ${i + 1})` }],
+						content: [{ type: "text", text: `description is required (step ${i + 1}, parallel task ${missing + 1})` }],
 						isError: true,
 						details: { mode: "chain" as const, results: [] },
 					};
@@ -1540,7 +1555,7 @@ function validateExecutionChainBindings(params: SubagentParamsLike, dynamicFanou
 function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
 	if ((params.chain?.length ?? 0) > 0) return "chain";
 	if ((params.tasks?.length ?? 0) > 0) return "parallel";
-	if (params.agent) return "single";
+	if (params.task) return "single";
 	return "single";
 }
 
@@ -2088,7 +2103,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			artifactConfig,
 			shareEnabled,
 			sessionRoot,
-			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride),
+			sessionFile: sessionFileForTask(spec.childId, 0, modelOverride),
 			skills,
 			output: effectiveOutput,
 			outputMode: effectiveOutputMode,
@@ -2458,7 +2473,18 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				return true;
 			};
 		}
-		return runSync(input.ctx.cwd, input.agents, task.agent, taskText, {
+		return runSync(input.ctx.cwd, normalizeChildSpec({
+			task: taskText,
+			description: task.description,
+			permissions: task.permissions,
+			model: input.modelOverrides[index] ?? task.model,
+			skill: task.skill,
+			cwd: taskCwd,
+			output: task.output,
+			outputMode: task.outputMode,
+			acceptance: task.acceptance,
+			toolBudget: task.toolBudget,
+		}, { parentMode: snapshotParentPermissionMode(input.ctx.sessionManager.getSessionId() ?? undefined), runId: input.runId, index }), {
 			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 			cwd: taskCwd,
 			signal: input.signal,
@@ -2923,18 +2949,46 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		contextPolicy,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
-	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, params.agent!, 0) : undefined;
-	const allProgress: AgentProgress[] = [];
-	const allArtifactPaths: ArtifactPaths[] = [];
-	const agentConfig = agents.find((a) => a.name === params.agent);
-	if (!agentConfig) {
+	let spec: ChildSpec;
+	try {
+		spec = normalizeChildSpec({
+			task: params.task,
+			description: params.description,
+			permissions: params.permissions,
+			model: params.model,
+			tier: params.tier,
+			skill: params.skill,
+			cwd: effectiveCwd,
+			output: params.output,
+			outputMode: params.outputMode,
+			acceptance: params.acceptance,
+			toolBudget: params.toolBudget,
+		}, { parentMode: snapshotParentPermissionMode(deps.state.currentSessionId), runId, index: 0 });
+	} catch (error) {
 		return {
-			content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
+			content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
 			isError: true,
 			details: { mode: "single", results: [] },
 		};
 	}
-	const effectiveToolBudget = resolveEffectiveToolBudget({ runBudget: data.toolBudget, agentBudget: agentConfig.toolBudget, configBudget: data.configToolBudget });
+	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, spec.childId, 0) : undefined;
+	const allProgress: AgentProgress[] = [];
+	const allArtifactPaths: ArtifactPaths[] = [];
+	const agentConfig = {
+		name: spec.childId,
+		description: spec.description,
+		model: spec.model,
+		output: typeof spec.output === "string" ? spec.output : undefined,
+		toolBudget: spec.toolBudget,
+		skills: spec.skill === false ? [] : undefined,
+		systemPrompt: "",
+		systemPromptMode: "append" as const,
+		inheritProjectContext: true,
+		inheritSkills: false,
+		source: "builtin" as const,
+		filePath: "",
+	};
+	const effectiveToolBudget = resolveEffectiveToolBudget({ runBudget: data.toolBudget, agentBudget: spec.toolBudget, configBudget: data.configToolBudget });
 	if (effectiveToolBudget.error) return toExecutionErrorResult(params, new Error(effectiveToolBudget.error));
 
 	const currentProvider = ctx.model?.provider;
@@ -3019,7 +3073,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				artifactConfig,
 				shareEnabled,
 				sessionRoot,
-				sessionFile: sessionFileForTask(params.agent!, 0, modelOverride),
+				sessionFile: sessionFileForTask(spec.childId, 0, modelOverride),
 				skills: skillOverride === false ? [] : skillOverride,
 				output: effectiveOutput,
 				outputMode: effectiveOutputMode,
@@ -3095,16 +3149,16 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		: undefined;
 
 	const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
-	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
+	const r = await runSync(ctx.cwd, { ...spec, task }, {
 		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 		cwd: effectiveCwd,
 		signal,
 		interruptSignal: interruptController.signal,
-		allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
+		allowIntercomDetach: data.intercomBridge.active,
 		intercomEvents: deps.pi.events,
 		runId,
 		sessionDir: sessionDirForIndex(0),
-		sessionFile: sessionFileForTask(params.agent!, 0, modelOverride),
+		sessionFile: sessionFileForTask(spec.childId, 0, modelOverride),
 		share: shareEnabled,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 		artifactConfig,
@@ -3235,7 +3289,7 @@ function foregroundCapacityResult(params: SubagentParamsLike, inFlight: number, 
 	return {
 		content: [{
 			type: "text",
-			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, use ONE subagent call with tasks: [{agent, task}, …], or set async: true.`,
+			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, use ONE subagent call with tasks: [{task, description}, …], or set async: true.`,
 		}],
 		isError: true,
 		details: { mode: inferExecutionMode(params), results: [] },
@@ -3542,7 +3596,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
-		const discovered = deps.discoverAgents(effectiveCwd, scope);
+		const discovered = deps.discoverAgents?.(effectiveCwd, scope) ?? { agents: [] };
 		const discoveredAgents = discovered.agents;
 		const modelScope = discovered.modelScope;
 		effectiveParams = applySingleAgentLaunchDefaults(effectiveParams, discoveredAgents);
@@ -3568,7 +3622,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const shareEnabled = effectiveParams.share === true;
 		const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
 		const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
-		const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.agent);
+		const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.task);
 		const allowClarifyTaskPrompt = hasChain
 			&& effectiveParams.clarify === true
 			&& ctx.hasUI
@@ -3585,11 +3639,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (validationError) return validationError;
 
 		const parentPermissionMode = snapshotParentPermissionMode(deps.state.currentSessionId);
-		const writeSpawnError = planModeWriteSpawnError(
-			parentPermissionMode,
-			collectRequestedAgents(effectiveParams, agents),
-		);
-		if (writeSpawnError) return buildRequestedModeError(effectiveParams, writeSpawnError);
 
 		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
 		let forkThinkingOverrideForIndex: (idx?: number) => AgentConfig["thinking"] | undefined = () => undefined;
