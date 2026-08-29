@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-29 (agent memory + global AGENTS.md). **`origin/master` = `161bdad`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-29 (release v0.2.12). **`origin/master` = `12c4c8d`** (+ release bump). Public npm target is `@ashx-j/lunr@0.2.12` (tag `v0.2.12`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
 - **Codex Fast + usage cleanup (`feat/codex-fast-usage-cleanup`):** `/fast [on|off|status]` persists `service_tier: "fast"` for `openai-codex` subscriptions only and marks the model chip. `/usage` fetches every stored-credential adapter plan plus the current env-only provider in parallel; Codex includes additional rate limits. The `/research` pipeline is removed; web tools and generic research subagents remain.
@@ -75,7 +75,7 @@ Last updated: 2026-08-29 (agent memory + global AGENTS.md). **`origin/master` = 
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.11**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.12**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -91,7 +91,7 @@ Last updated: 2026-08-29 (agent memory + global AGENTS.md). **`origin/master` = 
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.2.11**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.2.12**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
@@ -217,6 +217,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-23: v0.2.10 ships image chips, VS Code Alt+V, quieter subagent compact rows, unlimited parallel defaults, and grok-4.5+ Responses.
 - 2026-08-24: same-turn SINGLE `subagent` calls count toward the swarm gate; one once/reject covers that assistant message. Sequential work stays `chain`.
 - 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
+- 2026-08-29: v0.2.12 ships agent memory + global AGENTS.md, prompt-driven subagents, Codex Fast/`/usage` cleanup, lunR system prompt, watchdog cold start, and lunR-branded shipped docs.
 - 2026-08-28: keep the prompt review artifact as the literal assembled effective prompt only; put provenance and regeneration notes in `AGENTS.md` so the snapshot contains no non-injected commentary.
 - 2026-08-29: the default prompt is lunR-specific and schema-first; model changes refresh its runtime slug while existing context, skill, custom-prompt, and conditional injections stay intact.
 - 2026-08-29: shipped coding-agent docs describe lunR (`@ashx-j/lunr`, `lunr`, `~/.lunr/`) so npmjs is not still pi; keep ExtensionAPI `pi` and `PI_*` names.
