@@ -13,8 +13,8 @@ interface PromptWorkflow {
 	description: string;
 	body: string;
 	filePath: string;
-	agent: string;
-	context?: "fresh" | "fork";
+	childDescription: string;
+	permissions: "full" | "read-only";
 	model?: string;
 	skill?: string | string[] | false;
 	cwd?: string;
@@ -30,9 +30,7 @@ const RESERVED_COMMAND_NAMES = new Set([
 	"run",
 	"chain",
 	"parallel",
-	"run-chain",
 	"subagents-doctor",
-	"subagents-models",
 ]);
 
 function packagePromptsDir(): string {
@@ -86,12 +84,6 @@ function parseSkill(value: string | undefined): string | string[] | false | unde
 	return parts.length > 1 ? parts : parts[0];
 }
 
-function parseAgent(frontmatter: Record<string, string>): string {
-	const subagent = stringField(frontmatter, "subagent");
-	if (!subagent || subagent === "true") return "delegate";
-	return subagent;
-}
-
 function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 	const content = fs.readFileSync(filePath, "utf-8");
 	const { frontmatter, body } = parseFrontmatter(content);
@@ -106,9 +98,8 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 		description: stringField(frontmatter, "description") ?? firstNonEmptyLine(body),
 		body,
 		filePath,
-		agent: parseAgent(frontmatter),
-		...(booleanField(frontmatter, "inheritContext") === true || booleanField(frontmatter, "fork") === true ? { context: "fork" as const } : {}),
-		...(booleanField(frontmatter, "fresh") === true ? { context: "fresh" as const } : {}),
+		childDescription: stringField(frontmatter, "child-description") ?? name,
+		permissions: stringField(frontmatter, "permissions") === "read-only" ? "read-only" : "full",
 		...(model ? { model } : {}),
 		...(skill !== undefined ? { skill } : {}),
 		...(cwd ? { cwd } : {}),
@@ -172,21 +163,20 @@ function substituteArgs(template: string, args: string[]): string {
 		.replace(/\$(\d+)/g, (_match, index: string) => args[Number(index) - 1] ?? "");
 }
 
-function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?: string; fork?: boolean; fresh?: boolean; worktree?: boolean; bg?: boolean } {
+function parseRuntimeOptions(words: string[]): { args: string[]; descriptionOverride?: string; permissions?: "full" | "read-only"; worktree?: boolean; bg?: boolean } {
 	const args: string[] = [];
-	let agentOverride: string | undefined;
-	let fork = false;
-	let fresh = false;
+	let descriptionOverride: string | undefined;
+	let permissions: "full" | "read-only" | undefined;
 	let worktree = false;
 	let bg = false;
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i]!;
-		if (word === "--fork") {
-			fork = true;
+		if (word === "--read-only") {
+			permissions = "read-only";
 			continue;
 		}
-		if (word === "--fresh") {
-			fresh = true;
+		if (word === "--full") {
+			permissions = "full";
 			continue;
 		}
 		if (word === "--worktree") {
@@ -197,18 +187,18 @@ function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?:
 			bg = true;
 			continue;
 		}
-		if (word === "--subagent") {
-			agentOverride = words[++i];
+		if (word === "--description") {
+			descriptionOverride = words[++i];
 			continue;
 		}
-		const eq = word.match(/^--subagent(?:=|:)(.+)$/);
+		const eq = word.match(/^--description(?:=|:)(.+)$/);
 		if (eq) {
-			agentOverride = eq[1];
+			descriptionOverride = eq[1];
 			continue;
 		}
 		args.push(word);
 	}
-	return { args, agentOverride, fork, fresh, worktree, bg };
+	return { args, descriptionOverride, permissions, worktree, bg };
 }
 
 function splitChainDeclaration(input: string): { declaration: string; argsText: string } {
@@ -223,14 +213,11 @@ function splitPromptChain(input: string): string[] {
 
 function workflowParams(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): SubagentParamsLike {
 	const task = substituteArgs(workflow.body, args).trim();
-	// lunr: --fork is parsed so it is not a task word; children always start fresh.
-	const context = "fresh";
 	return {
-		agent: runtime.agentOverride ?? workflow.agent,
 		task,
+		description: runtime.descriptionOverride ?? workflow.childDescription,
+		permissions: runtime.permissions ?? workflow.permissions,
 		clarify: false,
-		agentScope: "both",
-		...(context ? { context } : {}),
 		...(workflow.model ? { model: workflow.model } : {}),
 		...(workflow.skill !== undefined ? { skill: workflow.skill } : {}),
 		...(workflow.cwd ? { cwd: workflow.cwd } : {}),
@@ -242,7 +229,8 @@ function workflowParams(workflow: PromptWorkflow, args: string[], runtime: Retur
 function workflowChainStep(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): ChainStep {
 	const params = workflowParams(workflow, args, runtime);
 	return {
-		agent: params.agent ?? "delegate",
+		description: params.description ?? workflow.childDescription,
+		permissions: params.permissions ?? workflow.permissions,
 		task: params.task,
 		...(params.model ? { model: params.model } : {}),
 		...(params.skill !== undefined ? { skill: params.skill } : {}),
@@ -269,7 +257,7 @@ export function registerPromptWorkflowCommands(input: {
 	const { pi, run } = input;
 
 	pi.registerCommand("prompt-workflow", {
-		description: "Run a prompt template through native pi-subagents: /prompt-workflow <name> [args]",
+		description: "Run a prompt template through lunR subagents: /prompt-workflow <name> [args]",
 		handler: async (rawArgs, ctx) => {
 			const words = shellWords(rawArgs);
 			const name = words.shift();
@@ -292,7 +280,7 @@ export function registerPromptWorkflowCommands(input: {
 						if (!step) throw new Error(`Unknown prompt workflow in chain '${workflow.name}': ${stepName}`);
 						return workflowChainStep(step, runtime.args, runtime);
 					});
-					await run({ chain, task: runtime.args.join(" "), clarify: false, agentScope: "both", ...(runtime.bg ? { async: true } : {}) }, ctx);
+					await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.bg ? { async: true } : {}) }, ctx);
 					return;
 				}
 				await run(workflowParams(workflow, runtime.args, runtime), ctx);
@@ -323,7 +311,7 @@ export function registerPromptWorkflowCommands(input: {
 					if (!workflow) throw new Error(`Unknown prompt workflow: ${name}`);
 					return workflowChainStep(workflow, runtime.args, runtime);
 				});
-				await run({ chain, task: runtime.args.join(" "), clarify: false, agentScope: "both", ...(runtime.bg ? { async: true } : {}) }, ctx);
+				await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.bg ? { async: true } : {}) }, ctx);
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}

@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "../../agents/agents.ts";
+import { normalizeChildSpec } from "../../shared/child-spec.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
@@ -19,7 +19,6 @@ import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveS
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
-import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
@@ -32,6 +31,7 @@ import { resolveEffectiveAcceptance } from "../shared/acceptance.ts";
 import {
 	type AcceptanceInput,
 	type ArtifactConfig,
+	type ChildSpec,
 	type Details,
 	type MaxOutputConfig,
 	type NestedRouteInfo,
@@ -122,7 +122,6 @@ interface AsyncChainParams {
 	goal?: string;
 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: Exclude<SubagentRunMode, "single">;
-	agents: AgentConfig[];
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
 	cwd?: string;
@@ -133,7 +132,7 @@ interface AsyncChainParams {
 	sessionRoot?: string;
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
-	thinkingOverridesByFlatIndex?: (AgentConfig["thinking"] | undefined)[];
+	thinkingOverridesByFlatIndex?: (string | false | undefined)[];
 	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
@@ -155,11 +154,9 @@ interface AsyncChainParams {
 }
 
 interface AsyncSingleParams {
-	agent: string;
-	task?: string;
+	spec: ChildSpec;
 	/** Raw caller-facing goal used only by the started event. */
 	goal?: string;
-	agentConfig: AgentConfig;
 	ctx: AsyncExecutionContext;
 	cwd?: string;
 	maxOutput?: MaxOutputConfig;
@@ -175,7 +172,7 @@ interface AsyncSingleParams {
 	outputMode?: "inline" | "file-only";
 	outputBaseDir?: string;
 	modelOverride?: string;
-	thinkingOverride?: AgentConfig["thinking"];
+	thinkingOverride?: string | false;
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
 	waitToolEnabled?: boolean;
@@ -205,13 +202,12 @@ export interface AsyncRunnerStepBuildParams {
 	task?: string;
 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: SubagentRunMode;
-	agents: AgentConfig[];
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
 	cwd?: string;
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
-	thinkingOverridesByFlatIndex?: (AgentConfig["thinking"] | undefined)[];
+	thinkingOverridesByFlatIndex?: (string | false | undefined)[];
 	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
@@ -222,6 +218,8 @@ export interface AsyncRunnerStepBuildParams {
 	validateOutputBindings?: boolean;
 	toolBudget?: ResolvedToolBudget;
 	configToolBudget?: ResolvedToolBudget;
+	/** Optional collision-free ChildSpec id namespace for steps appended to a live run. */
+	childIdRunId?: string;
 }
 
 export type AsyncRunnerStepBuildResult =
@@ -490,10 +488,13 @@ const UNAVAILABLE_SUBAGENT_SKILL_ERROR = "Skills not found: pi-subagents";
 class UnavailableSubagentSkillError extends Error {}
 class AsyncStartValidationError extends Error {}
 
+function childDescription(step: Pick<SequentialStep, "description" | "label" | "agent">): string {
+	return step.description || step.label || step.agent || "child";
+}
+
 export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildParams): AsyncRunnerStepBuildResult {
 	const {
 		chain,
-		agents,
 		ctx,
 		cwd,
 		sessionFilesByFlatIndex,
@@ -534,19 +535,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	}
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: graphChain });
 
-	for (const s of chain) {
-		const stepAgents = isParallelStep(s)
-			? s.parallel.map((t) => t.agent)
-			: isDynamicParallelStep(s)
-				? [s.parallel.agent]
-				: [(s as SequentialStep).agent];
-		for (const agentName of stepAgents) {
-			if (!agents.find((x) => x.name === agentName)) {
-				return { error: `Unknown agent: ${agentName}` };
-			}
-		}
-	}
-
 	let progressInstructionCreated = false;
 	const buildStepOverrides = (s: SequentialStep): StepOverrides => {
 		const stepSkillInput = normalizeSkillInput(s.skill);
@@ -560,18 +548,26 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		};
 	};
 	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }) => {
-		const a = agents.find((x) => x.name === s.agent)!;
-		const toolBudgetInput = s.toolBudget ?? params.toolBudget ?? a.toolBudget ?? params.configToolBudget;
-		const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, s.toolBudget ? "toolBudget" : a.toolBudget ? "agent.toolBudget" : "config.toolBudget");
+		const childIndex = flatIndex ?? parallelOutputNamespace?.stepIndex ?? 0;
+		const spec = normalizeChildSpec(s, {
+			parentMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
+			runId: params.childIdRunId ?? id,
+			index: childIndex,
+			childId: s.childId ?? (s.agent?.trim() ? s.agent : undefined),
+			defaultTask: "{previous}",
+			fanoutAuthorized: false,
+		});
+		const toolBudgetInput = spec.toolBudget ?? params.toolBudget ?? params.configToolBudget;
+		const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, spec.toolBudget ? "toolBudget" : "config.toolBudget");
 		if (resolvedToolBudget.error) throw new AsyncStartValidationError(resolvedToolBudget.error);
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const instructionCwd = behaviorCwd ?? stepCwd;
-		let behavior = suppressProgressForReadOnlyTask(resolvedBehavior ?? resolveStepBehavior(a, buildStepOverrides(s), chainSkills), s.task, originalTask);
+		let behavior = suppressProgressForReadOnlyTask(resolvedBehavior ?? resolveStepBehavior(buildStepOverrides(s), chainSkills), s.task, originalTask);
 		const inheritedRelativeParallelOutput = parallelOutputNamespace && s.output === undefined && typeof behavior.output === "string" && !path.isAbsolute(behavior.output);
 		if (inheritedRelativeParallelOutput && parallelOutputNamespace.taskIndex !== undefined) {
 			behavior = {
 				...behavior,
-				output: path.join(`parallel-${parallelOutputNamespace.stepIndex}`, `${parallelOutputNamespace.taskIndex}-${s.agent}`, behavior.output),
+				output: path.join(`parallel-${parallelOutputNamespace.stepIndex}`, String(parallelOutputNamespace.taskIndex), behavior.output),
 			};
 		}
 		const namespaceOutputPath = Boolean(inheritedRelativeParallelOutput && parallelOutputNamespace.taskIndex === undefined);
@@ -580,50 +576,52 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			skillNames,
 			stepCwd,
 			ctx.cwd,
-			a.skillPath,
-			a.filePath ? path.dirname(a.filePath) : stepCwd,
+			undefined,
+			stepCwd,
 		);
 		if (missingSkills.includes("pi-subagents")) throw new UnavailableSubagentSkillError(UNAVAILABLE_SUBAGENT_SKILL_ERROR);
 
-		let systemPrompt = a.systemPrompt?.trim() ?? "";
+		let systemPrompt = "";
 		if (resolvedSkills.length > 0) {
 			const injection = buildSkillInjection(resolvedSkills);
 			systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 		}
-		const memoryInjection = buildAgentMemoryInjection(a, stepCwd);
-		if (memoryInjection) {
-			systemPrompt = systemPrompt ? `${systemPrompt}\n\n${memoryInjection}` : memoryInjection;
-		}
-
 		const readInstructions = buildChainInstructions({ ...behavior, output: false, progress: false }, instructionCwd, false);
 		const isFirstProgressAgent = behavior.progress && !progressPrecreated && !progressInstructionCreated;
 		if (behavior.progress) progressInstructionCreated = true;
 		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, progressDir, isFirstProgressAgent);
 		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd, outputBaseDir);
-		if (!namespaceOutputPath) systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, a);
-		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${s.agent})`);
+		if (!namespaceOutputPath) systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, {
+			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
+		});
+		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${spec.description})`);
 		if (validationError) throw new AsyncStartValidationError(validationError);
 		let taskTemplate = s.task ?? "{previous}";
 		taskTemplate = taskTemplate.replace(/\{task\}/g, originalTask ?? "");
 		taskTemplate = taskTemplate.replace(/\{chain_dir\}/g, runnerCwd);
 		const taskText = `${readInstructions.prefix}${taskTemplate}${progressInstructions.suffix}`;
-		const task = namespaceOutputPath ? taskText : injectSingleOutputInstruction(taskText, outputPath, a);
+		const task = namespaceOutputPath ? taskText : injectSingleOutputInstruction(taskText, outputPath, {
+			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
+		});
 
 		const primaryModel = resolveEffectiveSubagentModel(
-			s.model,
-			a.model,
+			spec.model,
+			undefined,
 			ctx.currentModel,
 			availableModels,
 			ctx.currentModelProvider,
 			{ scope: ctx.modelScope },
 		);
 		const thinkingOverride = flatIndex === undefined ? undefined : thinkingOverridesByFlatIndex?.[flatIndex];
-		const effectiveThinking = thinkingOverride ?? a.thinking;
+		const effectiveThinking = thinkingOverride;
 		const model = applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
 		return {
 			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 			parentPermissionMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
-			agent: s.agent,
+			childId: spec.childId,
+			description: spec.description,
+			permissions: spec.effectivePermissions,
+			agent: spec.description,
 			task,
 			phase: s.phase,
 			label: s.label,
@@ -632,36 +630,31 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			cwd: stepCwd,
 			model,
 			thinking: resolveEffectiveThinking(model, effectiveThinking),
-			modelCandidates: buildModelCandidates(primaryModel, a.fallbackModels, availableModels, ctx.currentModelProvider, { scope: ctx.modelScope }).map((candidate) =>
+			modelCandidates: buildModelCandidates(primaryModel, undefined, availableModels, ctx.currentModelProvider, { scope: ctx.modelScope }).map((candidate) =>
 				applyThinkingSuffix(candidate, effectiveThinking, thinkingOverride !== undefined),
 			),
-			tools: a.tools,
-			extensions: a.extensions,
-			subagentOnlyExtensions: a.subagentOnlyExtensions,
-			mcpDirectTools: a.mcpDirectTools,
-			completionGuard: a.completionGuard,
 			systemPrompt,
-			systemPromptMode: a.systemPromptMode,
-			inheritProjectContext: a.inheritProjectContext,
-			inheritSkills: a.inheritSkills,
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			inheritSkills: false,
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
 			...(namespaceOutputPath ? { namespaceOutputPath: true } : {}),
 			outputMode: behavior.outputMode,
 			sessionFile,
-			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+			maxSubagentDepth,
 			waitToolEnabled: params.waitToolEnabled,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,
-				agentName: s.agent,
-				acceptanceRole: a.acceptanceRole,
+				agentName: spec.description,
+				permissions: spec.effectivePermissions,
 				task,
 				mode: resultMode,
 				async: true,
 				dynamic: false,
 			}),
 			acceptanceInput: s.acceptance,
-			acceptanceRole: a.acceptanceRole,
+			acceptanceRole: spec.effectivePermissions === "read-only" ? "read-only" : "writer",
 			...(s.outputSchema ? { structuredOutputSchema: s.outputSchema } : {}),
 			...(s.outputSchema ? { structuredOutput: createStructuredOutputRuntime(s.outputSchema, path.join(asyncDir, "structured-output")) } : {}),
 			...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
@@ -669,7 +662,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	};
 
 	let flatStepIndex = 0;
-	const nextFlatStep = (): { index: number; sessionFile?: string; thinkingOverride?: AgentConfig["thinking"] } => {
+	const nextFlatStep = (): { index: number; sessionFile?: string; thinkingOverride?: string | false } => {
 		const index = flatStepIndex;
 		const sessionFile = sessionFilesByFlatIndex?.[flatStepIndex];
 		const thinkingOverride = thinkingOverridesByFlatIndex?.[flatStepIndex];
@@ -685,8 +678,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const builtSteps = chain.map((s, stepIndex) => {
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
-					const agent = agents.find((candidate) => candidate.name === task.agent)!;
-					return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
+					return suppressProgressForReadOnlyTask(resolveStepBehavior(buildStepOverrides(task), chainSkills), task.task, originalTask);
 				});
 				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
 				if (progressPrecreated) {
@@ -712,8 +704,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				};
 			}
 			if (isDynamicParallelStep(s)) {
-				const agent = agents.find((candidate) => candidate.name === s.parallel.agent)!;
-				const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(s.parallel), chainSkills), s.parallel.task, originalTask);
+				const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(buildStepOverrides(s.parallel), chainSkills), s.parallel.task, originalTask);
 				const progressPrecreated = behavior.progress;
 				if (progressPrecreated) {
 					writeInitialProgressFile(progressDir);
@@ -734,15 +725,15 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 					thinkingOverrides: dynamicFlatSteps.map((step) => step.thinkingOverride),
 					effectiveAcceptance: resolveEffectiveAcceptance({
 						explicit: s.acceptance,
-						agentName: s.parallel.agent,
-						acceptanceRole: agent.acceptanceRole,
+						agentName: s.parallel.description,
+						permissions: s.parallel.permissions === "read-only" ? "read-only" : "full",
 						task: parallel.task,
 						mode: resultMode,
 						async: true,
 						dynamicGroup: true,
 					}),
 					acceptanceInput: s.acceptance,
-					acceptanceRole: agent.acceptanceRole,
+					acceptanceRole: s.parallel.permissions === "read-only" ? "read-only" : "writer",
 				};
 			}
 			const staticStep = nextFlatStep();
@@ -793,7 +784,6 @@ export function executeAsyncChain(
 ): AsyncExecutionResult {
 	const {
 		chain,
-		agents,
 		ctx,
 		cwd,
 		maxOutput,
@@ -834,7 +824,6 @@ export function executeAsyncChain(
 		task: params.task,
 		attachRoot: params.attachRoot,
 		resultMode,
-		agents,
 		ctx,
 		availableModels: params.availableModels,
 		cwd,
@@ -873,9 +862,9 @@ export function executeAsyncChain(
 				childTargetIndex++;
 				return [undefined];
 			}
-			return step.parallel.map((task) => childIntercomTarget(task.agent, childTargetIndex++));
+			return step.parallel.map((task) => childIntercomTarget(task.childId ?? task.agent, childTargetIndex++));
 		}
-		return [childIntercomTarget(step.agent, childTargetIndex++)];
+		return [childIntercomTarget(step.childId ?? step.agent, childTargetIndex++)];
 	}) : undefined;
 
 	let spawnResult: { pid?: number; error?: string } = {};
@@ -933,10 +922,10 @@ export function executeAsyncChain(
 	if (spawnResult.pid) {
 		const eventFirstStep = eventChain[0];
 		const firstAgents = isParallelStep(eventFirstStep)
-			? eventFirstStep.parallel.map((t) => t.agent)
+			? eventFirstStep.parallel.map(childDescription)
 			: isDynamicParallelStep(eventFirstStep)
-				? [eventFirstStep.parallel.agent]
-			: [(eventFirstStep as SequentialStep).agent];
+				? [childDescription(eventFirstStep.parallel)]
+			: [childDescription(eventFirstStep as SequentialStep)];
 		const firstTask = isParallelStep(eventFirstStep)
 			? eventFirstStep.parallel[0]?.task
 			: isDynamicParallelStep(eventFirstStep)
@@ -950,14 +939,14 @@ export function executeAsyncChain(
 			const step = eventChain[stepIndex]!;
 			if (isParallelStep(step)) {
 				parallelGroups.push({ start: flatStepStart, count: step.parallel.length, stepIndex });
-				flatAgents.push(...step.parallel.map((task) => task.agent));
+				flatAgents.push(...step.parallel.map(childDescription));
 				flatStepStart += step.parallel.length;
 			} else if (isDynamicParallelStep(step)) {
 				parallelGroups.push({ start: flatStepStart, count: 1, stepIndex });
-				flatAgents.push(step.parallel.agent);
+				flatAgents.push(childDescription(step.parallel));
 				flatStepStart++;
 			} else {
-				flatAgents.push((step as SequentialStep).agent);
+				flatAgents.push(childDescription(step as SequentialStep));
 				flatStepStart++;
 			}
 		}
@@ -1008,7 +997,7 @@ export function executeAsyncChain(
 			task: firstTask?.slice(0, 50),
 			goal: workflowGoal?.slice(0, 120),
 			chain: eventChain.map((s) =>
-				isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : isDynamicParallelStep(s) ? `expand:${s.parallel.agent}` : (s as SequentialStep).agent,
+				isParallelStep(s) ? `[${s.parallel.map(childDescription).join("+")}]` : isDynamicParallelStep(s) ? `expand:${childDescription(s.parallel)}` : childDescription(s as SequentialStep),
 			),
 			chainStepCount: eventChain.length,
 			parallelGroups,
@@ -1023,7 +1012,7 @@ export function executeAsyncChain(
 
 	const chainDesc = chain
 		.map((s) =>
-			isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : isDynamicParallelStep(s) ? `expand:${s.parallel.agent}` : (s as SequentialStep).agent,
+			isParallelStep(s) ? `[${s.parallel.map(childDescription).join("+")}]` : isDynamicParallelStep(s) ? `expand:${childDescription(s.parallel)}` : childDescription(s as SequentialStep),
 		)
 		.join(" -> ");
 
@@ -1041,8 +1030,7 @@ export function executeAsyncSingle(
 	params: AsyncSingleParams,
 ): AsyncExecutionResult {
 	const {
-		agent,
-		agentConfig,
+		spec,
 		ctx,
 		cwd,
 		maxOutput,
@@ -1060,28 +1048,24 @@ export function executeAsyncSingle(
 		childIntercomTarget,
 		nestedRoute,
 	} = params;
-	const task = params.task ?? "";
+	const agent = spec.description;
+	const task = spec.task;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
-	const skillNames = params.skills ?? agentConfig.skills ?? [];
+	const skillNames = params.skills ?? (spec.skill === false ? [] : normalizeSkillInput(spec.skill) ?? []);
 	const availableModels = params.availableModels;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
 		skillNames,
 		runnerCwd,
 		ctx.cwd,
-		agentConfig.skillPath,
-		agentConfig.filePath ? path.dirname(agentConfig.filePath) : runnerCwd,
+		undefined,
+		runnerCwd,
 	);
 	if (missingSkills.includes("pi-subagents")) return formatAsyncStartError("single", UNAVAILABLE_SUBAGENT_SKILL_ERROR);
-	let systemPrompt = agentConfig.systemPrompt?.trim() ?? "";
+	let systemPrompt = "";
 	if (resolvedSkills.length > 0) {
 		const injection = buildSkillInjection(resolvedSkills);
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 	}
-	const memoryInjection = buildAgentMemoryInjection(agentConfig, runnerCwd);
-	if (memoryInjection) {
-		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${memoryInjection}` : memoryInjection;
-	}
-
 	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
 	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
 	const asyncDir = inheritedNestedRoute
@@ -1098,23 +1082,24 @@ export function executeAsyncSingle(
 		};
 	}
 
-	const effectiveOutput = normalizeSingleOutputOverride(params.output, agentConfig.output);
+	const effectiveOutput = normalizeSingleOutputOverride(params.output ?? spec.output, typeof spec.output === "string" ? spec.output : undefined);
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
-	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, agentConfig);
-	const outputMode = params.outputMode ?? "inline";
+	const childToolShape = { tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined };
+	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, childToolShape);
+	const outputMode = params.outputMode ?? spec.outputMode ?? "inline";
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
-	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, agentConfig);
+	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, childToolShape);
 	const primaryModel = resolveSubagentModelOverride(
-		params.modelOverride ?? agentConfig.model,
+		params.modelOverride ?? spec.model,
 		ctx.currentModel,
 		availableModels,
 		ctx.currentModelProvider,
 	);
-	const effectiveThinking = params.thinkingOverride ?? agentConfig.thinking;
+	const effectiveThinking = params.thinkingOverride;
 	const model = applyThinkingSuffix(primaryModel, effectiveThinking, params.thinkingOverride !== undefined);
-	const toolBudgetInput = params.toolBudget ?? agentConfig.toolBudget ?? params.configToolBudget;
-	const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, params.toolBudget ? "toolBudget" : agentConfig.toolBudget ? "agent.toolBudget" : "config.toolBudget");
+	const toolBudgetInput = params.toolBudget ?? spec.toolBudget ?? params.configToolBudget;
+	const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, params.toolBudget || spec.toolBudget ? "toolBudget" : "config.toolBudget");
 	if (resolvedToolBudget.error) return formatAsyncStartError("single", resolvedToolBudget.error);
 	const deadlineAt = params.absoluteDeadlineAt ?? (params.timeoutMs !== undefined ? Date.now() + params.timeoutMs : undefined);
 	const timeoutMs = params.absoluteDeadlineAt !== undefined && deadlineAt !== undefined
@@ -1124,35 +1109,26 @@ export function executeAsyncSingle(
 	const initialTurnBudget = params.turnBudget ? initialTurnBudgetState(params.turnBudget) : undefined;
 	const resolvedSessionDir = params.sessionDir ?? (sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined);
 	const resolvedAcceptance = resolveEffectiveAcceptance({
-		explicit: params.acceptance,
+		explicit: params.acceptance ?? spec.acceptance,
 		agentName: agent,
-		acceptanceRole: agentConfig.acceptanceRole,
+		permissions: spec.effectivePermissions,
 		task,
 		mode: "single",
 		async: true,
 	});
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
-		version: 1,
+		version: 3,
+		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 		sourceRunId: id,
+		childId: spec.childId,
+		description: spec.description,
+		permissions: spec.effectivePermissions,
 		agent,
 		...(sessionFile ? { sessionFile } : {}),
 		cwd: runnerCwd,
 		...(model ? { model } : {}),
-		...(agentConfig.fallbackModels ? { fallbackModels: [...agentConfig.fallbackModels] } : {}),
 		...(effectiveThinking ? { thinking: resolveEffectiveThinking(model, effectiveThinking) } : {}),
-		...(agentConfig.tools ? { tools: [...agentConfig.tools] } : {}),
-		...(agentConfig.extensions ? { extensions: [...agentConfig.extensions] } : {}),
-		...(agentConfig.subagentOnlyExtensions ? { subagentOnlyExtensions: [...agentConfig.subagentOnlyExtensions] } : {}),
-		...(agentConfig.mcpDirectTools ? { mcpDirectTools: [...agentConfig.mcpDirectTools] } : {}),
-		...(agentConfig.systemPrompt ? { systemPrompt: agentConfig.systemPrompt } : {}),
-		systemPromptMode: agentConfig.systemPromptMode,
-		inheritProjectContext: agentConfig.inheritProjectContext,
-		inheritSkills: agentConfig.inheritSkills,
 		...(resolvedSkills.length ? { skills: resolvedSkills.map((skill) => skill.name) } : {}),
-		...(agentConfig.skillPath ? { skillPath: [...agentConfig.skillPath] } : {}),
-		...(agentConfig.filePath ? { agentFilePath: agentConfig.filePath } : {}),
-		...(agentConfig.completionGuard !== undefined ? { completionGuard: agentConfig.completionGuard } : {}),
-		...(agentConfig.memory ? { memory: { ...agentConfig.memory } } : {}),
 		...(outputPath ? { outputPath } : {}),
 		outputMode,
 		...(resolvedAcceptance ? { acceptance: resolvedAcceptance } : {}),
@@ -1160,7 +1136,7 @@ export function executeAsyncSingle(
 		...(deadlineAt !== undefined ? { absoluteDeadlineAt: deadlineAt } : {}),
 		...(params.turnBudget ? { initialTurnBudget: params.turnBudget } : {}),
 		...(resolvedToolBudget.budget ? { initialToolBudget: resolvedToolBudget.budget } : {}),
-		maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
+		maxSubagentDepth,
 		...(maxOutput ? { maxOutput } : {}),
 		share: shareEnabled,
 		...(resolvedSessionDir ? { sessionDir: resolvedSessionDir } : {}),
@@ -1181,28 +1157,26 @@ export function executeAsyncSingle(
 					{
 						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 						parentPermissionMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
+						childId: spec.childId,
+						description: spec.description,
+						permissions: spec.effectivePermissions,
 						agent,
 						task: taskWithOutputInstruction,
 						cwd: runnerCwd,
 						model,
 						thinking: resolveEffectiveThinking(model, effectiveThinking),
-						modelCandidates: buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, ctx.currentModelProvider, { scope: ctx.modelScope }).map((candidate) =>
+						modelCandidates: buildModelCandidates(primaryModel, undefined, availableModels, ctx.currentModelProvider, { scope: ctx.modelScope }).map((candidate) =>
 							applyThinkingSuffix(candidate, effectiveThinking, params.thinkingOverride !== undefined),
 						),
-						tools: agentConfig.tools,
-						extensions: agentConfig.extensions,
-						subagentOnlyExtensions: agentConfig.subagentOnlyExtensions,
-						mcpDirectTools: agentConfig.mcpDirectTools,
-						completionGuard: agentConfig.completionGuard,
 						systemPrompt,
-						systemPromptMode: agentConfig.systemPromptMode,
-						inheritProjectContext: agentConfig.inheritProjectContext,
-						inheritSkills: agentConfig.inheritSkills,
+						systemPromptMode: "append",
+						inheritProjectContext: true,
+						inheritSkills: false,
 						skills: resolvedSkills.map((r) => r.name),
 						outputPath,
 						outputMode,
 						sessionFile,
-						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
+						maxSubagentDepth,
 						waitToolEnabled: params.waitToolEnabled,
 						effectiveAcceptance: resolvedAcceptance,
 						...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
@@ -1229,7 +1203,7 @@ export function executeAsyncSingle(
 				turnBudget: params.turnBudget,
 				toolBudget: params.toolBudget,
 				controlIntercomTarget,
-				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,
+				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(spec.childId, 0)] : undefined,
 				resultMode: "single",
 				...(params.revivalLease ? { revivalLease: params.revivalLease } : {}),
 				nestedRoute: nestedRoute ?? inheritedNestedRoute,

@@ -219,12 +219,12 @@ function resolveJobById(jobs: ScheduledRunJob[], requestedId: string): Scheduled
 	throw new Error(`Scheduled run '${requestedId}' not found.`);
 }
 
-function sanitizeScheduledParams(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: string } {
+export function sanitizeScheduledParams(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: string } {
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
-	const hasSingle = !hasChain && !hasTasks && Boolean(params.agent);
+	const hasSingle = !hasChain && !hasTasks && Boolean(params.task);
 	if (Number(hasChain) + Number(hasTasks) + Number(hasSingle) !== 1) {
-		return { error: "action='schedule' requires exactly one execution mode: agent, tasks, or chain." };
+		return { error: "action='schedule' requires exactly one execution mode: {task, description, permissions?}, tasks, or chain." };
 	}
 	if (!params.schedule?.trim()) return { error: "action='schedule' requires schedule, such as '+10m' or a future ISO timestamp." };
 	if (params.context === "fork") return { error: "Scheduled subagent runs require fresh context. Forked parent-session context is not safe at fire time." };
@@ -240,8 +240,6 @@ function sanitizeScheduledParams(params: SubagentParamsLike): { params?: Subagen
 		dir: _dir,
 		index: _index,
 		message: _message,
-		chainName: _chainName,
-		config: _config,
 		schedule: _schedule,
 		scheduleName: _scheduleName,
 		...executionParams
@@ -289,7 +287,7 @@ export class ScheduledRunManager {
 		this.ctx = ctx;
 		try {
 			if (!scheduledRunsEnabled(this.deps.config)) {
-				return textResult("Scheduled subagent runs are disabled. Set { \"scheduledRuns\": { \"enabled\": true } } in ~/.pi/agent/extensions/subagent/config.json, then reload Pi. Schedule only explicit delayed runs the user asked for.", true);
+				return textResult("Scheduled subagent runs are disabled. Set { \"scheduledRuns\": { \"enabled\": true } } in ~/.lunr/agent/extensions/subagent/config.json, then reload lunR. Schedule only explicit delayed runs the user asked for.", true);
 			}
 			if (!this.store) this.bindSession(ctx);
 			if (!this.store) return textResult("Scheduled subagent store is unavailable for this session.", true);

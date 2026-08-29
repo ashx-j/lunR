@@ -85,11 +85,12 @@ function startNestedControlInboxListener(pi: ExtensionAPI, state: SubagentState)
 										: `Nested run ${request.targetRunId} has no active child step to interrupt.`;
 								} else if (!request.message?.trim()) {
 									message = "Nested resume requires message.";
-								} else if (!control.currentAgent) {
+								} else if (!control.currentChildId && !control.currentAgent) {
 									message = `Nested run ${request.targetRunId} has no active child message route.`;
 								} else {
 									const index = control.currentIndex ?? 0;
-									const target = resolveSubagentIntercomTarget(request.targetRunId, control.currentAgent, index);
+									const childId = control.currentChildId ?? control.currentAgent!;
+									const target = resolveSubagentIntercomTarget(request.targetRunId, childId, index);
 									ok = await deliverSubagentIntercomMessageEvent(
 										pi.events,
 										target,

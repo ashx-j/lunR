@@ -19,7 +19,7 @@ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to generic children by prompting them directly. There are no named agent types.
 
 EXECUTION (use exactly ONE mode):
-• SINGLE: { task, description, permissions? } — one child. Multiple SINGLE calls in the same turn run concurrently (capped).
+• SINGLE: { task, description, permissions? } — one child. Multiple SINGLE calls in the same turn run concurrently; explicit concurrency/run limits still apply.
 • PARALLEL: { tasks: [{task, description, permissions?, count?, output?, reads?, progress?}, ...], concurrency?: number, worktree?: true } — one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
 • CHAIN: { chain: [{task, description, permissions?}, {parallel:[{task, description, permissions?, count:3}]}] } — sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
 • description is required, single-line, max 80 characters. It is UI metadata only. task is the complete child prompt.

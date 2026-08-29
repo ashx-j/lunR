@@ -33,16 +33,16 @@ function isTopLevelParameterDescription(path: string[]): boolean {
 const SkillOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "array", items: { type: "string" } },
-		{ type: "boolean" },
+		{ type: "boolean", enum: [false] },
 		{ type: "string" },
 	],
-	description: "Skill name(s) to make available (comma-separated), array of strings, or boolean (false disables, true uses default)",
+	description: "Skill name(s) to make available (comma-separated), array of strings, or false to disable",
 });
 
 const OutputOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "string" },
-		{ type: "boolean" },
+		{ type: "boolean", enum: [false] },
 	],
 	description: "Output filename/path (string), or false to disable file output",
 });
@@ -62,7 +62,7 @@ const TierOverride = Type.String({
 const ReadsOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "array", items: { type: "string" } },
-		{ type: "boolean" },
+		{ type: "boolean", enum: [false] },
 	],
 	description: "Files to read before running (array of filenames), or false to disable",
 });
@@ -302,7 +302,7 @@ const SubagentParamsSchema = Type.Object({
 	output: Type.Optional(Type.Unsafe({
 		anyOf: [
 			{ type: "string" },
-			{ type: "boolean" },
+			{ type: "boolean", enum: [false] },
 		],
 		description: "Output file for a single child (string), or false to disable. Relative paths resolve against cwd.",
 	})),

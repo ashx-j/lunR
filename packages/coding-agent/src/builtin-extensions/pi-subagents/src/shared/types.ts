@@ -48,6 +48,30 @@ export interface ChildSpec {
 	fanoutAuthorized?: boolean;
 }
 
+/** Internal execution compatibility shape. It is built from ChildSpec and is never user-discovered. */
+export interface ChildRuntimeConfig {
+	name: string;
+	description: string;
+	tools?: string[];
+	mcpDirectTools?: string[];
+	model?: string;
+	fallbackModels?: string[];
+	thinking?: string | false;
+	systemPromptMode: "append" | "replace";
+	inheritProjectContext: boolean;
+	inheritSkills: boolean;
+	acceptanceRole?: AcceptanceRole;
+	systemPrompt: string;
+	skills?: string[];
+	skillPath?: string[];
+	extensions?: string[];
+	subagentOnlyExtensions?: string[];
+	output?: string;
+	maxSubagentDepth?: number;
+	completionGuard?: boolean;
+	toolBudget?: ToolBudgetConfig;
+}
+
 export function childRowLabel(entry: {
 	description?: string;
 	label?: string;
@@ -325,9 +349,9 @@ export interface SteeringRecoveryDescriptor {
 	version: 3;
 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 	sourceRunId: string;
-	childId?: string;
-	description?: string;
-	permissions?: ChildPermission;
+	childId: string;
+	description: string;
+	permissions: ChildPermission;
 	agent: string;
 	sessionFile?: string;
 	cwd: string;
@@ -418,7 +442,7 @@ export interface AgentProgress {
 	childId?: string;
 	description?: string;
 	permissions?: ChildPermission;
-	agent?: string;
+	agent: string;
 	status: "pending" | "running" | "completed" | "failed" | "detached";
 	activityState?: ActivityState;
 	task: string;
@@ -625,7 +649,7 @@ export interface SingleResult {
 	childId?: string;
 	description?: string;
 	permissions?: ChildPermission;
-	agent?: string;
+	agent: string;
 	task: string;
 	exitCode: number;
 	detached?: boolean;
@@ -891,6 +915,9 @@ export interface AsyncStatus {
 	parallelGroups?: AsyncParallelGroupStatus[];
 	workflowGraph?: WorkflowGraphSnapshot;
 	steps?: Array<{
+		childId?: string;
+		description?: string;
+		permissions?: ChildPermission;
 		agent: string;
 		phase?: string;
 		label?: string;
@@ -1039,6 +1066,7 @@ export interface SubagentState {
 		startedAt: number;
 		updatedAt: number;
 		currentAgent?: string;
+		currentChildId?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
 		lastActivityAt?: number;

@@ -2,6 +2,7 @@
 import type { DynamicParallelStep, ParallelTaskItem } from "../../shared/settings.ts";
 import type { ArtifactPaths, ChainOutputMap, JsonSchemaObject, SingleResult } from "../../shared/types.ts";
 import { getSingleResultOutput } from "../../shared/utils.ts";
+import { validateChildDescription } from "../../shared/child-spec.ts";
 import { validateStructuredOutputValue } from "./structured-output.ts";
 
 export class DynamicFanoutError extends Error {}
@@ -47,9 +48,10 @@ const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency
 const RUNNER_DYNAMIC_STEP_KEYS = new Set([...DYNAMIC_STEP_KEYS, "effectiveAcceptance", "acceptanceInput", "acceptanceRole", "sessionFiles", "thinkingOverrides"]);
 const DYNAMIC_EXPAND_KEYS = new Set(["from", "item", "key", "maxItems", "onEmpty"]);
 const DYNAMIC_EXPAND_FROM_KEYS = new Set(["output", "path"]);
-const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "task", "phase", "label", "outputSchema", "cwd", "output", "outputMode", "reads", "progress", "skill", "model", "toolBudget", "acceptance"]);
+const DYNAMIC_PARALLEL_KEYS = new Set(["task", "description", "permissions", "phase", "label", "outputSchema", "cwd", "output", "outputMode", "reads", "progress", "skill", "model", "tier", "toolBudget", "acceptance"]);
 const RUNNER_DYNAMIC_PARALLEL_KEYS = new Set([
 	...DYNAMIC_PARALLEL_KEYS,
+	"agent", "childId",
 	"outputName", "structured", "inheritProjectContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "waitToolEnabled",
 	"structuredOutput", "structuredOutputSchema", "tools", "extensions", "subagentOnlyExtensions", "mcpDirectTools", "completionGuard", "systemPrompt",
 	"systemPromptMode", "thinking", "modelCandidates", "sessionFile", "effectiveAcceptance", "acceptanceInput", "acceptanceRole", "parentSessionId", "parentPermissionMode",
@@ -204,11 +206,12 @@ export function validateDynamicStepShape(step: DynamicParallelStep, stepIndex: n
 	if (!step.parallel || Array.isArray(step.parallel)) throw new DynamicFanoutError(`${prefix} requires a single parallel template object and cannot mix dynamic expand/collect with static parallel arrays.`);
 	assertOnlyKeys(step.parallel, config.allowRunnerFields ? RUNNER_DYNAMIC_PARALLEL_KEYS : DYNAMIC_PARALLEL_KEYS, `${prefix} parallel`);
 	if ("expand" in (step.parallel as object)) throw new DynamicFanoutError(`${prefix} does not support nested dynamic fanout.`);
-	if (!step.parallel.agent) throw new DynamicFanoutError(`${prefix} parallel.agent is required.`);
+	if (!step.parallel.description) throw new DynamicFanoutError(`${prefix} parallel.description is required.`);
 	if (!step.collect?.as || !isSafeOutputName(step.collect.as)) throw new DynamicFanoutError(`${prefix} requires collect.as with a safe output name.`);
 	assertOnlyKeys(step.collect, DYNAMIC_COLLECT_KEYS, `${prefix} collect`);
 	for (const [label, template] of [
 		["parallel.task", step.parallel.task],
+		["parallel.description", step.parallel.description],
 		["parallel.label", step.parallel.label],
 	] as const) {
 		if (template) assertNoUnresolvedItemReferences(template, itemName, `${prefix} ${label}`);
@@ -252,10 +255,26 @@ export function materializeDynamicParallelStep(step: DynamicParallelStep, output
 	const itemName = step.expand.item ?? "item";
 	const parallel = items.map((entry) => {
 		const task = resolveItemTemplate(step.parallel.task ?? "{previous}", itemName, entry.item);
+		let description: string;
+		try {
+			description = validateChildDescription(
+				resolveItemTemplate(step.parallel.description, itemName, entry.item),
+				`Dynamic chain step ${stepIndex + 1} item '${entry.key}' description`,
+			);
+		} catch (error) {
+			throw new DynamicFanoutError(error instanceof Error ? error.message : String(error));
+		}
 		const label = step.parallel.label ? resolveItemTemplate(step.parallel.label, itemName, entry.item) : undefined;
+		const childId = step.parallel.childId ? `${step.parallel.childId}-${entry.idKey}` : undefined;
 		return {
 			...step.parallel,
+			childId,
+			// Foreground generic chains keep a private compatibility key in agent so
+			// intercom/runtime config lookup survives materialization. Async runner
+			// templates carry childId and use the expanded description for display.
+			agent: childId ? description : step.parallel.agent || description,
 			task,
+			description,
 			...(label !== undefined ? { label } : {}),
 		};
 	});

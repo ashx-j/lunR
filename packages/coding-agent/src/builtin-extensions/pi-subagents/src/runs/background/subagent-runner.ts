@@ -152,6 +152,9 @@ interface SubagentRunConfig {
 }
 
 interface StepResult {
+	childId?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	agent: string;
 	output: string;
 	error?: string;
@@ -1371,6 +1374,9 @@ async function runSingleStep(
 	}
 
 	return {
+		childId: step.childId,
+		description: step.description,
+		permissions: step.permissions,
 		agent: step.agent,
 		output: outputForSummary,
 		exitCode: effectiveFinalExitCode,
@@ -1612,6 +1618,9 @@ async function runSubagent(
 				const taskFlatIndex = flatStepCount;
 				const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: taskFlatIndex, flatStepCount: initialFlatStepCount });
 				initialStatusSteps.push({
+					childId: task.childId,
+					description: task.description,
+					permissions: task.permissions,
 					agent: task.agent,
 					phase: task.phase,
 					label: task.label,
@@ -1648,6 +1657,9 @@ async function runSubagent(
 			const stepFlatIndex = flatStepCount;
 			const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: step.agent, flatIndex: stepFlatIndex, flatStepCount: initialFlatStepCount });
 			initialStatusSteps.push({
+				childId: step.childId,
+				description: step.description,
+				permissions: step.permissions,
 				agent: step.agent,
 				phase: step.phase,
 				label: step.label,
@@ -1942,7 +1954,7 @@ async function runSubagent(
 		mutatingFailureStates.push(...Array.from({ length: added.addedFlatSteps }, () => createMutatingFailureState()));
 		pendingToolResults.push(...Array.from({ length: added.addedFlatSteps }, () => undefined));
 		if (config.childIntercomTargets) {
-			config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.agent, index));
+			config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.childId ?? statusStep.agent, index));
 		}
 		writeStatusPayload();
 		for (const request of requests) {
@@ -2720,7 +2732,7 @@ async function runSubagent(
 			});
 			statusPayload.steps.splice(groupStartFlatIndex, 1, ...dynamicStatusSteps);
 			if (config.childIntercomTargets) {
-				config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.agent, index));
+				config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.childId ?? statusStep.agent, index));
 			}
 			mutatingFailureStates.splice(groupStartFlatIndex, 1, ...dynamicStatusSteps.map(() => createMutatingFailureState()));
 			pendingToolResults.splice(groupStartFlatIndex, 1, ...dynamicStatusSteps.map(() => undefined));
@@ -3630,6 +3642,9 @@ async function runSubagent(
 			...(statusPayload.toolBudgetBlocked ? { toolBudgetBlocked: true } : {}),
 			...(stopped ? { stopped: true, error: stopMessage } : timedOut ? { timedOut: true, error: timeoutMessage ?? "Subagent timed out." } : turnBudgetExceeded ? { error: statusPayload.error ?? "Subagent exceeded turn budget." } : {}),
 			results: results.map((r) => ({
+				childId: r.childId,
+				description: r.description,
+				permissions: r.permissions,
 				agent: r.agent,
 				output: r.output,
 				error: r.error,
