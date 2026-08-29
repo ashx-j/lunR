@@ -17,14 +17,13 @@ Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cy
 
 `present_plan` is only available in plan mode. After approval, interactive lunR leaves plan mode before the tool result resolves.
 
-## Subagents, swarm, research
+## Subagents and swarm
 
 Advertised subagents always start **fresh** (no forked parent context). Default parallel concurrency / max tasks / global run cap are unlimited; an explicit `concurrency` is still honored.
 
 A **swarm** is 3+ parallel subagents in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. Swarms are gated in **manual and yolo**. Sequential work stays `chain`.
 
 - `/swarm <task>` — orchestrate parallel subagents
-- `/research [--depth N] [--breadth N] <question>` — deep research with cited sources
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 
@@ -32,7 +31,7 @@ A **swarm** is 3+ parallel subagents in one `tasks`/`chain.parallel` call, or 3+
 
 - **Todos** — lunr-todos is a full-replace list. Completed todos prune on the next user turn (no leftover `✓ N done` footer).
 - **Memory** — simple memory under the agent dir. Cap with `memoryCharCap` (default 5000; built-in behavior presets skip the cap).
-- **Behavior presets** — `/settings` → Behavior preset: `default` (empty, fill later) / `humanizer` / `concise` / `custom`. Built-ins replace `~/.lunr/agent/behavior.md`. Custom keeps the file; there is no in-app editor and no `fs.watch`. Drift off a template flips to custom.
+- **Behavior presets** — `/settings` → Behavior preset: `default` (empty, fill later) / `humanizer` / `concise` / `custom`. Built-ins replace `~/.lunr/agent/behavior.md`. Custom keeps the user-managed file; the agent cannot change it. There is no in-app editor and no `fs.watch`. Drift off a template flips to custom.
 
 ## Cron
 
@@ -81,7 +80,8 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 ## Thinking, usage, streaming, UI
 
 - `/thinking`, `/effort`, and `/reasoning` are full-parity aliases. `/thinking` only offers levels the session model supports (`getSupportedThinkingLevels`). `xhigh` and `max` are opt-in.
-- `/usage` is **this-session** context plus plan usage. There is no `/token-usage`.
+- `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth. There is no `/token-usage`.
+- `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). Customize → Footer: plan usage hides the whole segment; Footer: plan bar hides only the █░ fill and keeps the percent.
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
 - Smooth streaming (`smoothStreaming`, default off) is **interactive TUI only** (grapheme reveal at ~30 FPS). Print, RPC, and gateway stay unsmoothed.

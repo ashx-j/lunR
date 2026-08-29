@@ -163,11 +163,11 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
 | `/manual`, `/yolo`, `/auto` | Activate that permission mode |
 | `/swarm` | Orchestrate parallel subagents |
-| `/research` | Deep research with cited sources |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (forces session auto permission mode) |
 | `/processes` | Background processes started this session |
-| `/usage` | This-session token totals, context, and plan usage |
+| `/usage` | This-session token totals, context, and every stored subscription plan |
+| `/fast` | Toggle Fast mode for OpenAI Codex subscriptions |
 | `/context` | Estimated context-window breakdown |
 | `/resume`, `/sessions` | Pick from previous sessions |
 | `/new` | Start a new session |
@@ -464,7 +464,7 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; `/swarm` and `/research`; 3+ parallel in one turn is a swarm (gated in manual **and** yolo); default parallel concurrency is unlimited
+- **Subagents** — always fresh; `/swarm`; 3+ parallel in one turn is a swarm (gated in manual **and** yolo); default parallel concurrency is unlimited
 - **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
 - **Plan mode** — `/plan` plus the `present_plan` tool
 - **Todos** — lunr-todos (full-replace)

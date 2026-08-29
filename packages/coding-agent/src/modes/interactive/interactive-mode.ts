@@ -107,8 +107,6 @@ import {
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
-import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
-import { getUsageServiceBridge } from "../../core/usage-service.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import {
@@ -152,7 +150,8 @@ import { buildSwarmPrompt } from "../../core/swarm.ts";
 import { time } from "../../core/timings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
-import { getPlanUsageResult } from "../../core/usage-service.ts";
+import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
+import { getAllPlanUsageResults, getUsageServiceBridge } from "../../core/usage-service.ts";
 import { modelToUserEntry } from "../../core/user-models.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -314,22 +313,6 @@ const INIT_EXISTING_FILE_INSTRUCTIONS = {
 	append:
 		"An AGENTS.md already exists — keep the existing content and only add missing sections; do not rewrite what is already there.",
 } as const;
-
-function buildResearchPrompt(question: string, depth: number, breadth: number): string {
-	return `[DEEP RESEARCH] Question: ${question}
-Procedure: 1) Write a 3-line research brief decomposing this into ${breadth}
-subtopics. 2) Launch ${breadth} deep-researcher subagents in ONE parallel call, one
-per subtopic. 3) Reflect: list what's unanswered or conflicting. If gaps remain and
-this is not round ${depth}, launch one more parallel round targeting the gaps.
-4) Launch ONE research-writer subagent (chain after the last round) with all
-findings; its output is the final report. 5) Save the report to
-research-<yyyymmdd>-<slug>.md in the cwd and reply with the file path + the
-5-line summary. Hard caps: ≤3 parallel rounds, ≤8 researchers per round, cite or
-delete every claim. Failure rule: if web_search errors because no search provider
-is configured, stop immediately and tell the user to configure a search provider
-key (Brave/Tavily/Exa/OpenAI etc. in ~/.lunr settings or env vars) instead of
-writing a half-researched report.`;
-}
 
 function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
@@ -522,9 +505,6 @@ export class InteractiveMode {
 
 	// Track whether a /swarm orchestration turn is in flight (footer status)
 	private swarmMode = false;
-
-	// Track whether a /research deep-research turn is in flight (footer status)
-	private researchMode = false;
 
 	// lunr: mode in effect before the current plan stretch. Used by approve / `/plan off`
 	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
@@ -3000,6 +2980,11 @@ export class InteractiveMode {
 				await this.handleUsageCommand();
 				return;
 			}
+			if (text === "/fast" || text.startsWith("/fast ")) {
+				this.editor.setText("");
+				this.handleFastCommand(text === "/fast" ? "" : text.slice(6).trim());
+				return;
+			}
 			if (text === "/context") {
 				this.editor.setText("");
 				this.handleContextCommand();
@@ -3108,12 +3093,6 @@ export class InteractiveMode {
 				const task = text.startsWith("/swarm ") ? text.slice(7).trim() : "";
 				this.editor.setText("");
 				await this.handleSwarmCommand(task);
-				return;
-			}
-			if (text === "/research" || text.startsWith("/research ")) {
-				const args = text.startsWith("/research ") ? text.slice(10).trim() : "";
-				this.editor.setText("");
-				await this.handleResearchCommand(args);
 				return;
 			}
 			if (text === "/debug") {
@@ -3565,11 +3544,6 @@ export class InteractiveMode {
 				if (this.swarmMode) {
 					this.swarmMode = false;
 					this.setExtensionStatus("swarm", undefined);
-				}
-
-				if (this.researchMode) {
-					this.researchMode = false;
-					this.setExtensionStatus("research", undefined);
 				}
 
 				this.maybeAutoNameSession();
@@ -6663,55 +6637,6 @@ export class InteractiveMode {
 		await this.sendUserMessageAfterDeferredBuiltins(buildSwarmPrompt(task));
 	}
 
-	private async handleResearchCommand(args: string): Promise<void> {
-		const usage =
-			"Usage: /research [--depth N] [--breadth N] <question> — deep research with cited sources. depth: reflection rounds (1-4, default 2); breadth: subtopics per round (1-8, default 4).";
-
-		let depth = 2;
-		let breadth = 4;
-		const questionParts: string[] = [];
-		const tokens = args.split(/\s+/).filter((t) => t.length > 0);
-		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i];
-			if (token === "--depth" || token === "--breadth") {
-				const value = tokens[i + 1];
-				if (value === undefined || !/^\d+$/.test(value)) {
-					this.showStatus(usage);
-					return;
-				}
-				if (token === "--depth") {
-					depth = Math.min(4, Math.max(1, Number.parseInt(value, 10)));
-				} else {
-					breadth = Math.min(8, Math.max(1, Number.parseInt(value, 10)));
-				}
-				i++;
-			} else if (token.startsWith("--")) {
-				this.showStatus(usage);
-				return;
-			} else {
-				questionParts.push(token);
-			}
-		}
-
-		const question = questionParts.join(" ").trim();
-		if (question.length === 0) {
-			if (this.researchMode) {
-				this.showStatus("Deep research is active — findings stream in as subagents report.");
-			} else {
-				this.showStatus(usage);
-			}
-			return;
-		}
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /research.");
-			return;
-		}
-
-		this.researchMode = true;
-		this.setExtensionStatus("research", "research ● active");
-		await this.sendUserMessageAfterDeferredBuiltins(buildResearchPrompt(question, depth, breadth));
-	}
-
 	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
 	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
 	// pops the previous leaf and navigates back.
@@ -7291,6 +7216,28 @@ export class InteractiveMode {
 		});
 	}
 
+	private handleFastCommand(arg: string): void {
+		if (this.session.model?.provider !== "openai-codex") {
+			this.showStatus("Fast mode is for OpenAI Codex subscriptions.");
+			return;
+		}
+
+		const normalized = arg.toLowerCase();
+		if (normalized === "status") {
+			this.showStatus(`Fast mode is ${this.session.openaiFastMode ? "on" : "off"}.`);
+			return;
+		}
+		if (normalized !== "" && normalized !== "on" && normalized !== "off") {
+			this.showStatus("Usage: /fast [on|off|status]");
+			return;
+		}
+
+		const enabled = normalized === "on" || (normalized === "" && !this.session.openaiFastMode);
+		this.session.setOpenAIFastMode(enabled);
+		this.showStatus(`Fast mode ${enabled ? "enabled" : "disabled"}.`);
+		this.ui.requestRender();
+	}
+
 	// lunr: /usage — current session only: token totals, live context split,
 	// context-window bar, and subscription plan usage.
 	private async handleUsageCommand(): Promise<void> {
@@ -7308,16 +7255,16 @@ export class InteractiveMode {
 
 		const context = this.session.getContextUsage();
 		const provider = this.session.model?.provider;
-		const planResult = provider ? await getPlanUsageResult(provider, this.session.modelRuntime) : {};
+		const planResult = await getAllPlanUsageResults(provider, this.session.modelRuntime);
 		const breakdown = this.collectUsageBreakdown();
 
 		const lines = renderUsageBox(
-			{ sessionTotals, context, plan: planResult.usage, breakdown },
+			{ sessionTotals, context, plan: planResult.usages, breakdown },
 			this.ui.terminal.columns,
 		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		if (planResult.error) this.showStatus(planResult.error);
+		if (planResult.errors.length > 0) this.showStatus(planResult.errors.join("\n"));
 		this.ui.requestRender();
 	}
 

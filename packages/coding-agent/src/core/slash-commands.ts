@@ -29,6 +29,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "title", description: "Set session display name (alias of /name)" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "usage", description: "Show token totals, context, and plan usage" },
+	{ name: "fast", description: "Toggle OpenAI Codex subscription Fast mode", argumentHint: "[on|off|status]" },
 	{ name: "context", description: "Show estimated context window breakdown" },
 	{
 		name: "plan",
@@ -60,11 +61,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "new", description: "Start a new session" },
 	{ name: "init", description: "Generate a starter AGENTS.md for this project" },
 	{ name: "swarm", description: "Orchestrate parallel subagents for a complex task", argumentHint: "<task>" },
-	{
-		name: "research",
-		description: "Deep research with cited sources",
-		argumentHint: "[--depth N] [--breadth N] <question>",
-	},
 	{ name: "compact", description: "Manually compact the session context" },
 	{ name: "resume", description: "Resume a different session" },
 	{ name: "sessions", description: "Browse and resume sessions" },

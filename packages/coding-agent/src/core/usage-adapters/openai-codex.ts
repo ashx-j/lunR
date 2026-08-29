@@ -204,24 +204,30 @@ function windowLabel(window: NormalizedWindow, fallback: string | undefined): st
 	return `${minutes}m`;
 }
 
-function toPlanUsage(report: CodexUsageReport): PlanUsage | undefined {
-	const snapshot = report.snapshots[0];
-	if (!snapshot) return undefined;
-	// Longer window (weekly) first, shorter (5h) second — matches /usage layout.
-	const windows: PlanUsageWindow[] = [];
-	for (const window of [snapshot.secondary, snapshot.primary]) {
-		if (!window) continue;
-		windows.push({
-			label: windowLabel(window, snapshot.limitName),
-			usedPercent: window.usedPercent,
-			resetsAt: window.resetsAt,
-		});
-	}
-	if (windows.length === 0) return undefined;
-	return { provider: CODEX_PROVIDER_ID, planLabel: report.planType, windows };
+function toPlanUsage(report: CodexUsageReport): PlanUsage[] {
+	return report.snapshots.flatMap((snapshot, index) => {
+		// Longer window (weekly) first, shorter (5h) second — matches /usage layout.
+		const windows: PlanUsageWindow[] = [];
+		for (const window of [snapshot.secondary, snapshot.primary]) {
+			if (!window) continue;
+			windows.push({
+				label: windowLabel(window, snapshot.limitName),
+				usedPercent: window.usedPercent,
+				resetsAt: window.resetsAt,
+			});
+		}
+		if (windows.length === 0) return [];
+		return [
+			{
+				provider: CODEX_PROVIDER_ID,
+				planLabel: index === 0 ? report.planType : (snapshot.limitName ?? snapshot.limitId),
+				windows,
+			},
+		];
+	});
 }
 
-export async function fetchCodexPlanUsage(runtime: ModelRuntime): Promise<PlanUsage | undefined> {
+export async function fetchCodexPlanUsage(runtime: ModelRuntime): Promise<PlanUsage[] | undefined> {
 	const headers = await resolveCodexHeaders(runtime);
 	if (!headers) return undefined;
 

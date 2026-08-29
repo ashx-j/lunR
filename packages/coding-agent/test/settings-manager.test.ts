@@ -25,6 +25,14 @@ describe("SettingsManager", () => {
 		}
 	});
 
+	it("persists OpenAI Codex Fast mode", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getOpenAIFastMode()).toBe(false);
+		manager.setOpenAIFastMode(true);
+		await manager.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getOpenAIFastMode()).toBe(true);
+	});
+
 	describe("preserves externally added settings", () => {
 		it("should preserve enabledModels when changing thinking level", async () => {
 			// Create initial settings file

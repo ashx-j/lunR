@@ -7,6 +7,11 @@ describe("BUILTIN_SLASH_COMMANDS", () => {
 		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "usage")).toBe(true);
 	});
 
+	it("registers Codex Fast mode and removes deep research", () => {
+		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "fast")).toBe(true);
+		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "research")).toBe(false);
+	});
+
 	it("includes /edit and describes /undo as same-session rewind", () => {
 		const edit = BUILTIN_SLASH_COMMANDS.find((command) => command.name === "edit");
 		const undo = BUILTIN_SLASH_COMMANDS.find((command) => command.name === "undo");
