@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import {
 	clearPlanUsageCache,
+	footerPlanLabel,
+	getAllPlanUsageResults,
 	getPlanUsage,
 	getPlanUsageResult,
-	footerPlanLabel,
 	pickPlanWindow,
 	planUsageAuthError,
 } from "../src/core/usage-service.ts";
@@ -83,6 +84,7 @@ interface FakeRuntimeOptions {
 	headers?: Record<string, string>;
 	models?: Array<{ provider: string; id: string }>;
 	oauth?: boolean;
+	storedProviders?: string[];
 }
 
 function fakeRuntime(options: FakeRuntimeOptions = {}): ModelRuntime {
@@ -92,6 +94,8 @@ function fakeRuntime(options: FakeRuntimeOptions = {}): ModelRuntime {
 		getModels: () => options.models ?? [],
 		getAvailableSnapshot: () => [],
 		isUsingOAuth: () => options.oauth === true,
+		listCredentials: async () =>
+			(options.storedProviders ?? []).map((providerId) => ({ providerId, type: "api_key" })),
 	} as unknown as ModelRuntime;
 }
 
@@ -135,6 +139,35 @@ describe("usage adapters", () => {
 		expect(usage?.windows).toEqual([
 			{ label: "Weekly", usedPercent: 14, resetsAt: 1893185400 * 1000 },
 			{ label: "5h", usedPercent: 71, resetsAt: 1892617800 * 1000 },
+		]);
+	});
+
+	it("flattens primary and additional Codex rate-limit snapshots", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({
+					...CODEX_PAYLOAD,
+					additional_rate_limits: [
+						{
+							limit_name: "Review",
+							metered_feature: "review",
+							rate_limit: {
+								primary_window: { used_percent: 25, limit_window_seconds: 3600 },
+							},
+						},
+					],
+				}),
+			),
+		);
+		const result = await getPlanUsageResult("openai-codex", codexRuntime());
+		expect(result.usages).toEqual([
+			expect.objectContaining({ provider: "openai-codex", planLabel: "plus" }),
+			{
+				provider: "openai-codex",
+				planLabel: "Review",
+				windows: [{ label: "1h", usedPercent: 25, resetsAt: undefined }],
+			},
 		]);
 	});
 
@@ -333,11 +366,36 @@ describe("usage service failure paths", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Multi-provider collection
+// ---------------------------------------------------------------------------
+
+describe("all plan usage", () => {
+	it("fetches stored adapter providers plus the current env-only provider", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL) => {
+				const url = String(input);
+				if (url.includes("api.kimi.com")) return jsonResponse(KIMI_PAYLOAD);
+				if (url.includes("api.z.ai")) return jsonResponse(ZAI_PAYLOAD);
+				if (url.includes("grok.com")) return jsonResponse(XAI_PAYLOAD);
+				return new Response("not found", { status: 404 });
+			}),
+		);
+		const result = await getAllPlanUsageResults(
+			"xai",
+			fakeRuntime({ apiKey: "token", oauth: true, storedProviders: ["kimi-coding", "zai", "openrouter"] }),
+		);
+		expect(result.usages.map((usage) => usage.provider)).toEqual(["kimi-coding", "zai", "xai"]);
+		expect(result.errors).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Cache
 // ---------------------------------------------------------------------------
 
 describe("usage service cache", () => {
-	it("caches results for 5 minutes per provider", async () => {
+	it("caches results for 60 seconds per provider", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse(KIMI_PAYLOAD));
 		vi.stubGlobal("fetch", fetchMock);
 		const runtime = fakeRuntime({ apiKey: "kimi-key" });
@@ -362,7 +420,7 @@ describe("usage service cache", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const runtime = fakeRuntime({ apiKey: "kimi-key" });
 		await getPlanUsage("kimi-coding", runtime);
-		vi.setSystemTime(Date.now() + 6 * 60 * 1000);
+		vi.setSystemTime(Date.now() + 61 * 1000);
 		await getPlanUsage("kimi-coding", runtime);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
@@ -377,15 +435,17 @@ describe("renderUsageBox", () => {
 	const data = {
 		sessionTotals: { input: 24_300_000, output: 83_000, total: 24_400_000 },
 		context: { tokens: 193_000, contextWindow: 1_000_000, percent: 19 },
-		plan: {
-			provider: "openai-codex",
-			planLabel: "plus",
-			windows: [
-				// +30s buffer: the renderer floors whole minutes at draw time.
-				{ label: "Weekly", usedPercent: 14, resetsAt: now + (6 * 24 * 60 + 21 * 60) * 60000 + 30_000 },
-				{ label: "5h", usedPercent: 71, resetsAt: now + (2 * 60 + 51) * 60000 + 30_000 },
-			],
-		},
+		plan: [
+			{
+				provider: "openai-codex",
+				planLabel: "plus",
+				windows: [
+					// +30s buffer: the renderer floors whole minutes at draw time.
+					{ label: "Weekly", usedPercent: 14, resetsAt: now + (6 * 24 * 60 + 21 * 60) * 60000 + 30_000 },
+					{ label: "5h", usedPercent: 71, resetsAt: now + (2 * 60 + 51) * 60000 + 30_000 },
+				],
+			},
+		],
 	};
 
 	it("renders all three sections inside a bordered box", () => {
@@ -399,7 +459,7 @@ describe("renderUsageBox", () => {
 		expect(plain).toContain("Context window");
 		expect(plain).toContain("19%");
 		expect(plain).toContain("193k / 1.0M");
-		expect(plain).toContain("Plan usage (plus)");
+		expect(plain).toContain("Plan usage (openai-codex · plus)");
 		expect(plain).toContain("14% used");
 		expect(plain).toContain("resets in 6d 21h");
 		expect(plain).toContain("71% used");
@@ -411,7 +471,7 @@ describe("renderUsageBox", () => {
 	});
 
 	it("omits the plan section when there is no plan data", () => {
-		const lines = renderUsageBox({ ...data, plan: undefined }, 120);
+		const lines = renderUsageBox({ ...data, plan: [] }, 120);
 		expect(lines.join("\n")).not.toContain("Plan usage");
 	});
 
@@ -423,7 +483,7 @@ describe("renderUsageBox", () => {
 	});
 
 	it("renders a placeholder for an empty session", () => {
-		const lines = renderUsageBox({ sessionTotals: undefined, context: undefined, plan: undefined }, 120);
+		const lines = renderUsageBox({ sessionTotals: undefined, context: undefined, plan: [] }, 120);
 		expect(lines.join("\n")).toContain("No usage data yet.");
 	});
 });

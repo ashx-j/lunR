@@ -382,6 +382,7 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
+		this._syncOpenAIServiceTier();
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
@@ -403,6 +404,22 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	get openaiFastMode(): boolean {
+		return this.settingsManager.getOpenAIFastMode();
+	}
+
+	setOpenAIFastMode(enabled: boolean): void {
+		this.settingsManager.setOpenAIFastMode(enabled);
+		this._syncOpenAIServiceTier();
+	}
+
+	private _syncOpenAIServiceTier(): void {
+		this.agent.serviceTier =
+			this.agent.state.model.provider === "openai-codex" && this.settingsManager.getOpenAIFastMode()
+				? "fast"
+				: undefined;
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -494,8 +511,6 @@ export class AgentSession {
 				const pathsToSnapshot: string[] = [];
 				if (toolName === "edit" || toolName === "write") {
 					if (argPath) pathsToSnapshot.push(argPath);
-				} else if (toolName === "behavior_add" || toolName === "behavior_remove") {
-					pathsToSnapshot.push(join(getAgentDir(), "behavior.md"));
 				} else if (toolName === "memory_add" || toolName === "memory_remove") {
 					// lunr: simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
 					pathsToSnapshot.push(join(dirname(getAgentDir()), "simple-memory", "memory.md"));
@@ -1694,6 +1709,7 @@ export class AgentSession {
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = model;
+		this._syncOpenAIServiceTier();
 		this._refreshSystemPromptForCurrentModel();
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -1738,6 +1754,7 @@ export class AgentSession {
 
 		// Apply model
 		this.agent.state.model = next.model;
+		this._syncOpenAIServiceTier();
 		this._refreshSystemPromptForCurrentModel();
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -1767,6 +1784,7 @@ export class AgentSession {
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = nextModel;
+		this._syncOpenAIServiceTier();
 		this._refreshSystemPromptForCurrentModel();
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
@@ -2526,6 +2544,7 @@ export class AgentSession {
 		}
 
 		this.agent.state.model = refreshedModel;
+		this._syncOpenAIServiceTier();
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {

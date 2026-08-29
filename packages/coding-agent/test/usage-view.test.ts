@@ -19,7 +19,7 @@ describe("renderUsageBox", () => {
 				{
 					sessionTotals: { input: 12000, output: 3000, cacheRead: 4000, cacheWrite: 0, total: 19000 },
 					context: undefined,
-					plan: undefined,
+					plan: [],
 				},
 				80,
 			),
@@ -34,10 +34,10 @@ describe("renderUsageBox", () => {
 
 	it("omits the session section when totals are zero or missing", () => {
 		const zero = plain(
-			renderUsageBox({ sessionTotals: { input: 0, output: 0, total: 0 }, context: undefined, plan: undefined }, 80),
+			renderUsageBox({ sessionTotals: { input: 0, output: 0, total: 0 }, context: undefined, plan: [] }, 80),
 		);
 		expect(zero).toContain("No usage data yet.");
-		const missing = plain(renderUsageBox({ sessionTotals: undefined, context: undefined, plan: undefined }, 80));
+		const missing = plain(renderUsageBox({ sessionTotals: undefined, context: undefined, plan: [] }, 80));
 		expect(missing).toContain("No usage data yet.");
 	});
 
@@ -47,7 +47,7 @@ describe("renderUsageBox", () => {
 				{
 					sessionTotals: { input: 100, output: 20, total: 120 },
 					context: undefined,
-					plan: undefined,
+					plan: [],
 				},
 				80,
 			),
@@ -78,7 +78,7 @@ describe("renderUsageBox", () => {
 				{
 					sessionTotals: undefined,
 					context: { tokens: 10, contextWindow: 200_000, percent: 1 },
-					plan: undefined,
+					plan: [],
 					breakdown,
 				},
 				80,

@@ -17,7 +17,7 @@ export interface UsageViewData {
 	/** Session-wide token totals (summed across models); omitted when no usage yet. */
 	sessionTotals: UsageTotals | undefined;
 	context: { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
-	plan: PlanUsage | undefined;
+	plan: PlanUsage[];
 	/** Live session context split; omitted when the window is unknown. */
 	breakdown?: ContextBreakdown;
 }
@@ -151,11 +151,13 @@ export function renderUsageBox(data: UsageViewData, maxWidth: number): string[] 
 		);
 	}
 
-	if (data.plan && data.plan.windows.length > 0) {
+	for (const plan of data.plan) {
+		if (plan.windows.length === 0) continue;
 		if (content.length > 0) content.push("");
-		content.push(data.plan.planLabel ? `Plan usage (${data.plan.planLabel})` : "Plan usage");
-		const labelWidth = Math.max(...data.plan.windows.map((window) => window.label.length));
-		for (const window of data.plan.windows) {
+		const planName = plan.planLabel ? `${plan.provider} · ${plan.planLabel}` : plan.provider;
+		content.push(`Plan usage (${planName})`);
+		const labelWidth = Math.max(...plan.windows.map((window) => window.label.length));
+		for (const window of plan.windows) {
 			content.push(planWindowLine(window, labelWidth));
 		}
 	}

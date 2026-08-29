@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import behaviorExtension from "../src/builtin-extensions/lunr-behavior.ts";
 import {
 	applyBehaviorPreset,
 	BEHAVIOR_HEADER,
@@ -35,7 +36,29 @@ describe("behavior presets", () => {
 		if (existsSync(testDir)) rmSync(testDir, { recursive: true });
 	});
 
+	it("injects user behavior without registering agent tools", async () => {
+		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		writeFileSync(join(agentDir, "behavior.md"), `${BEHAVIOR_HEADER}Use exact verbs.\n`, "utf-8");
+		const tools: string[] = [];
+		let beforeStart: ((event: { systemPrompt: string }) => unknown) | undefined;
+		behaviorExtension({
+			registerTool: (tool: { name: string }) => tools.push(tool.name),
+			on: (_event: string, handler: (event: { systemPrompt: string }) => unknown) => {
+				beforeStart = handler;
+			},
+		} as never);
+
+		expect(tools).toEqual([]);
+		expect(await beforeStart?.({ systemPrompt: "base" })).toEqual({
+			systemPrompt: "base\n\n## Behavior rules (user-defined; follow these)\nUse exact verbs.",
+		});
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	});
+
 	it("fingerprints humanizer, concise, empty default, and anything else as custom", () => {
+		expect(BEHAVIOR_HEADER).toContain("User-edited. The agent cannot change this file.");
 		expect(detectBehaviorPreset("")).toBe("default");
 		expect(detectBehaviorPreset(BEHAVIOR_HEADER)).toBe("default");
 		expect(detectBehaviorPreset(wrapBehaviorFile(HUMANIZER_BEHAVIOR_PRESET))).toBe("humanizer");

@@ -38,6 +38,7 @@ const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
 const PERMISSION_MODE_BRIDGE = Symbol.for("@lunr/permission-mode");
 interface CustomizeBridgeForPrompt {
 	getPromptSymbol(): boolean;
+	getOpenAIFastMode?(): boolean;
 	// lunr: footer element toggles (added to the same bridge).
 	getFooterMcp?(): boolean;
 	getFooterLsp?(): boolean;
@@ -537,10 +538,12 @@ function colorEffort(theme: Theme | undefined, level: ThinkingLevel, text: strin
 
 function buildChip(ctx: ExtensionContextLike, pi: ExtensionAPI): { left: string; effort: string; level: ThinkingLevel } {
 	const modelId = ctx.model?.id ?? "no-model";
-	const providerLabel = formatProviderLabel(ctx.model?.provider);
+	const provider = ctx.model?.provider;
+	const providerLabel = formatProviderLabel(provider);
+	const fast = provider === "openai-codex" && lunrCustomizeBridge()?.getOpenAIFastMode?.() ? " · fast" : "";
 	const level = pi.getThinkingLevel();
 	const effort = formatChipEffort(level);
-	return { left: `${modelId} \u00b7 ${providerLabel} \u00b7 `, effort, level };
+	return { left: `${modelId}${fast} · ${providerLabel} · `, effort, level };
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +679,7 @@ export function renderStatsLine(
 	const sep = color(theme, "accent2", " | "); // lunr: theme-polish — separator uses subtle accent2 blue (was bright-black plain fallback)
 	const parts: string[] = [];
 
-	// lunr: mode zone — permission mode + agent-mode statuses (plan/goal/swarm/research)
+	// lunr: mode zone — permission mode + agent-mode statuses (plan/goal/swarm)
 	// render as ONE segment (dim middot-separated), not scattered across piped sections.
 	const modeZone: string[] = [];
 
@@ -694,11 +697,11 @@ export function renderStatsLine(
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
 		// lunr: status segments are toggle-gated via the customize bridge:
-		// footerStatuses gates plan/goal/swarm/research, footerTps gates tps,
+		// footerStatuses gates plan/goal/swarm, footerTps gates tps,
 		// footerMcp gates mcp/mcp-auth, footerLsp gates lsp. Publishers keep
 		// calling ctx.ui.setStatus harmlessly when their segment is hidden.
-		// lunr: plan/goal/swarm/research join the mode zone; tps/mcp/lsp stay piped.
-		const modeKeys: string[] = footerToggles.statuses ? ["plan", "goal", "swarm", "research"] : [];
+		// lunr: plan/goal/swarm join the mode zone; tps/mcp/lsp stay piped.
+		const modeKeys: string[] = footerToggles.statuses ? ["plan", "goal", "swarm"] : [];
 		for (const key of modeKeys) {
 			const v = statuses.get(key);
 			if (v) modeZone.push(color(theme, "white", stripAnsi(v)));

@@ -13,7 +13,6 @@
  * Auth failures are different: they return `error` and are not cached as empty.
  */
 
-import { ModelsError } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import { fetchKimiPlanUsage } from "./usage-adapters/kimi-coding.ts";
@@ -35,9 +34,17 @@ export interface PlanUsage {
 }
 
 export interface PlanUsageResult {
+	/** First plan, kept for footer and compatibility callers. */
 	usage?: PlanUsage;
+	/** Every plan returned by the provider. */
+	usages?: PlanUsage[];
 	/** Actionable auth failure. Not cached as an empty success. */
 	error?: string;
+}
+
+export interface AllPlanUsageResult {
+	usages: PlanUsage[];
+	errors: string[];
 }
 
 const XAI_RELOGIN = "xAI login expired. Run /login xai.";
@@ -68,7 +75,7 @@ export function planUsageAuthError(error: unknown): string | undefined {
 	return undefined;
 }
 
-type UsageAdapter = (runtime: ModelRuntime) => Promise<PlanUsage | undefined>;
+type UsageAdapter = (runtime: ModelRuntime) => Promise<PlanUsage | PlanUsage[] | undefined>;
 
 const ADAPTERS: Readonly<Record<string, UsageAdapter>> = {
 	"openai-codex": fetchCodexPlanUsage,
@@ -108,7 +115,7 @@ export function footerPlanLabel(window: PlanUsageWindow): string {
 	return window.label.length <= 4 ? window.label : window.label.slice(0, 4);
 }
 
-const cache = new Map<string, { expiresAt: number; value: PlanUsage | undefined }>();
+const cache = new Map<string, { expiresAt: number; value: PlanUsage[] }>();
 const inflight = new Map<string, Promise<PlanUsageResult>>();
 
 /** Whether a plan-usage adapter exists for this provider. */
@@ -121,24 +128,25 @@ export async function getPlanUsage(providerId: string, runtime: ModelRuntime): P
 	return (await getPlanUsageResult(providerId, runtime)).usage;
 }
 
-/** Like getPlanUsage, but surfaces SuperGrok/auth failures instead of hiding them. */
+/** Like getPlanUsage, but surfaces auth failures instead of hiding them. */
 export async function getPlanUsageResult(providerId: string, runtime: ModelRuntime): Promise<PlanUsageResult> {
 	const adapter = ADAPTERS[providerId];
 	if (!adapter) return {};
 	const now = Date.now();
 	const cached = cache.get(providerId);
-	if (cached && cached.expiresAt > now) return { usage: cached.value };
+	if (cached && cached.expiresAt > now) return { usage: cached.value[0], usages: cached.value };
 	const pending = inflight.get(providerId);
 	if (pending) return pending;
 	const task = (async (): Promise<PlanUsageResult> => {
 		try {
 			const value = await adapter(runtime);
-			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value });
-			return { usage: value };
+			const usages = value === undefined ? [] : Array.isArray(value) ? value : [value];
+			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: usages });
+			return { usage: usages[0], usages };
 		} catch (error) {
 			const authError = planUsageAuthError(error);
 			if (authError) return { error: authError };
-			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: undefined });
+			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: [] });
 			return {};
 		} finally {
 			inflight.delete(providerId);
@@ -148,9 +156,25 @@ export async function getPlanUsageResult(providerId: string, runtime: ModelRunti
 	return task;
 }
 
+/** Fetch every stored-credential plan plus the current provider, in parallel. */
+export async function getAllPlanUsageResults(
+	currentProvider: string | undefined,
+	runtime: ModelRuntime,
+): Promise<AllPlanUsageResult> {
+	const stored = new Set((await runtime.listCredentials()).map((credential) => credential.providerId));
+	const providers = Object.keys(ADAPTERS).filter(
+		(providerId) => stored.has(providerId) || providerId === currentProvider,
+	);
+	const results = await Promise.all(providers.map((providerId) => getPlanUsageResult(providerId, runtime)));
+	return {
+		usages: results.flatMap((result) => result.usages ?? []),
+		errors: results.flatMap((result) => (result.error ? [`${result.error}`] : [])),
+	};
+}
+
 /** Last fetched usage, including expired cache (footer can show stale while refetching). */
 export function peekPlanUsage(providerId: string): PlanUsage | undefined {
-	return cache.get(providerId)?.value;
+	return cache.get(providerId)?.value[0];
 }
 
 /** Clear the adapter cache (tests, /login changes). */

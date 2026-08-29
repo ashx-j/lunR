@@ -907,8 +907,10 @@ describe("openai-codex streaming", () => {
 	it.each([
 		["gpt-5.1-codex", "flex", 0.5],
 		["gpt-5.1-codex", "priority", 2],
+		["gpt-5.1-codex", "fast", 2],
 		["gpt-5.5", "flex", 0.5],
 		["gpt-5.5", "priority", 2.5],
+		["gpt-5.5", "fast", 2.5],
 	] as const)(
 		"uses the client-sent %s service tier for %s when Codex echoes default",
 		async (modelId, serviceTier, multiplier) => {
@@ -991,11 +993,16 @@ describe("openai-codex streaming", () => {
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 			};
 
-			const result = await streamOpenAICodexResponses(model, context, {
+			const result = await streamSimpleOpenAICodexResponses(model, context, {
 				apiKey: token,
 				serviceTier,
 				transport: "sse",
 			}).result();
+
+			const codexRequest = fetchMock.mock.calls.find(([input]) => String(input).includes("/codex/responses"))?.[1] as
+				| RequestInit
+				| undefined;
+			expect(decodeCodexRequestBody(codexRequest?.body)?.service_tier).toBe(serviceTier);
 
 			expect(result.usage.cost.input).toBe(1 * multiplier);
 			expect(result.usage.cost.output).toBe(2 * multiplier);

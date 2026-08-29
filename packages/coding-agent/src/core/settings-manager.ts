@@ -100,6 +100,7 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: ThinkingLevel;
+	openaiFastMode?: boolean; // default: false - OpenAI Codex subscription service tier
 	// lunr: gateway-daemon cron fallback models, "provider/modelId" entries tried
 	// in order when a cron fire fails (timeout or any error). Hand-edited.
 	cronFallbackModels?: string[];
@@ -154,7 +155,7 @@ export interface Settings {
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerCacheHitRate?: boolean; // default: true - show the latest prompt cache-hit rate
 	footerTps?: boolean; // default: true - show the pi-tps t/s segment
-	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research status segments
+	footerStatuses?: boolean; // default: true - show the plan/goal/swarm status segments
 	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
 	footerPlan?: boolean; // default: true - show the subscription usage segment
 	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
@@ -779,6 +780,16 @@ export class SettingsManager {
 
 	getDefaultThinkingLevel(): ThinkingLevel | undefined {
 		return this.settings.defaultThinkingLevel;
+	}
+
+	getOpenAIFastMode(): boolean {
+		return this.settings.openaiFastMode ?? false;
+	}
+
+	setOpenAIFastMode(enabled: boolean): void {
+		this.globalSettings.openaiFastMode = enabled;
+		this.markModified("openaiFastMode");
+		this.save();
 	}
 
 	setDefaultThinkingLevel(level: ThinkingLevel): void {

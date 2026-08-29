@@ -48,7 +48,8 @@ Built-in commands (from `slash-commands.ts`):
 | `/copy` | Copy last agent message to clipboard |
 | `/name`, `/title` | Set session display name |
 | `/session` | Show session info and stats |
-| `/usage` | This-session token totals, context, and plan usage (no `/token-usage`) |
+| `/usage` | This-session token totals, context, and every stored subscription plan (no `/token-usage`) |
+| `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
 | `/plan` | Switch to plan permission mode, or `/plan <task>` to plan a task |
 | `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` |
@@ -68,7 +69,6 @@ Built-in commands (from `slash-commands.ts`):
 | `/new` | Start a new session |
 | `/init` | Generate a starter AGENTS.md for this project |
 | `/swarm` | Orchestrate parallel subagents for a complex task |
-| `/research` | Deep research with cited sources |
 | `/compact` | Manually compact the session context |
 | `/resume`, `/sessions` | Browse and resume sessions |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |

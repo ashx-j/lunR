@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	type ApprovalRequest,
 	type ApprovalResponse,
+	BEHAVIOR_FILE_WRITE_BLOCK_REASON,
 	clearSessionApprovals,
 	createPermissionContext,
 	deletePermissionContext,
@@ -99,18 +101,17 @@ describe("permissions", () => {
 		});
 	});
 
-	it("behavior_add triggers the approval dialog in manual mode", async () => {
-		setPermissionMode("manual");
-		let received: import("../src/core/permissions.ts").ApprovalRequest | undefined;
-		registerApprovalHandler(async (req) => {
-			received = req;
-			return "once" as ApprovalResponse;
-		});
-		const result = await gateToolCall("behavior_add", { content: "always use strict types" }, "/cwd");
-		expect(result).toBeUndefined();
-		expect(received?.toolName).toBe("behavior_add");
-		expect(received?.action).toBe("behavior_add");
-		expect(received?.detail).toBe("always use strict types");
+	it("blocks file tools from changing the user-managed behavior file in every mode", async () => {
+		const behaviorPath = join(process.env.PI_CODING_AGENT_DIR!, "behavior.md");
+		for (const mode of ["manual", "yolo", "plan", "auto"] as const) {
+			setPermissionMode(mode);
+			for (const tool of ["edit", "write", "code_rewrite"]) {
+				expect(await gateToolCall(tool, { path: behaviorPath, dry_run: true }, "/cwd"), `${mode}/${tool}`).toEqual({
+					block: true,
+					reason: BEHAVIOR_FILE_WRITE_BLOCK_REASON,
+				});
+			}
+		}
 	});
 
 	it("memory_add and cron are gated as mutating tools in manual mode", async () => {

@@ -59,7 +59,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
 | `defaultPermissionMode` | string | `"manual"` | Startup permission mode: `"manual"`, `"yolo"`, `"plan"`, or `"auto"` |
-| `behaviorPreset` | string | `"default"` | `"default"`, `"humanizer"`, `"concise"`, or `"custom"`. Custom keeps `~/.lunr/agent/behavior.md` |
+| `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
+| `behaviorPreset` | string | `"default"` | `"default"`, `"humanizer"`, `"concise"`, or `"custom"`. Custom keeps the user-managed `~/.lunr/agent/behavior.md`; the agent cannot change it |
 | `memoryCharCap` | number | `5000` | Simple-memory character cap (1–30000). Built-in behavior presets skip the cap |
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
@@ -231,7 +232,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerTokens` | boolean | `true` | Show ↑in ↓out token totals |
 | `footerCacheHitRate` | boolean | `true` | Show the latest prompt cache-hit rate when reported |
 | `footerTps` | boolean | `true` | Show tokens/second. Independent of feature statuses |
-| `footerStatuses` | boolean | `true` | Show plan/goal/swarm/research status segments |
+| `footerStatuses` | boolean | `true` | Show plan/goal/swarm status segments |
 | `footerGit` | boolean | `true` | Show git branch + added/removed |
 | `footerPlan` | boolean | `true` | Show the subscription usage segment |
 | `footerPlanBar` | boolean | `true` | Show the █░ fill; off keeps the percent only |

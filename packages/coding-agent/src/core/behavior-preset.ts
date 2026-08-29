@@ -19,7 +19,7 @@ export type BehaviorPreset = "default" | "humanizer" | "concise" | "custom";
 export const BEHAVIOR_PRESETS: readonly BehaviorPreset[] = ["default", "humanizer", "concise", "custom"];
 
 export const BEHAVIOR_HEADER =
-	"<!-- lunR behavior rules — one rule per line. Edit freely or use the behavior tools. -->\n";
+	"<!-- lunR behavior rules — one rule per line. User-edited. The agent cannot change this file. -->\n";
 
 /** Empty on purpose. Default content is a later fill-in. */
 export const DEFAULT_BEHAVIOR_PRESET = "";

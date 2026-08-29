@@ -4,7 +4,7 @@
  *
  * Full access is the coding-tool set (read/search/shell/edit/write/web/LSP/MCP
  * plus output and supervisor coordination). It is not parent-equivalent: cron,
- * memory, behavior, goals, plan approval, nested subagent management, and other
+ * memory, goals, plan approval, nested subagent management, and other
  * persistent/user-config tools stay excluded.
  *
  * Read-only drops mutating coding tools from the registry and still runs under
@@ -19,9 +19,6 @@ export const PARENT_OWNED_CHILD_TOOLS = [
 	"memory_add",
 	"memory_remove",
 	"memory_load",
-	"behavior_add",
-	"behavior_remove",
-	"behavior_load",
 	"present_plan",
 	"goal_complete",
 	"goal_blocked",

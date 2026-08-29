@@ -1,6 +1,9 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
+import {
+	stream as streamOpenAIResponses,
+	streamSimple as streamSimpleOpenAIResponses,
+} from "../src/api/openai-responses.ts";
 import { getModel } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
 
@@ -425,7 +428,9 @@ describe("openai-responses provider defaults", () => {
 
 	it.each([
 		["gpt-5.4", "priority", 2],
+		["gpt-5.4", "fast", 2],
 		["gpt-5.5", "priority", 2.5],
+		["gpt-5.5", "fast", 2.5],
 		["gpt-5.5", "flex", 0.5],
 	] as const)("applies %s %s service-tier cost multiplier", async (modelId, serviceTier, multiplier) => {
 		const model = getModel("openai", modelId);
@@ -454,16 +459,24 @@ describe("openai-responses provider defaults", () => {
 			}),
 		);
 
-		const stream = streamOpenAIResponses(
+		let capturedServiceTier: unknown;
+		const stream = streamSimpleOpenAIResponses(
 			model,
 			{
 				systemPrompt: "sys",
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
-			{ apiKey: "test-key", serviceTier },
+			{
+				apiKey: "test-key",
+				serviceTier,
+				onPayload: (payload) => {
+					capturedServiceTier = (payload as { service_tier?: unknown }).service_tier;
+				},
+			},
 		);
 
 		const result = await stream.result();
+		expect(capturedServiceTier).toBe(serviceTier);
 
 		expect(result.usage.cost.input).toBe(model.cost.input * multiplier * tokenScale);
 		expect(result.usage.cost.output).toBe(model.cost.output * multiplier * tokenScale);

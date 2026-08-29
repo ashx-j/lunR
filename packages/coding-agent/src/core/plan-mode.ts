@@ -28,15 +28,7 @@ export const PLAN_MODE_ADDENDUM =
 /** Error returned to the model when a tool call is blocked by plan mode. */
 export const PLAN_MODE_BLOCK_MESSAGE = "Plan mode is active — propose a plan; no file changes.";
 
-const BLOCKED_TOOLS = new Set([
-	"edit",
-	"write",
-	"behavior_add",
-	"behavior_remove",
-	"memory_add",
-	"memory_remove",
-	"cron",
-]);
+const BLOCKED_TOOLS = new Set(["edit", "write", "memory_add", "memory_remove", "cron"]);
 
 /** Small allowlist of read-only commands permitted in plan mode. Everything else is rejected. */
 const ALLOWED_COMMANDS = new Set([

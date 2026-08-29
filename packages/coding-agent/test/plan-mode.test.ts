@@ -13,7 +13,7 @@ describe("planModeBlockReason", () => {
 	});
 
 	it("blocks extension mutating tools", () => {
-		for (const tool of ["behavior_add", "behavior_remove", "memory_add", "memory_remove", "cron"]) {
+		for (const tool of ["memory_add", "memory_remove", "cron"]) {
 			expect(planModeBlockReason(tool, { content: "x" }), tool).toBe(PLAN_MODE_BLOCK_MESSAGE);
 		}
 	});

@@ -14,6 +14,7 @@ export const CUSTOMIZE_BRIDGE_SYMBOL = Symbol.for("@lunr/customize");
 export interface CustomizeBridge {
 	getGutterRail(): boolean;
 	getPromptSymbol(): boolean;
+	getOpenAIFastMode(): boolean;
 	getFooterMcp(): boolean;
 	getFooterLsp(): boolean;
 	getFooterContext(): boolean;
@@ -36,6 +37,9 @@ const bridge: CustomizeBridge = {
 	},
 	getPromptSymbol(): boolean {
 		return activeSettingsManager?.getPromptSymbol() ?? true;
+	},
+	getOpenAIFastMode(): boolean {
+		return activeSettingsManager?.getOpenAIFastMode() ?? false;
 	},
 	getFooterMcp(): boolean {
 		return activeSettingsManager?.getFooterMcp() ?? true;
