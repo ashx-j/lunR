@@ -42,6 +42,7 @@ export const SUBAGENT_PARENT_PATH_ENV = "PI_SUBAGENT_PARENT_PATH";
 export const SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV = "PI_SUBAGENT_PARENT_CAPABILITY_TOKEN";
 export const SUBAGENT_PARENT_SESSION_ENV = "PI_SUBAGENT_PARENT_SESSION";
 export const SUBAGENT_PARENT_PERMISSION_MODE_ENV = "PI_SUBAGENT_PARENT_PERMISSION_MODE";
+export const SUBAGENT_CHILD_PERMISSION_ENV = "PI_SUBAGENT_CHILD_PERMISSION";
 export const SUBAGENT_STEER_INBOX_ENV = "PI_SUBAGENT_STEER_INBOX";
 export const SUBAGENT_STEER_CAPABILITY_ENV = "PI_SUBAGENT_STEER_CAPABILITY";
 export const SUBAGENT_STEER_ACK_DIR_ENV = "PI_SUBAGENT_STEER_ACK_DIR";
@@ -91,6 +92,10 @@ interface BuildPiArgsInput {
 	childWatchdog?: ChildWatchdogConfig;
 	waitToolEnabled?: boolean;
 	parentPermissionMode?: string;
+	childPermission?: "full" | "read-only";
+	excludeTools?: string[];
+	childId?: string;
+	childDescription?: string;
 }
 
 interface BuildPiArgsResult {
@@ -161,6 +166,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 			args.push("--tools", requiredChildTools.join(","));
 		}
 	}
+	if (input.excludeTools?.length) {
+		args.push("--exclude-tools", [...new Set(input.excludeTools)].join(","));
+	}
 
 	const runtimeExtensions = fanoutAuthorized
 		? [PROMPT_RUNTIME_EXTENSION_PATH, FANOUT_CHILD_EXTENSION_PATH]
@@ -209,7 +217,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		env[CHILD_TOOL_DIAGNOSTIC_PATH_ENV] = toolDiagnosticPath;
 	}
 	env[SUBAGENT_CHILD_ENV] = "1";
-	env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] = input.parentPermissionMode ?? process.env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] ?? "";
+	env[SUBAGENT_CHILD_PERMISSION_ENV] = input.childPermission
+		?? (input.parentPermissionMode === "plan" ? "read-only" : "full");
+	env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] = "";
 	env[SUBAGENT_FANOUT_CHILD_ENV] = fanoutAuthorized ? "1" : "0";
 	if (input.waitToolEnabled !== undefined) {
 		env[WAIT_TOOL_ENABLED_ENV] = input.waitToolEnabled ? "true" : "false";
@@ -268,8 +278,8 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.runId) {
 		env[SUBAGENT_RUN_ID_ENV] = input.runId;
 	}
-	if (input.childAgentName) {
-		env[SUBAGENT_CHILD_AGENT_ENV] = input.childAgentName;
+	if (input.childId || input.childAgentName) {
+		env[SUBAGENT_CHILD_AGENT_ENV] = input.childId ?? input.childAgentName;
 	}
 	if (input.childIndex !== undefined) {
 		env[SUBAGENT_CHILD_INDEX_ENV] = String(input.childIndex);

@@ -9,7 +9,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
-import type { AgentConfig } from "../../agents/agents.ts";
+import type { ChildRuntimeConfig } from "../../shared/types.ts";
 import type { ResolvedStepBehavior } from "../../shared/settings.ts";
 import { resolveModelCandidate, splitThinkingSuffix } from "../shared/model-fallback.ts";
 import { findModelInfo, getSupportedThinkingLevels, type ModelInfo, type ThinkingLevel } from "../../shared/model-info.ts";
@@ -222,7 +222,7 @@ export class ChainClarifyComponent implements Component {
 	private runInBackground = false;
 	private tui: TUI;
 	private theme: Theme;
-	private agentConfigs: AgentConfig[];
+	private agentConfigs: ChildRuntimeConfig[];
 	private templates: string[];
 	private originalTask: string;
 	private chainDir: string | undefined;
@@ -236,7 +236,7 @@ export class ChainClarifyComponent implements Component {
 	constructor(
 		tui: TUI,
 		theme: Theme,
-		agentConfigs: AgentConfig[],
+		agentConfigs: ChildRuntimeConfig[],
 		templates: string[],
 		originalTask: string,
 		chainDir: string | undefined,

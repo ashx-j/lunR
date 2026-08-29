@@ -386,7 +386,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 				const stepOutputPath = path.join(asyncDir, `output-${index}.log`);
 				if (stepOutputPath !== outputPath && fs.existsSync(stepOutputPath)) lines.push(`  Output: ${stepOutputPath}`);
 				if (step.status === "running") {
-					lines.push(`  Intercom target: ${resolveSubagentIntercomTarget(status.runId, step.agent, index)} (if registered)`);
+					lines.push(`  Intercom target: ${resolveSubagentIntercomTarget(status.runId, step.childId ?? step.agent, index)} (if registered)`);
 					lines.push(`  Steer: subagent({ action: "steer", id: "${status.runId}", index: ${index}, message: "..." })`);
 				}
 			}

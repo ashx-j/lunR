@@ -9,7 +9,7 @@
  * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
  * Toggle: async parameter (default: false, configurable via config.json)
  *
- * Config file: ~/.pi/agent/extensions/subagent/config.json
+ * Config file: ~/.lunr/agent/extensions/subagent/config.json
  *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
  */
 
@@ -20,7 +20,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyText, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { discoverAgents } from "../agents/agents.ts";
+
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
@@ -74,8 +74,8 @@ export { loadConfig } from "./config.ts";
 
 /**
  * Derive subagent session base directory from parent session file.
- * If parent session is ~/.pi/agent/sessions/abc123.jsonl,
- * returns ~/.pi/agent/sessions/abc123/ as the base.
+ * If parent session is ~/.lunr/agent/sessions/abc123.jsonl,
+ * returns ~/.lunr/agent/sessions/abc123/ as the base.
  * Callers add runId to create the actual session root: abc123/{runId}/
  * Falls back to a unique temp directory if no parent session.
  */
@@ -325,7 +325,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
-		discoverAgents,
 	});
 	executorExecute = executor.execute;
 
@@ -357,7 +356,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const parts: string[] = [];
 		if (details.taskInfo) parts.push(details.taskInfo);
 		if (details.durationMs !== undefined) parts.push(formatDuration(details.durationMs));
-		let text = `${icon} ${theme.bold(details.agent)} ${theme.fg("dim", details.status)}`;
+		const notifyLabel = details.taskInfo || details.agent || "child";
+		let text = `${icon} ${theme.bold(notifyLabel)} ${theme.fg("dim", details.status)}`;
 		if (parts.length > 0) text += ` ${theme.fg("dim", "·")} ${parts.map((part) => theme.fg("dim", part)).join(` ${theme.fg("dim", "·")} `)}`;
 		const trimmedPreview = details.resultPreview.trim();
 		const previewLines = options.expanded
@@ -439,7 +439,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 		renderCall(args, theme) {
 			if (args.action) {
-				const target = args.agent || args.chainName || "";
+				const target = args.id || args.runId || "";
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 					0, 0,
@@ -461,19 +461,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					0,
 				);
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.description || args.task || "?")}${asyncLabel}`,
 				0,
 				0,
 			);
 		},
 
 		renderResult(result, options, theme, context) {
-			// lunr: hide `subagent list` / `subagent models` result bodies — the call
-			// row already shows the action; the dump stays in the transcript for the model.
-			const action = (context.args as { action?: string } | undefined)?.action;
-			if (action === "list" || action === "models") {
-				return { render: () => [], invalidate() {} };
-			}
 			if (subagentResultIsRunning(result)) {
 				ensureSubagentResultAnimation(context);
 			} else {

@@ -7,7 +7,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "../../agents/agents.ts";
+import type { ChildRuntimeConfig } from "../../shared/types.ts";
+import { normalizeChildSpec } from "../../shared/child-spec.ts";
+import { snapshotParentPermissionMode } from "../../../../core/subagent-permission-inherit.ts";
 import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import {
@@ -96,7 +98,7 @@ interface ParallelChainRunInput {
 	step: ParallelStep;
 	parallelTemplates: string[];
 	parallelBehaviors: ResolvedStepBehavior[];
-	agents: AgentConfig[];
+	agents: ChildRuntimeConfig[];
 	stepIndex: number;
 	availableModels: ModelInfo[];
 	modelScope?: ModelScopeConfig;
@@ -111,7 +113,7 @@ interface ParallelChainRunInput {
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
 	sessionFileForTask?: (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
-	thinkingOverrideForTask?: (agentName: string, idx?: number, modelOverride?: string) => AgentConfig["thinking"] | undefined;
+	thinkingOverrideForTask?: (agentName: string, idx?: number, modelOverride?: string) => ChildRuntimeConfig["thinking"] | undefined;
 	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
@@ -124,6 +126,7 @@ interface ParallelChainRunInput {
 	foregroundControl?: {
 		updatedAt: number;
 		currentAgent?: string;
+		currentChildId?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
 		lastActivityAt?: number;
@@ -233,11 +236,11 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 	const failFast = input.step.failFast ?? false;
 	let aborted = false;
 	const effectiveModels = input.step.parallel.map((task) => {
-		const taskAgentConfig = input.agents.find((agent) => agent.name === task.agent);
+		const taskChildConfig = input.agents.find((child) => child.name === task.agent);
 		return resolveEffectiveSubagentModel(
 			// lunr: model tiers — explicit per-task model wins; otherwise resolve task.tier via the tier bridge.
 			task.model ?? resolveTierModelOverride(task.tier),
-			taskAgentConfig?.model,
+			taskChildConfig?.model,
 			input.ctx.model,
 			input.availableModels,
 			input.ctx.model?.provider,
@@ -266,7 +269,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 
 			const taskTemplate = input.parallelTemplates[taskIndex] ?? "{previous}";
 			const behavior = suppressProgressForReadOnlyTask(input.parallelBehaviors[taskIndex]!, taskTemplate, input.originalTask);
-			const taskAgentConfig = input.agents.find((agent) => agent.name === task.agent);
+			const taskChildConfig = input.agents.find((child) => child.name === task.agent);
 			const templateHasPrevious = taskTemplate.includes("{previous}");
 			const { prefix, suffix } = buildChainInstructions(
 				{ ...behavior, output: false },
@@ -283,8 +286,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			taskStr = prefix + taskStr + suffix;
 
 			const effectiveModel = effectiveModels[taskIndex];
-			const maxSubagentDepth = resolveChildMaxSubagentDepth(input.maxSubagentDepth, taskAgentConfig?.maxSubagentDepth);
-			const toolBudget = resolveChainToolBudget({ stepBudget: task.toolBudget, runBudget: input.toolBudget, agentBudget: taskAgentConfig?.toolBudget, configBudget: input.configToolBudget });
+			const maxSubagentDepth = resolveChildMaxSubagentDepth(input.maxSubagentDepth, taskChildConfig?.maxSubagentDepth);
+			const toolBudget = resolveChainToolBudget({ stepBudget: task.toolBudget, runBudget: input.toolBudget, agentBudget: taskChildConfig?.toolBudget, configBudget: input.configToolBudget });
 			if (toolBudget.error) throw new Error(toolBudget.error);
 
 			const taskCwd = input.worktreeSetup
@@ -294,10 +297,11 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(input.chainDir, behavior.output))
 				: undefined;
-			taskStr = injectSingleOutputInstruction(taskStr, outputPath, taskAgentConfig);
+			taskStr = injectSingleOutputInstruction(taskStr, outputPath, taskChildConfig);
 			const interruptController = new AbortController();
 			if (input.foregroundControl) {
-				input.foregroundControl.currentAgent = task.agent;
+				input.foregroundControl.currentAgent = task.description || task.agent;
+				input.foregroundControl.currentChildId = task.agent;
 				input.foregroundControl.currentIndex = input.globalTaskIndex + taskIndex;
 				input.foregroundControl.currentActivityState = undefined;
 				input.foregroundControl.updatedAt = Date.now();
@@ -313,12 +317,23 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const structuredRuntime = task.outputSchema
 				? createStructuredOutputRuntime(task.outputSchema, path.join(input.chainDir, "structured-output"))
 				: undefined;
-			const result = await runSync(input.ctx.cwd, input.agents, task.agent, taskStr, {
+			const result = await runSync(input.ctx.cwd, normalizeChildSpec({
+				task: taskStr,
+				description: task.description,
+				permissions: task.permissions,
+				model: effectiveModel ?? task.model,
+				skill: task.skill,
+				cwd: taskCwd,
+				output: task.output,
+				outputMode: task.outputMode,
+				acceptance: task.acceptance,
+				toolBudget: task.toolBudget,
+			}, { parentMode: snapshotParentPermissionMode(input.ctx.sessionManager.getSessionId() ?? undefined), runId: input.runId, index: input.globalTaskIndex + taskIndex }), {
 				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 				cwd: taskCwd,
 				signal: input.signal,
 				interruptSignal: interruptController.signal,
-				allowIntercomDetach: taskAgentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
+				allowIntercomDetach: taskChildConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 				intercomEvents: input.intercomEvents,
 				runId: input.runId,
 				index: input.globalTaskIndex + taskIndex,
@@ -358,7 +373,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 						const stepProgress = progressUpdate.details?.progress || [];
 						if (input.foregroundControl && stepProgress.length > 0) {
 							const current = stepProgress[0];
-							input.foregroundControl.currentAgent = task.agent;
+							input.foregroundControl.currentAgent = task.description || task.agent;
+							input.foregroundControl.currentChildId = task.agent;
 							input.foregroundControl.currentIndex = input.globalTaskIndex + taskIndex;
 							input.foregroundControl.currentActivityState = current?.activityState;
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
@@ -416,7 +432,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 interface ChainExecutionParams {
 	chain: ChainStep[];
 	task?: string;
-	agents: AgentConfig[];
+	agents: ChildRuntimeConfig[];
 	ctx: ExtensionContext;
 	intercomEvents?: IntercomEventBus;
 	signal?: AbortSignal;
@@ -426,7 +442,7 @@ interface ChainExecutionParams {
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
 	sessionFileForTask?: (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
-	thinkingOverrideForTask?: (agentName: string, idx?: number, modelOverride?: string) => AgentConfig["thinking"] | undefined;
+	thinkingOverrideForTask?: (agentName: string, idx?: number, modelOverride?: string) => ChildRuntimeConfig["thinking"] | undefined;
 	artifactsDir: string;
 	artifactConfig: ArtifactConfig;
 	includeProgress?: boolean;
@@ -439,6 +455,7 @@ interface ChainExecutionParams {
 	foregroundControl?: {
 		updatedAt: number;
 		currentAgent?: string;
+		currentChildId?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
 		lastActivityAt?: number;
@@ -522,10 +539,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 	const chainAgents: string[] = chainSteps.map((step) =>
 		isParallelStep(step)
-			? `[${step.parallel.map((t) => t.agent).join("+")}]`
+			? `[${step.parallel.map((t) => t.description || t.label || t.agent || "child").join("+")}]`
 			: isDynamicParallelStep(step)
-				? `expand:${step.parallel.agent}`
-			: (step as SequentialStep).agent,
+				? `expand:${step.parallel.description || step.parallel.label || step.parallel.agent || "child"}`
+			: ((step as SequentialStep).description || (step as SequentialStep).label || (step as SequentialStep).agent || "child"),
 	);
 	const totalSteps = chainSteps.length;
 
@@ -575,7 +592,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 	if (shouldClarify) {
 		const seqSteps = chainSteps as SequentialStep[];
-		const agentConfigs: AgentConfig[] = [];
+		const agentConfigs: ChildRuntimeConfig[] = [];
 		for (const step of seqSteps) {
 			const config = agents.find((a) => a.name === step.agent);
 			if (!config) {
@@ -598,8 +615,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			model: step.model,
 		}));
 
-		const resolvedBehaviors = agentConfigs.map((config, i) =>
-			resolveStepBehavior(config, stepOverrides[i]!, chainSkills),
+		const resolvedBehaviors = agentConfigs.map((_config, i) =>
+			resolveStepBehavior(stepOverrides[i]!, chainSkills),
 		);
 		const flatTemplates = templates as string[];
 
@@ -697,7 +714,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			try {
 				const agentNames = step.parallel.map((task) => task.agent);
-				const parallelBehaviors = resolveParallelBehaviors(step.parallel, agents, stepIndex, chainSkills)
+				const parallelBehaviors = resolveParallelBehaviors(step.parallel, stepIndex, chainSkills)
 					.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, parallelTemplates[taskIndex] ?? step.parallel[taskIndex]?.task, originalTask));
 				for (let taskIndex = 0; taskIndex < step.parallel.length; taskIndex++) {
 					const behavior = parallelBehaviors[taskIndex]!;
@@ -914,7 +931,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				failFast: step.failFast,
 			};
 			const parallelTemplates = materialized.parallel.map((task) => task.task ?? "{previous}");
-			const parallelBehaviors = resolveParallelBehaviors(dynamicParallelStep.parallel, agents, stepIndex, chainSkills)
+			const parallelBehaviors = resolveParallelBehaviors(dynamicParallelStep.parallel, stepIndex, chainSkills)
 				.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, parallelTemplates[taskIndex] ?? dynamicParallelStep.parallel[taskIndex]?.task, originalTask));
 
 			for (let taskIndex = 0; taskIndex < dynamicParallelStep.parallel.length; taskIndex++) {
@@ -1105,7 +1122,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						? tuiOverride.skills
 						: normalizeSkillInput(seqStep.skill),
 			};
-			const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(agentConfig, stepOverride, chainSkills), stepTemplate, originalTask);
+			const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(stepOverride, chainSkills), stepTemplate, originalTask);
 
 			const isFirstProgress = behavior.progress && !progressCreated;
 			if (isFirstProgress) {
@@ -1150,7 +1167,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const childIndex = globalTaskIndex;
 			const interruptController = new AbortController();
 			if (foregroundControl) {
-				foregroundControl.currentAgent = seqStep.agent;
+				foregroundControl.currentAgent = seqStep.description || seqStep.agent;
+				foregroundControl.currentChildId = seqStep.agent;
 				foregroundControl.currentIndex = childIndex;
 				foregroundControl.currentActivityState = undefined;
 				foregroundControl.updatedAt = Date.now();
@@ -1183,7 +1201,18 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				dynamicChildren,
 				dynamicGroupStatuses,
 			});
-			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
+			const r = await runSync(ctx.cwd, normalizeChildSpec({
+				task: stepTask,
+				description: seqStep.description,
+				permissions: seqStep.permissions,
+				model: effectiveModel ?? seqStep.model,
+				skill: seqStep.skill,
+				cwd: seqStep.cwd,
+				output: seqStep.output,
+				outputMode: seqStep.outputMode,
+				acceptance: seqStep.acceptance,
+				toolBudget: seqStep.toolBudget,
+			}, { parentMode: snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined), runId, index: childIndex }), {
 				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 				cwd: resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
 				signal,
@@ -1228,7 +1257,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						const stepProgress = p.details?.progress || [];
 						if (foregroundControl && stepProgress.length > 0) {
 							const current = stepProgress[0];
-							foregroundControl.currentAgent = seqStep.agent;
+							foregroundControl.currentAgent = seqStep.description || seqStep.agent;
+							foregroundControl.currentChildId = seqStep.agent;
 							foregroundControl.currentIndex = childIndex;
 							foregroundControl.currentActivityState = current?.activityState;
 							foregroundControl.lastActivityAt = current?.lastActivityAt;

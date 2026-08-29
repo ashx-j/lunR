@@ -15,17 +15,18 @@ describe("stripTaskChrome", () => {
 });
 
 describe("compactRowLead", () => {
-	it("prefers the model over Read from chrome", () => {
+	it("uses description as the primary label", () => {
 		expect(
 			compactRowLead({
+				description: "Search auth flow for bugs",
 				task: "[Read from: C:\\foo]\nDo the work",
 				model: "xai/grok-4:high",
 			}),
-		).toBe("grok-4");
+		).toBe("Search auth flow for bugs");
 	});
 
-	it("never returns the path when there is no model", () => {
-		expect(compactRowLead({ task: "[Read from: C:\\foo]" })).toBe("");
+	it("never returns a model or path when description is missing", () => {
+		expect(compactRowLead({ task: "[Read from: C:\\foo]", model: "xai/grok-4:high" })).toBe("");
 	});
 
 	it("falls back to the truncated first line of a normal task", () => {
@@ -65,7 +66,7 @@ describe("renderSingleCompact thinking line", () => {
 		italic: (value: string) => value,
 	};
 
-	it("shows header model plus one stats hang line, not thinking text", () => {
+	it("shows description-first header plus one stats hang line, not thinking text", () => {
 		const result = renderSubagentResult(
 			{
 				content: [{ type: "text", text: "running" }],
@@ -73,7 +74,8 @@ describe("renderSingleCompact thinking line", () => {
 					mode: "single",
 					results: [
 						{
-							agent: "worker",
+							description: "Search auth flow for bugs",
+							permissions: "read-only",
 							task: "do the work",
 							exitCode: 0,
 							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
@@ -81,7 +83,8 @@ describe("renderSingleCompact thinking line", () => {
 							thinking: "high",
 							progress: {
 								index: 0,
-								agent: "worker",
+								description: "Search auth flow for bugs",
+								permissions: "read-only",
 								status: "running",
 								task: "do the work",
 								model: "xai/grok-4.5",
@@ -104,11 +107,10 @@ describe("renderSingleCompact thinking line", () => {
 			stubTheme,
 		);
 		const lines = result.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+		expect(lines[0]).toContain("Search auth flow for bugs");
 		expect(lines[0]).toContain("grok-4.5");
-		expect(lines[0]).not.toContain("thinking high");
-		expect(lines[0]).toContain("worker");
-		expect(lines[0]).toContain("52 tool uses");
-		expect(lines[0]).toContain("172k token");
+		expect(lines[0]).not.toContain("worker");
+		expect(lines[0]).not.toContain("scout");
 		expect(lines.some((line) => line.includes("Considering the next read of src/foo.ts"))).toBe(false);
 		expect(lines.some((line) => /needs attention/i.test(line))).toBe(false);
 		expect(lines.some((line) => /read:/.test(line))).toBe(false);

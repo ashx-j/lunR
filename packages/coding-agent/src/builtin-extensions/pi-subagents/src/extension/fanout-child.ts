@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { discoverAgents } from "../agents/agents.ts";
+
 import { getArtifactsDir } from "../shared/artifacts.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveWaitToolConfig } from "../runs/background/wait-config.ts";
@@ -85,11 +85,12 @@ function startNestedControlInboxListener(pi: ExtensionAPI, state: SubagentState)
 										: `Nested run ${request.targetRunId} has no active child step to interrupt.`;
 								} else if (!request.message?.trim()) {
 									message = "Nested resume requires message.";
-								} else if (!control.currentAgent) {
+								} else if (!control.currentChildId && !control.currentAgent) {
 									message = `Nested run ${request.targetRunId} has no active child message route.`;
 								} else {
 									const index = control.currentIndex ?? 0;
-									const target = resolveSubagentIntercomTarget(request.targetRunId, control.currentAgent, index);
+									const childId = control.currentChildId ?? control.currentAgent!;
+									const target = resolveSubagentIntercomTarget(request.targetRunId, childId, index);
 									ok = await deliverSubagentIntercomMessageEvent(
 										pi.events,
 										target,
@@ -152,7 +153,6 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI): 
 		tempArtifactsDir: getArtifactsDir(null),
 		getSubagentSessionRoot,
 		expandTilde,
-		discoverAgents,
 		allowMutatingManagementActions: false,
 	});
 
@@ -160,9 +160,9 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI): 
 		name: "subagent",
 		label: "Subagent",
 		description: [
-			"Delegate to subagents from child-safe fanout mode.",
-			"Allowed management/control actions: list, get, status, interrupt, resume, steer, append-step, doctor.",
-			"Agent config mutation actions (create, update, delete, eject, disable, enable, reset) are blocked in this mode.",
+			"Delegate to generic children from child-safe fanout mode.",
+			"Execution uses { task, description, permissions? } (or tasks[] / chain[]).",
+			"Allowed control actions: status, interrupt, resume, steer, append-step, doctor.",
 		].join("\n"),
 		parameters: SubagentParams,
 		execute(id, params, signal, onUpdate, ctx) {

@@ -8,12 +8,13 @@
 export function buildSwarmPrompt(task: string): string {
 	return `[SWARM MODE] Task: ${task}
 Act as an orchestrator. 1) Decompose into 3-8 independent subtasks. 2) Launch them
-in ONE parallel subagent call (async:false), picking an agent + model tier per
-subtask (prefer scout for exploration, worker for implementation, reviewer for
-verification). 3) Synthesize the results and report. Rules: max 8 concurrent
-subagents; no nested fan-out; if a subtask fails, retry once with the heavy tier
-before giving up on it; keep your final report under 100 lines with per-subtask
-status.`;
+in ONE parallel subagent call (async:false) as generic children, each with task,
+description, and permissions ("full" or "read-only"; omit permissions for full).
+Use read-only children for inspection/review and full children only when edits
+are required. Pick a model tier per subtask. 3) Synthesize the results and report.
+Rules: max 8 concurrent children; no nested fan-out; if a subtask fails, retry
+once with the heavy tier before giving up on it; keep your final report under
+100 lines with per-subtask status.`;
 }
 
 /**
@@ -67,7 +68,12 @@ export function effectiveSwarmCount(args: Record<string, unknown>): number {
 function siblingSingleCount(args: Record<string, unknown>): number {
 	if (isManagementCall(args) || isAsyncDetached(args)) return 0;
 	if (Array.isArray(args.tasks) || Array.isArray(args.chain)) return 0;
-	return typeof args.agent === "string" && args.agent.length > 0 ? 1 : 0;
+	return typeof args.task === "string" &&
+		args.task.length > 0 &&
+		typeof args.description === "string" &&
+		args.description.length > 0
+		? 1
+		: 0;
 }
 
 interface AssistantMessageLike {

@@ -5,7 +5,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentConfig } from "../agents/agents.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
 import { CHAIN_RUNS_DIR, type AcceptanceInput, type JsonSchemaObject, type OutputMode, type ToolBudgetConfig } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -41,10 +40,12 @@ function normalizeOutputOverride(output: string | false | undefined): string | f
 // Chain Step Types
 // =============================================================================
 
-/** Sequential step: single agent execution */
+/** Sequential step: single generic child execution */
 export interface SequentialStep {
-	agent: string;
+	agent?: string;
 	task?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	phase?: string;
 	label?: string;
 	as?: string;
@@ -56,14 +57,17 @@ export interface SequentialStep {
 	progress?: boolean;
 	skill?: string | string[] | false;
 	model?: string;
+	tier?: "light" | "standard" | "heavy";
 	toolBudget?: ToolBudgetConfig;
 	acceptance?: AcceptanceInput;
 }
 
 /** Parallel task item within a parallel step */
 export interface ParallelTaskItem {
-	agent: string;
+	agent?: string;
 	task?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	phase?: string;
 	label?: string;
 	as?: string;
@@ -76,6 +80,7 @@ export interface ParallelTaskItem {
 	progress?: boolean;
 	skill?: string | string[] | false;
 	model?: string;
+	tier?: "light" | "standard" | "heavy";
 	toolBudget?: ToolBudgetConfig;
 	acceptance?: AcceptanceInput;
 }
@@ -133,15 +138,15 @@ export function isDynamicParallelStep(step: ChainStep): step is DynamicParallelS
 	return "expand" in step && "collect" in step && "parallel" in step && !Array.isArray((step as { parallel?: unknown }).parallel);
 }
 
-/** Get all agent names in a step (single for sequential, multiple for parallel) */
+/** Get display labels (description) for children in a step. */
 export function getStepAgents(step: ChainStep): string[] {
 	if (isParallelStep(step)) {
-		return step.parallel.map((t) => t.agent);
+		return step.parallel.map((t) => t.description || t.label || t.agent || "child");
 	}
 	if (isDynamicParallelStep(step)) {
-		return [step.parallel.agent];
+		return [step.parallel.description || step.parallel.label || step.parallel.agent || "child"];
 	}
-	return [step.agent];
+	return [step.description || step.label || step.agent || "child"];
 }
 
 // =============================================================================
@@ -227,31 +232,16 @@ export function resolveChainTemplates(
 
 /**
  * Resolve effective chain behavior per step.
- * Priority: step override > agent frontmatter > false (disabled)
+ * Priority: step override > false (disabled). Children have no named-agent defaults.
  */
 export function resolveStepBehavior(
-	agentConfig: AgentConfig,
 	stepOverrides: StepOverrides,
 	chainSkills?: string[],
 ): ResolvedStepBehavior {
-	// Output: step override > frontmatter > false (no output)
 	const stepOutput = normalizeOutputOverride(stepOverrides.output);
-	const output =
-		stepOutput !== undefined
-			? stepOutput
-			: normalizeOutputOverride(agentConfig.output) ?? false;
-
-	// Reads: step override > frontmatter defaultReads > false (no reads)
-	const reads =
-		stepOverrides.reads !== undefined
-			? stepOverrides.reads
-			: agentConfig.defaultReads ?? false;
-
-	// Progress: step override > frontmatter defaultProgress > false
-	const progress =
-		stepOverrides.progress !== undefined
-			? stepOverrides.progress
-			: agentConfig.defaultProgress ?? false;
+	const output = stepOutput !== undefined ? stepOutput : false;
+	const reads = stepOverrides.reads !== undefined ? stepOverrides.reads : false;
+	const progress = stepOverrides.progress !== undefined ? stepOverrides.progress : false;
 
 	let skills: string[] | false;
 	if (stepOverrides.skills === false) {
@@ -262,14 +252,11 @@ export function resolveStepBehavior(
 			skills = [...new Set([...skills, ...chainSkills])];
 		}
 	} else {
-		skills = agentConfig.skills ? [...agentConfig.skills] : [];
-		if (chainSkills && chainSkills.length > 0) {
-			skills = [...new Set([...skills, ...chainSkills])];
-		}
+		skills = chainSkills && chainSkills.length > 0 ? [...chainSkills] : [];
 	}
 
 	const outputMode = stepOverrides.outputMode ?? "inline";
-	const model = stepOverrides.model ?? agentConfig.model;
+	const model = stepOverrides.model;
 	return { output, outputMode, reads, progress, skills, model };
 }
 
@@ -369,47 +356,25 @@ export function buildChainInstructions(
  */
 export function resolveParallelBehaviors(
 	tasks: ParallelTaskItem[],
-	agentConfigs: AgentConfig[],
 	stepIndex: number,
 	chainSkills?: string[],
 ): ResolvedStepBehavior[] {
 	return tasks.map((task, taskIndex) => {
-		const config = agentConfigs.find((a) => a.name === task.agent);
-		if (!config) {
-			throw new Error(`Unknown agent: ${task.agent}`);
-		}
-
-		// Build subdirectory path for this parallel task
-		const subdir = path.join(`parallel-${stepIndex}`, `${taskIndex}-${task.agent}`);
-
-		// Output: task override > agent default (namespaced) > false
-		// Absolute paths pass through unchanged; relative paths get namespaced under subdir
+		const subdir = path.join(`parallel-${stepIndex}`, String(taskIndex));
 		let output: string | false = false;
 		const taskOutput = normalizeOutputOverride(task.output);
-		const configOutput = normalizeOutputOverride(config.output);
 		if (taskOutput !== undefined) {
 			if (taskOutput === false) {
 				output = false;
 			} else if (path.isAbsolute(taskOutput)) {
-				output = taskOutput; // Absolute path: use as-is
+				output = taskOutput;
 			} else {
-				output = path.join(subdir, taskOutput); // Relative: namespace under subdir
+				output = path.join(subdir, taskOutput);
 			}
-		} else if (configOutput) {
-			// Agent defaults are always relative, so namespace them
-			output = path.join(subdir, configOutput);
 		}
 
-		// Reads: task override > agent default > false
-		const reads =
-			task.reads !== undefined ? task.reads : config.defaultReads ?? false;
-
-		// Progress: task override > agent default > false
-		const progress =
-			task.progress !== undefined
-				? task.progress
-				: config.defaultProgress ?? false;
-
+		const reads = task.reads !== undefined ? task.reads : false;
+		const progress = task.progress !== undefined ? task.progress : false;
 		const taskSkillInput = normalizeSkillInput(task.skill);
 		let skills: string[] | false;
 		if (taskSkillInput === false) {
@@ -420,14 +385,11 @@ export function resolveParallelBehaviors(
 				skills = [...new Set([...skills, ...chainSkills])];
 			}
 		} else {
-			skills = config.skills ? [...config.skills] : [];
-			if (chainSkills && chainSkills.length > 0) {
-				skills = [...new Set([...skills, ...chainSkills])];
-			}
+			skills = chainSkills && chainSkills.length > 0 ? [...chainSkills] : [];
 		}
 
 		const outputMode = task.outputMode ?? "inline";
-		const model = task.model ?? config.model;
+		const model = task.model;
 		return { output, outputMode, reads, progress, skills, model };
 	});
 }
@@ -442,7 +404,7 @@ export function createParallelDirs(
 	agentNames: string[],
 ): void {
 	for (let i = 0; i < taskCount; i++) {
-		const subdir = path.join(chainDir, `parallel-${stepIndex}`, `${i}-${agentNames[i]}`);
+		const subdir = path.join(chainDir, `parallel-${stepIndex}`, String(i));
 		fs.mkdirSync(subdir, { recursive: true });
 	}
 }

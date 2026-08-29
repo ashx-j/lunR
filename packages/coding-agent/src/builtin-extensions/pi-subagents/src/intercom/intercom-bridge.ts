@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentConfig } from "../agents/agents.ts";
+import type { ChildRuntimeConfig } from "../shared/types.ts";
 import type { ExtensionConfig, IntercomBridgeConfig, IntercomBridgeMode } from "../shared/types.ts";
 import { getAgentDir } from "../shared/utils.ts";
 
@@ -158,7 +158,7 @@ export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): Interc
 	};
 }
 
-export function applyIntercomBridgeToAgent(agent: AgentConfig, bridge: IntercomBridgeState): AgentConfig {
+export function applyIntercomBridgeToAgent(agent: ChildRuntimeConfig, bridge: IntercomBridgeState): ChildRuntimeConfig {
 	if (!bridge.active || !bridge.orchestratorTarget) return agent;
 
 	const bridgeTools = ["intercom", "contact_supervisor"];

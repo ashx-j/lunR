@@ -59,7 +59,8 @@ import {
 	Semaphore,
 } from "../shared/parallel-utils.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { filterToolsForInheritedChild, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { resolveChildExcludeTools } from "../shared/child-tools.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
@@ -151,6 +152,9 @@ interface SubagentRunConfig {
 }
 
 interface StepResult {
+	childId?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	agent: string;
 	output: string;
 	error?: string;
@@ -1118,6 +1122,11 @@ async function runSingleStep(
 			})
 			: undefined;
 		const parentPermissionMode = step.parentPermissionMode ?? snapshotParentPermissionMode(step.parentSessionId);
+		const childPermission = step.permissions === "read-only" || parentPermissionMode === "plan" ? "read-only" : "full";
+		const excludeTools = resolveChildExcludeTools({
+			permissions: childPermission,
+			fanoutAuthorized: Array.isArray(step.tools) && step.tools.includes("subagent"),
+		});
 		const { args, env, tempDir, toolDiagnosticPath } = buildPiArgs({
 			parentSessionId: step.parentSessionId,
 			baseArgs: ["--mode", "json", "-p"],
@@ -1126,21 +1135,21 @@ async function runSingleStep(
 			sessionDir,
 			sessionFile: step.sessionFile,
 			model: candidate,
-			inheritProjectContext: step.inheritProjectContext,
-			inheritSkills: step.inheritSkills,
+			inheritProjectContext: true,
+			inheritSkills: false,
 			requireReadTool: Boolean(step.skills?.length),
-			tools: filterToolsForInheritedChild(step.tools, parentPermissionMode),
-			extensions: step.extensions,
-			subagentOnlyExtensions: step.subagentOnlyExtensions,
-			systemPrompt: appendTurnBudgetSystemPrompt(step.systemPrompt ?? "", ctx.turnBudget),
-			systemPromptMode: step.systemPromptMode,
-			mcpDirectTools: step.mcpDirectTools,
+			excludeTools,
+			childPermission,
+			childId: step.childId ?? step.agent,
+			childDescription: step.description ?? step.agent,
+			systemPrompt: appendTurnBudgetSystemPrompt(step.systemPrompt && !step.systemPrompt.includes("You are `") ? step.systemPrompt : "", ctx.turnBudget) || undefined,
+			systemPromptMode: "append",
 			cwd: step.cwd ?? ctx.cwd,
-			promptFileStem: step.agent,
+			promptFileStem: step.childId ?? step.agent,
 			intercomSessionName: ctx.childIntercomTarget,
 			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
 			runId: ctx.id,
-			childAgentName: step.agent,
+			childAgentName: step.childId ?? step.agent,
 			childIndex: ctx.flatIndex,
 			parentEventSink: ctx.nestedRoute?.eventSink,
 			parentControlInbox: ctx.nestedRoute?.controlInbox,
@@ -1365,6 +1374,9 @@ async function runSingleStep(
 	}
 
 	return {
+		childId: step.childId,
+		description: step.description,
+		permissions: step.permissions,
 		agent: step.agent,
 		output: outputForSummary,
 		exitCode: effectiveFinalExitCode,
@@ -1606,6 +1618,9 @@ async function runSubagent(
 				const taskFlatIndex = flatStepCount;
 				const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: taskFlatIndex, flatStepCount: initialFlatStepCount });
 				initialStatusSteps.push({
+					childId: task.childId,
+					description: task.description,
+					permissions: task.permissions,
 					agent: task.agent,
 					phase: task.phase,
 					label: task.label,
@@ -1642,6 +1657,9 @@ async function runSubagent(
 			const stepFlatIndex = flatStepCount;
 			const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: step.agent, flatIndex: stepFlatIndex, flatStepCount: initialFlatStepCount });
 			initialStatusSteps.push({
+				childId: step.childId,
+				description: step.description,
+				permissions: step.permissions,
 				agent: step.agent,
 				phase: step.phase,
 				label: step.label,
@@ -1936,7 +1954,7 @@ async function runSubagent(
 		mutatingFailureStates.push(...Array.from({ length: added.addedFlatSteps }, () => createMutatingFailureState()));
 		pendingToolResults.push(...Array.from({ length: added.addedFlatSteps }, () => undefined));
 		if (config.childIntercomTargets) {
-			config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.agent, index));
+			config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.childId ?? statusStep.agent, index));
 		}
 		writeStatusPayload();
 		for (const request of requests) {
@@ -2714,7 +2732,7 @@ async function runSubagent(
 			});
 			statusPayload.steps.splice(groupStartFlatIndex, 1, ...dynamicStatusSteps);
 			if (config.childIntercomTargets) {
-				config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.agent, index));
+				config.childIntercomTargets = statusPayload.steps.map((statusStep, index) => resolveSubagentIntercomTarget(id, statusStep.childId ?? statusStep.agent, index));
 			}
 			mutatingFailureStates.splice(groupStartFlatIndex, 1, ...dynamicStatusSteps.map(() => createMutatingFailureState()));
 			pendingToolResults.splice(groupStartFlatIndex, 1, ...dynamicStatusSteps.map(() => undefined));
@@ -3624,6 +3642,9 @@ async function runSubagent(
 			...(statusPayload.toolBudgetBlocked ? { toolBudgetBlocked: true } : {}),
 			...(stopped ? { stopped: true, error: stopMessage } : timedOut ? { timedOut: true, error: timeoutMessage ?? "Subagent timed out." } : turnBudgetExceeded ? { error: statusPayload.error ?? "Subagent exceeded turn budget." } : {}),
 			results: results.map((r) => ({
+				childId: r.childId,
+				description: r.description,
+				permissions: r.permissions,
 				agent: r.agent,
 				output: r.output,
 				error: r.error,

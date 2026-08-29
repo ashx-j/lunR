@@ -1,7 +1,6 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { discoverAgentsAll, type AgentSource } from "../agents/agents.ts";
 import { isAsyncAvailable } from "../runs/background/async-execution.ts";
 import { diagnoseIntercomBridge, type IntercomBridgeDiagnostic } from "../intercom/intercom-bridge.ts";
 import { discoverAvailableSkills, type SkillSource } from "../agents/skills.ts";
@@ -23,7 +22,6 @@ interface DoctorPaths {
 
 interface DoctorDeps {
 	isAsyncAvailable: () => boolean;
-	discoverAgentsAll: typeof discoverAgentsAll;
 	discoverAvailableSkills: typeof discoverAvailableSkills;
 	diagnoseIntercomBridge: typeof diagnoseIntercomBridge;
 }
@@ -52,7 +50,6 @@ const DEFAULT_PATHS: DoctorPaths = {
 
 const DEFAULT_DEPS: DoctorDeps = {
 	isAsyncAvailable,
-	discoverAgentsAll,
 	discoverAvailableSkills,
 	diagnoseIntercomBridge,
 };
@@ -79,10 +76,6 @@ function formatExistingDirectory(label: string, dirPath: string): string {
 	} catch (error) {
 		return `- ${label}: failed (${dirPath}) — ${errorText(error)}`;
 	}
-}
-
-function formatSourceCounts(counts: Record<AgentSource, number>): string {
-	return `builtin ${counts.builtin}, package ${counts.package}, user ${counts.user}, project ${counts.project}`;
 }
 
 function formatSkillSourceCounts(skills: Array<{ source: SkillSource }>): string {
@@ -129,23 +122,6 @@ function formatSessionLines(input: DoctorReportInput): string[] {
 
 function formatDiscovery(input: DoctorReportInput, deps: DoctorDeps): string[] {
 	return [
-		lineFromCheck("agents/chains", () => {
-			const discovered = deps.discoverAgentsAll(input.cwd);
-			const agentCounts = {
-				builtin: discovered.builtin.length,
-				package: discovered.package?.length ?? 0,
-				user: discovered.user.length,
-				project: discovered.project.length,
-			};
-			const chainCounts = discovered.chains.reduce<Record<AgentSource, number>>((counts, chain) => {
-				counts[chain.source] += 1;
-				return counts;
-			}, { builtin: 0, package: 0, user: 0, project: 0 });
-			return [
-				`- agents: total ${agentCounts.builtin + agentCounts.package + agentCounts.user + agentCounts.project} (${formatSourceCounts(agentCounts)})`,
-				`- chains: total ${discovered.chains.length} (${formatSourceCounts(chainCounts)})`,
-			].join("\n");
-		}),
 		lineFromCheck("skills", () => {
 			const skills = deps.discoverAvailableSkills(input.cwd);
 			return `- skills: total ${skills.length} (${formatSkillSourceCounts(skills)})`;
@@ -197,7 +173,7 @@ export function buildDoctorReport(input: DoctorReportInput): string {
 		formatExistingDirectory("results", paths.resultsDir),
 		formatExistingDirectory("chain runs", paths.chainRunsDir),
 		"",
-		"Discovery",
+		"Capabilities",
 		...formatDiscovery(input, deps),
 		"",
 		"Permission system",

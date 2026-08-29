@@ -1,9 +1,9 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ASYNC_DIR, RESULTS_DIR, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
+import { validateChildDescription } from "../../shared/child-spec.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
-import type { AgentConfig } from "../../agents/agents.ts";
 import { validateAcceptanceInput } from "../shared/acceptance.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
 import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
@@ -36,6 +36,9 @@ export type AsyncResumeTarget = {
 	asyncDir?: string;
 	state: AsyncStatus["state"];
 	agent: string;
+	childId?: string;
+	description?: string;
+	permissions?: "full" | "read-only";
 	index: number;
 	intercomTarget: string;
 	cwd?: string;
@@ -123,6 +126,9 @@ function validateOptionalString(value: Record<string, unknown>, field: string, s
 
 function validateResultFile(value: unknown, resultPath: string): AsyncResultFile {
 	const data = ensureObject(value, resultPath);
+	if (!isSupportedSubagentLifecycleVersion(data.lifecycleArtifactVersion)) {
+		throw new Error(UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE);
+	}
 	const resultsValue = data.results;
 	let results: AsyncResultFile["results"];
 	if (resultsValue !== undefined) {
@@ -284,6 +290,9 @@ function validateStatusForResume(status: AsyncStatus | null, source: string): vo
 			if (!step || typeof step !== "object" || Array.isArray(step)) throw new Error(`Invalid async status '${source}': steps[${index}] must be an object.`);
 			const stepRecord = step as Record<string, unknown>;
 			if (typeof stepRecord.agent !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].agent must be a string.`);
+			if (stepRecord.childId !== undefined && (typeof stepRecord.childId !== "string" || !stepRecord.childId.trim())) throw new Error(`Invalid async status '${source}': steps[${index}].childId must be a non-empty string.`);
+			if (stepRecord.description !== undefined) validateChildDescription(stepRecord.description, `Async status '${source}' steps[${index}].description`);
+			if (stepRecord.permissions !== undefined && stepRecord.permissions !== "full" && stepRecord.permissions !== "read-only") throw new Error(`Invalid async status '${source}': steps[${index}].permissions must be full or read-only.`);
 			if (stepRecord.sessionFile !== undefined && typeof stepRecord.sessionFile !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].sessionFile must be a string.`);
 			if (stepRecord.model !== undefined && typeof stepRecord.model !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].model must be a string.`);
 			if (stepRecord.thinking !== undefined && typeof stepRecord.thinking !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].thinking must be a string.`);
@@ -304,38 +313,32 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"version", "sourceRunId", "agent", "sessionFile", "cwd", "model", "fallbackModels", "thinking", "tools", "extensions",
-		"subagentOnlyExtensions", "mcpDirectTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritSkills", "skills",
-		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "acceptance", "sessionDir", "artifactConfig",
+		"version", "lifecycleArtifactVersion", "sourceRunId", "childId", "description", "permissions", "agent", "sessionFile", "cwd", "model", "thinking", "skills",
+		"outputPath", "outputMode", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share",
 	]);
 	for (const field of Object.keys(parsed)) {
 		if (!allowedFields.has(field)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': unknown field '${field}'.`);
 	}
-	const requiredStrings = ["sourceRunId", "agent", "cwd", "systemPromptMode", "outputMode"] as const;
+	if (parsed.version !== 3) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 3.`);
+	if (!isSupportedSubagentLifecycleVersion(parsed.lifecycleArtifactVersion)) throw new Error(UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE);
+	const requiredStrings = ["sourceRunId", "childId", "description", "agent", "cwd", "outputMode"] as const;
 	for (const field of requiredStrings) {
 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
-	if (parsed.version !== 1) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 1.`);
-	if (parsed.systemPromptMode !== "append" && parsed.systemPromptMode !== "replace") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': systemPromptMode is invalid.`);
+	if (parsed.permissions !== "full" && parsed.permissions !== "read-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': permissions must be full or read-only.`);
+	validateChildDescription(parsed.description, `Async recovery descriptor '${descriptorPath}' description`);
 	if (parsed.outputMode !== "inline" && parsed.outputMode !== "file-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': outputMode is invalid.`);
-	for (const field of ["inheritProjectContext", "inheritSkills", "share"] as const) {
+	for (const field of ["share"] as const) {
 		if (typeof parsed[field] !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a boolean.`);
 	}
 	if (!Number.isInteger(parsed.maxSubagentDepth) || (parsed.maxSubagentDepth as number) < 0) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': maxSubagentDepth must be a non-negative integer.`);
-	for (const field of ["fallbackModels", "tools", "extensions", "subagentOnlyExtensions", "mcpDirectTools", "skills", "skillPath"] as const) {
+	for (const field of ["skills"] as const) {
 		const item = parsed[field];
 		if (item !== undefined && (!Array.isArray(item) || item.some((entry) => typeof entry !== "string" || !entry.trim()))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must contain non-empty strings.`);
 	}
-	if (parsed.systemPrompt !== undefined && typeof parsed.systemPrompt !== "string") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': systemPrompt must be a string.`);
-	for (const field of ["sessionFile", "model", "thinking", "agentFilePath", "outputPath", "sessionDir", "artifactsDir"] as const) {
+	for (const field of ["sessionFile", "model", "thinking", "outputPath", "sessionDir", "artifactsDir"] as const) {
 		if (parsed[field] !== undefined && (typeof parsed[field] !== "string" || !(parsed[field] as string).trim())) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
-	}
-	if (parsed.completionGuard !== undefined && typeof parsed.completionGuard !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': completionGuard must be a boolean.`);
-	if (parsed.memory !== undefined) {
-		if (!parsed.memory || typeof parsed.memory !== "object" || Array.isArray(parsed.memory)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': memory must be an object.`);
-		const memory = parsed.memory as Record<string, unknown>;
-		if ((memory.scope !== "project" && memory.scope !== "user") || typeof memory.path !== "string" || !memory.path.trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': memory is invalid.`);
 	}
 	if (parsed.absoluteDeadlineAt !== undefined && (!Number.isFinite(parsed.absoluteDeadlineAt) || (parsed.absoluteDeadlineAt as number) <= 0)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': absoluteDeadlineAt must be a positive timestamp.`);
 	if (parsed.initialTurnBudget !== undefined) {
@@ -429,8 +432,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 					asyncDir: location.asyncDir ?? undefined,
 					state,
 					agent: selectedStep.agent,
+					childId: selectedStep.childId,
+					description: selectedStep.description,
+					permissions: selectedStep.permissions,
 					index: requestedIndex,
-					intercomTarget: resolveSubagentIntercomTarget(runId, selectedStep.agent, requestedIndex),
+					intercomTarget: resolveSubagentIntercomTarget(runId, selectedStep.childId ?? selectedStep.agent, requestedIndex),
 					cwd: status?.cwd ?? result?.cwd,
 					sessionFile: selectedStep.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 					model: selectedStep.model,
@@ -454,8 +460,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 				asyncDir: location.asyncDir ?? undefined,
 				state,
 				agent: selected.step.agent,
+				childId: selected.step.childId,
+				description: selected.step.description,
+				permissions: selected.step.permissions,
 				index: selected.index,
-				intercomTarget: resolveSubagentIntercomTarget(runId, selected.step.agent, selected.index),
+				intercomTarget: resolveSubagentIntercomTarget(runId, selected.step.childId ?? selected.step.agent, selected.index),
 				cwd: status?.cwd ?? result?.cwd,
 				sessionFile: selected.step.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 				model: selected.step.model,
@@ -481,6 +490,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	const resolvedSessionFile = sessionFile ? validateResumeSessionFile(runId, sessionFile) : undefined;
 	const stepModel = statusSteps[index]?.model ?? resultSteps[index]?.model ?? (stepCount === 1 ? result?.model : undefined);
 	const stepThinking = statusSteps[index]?.thinking ?? resultSteps[index]?.thinking ?? (stepCount === 1 ? result?.thinking : undefined);
+	const childId = statusSteps[index]?.childId ?? resultSteps[index]?.childId;
 
 	return {
 		kind: "revive",
@@ -488,38 +498,16 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		asyncDir: location.asyncDir ?? undefined,
 		state,
 		agent,
+		childId,
+		description: statusSteps[index]?.description ?? resultSteps[index]?.description,
+		permissions: statusSteps[index]?.permissions ?? resultSteps[index]?.permissions,
 		index,
-		intercomTarget: resolveSubagentIntercomTarget(runId, agent, index),
+		intercomTarget: resolveSubagentIntercomTarget(runId, childId ?? agent, index),
 		cwd: status?.cwd ?? result?.cwd,
 		...(resolvedSessionFile ? { sessionFile: resolvedSessionFile } : {}),
 		...(stepModel ? { model: stepModel } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
 		...(recoveryDescriptor ? { recoveryDescriptor } : {}),
-	};
-}
-
-export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descriptor: SteeringRecoveryDescriptor): AgentConfig {
-	return {
-		...agentConfig,
-		model: descriptor.model,
-		fallbackModels: descriptor.fallbackModels ? [...descriptor.fallbackModels] : undefined,
-		thinking: descriptor.thinking,
-		tools: descriptor.tools ? [...descriptor.tools] : undefined,
-		extensions: descriptor.extensions ? [...descriptor.extensions] : undefined,
-		subagentOnlyExtensions: descriptor.subagentOnlyExtensions ? [...descriptor.subagentOnlyExtensions] : undefined,
-		mcpDirectTools: descriptor.mcpDirectTools ? [...descriptor.mcpDirectTools] : undefined,
-		systemPrompt: descriptor.systemPrompt,
-		systemPromptMode: descriptor.systemPromptMode,
-		inheritProjectContext: descriptor.inheritProjectContext,
-		inheritSkills: descriptor.inheritSkills,
-		skills: descriptor.skills ? [...descriptor.skills] : undefined,
-		skillPath: descriptor.skillPath ? [...descriptor.skillPath] : undefined,
-		filePath: descriptor.agentFilePath,
-		completionGuard: descriptor.completionGuard,
-		memory: descriptor.memory ? { ...descriptor.memory } : undefined,
-		output: descriptor.outputPath,
-		toolBudget: descriptor.initialToolBudget,
-		maxSubagentDepth: descriptor.maxSubagentDepth,
 	};
 }
 

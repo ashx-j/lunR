@@ -19,6 +19,8 @@ import {
 	WIDGET_KEY,
 } from "../shared/types.ts";
 import { formatTokens, formatUsage, formatDuration, formatModelThinking, formatToolCall, shortenPath } from "../shared/formatters.ts";
+import { childRowLabel } from "../shared/types.ts";
+import { sanitizeChildDescription } from "../shared/child-spec.ts";
 import { getDisplayItems, getSingleResultOutput } from "../shared/utils.ts";
 import { flatToLogicalStepIndex } from "../runs/background/parallel-groups.ts";
 import { formatNestedAggregate } from "../runs/shared/nested-render.ts";
@@ -297,13 +299,11 @@ export function stripTaskChrome(task: string | undefined): string {
 	return lines.join("\n").trim();
 }
 
-/** Compact-row lead: model name only (no thinking level), else the chrome-stripped task. */
-export function compactRowLead(result: { task?: string; model?: string }): string {
-	const badge = formatModelThinking(result.model);
-	const cut = badge.indexOf(" · thinking ");
-	const modelOnly = cut === -1 ? badge : badge.slice(0, cut);
-	if (modelOnly) return modelOnly;
-	return taskSummaryText(stripTaskChrome(result.task));
+/** Compact-row lead: sanitized description, never a removed agent type or the model. */
+export function compactRowLead(result: { description?: string; task?: string; model?: string }): string {
+	const fromDescription = sanitizeChildDescription(result.description ?? "", 80);
+	if (fromDescription) return fromDescription;
+	return taskSummaryText(stripTaskChrome(result.task), 80);
 }
 
 function resultStatusLine(result: Details["results"][number], output: string): string {
@@ -1322,8 +1322,10 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-	const lead = compactRowLead({ task: r.task, model: r.model ?? progress?.model });
-	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, r.agent)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
+	const lead = compactRowLead({ description: r.description ?? r.agent, task: r.task });
+	const modelBadge = formatModelThinking(r.model ?? progress?.model, r.thinking ?? progress?.thinking);
+	const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
+	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
 
 	if (isRunning && r.progress) {
 		c.addChild(new Text(formatCompactStatsHangLine(r.progress, width, (s) => theme.fg("dim", s)), 0, 0));
@@ -1418,10 +1420,11 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
 		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-		const lead = compactRowLead({ task: r.task, model: r.model ?? (rProg && "model" in rProg ? rProg.model : undefined) });
+		const lead = compactRowLead({ description: r.description ?? agentName, task: r.task });
+		const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
 		c.addChild(animatedLine((f) => {
 			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
-			return truncLine(`  ${glyph} ${lead} ${theme.fg("dim", "·")} ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
+			return truncLine(`  ${glyph} ${themeBold(theme, lead)}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
 		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
 			c.addChild(new Text(formatCompactStatsHangLine(
