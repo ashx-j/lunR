@@ -1,4 +1,4 @@
-> pi can create themes. Ask it to build one for your setup.
+> lunR can create themes. Ask it to build one for your setup.
 
 # Themes
 
@@ -16,11 +16,11 @@ Themes are JSON files that define colors for the TUI.
 
 ## Locations
 
-Pi loads themes from:
+lunR loads themes from:
 
-- Built-in: `dark`, `light`
-- Global: `~/.pi/agent/themes/*.json`
-- Project: `.pi/themes/*.json` (only after the project is trusted)
+- Built-in: `moon` only (`getDefaultTheme()` returns `"moon"`)
+- Global: `~/.lunr/agent/themes/*.json`
+- Project: `.lunr/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
@@ -37,22 +37,22 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, pi detects your terminal background and defaults to `dark` or `light`.
+The default theme is `moon`. Custom themes still hot-reload when you edit the active file.
 
 ## Creating a Custom Theme
 
 1. Create a theme file:
 
 ```bash
-mkdir -p ~/.pi/agent/themes
-vim ~/.pi/agent/themes/my-theme.json
+mkdir -p ~/.lunr/agent/themes
+vim ~/.lunr/agent/themes/my-theme.json
 ```
 
 2. Define the theme with all required colors (see [Color Tokens](#color-tokens)):
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/ashx-j/lunR/master/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -123,7 +123,7 @@ vim ~/.pi/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/ashx-j/lunR/master/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",
@@ -270,7 +270,7 @@ Four formats are supported:
 
 ### Terminal Compatibility
 
-Pi uses 24-bit RGB colors. Most modern terminals support this (iTerm2, Kitty, WezTerm, Windows Terminal, VS Code). For older terminals with only 256-color support, pi falls back to the nearest approximation.
+lunR uses 24-bit RGB colors. Most modern terminals support this (iTerm2, Kitty, WezTerm, Windows Terminal, VS Code). For older terminals with only 256-color support, lunR falls back to the nearest approximation.
 
 Check truecolor support:
 
@@ -292,6 +292,4 @@ echo $COLORTERM  # Should output "truecolor" or "24bit"
 
 ## Examples
 
-See the built-in themes:
-- [dark.json](../src/modes/interactive/theme/dark.json)
-- [light.json](../src/modes/interactive/theme/light.json)
+The only built-in theme is `moon`. Schema for custom themes: [theme-schema.json](https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/src/modes/interactive/theme/theme-schema.json) (also packed as `dist/modes/interactive/theme/theme-schema.json` in `@ashx-j/lunr`).

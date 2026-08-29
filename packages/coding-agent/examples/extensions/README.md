@@ -1,15 +1,15 @@
 # Extension Examples
 
-Example extensions for pi-coding-agent.
+Example extensions for lunR. These are Extension API samples, not the product implementation of plan mode, todos, or subagents (those are built-ins; see [docs/features.md](../../docs/features.md)).
 
 ## Usage
 
 ```bash
 # Load an extension with --extension flag
-pi --extension examples/extensions/permission-gate.ts
+lunr --extension examples/extensions/permission-gate.ts
 
 # Or copy to extensions directory for auto-discovery
-cp permission-gate.ts ~/.pi/agent/extensions/
+cp permission-gate.ts ~/.lunr/agent/extensions/
 ```
 
 ## Examples
@@ -100,7 +100,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 
 | Extension | Description |
 |-----------|-------------|
-| `mac-system-theme.ts` | Syncs pi theme with macOS dark/light mode |
+| `mac-system-theme.ts` | Syncs lunR theme with macOS dark/light mode |
 
 ### Resources
 
@@ -142,7 +142,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 See [docs/extensions.md](../../docs/extensions.md) for full documentation.
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@ashx-j/lunr";
 import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -184,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 
 **Use StringEnum for string parameters** (required for Google API compatibility):
 ```typescript
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum } from "@ashx-j/lunr-ai";
 
 // Good
 action: StringEnum(["list", "add"] as const)

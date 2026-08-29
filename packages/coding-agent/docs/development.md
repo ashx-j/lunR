@@ -1,23 +1,25 @@
 # Development
 
-See [AGENTS.md](https://github.com/earendil-works/pi-mono/blob/main/AGENTS.md) for additional guidelines.
+See [AGENTS.md](https://github.com/ashx-j/lunR/blob/master/AGENTS.md) for additional guidelines.
 
 ## Setup
 
 ```bash
-git clone https://github.com/earendil-works/pi-mono
-cd pi-mono
+git clone https://github.com/ashx-j/lunR
+cd lunR
 npm install
 npm run build
 ```
 
-Run from source:
+Compile in order: tui → ai → agent → coding-agent. From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not a published global install. Rebuild coding-agent `dist` after changes.
+
+Run from the package:
 
 ```bash
-/path/to/pi-mono/pi-test.sh
+npx lunr
 ```
 
-The script can be run from any directory. Pi keeps the caller's current working directory.
+lunR keeps the caller's current working directory.
 
 ## Forking / Rebranding
 
@@ -26,13 +28,13 @@ Configure via `package.json`:
 ```json
 {
   "piConfig": {
-    "name": "pi",
-    "configDir": ".pi"
+    "name": "lunr",
+    "configDir": ".lunr"
   }
 }
 ```
 
-Change `name`, `configDir`, and `bin` field for your fork. Affects CLI banner, config paths, and environment variable names.
+Change `name`, `configDir`, and `bin` for a fork. That affects the CLI banner and config directory. Environment variable names stay pinned: `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_PACKAGE_DIR`, `PI_OFFLINE`, `PI_SHARE_VIEWER_URL`. Do not invent `LUNR_*` replacements for those.
 
 ## Path Resolution
 
@@ -41,23 +43,22 @@ Three execution modes: npm install, standalone binary, tsx from source.
 **Always use `src/config.ts`** for package assets:
 
 ```typescript
-import { getPackageDir, getThemeDir } from "./config.js";
+import { getPackageDir, getThemesDir } from "./config.js";
 ```
 
 Never use `__dirname` directly for package assets.
 
 ## Debug Command
 
-`/debug` (hidden) writes to `~/.pi/agent/pi-debug.log`:
+`/debug` (hidden) writes to `~/.lunr/agent/lunr-debug.log`:
 - Rendered TUI lines with ANSI codes
 - Last messages sent to the LLM
 
 ## Testing
 
 ```bash
-./test.sh                         # Run non-LLM tests (no API keys needed)
-npm test                          # Run all tests
-npm test -- test/specific.test.ts # Run specific test
+npx vitest --run                  # coding-agent tests
+npm test -- test/specific.test.ts # specific test
 ```
 
 ## Project Structure
@@ -65,7 +66,7 @@ npm test -- test/specific.test.ts # Run specific test
 ```
 packages/
   ai/           # LLM provider abstraction
-  agent/        # Agent loop and message types  
+  agent/        # Agent loop and message types
   tui/          # Terminal UI components
   coding-agent/ # CLI and interactive mode
 ```

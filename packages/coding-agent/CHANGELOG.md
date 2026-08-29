@@ -1,6 +1,12 @@
 # Changelog
 
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.11`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases. This unreleased docs-only note is not a fake lunR version bump.
+
 ## [Unreleased]
+
+### Documentation
+
+- User-facing shipped docs now describe lunR: `@ashx-j/lunr`, binary `lunr`, config `~/.lunr/agent` and project `.lunr/`, `/refresh` for catalogs, and baked-in features (MCP, subagents, permissions, plan, todos, cron, gateway).
 
 ### New Features
 

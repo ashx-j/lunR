@@ -22,9 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-29 (lunR system prompt). **`origin/master` = `4b7c01c`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-29 (system prompt + shipped npm docs). **`origin/master` = `26b3cd4`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Watchdog cold start (`fix/watchdog-cold-start`):** the default-off main watchdog performs no repo-signature work during construction, session binding, or disabled turns. Enabled repo-edit review lazily establishes its baseline at `before_agent_start`; session and disable boundaries clear the old baseline. Tests: subagent-watchdog-startup + subagent/deferred regression set.
+- **Shipped npm docs (`docs/lunr-user-facing`):** `packages/coding-agent` README/docs/examples/CHANGELOG now describe `@ashx-j/lunr`, binary `lunr`, `~/.lunr/agent` + project `.lunr/`. Catalog refresh is `/refresh`; `lunr update` only reinstalls the global CLI. Builtin theme is `moon`. Dropped stale `files` entry `containerization.md`. ExtensionAPI `pi` parameter, package.json `"pi"` key, and `PI_*` env names stay. Untracked `lunr-docs/` is not shipped.
 
 - **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
@@ -95,6 +96,7 @@ Last updated: 2026-08-29 (lunR system prompt). **`origin/master` = `4b7c01c`**. 
 - Watchdog cold-start verification (2026-08-28): full tsgo sequence passed; focused Vitest 25/25; touched-file Biome passed (watchdog source remains excluded); dirty-worktree benchmark prompt-ready 2.23s, deferred attach 265ms, subagent factory 6ms. Full coding-agent Vitest: 2236 passed / 125 unrelated current-master Windows failures. Full Biome: 35 pre-existing errors + 1 warning outside touched files.
 - Watchdog PR CI caveat: the workflow still runs the forbidden `npm run build` in `packages/ai`; live catalog generation currently produces a Cloudflare transport TS2353 before reaching this patch. The explicit offline tsgo sequence above is green.
 - lunR system prompt (2026-08-29): coding-agent `tsgo` passes; focused prompt/tool/model tests pass (29/29). Expanded run passes the new SDK prompt assertion but retains two unrelated Windows path failures; full suite remains red from pre-existing environment/working-tree failures.
+- Published npm docs are `packages/coding-agent/{README.md,docs/**,examples/**,CHANGELOG.md}` (packed via `package.json` `files`). Repo-root README and untracked `lunr-docs/` are not what npmjs shows. `npm pack --dry-run --ignore-scripts --json --workspace=@earendil-works/pi-coding-agent` lists them.
 
 ---
 
@@ -127,6 +129,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Tool schemas are the always-available discovery layer. Keep recovery/workflow instructions conditional in tool results where possible; reserve base-prompt rules for guidance required before the first call.
 - `/plan <task>`: enter plan + send; if already in plan, restore previous mode + send.
 - Catalog: `models.json` is one minified line on purpose; `/refresh` does not download it (shards only). Cache-only create prefers `official-catalog-cache.json` over parsing bundled `models.json`.
+- Shipped user docs live in `packages/coding-agent` (README + `docs/` + `examples/`). Author markdown for `@ashx-j/lunr` / `lunr` / `~/.lunr/`. Keep ExtensionAPI `pi`, package.json `"pi"`, and `PI_*` env names. Do not treat repo-root README or untracked `lunr-docs/` as the npm page.
 - Repo `npx lunr` is the workspace bin, not `%AppData%\Roaming\npm\lunr` (`@ashx-j/lunr`). Do not treat local npx as a published smoke test.
 - **Stop proposing boot-screen art.** Slim box only; ask first.
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
@@ -209,6 +212,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
 - 2026-08-28: keep the prompt review artifact as the literal assembled effective prompt only; put provenance and regeneration notes in `AGENTS.md` so the snapshot contains no non-injected commentary.
 - 2026-08-29: the default prompt is lunR-specific and schema-first; model changes refresh its runtime slug while existing context, skill, custom-prompt, and conditional injections stay intact.
+- 2026-08-29: shipped coding-agent docs describe lunR (`@ashx-j/lunr`, `lunr`, `~/.lunr/`) so npmjs is not still pi; keep ExtensionAPI `pi` and `PI_*` names.
 
 # Deferred
 

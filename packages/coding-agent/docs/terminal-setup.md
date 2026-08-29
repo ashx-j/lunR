@@ -1,6 +1,6 @@
 # Terminal Setup
 
-Pi uses the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) for reliable modifier key detection. Most modern terminals support this protocol, but some require configuration.
+lunR uses the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) for reliable modifier key detection. Most modern terminals support this protocol, but some require configuration.
 
 ## Kitty, iTerm2
 
@@ -8,9 +8,9 @@ Work out of the box.
 
 ## Apple Terminal
 
-Pi enables enhanced key reporting when available. If Terminal.app still sends plain Return for `Shift+Enter`, pi uses a local macOS modifier fallback to treat that Return as `Shift+Enter`.
+lunR enables enhanced key reporting when available. If Terminal.app still sends plain Return for `Shift+Enter`, lunR uses a local macOS modifier fallback to treat that Return as `Shift+Enter`.
 
-This fallback only works when pi runs on the same Mac as Terminal.app. It cannot detect the local keyboard over remote SSH.
+This fallback only works when lunR runs on the same Mac as Terminal.app. It cannot detect the local keyboard over remote SSH.
 
 ## Ghostty
 
@@ -30,7 +30,7 @@ That mapping sends a raw linefeed byte. Inside pi, that is indistinguishable fro
 
 If Claude Code 2.x or newer is the only reason you added that mapping, you can remove it, unless you want to use Claude Code in tmux, where it still requires that Ghostty mapping.
 
-Pi binds `Ctrl+J` as a default newline alias, so `Shift+Enter` keeps working in tmux via that remap without extra pi configuration.
+lunR binds `Ctrl+J` as a default newline alias, so `Shift+Enter` keeps working in tmux via that remap without extra lunr configuration.
 
 ## WezTerm
 
@@ -112,7 +112,7 @@ A successful paste toasts `Pasted [image_1]` and inserts that chip in the editor
 
 ## Windows Terminal
 
-Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward the modified Enter keys pi uses:
+Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward the modified Enter keys lunR uses:
 
 ```json
 {

@@ -1,5 +1,6 @@
 /**
- * Todo Extension - Demonstrates state management via session entries
+ * Todo Extension (sample) - Demonstrates state management via session entries.
+ * Not lunR's product todos (lunr-todos). See docs/features.md.
  *
  * This extension:
  * - Registers a `todo` tool for the LLM to manage todos

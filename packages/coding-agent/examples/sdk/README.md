@@ -1,6 +1,6 @@
 # SDK Examples
 
-Programmatic usage of pi-coding-agent via `createAgentSession()` and `createAgentSessionRuntime()`.
+Programmatic usage of `@ashx-j/lunr` via `createAgentSession()` and `createAgentSessionRuntime()`.
 
 The runtime example shows how to build a recreate function that closes over process-global fixed inputs and recreates cwd-bound services and sessions as the active session cwd changes.
 
@@ -15,7 +15,7 @@ The runtime example shows how to build a recreate function that closes over proc
 | `05-tools.ts` | Built-in tool allowlists |
 | `06-extensions.ts` | Logging, blocking, result modification |
 | `07-context-files.ts` | AGENTS.md context files |
-| `08-slash-commands.ts` | File-based slash commands |
+| `08-prompt-templates.ts` | File-based prompt templates |
 | `09-api-keys-and-oauth.ts` | API key resolution, OAuth config |
 | `10-settings.ts` | Override compaction, retry, terminal settings |
 | `11-sessions.ts` | In-memory, persistent, continue, list sessions |
@@ -24,22 +24,26 @@ The runtime example shows how to build a recreate function that closes over proc
 
 ## Running
 
+From this repo:
+
 ```bash
 cd packages/coding-agent
 npx tsx examples/sdk/01-minimal.ts
 ```
 
+After a global install, examples live under `node_modules/@ashx-j/lunr/examples` (or `npm root -g` then `@ashx-j/lunr/examples`). Workspace TypeScript in this repo still imports `@earendil-works/pi-*`; published standalone consumers should import `@ashx-j/lunr`.
+
 ## Quick Reference
 
 ```typescript
-import { getModel } from "@earendil-works/pi-ai";
+import { getModel } from "@ashx-j/lunr-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+} from "@ashx-j/lunr";
 
 const modelRuntime = await ModelRuntime.create();
 
@@ -107,7 +111,7 @@ await session.prompt("Hello");
 |--------|---------|-------------|
 | `modelRuntime` | Runtime using `agentDir/auth.json` and `models.json` | Canonical model and authentication runtime |
 | `cwd` | `process.cwd()` | Working directory |
-| `agentDir` | `~/.pi/agent` | Config directory |
+| `agentDir` | `~/.lunr/agent` | Config directory |
 | `model` | From settings/first available | Model to use |
 | `thinkingLevel` | From settings/"off" | off, low, medium, high |
 | `tools` | `["read", "bash", "edit", "write"]` built-ins | Allowlist tool names across built-in, extension, and custom tools |

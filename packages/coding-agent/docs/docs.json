@@ -12,8 +12,12 @@
           "path": "quickstart.md"
         },
         {
-          "title": "Using Pi",
+          "title": "Using lunR",
           "path": "usage.md"
+        },
+        {
+          "title": "Built-in features",
+          "path": "features.md"
         },
         {
           "title": "Providers",
@@ -65,7 +69,7 @@
           "path": "themes.md"
         },
         {
-          "title": "Pi Packages",
+          "title": "Packages",
           "path": "packages.md"
         },
         {

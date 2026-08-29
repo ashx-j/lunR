@@ -1,91 +1,115 @@
 # Quickstart
 
-This page gets you from install to a useful first pi session.
+This page gets you from install to a useful first lunR session.
 
 ## Install
 
-Pi is distributed as an npm package:
+Requires **Node.js ≥ 22.19**. lunR is distributed as `@ashx-j/lunr`:
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+npm i -g @ashx-j/lunr
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
+`--ignore-scripts` is optional; lunR does not require install scripts for a normal npm install. There is no pi.dev `install.sh`.
 
 ### Uninstall
 
-Use the package manager that installed pi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
+Product uninstall vs package uninstall:
 
 ```bash
-# curl installer or npm install -g
-npm uninstall -g @earendil-works/pi-coding-agent
+# Remove this lunR install; keeps ~/.lunr/agent
+lunr uninstall
 
-# pnpm
-pnpm remove -g @earendil-works/pi-coding-agent
+# Also wipe ~/.lunr/agent (settings, credentials, sessions, packages)
+lunr uninstall --purge
 
-# Yarn
-yarn global remove @earendil-works/pi-coding-agent
-
-# Bun
-bun uninstall -g @earendil-works/pi-coding-agent
+# Remove an extension package (alias for lunr remove)
+lunr uninstall npm:@foo/bar
 ```
 
-Uninstalling pi leaves settings, credentials, sessions, and installed pi packages in `~/.pi/agent/`.
+You can also uninstall the npm package itself:
 
-Then start pi in the project directory you want it to work on:
+```bash
+npm uninstall -g @ashx-j/lunr
+pnpm remove -g @ashx-j/lunr
+yarn global remove @ashx-j/lunr
+bun uninstall -g @ashx-j/lunr
+```
+
+`npm uninstall -g` leaves settings, credentials, sessions, and installed packages in `~/.lunr/agent/`. Use `lunr uninstall --purge` to wipe that directory.
+
+Optional first-run features (Telegram/Discord gateway):
+
+```bash
+lunr setup
+lunr features list
+lunr features enable chat-platforms
+```
+
+Then start lunR in the project directory you want it to work on:
 
 ```bash
 cd /path/to/project
-pi
+lunr
 ```
+
+Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override with `PI_CODING_AGENT_DIR`. Never use `~/.pi/` as the lunR home.
 
 ## Authenticate
 
-Pi can use subscription providers through `/login`, or API-key providers through environment variables or the auth file.
+lunR can use subscription providers through `/login`, or API-key providers through environment variables or the auth file.
 
 ### Option 1: subscription login
 
-Start pi and run:
+Start lunR and run:
 
 ```text
 /login
 ```
 
-Then select a provider. Built-in subscription logins include Claude Pro/Max, ChatGPT Plus/Pro (Codex), and GitHub Copilot.
+Then select a provider. Built-in subscription logins include Claude Pro/Max, ChatGPT Plus/Pro (Codex), GitHub Copilot, and xAI SuperGrok.
+
+`/login xai` can import the Grok CLI session from `~/.grok/auth.json`. `/logout xai` does not delete that file.
+
+Local Ollama and LM Studio: `/login` and select the local provider (lunR probes localhost). OpenCode Zen: `/login opencode` then `/refresh`.
 
 ### Option 2: API key
 
-Set an API key before launching pi:
+Set an API key before launching lunR:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-pi
+lunr
 ```
 
-You can also run `/login` and select an API-key provider to store the key in `~/.pi/agent/auth.json`.
+You can also run `/login` and select an API-key provider to store the key in `~/.lunr/agent/auth.json`.
 
 See [Providers](providers.md) for all supported providers, environment variables, and cloud-provider setup.
 
+`/model` lists **stored-credential** providers only. An environment variable such as `OPENROUTER_API_KEY` does not list that provider until you store a credential or pass `--api-key`. First paint is cache-only; run `/refresh` to pull newer catalogs.
+
 ## First session
 
-Once pi starts, type a request and press Enter:
+Once lunR starts, type a request and press Enter:
 
 ```text
 Summarize this repository and tell me how to run its checks.
 ```
 
-By default, pi gives the model four tools:
+By default, lunR gives the model four tools:
 
 - `read` - read files
 - `write` - create or overwrite files
 - `edit` - patch files
 - `bash` - run shell commands
 
-Additional built-in read-only tools (`grep`, `find`, `ls`) are available through tool options. Pi runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
+Additional built-in read-only tools (`grep`, `find`, `ls`) exist but start off. lunR runs in your current working directory and can modify files there. Use git or `/rollback` if you want easy undo.
 
-## Give pi project instructions
+Permission modes are `manual | yolo | plan | auto`. Shift+Tab cycles that order. In plan mode the model uses `present_plan` for approval.
 
-Pi loads context files at startup. Add an `AGENTS.md` file to tell it how to work in a project:
+## Give lunR project instructions
+
+lunR loads context files at startup. Add an `AGENTS.md` file to tell it how to work in a project:
 
 ```markdown
 # Project Instructions
@@ -95,12 +119,12 @@ Pi loads context files at startup. Add an `AGENTS.md` file to tell it how to wor
 - Keep responses concise.
 ```
 
-Pi loads:
+lunR loads:
 
-- `~/.pi/agent/AGENTS.md` for global instructions
+- `~/.lunr/agent/AGENTS.md` for global instructions
 - `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
 
-Restart pi, or run `/reload`, after changing context files.
+Restart lunR, or run `/reload`, after changing context files.
 
 ## Common things to try
 
@@ -109,11 +133,11 @@ Restart pi, or run `/reload`, after changing context files.
 Type `@` in the editor to fuzzy-search files, or pass files on the command line:
 
 ```bash
-pi @README.md "Summarize this"
-pi @src/app.ts @src/app.test.ts "Review these together"
+lunr @README.md "Summarize this"
+lunr @src/app.ts @src/app.test.ts "Review these together"
 ```
 
-Images or text can be pasted with Ctrl+V (Alt+V on Windows); images can also be dragged into supported terminals.
+Paste images with Ctrl+V (Alt+V on Windows). The editor inserts `[image_1]`, `[image_2]`, … chips instead of a temp path. Dragging images into supported terminals also works.
 
 ### Run shell commands
 
@@ -123,43 +147,54 @@ In interactive mode:
 !npm run lint
 ```
 
-The command output is sent to the model. Use `!!command` to run a command without adding its output to the model context.
+The command output is sent to the model. Use `!!command` to run a command without adding its output to the model context. `/processes` lists background processes started this session.
 
 ### Switch models
 
-Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle permission mode (manual → yolo → plan → auto). Use `/thinking`, `/effort`, `/reasoning`, or `/settings` to change thinking level. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models.
+Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle permission mode (manual → yolo → plan → auto). Use `/thinking`, `/effort`, `/reasoning`, or `/settings` to change thinking level. `xhigh` and `max` are opt-in when the model supports them. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models. Catalog refresh is `/refresh`, not `lunr update`.
 
 ### Continue later
 
 Sessions are saved automatically:
 
 ```bash
-pi -c                  # Continue most recent session
-pi -r                  # Browse previous sessions
-pi --name "my task"    # Set session display name at startup
-pi --session <path|id> # Open a specific session
+lunr -c                  # Continue most recent session
+lunr -r                  # Browse previous sessions
+lunr --name "my task"    # Set session display name at startup
+lunr --session <path|id> # Open a specific session
+lunr --session-id <id>   # Exact project session ID (created if missing)
 ```
 
-Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions.
+Inside lunR, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions. `/undo` rewinds the same session; `/edit` rewinds and pastes; `/rollback` forks and restores files.
 
 ### Non-interactive mode
 
 For one-shot prompts:
 
 ```bash
-pi -p "Summarize this codebase"
-cat README.md | pi -p "Summarize this text"
-pi -p @screenshot.png "What's in this image?"
+lunr -p "Summarize this codebase"
+cat README.md | lunr -p "Summarize this text"
+lunr -p @screenshot.png "What's in this image?"
 ```
 
-Use `--mode json` for JSON event output or `--mode rpc` for process integration.
+Use `--mode json` for JSON event output or `--mode rpc` for process integration. `--offline` (or `PI_OFFLINE=1`) skips startup network operations.
+
+### Update
+
+```bash
+lunr update          # reinstall global @ashx-j/lunr from npm
+lunr update --self   # same
+```
+
+Workspace `npx lunr` from this repo is not a published install and will not self-update. Catalog refresh is `/refresh`. Extra flags such as `--models`, `--all`, and `--force` are invalid.
 
 ## Next steps
 
-- [Using Pi](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
+- [Using lunR](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
+- [Built-in features](features.md) - gateway, cron, MCP, subagents, plan, todos, and more.
 - [Providers](providers.md) - authentication and model setup.
 - [Settings](settings.md) - global and project configuration.
 - [Keybindings](keybindings.md) - shortcuts and customization.
-- [Pi Packages](packages.md) - install shared extensions, skills, prompts, and themes.
+- [Packages](packages.md) - install shared extensions, skills, prompts, and themes.
 
 Platform notes: [Windows](windows.md), [Termux](termux.md), [tmux](tmux.md), [Terminal setup](terminal-setup.md), [Shell aliases](shell-aliases.md).

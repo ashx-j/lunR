@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.2.11",
-	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"description": "lunR — terminal coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
 		"name": "lunr",
@@ -25,7 +25,6 @@
 		"dist",
 		"docs",
 		"examples",
-		"containerization.md",
 		"CHANGELOG.md",
 		"npm-shrinkwrap.json"
 	],
@@ -109,7 +108,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/ashx-j/lunR.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {
