@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-24. **`origin/master` = `b0401d9`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-29 (shipped npm docs). **`origin/master` = `29908dd`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Shipped npm docs (`docs/lunr-user-facing`):** `packages/coding-agent` README/docs/examples/CHANGELOG now describe `@ashx-j/lunr`, binary `lunr`, `~/.lunr/agent` + project `.lunr/`. Catalog refresh is `/refresh`; `lunr update` only reinstalls the global CLI. Builtin theme is `moon`. Dropped stale `files` entry `containerization.md`. ExtensionAPI `pi` parameter, package.json `"pi"` key, and `PI_*` env names stay. Untracked `lunr-docs/` is not shipped.
 
 - **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
@@ -88,6 +90,7 @@ Last updated: 2026-08-24. **`origin/master` = `b0401d9`**. Public npm is `@ashx-
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
+- Published npm docs are `packages/coding-agent/{README.md,docs/**,examples/**,CHANGELOG.md}` (packed via `package.json` `files`). Repo-root README and untracked `lunr-docs/` are not what npmjs shows. `npm pack --dry-run --ignore-scripts --json --workspace=@earendil-works/pi-coding-agent` lists them.
 
 ---
 
@@ -118,6 +121,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Injected-prompt collapse is render-only (`[SWARM MODE]` / `[DEEP RESEARCH]` / goal marker).
 - `/plan <task>`: enter plan + send; if already in plan, restore previous mode + send.
 - Catalog: `models.json` is one minified line on purpose; `/refresh` does not download it (shards only). Cache-only create prefers `official-catalog-cache.json` over parsing bundled `models.json`.
+- Shipped user docs live in `packages/coding-agent` (README + `docs/` + `examples/`). Author markdown for `@ashx-j/lunr` / `lunr` / `~/.lunr/`. Keep ExtensionAPI `pi`, package.json `"pi"`, and `PI_*` env names. Do not treat repo-root README or untracked `lunr-docs/` as the npm page.
 - Repo `npx lunr` is the workspace bin, not `%AppData%\Roaming\npm\lunr` (`@ashx-j/lunr`). Do not treat local npx as a published smoke test.
 - **Stop proposing boot-screen art.** Slim box only; ask first.
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
@@ -196,6 +200,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-23: v0.2.10 ships image chips, VS Code Alt+V, quieter subagent compact rows, unlimited parallel defaults, and grok-4.5+ Responses.
 - 2026-08-24: same-turn SINGLE `subagent` calls count toward the swarm gate; one once/reject covers that assistant message. Sequential work stays `chain`.
 - 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
+- 2026-08-29: shipped coding-agent docs describe lunR (`@ashx-j/lunr`, `lunr`, `~/.lunr/`) so npmjs is not still pi; keep ExtensionAPI `pi` and `PI_*` names.
 
 # Deferred
 
