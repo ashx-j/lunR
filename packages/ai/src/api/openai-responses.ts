@@ -10,6 +10,7 @@ import type {
 	OpenAIResponsesCompat,
 	ProviderEnv,
 	ProviderHeaders,
+	ServiceTier,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
@@ -87,7 +88,7 @@ function formatOpenAIResponsesError(error: unknown): string {
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
-	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+	serviceTier?: ServiceTier;
 	toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 }
 
@@ -186,6 +187,7 @@ export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOption
 	return stream(model, context, {
 		...base,
 		reasoningEffort,
+		serviceTier: options?.serviceTier,
 	} satisfies OpenAIResponsesOptions);
 };
 
@@ -257,7 +259,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	}
 
 	if (options?.serviceTier !== undefined) {
-		params.service_tier = options.serviceTier;
+		(params as { service_tier?: ServiceTier }).service_tier = options.serviceTier;
 	}
 
 	if (toolPlacement.immediate.length > 0) {
@@ -291,11 +293,12 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 
 function getServiceTierCostMultiplier(
 	model: Pick<Model<"openai-responses">, "id">,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	serviceTier: ServiceTier | undefined,
 ): number {
 	switch (serviceTier) {
 		case "flex":
 			return 0.5;
+		case "fast":
 		case "priority":
 			return model.id === "gpt-5.5" ? 2.5 : 2;
 		default:
@@ -305,7 +308,7 @@ function getServiceTierCostMultiplier(
 
 function applyServiceTierPricing(
 	usage: Usage,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	serviceTier: ServiceTier | undefined,
 	model: Pick<Model<"openai-responses">, "id">,
 ) {
 	const multiplier = getServiceTierCostMultiplier(model, serviceTier);

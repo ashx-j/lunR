@@ -1,11 +1,6 @@
 import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
-import type {
-	Tool as OpenAITool,
-	ResponseCreateParamsStreaming,
-	ResponseInput,
-	ResponseStreamEvent,
-} from "openai/resources/responses/responses.js";
+import type { Tool as OpenAITool, ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses.js";
 
 type ProcessWithOsBuiltinModule = typeof process & {
 	getBuiltinModule?: (id: "node:os") => typeof NodeOs;
@@ -30,6 +25,7 @@ import type {
 	Model,
 	ProviderEnv,
 	ProviderHeaders,
+	ServiceTier,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
@@ -83,7 +79,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
-	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+	serviceTier?: ServiceTier;
 	textVerbosity?: "low" | "medium" | "high";
 	toolChoice?: "auto" | "none" | "required";
 }
@@ -102,7 +98,7 @@ interface RequestBody {
 	parallel_tool_calls?: boolean;
 	temperature?: number;
 	reasoning?: { effort?: string; summary?: string };
-	service_tier?: ResponseCreateParamsStreaming["service_tier"];
+	service_tier?: ServiceTier;
 	text?: { verbosity?: string };
 	include?: string[];
 	prompt_cache_key?: string;
@@ -472,6 +468,7 @@ export const streamSimple: StreamFunction<"openai-codex-responses", SimpleStream
 	return stream(model, context, {
 		...base,
 		reasoningEffort,
+		serviceTier: options?.serviceTier,
 	} satisfies OpenAICodexResponsesOptions);
 };
 
@@ -533,11 +530,12 @@ function buildRequestBody(
 
 function getServiceTierCostMultiplier(
 	model: Pick<Model<"openai-codex-responses">, "id">,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	serviceTier: ServiceTier | undefined,
 ): number {
 	switch (serviceTier) {
 		case "flex":
 			return 0.5;
+		case "fast":
 		case "priority":
 			return model.id === "gpt-5.5" ? 2.5 : 2;
 		default:
@@ -547,7 +545,7 @@ function getServiceTierCostMultiplier(
 
 function applyServiceTierPricing(
 	usage: Usage,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	serviceTier: ServiceTier | undefined,
 	model: Pick<Model<"openai-codex-responses">, "id">,
 ) {
 	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
@@ -561,10 +559,13 @@ function applyServiceTierPricing(
 }
 
 function resolveCodexServiceTier(
-	responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-	requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-): ResponseCreateParamsStreaming["service_tier"] | undefined {
-	if (responseServiceTier === "default" && (requestServiceTier === "flex" || requestServiceTier === "priority")) {
+	responseServiceTier: ServiceTier | undefined,
+	requestServiceTier: ServiceTier | undefined,
+): ServiceTier | undefined {
+	if (
+		responseServiceTier === "default" &&
+		(requestServiceTier === "flex" || requestServiceTier === "priority" || requestServiceTier === "fast")
+	) {
 		return requestServiceTier;
 	}
 	return responseServiceTier ?? requestServiceTier;

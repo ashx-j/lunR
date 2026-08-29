@@ -2,6 +2,7 @@ import {
 	type ImageContent,
 	type Message,
 	type Model,
+	type ServiceTier,
 	type SimpleStreamOptions,
 	streamSimple,
 	type TextContent,
@@ -115,6 +116,7 @@ export interface AgentOptions {
 	followUpMode?: QueueMode;
 	sessionId?: string;
 	thinkingBudgets?: ThinkingBudgets;
+	serviceTier?: ServiceTier;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
@@ -200,6 +202,8 @@ export class Agent {
 	public sessionId?: string;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
 	public thinkingBudgets?: ThinkingBudgets;
+	/** OpenAI Responses service tier forwarded to the stream function. */
+	public serviceTier?: ServiceTier;
 	/** Preferred transport forwarded to the stream function. */
 	public transport: Transport;
 	/** Optional cap for provider-requested retry delays. */
@@ -223,6 +227,7 @@ export class Agent {
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
 		this.thinkingBudgets = options.thinkingBudgets;
+		this.serviceTier = options.serviceTier;
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
@@ -434,6 +439,7 @@ export class Agent {
 		return {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
+			serviceTier: this.serviceTier,
 			sessionId: this.sessionId,
 			onPayload: this.onPayload,
 			onResponse: this.onResponse,

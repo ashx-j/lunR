@@ -1,7 +1,6 @@
 import type OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
-	ResponseCreateParamsStreaming,
 	ResponseFunctionCallOutputItemList,
 	ResponseInput,
 	ResponseInputContent,
@@ -21,6 +20,7 @@ import type {
 	Context,
 	ImageContent,
 	Model,
+	ServiceTier,
 	StopReason,
 	TextContent,
 	TextSignatureV1,
@@ -66,15 +66,12 @@ function parseTextSignature(
 }
 
 export interface OpenAIResponsesStreamOptions {
-	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+	serviceTier?: ServiceTier;
 	resolveServiceTier?: (
-		responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-		requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-	) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-	applyServiceTierPricing?: (
-		usage: Usage,
-		serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-	) => void;
+		responseServiceTier: ServiceTier | undefined,
+		requestServiceTier: ServiceTier | undefined,
+	) => ServiceTier | undefined;
+	applyServiceTierPricing?: (usage: Usage, serviceTier: ServiceTier | undefined) => void;
 }
 
 export interface ConvertResponsesMessagesOptions {

@@ -671,12 +671,15 @@ describe("Agent", () => {
 		expect(sawAbortSignal).toBe(true);
 	});
 
-	it("forwards sessionId to streamFn options", async () => {
+	it("forwards sessionId and serviceTier to streamFn options", async () => {
 		let receivedSessionId: string | undefined;
+		let receivedServiceTier: string | null | undefined;
 		const agent = new Agent({
 			sessionId: "session-abc",
+			serviceTier: "fast",
 			streamFn: (_model, _context, options) => {
 				receivedSessionId = options?.sessionId;
+				receivedServiceTier = options?.serviceTier;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					const message = createAssistantMessage("ok");
@@ -688,6 +691,7 @@ describe("Agent", () => {
 
 		await agent.prompt("hello");
 		expect(receivedSessionId).toBe("session-abc");
+		expect(receivedServiceTier).toBe("fast");
 
 		// Test setter
 		agent.sessionId = "session-def";

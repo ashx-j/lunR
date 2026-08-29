@@ -104,6 +104,9 @@ export type CacheRetention = "none" | "short" | "long";
 
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 
+/** OpenAI Responses service tiers, including the Codex subscription `fast` alias. */
+export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | "fast" | null;
+
 /** Provider-scoped environment overrides. Values take precedence over process.env. */
 export type ProviderEnv = Record<string, string>;
 export type ProviderHeaders = Record<string, string | null>;
@@ -298,6 +301,8 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
+	/** OpenAI Responses service tier. Other providers ignore it. */
+	serviceTier?: ServiceTier;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 }
