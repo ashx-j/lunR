@@ -27,11 +27,11 @@ A **swarm** is 3+ parallel subagents in one `tasks`/`chain.parallel` call, or 3+
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 
-## Todos, memory, behavior
+## Todos, memory, and global instructions
 
 - **Todos** — lunr-todos is a full-replace list. Completed todos prune on the next user turn (no leftover `✓ N done` footer).
-- **Memory** — simple memory under the agent dir. Cap with `memoryCharCap` (default 5000; built-in behavior presets skip the cap).
-- **Behavior presets** — `/settings` → Behavior preset: `default` (empty, fill later) / `humanizer` / `concise` / `custom`. Built-ins replace `~/.lunr/agent/behavior.md`. Custom keeps the user-managed file; the agent cannot change it. There is no in-app editor and no `fs.watch`. Drift off a template flips to custom.
+- **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
+- **Global instructions** — create `~/.lunr/agent/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file. The retired `behavior.md` file and behavior presets are no longer loaded.
 
 ## Cron
 

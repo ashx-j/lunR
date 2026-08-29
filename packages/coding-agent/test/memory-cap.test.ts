@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -59,6 +59,19 @@ describe("memoryCharCap setting", () => {
 		manager.setMemoryCharCap(2500.9);
 		expect(manager.getMemoryCharCap()).toBe(2500);
 	});
+
+	it("defaults memory on and ignores project attempts to enable it", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getMemoryEnabled()).toBe(true);
+		manager.setMemoryEnabled(false);
+		await manager.flush();
+
+		mkdirSync(join(projectDir, ".lunr"), { recursive: true });
+		writeFileSync(join(projectDir, ".lunr", "settings.json"), JSON.stringify({ memoryEnabled: true }), "utf-8");
+		const reloaded = SettingsManager.create(projectDir, agentDir, { projectTrusted: true });
+		expect(reloaded.getMemoryEnabled()).toBe(false);
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).memoryEnabled).toBe(false);
+	});
 });
 
 describe("memory-cap bridge", () => {
@@ -87,6 +100,7 @@ describe("memory-cap bridge", () => {
 
 		const bridge = (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] as MemoryCapBridge;
 		expect(bridge).toBeDefined();
+		expect(bridge.isEnabled()).toBe(true);
 		expect(bridge.getCharCap()).toBe(MEMORY_CHAR_CAP_DEFAULT);
 
 		bridge.setCharCap(8000);
@@ -95,6 +109,14 @@ describe("memory-cap bridge", () => {
 
 		const reloaded = SettingsManager.create(projectDir, agentDir);
 		expect(reloaded.getMemoryCharCap()).toBe(8000);
+	});
+
+	it("reflects the live memory toggle", () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		registerMemoryCapBridge(manager);
+		const bridge = (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] as MemoryCapBridge;
+		manager.setMemoryEnabled(false);
+		expect(bridge.isEnabled()).toBe(false);
 	});
 
 	it("re-pointing the bridge swaps the settings source", async () => {

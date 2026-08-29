@@ -157,7 +157,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/model` | Switch models (stored-cred providers) |
 | `/refresh` | Refresh model catalogs |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
-| `/settings` | Theme, thinking, behavior preset, message delivery, transport |
+| `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
 | `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
@@ -314,7 +314,7 @@ lunR loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 - Parent directories (walking up from cwd)
 - Current directory
 
-Use for project instructions (`AGENTS.md`/`CLAUDE.md`), conventions, common commands. All matching files are concatenated.
+Use `~/.lunr/agent/AGENTS.md` for optional global behavior and instructions; the model cannot change this user-managed file. Use project files for project conventions and commands. All matching files are concatenated. Run `/reload` after adding or editing one while lunR is open.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 
@@ -471,7 +471,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)
 - **Gateway** — `lunr gateway` for Telegram and Discord
-- **Web search, LSP, memory, behavior presets, goals, intercom, skill-creator, model tiers**
+- **Web search, LSP, agent memory, goals, intercom, skill-creator, model tiers**
 
 See [docs/features.md](docs/features.md) for how those work. Build anything else with extensions.
 

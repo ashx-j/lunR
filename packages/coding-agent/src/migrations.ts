@@ -73,6 +73,23 @@ export function migrateAuthToAuthJson(): string[] {
 	return providers;
 }
 
+/** Remove the retired behavior-preset selector state without touching behavior.md. */
+export function removeRetiredBehaviorPresetSetting(agentDir: string = getAgentDir()): boolean {
+	const settingsPath = join(agentDir, "settings.json");
+	if (!existsSync(settingsPath)) return false;
+	try {
+		const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as unknown;
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+		const settings = parsed as Record<string, unknown>;
+		if (!("behaviorPreset" in settings)) return false;
+		delete settings.behaviorPreset;
+		writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Migrate sessions from ~/.pi/agent/*.jsonl to proper session directories.
  *
@@ -380,6 +397,7 @@ export function runMigrations(cwd: string): {
 	deprecationWarnings: string[];
 } {
 	const migratedAuthProviders = migrateAuthToAuthJson();
+	removeRetiredBehaviorPresetSetting();
 	migrateSessionsFromAgentRoot();
 	migrateToolsToBin();
 	migrateKeybindingsConfigFile();

@@ -27,6 +27,8 @@ describe("deferred builtin extensions", () => {
 		const lightNames = lightBuiltinExtensions.map((entry) => ("name" in entry ? entry.name : ""));
 		expect(lightNames).toContain("ashxj-tui");
 		expect(lightNames).toContain("lunr-local-providers");
+		expect(lightNames).toContain("simple-pi-memory");
+		expect(lightNames).not.toContain("lunr-behavior");
 		for (const name of DEFERRED_BUILTIN_EXTENSION_NAMES) {
 			expect(lightNames).not.toContain(name);
 		}

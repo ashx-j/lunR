@@ -60,8 +60,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
 | `defaultPermissionMode` | string | `"manual"` | Startup permission mode: `"manual"`, `"yolo"`, `"plan"`, or `"auto"` |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
-| `behaviorPreset` | string | `"default"` | `"default"`, `"humanizer"`, `"concise"`, or `"custom"`. Custom keeps the user-managed `~/.lunr/agent/behavior.md`; the agent cannot change it |
-| `memoryCharCap` | number | `5000` | Simple-memory character cap (1–30000). Built-in behavior presets skip the cap |
+| `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
+| `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |

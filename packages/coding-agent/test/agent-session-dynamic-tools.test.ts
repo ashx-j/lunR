@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import simpleMemory from "../src/builtin-extensions/simple-pi-memory.ts";
+import { MEMORY_CAP_BRIDGE_SYMBOL, registerMemoryCapBridge } from "../src/core/memory-cap.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -20,9 +22,45 @@ describe("AgentSession dynamic tool registration", () => {
 	});
 
 	afterEach(() => {
+		delete (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL];
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("removes and restores memory tools when agent memory is toggled", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		registerMemoryCapBridge(settingsManager);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [simpleMemory],
+		});
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			settingsManager,
+			sessionManager: SessionManager.inMemory(),
+			resourceLoader,
+		});
+		await session.bindExtensions({});
+
+		const memoryTools = ["memory_add", "memory_remove", "memory_load"];
+		expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(memoryTools));
+		expect(session.getAllTools().map((tool) => tool.name)).toEqual(expect.arrayContaining(memoryTools));
+
+		settingsManager.setMemoryEnabled(false);
+		session.refreshToolRegistry();
+		expect(session.getActiveToolNames()).not.toEqual(expect.arrayContaining(memoryTools));
+		expect(session.getAllTools().map((tool) => tool.name)).not.toEqual(expect.arrayContaining(memoryTools));
+
+		settingsManager.setMemoryEnabled(true);
+		session.refreshToolRegistry();
+		expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(memoryTools));
+		session.dispose();
 	});
 
 	it("refreshes tool registry when tools are registered after initialization", async () => {

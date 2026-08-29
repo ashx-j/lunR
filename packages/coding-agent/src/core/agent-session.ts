@@ -91,13 +91,14 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import type { Extension, InlineExtension } from "./extensions/types.ts";
+import { MEMORY_TOOL_NAMES } from "./memory-cap.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { gateToolCall } from "./permissions.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
-import type { Extension, InlineExtension } from "./extensions/types.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -1045,6 +1046,11 @@ export class AgentSession {
 		this.agent.state.systemPrompt = this._withSystemPromptAppend(
 			this._systemPromptOverride ?? this._baseSystemPrompt,
 		);
+	}
+
+	/** Rebuild the registry after a settings-backed feature changes availability. */
+	refreshToolRegistry(): void {
+		this._refreshToolRegistry();
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -2672,7 +2678,9 @@ export class AgentSession {
 		const allowedToolNames = this._allowedToolNames;
 		const excludedToolNames = this._excludedToolNames;
 		const isAllowedTool = (name: string): boolean =>
-			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
+			(!allowedToolNames || allowedToolNames.has(name)) &&
+			!excludedToolNames?.has(name) &&
+			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name));
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [

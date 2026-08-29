@@ -332,6 +332,6 @@ These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
 
 ## Design Principles
 
-lunR keeps the core small and still ships the workflows most coding agents expect: MCP, subagents, permission modes, plan + `present_plan`, todos, `/processes`, cron, gateway, web search, LSP, memory, behavior presets, goals, intercom, skill-creator, and model tiers. Everything else stays in extensions, skills, prompt templates, and packages.
+lunR keeps the core small and still ships the workflows most coding agents expect: MCP, subagents, permission modes, plan + `present_plan`, todos, `/processes`, cron, gateway, web search, LSP, agent memory, goals, intercom, skill-creator, and model tiers. Everything else stays in extensions, skills, prompt templates, and packages.
 
 See [Built-in features](features.md) and the [README philosophy](../README.md#philosophy).
