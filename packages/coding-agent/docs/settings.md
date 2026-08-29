@@ -229,6 +229,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerLsp` | boolean | `false` | Show LSP status in the footer |
 | `footerContext` | boolean | `true` | Show context-usage pct/window |
 | `footerTokens` | boolean | `true` | Show ↑in ↓out token totals |
+| `footerCacheHitRate` | boolean | `true` | Show the latest prompt cache-hit rate when reported |
 | `footerTps` | boolean | `true` | Show tokens/second. Independent of feature statuses |
 | `footerStatuses` | boolean | `true` | Show plan/goal/swarm/research status segments |
 | `footerGit` | boolean | `true` | Show git branch + added/removed |

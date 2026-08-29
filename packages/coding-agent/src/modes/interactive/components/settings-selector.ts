@@ -107,6 +107,7 @@ export interface SettingsConfig {
 	footerLsp: boolean;
 	footerContext: boolean;
 	footerTokens: boolean;
+	footerCacheHitRate: boolean;
 	footerTps: boolean;
 	footerStatuses: boolean;
 	footerGit: boolean;
@@ -169,6 +170,7 @@ export interface SettingsCallbacks {
 	onFooterLspChange: (enabled: boolean) => void;
 	onFooterContextChange: (enabled: boolean) => void;
 	onFooterTokensChange: (enabled: boolean) => void;
+	onFooterCacheHitRateChange: (enabled: boolean) => void;
 	onFooterTpsChange: (enabled: boolean) => void;
 	onFooterStatusesChange: (enabled: boolean) => void;
 	onFooterGitChange: (enabled: boolean) => void;
@@ -524,6 +526,13 @@ class CustomizeSubmenu extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "footer-cache-hit-rate",
+				label: "Footer: cache hit rate",
+				description: "Show the latest prompt cache-hit rate when cache usage is reported.",
+				currentValue: (bridge?.getFooterCacheHitRate() ?? true) ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "footer-tps",
 				label: "Footer: TPS counter",
 				description: "Show the ✓ 174.0 t/s · tokens-in-time segment in the footer stats line.",
@@ -583,6 +592,9 @@ class CustomizeSubmenu extends Container {
 						break;
 					case "footer-tokens":
 						callbacks.onFooterTokensChange(newValue === "on");
+						break;
+					case "footer-cache-hit-rate":
+						callbacks.onFooterCacheHitRateChange(newValue === "on");
 						break;
 					case "footer-tps":
 						callbacks.onFooterTpsChange(newValue === "on");

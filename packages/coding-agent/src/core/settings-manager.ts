@@ -152,6 +152,7 @@ export interface Settings {
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
 	footerContext?: boolean; // default: true - show the context-usage pct/window segment
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
+	footerCacheHitRate?: boolean; // default: true - show the latest prompt cache-hit rate
 	footerTps?: boolean; // default: true - show the pi-tps t/s segment
 	footerStatuses?: boolean; // default: true - show the plan/goal/swarm/research status segments
 	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
@@ -1063,6 +1064,16 @@ export class SettingsManager {
 	setFooterTokens(enabled: boolean): void {
 		this.globalSettings.footerTokens = enabled;
 		this.markModified("footerTokens");
+		this.save();
+	}
+
+	getFooterCacheHitRate(): boolean {
+		return this.settings.footerCacheHitRate ?? true;
+	}
+
+	setFooterCacheHitRate(enabled: boolean): void {
+		this.globalSettings.footerCacheHitRate = enabled;
+		this.markModified("footerCacheHitRate");
 		this.save();
 	}
 

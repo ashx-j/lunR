@@ -43,6 +43,7 @@ interface CustomizeBridgeForPrompt {
 	getFooterLsp?(): boolean;
 	getFooterContext?(): boolean;
 	getFooterTokens?(): boolean;
+	getFooterCacheHitRate?(): boolean;
 	getFooterTps?(): boolean;
 	getFooterStatuses?(): boolean;
 	getFooterGit?(): boolean;
@@ -68,6 +69,7 @@ function lunrFooterToggles(): {
 	lsp: boolean;
 	context: boolean;
 	tokens: boolean;
+	cacheHitRate: boolean;
 	tps: boolean;
 	statuses: boolean;
 	git: boolean;
@@ -80,6 +82,7 @@ function lunrFooterToggles(): {
 		lsp: bridge?.getFooterLsp?.() ?? false,
 		context: bridge?.getFooterContext?.() ?? true,
 		tokens: bridge?.getFooterTokens?.() ?? true,
+		cacheHitRate: bridge?.getFooterCacheHitRate?.() ?? true,
 		tps: bridge?.getFooterTps?.() ?? true,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
 		git: bridge?.getFooterGit?.() ?? true,
@@ -201,6 +204,8 @@ interface ContextUsage {
 interface AssistantUsage {
 	input: number;
 	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
 	cost: { total: number };
 }
 
@@ -458,10 +463,18 @@ function formatCount(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
-/** Sum input/output tokens across assistant messages in the session. */
-function getUsageTotals(ctx: ExtensionContextLike): { input: number; output: number } {
+/** Sum session token totals and derive the latest request's cache-hit rate. */
+function getUsageTotals(ctx: ExtensionContextLike): {
+	input: number;
+	output: number;
+	cacheActivity: boolean;
+	latestCacheHitRate: number | undefined;
+} {
 	let input = 0;
 	let output = 0;
+	let cacheRead = 0;
+	let cacheWrite = 0;
+	let latestCacheHitRate: number | undefined;
 	const entries = ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch?.() ?? [];
 	for (const entry of entries as readonly SessionEntry[]) {
 		if (entry.type !== "message") continue;
@@ -469,10 +482,17 @@ function getUsageTotals(ctx: ExtensionContextLike): { input: number; output: num
 		if (!m || m.role !== "assistant") continue;
 		const u = m.usage;
 		if (!u) continue;
-		input += u.input ?? 0;
+		const usageInput = u.input ?? 0;
+		const usageCacheRead = u.cacheRead ?? 0;
+		const usageCacheWrite = u.cacheWrite ?? 0;
+		input += usageInput;
 		output += u.output ?? 0;
+		cacheRead += usageCacheRead;
+		cacheWrite += usageCacheWrite;
+		const promptTokens = usageInput + usageCacheRead + usageCacheWrite;
+		latestCacheHitRate = promptTokens > 0 ? (usageCacheRead / promptTokens) * 100 : undefined;
 	}
-	return { input, output };
+	return { input, output, cacheActivity: cacheRead > 0 || cacheWrite > 0, latestCacheHitRate };
 }
 
 // ---------------------------------------------------------------------------
@@ -647,7 +667,7 @@ class ChatboxEditor extends CustomEditor {
 // The stats line (footer) — slim, single line, BELOW the box
 // ---------------------------------------------------------------------------
 
-function renderStatsLine(
+export function renderStatsLine(
 	width: number,
 	ctx: ExtensionContextLike,
 	theme: Theme,
@@ -739,10 +759,16 @@ function renderStatsLine(
 		else parts.push(color(theme, "white", ctxSeg)); // lunr: theme-polish — normal context % white (was dim)
 	}
 
+	const totals = getUsageTotals(ctx);
+
 	// 3) Token totals: ↑in ↓out (lunr: gated on footerTokens).
 	if (footerToggles.tokens) {
-		const totals = getUsageTotals(ctx);
 		parts.push(color(theme, "white", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`)); // lunr: theme-polish — token totals white (was dim)
+	}
+
+	// 4) Latest prompt cache hit rate (gated on footerCacheHitRate).
+	if (footerToggles.cacheHitRate && totals.cacheActivity && totals.latestCacheHitRate !== undefined) {
+		parts.push(color(theme, "white", `CH${totals.latestCacheHitRate.toFixed(1)}%`));
 	}
 
 	// lunr: cost/usage counter segment removed entirely (both the $x.xxx dollar

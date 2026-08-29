@@ -4755,6 +4755,7 @@ export class InteractiveMode {
 					footerLsp: this.settingsManager.getFooterLsp(),
 					footerContext: this.settingsManager.getFooterContext(),
 					footerTokens: this.settingsManager.getFooterTokens(),
+					footerCacheHitRate: this.settingsManager.getFooterCacheHitRate(),
 					footerTps: this.settingsManager.getFooterTps(),
 					footerStatuses: this.settingsManager.getFooterStatuses(),
 					footerGit: this.settingsManager.getFooterGit(),
@@ -4971,6 +4972,9 @@ export class InteractiveMode {
 					},
 					onFooterTokensChange: (enabled) => {
 						this.settingsManager.setFooterTokens(enabled);
+					},
+					onFooterCacheHitRateChange: (enabled) => {
+						this.settingsManager.setFooterCacheHitRate(enabled);
 					},
 					onFooterTpsChange: (enabled) => {
 						this.settingsManager.setFooterTps(enabled);

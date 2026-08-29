@@ -18,6 +18,7 @@ export interface CustomizeBridge {
 	getFooterLsp(): boolean;
 	getFooterContext(): boolean;
 	getFooterTokens(): boolean;
+	getFooterCacheHitRate(): boolean;
 	getFooterTps(): boolean;
 	getFooterStatuses(): boolean;
 	getFooterGit(): boolean;
@@ -47,6 +48,9 @@ const bridge: CustomizeBridge = {
 	},
 	getFooterTokens(): boolean {
 		return activeSettingsManager?.getFooterTokens() ?? true;
+	},
+	getFooterCacheHitRate(): boolean {
+		return activeSettingsManager?.getFooterCacheHitRate() ?? true;
 	},
 	getFooterTps(): boolean {
 		return activeSettingsManager?.getFooterTps() ?? true;
