@@ -19,7 +19,8 @@
  * concurrent gateway chats do not share permission decisions.
  */
 
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { getAgentDir } from "../config.ts";
 import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
 import { effectiveSwarmCountForTurn, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
 
@@ -94,21 +95,11 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_symbols",
 	"lsp_code_actions",
 	"lsp_completions",
-	"behavior_load",
 	"memory_load",
 ]);
 
 /** Tools that mutate state and must be gated in manual mode. */
-const MUTATING_TOOLS = new Set([
-	"bash",
-	"edit",
-	"write",
-	"behavior_add",
-	"behavior_remove",
-	"memory_add",
-	"memory_remove",
-	"cron",
-]);
+const MUTATING_TOOLS = new Set(["bash", "edit", "write", "memory_add", "memory_remove", "cron"]);
 
 const REJECT_REASON = "Rejected by user (permission mode: manual).";
 export const NO_HANDLER_REASON = "Mutating tool blocked in manual mode: no approval channel available.";
@@ -225,6 +216,20 @@ function resolvePath(cwd: string, p: unknown): string {
 	if (typeof p !== "string") return "";
 	if (!p) return "";
 	return resolve(cwd, p);
+}
+
+export const BEHAVIOR_FILE_WRITE_BLOCK_REASON =
+	"The behavior file is user-managed. The agent cannot change ~/.lunr/agent/behavior.md.";
+
+function isBehaviorFileWrite(toolName: string, input: Record<string, unknown>, cwd: string): boolean {
+	if (toolName !== "edit" && toolName !== "write" && toolName !== "code_rewrite") return false;
+	const target = resolvePath(cwd, input.path);
+	if (!target) return false;
+	const normalize = (path: string) => {
+		const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
+		return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+	};
+	return normalize(target) === normalize(join(getAgentDir(), "behavior.md"));
 }
 
 function isMutatingTool(toolName: string): boolean {
@@ -353,6 +358,9 @@ export async function gateToolCall(
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
 	const ctx = getContext(sessionId);
+	if (isBehaviorFileWrite(toolName, input, cwd)) {
+		return { block: true, reason: BEHAVIOR_FILE_WRITE_BLOCK_REASON };
+	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
 	// lunr: agent-swarm gate runs before the mode early-return — it applies in
@@ -381,10 +389,10 @@ export async function gateToolCall(
 		const outside = path ? isPathOutsideCwd(path, cwd) : false;
 		action = outside ? `${toolName}-outside` : toolName;
 		detail = path || String(input.path ?? "");
-	} else if (toolName === "behavior_add" || toolName === "memory_add") {
+	} else if (toolName === "memory_add") {
 		action = toolName;
 		detail = sanitizeDetail(input.content);
-	} else if (toolName === "behavior_remove" || toolName === "memory_remove") {
+	} else if (toolName === "memory_remove") {
 		action = toolName;
 		detail = sanitizeDetail(input.line);
 	} else if (toolName === "cron") {

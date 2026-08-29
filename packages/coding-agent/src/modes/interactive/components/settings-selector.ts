@@ -406,7 +406,7 @@ const BEHAVIOR_PRESET_ITEMS: SelectItem[] = [
 	{
 		value: "custom",
 		label: "custom",
-		description: "Keep the current behavior.md. Edit the file or use the behavior tools.",
+		description: "Keep the current behavior.md. Edit ~/.lunr/agent/behavior.md.",
 	},
 ];
 
@@ -542,7 +542,7 @@ class CustomizeSubmenu extends Container {
 			{
 				id: "footer-statuses",
 				label: "Footer: feature statuses",
-				description: "Show the plan/goal/swarm/research status segments in the footer stats line.",
+				description: "Show the plan/goal/swarm status segments in the footer stats line.",
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},

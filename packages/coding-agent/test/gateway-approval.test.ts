@@ -262,35 +262,6 @@ describe("gateway manual-mode approvals", () => {
 		expect(gateDone).toBe(true);
 	});
 
-	it("prompts for behavior_add in manual mode", async () => {
-		const { adapter, bridge, router } = makeDeps(makeConfig());
-		const gateResults: GateResult[] = [];
-		bridge.onRunTurn = async () => {
-			gateResults.push(await gateToolCall("behavior_add", { content: "always use strict types" }, process.cwd()));
-		};
-		bridge.results = ["done"];
-
-		const runPromise = router.handleEvent(dmEvent("go"));
-		await waitFor(() => adapter.sent.some((m) => m.buttons));
-
-		const once = findButtonByLabel(adapter, "✓ Approve once");
-		expect(once).toBeDefined();
-		expect(adapter.sent[0].text).toContain("Approve behavior_add?");
-		expect(adapter.sent[0].text).toContain("always use strict types");
-
-		adapter.simulateCallback({
-			id: "cb-behavior",
-			chatId: "chat1",
-			messageId: adapter.sent[0].messageId ?? "m1",
-			userId: "u1",
-			data: once!.data,
-		});
-
-		await runPromise;
-		expect(gateResults).toHaveLength(1);
-		expect(gateResults[0]).toBeUndefined();
-	});
-
 	it("defaults to manual permission mode for gateway sessions", () => {
 		expect(getPermissionMode()).toBe("manual");
 	});
