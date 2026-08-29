@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	type ApprovalRequest,
 	type ApprovalResponse,
-	BEHAVIOR_FILE_WRITE_BLOCK_REASON,
 	clearSessionApprovals,
 	createPermissionContext,
 	deletePermissionContext,
+	GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
 	gateToolCall,
 	getPermissionMode,
 	isPlanModeActive,
+	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
 	NO_SWARM_HANDLER_REASON,
 	nextPermissionMode,
 	registerApprovalHandler,
@@ -101,14 +102,27 @@ describe("permissions", () => {
 		});
 	});
 
-	it("blocks file tools from changing the user-managed behavior file in every mode", async () => {
-		const behaviorPath = join(process.env.PI_CODING_AGENT_DIR!, "behavior.md");
+	it("blocks file tools from changing user-managed global instructions in every mode", async () => {
+		const agentsPath = join(process.env.PI_CODING_AGENT_DIR!, "AGENTS.md");
 		for (const mode of ["manual", "yolo", "plan", "auto"] as const) {
 			setPermissionMode(mode);
 			for (const tool of ["edit", "write", "code_rewrite"]) {
-				expect(await gateToolCall(tool, { path: behaviorPath, dry_run: true }, "/cwd"), `${mode}/${tool}`).toEqual({
+				expect(await gateToolCall(tool, { path: agentsPath, dry_run: true }, "/cwd"), `${mode}/${tool}`).toEqual({
 					block: true,
-					reason: BEHAVIOR_FILE_WRITE_BLOCK_REASON,
+					reason: GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
+				});
+			}
+		}
+	});
+
+	it("requires memory tools instead of direct file-tool writes", async () => {
+		const memoryPath = join(process.env.PI_CODING_AGENT_DIR!, "..", "simple-memory", "memory.md");
+		for (const mode of ["manual", "yolo", "plan", "auto"] as const) {
+			setPermissionMode(mode);
+			for (const tool of ["edit", "write", "code_rewrite"]) {
+				expect(await gateToolCall(tool, { path: memoryPath, dry_run: true }, "/cwd"), `${mode}/${tool}`).toEqual({
+					block: true,
+					reason: MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
 				});
 			}
 		}

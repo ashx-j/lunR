@@ -19,7 +19,7 @@
  * concurrent gateway chats do not share permission decisions.
  */
 
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { getAgentDir } from "../config.ts";
 import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
 import { effectiveSwarmCountForTurn, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
@@ -218,18 +218,27 @@ function resolvePath(cwd: string, p: unknown): string {
 	return resolve(cwd, p);
 }
 
-export const BEHAVIOR_FILE_WRITE_BLOCK_REASON =
-	"The behavior file is user-managed. The agent cannot change ~/.lunr/agent/behavior.md.";
+export const GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON =
+	"The global AGENTS.md file is user-managed. The agent cannot change ~/.lunr/agent/AGENTS.md.";
+export const MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON =
+	"Memory is model-managed through the memory tools. Do not directly change ~/.lunr/simple-memory/memory.md.";
 
-function isBehaviorFileWrite(toolName: string, input: Record<string, unknown>, cwd: string): boolean {
-	if (toolName !== "edit" && toolName !== "write" && toolName !== "code_rewrite") return false;
+function protectedFileWriteReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
+	if (toolName !== "edit" && toolName !== "write" && toolName !== "code_rewrite") return undefined;
 	const target = resolvePath(cwd, input.path);
-	if (!target) return false;
+	if (!target) return undefined;
 	const normalize = (path: string) => {
 		const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
 		return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 	};
-	return normalize(target) === normalize(join(getAgentDir(), "behavior.md"));
+	const agentsPaths = [join(getAgentDir(), "AGENTS.md"), join(getAgentDir(), "AGENTS.MD")];
+	if (agentsPaths.some((candidate) => normalize(target) === normalize(candidate))) {
+		return GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON;
+	}
+	if (normalize(target) === normalize(join(dirname(getAgentDir()), "simple-memory", "memory.md"))) {
+		return MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON;
+	}
+	return undefined;
 }
 
 function isMutatingTool(toolName: string): boolean {
@@ -358,8 +367,9 @@ export async function gateToolCall(
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
 	const ctx = getContext(sessionId);
-	if (isBehaviorFileWrite(toolName, input, cwd)) {
-		return { block: true, reason: BEHAVIOR_FILE_WRITE_BLOCK_REASON };
+	const protectedWriteReason = protectedFileWriteReason(toolName, input, cwd);
+	if (protectedWriteReason) {
+		return { block: true, reason: protectedWriteReason };
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 

@@ -296,7 +296,7 @@ describe("rollback", () => {
 		rollback.clearRollback();
 	});
 
-	// B1: behavior.md / cron jobs.json / memory.md are snapshotted by the agent
+	// B1: agent config / cron jobs.json / memory.md are snapshotted by the agent
 	// hook — they must actually restore, not be skipped by the root check.
 	it("restores snapshots under the lunR config dir and the memory dir", async () => {
 		const rollback = await import("../src/core/rollback.ts");

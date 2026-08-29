@@ -140,7 +140,6 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		{ loadAllBuiltinExtensions },
 		{ getAgentDir },
 		{ registerCustomizeBridge },
-		{ reconcileBehaviorPreset, registerBehaviorPresetBridge },
 		{ registerMemoryCapBridge },
 		{ getModelTiersBridge, registerModelTierBridge },
 		{ createAgentSessionFromServices, createAgentSessionServices },
@@ -150,7 +149,6 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 		import("../builtin-extensions/index.ts"),
 		import("../config.ts"),
 		import("../core/customize.ts"),
-		import("../core/behavior-preset.ts"),
 		import("../core/memory-cap.ts"),
 		import("../core/model-tiers.ts"),
 		import("../core/agent-session-services.ts"),
@@ -163,8 +161,6 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 	// Same bridges main.ts registers before extensions load.
 	registerModelTierBridge(settingsManager);
 	registerMemoryCapBridge(settingsManager);
-	registerBehaviorPresetBridge(settingsManager);
-	reconcileBehaviorPreset(settingsManager, agentDir);
 	registerCustomizeBridge(settingsManager);
 
 	let sessionManager: SessionManager;

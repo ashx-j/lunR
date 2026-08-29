@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { migratePiStateToLunr } from "../src/migrations.ts";
+import { migratePiStateToLunr, removeRetiredBehaviorPresetSetting } from "../src/migrations.ts";
 
 let root: string;
 let piHome: string;
@@ -92,5 +92,24 @@ describe("migratePiStateToLunr", () => {
 
 		expect(copied).toEqual([]);
 		expect(readFileSync(join(lunrAgentDir, "pi-goal-state.json"), "utf-8")).toBe(`{"a":2}`);
+	});
+});
+
+describe("removeRetiredBehaviorPresetSetting", () => {
+	test("removes only the retired selector state and leaves behavior.md untouched", () => {
+		write(join(lunrAgentDir, "settings.json"), JSON.stringify({ behaviorPreset: "humanizer", theme: "moon" }));
+		write(join(lunrAgentDir, "behavior.md"), "legacy user content\n");
+
+		expect(removeRetiredBehaviorPresetSetting(lunrAgentDir)).toBe(true);
+		expect(JSON.parse(readFileSync(join(lunrAgentDir, "settings.json"), "utf-8"))).toEqual({ theme: "moon" });
+		expect(readFileSync(join(lunrAgentDir, "behavior.md"), "utf-8")).toBe("legacy user content\n");
+		expect(removeRetiredBehaviorPresetSetting(lunrAgentDir)).toBe(false);
+	});
+
+	test("ignores missing and malformed settings", () => {
+		expect(removeRetiredBehaviorPresetSetting(lunrAgentDir)).toBe(false);
+		write(join(lunrAgentDir, "settings.json"), "not-json");
+		expect(removeRetiredBehaviorPresetSetting(lunrAgentDir)).toBe(false);
+		expect(readFileSync(join(lunrAgentDir, "settings.json"), "utf-8")).toBe("not-json");
 	});
 });

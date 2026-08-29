@@ -458,7 +458,7 @@ function isWithinAllowedRoots(absPath: string, turn: TurnSnapshots): boolean {
 	if (!turn.cwd) return true; // no recorded cwd: cannot validate, allow (tests / legacy)
 	const roots = [
 		ROLLBACK_BASE,
-		join(homedir(), CONFIG_DIR_NAME), // lunr: behavior.md / cron jobs.json live under the config dir
+		join(homedir(), CONFIG_DIR_NAME), // lunr: agent settings / cron jobs.json live under the config dir
 		// lunr: simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
 		join(dirname(getAgentDir()), "simple-memory"),
 		resolve(turn.cwd),

@@ -1,21 +1,16 @@
 import type { SettingsManager } from "./settings-manager.ts";
 
-/**
- * simple-pi-memory character-cap bridge.
- *
- * The bridge is exposed on `globalThis` under `Symbol.for("@lunr/memory-cap")` so
- * the baked-in simple-pi-memory extension can read/write the cap from lunR
- * settings instead of its legacy `~/.pi/simple-memory/config.json` — without
- * importing core code (same pattern as the model-tiers bridge).
- */
+/** Memory settings shared with the baked-in simple-memory extension. */
 
 export const MEMORY_CAP_BRIDGE_SYMBOL = Symbol.for("@lunr/memory-cap");
 
 export const MEMORY_CHAR_CAP_DEFAULT = 5000;
 export const MEMORY_CHAR_CAP_MIN = 1;
 export const MEMORY_CHAR_CAP_MAX = 30000;
+export const MEMORY_TOOL_NAMES = new Set(["memory_add", "memory_remove", "memory_load"]);
 
 export interface MemoryCapBridge {
+	isEnabled(): boolean;
 	/** Current character cap (clamped to 1..30000). */
 	getCharCap(): number;
 	/** Persist a new character cap into lunR settings. */
@@ -25,6 +20,9 @@ export interface MemoryCapBridge {
 let activeSettingsManager: SettingsManager | undefined;
 
 const bridge: MemoryCapBridge = {
+	isEnabled(): boolean {
+		return activeSettingsManager?.getMemoryEnabled() ?? true;
+	},
 	getCharCap(): number {
 		return activeSettingsManager?.getMemoryCharCap() ?? MEMORY_CHAR_CAP_DEFAULT;
 	},
@@ -42,4 +40,8 @@ const bridge: MemoryCapBridge = {
 export function registerMemoryCapBridge(settingsManager: SettingsManager): void {
 	activeSettingsManager = settingsManager;
 	(globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] = bridge;
+}
+
+export function getMemoryCapBridge(): MemoryCapBridge | undefined {
+	return (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] as MemoryCapBridge | undefined;
 }

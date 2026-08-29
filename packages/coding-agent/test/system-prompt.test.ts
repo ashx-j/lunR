@@ -18,6 +18,9 @@ describe("buildSystemPrompt", () => {
 		);
 		expect(prompt).toContain("Current working directory: ''C:/work/project''");
 		expect(prompt).toContain("Behavior guidelines:");
+		expect(prompt).toContain("Memory stores established, durable facts and stable preferences.");
+		expect(prompt).toContain("Never modify it, including through shell commands.");
+		expect(prompt).not.toContain("behavior.md");
 		expect(prompt).toContain("Guidelines:");
 		expect(prompt).toContain("lunR documentation");
 		expect(prompt).toContain(`- README: ${getReadmePath()}`);

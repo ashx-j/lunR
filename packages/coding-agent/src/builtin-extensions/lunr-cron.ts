@@ -19,7 +19,7 @@
  *    (registered here as the local notify; the Phase 4 gateway replaces
  *    it — core/cron/scheduler.ts never touches the bridge itself).
  *
- * `// @ts-nocheck` matches the builtin-extension convention (see lunr-behavior).
+ * `// @ts-nocheck` matches the builtin-extension convention.
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
 
