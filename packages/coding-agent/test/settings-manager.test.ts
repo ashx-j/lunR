@@ -33,6 +33,23 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getOpenAIFastMode()).toBe(true);
 	});
 
+	it("defaults the skill tag character to + and persists ~ and $", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getSkillTagCharacter()).toBe("+");
+		manager.setSkillTagCharacter("~");
+		await manager.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getSkillTagCharacter()).toBe("~");
+		manager.setSkillTagCharacter("$");
+		await manager.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getSkillTagCharacter()).toBe("$");
+	});
+
+	it("treats an unknown skill tag character as +", () => {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ skillTagCharacter: "x" }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getSkillTagCharacter()).toBe("+");
+	});
+
 	describe("preserves externally added settings", () => {
 		it("should preserve enabledModels when changing thinking level", async () => {
 			// Create initial settings file

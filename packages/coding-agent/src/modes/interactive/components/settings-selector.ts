@@ -18,13 +18,15 @@ import { getCustomizeBridge } from "../../../core/customize.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
-import type {
-	DefaultPermissionMode,
-	DefaultProjectTrust,
-	ModelTierName,
-	ModelTiersSettings,
-	RollbackCapture,
-	RollbackScope,
+import {
+	type DefaultPermissionMode,
+	type DefaultProjectTrust,
+	type ModelTierName,
+	type ModelTiersSettings,
+	type RollbackCapture,
+	type RollbackScope,
+	SKILL_TAG_CHARACTERS,
+	type SkillTagCharacter,
 } from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
@@ -68,6 +70,7 @@ export interface SettingsConfig {
 	autoResizeImages: boolean;
 	blockImages: boolean;
 	enableSkillCommands: boolean;
+	skillTagCharacter: SkillTagCharacter;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
 	transport: Transport;
@@ -132,6 +135,7 @@ export interface SettingsCallbacks {
 	onAutoResizeImagesChange: (enabled: boolean) => void;
 	onBlockImagesChange: (blocked: boolean) => void;
 	onEnableSkillCommandsChange: (enabled: boolean) => void;
+	onSkillTagCharacterChange: (character: SkillTagCharacter) => void;
 	onSteeringModeChange: (mode: "all" | "one-at-a-time") => void;
 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
 	onTransportChange: (transport: Transport) => void;
@@ -293,7 +297,10 @@ class ModelTiersSubmenu extends Container {
 								],
 								this.state[tKey] ?? "inherit",
 								(value) => {
-									callbacks.onModelTierThinkingChange(tier, value === "inherit" ? undefined : (value as ThinkingLevel));
+									callbacks.onModelTierThinkingChange(
+										tier,
+										value === "inherit" ? undefined : (value as ThinkingLevel),
+									);
 									done(value);
 								},
 								() => done(),
@@ -1549,9 +1556,19 @@ export class SettingsSelectorComponent extends Container {
 			values: ["true", "false"],
 		});
 
-		// Hardware cursor toggle (insert after skill-commands)
+		// Skill tag character (insert after skill-commands)
 		const skillCommandsIndex = items.findIndex((item) => item.id === "skill-commands");
 		items.splice(skillCommandsIndex + 1, 0, {
+			id: "skill-tag-character",
+			label: "Skill tag",
+			description: "After a space, this character lists skills to tag in the message",
+			currentValue: config.skillTagCharacter,
+			values: [...SKILL_TAG_CHARACTERS],
+		});
+
+		// Hardware cursor toggle (insert after skill-tag-character)
+		const skillTagIndex = items.findIndex((item) => item.id === "skill-tag-character");
+		items.splice(skillTagIndex + 1, 0, {
 			id: "show-hardware-cursor",
 			label: "Show hardware cursor",
 			description: "Show the terminal cursor while still positioning it for IME support",
@@ -1635,6 +1652,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "skill-commands":
 						callbacks.onEnableSkillCommandsChange(newValue === "true");
+						break;
+					case "skill-tag-character":
+						callbacks.onSkillTagCharacterChange(newValue as SkillTagCharacter);
 						break;
 					case "steering-mode":
 						callbacks.onSteeringModeChange(newValue as "all" | "one-at-a-time");
