@@ -2,12 +2,12 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@earendil-works/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
+**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@ashx-j/lunr` instead of spawning a subprocess. See the SDK (`docs/sdk.md`) and types in the published package (`node_modules/@ashx-j/lunr`). A subprocess TypeScript client ships in the repo as `packages/coding-agent/src/modes/rpc/rpc-client.ts`.
 
 ## Starting RPC Mode
 
 ```bash
-pi --mode rpc [options]
+lunr --mode rpc [options]
 ```
 
 Common options:
@@ -756,7 +756,7 @@ Response:
 }
 ```
 
-The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `pi --mode rpc` process.
+The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `lunr --mode rpc` process.
 
 ### Commands
 
@@ -792,7 +792,7 @@ Each command has:
   - `"prompt"`: Loaded from a prompt template `.md` file
   - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
 - `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.pi/agent/`)
+  - `"user"`: User-level (`~/.lunr/agent/`)
   - `"project"`: Project-level (`./.pi/agent/`)
   - `"path"`: Explicit path via CLI or settings
 - `path`: Absolute file path to the command source (optional)
@@ -847,7 +847,7 @@ Emitted when one low-level agent run completes. Contains all messages generated 
 
 ### agent_settled
 
-Emitted after the full session-level run settles. At this point Pi will not continue automatically through retry, compaction retry, or queued follow-up messages.
+Emitted after the full session-level run settles. At this point lunR will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
 ```json
 {"type": "agent_settled"}
@@ -1272,11 +1272,7 @@ Parse errors:
 
 ## Types
 
-Source files:
-- [`packages/ai/src/types.ts`](../../ai/src/types.ts) - `Model`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`
-- [`packages/agent/src/types.ts`](../../agent/src/types.ts) - `AgentMessage`, `AgentEvent`
-- [`src/core/messages.ts`](../src/core/messages.ts) - `BashExecutionMessage`
-- [`src/modes/rpc/rpc-types.ts`](../src/modes/rpc/rpc-types.ts) - RPC command/response types, extension UI request/response types
+Types ship in the published package (`node_modules/@ashx-j/lunr`). In this repo they live under `packages/ai`, `packages/agent`, and `packages/coding-agent/src`.
 
 ### Model
 
@@ -1423,9 +1419,7 @@ for event in read_events():
 
 ## Example: Interactive Client (Node.js)
 
-See [`test/rpc-example.ts`](../test/rpc-example.ts) for a complete interactive example, or [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts) for a typed client implementation.
-
-For a complete example of handling the extension UI protocol, see [`examples/rpc-extension-ui.ts`](../examples/rpc-extension-ui.ts) which pairs with the [`examples/extensions/rpc-demo.ts`](../examples/extensions/rpc-demo.ts) extension.
+See [`examples/rpc-extension-ui.ts`](../examples/rpc-extension-ui.ts) for a complete example of handling the extension UI protocol; it pairs with [`examples/extensions/rpc-demo.ts`](../examples/extensions/rpc-demo.ts). After a global install, examples live under `node_modules/@ashx-j/lunr/examples` (or `npm root -g` then `@ashx-j/lunr/examples`). From this repo they are `packages/coding-agent/examples/`.
 
 ```javascript
 const { spawn } = require("child_process");

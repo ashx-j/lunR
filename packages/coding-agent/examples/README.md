@@ -1,6 +1,8 @@
 # Examples
 
-Example code for pi-coding-agent SDK and extensions.
+Example code for the lunR SDK (`@ashx-j/lunr`) and extensions.
+
+After a global install, these files live under `node_modules/@ashx-j/lunr/examples` (or `npm root -g` then `@ashx-j/lunr/examples`). From this repo they are `packages/coding-agent/examples/`. Sample extensions such as `plan-mode`, `todo.ts`, and `subagent/` demonstrate the Extension API; they are not the product implementation.
 
 ## Directories
 
