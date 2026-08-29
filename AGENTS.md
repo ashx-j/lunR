@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-29 (release v0.2.12). **`origin/master` = `12c4c8d`** (+ release bump). Public npm target is `@ashx-j/lunr@0.2.12` (tag `v0.2.12`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-29 (v0.2.12 shipped). **`origin/master` = `788e680`**. Public npm is `@ashx-j/lunr@0.2.12` (tag `v0.2.12`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
 - **Codex Fast + usage cleanup (`feat/codex-fast-usage-cleanup`):** `/fast [on|off|status]` persists `service_tier: "fast"` for `openai-codex` subscriptions only and marks the model chip. `/usage` fetches every stored-credential adapter plan plus the current env-only provider in parallel; Codex includes additional rate limits. The `/research` pipeline is removed; web tools and generic research subagents remain.
@@ -81,11 +81,11 @@ Last updated: 2026-08-29 (release v0.2.12). **`origin/master` = `12c4c8d`** (+ r
 
 ## Not merged
 
-- None for 0.2.11 leftover stashes. `{0}`/`{1}` are 0.2.10 copies. `{4}` is local notes/artifacts.
+- None for 0.2.12.
 
 ## Uncommitted (working tree)
 
-- None for 0.2.11.
+- None for 0.2.12.
 
 ## Build & run
 
