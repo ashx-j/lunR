@@ -8,11 +8,13 @@ import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
-	/** Tools to include in prompt. Default: [read, bash, edit, write] */
+	/** Current model in provider/id form. */
+	modelSlug?: string;
+	/** Active tools; used to decide whether read-dependent skill metadata is visible. */
 	selectedTools?: string[];
-	/** Optional one-line tool snippets keyed by tool name. */
+	/** Legacy extension metadata retained for API compatibility; tool definitions are sent separately. */
 	toolSnippets?: Record<string, string>;
-	/** Additional guideline bullets appended to the default system prompt guidelines. */
+	/** Legacy extension metadata retained for API compatibility; not appended to the default prompt. */
 	promptGuidelines?: string[];
 	/** Text to append to system prompt. */
 	appendSystemPrompt?: string;
@@ -24,13 +26,12 @@ export interface BuildSystemPromptOptions {
 	skills?: Skill[];
 }
 
-/** Build the system prompt with tools, guidelines, and context */
+/** Build the base system prompt and append configured context. */
 export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const {
 		customPrompt,
+		modelSlug,
 		selectedTools,
-		toolSnippets,
-		promptGuidelines,
 		appendSystemPrompt,
 		cwd,
 		contextFiles: providedContextFiles,
@@ -76,62 +77,46 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const docsPath = getDocsPath();
 	const examplesPath = getExamplesPath();
 
-	// Build tools list based on selected tools.
-	// A tool appears in Available tools only when the caller provides a one-line snippet.
-	const tools = selectedTools || ["read", "bash", "edit", "write"];
-	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
-	const toolsList =
-		visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n") : "(none)";
+	const currentModel = modelSlug?.trim() || "no model selected";
+	const hasRead = !selectedTools || selectedTools.includes("read");
 
-	// Build guidelines based on which tools are actually available
-	const guidelinesList: string[] = [];
-	const guidelinesSet = new Set<string>();
-	const addGuideline = (guideline: string): void => {
-		if (guidelinesSet.has(guideline)) {
-			return;
-		}
-		guidelinesSet.add(guideline);
-		guidelinesList.push(guideline);
-	};
+	let prompt = `You are an expert coding assistant currently running ''${currentModel}'', operating inside lunR, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+Current working directory: ''${promptCwd}''
 
-	const hasBash = tools.includes("bash");
-	const hasGrep = tools.includes("grep");
-	const hasFind = tools.includes("find");
-	const hasLs = tools.includes("ls");
-	const hasRead = tools.includes("read");
+Behavior guidelines:
+- Default to writing no comments. Only add one if the why is non-obvious: a hidden constraint, a subtle invariant, a workaround for a specific bug, something that would surprise the reader. If removing the comment wouldn't confuse a future reader, don't write it.
+- Keep comments up to date! When making changes, it's important to keep things in sync. An outdated comment is worse than no comment at all.
+- Carefully consider the reversibility and blast radius of actions. Generally you can freely take local, reversible actions like editing files or running tests. But for actions that are hard to reverse, affect shared systems beyond your local environment, or could otherwise be risky or destructive, check with the user before proceeding.
+- Orchestrate subagents with intent! Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks. Use subagents as a tool when there is genuine benefit to it or the user explicitly asks for it.
+- When several agents work in parallel, state file ownership up front so they do not collide.
+- Tests are good! Endless smoke tests, regressions tests for feature deletions, etc, much less good. Tests should be focused, not slop.
+- Prefer editing existing files to creating new ones.
+- Only use emojis if the user explicitly requests it.
+- Never exfil private data on public platforms like github or any other services under any circumstances.
 
-	// File exploration guidelines
-	if (hasBash && !hasGrep && !hasFind && !hasLs) {
-		addGuideline("Use bash for file operations like ls, rg, find");
-	}
 
-	for (const guideline of promptGuidelines ?? []) {
-		const normalized = guideline.trim();
-		if (normalized.length > 0) {
-			addGuideline(normalized);
-		}
-	}
+Guidelines:
+- Use bash for file operations like ls, rg, find
+- Use read to examine files instead of cat or sed.
+- Use edit for precise changes (edits[].oldText must match exactly)
+- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls
+- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.
+- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.
+- Use write only for new files or complete rewrites.
+- Use todo for meaningful multi-step work. Every update must send the complete list, with exactly one item in progress at a time.
+- Use subagents for independent parallel work, specialist analysis, or substantial research. Subagents start with fresh sessions. Use intercom instead to coordinate with an existing lunR session.
+- Use ast_search for structural code matches.
+- Use cron only when the user asks to schedule or manage unattended prompts.
+- Memory stores durable facts and preferences about the user. Behavior stores persistent instructions for how lunR should act. Do not store transient task details, transcripts, or secrets in either.
+- Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.
+- Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.
 
-	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
-	const guidelinesSection = guidelines ? `Guidelines:\n${guidelines}\n\n` : "";
 
-	let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
-
-Available tools:
-${toolsList}
-
-In addition to the tools above, you may have access to other custom tools depending on the project.
-
-${guidelinesSection}Plan mode: the user toggles it with /plan. While active, investigate read-only and present a concrete plan before any file changes.
-
-Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
-- Main documentation: ${readmePath}
-- Additional docs: ${docsPath}
-- Examples: ${examplesPath} (extensions, custom tools, SDK)
-- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
-- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)
-- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
-- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
+lunR documentation (read only when the user asks about lunR itself, or the task concerns lunR itself, its SDK, extensions, themes, skills, or TUI):
+- README: ${readmePath}
+- Documentation: ${docsPath}
+- Examples: ${examplesPath}
+- Always read lunR .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
 
 	if (appendSection) {
 		prompt += appendSection;
@@ -151,8 +136,6 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 	if (hasRead && skills.length > 0) {
 		prompt += formatSkillsForPrompt(skills);
 	}
-
-	prompt += `\nCurrent working directory: ${promptCwd}`;
 
 	return prompt;
 }

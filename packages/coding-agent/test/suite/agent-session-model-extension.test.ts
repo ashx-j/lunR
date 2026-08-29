@@ -35,6 +35,7 @@ describe("AgentSession model and extension characterization", () => {
 		await harness.session.setModel(nextModel);
 
 		expect(harness.session.model?.id).toBe("faux-2");
+		expect(harness.session.systemPrompt).toContain(`currently running ''${nextModel.provider}/${nextModel.id}''`);
 		expect(modelEvents).toEqual(["faux-1->faux-2:set"]);
 		expect(
 			harness.sessionManager
@@ -63,10 +64,12 @@ describe("AgentSession model and extension characterization", () => {
 		await harness.session.cycleModel();
 		expect(harness.session.model?.id).toBe("faux-2");
 		expect(harness.session.thinkingLevel).toBe("off");
+		expect(harness.session.systemPrompt).toContain(`currently running ''${modelTwo.provider}/${modelTwo.id}''`);
 
 		await harness.session.cycleModel();
 		expect(harness.session.model?.id).toBe("faux-1");
 		expect(harness.session.thinkingLevel).toBe("high");
+		expect(harness.session.systemPrompt).toContain(`currently running ''${modelOne.provider}/${modelOne.id}''`);
 	});
 
 	it("clamps thinking levels to model capabilities and cycles available levels", async () => {

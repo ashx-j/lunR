@@ -16,18 +16,20 @@ TypeScript ESM. Build order: tui → ai → agent → coding-agent → orchestra
 
 ## Agent rules
 
-Read this file first; ask when ambiguous; touch only the task; small why-commits. No drive-by rewrites; check existing deps before adding. Never commit secrets; never force-push shared branches; confirm destructive git. Branch + PR before merge. Public docs: no local setup/secrets. **This file is the source of truth — after work update Current State + build/test, append Decisions (one-line why), gotchas under Notes. Delete stale entries. Committed detail lives in git log.**
+Read this file first; ask when ambiguous; touch only the task; small why-commits. No drive-by rewrites; check existing deps before adding. Never commit secrets; never force-push shared branches; confirm destructive git. Branch + PR before merge. Public docs: no local setup/secrets. Whenever an agent-facing tool is added, removed, renamed, conditionally registered, or materially changes purpose, keep its structured description/schema and conditional result guidance accurate, update tool-coverage tests, and regenerate the system-prompt inventory/snapshot when affected. Add always-injected base-prompt guidance only when the model needs it before its first tool call. **This file is the source of truth — after work update Current State + build/test, append Decisions (one-line why), gotchas under Notes. Delete stale entries. Committed detail lives in git log.**
 
 ---
 
 # Current State
 
-Last updated: 2026-08-28 (watchdog cold-start fix). **`origin/master` = `29908dd`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-29 (lunR system prompt). **`origin/master` = `4b7c01c`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Watchdog cold start (`fix/watchdog-cold-start`):** the default-off main watchdog performs no repo-signature work during construction, session binding, or disabled turns. Enabled repo-edit review lazily establishes its baseline at `before_agent_start`; session and disable boundaries clear the old baseline. Tests: subagent-watchdog-startup + subagent/deferred regression set.
 
 - **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
+- **System-injection review artifacts:** root `LUNR_SYSTEM_INJECTION.md` and `LUNR_SYSTEM_PROMPT_DRAFT.md` are local review artifacts, not runtime prompt sources. Regenerate the effective snapshot after this branch before treating it as current.
+- **lunR base system prompt (`feat/lunr-system-prompt`):** default prompt now identifies lunR and the active `provider/model`, injects runtime cwd/documentation paths, and uses the approved behavior/guideline text. API tool definitions and extension prompt metadata are not duplicated in it. Model switches rebuild the prompt; custom `SYSTEM.md`, append/context/skill injection, and conditional extension addenda remain unchanged.
 - **Image paste chips:** clipboard paste inserts atomic `[image_1]` / `[image_2]` instead of a temp path. Submit keeps the labels in the chat card and attaches `ImageContent`. `/edit` restores chips + files. Tests: tui editor image chips + image-paste-markers + startup-input.
 
 - **TUI bugs (`fix/tui-bugs`):** scrollbar thumb drags (capture + last-column hit) and resets SGR so error/thinking colors do not bleed. Left-drag does not select or copy; Shift+drag stays native. `/undo` rewinds the same session (no fork, no editor paste); `/edit` is the same rewind then pastes; `/redo` works. Live thinking is a 4-line max tail of the latest rendered text (full string, not the typewriter prefix; no empty-row pad). Compact running subagent rows hang tool/token/time stats (no thinking text). TUI hides `⚠ Subagent needs attention` cards (`display: false`, no `triggerTurn`). Tests: tui-pin + mouse + thinking-tail + assistant-message + undo-edit + slash-commands + compact-row + control-notice.
@@ -92,6 +94,7 @@ Last updated: 2026-08-28 (watchdog cold-start fix). **`origin/master` = `29908dd
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
 - Watchdog cold-start verification (2026-08-28): full tsgo sequence passed; focused Vitest 25/25; touched-file Biome passed (watchdog source remains excluded); dirty-worktree benchmark prompt-ready 2.23s, deferred attach 265ms, subagent factory 6ms. Full coding-agent Vitest: 2236 passed / 125 unrelated current-master Windows failures. Full Biome: 35 pre-existing errors + 1 warning outside touched files.
 - Watchdog PR CI caveat: the workflow still runs the forbidden `npm run build` in `packages/ai`; live catalog generation currently produces a Cloudflare transport TS2353 before reaching this patch. The explicit offline tsgo sequence above is green.
+- lunR system prompt (2026-08-29): coding-agent `tsgo` passes; focused prompt/tool/model tests pass (29/29). Expanded run passes the new SDK prompt assertion but retains two unrelated Windows path failures; full suite remains red from pre-existing environment/working-tree failures.
 
 ---
 
@@ -120,6 +123,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Telegram length = `string.length` (UTF-16). Busy-session `/stop` `/new` must bypass session guard.
 - `// lunr:` = upstream edit markers. Hot sync files: `ashxj-tui.ts`, `interactive-mode.ts`, `agent-session.ts`, `bash.ts`, `settings-manager.ts`, `main.ts`, `builtin-extensions/*`.
 - Injected-prompt collapse is render-only (`[SWARM MODE]` / `[DEEP RESEARCH]` / goal marker).
+- `LUNR_SYSTEM_INJECTION.md` is a point-in-time effective-prompt snapshot, not an input. Regenerate it after changes to `system-prompt.ts`, active tools/extensions, `AGENTS.md`, skills, permission mode, goal state, `~/.lunr/simple-memory/memory.md`, or `~/.lunr/agent/behavior.md`.
+- Tool schemas are the always-available discovery layer. Keep recovery/workflow instructions conditional in tool results where possible; reserve base-prompt rules for guidance required before the first call.
 - `/plan <task>`: enter plan + send; if already in plan, restore previous mode + send.
 - Catalog: `models.json` is one minified line on purpose; `/refresh` does not download it (shards only). Cache-only create prefers `official-catalog-cache.json` over parsing bundled `models.json`.
 - Repo `npx lunr` is the workspace bin, not `%AppData%\Roaming\npm\lunr` (`@ashx-j/lunr`). Do not treat local npx as a published smoke test.
@@ -202,6 +207,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-23: v0.2.10 ships image chips, VS Code Alt+V, quieter subagent compact rows, unlimited parallel defaults, and grok-4.5+ Responses.
 - 2026-08-24: same-turn SINGLE `subagent` calls count toward the swarm gate; one once/reject covers that assistant message. Sequential work stays `chain`.
 - 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
+- 2026-08-28: keep the prompt review artifact as the literal assembled effective prompt only; put provenance and regeneration notes in `AGENTS.md` so the snapshot contains no non-injected commentary.
+- 2026-08-29: the default prompt is lunR-specific and schema-first; model changes refresh its runtime slug while existing context, skill, custom-prompt, and conditional injections stay intact.
 
 # Deferred
 
