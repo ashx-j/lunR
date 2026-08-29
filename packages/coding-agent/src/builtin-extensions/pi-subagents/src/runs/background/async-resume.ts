@@ -1,7 +1,7 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ASYNC_DIR, RESULTS_DIR, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { validateAcceptanceInput } from "../shared/acceptance.ts";
@@ -123,6 +123,9 @@ function validateOptionalString(value: Record<string, unknown>, field: string, s
 
 function validateResultFile(value: unknown, resultPath: string): AsyncResultFile {
 	const data = ensureObject(value, resultPath);
+	if (!isSupportedSubagentLifecycleVersion(data.lifecycleArtifactVersion)) {
+		throw new Error(UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE);
+	}
 	const resultsValue = data.results;
 	let results: AsyncResultFile["results"];
 	if (resultsValue !== undefined) {

@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-29 (lunR system prompt). **`origin/master` = `b0401d9`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-29 (prompt-driven subagents). **`origin/master` = `b0401d9`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Prompt-driven subagents (`feat/prompt-driven-subagents`):** no named agent types. Every child is `{ task, description, permissions? }`. `description` is required UI metadata (single-line, max 80). `permissions` is `full` or `read-only`; omitted means full. Full is child-safe coding tools (read/search/shell/edit/write/web/LSP/MCP) minus cron/memory/behavior/goals/plan-approval/nested subagents. Plan parents may launch only explicit `permissions: "read-only"`. Full maps to child Auto; read-only maps to child Plan. Saved named chains and agent CRUD actions are removed. Compact rows are description-first. Lifecycle artifact version 3; old runs cannot be resumed. Tests: prompt-driven-subagents + subagent-permission-inherit + subagent-compact-row + permissions swarm fixtures.
 
 - **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
@@ -65,7 +67,7 @@ Last updated: 2026-08-29 (lunR system prompt). **`origin/master` = `b0401d9`**. 
 - **Also on master (see git log):** sticky chatbox + plan-as-permission-mode + xAI weekly `/usage` + traffic-light bars (`3a8d843`); TUI batch + cache hit-rate (`3cf89f9`); npm-audit workflow manual-only (`8266ede`).
 - **Model-tiers toggle:** `/settings` Enable model tiers used `pi.runtime.refreshTools()`; `pi` is `ExtensionAPI` and has no `runtime`. Fix: `pi.registerTool(tool)` + bridge swallows refresher throws. Tests: `model-tiers.test.ts`.
 - **Session wheel:** sticky chat + alt-screen has no native scrollback. TUI enables SGR 1000+1006 while pinned; wheel → `scrollChat` (±3, Ctrl+wheel pages). Shift+drag still selects. Tests: `mouse.test.ts` + `tui-pin.test.ts`.
-- **Child permission inherit:** parent snapshot `PI_SUBAGENT_PARENT_PERMISSION_MODE` at spawn. Child `PI_SUBAGENT_CHILD=1` resets to `plan` or `auto` in `main.ts` before tools. Plan parent fails writer/write-tool launches (`PLAN_MODE_WRITE_SPAWN_ERROR`); read-only children stay blocked for writes. Non-child `lunr -p` stays fail-closed. Tests: `subagent-permission-inherit.test.ts` + permissions fail-closed.
+- **Child permission inherit:** parent snapshots `PI_SUBAGENT_CHILD_PERMISSION` (`full` | `read-only`) at spawn. Child `PI_SUBAGENT_CHILD=1` maps full→auto and read-only→plan in `main.ts` before tools. Plan parent rejects full/omitted launches (`PLAN_MODE_WRITE_SPAWN_ERROR` tells the model to relaunch with `permissions: "read-only"`). Non-child `lunr -p` stays fail-closed. Tests: `subagent-permission-inherit.test.ts` + permissions fail-closed.
 
 ## Installer
 
@@ -91,6 +93,7 @@ Last updated: 2026-08-29 (lunR system prompt). **`origin/master` = `b0401d9`**. 
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
 - lunR system prompt (2026-08-29): coding-agent `tsgo` passes; focused prompt/tool/model tests pass (29/29). Expanded run passes the new SDK prompt assertion but retains two unrelated Windows path failures; full suite remains red from pre-existing environment/working-tree failures.
+- Prompt-driven subagents (2026-08-29): coding-agent `tsgo` passes; focused schema/permission/swarm tests added. Named agent markdown and saved-chain CRUD still exist on disk but are no longer required for spawn.
 
 ---
 
@@ -130,7 +133,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Collapsed same-name tool rows are header-only; click the card to reveal bodies/notices. Subagent compact widgets are the exception. Collapsed grouped errors stay in the tree and print under the last leaf. `app.tools.expand` has no default key; `/tree` still uses `ctrl+o` to cycle filters.
 - Behavior preset custom does not open an editor. Edit `~/.lunr/agent/behavior.md` or use the behavior tools. Do not add `fs.watch`.
 - Tab title: `process.title` + OSC 0 `lunr` in `cli.ts` before importing main; InteractiveMode then sets `lunr - [session -] cwd`. Do not call `ctx.ui.setTitle` from ashxj-spinners.
-- Advertised subagents always start fresh. `fork-context.ts` stays for upstream sync; do not advertise `context: fork` in the tool schema/description.
+- Advertised children always start fresh. `fork-context.ts` stays for upstream sync; do not advertise `context: fork` in the tool schema/description. There are no named agent types; prompt children with `task` + `description` + optional `permissions`.
+- Child `permissions: "full"` is not parent-equivalent. It includes coding tools (read/search/shell/edit/write/web/LSP/MCP) and excludes cron, memory_*, behavior_*, goals, present_plan, and nested `subagent` (unless fanout-authorized). Read-only omits edit/write/code_rewrite and runs as Plan.
+- Compact subagent rows are description-first. Do not restore model-first `compactRowLead`. Never display worker/scout/reviewer role names.
 - `lunr update` is npm global `@ashx-j/lunr` only. Workspace `PACKAGE_NAME !== NPM_CLI_PACKAGE` skips the nag and refuses to self-update.
 - Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. Customize → Footer: plan usage hides the whole segment; Footer: plan bar hides only the █░ fill and keeps `wk 32%`.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
@@ -203,6 +208,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
 - 2026-08-28: keep the prompt review artifact as the literal assembled effective prompt only; put provenance and regeneration notes in `AGENTS.md` so the snapshot contains no non-injected commentary.
 - 2026-08-29: the default prompt is lunR-specific and schema-first; model changes refresh its runtime slug while existing context, skill, custom-prompt, and conditional injections stay intact.
+- 2026-08-29: prompt-driven subagents replace named types with task+description+full|read-only; Plan parents must pass read-only; no definition/saved-chain migration.
 
 # Deferred
 

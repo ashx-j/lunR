@@ -21,6 +21,42 @@ export interface MaxOutputConfig {
 
 export type OutputMode = "inline" | "file-only";
 
+export type ChildPermission = "full" | "read-only";
+export type ChildTier = "light" | "standard" | "heavy";
+
+export interface ChildSpec {
+	childId: string;
+	task: string;
+	description: string;
+	requestedPermissions: ChildPermission;
+	effectivePermissions: ChildPermission;
+	model?: string;
+	tier?: ChildTier;
+	skill?: string | string[] | false;
+	cwd?: string;
+	output?: string | false;
+	outputMode?: OutputMode;
+	acceptance?: AcceptanceInput;
+	toolBudget?: ToolBudgetConfig;
+	count?: number;
+	reads?: string[] | false;
+	progress?: boolean;
+	label?: string;
+	phase?: string;
+	as?: string;
+	outputSchema?: JsonSchemaObject;
+	fanoutAuthorized?: boolean;
+}
+
+export function childRowLabel(entry: {
+	description?: string;
+	label?: string;
+	agent?: string;
+	childId?: string;
+}): string {
+	return entry.label?.trim() || entry.description?.trim() || entry.agent?.trim() || entry.childId || "child";
+}
+
 export type AcceptanceRole = "read-only" | "writer";
 
 export type JsonSchemaObject = Record<string, unknown>;
@@ -214,8 +250,14 @@ export interface ControlEvent {
 
 export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
 export type SubagentRunMode = "single" | "parallel" | "chain";
-export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 2;
+export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 3;
 export type SubagentLifecycleArtifactVersion = typeof SUBAGENT_LIFECYCLE_ARTIFACT_VERSION;
+export const UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE =
+	"This subagent run uses an unsupported lifecycle format. Named agent types cannot be resumed. Launch a new prompt-driven child instead.";
+
+export function isSupportedSubagentLifecycleVersion(version: unknown): boolean {
+	return version === SUBAGENT_LIFECYCLE_ARTIFACT_VERSION;
+}
 
 export type SteeringActionState = "delivered" | "scheduled" | "pending" | "partial" | "recovered" | "failed";
 export type SteeringTargetState = "scheduled" | "routed" | "delivered" | "late" | "failed" | "recovered";
@@ -280,27 +322,18 @@ export interface SteeringNotice {
 }
 
 export interface SteeringRecoveryDescriptor {
-	version: 1;
+	version: 3;
+	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 	sourceRunId: string;
+	childId?: string;
+	description?: string;
+	permissions?: ChildPermission;
 	agent: string;
 	sessionFile?: string;
 	cwd: string;
 	model?: string;
-	fallbackModels?: string[];
 	thinking?: string;
-	tools?: string[];
-	extensions?: string[];
-	subagentOnlyExtensions?: string[];
-	mcpDirectTools?: string[];
-	systemPrompt?: string;
-	systemPromptMode: "append" | "replace";
-	inheritProjectContext: boolean;
-	inheritSkills: boolean;
 	skills?: string[];
-	skillPath?: string[];
-	agentFilePath?: string;
-	completionGuard?: boolean;
-	memory?: { scope: "project" | "user"; path: string };
 	outputPath?: string;
 	outputMode: "inline" | "file-only";
 	acceptance?: AcceptanceInput;
@@ -382,7 +415,10 @@ export interface ChildWatchdogProgress {
 
 export interface AgentProgress {
 	index: number;
-	agent: string;
+	childId?: string;
+	description?: string;
+	permissions?: ChildPermission;
+	agent?: string;
 	status: "pending" | "running" | "completed" | "failed" | "detached";
 	activityState?: ActivityState;
 	task: string;
@@ -586,7 +622,10 @@ export interface ProtocolOutputLimit {
 }
 
 export interface SingleResult {
-	agent: string;
+	childId?: string;
+	description?: string;
+	permissions?: ChildPermission;
+	agent?: string;
 	task: string;
 	exitCode: number;
 	detached?: boolean;
@@ -659,7 +698,8 @@ export interface Details {
 		artifactPath?: string;
 	};
 	// Chain metadata for observability
-	chainAgents?: string[];      // Agent names in order, e.g., ["scout", "planner"]
+	chainAgents?: string[];      // deprecated: child descriptions in order
+	chainChildren?: Array<{ childId: string; description: string; permissions: ChildPermission }>;
 	totalSteps?: number;         // Total steps in chain
 	currentStepIndex?: number;   // 0-indexed current step (for running chains)
 	workflowGraph?: WorkflowGraphSnapshot;
@@ -1100,7 +1140,7 @@ export interface RunSyncOptions {
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
 	/** Override the agent's default thinking level for this run */
-	thinkingOverride?: AgentConfig["thinking"];
+	thinkingOverride?: string | false;
 	/** Registry models available for heuristic bare-model resolution */
 	availableModels?: Array<{ provider: string; id: string; fullId: string }>;
 	/** Current parent-session provider to prefer for ambiguous bare model ids */
@@ -1275,7 +1315,8 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "models", "create", "update", "delete", "eject", "disable", "enable", "reset", "status", "interrupt", "resume", "steer", "stop", "append-step", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule", "schedule-list", "schedule-status", "schedule-cancel"] as const;
+export const SUBAGENT_ACTIONS = ["status", "interrupt", "resume", "steer", "stop", "append-step", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule", "schedule-list", "schedule-status", "schedule-cancel"] as const;
+export const REMOVED_SUBAGENT_ACTIONS = ["list", "get", "models", "create", "update", "delete", "eject", "disable", "enable", "reset"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +

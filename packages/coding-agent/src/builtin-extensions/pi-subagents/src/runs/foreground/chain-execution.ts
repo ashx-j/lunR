@@ -8,6 +8,8 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
+import { normalizeChildSpec } from "../../shared/child-spec.ts";
+import { snapshotParentPermissionMode } from "../../../../core/subagent-permission-inherit.ts";
 import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import {
@@ -313,7 +315,18 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const structuredRuntime = task.outputSchema
 				? createStructuredOutputRuntime(task.outputSchema, path.join(input.chainDir, "structured-output"))
 				: undefined;
-			const result = await runSync(input.ctx.cwd, input.agents, task.agent, taskStr, {
+			const result = await runSync(input.ctx.cwd, normalizeChildSpec({
+				task: taskStr,
+				description: task.description,
+				permissions: task.permissions,
+				model: effectiveModel ?? task.model,
+				skill: task.skill,
+				cwd: taskCwd,
+				output: task.output,
+				outputMode: task.outputMode,
+				acceptance: task.acceptance,
+				toolBudget: task.toolBudget,
+			}, { parentMode: snapshotParentPermissionMode(input.ctx.sessionManager.getSessionId() ?? undefined), runId: input.runId, index: input.globalTaskIndex + taskIndex }), {
 				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 				cwd: taskCwd,
 				signal: input.signal,
@@ -1183,7 +1196,18 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				dynamicChildren,
 				dynamicGroupStatuses,
 			});
-			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
+			const r = await runSync(ctx.cwd, normalizeChildSpec({
+				task: stepTask,
+				description: seqStep.description,
+				permissions: seqStep.permissions,
+				model: effectiveModel ?? seqStep.model,
+				skill: seqStep.skill,
+				cwd: seqStep.cwd,
+				output: seqStep.output,
+				outputMode: seqStep.outputMode,
+				acceptance: seqStep.acceptance,
+				toolBudget: seqStep.toolBudget,
+			}, { parentMode: snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined), runId, index: childIndex }), {
 				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 				cwd: resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
 				signal,

@@ -1199,9 +1199,10 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run-chain", {
-		description: "Run a saved chain: /run-chain chainName -- task [--bg]",
-		getArgumentCompletions: makeChainCompletions(state),
-		handler: async (args, ctx) => {
+		description: "Removed: saved named chains are no longer supported",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify("Saved named chains were removed. Use /chain with task + description, or the subagent tool chain array.", "error");
+			return;
 			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
 			const delimiterIndex = cleanedArgs.indexOf(" -- ");
 			const usage = "Usage: /run-chain <chainName> -- <task> [--bg]";
@@ -1324,9 +1325,10 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("subagents-models", {
-		description: "Show runtime-loaded builtin subagent models",
-		getArgumentCompletions: makeBuiltinAgentNameCompletions(),
-		handler: async (args, ctx) => {
+		description: "Removed: named subagent types no longer have per-agent models",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify("Named subagent types were removed. Children inherit the parent model unless you pass model or tier.", "error");
+			return;
 			const trimmed = args.trim();
 			if (!trimmed) {
 				await runSlashSubagent(pi, ctx, { action: "models" });
