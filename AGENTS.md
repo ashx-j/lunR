@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-24. **`origin/master` = `b0401d9`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-28 (watchdog cold-start fix). **`origin/master` = `29908dd`**. Public npm is `@ashx-j/lunr@0.2.11` (tag `v0.2.11`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Watchdog cold start (`fix/watchdog-cold-start`):** the default-off main watchdog performs no repo-signature work during construction, session binding, or disabled turns. Enabled repo-edit review lazily establishes its baseline at `before_agent_start`; session and disable boundaries clear the old baseline. Tests: subagent-watchdog-startup + subagent/deferred regression set.
 
 - **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
@@ -88,6 +90,8 @@ Last updated: 2026-08-24. **`origin/master` = `b0401d9`**. Public npm is `@ashx-
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
+- Watchdog cold-start verification (2026-08-28): full tsgo sequence passed; focused Vitest 25/25; touched-file Biome passed (watchdog source remains excluded); dirty-worktree benchmark prompt-ready 2.23s, deferred attach 265ms, subagent factory 6ms. Full coding-agent Vitest: 2236 passed / 125 unrelated current-master Windows failures. Full Biome: 35 pre-existing errors + 1 warning outside touched files.
+- Watchdog PR CI caveat: the workflow still runs the forbidden `npm run build` in `packages/ai`; live catalog generation currently produces a Cloudflare transport TS2353 before reaching this patch. The explicit offline tsgo sequence above is green.
 
 ---
 
@@ -136,9 +140,11 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Default parallel subagent launch is unlimited. Honor an explicit `concurrency` / config override. Do not restore the 4-wide default.
 - xAI effort maps and Responses transport live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses). Humans do not invent catalog JSON; `withXaiEffortMetadata` also runs in `mergeCatalogLayers` so a stale shard cannot keep 4.6 on Completions. Named Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`, not a frozen id allowlist.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
+- Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
 
 # Decisions (keep; why in one line)
 
+- 2026-08-28: watchdog repo-edit fingerprints are lazy and effective-enable gated so an optional default-off reviewer cannot block prompt readiness.
 - 2026-07-18: `.lunr/` split; keep `pi-*` scopes + `PI_CODING_AGENT_*`.
 - 2026-07-22 / 08-15: no pi.dev catalog. `/refresh` = local `/models` + our GitHub `catalog/`.
 - 2026-07-26: extension-absorption rolled back — baked-in extensions + bridges only. No “done” without live `npx lunr` + one message.
