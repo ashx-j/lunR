@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-30 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` (tag `v0.2.12` = `788e680`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-30 (release v0.2.13). **`origin/master` = `ec347e5`** (+ release bump). Public npm target is `@ashx-j/lunr@0.2.13` (tag `v0.2.13`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
@@ -78,23 +78,23 @@ Last updated: 2026-08-30 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` 
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.12**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.13**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
 ## Not merged
 
-- None for 0.2.12.
+- None for 0.2.13.
 
 ## Uncommitted (working tree)
 
-- None for 0.2.12.
+- None for 0.2.13.
 
 ## Build & run
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.2.12**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / published CLI → **0.2.13**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
@@ -227,6 +227,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-24: same-turn SINGLE `subagent` calls count toward the swarm gate; one once/reject covers that assistant message. Sequential work stays `chain`.
 - 2026-08-24: v0.2.11 ships same-turn swarm gate, gateway `/new` while busy, TUI cron deliver allowlist, models-store parse harden, git-flag walk, manual `code_rewrite` prompt.
 - 2026-08-29: v0.2.12 ships agent memory + global AGENTS.md, prompt-driven subagents, Codex Fast/`/usage` cleanup, lunR system prompt, watchdog cold start, and lunR-branded shipped docs.
+- 2026-08-30: v0.2.13 ships settings menu copy, mid-message skill tags, and Global AGENTS.md context labels.
 - 2026-08-28: keep the prompt review artifact as the literal assembled effective prompt only; put provenance and regeneration notes in `AGENTS.md` so the snapshot contains no non-injected commentary.
 - 2026-08-29: the default prompt is lunR-specific and schema-first; model changes refresh its runtime slug while existing context, skill, custom-prompt, and conditional injections stay intact.
 - 2026-08-29: shipped coding-agent docs describe lunR (`@ashx-j/lunr`, `lunr`, `~/.lunr/`) so npmjs is not still pi; keep ExtensionAPI `pi` and `PI_*` names.
