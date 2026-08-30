@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-30 (release v0.2.13). **`origin/master` = `ec347e5`** (+ release bump). Public npm target is `@ashx-j/lunr@0.2.13` (tag `v0.2.13`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
