@@ -179,6 +179,27 @@ describe("computeContextBreakdown", () => {
 		expect(breakdown.total).toBe(1000);
 		expect(breakdown.free).toBe(0);
 	});
+
+	it("labels only the user-level AGENTS.md as global", () => {
+		const globalAgentsPath = "C:\\Users\\test\\.lunr\\agent\\AGENTS.md";
+		const prompt = [
+			"<project_context>",
+			'<project_instructions path="C:/Users/test/.lunr/agent/AGENTS.md">Global rules.</project_instructions>',
+			'<project_instructions path="C:/repo/AGENTS.md">Project rules.</project_instructions>',
+			"</project_context>",
+		].join("\n");
+		const breakdown = computeContextBreakdown({
+			systemPrompt: prompt,
+			tools: [],
+			messages: [],
+			contextWindow: 200_000,
+			globalAgentsPath,
+		});
+
+		expect(breakdown.contextFiles.map((file) => file.label)).toEqual(["Global AGENTS.md", "AGENTS.md"]);
+		const rendered = renderContextBox({ breakdown }, 80).join("\n");
+		expect(rendered).toContain("Global AGENTS.md");
+	});
 });
 
 describe("renderContextBox", () => {

@@ -7220,6 +7220,7 @@ export class InteractiveMode {
 			tools,
 			messages: this.session.messages,
 			contextWindow,
+			globalAgentsPath: path.join(getAgentDir(), "AGENTS.md"),
 		});
 	}
 
