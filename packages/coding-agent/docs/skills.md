@@ -89,6 +89,16 @@ Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 }
 ```
 
+### Skill tags
+
+`/settings` → Skill tag picks `+`, `~`, or `$` (default `+`). After a space — or at the start of a line — that character lists loaded skills, the same picker `/` opens at the start of the TUI. Completing inserts a tag; it does not expand SKILL.md the way `/skill:name` does.
+
+```text
+Please use +pdf-tools on this file
+```
+
+`xyz+` does not open the list. `xyz +` does. When the tag character is `~`, `~/path` still completes as a file path.
+
 ## Skill Structure
 
 A skill is a directory with a `SKILL.md` file. Everything else is freeform.
