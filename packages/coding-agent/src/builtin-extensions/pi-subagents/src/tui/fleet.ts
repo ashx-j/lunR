@@ -2,7 +2,7 @@
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
-import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../shared/formatters.ts";
+import { formatDuration, formatModelSelection, formatTokens, shortenPath } from "../shared/formatters.ts";
 import { RESULTS_DIR, type AsyncJobState, type ForegroundResumeChild, type ForegroundResumeRun, type SubagentState } from "../shared/types.ts";
 import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
@@ -169,7 +169,7 @@ function rosterFacts(item: FleetItem, _theme: Theme): string | undefined {
 	if (item.kind === "async") {
 		const model = item.step?.model;
 		const thinking = item.step?.thinking;
-		const badge = formatModelThinking(model, thinking);
+		const badge = formatModelSelection(item.step?.modelSelection, model, thinking);
 		if (badge) parts.push(badge);
 	}
 	return parts.length ? parts.join(" · ") : undefined;

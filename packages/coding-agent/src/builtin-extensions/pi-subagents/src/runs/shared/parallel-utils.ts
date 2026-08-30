@@ -22,6 +22,7 @@ export interface RunnerSubagentStep {
 	cwd?: string;
 	model?: string;
 	thinking?: string;
+	modelSelection?: import("../../shared/types.ts").ModelSelection;
 	modelCandidates?: string[];
 	tools?: string[];
 	extensions?: string[];

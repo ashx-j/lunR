@@ -18,7 +18,7 @@ import {
 	MAX_WIDGET_JOBS,
 	WIDGET_KEY,
 } from "../shared/types.ts";
-import { formatTokens, formatUsage, formatDuration, formatModelThinking, formatToolCall, shortenPath } from "../shared/formatters.ts";
+import { formatTokens, formatUsage, formatDuration, formatModelSelection, formatToolCall, shortenPath } from "../shared/formatters.ts";
 import { childRowLabel } from "../shared/types.ts";
 import { sanitizeChildDescription } from "../shared/child-spec.ts";
 import { getDisplayItems, getSingleResultOutput } from "../shared/utils.ts";
@@ -502,7 +502,7 @@ function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme, expanded =
 		const marker = index === job.steps.length - 1 ? "└" : "├";
 		const activity = widgetStepActivity(step, job.updatedAt);
 		const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
-		const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking);
+		const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking, step.modelSelection);
 		lines.push(`  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme, widgetStepRunningSeed(step, index))} ${itemTitle} ${index + 1}/${total}: ${step.agent} · ${widgetStepStatus(step.status, theme)}${modelDisplay}${activity ? ` · ${activity}` : ""}`)}`);
 		for (const nestedLine of formatNestedWidgetLines(step.children, theme, width, expanded, job.updatedAt, expanded ? 8 : 1)) lines.push(`    ${nestedLine}`);
 	}
@@ -800,8 +800,8 @@ function widgetStepStats(theme: Theme, step: NonNullable<AsyncJobState["steps"]>
 	]);
 }
 
-function modelThinkingBadge(theme: Theme, model?: string, thinking?: string): string {
-	const label = formatModelThinking(model, thinking);
+function modelThinkingBadge(theme: Theme, model?: string, thinking?: string, selection?: import("../shared/types.ts").ModelSelection): string {
+	const label = formatModelSelection(selection, model, thinking);
 	return label ? theme.fg("dim", ` (${label})`) : "";
 }
 
@@ -906,7 +906,7 @@ function foregroundStyleWidgetStepLines(
 ): string[] {
 	const status = widgetStepStatus(step.status, theme);
 	const stats = widgetStepStats(theme, step);
-	const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking);
+	const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking, step.modelSelection);
 	const lines = [`  ${widgetStepGlyph(step.status, theme, widgetStepRunningSeed(step, index - 1))} ${itemTitle} ${index}/${total}: ${themeBold(theme, step.agent)} ${theme.fg("dim", "·")} ${status}${modelDisplay}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`];
 	const activity = widgetStepActivityLine(step, width, expanded, job.updatedAt);
 	if (activity) lines.push(`    ${theme.fg("dim", `⎿  ${activity}`)}`);
@@ -975,7 +975,7 @@ function compactSingleWidgetLines(job: AsyncJobState, theme: Theme, width: numbe
 		const activity = widgetStepActivityLine(step, width, false, job.updatedAt);
 		const stepStats = widgetStepStats(theme, step);
 		const activitySuffix = activity ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", activity)}` : "";
-		const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking);
+		const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking, step.modelSelection);
 		lines.push(`  ${widgetStepGlyph(step.status, theme, widgetStepRunningSeed(step, index))} ${itemTitle} ${index + 1}/${total}: ${themeBold(theme, step.agent)} ${theme.fg("dim", "·")} ${status}${modelDisplay}${activitySuffix}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}`);
 		for (const nestedLine of formatNestedWidgetLines(step.children, theme, width, false, job.updatedAt)) lines.push(`    ${nestedLine}`);
 	}
@@ -1323,7 +1323,11 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const width = getTermWidth() - 4;
 	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
 	const lead = compactRowLead({ description: r.description ?? r.agent, task: r.task });
-	const modelBadge = formatModelThinking(r.model ?? progress?.model, r.thinking ?? progress?.thinking);
+	const modelBadge = formatModelSelection(
+		r.modelSelection ?? progress?.modelSelection,
+		r.model ?? progress?.model,
+		r.thinking ?? progress?.thinking,
+	);
 	const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
 	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
 
@@ -1422,9 +1426,14 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
 		const lead = compactRowLead({ description: r.description ?? agentName, task: r.task });
 		const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
+		const modelBadge = formatModelSelection(
+			r.modelSelection ?? (rProg && "modelSelection" in rProg ? rProg.modelSelection : undefined),
+			r.model ?? (rProg && "model" in rProg ? rProg.model : undefined),
+			r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined),
+		);
 		c.addChild(animatedLine((f) => {
 			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
-			return truncLine(`  ${glyph} ${themeBold(theme, lead)}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
+			return truncLine(`  ${glyph} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
 		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
 			c.addChild(new Text(formatCompactStatsHangLine(
@@ -1489,7 +1498,8 @@ export function renderSubagentResult(
 		const fit = (text: string) => expanded ? text : truncLine(text, w);
 		const toolCallLines = getToolCallLines(r, expanded);
 		const c = new Container();
-		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${progressInfo}`), 0, 0));
+		const modelDisplay = modelThinkingBadge(theme, r.model, r.thinking ?? r.progress?.thinking, r.modelSelection ?? r.progress?.modelSelection);
+		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelDisplay}${contextBadge}${progressInfo}`), 0, 0));
 		c.addChild(new Spacer(1));
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = expanded || r.task.length <= taskMaxLen
@@ -1708,7 +1718,7 @@ export function renderSubagentResult(
 					? theme.fg("warning", "warning")
 					: theme.fg("success", "done");
 		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
-		const modelDisplay = modelThinkingBadge(theme, r.model);
+		const modelDisplay = modelThinkingBadge(theme, r.model, r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined), r.modelSelection ?? (rProg && "modelSelection" in rProg ? rProg.modelSelection : undefined));
 		const stepLabel = resultRowLabel(d, multiLabel, i, stepNumber);
 		const stepHeader = rRunning
 			? `${statusIcon} ${stepLabel}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
