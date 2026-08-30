@@ -246,6 +246,7 @@ export {
 	type RetrySettings,
 	SettingsManager,
 	type SettingsManagerCreateOptions,
+	type SkillTagCharacter,
 } from "./core/settings-manager.ts";
 // Skills
 export {

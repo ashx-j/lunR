@@ -356,7 +356,11 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 			});
 
 		const fakeThis = {
-			createBaseAutocompleteProvider: () => new CombinedAutocompleteProvider([], "/tmp/project", undefined),
+			createBaseAutocompleteProvider: () => {
+				const provider = new CombinedAutocompleteProvider([], "/tmp/project", undefined);
+				provider.triggerCharacters = ["+"];
+				return provider;
+			},
 			defaultEditor,
 			editor: customEditor,
 			autocompleteProviderWrappers: [passThrough(["$"]), passThrough(["!"])],
@@ -369,7 +373,7 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 		).prototype.setupAutocompleteProvider.call(fakeThis);
 
 		const provider = defaultEditor.setAutocompleteProvider.mock.calls[0]?.[0] as AutocompleteProvider;
-		expect(provider.triggerCharacters).toEqual(["$", "!"]);
+		expect(provider.triggerCharacters).toEqual(["+", "$", "!"]);
 	});
 });
 
@@ -384,7 +388,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
 			};
-			settingsManager: { getEnableSkillCommands: () => boolean };
+			settingsManager: { getEnableSkillCommands: () => boolean; getSkillTagCharacter: () => "+" };
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
@@ -407,7 +411,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
 			},
-			settingsManager: { getEnableSkillCommands: () => false },
+			settingsManager: { getEnableSkillCommands: () => false, getSkillTagCharacter: () => "+" },
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
@@ -434,7 +438,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
 			};
-			settingsManager: { getEnableSkillCommands: () => boolean };
+			settingsManager: { getEnableSkillCommands: () => boolean; getSkillTagCharacter: () => "+" };
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
@@ -454,7 +458,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
 			},
-			settingsManager: { getEnableSkillCommands: () => false },
+			settingsManager: { getEnableSkillCommands: () => false, getSkillTagCharacter: () => "+" },
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
@@ -476,6 +480,67 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				value: "anthropic",
 				label: "anthropic",
 				description: "Anthropic · subscription/API key",
+			},
+		]);
+	});
+
+	test("lists skills for the skill tag character mid-message", async () => {
+		type FakeInteractiveMode = {
+			session: {
+				scopedModels: [];
+				modelRuntime: { getAvailable: () => [] };
+				promptTemplates: [];
+				extensionRunner: { getRegisteredCommands: () => [] };
+				resourceLoader: {
+					getSkills: () => {
+						skills: Array<{ name: string; description: string; sourceInfo?: SourceInfo }>;
+					};
+				};
+			};
+			settingsManager: { getEnableSkillCommands: () => boolean; getSkillTagCharacter: () => "+" };
+			skillCommands: Map<string, string>;
+			sessionManager: { getCwd: () => string };
+			fdPath: null;
+			prefixAutocompleteDescription: (description?: string) => string | undefined;
+		};
+
+		const createBaseAutocompleteProvider = (
+			InteractiveMode as unknown as {
+				prototype: { createBaseAutocompleteProvider(this: FakeInteractiveMode): AutocompleteProvider };
+			}
+		).prototype.createBaseAutocompleteProvider;
+		const fakeThis: FakeInteractiveMode = {
+			session: {
+				scopedModels: [],
+				modelRuntime: { getAvailable: () => [] },
+				promptTemplates: [],
+				extensionRunner: { getRegisteredCommands: () => [] },
+				resourceLoader: {
+					getSkills: () => ({
+						skills: [{ name: "pdf-tools", description: "PDF helpers" }],
+					}),
+				},
+			},
+			settingsManager: { getEnableSkillCommands: () => false, getSkillTagCharacter: () => "+" },
+			skillCommands: new Map(),
+			sessionManager: { getCwd: () => "/tmp" },
+			fdPath: null,
+			prefixAutocompleteDescription: (description) => description,
+		};
+
+		const provider = createBaseAutocompleteProvider.call(fakeThis);
+		const line = "hello +pdf";
+		const suggestions = await provider.getSuggestions([line], 0, line.length, {
+			signal: new AbortController().signal,
+		});
+
+		expect(provider.triggerCharacters).toEqual(["+"]);
+		expect(suggestions?.prefix).toBe("+pdf");
+		expect(suggestions?.items).toEqual([
+			{
+				value: "+pdf-tools",
+				label: "pdf-tools",
+				description: "PDF helpers",
 			},
 		]);
 	});

@@ -28,10 +28,10 @@ import type {
 	SlashCommand,
 } from "@earendil-works/pi-tui";
 import {
-	collectImageMarkerIds,
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
+	collectImageMarkerIds,
 	type EditorImageAttachment,
 	formatImageMarker,
 	fuzzyFilter,
@@ -212,6 +212,7 @@ import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
 	computeSmoothRevealStep,
 	countGraphemesBeforeToolCall,
@@ -795,16 +796,25 @@ export class InteractiveMode {
 			}
 		}
 
-		return new CombinedAutocompleteProvider(
-			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
-			this.sessionManager.getCwd(),
-			this.fdPath,
+		return wrapSkillTagAutocomplete(
+			new CombinedAutocompleteProvider(
+				[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
+				this.sessionManager.getCwd(),
+				this.fdPath,
+			),
+			{
+				character: this.settingsManager.getSkillTagCharacter(),
+				skills: this.session.resourceLoader.getSkills().skills.map((skill) => ({
+					name: skill.name,
+					description: this.prefixAutocompleteDescription(skill.description, skill.sourceInfo),
+				})),
+			},
 		);
 	}
 
 	private setupAutocompleteProvider(): void {
 		let provider = this.createBaseAutocompleteProvider();
-		const triggerCharacters: string[] = [];
+		const triggerCharacters: string[] = [...(provider.triggerCharacters ?? [])];
 		for (const wrapProvider of this.autocompleteProviderWrappers) {
 			provider = wrapProvider(provider);
 			triggerCharacters.push(...(provider.triggerCharacters ?? []));
@@ -4692,6 +4702,7 @@ export class InteractiveMode {
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
 					blockImages: this.settingsManager.getBlockImages(),
 					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
+					skillTagCharacter: this.settingsManager.getSkillTagCharacter(),
 					steeringMode: this.session.steeringMode,
 					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
@@ -4773,6 +4784,10 @@ export class InteractiveMode {
 					},
 					onEnableSkillCommandsChange: (enabled) => {
 						this.settingsManager.setEnableSkillCommands(enabled);
+						this.setupAutocompleteProvider();
+					},
+					onSkillTagCharacterChange: (character) => {
+						this.settingsManager.setSkillTagCharacter(character);
 						this.setupAutocompleteProvider();
 					},
 					onSteeringModeChange: (mode) => {
@@ -7205,6 +7220,7 @@ export class InteractiveMode {
 			tools,
 			messages: this.session.messages,
 			contextWindow,
+			globalAgentsPath: path.join(getAgentDir(), "AGENTS.md"),
 		});
 	}
 

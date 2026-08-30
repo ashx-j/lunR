@@ -265,6 +265,7 @@ Paths in `~/.lunr/agent/settings.json` resolve relative to `~/.lunr/agent`. Path
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands |
+| `skillTagCharacter` | `"+" \| "~" \| "$"` | `"+"` | Character that lists skills mid-message after a space |
 
 Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.
 
