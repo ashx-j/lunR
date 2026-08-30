@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-08-30 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` (tag `v0.2.12` = `788e680`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
 - **Global context label (`fix/global-agents-context-label`):** `/context` and `/usage` label `~/.lunr/agent/AGENTS.md` as `Global AGENTS.md`; project instruction files remain `AGENTS.md`. The prompt path/content is unchanged. Test: context-breakdown.
@@ -107,6 +108,7 @@ Last updated: 2026-08-30 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` 
 - Agent memory + global instructions (2026-08-29): required tui → ai → agent → coding-agent → orchestrator offline tsgo sequence passes. Focused coding-agent Vitest passes 73/73. Adding resource-loader coverage passes 90/96; its 6 existing Windows `.pi`/symlink fixture failures remain unrelated, while global `AGENTS.md` discovery passes. Touched-file Biome retains pre-existing format/import-order findings in hot files; new memory implementation/test files pass separately.
 - Global context label (2026-08-30): coding-agent tsgo passes; focused context/usage Vitest passes 15/15. Biome passes the changed core/test files; `interactive-mode.ts` retains its pre-existing import-order finding.
 - Skill tag character (2026-08-30): coding-agent tsgo passes. Focused Vitest: skill-tag-autocomplete 11/11, settings-manager skill-tag 2/2, interactive-mode wiring/trigger-merge 4/4. New files pass Biome; `settings-selector.ts` keeps its pre-existing format finding and `interactive-mode.ts` its pre-existing import-order finding.
+- Settings menu copy (2026-08-30): coding-agent tsgo, settings-selector Biome, and `git diff --check` pass. Focused Vitest passes 49/52; the three unrelated existing Windows failures are in rollback memory-path coverage and settings-manager external-edit fixtures, while model-tiers and memory-cap pass. The pre-commit aggregate check retains the documented pinned-dependency failures from study material and coding-agent dependencies.
 
 ---
 
@@ -164,6 +166,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - xAI effort maps and Responses transport live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses). Humans do not invent catalog JSON; `withXaiEffortMetadata` also runs in `mergeCatalogLayers` so a stale shard cannot keep 4.6 on Completions. Named Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`, not a frozen id allowlist.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 - Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
+- Settings menu descriptions name the feature, not every control inside it. Keep choice-specific limits and warnings beside the relevant choice or confirmation.
 
 # Decisions (keep; why in one line)
 
@@ -235,6 +238,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-29: Remove `/research` orchestration; generic subagents and web tools cover research without a product pipeline.
 - 2026-08-30: distinguish the global instruction file by its resolved agent-dir path in the context breakdown so UI labels improve without changing prompt injection or project-file labels.
 - 2026-08-30: mid-message skill tagging uses a dedicated `/settings` character (`+`/`~`/`$`) and inserts a tag only; do not reuse `/` or dump SKILL.md.
+- 2026-08-30: `/settings` descriptions are short feature summaries so the menu stays scannable; choice details stay in submenus.
 
 # Deferred
 

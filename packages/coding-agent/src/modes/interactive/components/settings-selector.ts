@@ -205,17 +205,17 @@ const MODEL_TIER_ROWS: { tier: ModelTierName; label: string; description: string
 	{
 		tier: "light",
 		label: "Light tier model",
-		description: "Cheap/fast model for simple subagent tasks (lookups, formatting)",
+		description: "Fast, low-cost model for simple subagent tasks",
 	},
 	{
 		tier: "standard",
 		label: "Standard tier model",
-		description: "Mid-tier model for typical coding subagent tasks",
+		description: "Balanced model for everyday coding tasks",
 	},
 	{
 		tier: "heavy",
 		label: "Heavy tier model",
-		description: "Strongest model for deep reasoning and complex debugging subagents",
+		description: "Strong model for complex reasoning and debugging",
 	},
 ];
 
@@ -260,8 +260,7 @@ class ModelTiersSubmenu extends Container {
 			{
 				id: "enabled",
 				label: "Enable model tiers",
-				description:
-					"Route subagents to per-tier models. An explicit model choice overrides the tier; tiers without a model inherit the parent model.",
+				description: "Route subagent work by model tier",
 				currentValue: this.state.enabled ? "on" : "off",
 				values: ["on", "off"],
 			},
@@ -280,15 +279,19 @@ class ModelTiersSubmenu extends Container {
 					{
 						id: `${tier}-thinking`,
 						label: `${row.label.replace(" model", "")} thinking`,
-						description: "Reasoning depth for this tier. Inherit uses the parent session level.",
+						description: "Reasoning level for this tier",
 						currentValue: this.state[tKey] ?? "inherit",
 						disabled: () => !this.state.enabled,
 						submenu: (_currentValue, done) =>
 							new SelectSubmenu(
 								`${row.label} thinking`,
-								"Unset inherits the parent session thinking level.",
+								"Inherit uses the parent session's reasoning level",
 								[
-									{ value: "inherit", label: "inherit", description: "Use the parent session thinking level" },
+									{
+										value: "inherit",
+										label: "inherit",
+										description: "Use the parent session's reasoning level",
+									},
 									...callbacks.getTierThinkingLevels(tier).map((level) => ({
 										value: level,
 										label: level,
@@ -358,7 +361,7 @@ class MemoryCharCapSubmenu extends Container {
 			new Text(
 				theme.fg(
 					"muted",
-					`Max characters in the memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}).`,
+					`Maximum agent memory size (${MEMORY_CHAR_CAP_MIN} to ${MEMORY_CHAR_CAP_MAX} characters, default ${MEMORY_CHAR_CAP_DEFAULT})`,
 				),
 				0,
 				0,
@@ -407,84 +410,84 @@ class CustomizeSubmenu extends Container {
 			{
 				id: "gutter-rail",
 				label: "Gutter rail",
-				description: "Render a thin left │ rail spanning each turn, closing with ╰.",
+				description: "Turn boundary rail",
 				currentValue: (bridge?.getGutterRail() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "prompt-symbol",
 				label: "Prompt symbol",
-				description: "Show the ☾ › prompt glyph on the editor's first line.",
+				description: "Moon prompt glyph",
 				currentValue: (bridge?.getPromptSymbol() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-mcp",
 				label: "Footer: MCP status",
-				description: "Show the MCP server status segment in the footer stats line.",
+				description: "MCP server status",
 				currentValue: (bridge?.getFooterMcp() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-lsp",
 				label: "Footer: LSP status",
-				description: "Show the LSP status segment in the footer stats line.",
+				description: "Language server status",
 				currentValue: (bridge?.getFooterLsp() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-context",
 				label: "Footer: context meter",
-				description: "Show the context-usage pct/window segment in the footer stats line.",
+				description: "Context usage",
 				currentValue: (bridge?.getFooterContext() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-tokens",
 				label: "Footer: token counter",
-				description: "Show the ↑in ↓out token totals segment in the footer stats line.",
+				description: "Input and output token counts",
 				currentValue: (bridge?.getFooterTokens() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-cache-hit-rate",
 				label: "Footer: cache hit rate",
-				description: "Show the latest prompt cache-hit rate when cache usage is reported.",
+				description: "Latest prompt cache hit rate",
 				currentValue: (bridge?.getFooterCacheHitRate() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-tps",
 				label: "Footer: TPS counter",
-				description: "Show the ✓ 174.0 t/s · tokens-in-time segment in the footer stats line.",
+				description: "Token generation speed",
 				currentValue: (bridge?.getFooterTps() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-statuses",
 				label: "Footer: feature statuses",
-				description: "Show the plan/goal/swarm status segments in the footer stats line.",
+				description: "Active plan, goal, and swarm status",
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-git",
 				label: "Footer: git branch",
-				description: "Show the current git branch and added/removed line counts in the footer stats line.",
+				description: "Git branch and line changes",
 				currentValue: (bridge?.getFooterGit() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-plan",
 				label: "Footer: plan usage",
-				description: "Show the live subscription usage percent when the current model is on a plan.",
+				description: "Subscription usage percentage",
 				currentValue: (bridge?.getFooterPlan() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-plan-bar",
 				label: "Footer: plan bar",
-				description: "Show the filled █░ bar next to the plan percent. Off keeps the percent only.",
+				description: "Bar beside the subscription usage percentage",
 				currentValue: (bridge?.getFooterPlanBar() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
@@ -565,9 +568,7 @@ class RollbackSubmenu extends Container {
 			{
 				id: "rollback-enabled",
 				label: "Rollback enabled",
-				description:
-					"Copy files before edits so /rollback can restore them. Uses extra disk + processing." +
-					(sessionForceEnabled ? " (forced on by auto mode)" : ""),
+				description: `Save file snapshots for /rollback${sessionForceEnabled ? ". Always on in Auto mode" : ""}`,
 				currentValue: this.enabled ? "on" : "off",
 				values: ["on", "off"],
 				disabled: () => sessionForceEnabled,
@@ -575,7 +576,7 @@ class RollbackSubmenu extends Container {
 			{
 				id: "rollback-turns",
 				label: "Rollback turns",
-				description: `How many turns of snapshots to retain (1-20, default 2).`,
+				description: "Number of turns kept for rollback",
 				currentValue: String(config.rollbackTurns),
 				disabled: () => !this.enabled,
 				submenu: (currentValue, submenuDone) => new RollbackTurnsSubmenu(currentValue, submenuDone),
@@ -583,29 +584,28 @@ class RollbackSubmenu extends Container {
 			{
 				id: "rollback-capture",
 				label: "Capture mode",
-				description:
-					"How snapshots are taken: copies = restore edited files + delete tool-created files, hybrid = also delete files created outside tools (tree scope), shadow-git = hidden git repo (needs git).",
+				description: "How rollback snapshots are stored",
 				currentValue: config.rollbackCapture,
 				disabled: () => !this.enabled,
 				submenu: (currentValue, submenuDone) =>
 					new SelectSubmenu(
 						"Rollback Capture Mode",
-						"How file snapshots are captured before edits.",
+						"Snapshot storage method",
 						[
 							{
 								value: "copies",
 								label: "copies",
-								description: "fast; restores edits, deletes tool-created files",
+								description: "File copies for tool edits and created files",
 							},
 							{
 								value: "hybrid",
 								label: "hybrid",
-								description: "also deletes files created outside tools (tree scope)",
+								description: "Track files created outside tools with tree scope",
 							},
 							{
 								value: "shadow-git",
 								label: "shadow-git",
-								description: "needs git, hidden repo — deferred, falls back to copies",
+								description: "Reserved mode; currently falls back to copies",
 							},
 						],
 						currentValue,
@@ -619,20 +619,19 @@ class RollbackSubmenu extends Container {
 			{
 				id: "rollback-scope",
 				label: "Rollback scope",
-				description:
-					"tools = only edit/write changes; tree = also catches bash side-effects via git status (slower on large repos).",
+				description: "Which file changes rollback tracks",
 				currentValue: config.rollbackScope,
 				disabled: () => !this.enabled,
 				submenu: (currentValue, submenuDone) =>
 					new SelectSubmenu(
 						"Rollback Scope",
-						"What file changes to snapshot.",
+						"File changes included in snapshots",
 						[
-							{ value: "tools", label: "tools", description: "only edit/write tool changes" },
+							{ value: "tools", label: "tools", description: "Changes made by edit and write tools" },
 							{
 								value: "tree",
 								label: "tree",
-								description: "also catches bash side-effects; slower on large repos",
+								description: "Tool and shell changes across the repository",
 							},
 						],
 						currentValue,
@@ -678,7 +677,7 @@ class RollbackTurnsSubmenu extends Container {
 		super();
 		this.addChild(new Text(theme.bold(theme.fg("accent", "Rollback Turns")), 0, 0));
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("muted", "How many turns of snapshots to retain (1-20, default 2)."), 0, 0));
+		this.addChild(new Text(theme.fg("muted", "Number of turns kept for rollback (1 to 20, default 2)"), 0, 0));
 		this.addChild(new Spacer(1));
 		this.input = new Input();
 		this.input.setValue(currentValue);
@@ -783,8 +782,8 @@ class SubscriptionActionSubmenu extends Container {
 				id: "set-active",
 				label: "Set active",
 				description: subs.autoManage()
-					? "Manual switching is disabled while Auto-manage subscriptions is on."
-					: "Use this key for new requests.",
+					? "Turn off automatic key rotation to switch keys"
+					: "Use this key for new requests",
 				currentValue: row.active ? "already active" : "activate",
 				values: ["activate"],
 				disabled: () => subs.autoManage() || row.active,
@@ -792,7 +791,7 @@ class SubscriptionActionSubmenu extends Container {
 			{
 				id: "rename",
 				label: "Rename",
-				description: "Display name for this key.",
+				description: "Change the key's display name",
 				currentValue: row.name,
 				submenu: (currentValue, renameDone) =>
 					new SubscriptionRenameSubmenu(currentValue, (name) => {
@@ -813,7 +812,7 @@ class SubscriptionActionSubmenu extends Container {
 				description:
 					row.exhaustedUntil !== undefined
 						? `Marked exhausted until ${formatSubscriptionExhaustedUntil(row.exhaustedUntil)}.`
-						: "Only available for keys marked exhausted.",
+						: "Unavailable until the key is marked exhausted",
 				currentValue: "clear",
 				values: ["clear"],
 				disabled: () => row.exhaustedUntil === undefined,
@@ -821,12 +820,12 @@ class SubscriptionActionSubmenu extends Container {
 			{
 				id: "remove",
 				label: "Remove",
-				description: "Delete this key. Removing the provider's last key logs it out completely.",
+				description: "Delete this stored key",
 				currentValue: "remove…",
 				submenu: (_currentValue, confirmDone) =>
 					new SelectSubmenu(
 						"Remove Subscription",
-						`Remove "${row.name}" (${row.providerName})? Removing the provider's last key logs it out.`,
+						`Delete "${row.name}" from ${row.providerName}? The last key also logs out the provider.`,
 						[
 							{ value: "cancel", label: "Cancel" },
 							{ value: "remove", label: "Remove key" },
@@ -1031,7 +1030,7 @@ function singleModeThemeItems(availableThemes: string[]): SelectItem[] {
 		{
 			value: AUTOMATIC_THEME_VALUE,
 			label: "Automatic",
-			description: "Use separate themes for light and dark terminal appearance",
+			description: "Follow the terminal's light or dark appearance",
 		},
 		...themeItems(availableThemes),
 	];
@@ -1113,7 +1112,7 @@ class ThemeSubmenu extends Container {
 		this.mode = "single";
 		const menu = new SelectSubmenu(
 			"Theme",
-			"Select a theme, or choose Automatic to follow terminal appearance.",
+			"Choose a theme or follow terminal appearance",
 			singleModeThemeItems(this.availableThemes),
 			this.singleTheme,
 			(value) => {
@@ -1140,7 +1139,7 @@ class ThemeSubmenu extends Container {
 		const content = new Container();
 		content.addChild(new Text(theme.bold(theme.fg("accent", "Automatic Theme")), 0, 0));
 		content.addChild(new Spacer(1));
-		content.addChild(new Text(theme.fg("muted", "Choose themes for terminal light and dark appearance."), 0, 0));
+		content.addChild(new Text(theme.fg("muted", "Use different themes for light and dark terminals."), 0, 0));
 		content.addChild(new Text(theme.fg("muted", "Light/dark detection requires terminal support."), 0, 0));
 		content.addChild(new Spacer(1));
 
@@ -1148,50 +1147,38 @@ class ThemeSubmenu extends Container {
 			{
 				id: "light-theme",
 				label: "Light theme",
-				description: "Theme to use in automatic mode when the terminal is light",
+				description: "Theme for light terminals",
 				currentValue: this.lightTheme,
 				submenu: (currentValue, done) =>
-					this.createThemeSelect(
-						"Light Theme",
-						"Select the theme to use for light terminal appearance",
-						currentValue,
-						done,
-						(value) => {
-							this.lightTheme = value;
-							this.callbacks.onThemePreview?.(this.getThemeSetting());
-							done(value);
-						},
-					),
+					this.createThemeSelect("Light Theme", "Theme for light terminals", currentValue, done, (value) => {
+						this.lightTheme = value;
+						this.callbacks.onThemePreview?.(this.getThemeSetting());
+						done(value);
+					}),
 			},
 			{
 				id: "dark-theme",
 				label: "Dark theme",
-				description: "Theme to use in automatic mode when the terminal is dark",
+				description: "Theme for dark terminals",
 				currentValue: this.darkTheme,
 				submenu: (currentValue, done) =>
-					this.createThemeSelect(
-						"Dark Theme",
-						"Select the theme to use for dark terminal appearance",
-						currentValue,
-						done,
-						(value) => {
-							this.darkTheme = value;
-							this.callbacks.onThemePreview?.(this.getThemeSetting());
-							done(value);
-						},
-					),
+					this.createThemeSelect("Dark Theme", "Theme for dark terminals", currentValue, done, (value) => {
+						this.darkTheme = value;
+						this.callbacks.onThemePreview?.(this.getThemeSetting());
+						done(value);
+					}),
 			},
 			{
 				id: "apply",
 				label: "Apply",
-				description: "Save and go back",
+				description: "Save theme settings",
 				currentValue: "save and go back",
 				values: ["save and go back"],
 			},
 			{
 				id: "single-mode",
 				label: "Change mode",
-				description: "Switch to one theme for light and dark",
+				description: "Use one theme for all terminal appearances",
 				currentValue: "switch to single theme",
 				values: ["switch to single theme"],
 			},
@@ -1280,44 +1267,42 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "autocompact",
 				label: "Auto-compact",
-				description: "Automatically compact context when it gets too large",
+				description: "Compact context before it reaches the model limit",
 				currentValue: config.autoCompact ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
 				id: "steering-mode",
 				label: "Steering mode",
-				description:
-					"Enter while streaming queues steering messages. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
+				description: "How new messages interrupt a streaming response",
 				currentValue: config.steeringMode,
 				values: ["one-at-a-time", "all"],
 			},
 			{
 				id: "follow-up-mode",
 				label: "Follow-up mode",
-				description: `${followUpKey} queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.`,
+				description: `How ${followUpKey} messages run after the current response`,
 				currentValue: config.followUpMode,
 				values: ["one-at-a-time", "all"],
 			},
 			{
 				id: "transport",
 				label: "Transport",
-				description: "Preferred transport for providers that support multiple transports",
+				description: "Connection method for supported providers",
 				currentValue: config.transport,
 				values: ["sse", "websocket", "websocket-cached", "auto"],
 			},
 			{
 				id: "http-idle-timeout",
 				label: "HTTP idle timeout",
-				description:
-					"Maximum idle gap while waiting for HTTP headers or body chunks. Disable for local models that pause longer than five minutes.",
+				description: "Time before an inactive HTTP request times out",
 				currentValue: formatHttpIdleTimeoutMs(config.httpIdleTimeoutMs),
 				values: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => choice.label),
 			},
 			{
 				id: "hide-thinking",
 				label: "Hide thinking",
-				description: "Hide thinking blocks in assistant responses",
+				description: "Thinking block visibility",
 				currentValue: config.hideThinkingBlock ? "true" : "false",
 				values: ["true", "false"],
 			},
@@ -1326,7 +1311,7 @@ export class SettingsSelectorComponent extends Container {
 				// "✻ Thought for Xs" + first sentence. Disabled when thinking is hidden.
 				id: "thinking-collapse",
 				label: "Collapse thinking",
-				description: "Collapse completed thinking blocks to a short summary",
+				description: "Short summaries for completed thinking",
 				currentValue: config.thinkingCollapse ? "true" : "false",
 				values: ["true", "false"],
 				disabled: () => config.hideThinkingBlock,
@@ -1334,7 +1319,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "cache-miss-notices",
 				label: "Cache miss notices",
-				description: "Show transcript notices for significant prompt-cache misses",
+				description: "Prompt cache miss notices in the transcript",
 				currentValue: config.showCacheMissNotices ? "true" : "false",
 				values: ["true", "false"],
 			},
@@ -1343,35 +1328,35 @@ export class SettingsSelectorComponent extends Container {
 				// applies; the row displays "short" as the implicit default.
 				id: "cache-retention",
 				label: "Cache retention",
-				description: "Prompt-cache TTL: short (5 min), long (1h where supported), or none",
+				description: "Prompt cache lifetime",
 				currentValue: config.cacheRetention,
 				values: ["short", "long", "none"],
 			},
 			{
 				id: "quiet-startup",
 				label: "Quiet startup",
-				description: "Disable verbose printing at startup",
+				description: "Startup log visibility",
 				currentValue: config.quietStartup ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
 				id: "smooth-streaming",
 				label: "Smooth streaming",
-				description: "Reveal responses grapheme by grapheme (~30 FPS typewriter)",
+				description: "Typewriter-style response streaming",
 				currentValue: config.smoothStreaming ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
 				id: "agent-memory",
 				label: "Agent memory",
-				description: "Inject durable facts and allow the model to add, inspect, and remove them.",
+				description: "Durable facts the agent can manage",
 				currentValue: config.memoryEnabled ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "memory-char-cap",
 				label: "Memory character cap",
-				description: `Max characters in the durable-facts memory file (${MEMORY_CHAR_CAP_MIN}-${MEMORY_CHAR_CAP_MAX}, default ${MEMORY_CHAR_CAP_DEFAULT}). Also settable via /memory-char-cap.`,
+				description: "Maximum agent memory size",
 				currentValue: String(config.memoryCharCap),
 				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
 			},
@@ -1379,56 +1364,55 @@ export class SettingsSelectorComponent extends Container {
 				id: "search-curator",
 				label: "Search curator",
 				description: curatorAvailable
-					? "pi-web-access search curator: off = raw results, on = browser curator with summary draft, auto-summary = summary without the curator. Also settable via /curator."
-					: "pi-web-access is not loaded; the search curator is unavailable.",
+					? "Web search review and summary mode"
+					: "Unavailable because web access is not loaded",
 				currentValue: config.searchCurator ?? "unavailable",
 				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
 			},
 			{
 				id: "session-retention-days",
 				label: "Session retention",
-				description: "Auto-delete session files older than N days at launch (0 = keep forever)",
+				description: "How long session files are kept",
 				currentValue: String(config.sessionRetentionDays),
 				values: ["0", "7", "14", "30", "60", "90", "365"],
 			},
 			{
 				id: "default-project-trust",
 				label: "Default project trust",
-				description: "Fallback behavior when no extension or saved trust decision decides project trust",
+				description: "Trust choice when a project has no saved decision",
 				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
 				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
 			},
 			{
 				id: "default-permission-mode",
 				label: "Default permission mode",
-				description:
-					"Permission mode new sessions start with: manual = approve every action, yolo = auto-approve tools, plan = read-only, auto = fully autonomous. Change per-session with /mode or Shift+Tab.",
+				description: "Starting permission mode for new sessions",
 				currentValue: config.defaultPermissionMode,
 				values: ["manual", "yolo", "plan", "auto"],
 			},
 			{
 				id: "double-escape-action",
 				label: "Double-escape action",
-				description: "Action when pressing Escape twice with empty editor",
+				description: "Action for double Escape in an empty editor",
 				currentValue: config.doubleEscapeAction,
 				values: ["tree", "fork", "none"],
 			},
 			{
 				id: "tree-filter-mode",
 				label: "Tree filter mode",
-				description: "Default filter when opening /tree",
+				description: "Default /tree filter",
 				currentValue: config.treeFilterMode,
 				values: ["default", "no-tools", "user-only", "labeled-only", "all"],
 			},
 			{
 				id: "thinking",
 				label: "Thinking level",
-				description: "Reasoning depth for thinking-capable models",
+				description: "Reasoning level for supported models",
 				currentValue: config.thinkingLevel,
 				submenu: (currentValue, done) =>
 					new SelectSubmenu(
 						"Thinking Level",
-						"Select reasoning depth for thinking-capable models",
+						"Reasoning level for supported models",
 						config.availableThinkingLevels.map((level) => ({
 							value: level,
 							label: level,
@@ -1445,7 +1429,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "theme",
 				label: "Theme",
-				description: "Color theme for the interface",
+				description: "Interface color theme",
 				currentValue: config.currentTheme,
 				submenu: (currentValue, done) =>
 					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
@@ -1453,15 +1437,14 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "model-tiers",
 				label: "Model tiers",
-				description:
-					"Route subagents to light/standard/heavy tier models. An explicit model choice overrides the tier.",
+				description: "Subagent model routing",
 				currentValue: config.modelTiers.enabled ? "on" : "off",
 				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
 			},
 			{
 				id: "plan-usage-window",
 				label: "Plan usage window",
-				description: "Preferred subscription window for the footer bar. Missing 5h falls back to weekly.",
+				description: "Subscription usage period shown in the footer",
 				currentValue: config.planUsageWindow,
 				values: ["5h", "weekly"],
 			},
@@ -1469,7 +1452,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "customize",
 				label: "Customize",
-				description: "lunR TUI customizations: gutter rail, prompt symbol, footer segments",
+				description: "Interface and footer options",
 				currentValue: "configure",
 				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
 			},
@@ -1477,7 +1460,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "rollback",
 				label: "Rollback",
-				description: "Pre-edit file snapshots so /rollback can restore them. Capture mode, scope, retention.",
+				description: "Rollback behavior options",
 				currentValue: config.rollbackEnabled ? "on" : "off",
 				submenu: (currentValue, done) =>
 					new RollbackSubmenu(currentValue, config, callbacks, callbacks.isRollbackSessionForceEnabled(), done),
@@ -1486,8 +1469,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "auto-manage-subscriptions",
 				label: "Auto-manage subscriptions",
-				description:
-					"When on, lunr rotates API keys automatically on usage limits and the model selector won't offer manual subscription switching.",
+				description: "Automatic API key rotation after usage limits",
 				currentValue: config.autoManageSubscriptions ? "on" : "off",
 				values: ["on", "off"],
 			},
@@ -1499,7 +1481,7 @@ export class SettingsSelectorComponent extends Container {
 			items.push({
 				id: "subscriptions",
 				label: "Subscriptions",
-				description: "Per-provider API key pools: set the active key, rename, clear exhaustion, remove.",
+				description: "Saved API key management",
 				currentValue:
 					config.subscriptionCount === 0
 						? "none"
@@ -1514,14 +1496,14 @@ export class SettingsSelectorComponent extends Container {
 			items.splice(1, 0, {
 				id: "show-images",
 				label: "Show images",
-				description: "Render images inline in terminal",
+				description: "Inline terminal image rendering",
 				currentValue: config.showImages ? "true" : "false",
 				values: ["true", "false"],
 			});
 			items.splice(2, 0, {
 				id: "image-width-cells",
 				label: "Image width",
-				description: "Preferred inline image width in terminal cells",
+				description: "Inline image width in terminal cells",
 				currentValue: String(config.imageWidthCells),
 				values: ["60", "80", "120"],
 			});
@@ -1531,7 +1513,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(supportsImages ? 3 : 1, 0, {
 			id: "auto-resize-images",
 			label: "Auto-resize images",
-			description: "Resize large images to 2000x2000 max for better model compatibility",
+			description: "Limit images to 2000 x 2000 pixels",
 			currentValue: config.autoResizeImages ? "true" : "false",
 			values: ["true", "false"],
 		});
@@ -1541,7 +1523,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(autoResizeIndex + 1, 0, {
 			id: "block-images",
 			label: "Block images",
-			description: "Prevent images from being sent to LLM providers",
+			description: "Prevent images from reaching model providers",
 			currentValue: config.blockImages ? "true" : "false",
 			values: ["true", "false"],
 		});
@@ -1551,7 +1533,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(blockImagesIndex + 1, 0, {
 			id: "skill-commands",
 			label: "Skill commands",
-			description: "Register skills as /skill:name commands",
+			description: "Skills as /skill:name commands",
 			currentValue: config.enableSkillCommands ? "true" : "false",
 			values: ["true", "false"],
 		});
@@ -1571,7 +1553,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(skillTagIndex + 1, 0, {
 			id: "show-hardware-cursor",
 			label: "Show hardware cursor",
-			description: "Show the terminal cursor while still positioning it for IME support",
+			description: "Terminal cursor for input method editors",
 			currentValue: config.showHardwareCursor ? "true" : "false",
 			values: ["true", "false"],
 		});
@@ -1581,7 +1563,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(hardwareCursorIndex + 1, 0, {
 			id: "editor-padding",
 			label: "Editor padding",
-			description: "Horizontal padding for input editor (0-3)",
+			description: "Horizontal editor padding",
 			currentValue: String(config.editorPaddingX),
 			values: ["0", "1", "2", "3"],
 		});
@@ -1591,7 +1573,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(editorPaddingIndex + 1, 0, {
 			id: "output-padding",
 			label: "Output padding",
-			description: "Horizontal padding for user messages, assistant messages, and thinking",
+			description: "Horizontal message padding",
 			currentValue: String(config.outputPad),
 			values: ["0", "1"],
 		});
@@ -1601,7 +1583,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(outputPaddingIndex + 1, 0, {
 			id: "autocomplete-max-visible",
 			label: "Autocomplete max items",
-			description: "Max visible items in autocomplete dropdown (3-20)",
+			description: "Visible autocomplete items",
 			currentValue: String(config.autocompleteMaxVisible),
 			values: ["3", "5", "7", "10", "15", "20"],
 		});
@@ -1611,7 +1593,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(autocompleteIndex + 1, 0, {
 			id: "clear-on-shrink",
 			label: "Clear on shrink",
-			description: "Clear empty rows when content shrinks (may cause flicker)",
+			description: "Clear leftover terminal rows when content shrinks",
 			currentValue: config.clearOnShrink ? "true" : "false",
 			values: ["true", "false"],
 		});
@@ -1621,7 +1603,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(clearOnShrinkIndex + 1, 0, {
 			id: "terminal-progress",
 			label: "Terminal progress",
-			description: "Show OSC 9;4 progress indicators in the terminal tab bar",
+			description: "Progress in supported terminal tabs",
 			currentValue: config.showTerminalProgress ? "true" : "false",
 			values: ["true", "false"],
 		});
