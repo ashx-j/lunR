@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-29 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` (tag `v0.2.12` = `788e680`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-08-30 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` (tag `v0.2.12` = `788e680`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
 - **Codex Fast + usage cleanup (`feat/codex-fast-usage-cleanup`):** `/fast [on|off|status]` persists `service_tier: "fast"` for `openai-codex` subscriptions only and marks the model chip. `/usage` fetches every stored-credential adapter plan plus the current env-only provider in parallel; Codex includes additional rate limits. The `/research` pipeline is removed; web tools and generic research subagents remain.
 - **Watchdog cold start (`fix/watchdog-cold-start`):** the default-off main watchdog performs no repo-signature work during construction, session binding, or disabled turns. Enabled repo-edit review lazily establishes its baseline at `before_agent_start`; session and disable boundaries clear the old baseline. Tests: subagent-watchdog-startup + subagent/deferred regression set.
@@ -103,6 +104,7 @@ Last updated: 2026-08-29 (v0.2.12 shipped). Public npm is `@ashx-j/lunr@0.2.12` 
 - Prompt-driven subagents (2026-08-29): coding-agent build/copy-assets passes; focused 13-file Vitest run passes 172/172; `npx lunr --version` is 0.2.11, a rebuilt print message returned `smoke-ok`, and an end-to-end generic `{ description: "Verify generic child smoke", permissions: "read-only" }` launch returned `child-smoke-ok`. Full coding-agent Vitest remains red with 2261 passed / 114 unrelated current-master Windows/fixture failures / 47 skipped. Full Biome remains red with 37 pre-existing errors + 1 warning outside the touched extension/test files.
 - Codex Fast + usage cleanup (2026-08-29): tui → ai → agent → coding-agent tsgo passes. Focused Vitest passes AI 66/66, agent 19/19, coding-agent 139/139, plus the Fast settings persistence test 1/1. The full settings-manager file retains 5 unrelated Windows `.pi` fixture failures; its new test passes. Biome passes 22 changed files; aggregate touched-file lint still reports pre-existing formatting/import-order errors in high-conflict files.
 - Agent memory + global instructions (2026-08-29): required tui → ai → agent → coding-agent → orchestrator offline tsgo sequence passes. Focused coding-agent Vitest passes 73/73. Adding resource-loader coverage passes 90/96; its 6 existing Windows `.pi`/symlink fixture failures remain unrelated, while global `AGENTS.md` discovery passes. Touched-file Biome retains pre-existing format/import-order findings in hot files; new memory implementation/test files pass separately.
+- Settings menu copy (2026-08-30): coding-agent tsgo, settings-selector Biome, and `git diff --check` pass. Focused Vitest passes 49/52; the three unrelated existing Windows failures are in rollback memory-path coverage and settings-manager external-edit fixtures, while model-tiers and memory-cap pass. The pre-commit aggregate check retains the documented pinned-dependency failures from study material and coding-agent dependencies.
 
 ---
 
@@ -158,6 +160,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - xAI effort maps and Responses transport live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses). Humans do not invent catalog JSON; `withXaiEffortMetadata` also runs in `mergeCatalogLayers` so a stale shard cannot keep 4.6 on Completions. Named Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`, not a frozen id allowlist.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 - Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
+- Settings menu descriptions name the feature, not every control inside it. Keep choice-specific limits and warnings beside the relevant choice or confirmation.
 
 # Decisions (keep; why in one line)
 
@@ -227,6 +230,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-29: Fast mode is persisted only for `openai-codex`; paid `openai` API models never activate it.
 - 2026-08-29: `/usage` renders all stored adapter plans, while the footer remains current-provider-only.
 - 2026-08-29: Remove `/research` orchestration; generic subagents and web tools cover research without a product pipeline.
+- 2026-08-30: `/settings` descriptions are short feature summaries so the menu stays scannable; choice details stay in submenus.
 
 # Deferred
 
