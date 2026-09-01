@@ -85,7 +85,7 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). Customize → Footer: plan usage hides the whole segment; Footer: plan bar hides only the █░ fill and keeps the percent.
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
 - Smooth streaming (`smoothStreaming`, default off) is **interactive TUI only** (grapheme reveal at ~30 FPS). Print, RPC, and gateway stay unsmoothed.
-- Image paste inserts `[image_n]` chips. On Windows, paste is **Alt+V** (Ctrl+V is the terminal’s). VS Code may eat Alt+V; forward it with `sendSequence` `\u001b[118;3u`.
+- Image paste inserts `[image_n]` chips. Windows uses **Alt+V**; VS Code must forward it because it owns Ctrl+V and Alt+V. `/paste-image` bypasses terminal shortcuts.
 - Model tiers: `/settings` Enable model tiers. Per-tier thinking; unset = parent session.
 
 ## Updates, catalogs, local models

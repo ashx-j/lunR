@@ -35,7 +35,8 @@ export class CustomEditor extends Editor {
 
 		// Check for clipboard paste keybinding
 		if (this.keybindings.matches(data, "app.clipboard.pasteImage")) {
-			this.onPasteImage?.();
+			const handler = this.onPasteImage ?? this.actionHandlers.get("app.clipboard.pasteImage");
+			handler?.();
 			return;
 		}
 

@@ -2561,9 +2561,6 @@ export class InteractiveMode {
 				if (!customEditor.onCtrlD) {
 					customEditor.onCtrlD = () => this.defaultEditor.onCtrlD?.();
 				}
-				if (!customEditor.onPasteImage) {
-					customEditor.onPasteImage = () => this.defaultEditor.onPasteImage?.();
-				}
 				if (!customEditor.onExtensionShortcut) {
 					customEditor.onExtensionShortcut = (data: string) => this.defaultEditor.onExtensionShortcut?.(data);
 				}
@@ -2748,6 +2745,7 @@ export class InteractiveMode {
 		// lunr: tool/thinking expand is per-item click; ctrl+o is not bound (tree filter still uses ctrl+o).
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
+		this.defaultEditor.onAction("app.clipboard.pasteImage", () => void this.handleClipboardPaste());
 		this.defaultEditor.onAction("app.message.copy", () => void this.handleCopyCommand());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
@@ -2762,13 +2760,6 @@ export class InteractiveMode {
 			if (wasBashMode !== this.isBashMode) {
 				this.updateEditorBorderColor();
 			}
-		};
-
-		// Handle clipboard paste (keybinding: app.clipboard.pasteImage, Alt+V on Windows —
-		// Ctrl+V is owned by the terminal and never reaches us). Images become `[image_n]`
-		// chips; otherwise, paste plain text from the system clipboard.
-		this.defaultEditor.onPasteImage = () => {
-			void this.handleClipboardPaste();
 		};
 
 		this.ui.addInputListener((data) => {
@@ -2897,7 +2888,7 @@ export class InteractiveMode {
 		this.restoreEditorDraft(result.editorText ?? "", result.editorImages);
 	}
 
-	private async handleClipboardPaste(): Promise<void> {
+	private async handleClipboardPaste(options: { textFallback?: boolean } = {}): Promise<void> {
 		try {
 			const image = await readClipboardImage();
 			if (image) {
@@ -2908,14 +2899,18 @@ export class InteractiveMode {
 				return;
 			}
 
-			const text = await readClipboardText();
-			if (text) {
-				this.editor.insertTextAtCursor?.(text);
-				this.ui.requestRender();
-				return;
+			if (options.textFallback !== false) {
+				const text = await readClipboardText();
+				if (text) {
+					this.editor.insertTextAtCursor?.(text);
+					this.ui.requestRender();
+					return;
+				}
 			}
 
-			this.showStatus("Clipboard contains no image or text");
+			this.showStatus(
+				options.textFallback === false ? "Clipboard contains no image" : "Clipboard contains no image or text",
+			);
 		} catch (err) {
 			this.showStatus(`Clipboard paste failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -2933,6 +2928,11 @@ export class InteractiveMode {
 			this.ui.setChatScroll(0);
 
 			// Handle commands
+			if (text === "/paste-image") {
+				this.editor.setText("");
+				await this.handleClipboardPaste({ textFallback: false });
+				return;
+			}
 			if (text === "/settings") {
 				void this.showSettingsSelector();
 				this.editor.setText("");
@@ -7757,6 +7757,7 @@ ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` 
 | \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste image or text from clipboard |
+| \`/paste-image\` | Paste image without a terminal shortcut |
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |
 | \`!!\` | Run bash command (excluded from context) |

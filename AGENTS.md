@@ -24,6 +24,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **VS Code image paste (`fix/vscode-image-paste`):** image paste flows through the normal app action for default and custom editors. `/paste-image` invokes the same image-only clipboard path when VS Code owns the forwarded `Alt+V` key. Tests: image-paste-keybinding + image-paste-markers + slash-commands + clipboard-image + extensions-runner.
+
 - **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
@@ -109,6 +111,7 @@ Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - Global context label (2026-08-30): coding-agent tsgo passes; focused context/usage Vitest passes 15/15. Biome passes the changed core/test files; `interactive-mode.ts` retains its pre-existing import-order finding.
 - Skill tag character (2026-08-30): coding-agent tsgo passes. Focused Vitest: skill-tag-autocomplete 11/11, settings-manager skill-tag 2/2, interactive-mode wiring/trigger-merge 4/4. New files pass Biome; `settings-selector.ts` keeps its pre-existing format finding and `interactive-mode.ts` its pre-existing import-order finding.
 - Settings menu copy (2026-08-30): coding-agent tsgo, settings-selector Biome, and `git diff --check` pass. Focused Vitest passes 49/52; the three unrelated existing Windows failures are in rollback memory-path coverage and settings-manager external-edit fixtures, while model-tiers and memory-cap pass. The pre-commit aggregate check retains the documented pinned-dependency failures from study material and coding-agent dependencies.
+- VS Code image paste (2026-09-01): tui → coding-agent tsgo and copy-assets pass; focused Vitest passes 52/52; changed-code Biome and `git diff --check` pass. A live Windows clipboard image inserts `[image_1]`, and rebuilt `npx lunr -p` returned `image-paste-smoke-ok` before the known print-mode timeout.
 
 ---
 
@@ -131,7 +134,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Theme: `moon.json` is the builtin; `default.json` untracked/unwired. Glyphs `promptMoon`/`promptArrow`; `promptSymbol` is master on/off.
 - Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; click expands/collapses a thinking run or tool card; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
-- Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`. Paste inserts `[image_n]` chips, not a temp path. Do not expand those chips back to paths on submit.
+- Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`. VS Code must forward that key; `/paste-image` bypasses terminal key ownership. Paste inserts `[image_n]` chips, not a temp path. Do not expand those chips back to paths on submit.
 - Process registry: direct children only; `nohup &` grandchildren untracked.
 - vite/oxc: `import type { A, B }` not `import type { A, type B }`.
 - Telegram length = `string.length` (UTF-16). Busy-session `/stop` `/new` must bypass session guard.
@@ -240,6 +243,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-30: distinguish the global instruction file by its resolved agent-dir path in the context breakdown so UI labels improve without changing prompt injection or project-file labels.
 - 2026-08-30: mid-message skill tagging uses a dedicated `/settings` character (`+`/`~`/`$`) and inserts a tag only; do not reuse `/` or dump SKILL.md.
 - 2026-08-30: `/settings` descriptions are short feature summaries so the menu stays scannable; choice details stay in submenus.
+- 2026-09-01: `/paste-image` is the guaranteed VS Code path because a terminal process cannot recover paste keys the host never sends.
 
 # Deferred
 
