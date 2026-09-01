@@ -310,15 +310,15 @@
 		},
 		"glyphs": {
 			"type": "object",
-			"description": "Optional non-color glyph customization (prompt glyph parts; empty string hides that part)",
+			"description": "Optional chatbox prompt customization",
 			"properties": {
 				"promptMoon": {
 					"type": "string",
-					"description": "Leading prompt glyph (default \"☾\")"
+					"description": "Retired legacy input. Accepted but ignored"
 				},
 				"promptArrow": {
 					"type": "string",
-					"description": "Trailing prompt glyph (default \">\")"
+					"description": "Chatbox prompt glyph (default \">\")"
 				}
 			},
 			"additionalProperties": false

@@ -144,7 +144,6 @@ describe("AssistantMessageComponent", () => {
 			undefined,
 			"Thinking...",
 			1,
-			false,
 			true,
 		);
 	}
@@ -206,7 +205,7 @@ describe("AssistantMessageComponent", () => {
 			"\n",
 		);
 		// Mirror interactive-mode: construct empty, attach live timings, then updateContent.
-		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true);
 		component.setThinkingTimings([{ start: Date.now() }]);
 		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: source }]));
 		return component;
@@ -241,7 +240,7 @@ describe("AssistantMessageComponent", () => {
 		initTheme("moon");
 
 		const thinking = `${"alpha ".repeat(8).trim()}\nlatest-chunk-xyz`;
-		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true);
 		component.setThinkingTimings([{ start: Date.now() }]);
 		component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]));
 		const lines = component.render(80).map((line) => stripAnsi(line));
@@ -255,7 +254,7 @@ describe("AssistantMessageComponent", () => {
 	test("a short streaming thinking run does not reserve empty tail rows", () => {
 		initTheme("moon");
 
-		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true);
 		component.setThinkingTimings([{ start: Date.now() }]);
 		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: "one line" }]));
 		const lines = component.render(80).map((line) => stripAnsi(line));
@@ -271,7 +270,7 @@ describe("AssistantMessageComponent", () => {
 		const thinking = `${"A".repeat(80)} UNIQUE_TAIL_CHUNK`;
 		const full = createAssistantMessage([{ type: "thinking", thinking }]);
 		const sliced = sliceMessageContent(full, 10, {});
-		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, true);
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true);
 		component.setThinkingTimings([{ start: Date.now() }]);
 		component.updateContent(sliced, { thinkingSource: full });
 		const rendered = stripAnsi(component.render(40).join("\n"));
@@ -289,7 +288,6 @@ describe("AssistantMessageComponent", () => {
 			undefined,
 			"Thinking...",
 			1,
-			false,
 			true,
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
