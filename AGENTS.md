@@ -22,9 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-02 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
-- **Shell-first launch (`perf/launch-shell`):** interactive CLI startup arms a minimal TUI editor before runtime hydration, then hands the same UI, editor, keybindings, queued prompt, and draft to `InteractiveMode`. Prompt execution still waits for deferred builtins. Session retention and other maintenance run after the prompt barrier. Non-interactive modes avoid the startup shell and keep heavy mode imports lazy. Machine-readable startup milestones cover process entry through deferred maintenance idle.
+- **Reliability + instant launch (`fix/reliability-and-instant-launch`):** interactive startup reuses a small TUI shell and accepts input before full runtime hydration; an isolated offline run armed input at 127 ms and painted at 131 ms, with the prompt barrier at 3.87 s. Model setup runs one cache refresh, footer git work is async, retention is deferred, and deferred builtin import failures are isolated. Manual mode now approves full children. Rollback rejects symlink escapes. Session graphs reject cycles. Orchestrator shutdown and state writes are bounded and crash-safe. TUI text strips unsafe terminal controls, pinned chat avoids paint-only relayout, and release builds stay offline. Reports: `PERFORMANCE_AND_BUG_REVIEW.md` and `INTERACTIVE_LAUNCH_PERFORMANCE_REVIEW.md`.
 - **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
@@ -101,7 +101,6 @@ Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not `%AppData%\Roaming\npm\lunr`. Rebuild coding-agent `dist` first. Time first paint with `PI_STARTUP_BENCHMARK=1 PI_TIMING=1 npx lunr` (stays interactive without a TTY and exits after attach). Add `-ne` to skip deferred factories. That is not a published-npm smoke test.
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
 - Watchdog cold-start verification (2026-08-28): full tsgo sequence passed; focused Vitest 25/25; touched-file Biome passed (watchdog source remains excluded); dirty-worktree benchmark prompt-ready 2.23s, deferred attach 265ms, subagent factory 6ms. Full coding-agent Vitest: 2236 passed / 125 unrelated current-master Windows failures. Full Biome: 35 pre-existing errors + 1 warning outside touched files.
-- Watchdog PR CI caveat: the workflow still runs the forbidden `npm run build` in `packages/ai`; live catalog generation currently produces a Cloudflare transport TS2353 before reaching this patch. The explicit offline tsgo sequence above is green.
 - lunR system prompt (2026-08-29): coding-agent `tsgo` passes; focused prompt/tool/model tests pass (29/29). Expanded run passes the new SDK prompt assertion but retains two unrelated Windows path failures; full suite remains red from pre-existing environment/working-tree failures.
 - Published npm docs are `packages/coding-agent/{README.md,docs/**,examples/**,CHANGELOG.md}` (packed via `package.json` `files`). Repo-root README and untracked `lunr-docs/` are not what npmjs shows. `npm pack --dry-run --ignore-scripts --json --workspace=@earendil-works/pi-coding-agent` lists them.
 - Prompt-driven subagents (2026-08-29): coding-agent build/copy-assets passes; focused 13-file Vitest run passes 172/172; `npx lunr --version` is 0.2.11, a rebuilt print message returned `smoke-ok`, and an end-to-end generic `{ description: "Verify generic child smoke", permissions: "read-only" }` launch returned `child-smoke-ok`. Full coding-agent Vitest remains red with 2261 passed / 114 unrelated current-master Windows/fixture failures / 47 skipped. Full Biome remains red with 37 pre-existing errors + 1 warning outside the touched extension/test files.
@@ -110,6 +109,7 @@ Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - Global context label (2026-08-30): coding-agent tsgo passes; focused context/usage Vitest passes 15/15. Biome passes the changed core/test files; `interactive-mode.ts` retains its pre-existing import-order finding.
 - Skill tag character (2026-08-30): coding-agent tsgo passes. Focused Vitest: skill-tag-autocomplete 11/11, settings-manager skill-tag 2/2, interactive-mode wiring/trigger-merge 4/4. New files pass Biome; `settings-selector.ts` keeps its pre-existing format finding and `interactive-mode.ts` its pre-existing import-order finding.
 - Settings menu copy (2026-08-30): coding-agent tsgo, settings-selector Biome, and `git diff --check` pass. Focused Vitest passes 49/52; the three unrelated existing Windows failures are in rollback memory-path coverage and settings-manager external-edit fixtures, while model-tiers and memory-cap pass. The pre-commit aggregate check retains the documented pinned-dependency failures from study material and coding-agent dependencies.
+- Reliability + instant launch (2026-09-02): offline tui → ai → agent → coding-agent → orchestrator tsgo and copy-assets pass. Focused TUI tests pass 98/98, coding-agent Vitest passes 134/134, and orchestrator Vitest passes 7/7. The isolated launch benchmark reports input armed at 127 ms, first frame at 131 ms, runtime hydrated at 2.53 s, and prompt barrier at 3.87 s. Local release staging and the full package build passed in the isolated worker. The pre-commit aggregate check still reaches known pinned-dependency failures in untracked study material.
 
 ---
 
@@ -168,7 +168,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 - Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
 - Settings menu descriptions name the feature, not every control inside it. Keep choice-specific limits and warnings beside the relevant choice or confirmation.
-- The startup shell owns the first terminal frame and accepts one queued prompt while runtime hydration runs. Hand off its live TUI/editor instead of copying the draft into a replacement editor. Keep session prompts behind the deferred-builtin prompt barrier, and run retention as deferred maintenance.
+- The startup shell owns the first terminal frame and accepts one queued prompt while runtime hydration runs. Hand off its live TUI/editor instead of copying the draft into a replacement editor. Keep session prompts behind the deferred-builtin prompt barrier, and run retention as deferred maintenance. Benchmark first paint separately from prompt readiness; no-PTY runs validate milestones but do not replace a live terminal smoke test.
+- Manual mode treats omitted child permissions as full access and must approve them. Session and orchestrator state loaders fail closed on malformed data. Rollback restore and orchestrator cleanup must remain path-safe, atomic, and time-bounded.
 
 # Decisions (keep; why in one line)
 
@@ -242,14 +243,15 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-30: distinguish the global instruction file by its resolved agent-dir path in the context breakdown so UI labels improve without changing prompt injection or project-file labels.
 - 2026-08-30: mid-message skill tagging uses a dedicated `/settings` character (`+`/`~`/`$`) and inserts a tag only; do not reuse `/` or dump SKILL.md.
 - 2026-08-30: `/settings` descriptions are short feature summaries so the menu stays scannable; choice details stay in submenus.
-- 2026-09-02: interactive startup reuses a shell-first editor through runtime handoff so typing starts before hydration without letting prompts bypass deferred extension attachment.
+- 2026-09-02: interactive startup reuses a shell-first editor through runtime handoff so typing starts before hydration without letting prompts bypass deferred extension attachment; safety and maintenance work stays behind explicit readiness boundaries.
+- 2026-09-02: full child launches require Manual approval, and rollback, session, process, network, and persisted-state recovery fail closed or finish within a deadline.
 
 # Deferred
 
 - Gateway cold first slash after daemon start can hang minutes.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Scope rename; `PI_CODING_AGENT*` rename; `/share` still pi.dev.
-- Pin `^` + lockfile; ai catalog-drift `npm run build`.
+- Pin `^` + lockfile.
 - **`~/.pi` leakage (vendored copies only):** mcp-adapter, intercom broker, web-access keys/settings, pi-goal-state, simple-pi-memory (+ rollback snapshots that path), TUI crash log `~/.pi/agent/pi-crash.log`. Fix: route through `getAgentDir()` / set `PI_CODING_AGENT_DIR` at startup + migrate. Catalog no longer hits pi.dev.
-- Rollback: shadow-git, gateway rollback (B7), orphan GC, symlink escape.
+- Rollback: shadow-git, gateway rollback (B7), orphan GC.
 - Cron: script/`no_agent` jobs; more gateway platforms; process-tree for `nohup` grandchildren.

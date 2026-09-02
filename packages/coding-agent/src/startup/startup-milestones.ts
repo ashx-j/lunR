@@ -10,7 +10,8 @@ export type StartupMilestoneName =
 	| "first_frame_committed"
 	| "runtime_hydrated"
 	| "prompt_barrier_open"
-	| "deferred_maintenance_idle";
+	| "deferred_maintenance_idle"
+	| "first_provider_request_started";
 
 const enabled = process.env.PI_TIMING === "1" || process.env.PI_STARTUP_BENCHMARK === "1";
 const startedAt = performance.now();

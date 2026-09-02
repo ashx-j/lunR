@@ -37,6 +37,15 @@ describe("orchestrator state storage", () => {
 		expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 	});
 
+	it("quarantines parseable state with invalid records", () => {
+		writeFileSync(getInstancesPath(), JSON.stringify([{ id: "instance-1", status: "mystery", cwd: directory }]));
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		expect(loadInstances()).toEqual([]);
+		expect(existsSync(getInstancesPath())).toBe(false);
+		expect(readdirSync(directory).filter((name) => name.startsWith("instances.json.corrupt-"))).toHaveLength(1);
+	});
+
 	it("quarantines truncated state and lets restart recovery continue", async () => {
 		writeFileSync(getInstancesPath(), '[{"id":"broken"');
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});

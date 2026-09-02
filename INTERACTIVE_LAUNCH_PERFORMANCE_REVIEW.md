@@ -1,6 +1,6 @@
 # Interactive launch performance review
 
-Date: 2026-09-02  
+Date: 2026-09-02
 Reviewed commit: `2d2ab360723eeb6a9502b8ebb304eafad74b7fb9`
 
 ## Verdict
@@ -18,9 +18,28 @@ Two heavy, read-only reviewers examined the same launch path independently.
 - Reviewer A traced and profiled the current path, then ranked work on the critical path.
 - Reviewer B designed a shell-first architecture and checked it against custom editors, extensions, permissions, project trust, resume behavior, print mode, RPC, and gateway requirements.
 
-I checked their main claims against the current source and ran one isolated offline benchmark from the rebuilt `dist` already in the working tree.
+I checked their main claims against the current source and ran isolated offline benchmarks from the rebuilt `dist`.
 
-## Current path to an editor
+## Implementation result
+
+The follow-up branch now starts a small interactive shell before importing and hydrating the full runtime. A fresh isolated run reached these milestones:
+
+| Milestone | Time |
+| --- | ---: |
+| Mode routed | 8 ms |
+| Input handler armed | 127 ms |
+| Raw mode active | 129 ms |
+| First frame committed | 131 ms |
+| Runtime hydrated | 2,530 ms |
+| Prompt barrier open | 3,872 ms |
+
+This hits the report's first target. Users can type in roughly 130 ms on the measured machine even though models, resources, and extensions continue loading. Prompt submission still waits for the complete tool and permission setup.
+
+The branch also fixes the timing parser, records machine-readable milestones, removes the fixed benchmark delay, defers session retention, lazy-loads mode implementations, runs one cache-only model refresh during service creation, moves footer git work off the render path, and isolates deferred builtin import failures.
+
+Remaining launch work is narrower. Settings and resource discovery still repeat some reads. Migrations still need a completion marker, auth storage still initializes eagerly, and large resource trees do not yet use an index or worker. A named deferred builtin import failure now keeps the prompt barrier closed, but the TUI does not yet offer retry or continue-without-tools controls, and a hung lifecycle handler still lacks cancellation.
+
+## Pre-change path to an editor
 
 ```text
 cli.ts
@@ -61,9 +80,9 @@ cli.ts
 
 `ui.start()` is the first point where the editor can receive input. Nearly the whole application has already initialized by then.
 
-## Measurement result
+## Pre-change measurement
 
-The current benchmark has correctness problems, so this sample is diagnostic rather than a release baseline.
+The original benchmark had correctness problems, so this sample is diagnostic rather than a release baseline.
 
 Command shape:
 
@@ -94,7 +113,7 @@ The process took 15.5 seconds to exit because the benchmark endpoint includes de
 
 The project notes record an earlier dirty-worktree prompt-ready result of 2.23 seconds plus 265 ms for deferred attachment. The new sample is in the same general range, but neither measurement records the first accepted keystroke.
 
-## Why the current benchmark is not trustworthy
+## Problems found in the old benchmark
 
 Files:
 
@@ -111,14 +130,14 @@ Problems:
 5. The harness refuses to run without an interactive terminal, which makes automated Windows and CI comparisons harder.
 6. There is no milestone for input handler armed, first frame written, or prompt barrier open.
 
-Fix measurement before using startup numbers to accept or reject code changes.
+The branch repairs these measurement problems and reports the input, frame, hydration, prompt, and maintenance milestones separately.
 
 ## Findings
 
 ### 1. The TUI starts after full runtime hydration
 
-Severity: blocker  
-Status: confirmed  
+Severity: blocker
+Status: confirmed
 Confidence: high
 
 Files:
@@ -136,8 +155,8 @@ Create an `InteractiveShell` that needs only enough settings for a fallback them
 
 ### 2. The launcher imports unrelated modes and every provider too early
 
-Severity: high  
-Status: confirmed  
+Severity: high
+Status: confirmed
 Confidence: high
 
 Files:
@@ -160,8 +179,8 @@ Fix direction:
 
 ### 3. Model initialization performs two broad cache refreshes
 
-Severity: high  
-Status: confirmed  
+Severity: high
+Status: confirmed
 Confidence: high
 
 Files:
@@ -179,8 +198,8 @@ Construct the runtime without refreshing. Register builtins and extension provid
 
 ### 4. Session retention blocks every launch
 
-Severity: high  
-Status: confirmed  
+Severity: high
+Status: confirmed
 Confidence: high
 
 Files:
@@ -196,8 +215,8 @@ Run retention after prompt readiness. Throttle it with a timestamp, such as once
 
 ### 5. Synchronous git work can freeze the UI around first paint
 
-Severity: high  
-Status: confirmed mechanism  
+Severity: high
+Status: confirmed mechanism
 Confidence: high
 
 Files:
@@ -214,8 +233,8 @@ No renderer or render-time getter should launch a process. Paint empty or cached
 
 ### 6. Settings and resources are reread several times
 
-Severity: medium  
-Status: confirmed  
+Severity: medium
+Status: confirmed
 Confidence: high
 
 Files:
@@ -231,8 +250,8 @@ Load global settings once into an immutable startup snapshot. Add project settin
 
 ### 7. Migrations rescan legacy state on every launch
 
-Severity: medium  
-Status: confirmed  
+Severity: medium
+Status: confirmed
 Confidence: high
 
 Files:
@@ -248,8 +267,8 @@ Persist a migration schema version after successful completion. Use a cheap top-
 
 ### 8. Authentication storage initializes and locks synchronously
 
-Severity: medium  
-Status: confirmed  
+Severity: medium
+Status: confirmed
 Confidence: high
 
 Files:
@@ -265,8 +284,8 @@ Treat a missing auth file as an empty store without creating it. Load credential
 
 ### 9. Deferred builtin failure can open an incomplete first turn
 
-Severity: high  
-Status: confirmed  
+Severity: high
+Status: confirmed
 Confidence: high
 
 Files:
@@ -282,8 +301,8 @@ Load builtins independently and return a structured result with names, successes
 
 ### 10. Theme work is repeated and auto detection can add delay after paint
 
-Severity: medium  
-Status: confirmed  
+Severity: medium
+Status: confirmed
 Confidence: high
 
 Files:
@@ -300,8 +319,8 @@ Resolve one fallback or configured theme before shell paint. Start file watching
 
 ### 11. Resource discovery combines scanning, parsing, and extension execution
 
-Severity: high for large configurations  
-Status: confirmed  
+Severity: high for large configurations
+Status: confirmed
 Confidence: high
 
 Files:

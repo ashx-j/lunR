@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import { getInstancesPath, getMachinePath, getOrchestratorDir } from "./config.ts";
-import type { InstanceRecord, MachineRecord } from "./types.ts";
+import type { InstanceRecord, InstanceStatus, MachineRecord } from "./types.ts";
 
 function ensureOrchestratorDir(): void {
 	const orchestratorDir = getOrchestratorDir();
@@ -75,16 +75,39 @@ function loadJson<T>(path: string, validate: (value: unknown) => value is T): T 
 	}
 }
 
+const INSTANCE_STATUSES = new Set<InstanceStatus>(["starting", "online", "stopping", "stopped", "error"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRequiredString(record: Record<string, unknown>, key: string): boolean {
+	return typeof record[key] === "string" && record[key].length > 0;
+}
+
+function hasValidOptionalStrings(record: Record<string, unknown>, keys: string[]): boolean {
+	return keys.every((key) => record[key] === undefined || typeof record[key] === "string");
+}
+
 function isMachineRecord(value: unknown): value is MachineRecord {
+	if (!isRecord(value)) return false;
 	return (
-		!!value && typeof value === "object" && !Array.isArray(value) && typeof (value as MachineRecord).id === "string"
+		isRequiredString(value, "id") &&
+		isRequiredString(value, "createdAt") &&
+		hasValidOptionalStrings(value, ["lastSeenAt", "label"])
 	);
 }
 
 function isInstanceRecord(value: unknown): value is InstanceRecord {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const record = value as InstanceRecord;
-	return typeof record.id === "string" && typeof record.status === "string" && typeof record.cwd === "string";
+	if (!isRecord(value)) return false;
+	return (
+		isRequiredString(value, "id") &&
+		isRequiredString(value, "cwd") &&
+		isRequiredString(value, "createdAt") &&
+		typeof value.status === "string" &&
+		INSTANCE_STATUSES.has(value.status as InstanceStatus) &&
+		hasValidOptionalStrings(value, ["lastSeenAt", "label", "sessionId", "sessionFile", "radiusPiId"])
+	);
 }
 
 export function loadMachine(): MachineRecord | undefined {

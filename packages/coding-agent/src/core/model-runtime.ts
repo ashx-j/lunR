@@ -496,11 +496,7 @@ export class ModelRuntime implements Models {
 		return this.credentials.hasRuntimeApiKey(providerId);
 	}
 
-	async setRuntimeApiKey(
-		providerId: string,
-		apiKey: string,
-		options?: { allowNetwork?: boolean },
-	): Promise<void> {
+	async setRuntimeApiKey(providerId: string, apiKey: string, options?: { allowNetwork?: boolean }): Promise<void> {
 		this.credentials.setRuntimeApiKey(providerId, apiKey);
 		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);

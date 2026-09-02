@@ -1,6 +1,6 @@
 # lunR performance and bug review
 
-Date: 2026-09-02  
+Date: 2026-09-02
 Reviewed commit: `2d2ab360723eeb6a9502b8ebb304eafad74b7fb9`
 
 ## What was reviewed
@@ -15,6 +15,12 @@ Four heavy, read-only reviewers split the project into these areas:
 The first reviewer lost its connection before returning findings. Two later launch reviewers covered the startup portion in more depth. Their launch findings are in [`INTERACTIVE_LAUNCH_PERFORMANCE_REVIEW.md`](INTERACTIVE_LAUNCH_PERFORMANCE_REVIEW.md).
 
 I checked the reported mechanisms against the current source. "Confirmed" means the faulty path exists in the code and has a deterministic failure scenario. It does not mean every finding has a new automated regression test yet.
+
+## Implementation status
+
+The follow-up branch addresses findings 1 through 16. Focused regression tests now cover permissions, rollback, session graph validation, orchestrator shutdown and persistence, terminal sanitization, pinned chat, Unicode input, narrow viewports, footer caching, process selector updates, and release staging. Bracketed paste and default untrusted text components strip terminal controls. Trusted styled `Text` output still permits lunR's OSC 8 hyperlinks by design.
+
+Finding 17 remains open. Manual npm publication still needs a source-tag guard.
 
 ## Priority order
 
@@ -31,9 +37,9 @@ I would fix these first:
 
 ### 1. Manual mode can be bypassed through one full-access child
 
-Severity: high  
-Category: bug, permission bypass  
-Status: confirmed  
+Severity: high
+Category: bug, permission bypass
+Status: confirmed
 Confidence: high
 
 Files:
@@ -61,9 +67,9 @@ Focused test:
 
 ### 2. Bracketed paste accepts raw terminal control sequences
 
-Severity: high  
-Category: bug, terminal security  
-Status: confirmed  
+Severity: high
+Category: bug, terminal security
+Status: confirmed
 Confidence: high
 
 Files:
@@ -83,9 +89,9 @@ Paste `safe\x1b]52;c;SGVsbG8=\x07` through the bracketed-paste path and assert t
 
 ### 3. RPC child disposal can wait forever
 
-Severity: high  
-Category: bug, process lifecycle  
-Status: confirmed  
+Severity: high
+Category: bug, process lifecycle
+Status: confirmed
 Confidence: high
 
 File: `packages/orchestrator/src/rpc-process.ts:186-196`
@@ -106,9 +112,9 @@ Use one fixture that ignores `SIGTERM` and another fake child that emits `exit` 
 
 ### 4. Rollback can follow a replacement symlink outside allowed roots
 
-Severity: high  
-Category: bug, filesystem safety  
-Status: confirmed mechanism, already listed in `AGENTS.md` Deferred  
+Severity: high
+Category: bug, filesystem safety
+Status: confirmed mechanism, already listed in `AGENTS.md` Deferred
 Confidence: high
 
 File: `packages/coding-agent/src/core/rollback.ts:448-540`
@@ -128,9 +134,9 @@ Snapshot a project file, replace it with a symlink to a file in another temporar
 
 ### 5. Release CI and binary builds use the forbidden network-dependent AI build
 
-Severity: high  
-Category: build and release bug  
-Status: confirmed, already documented as a CI caveat in `AGENTS.md`  
+Severity: high
+Category: build and release bug
+Status: confirmed, already documented as a CI caveat in `AGENTS.md`
 Confidence: high
 
 Files:
@@ -155,9 +161,9 @@ Run the release build with network access blocked, then assert that compilation 
 
 ### 6. Multiple RPC streams can receive each other's UI requests
 
-Severity: medium  
-Category: bug, async routing  
-Status: confirmed  
+Severity: medium
+Category: bug, async routing
+Status: confirmed
 Confidence: high
 
 File: `packages/orchestrator/src/supervisor.ts:95-112,197-233`
@@ -174,9 +180,9 @@ Open streams A and B, issue an RPC from A that asks for UI input, and assert tha
 
 ### 7. A truncated orchestrator state file can prevent startup
 
-Severity: medium  
-Category: bug, persistence  
-Status: confirmed  
+Severity: medium
+Category: bug, persistence
+Status: confirmed
 Confidence: high
 
 Files:
@@ -196,9 +202,9 @@ Start with a truncated `instances.json` under a temporary orchestrator directory
 
 ### 8. Cyclic session parent links can freeze the process
 
-Severity: medium  
-Category: bug, session integrity  
-Status: confirmed  
+Severity: medium
+Category: bug, session integrity
+Status: confirmed
 Confidence: high
 
 Files:
@@ -218,9 +224,9 @@ Open a two-entry cyclic JSONL session in a child process. Context construction m
 
 ### 9. Radius calls can hold local lifecycle operations indefinitely
 
-Severity: medium  
-Category: bug and performance  
-Status: risk with a confirmed unbounded path  
+Severity: medium
+Category: bug and performance
+Status: risk with a confirmed unbounded path
 Confidence: medium-high
 
 Files:
@@ -240,9 +246,9 @@ Mock `fetch` with a promise that never settles. Spawn and stop must both finish 
 
 ### 10. Every normal paint invalidates the full pinned-chat layout
 
-Severity: medium  
-Category: performance  
-Status: confirmed  
+Severity: medium
+Category: performance
+Status: confirmed
 Confidence: high
 
 File: `packages/tui/src/tui.ts:641-781,1037-1075`
@@ -261,9 +267,9 @@ Render 10,000 static chat children and one animated dock child. Across 100 dock-
 
 ### 11. The footer rescans the whole transcript on every frame
 
-Severity: medium  
-Category: performance  
-Status: confirmed  
+Severity: medium
+Category: performance
+Status: confirmed
 Confidence: high
 
 File: `packages/coding-agent/src/modes/interactive/components/footer.ts:85-113`
@@ -280,9 +286,9 @@ Render a footer backed by 20,000 assistant entries 300 times without changing th
 
 ### 12. Astral Kitty printable keys can be inserted twice
 
-Severity: medium  
-Category: bug, Unicode input  
-Status: confirmed mechanism  
+Severity: medium
+Category: bug, Unicode input
+Status: confirmed mechanism
 Confidence: high
 
 File: `packages/tui/src/stdin-buffer.ts:280-404`
@@ -299,9 +305,9 @@ Process `\x1b[128512u😀` and assert that the buffer emits one printable charac
 
 ### 13. A one-column terminal can receive two-column TUI lines
 
-Severity: medium  
-Category: bug, resize handling  
-Status: confirmed  
+Severity: medium
+Category: bug, resize handling
+Status: confirmed
 Confidence: high
 
 File: `packages/tui/src/tui.ts:699-781`
@@ -318,9 +324,9 @@ Set the virtual terminal width to one, render overflowing pinned chat twice, and
 
 ### 14. Kitty image snapping can hide the newest line at scroll offset zero
 
-Severity: medium  
-Category: bug, scroll correctness  
-Status: confirmed from layout arithmetic  
+Severity: medium
+Category: bug, scroll correctness
+Status: confirmed from layout arithmetic
 Confidence: medium-high
 
 File: `packages/tui/src/tui.ts:675-781`
@@ -337,9 +343,9 @@ Create a three-row viewport whose calculated start lands in reserved image space
 
 ### 15. The process selector refreshes state without repainting
 
-Severity: low  
-Category: bug, timer lifecycle  
-Status: confirmed  
+Severity: low
+Category: bug, timer lifecycle
+Status: confirmed
 Confidence: high
 
 File: `packages/coding-agent/src/modes/interactive/components/processes-selector.ts:18-45`
@@ -352,9 +358,9 @@ Inject a paint callback, call it after refresh, and expose an idempotent `dispos
 
 ### 16. `release:local` is broken and checks the old product
 
-Severity: medium  
-Category: build and release bug  
-Status: confirmed  
+Severity: medium
+Category: build and release bug
+Status: confirmed
 Confidence: high
 
 Files:
@@ -378,9 +384,9 @@ The repaired flow should then install its staged tarballs and run `lunr --versio
 
 ### 17. Manual npm publication is not tied to a tag or expected source
 
-Severity: medium  
-Category: release safety risk  
-Status: risk  
+Severity: medium
+Category: release safety risk
+Status: risk
 Confidence: high
 
 Files:

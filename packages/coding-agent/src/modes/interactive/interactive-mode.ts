@@ -404,6 +404,11 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
 	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
 
+interface DeferredBuiltinLoadResult {
+	extensions: InlineExtension[];
+	failures: Array<{ name: string; error: Error }>;
+}
+
 /**
  * Options for InteractiveMode initialization.
  */
@@ -423,7 +428,7 @@ export interface InteractiveModeOptions {
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
 	/** Extra inline factories to attach after first paint (MCP / LSP / web-access / intercom / subagents). */
-	deferredBuiltinFactories?: () => Promise<InlineExtension[]>;
+	deferredBuiltinFactories?: () => Promise<DeferredBuiltinLoadResult>;
 	/** Persist attached factories so /new and /resume recreate the full roster. */
 	onDeferredBuiltinsAttached?: (factories: InlineExtension[]) => void;
 	startupShellBinding?: InteractiveShellBinding;
@@ -998,7 +1003,7 @@ export class InteractiveMode {
 
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {
-			this.ui.requestRender();
+			this.ui.requestPaint();
 		});
 
 		const providerMaintenance = startupBenchmark
@@ -1027,7 +1032,7 @@ export class InteractiveMode {
 	private startPlanUsagePolling(): void {
 		const bridge = getUsageServiceBridge();
 		if (!bridge) return;
-		bridge.setOnUpdate(() => this.ui.requestRender());
+		bridge.setOnUpdate(() => this.ui.requestPaint());
 		const tick = () => {
 			const provider = this.session.model?.provider;
 			if (provider) bridge.prefetch(provider);
@@ -1792,14 +1797,21 @@ export class InteractiveMode {
 		}
 		this.setExtensionStatus("deferred-builtins", "loading tools…");
 		try {
-			const factories = await this.options.deferredBuiltinFactories();
+			const { extensions, failures } = await this.options.deferredBuiltinFactories();
+			if (extensions.length > 0) {
+				this.options.onDeferredBuiltinsAttached?.(extensions);
+				await this.session.attachInlineExtensions(extensions);
+				this.setupAutocompleteProvider();
+				this.setupExtensionShortcuts(this.session.extensionRunner);
+				this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
+			}
+			if (failures.length > 0) {
+				throw new AggregateError(
+					failures.map(({ error }) => error),
+					`Failed to import deferred builtins: ${failures.map(({ name }) => name).join(", ")}`,
+				);
+			}
 			this.deferredBuiltinsAttached = true;
-			if (factories.length === 0) return;
-			this.options.onDeferredBuiltinsAttached?.(factories);
-			await this.session.attachInlineExtensions(factories);
-			this.setupAutocompleteProvider();
-			this.setupExtensionShortcuts(this.session.extensionRunner);
-			this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 		} catch (error) {
 			this.deferredBuiltinsAttached = false;
 			const message = error instanceof Error ? error.message : String(error);
@@ -7639,7 +7651,7 @@ export class InteractiveMode {
 				() => {
 					done();
 				},
-				() => this.ui.requestRender(),
+				() => this.ui.requestPaint(),
 			);
 			return { component, focus: component };
 		});

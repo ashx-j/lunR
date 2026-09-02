@@ -58,12 +58,6 @@ describe("deferred builtin extensions", () => {
 
 		expect(result.extensions.map((entry) => ("name" in entry ? entry.name : ""))).toEqual(["first", "third"]);
 		expect(result.failures).toMatchObject([{ name: "broken", error: { message: "import exploded" } }]);
-		expect(result.roster.map((entry) => ("name" in entry ? entry.name : ""))).toEqual(["first", "broken", "third"]);
-		expect(() => {
-			const failed = result.roster[1];
-			if (typeof failed === "function") failed({} as never);
-			else failed.factory({} as never);
-		}).toThrow("Deferred builtin import failed: import exploded");
 	});
 
 	it("attaches a late inline factory after first bind without restarting earlier extensions", async () => {

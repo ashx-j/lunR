@@ -894,6 +894,10 @@ export async function main(args: string[], options?: MainOptions) {
 		agentDir,
 		sessionManager,
 	});
+	if (startupShell?.isExitRequested) {
+		await runtime.dispose();
+		return;
+	}
 	markStartupMilestone("runtime_hydrated");
 	time("createAgentSessionRuntime");
 	if (appMode !== "interactive") await runSessionRetention();
@@ -983,7 +987,7 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
-		const [{ InteractiveMode }, { loadDeferredBuiltinExtensions }] = await Promise.all([
+		const [{ InteractiveMode }, { loadDeferredBuiltinExtensionsResult }] = await Promise.all([
 			interactiveModeImport!,
 			import("./builtin-extensions/index.ts"),
 		]);
@@ -1001,7 +1005,7 @@ export async function main(args: string[], options?: MainOptions) {
 				: undefined,
 			startupShellBinding: startupShell?.binding(),
 			deferredMaintenance: runSessionRetention,
-			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensions,
+			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensionsResult,
 			onDeferredBuiltinsAttached: rememberAttachedFactories,
 		});
 		if (startupBenchmark) {

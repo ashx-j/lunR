@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { Box } from "../src/components/box.ts";
+import { Text } from "../src/components/text.ts";
 import { MOUSE_TRACKING_DISABLE, MOUSE_TRACKING_ENABLE } from "../src/mouse.ts";
 import { type Component, TUI, visibleWidth } from "../src/tui.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
@@ -498,11 +499,28 @@ describe("TUI pinFrom dock", () => {
 		tui.render(20);
 		const afterLayout = chat.renders;
 		for (let i = 0; i < 100; i++) {
-			tui.requestRender();
+			tui.requestPaint();
 			tui.render(20);
 		}
 
 		assert.strictEqual(chat.renders, afterLayout);
+	});
+
+	it("invalidates cached chat for normal render requests", () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const tui = new TUI(terminal);
+		const chat = new Text("first", 0, 0);
+		const dock = new Lines(["DOCK"]);
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		tui.render(20);
+		chat.setText("second");
+		tui.requestRender();
+		const frame = tui.render(20);
+
+		assert.ok(frame.some((line) => line.startsWith("second")));
 	});
 
 	it("re-layouts chat when a nested box changes", () => {

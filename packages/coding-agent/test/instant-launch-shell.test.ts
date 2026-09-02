@@ -26,6 +26,12 @@ describe("startup shell handoff", () => {
 		expect(binding.editor.getText()).toBe("next draft");
 		expect(binding.pendingSubmissions).toEqual([{ text: " queued prompt ", attachments: [] }]);
 	});
+
+	it("records exit requests while runtime hydration is still pending", () => {
+		const shell = new InteractiveStartupShell();
+		shell.stop();
+		expect(shell.isExitRequested).toBe(true);
+	});
 });
 
 describe("startup benchmark parsing", () => {
@@ -37,12 +43,14 @@ describe("startup benchmark parsing", () => {
 			"-----------------------------",
 			'LUNR_STARTUP_MILESTONE {"name":"input_handler_armed","ms":42.25}',
 			'LUNR_STARTUP_MILESTONE {"name":"prompt_barrier_open","ms":456.75}',
+			'LUNR_STARTUP_MILESTONE {"name":"first_provider_request_started","ms":500}',
 		].join("\n");
 
 		expect(Object.fromEntries(parseStartupTimings(stderr))).toEqual({ "import:main": 123.5 });
 		expect(Object.fromEntries(parseStartupMilestones(stderr))).toEqual({
 			input_handler_armed: 42.25,
 			prompt_barrier_open: 456.75,
+			first_provider_request_started: 500,
 		});
 	});
 });

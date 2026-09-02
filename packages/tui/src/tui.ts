@@ -1115,8 +1115,12 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
-		if (force) this.chatLayoutCache = undefined;
+		this.chatLayoutCache = undefined;
 		this.queueRender(force);
+	}
+
+	requestPaint(): void {
+		this.queueRender(false);
 	}
 
 	private requestRenderFromScroll(): void {
