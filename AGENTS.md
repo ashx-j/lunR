@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-08-30 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Shell-first launch (`perf/launch-shell`):** interactive CLI startup arms a minimal TUI editor before runtime hydration, then hands the same UI, editor, keybindings, queued prompt, and draft to `InteractiveMode`. Prompt execution still waits for deferred builtins. Session retention and other maintenance run after the prompt barrier. Non-interactive modes avoid the startup shell and keep heavy mode imports lazy. Machine-readable startup milestones cover process entry through deferred maintenance idle.
 - **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
 - **Agent memory + global instructions (`feat/agent-memory-agents-md`):** `~/.lunr/simple-memory/memory.md` is agent-managed durable facts only. `/settings` has a global Agent memory toggle beside the cap; off removes prompt injection and `memory_add`/`memory_remove`/`memory_load` without deleting data. Direct file-tool writes are blocked. Behavior presets and runtime `behavior.md` injection are removed; optional global behavior comes from a user-created, user-only `~/.lunr/agent/AGENTS.md` through the normal context loader and `/reload`. Migration removes only stale `behaviorPreset` settings. Tests: agent-memory + memory-cap + dynamic-tools + permissions + migrations + system-prompt + deferred roster.
@@ -167,6 +168,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 - Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
 - Settings menu descriptions name the feature, not every control inside it. Keep choice-specific limits and warnings beside the relevant choice or confirmation.
+- The startup shell owns the first terminal frame and accepts one queued prompt while runtime hydration runs. Hand off its live TUI/editor instead of copying the draft into a replacement editor. Keep session prompts behind the deferred-builtin prompt barrier, and run retention as deferred maintenance.
 
 # Decisions (keep; why in one line)
 
@@ -240,6 +242,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-30: distinguish the global instruction file by its resolved agent-dir path in the context breakdown so UI labels improve without changing prompt injection or project-file labels.
 - 2026-08-30: mid-message skill tagging uses a dedicated `/settings` character (`+`/`~`/`$`) and inserts a tag only; do not reuse `/` or dump SKILL.md.
 - 2026-08-30: `/settings` descriptions are short feature summaries so the menu stays scannable; choice details stay in submenus.
+- 2026-09-02: interactive startup reuses a shell-first editor through runtime handoff so typing starts before hydration without letting prompts bypass deferred extension attachment.
 
 # Deferred
 

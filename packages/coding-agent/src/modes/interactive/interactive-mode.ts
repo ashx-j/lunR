@@ -62,6 +62,7 @@ import {
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -152,6 +153,8 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
 import { getAllPlanUsageResults, getUsageServiceBridge } from "../../core/usage-service.ts";
 import { modelToUserEntry } from "../../core/user-models.ts";
+import type { InteractiveShellBinding } from "../../startup/interactive-shell.ts";
+import { markStartupMilestone } from "../../startup/startup-milestones.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
@@ -423,6 +426,10 @@ export interface InteractiveModeOptions {
 	deferredBuiltinFactories?: () => Promise<InlineExtension[]>;
 	/** Persist attached factories so /new and /resume recreate the full roster. */
 	onDeferredBuiltinsAttached?: (factories: InlineExtension[]) => void;
+	startupShellBinding?: InteractiveShellBinding;
+	startupDiagnostics?: AgentSessionRuntimeDiagnostic[];
+	deprecationWarnings?: string[];
+	deferredMaintenance?: () => Promise<void>;
 }
 
 export class InteractiveMode {
@@ -447,6 +454,9 @@ export class InteractiveMode {
 	private isInitialized = false;
 	private onInputCallback?: (input: QueuedUserInput) => void;
 	private pendingUserInputs: QueuedUserInput[] = [];
+	private startupUserInputs: Promise<QueuedUserInput>[] = [];
+	private readonly startedFromShell: boolean;
+	private deferredStartupEditorFactory: EditorFactory | undefined;
 	private stagedSubmitImages: ImageContent[] | undefined;
 	private fallbackImageAttachments = new Map<number, EditorImageAttachment>();
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
@@ -568,6 +578,7 @@ export class InteractiveMode {
 	private themeController: InteractiveThemeController;
 	private deferredBuiltinsAttached = false;
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
+	private promptBarrierPromise: Promise<void> | undefined;
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -609,7 +620,9 @@ export class InteractiveMode {
 			this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
 		});
 		this.version = VERSION;
-		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		const startupShell = options.startupShellBinding;
+		this.startedFromShell = startupShell !== undefined;
+		this.ui = startupShell?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
@@ -627,14 +640,18 @@ export class InteractiveMode {
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
-		this.keybindings = KeybindingsManager.create();
+		this.keybindings = startupShell?.keybindings ?? KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
-		this.defaultEditor = new CustomEditor(this.ui, getEditorTheme(), this.keybindings, {
-			paddingX: editorPaddingX,
-			autocompleteMaxVisible,
-		});
+		this.defaultEditor =
+			startupShell?.editor ??
+			new CustomEditor(this.ui, getEditorTheme(), this.keybindings, {
+				paddingX: editorPaddingX,
+				autocompleteMaxVisible,
+			});
+		this.defaultEditor.setPaddingX(editorPaddingX);
+		this.defaultEditor.setAutocompleteMaxVisible(autocompleteMaxVisible);
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
@@ -835,15 +852,16 @@ export class InteractiveMode {
 
 		this.registerSignalHandlers();
 
-		// Use already-installed fd immediately. Download in the background so a
-		// missing binary or GitHub outage cannot block first paint.
+		const startupBenchmark = process.env.PI_STARTUP_BENCHMARK === "1";
 		this.fdPath = getToolPath("fd") ?? undefined;
-		void Promise.all([ensureTool("fd"), ensureTool("rg")]).then(([fdPath]) => {
-			if (fdPath && fdPath !== this.fdPath) {
-				this.fdPath = fdPath;
-				this.setupAutocompleteProvider();
-			}
-		});
+		const toolMaintenance = startupBenchmark
+			? Promise.resolve()
+			: Promise.all([ensureTool("fd"), ensureTool("rg")]).then(([fdPath]) => {
+					if (fdPath && fdPath !== this.fdPath) {
+						this.fdPath = fdPath;
+						this.setupAutocompleteProvider();
+					}
+				});
 		time("ensureTools");
 
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
@@ -859,6 +877,11 @@ export class InteractiveMode {
 					? theme.fg("muted", ` (${formatKeyText(cycleKeys.join("/"), { capitalize: true })} to cycle)`)
 					: "";
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
+		}
+
+		if (this.startedFromShell) {
+			this.ui.pinFrom(null);
+			this.ui.clear();
 		}
 
 		// Add header container as first child. Populate it after applying theme settings.
@@ -877,17 +900,27 @@ export class InteractiveMode {
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
+		const startupSubmissions = this.options.startupShellBinding?.pendingSubmissions.splice(0) ?? [];
+		this.startupUserInputs.push(
+			...startupSubmissions.map(async ({ text, attachments }) => ({
+				text,
+				images: await this.loadImageAttachments(attachments),
+			})),
+		);
 		this.setupEditorSubmitHandler();
 
 		this.ui.pinFrom(this.widgetContainerAbove);
 		this.ui.setAlternateScreen(true);
 
-		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
-		this.ui.start();
+		if (this.startedFromShell) {
+			this.ui.requestRender(true);
+		} else {
+			this.ui.start();
+		}
 		this.isInitialized = true;
 		time("ui.start");
-		void this.maybeNotifyCliUpdate();
-		this.startPlanUsagePolling();
+		const updateMaintenance = startupBenchmark ? Promise.resolve() : this.maybeNotifyCliUpdate();
+		if (!startupBenchmark) this.startPlanUsagePolling();
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
@@ -945,9 +978,15 @@ export class InteractiveMode {
 		await this.rebindCurrentSession();
 		time("rebindCurrentSession");
 		this.renderInitialMessages();
+		for (const diagnostic of this.options.startupDiagnostics ?? []) {
+			if (diagnostic.type === "warning") this.showWarning(diagnostic.message);
+			else this.showStatus(diagnostic.message);
+		}
+		for (const warning of this.options.deprecationWarnings ?? []) this.showWarning(warning);
 		this.deferredBuiltinAttachPromise = this.attachDeferredBuiltinExtensions();
-		void this.deferredBuiltinAttachPromise.then(() => {
+		this.promptBarrierPromise = this.deferredBuiltinAttachPromise.then(() => {
 			time("attachDeferredBuiltins");
+			markStartupMilestone("prompt_barrier_open");
 		});
 
 		// Set up theme file watcher
@@ -962,17 +1001,25 @@ export class InteractiveMode {
 			this.ui.requestRender();
 		});
 
-		// Cache-only footer snapshot. Do not hold time-to-type on it.
-		void this.updateAvailableProviderCount().then(() => {
-			time("updateAvailableProviderCount");
+		const providerMaintenance = startupBenchmark
+			? Promise.resolve()
+			: this.updateAvailableProviderCount().then(() => {
+					time("updateAvailableProviderCount");
+				});
+		const callerMaintenance = startupBenchmark
+			? Promise.resolve()
+			: this.waitForPromptBarrier().then(() => this.options.deferredMaintenance?.());
+		void Promise.allSettled([toolMaintenance, updateMaintenance, providerMaintenance, callerMaintenance]).then(() => {
+			markStartupMilestone("deferred_maintenance_idle");
 		});
 	}
 
-	/** Wait until deferred builtins have attached (or were skipped). */
 	async waitForDeferredBuiltins(): Promise<void> {
-		if (this.deferredBuiltinAttachPromise) {
-			await this.deferredBuiltinAttachPromise;
-		}
+		if (this.deferredBuiltinAttachPromise) await this.deferredBuiltinAttachPromise;
+	}
+
+	async waitForPromptBarrier(): Promise<void> {
+		if (this.promptBarrierPromise) await this.promptBarrierPromise;
 	}
 
 	private planUsageTimer: ReturnType<typeof setInterval> | undefined;
@@ -1723,7 +1770,7 @@ export class InteractiveMode {
 	 * Initialize the extension system with TUI-based UI context.
 	 */
 	private async awaitDeferredBuiltinsForPrompt(): Promise<void> {
-		await this.waitForDeferredBuiltins();
+		await this.waitForPromptBarrier();
 	}
 
 	private async promptAfterDeferredBuiltins(
@@ -1757,6 +1804,7 @@ export class InteractiveMode {
 			this.deferredBuiltinsAttached = false;
 			const message = error instanceof Error ? error.message : String(error);
 			this.showError(`Failed to load deferred extensions: ${message}`);
+			throw error;
 		} finally {
 			this.setExtensionStatus("deferred-builtins", undefined);
 		}
@@ -2522,8 +2570,12 @@ export class InteractiveMode {
 	private setCustomEditorComponent(factory: EditorFactory | undefined): void {
 		this.editorComponentFactory = factory;
 
-		// Save text from current editor before switching
 		const currentText = this.editor.getText();
+		if (this.startedFromShell && factory && currentText.length > 0) {
+			this.deferredStartupEditorFactory = factory;
+			return;
+		}
+		this.deferredStartupEditorFactory = undefined;
 
 		this.editorContainer.clear();
 
@@ -2583,6 +2635,13 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor as Component);
 		this.ui.setFocus(this.editor as Component);
 		this.ui.requestRender();
+	}
+
+	private activateDeferredStartupEditor(): void {
+		const factory = this.deferredStartupEditorFactory;
+		if (!factory || this.editor.getText().length > 0) return;
+		this.deferredStartupEditorFactory = undefined;
+		this.setCustomEditorComponent(factory);
 	}
 
 	/**
@@ -2930,6 +2989,7 @@ export class InteractiveMode {
 			}
 			const images =
 				this.consumeStagedSubmitImages() ?? (await this.loadImageAttachments(this.takeSubmittedImages(text)));
+			this.activateDeferredStartupEditor();
 			this.ui.setChatScroll(0);
 
 			// Handle commands
@@ -4005,6 +4065,8 @@ export class InteractiveMode {
 	}
 
 	async getUserInput(): Promise<QueuedUserInput> {
+		const startupInput = this.startupUserInputs.shift();
+		if (startupInput !== undefined) return startupInput;
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
 			return queuedInput;
@@ -4033,6 +4095,7 @@ export class InteractiveMode {
 			void this.shutdown();
 		} else {
 			this.clearEditor();
+			this.activateDeferredStartupEditor();
 			this.lastSigintTime = now;
 		}
 	}
