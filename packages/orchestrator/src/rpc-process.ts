@@ -16,6 +16,16 @@ interface PendingRequest {
 	reject(error: Error): void;
 }
 
+export interface RpcProcessOptions {
+	cwd: string;
+	childProcess?: ChildProcess;
+	disposeGraceMs?: number;
+	forceKillGraceMs?: number;
+	forceKill?: (child: ChildProcess) => void;
+}
+
+const DEFAULT_DISPOSE_GRACE_MS = 1_000;
+const DEFAULT_FORCE_KILL_GRACE_MS = 1_000;
 const require = createRequire(import.meta.url);
 
 function toError(error: unknown): Error {
@@ -26,6 +36,10 @@ export class RpcProcessInstance {
 	readonly process: ChildProcess;
 
 	private exited = false;
+	private disposePromise?: Promise<void>;
+	private readonly disposeGraceMs: number;
+	private readonly forceKillGraceMs: number;
+	private readonly forceKill: (child: ChildProcess) => void;
 	private nextRequestId = 0;
 	private stdoutBuffer = "";
 	private stderrBuffer = "";
@@ -34,13 +48,21 @@ export class RpcProcessInstance {
 	private readonly exitListeners = new Set<(error?: Error) => void>();
 	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
 
-	constructor(options: { cwd: string }) {
-		const rpcCommand = this.getSpawnCommand();
-		this.process = spawn(rpcCommand.command, rpcCommand.args, {
-			cwd: options.cwd,
-			env: process.env,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+	constructor(options: RpcProcessOptions) {
+		if (options.childProcess) {
+			this.process = options.childProcess;
+		} else {
+			const rpcCommand = this.getSpawnCommand();
+			this.process = spawn(rpcCommand.command, rpcCommand.args, {
+				cwd: options.cwd,
+				env: process.env,
+				stdio: ["pipe", "pipe", "pipe"],
+				detached: process.platform !== "win32",
+			});
+		}
+		this.disposeGraceMs = options.disposeGraceMs ?? DEFAULT_DISPOSE_GRACE_MS;
+		this.forceKillGraceMs = options.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS;
+		this.forceKill = options.forceKill ?? ((child) => forceKillProcessTree(child, !options.childProcess));
 		if (!this.process.stdin || !this.process.stdout) {
 			throw new Error("Failed to create RPC process stdio");
 		}
@@ -183,17 +205,83 @@ export class RpcProcessInstance {
 		};
 	}
 
-	async dispose(): Promise<void> {
-		this.uiRequestHandler = undefined;
-		this.rejectAllPending(new Error("RPC process disposed"));
-		if (this.exited) {
-			return;
-		}
-		this.process.kill("SIGTERM");
-		await new Promise<void>((resolve) => {
-			this.process.once("exit", () => resolve());
+	private hasExited(): boolean {
+		return this.exited || this.process.exitCode !== null || this.process.signalCode !== null;
+	}
+
+	private waitForExit(timeoutMs: number): Promise<boolean> {
+		if (this.hasExited()) return Promise.resolve(true);
+		return new Promise<boolean>((resolve) => {
+			let settled = false;
+			let timer: NodeJS.Timeout | undefined;
+			const finish = (exited: boolean) => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				this.process.off("exit", onExit);
+				this.process.off("error", onError);
+				resolve(exited);
+			};
+			const onExit = () => finish(true);
+			const onError = () => finish(true);
+			this.process.once("exit", onExit);
+			this.process.once("error", onError);
+			timer = setTimeout(() => finish(this.hasExited()), Math.max(0, timeoutMs));
+			timer.unref?.();
+			if (this.hasExited()) finish(true);
 		});
 	}
+
+	private async disposeOnce(): Promise<void> {
+		this.uiRequestHandler = undefined;
+		this.rejectAllPending(new Error("RPC process disposed"));
+		if (this.hasExited()) return;
+
+		const gracefulExit = this.waitForExit(this.disposeGraceMs);
+		try {
+			this.process.kill("SIGTERM");
+		} catch {
+			// Escalation below handles processes that reject the graceful signal.
+		}
+		if (await gracefulExit) return;
+
+		try {
+			this.forceKill(this.process);
+		} catch {
+			// Disposal stays bounded even if the platform kill mechanism fails.
+		}
+		await this.waitForExit(this.forceKillGraceMs);
+	}
+
+	dispose(): Promise<void> {
+		this.disposePromise ??= this.disposeOnce();
+		return this.disposePromise;
+	}
+}
+
+function forceKillProcessTree(child: ChildProcess, killProcessGroup: boolean): void {
+	if (process.platform === "win32") {
+		if (child.pid) {
+			const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			killer.unref();
+		}
+		try {
+			child.kill("SIGKILL");
+		} catch {}
+		return;
+	}
+	if (killProcessGroup && child.pid) {
+		try {
+			process.kill(-child.pid, "SIGKILL");
+			return;
+		} catch {}
+	}
+	try {
+		child.kill("SIGKILL");
+	} catch {}
 }
 
 export function createRpcProcessInstance(options: { cwd: string }): RpcProcessInstance {

@@ -291,6 +291,52 @@ describe("SessionManager.setSessionFile with corrupted files", () => {
 		expect(readFileSync(nonSessionFile, "utf-8")).toBe(originalContent);
 	});
 
+	it.each([
+		{
+			name: "duplicate ids",
+			entries: [
+				{ id: "a", parentId: null },
+				{ id: "a", parentId: null },
+			],
+			message: "duplicate entry id",
+		},
+		{
+			name: "self-links",
+			entries: [{ id: "a", parentId: "a" }],
+			message: "links to itself",
+		},
+		{
+			name: "missing parents",
+			entries: [{ id: "a", parentId: "missing" }],
+			message: "missing parent",
+		},
+		{
+			name: "parent cycles",
+			entries: [
+				{ id: "a", parentId: "b" },
+				{ id: "b", parentId: "a" },
+			],
+			message: "parent cycle detected",
+		},
+	])("rejects corrupt session graphs with $name", ({ entries, message }) => {
+		const file = join(tempDir, "corrupt-graph.jsonl");
+		const header = {
+			type: "session",
+			version: 3,
+			id: "session-1",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			cwd: tempDir,
+		};
+		const records = entries.map((entry) => ({
+			type: "message",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: { role: "user", content: "test", timestamp: 0 },
+			...entry,
+		}));
+		writeFileSync(file, [header, ...records].map((record) => JSON.stringify(record)).join("\n"));
+		expect(() => SessionManager.open(file, tempDir)).toThrow(message);
+	});
+
 	it("preserves explicit session file path when recovering from corrupted file", () => {
 		const explicitPath = join(tempDir, "my-session.jsonl");
 		writeFileSync(explicitPath, "");

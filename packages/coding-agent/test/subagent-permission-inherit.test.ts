@@ -115,6 +115,27 @@ describe("subagent permission inherit", () => {
 		expect(getPermissionMode()).toBe("plan");
 	});
 
+	it("only lets a manual parent start a writing child after approval", async () => {
+		setPermissionMode("manual");
+		registerApprovalHandler(async () => "reject");
+		const rejected = await gateToolCall(
+			"subagent",
+			{ task: "write", description: "Rejected writer", permissions: "full" },
+			"/cwd",
+		);
+		expect(rejected?.block).toBe(true);
+
+		registerApprovalHandler(async () => "once");
+		expect(
+			await gateToolCall("subagent", { task: "write", description: "Approved writer", permissions: "full" }, "/cwd"),
+		).toBeUndefined();
+		applyInheritedSubagentPermissions({
+			[SUBAGENT_CHILD_ENV]: "1",
+			[SUBAGENT_CHILD_PERMISSION_ENV]: "full",
+		});
+		expect(await gateToolCall("write", { path: "/cwd/approved.ts" }, "/cwd")).toBeUndefined();
+	});
+
 	it("lets a full child write without an approval handler", async () => {
 		applyInheritedSubagentPermissions({
 			[SUBAGENT_CHILD_ENV]: "1",

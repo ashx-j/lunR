@@ -20,7 +20,12 @@ import {
 	setPermissionMode,
 } from "../src/core/permissions.ts";
 import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
-import { effectiveSwarmCount, effectiveSwarmCountForTurn, isExplicitSwarmTurn, SWARM_APPROVAL_THRESHOLD } from "../src/core/swarm.ts";
+import {
+	effectiveSwarmCount,
+	effectiveSwarmCountForTurn,
+	isExplicitSwarmTurn,
+	SWARM_APPROVAL_THRESHOLD,
+} from "../src/core/swarm.ts";
 
 describe("permissions", () => {
 	beforeEach(() => {
@@ -66,6 +71,62 @@ describe("permissions", () => {
 		const result = await gateToolCall("edit", { path: "/cwd/test2.ts" }, "/cwd");
 		expect(result).toBeUndefined();
 		expect(calls).toBe(1);
+	});
+
+	it("requires approval for full-access children in manual mode", async () => {
+		setPermissionMode("manual");
+		let received: ApprovalRequest | undefined;
+		registerApprovalHandler(async (request) => {
+			received = request;
+			return "reject";
+		});
+		const result = await gateToolCall(
+			"subagent",
+			{ task: "write a file", description: "Implement storage", permissions: "full" },
+			"/cwd",
+		);
+		expect(result).toEqual({ block: true, reason: "Rejected by user (permission mode: manual)." });
+		expect(received).toMatchObject({
+			toolName: "subagent",
+			action: "subagent-full",
+		});
+		expect(received?.detail).toContain("Implement storage");
+		expect(received?.detail).toContain("permissions: full");
+	});
+
+	it("treats omitted child permissions as full and lets read-only children pass", async () => {
+		setPermissionMode("manual");
+		expect(await gateToolCall("subagent", { task: "write", description: "Writer" }, "/cwd")).toEqual({
+			block: true,
+			reason: "Mutating tool blocked in manual mode: no approval channel available.",
+		});
+		expect(
+			await gateToolCall("subagent", { task: "inspect", description: "Reviewer", permissions: "read-only" }, "/cwd"),
+		).toBeUndefined();
+	});
+
+	it("gates full children nested in chain and parallel launch shapes", async () => {
+		setPermissionMode("manual");
+		const requests: ApprovalRequest[] = [];
+		registerApprovalHandler(async (request) => {
+			requests.push(request);
+			return "once";
+		});
+		expect(
+			await gateToolCall(
+				"subagent",
+				{
+					chain: [
+						{ task: "inspect", description: "Reviewer", permissions: "read-only" },
+						{ parallel: [{ task: "fix", description: "Fixer", permissions: "full" }] },
+					],
+				},
+				"/cwd",
+			),
+		).toBeUndefined();
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({ action: "subagent-full" });
+		expect(requests[0].detail).toContain("Fixer");
 	});
 
 	it("allows all tools in yolo mode", async () => {
@@ -218,15 +279,37 @@ describe("permissions", () => {
 
 describe("swarm helpers", () => {
 	it("counts parallel tasks with count multipliers", () => {
-		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A" }, { task: "b", description: "B" }] })).toBe(2);
+		expect(
+			effectiveSwarmCount({
+				tasks: [
+					{ task: "a", description: "A" },
+					{ task: "b", description: "B" },
+				],
+			}),
+		).toBe(2);
 		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A", count: 3 }] })).toBe(3);
-		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A", count: 0 }, { task: "b", description: "B" }] })).toBe(2);
+		expect(
+			effectiveSwarmCount({
+				tasks: [
+					{ task: "a", description: "A", count: 0 },
+					{ task: "b", description: "B" },
+				],
+			}),
+		).toBe(2);
 	});
 
 	it("counts chain parallel fan-out blocks", () => {
 		expect(
 			effectiveSwarmCount({
-				chain: [{ task: "a", description: "A" }, { parallel: [{ task: "b", description: "B" }, { task: "c", description: "C", count: 2 }] }],
+				chain: [
+					{ task: "a", description: "A" },
+					{
+						parallel: [
+							{ task: "b", description: "B" },
+							{ task: "c", description: "C", count: 2 },
+						],
+					},
+				],
 			}),
 		).toBe(3);
 	});
@@ -234,7 +317,14 @@ describe("swarm helpers", () => {
 	it("counts zero for single-agent and management calls", () => {
 		expect(effectiveSwarmCount({ task: "x", description: "Scout files" })).toBe(0);
 		expect(effectiveSwarmCount({ action: "status" })).toBe(0);
-		expect(effectiveSwarmCount({ chain: [{ task: "a", description: "A" }, { task: "b", description: "B" }] })).toBe(0);
+		expect(
+			effectiveSwarmCount({
+				chain: [
+					{ task: "a", description: "A" },
+					{ task: "b", description: "B" },
+				],
+			}),
+		).toBe(0);
 	});
 
 	it("counts same-turn sibling SINGLE calls toward the swarm threshold", () => {
@@ -246,7 +336,17 @@ describe("swarm helpers", () => {
 			],
 		};
 		expect(effectiveSwarmCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(3);
-		expect(effectiveSwarmCountForTurn({ tasks: [{ task: "a", description: "A" }, { task: "b", description: "B" }] }, assistantMessage)).toBe(3);
+		expect(
+			effectiveSwarmCountForTurn(
+				{
+					tasks: [
+						{ task: "a", description: "A" },
+						{ task: "b", description: "B" },
+					],
+				},
+				assistantMessage,
+			),
+		).toBe(3);
 	});
 
 	it("ignores async and management siblings when counting same-turn singles", () => {
@@ -294,10 +394,23 @@ describe("agent-swarm gate", () => {
 		expect(SWARM_APPROVAL_THRESHOLD).toBe(2);
 	});
 
-	it("allows subagent calls at or below the threshold without a handler", async () => {
+	it("allows read-only subagent calls at or below the threshold without a handler", async () => {
 		setPermissionMode("manual");
-		expect(await gateToolCall("subagent", { task: "x", description: "Scout files" }, "/cwd")).toBeUndefined();
-		expect(await gateToolCall("subagent", { tasks: [{ task: "a", description: "A" }, { task: "b", description: "B" }] }, "/cwd")).toBeUndefined();
+		expect(
+			await gateToolCall("subagent", { task: "x", description: "Scout files", permissions: "read-only" }, "/cwd"),
+		).toBeUndefined();
+		expect(
+			await gateToolCall(
+				"subagent",
+				{
+					tasks: [
+						{ task: "a", description: "A", permissions: "read-only" },
+						{ task: "b", description: "B", permissions: "read-only" },
+					],
+				},
+				"/cwd",
+			),
+		).toBeUndefined();
 	});
 
 	it("prompts for >2 parallel subagents in manual mode", async () => {
@@ -312,7 +425,7 @@ describe("agent-swarm gate", () => {
 		expect(received?.kind).toBe("swarm");
 		expect(received?.action).toBe("swarm");
 		expect(received?.detail).toContain("agent swarm (3 subagents)");
-		expect(received?.detail).toContain("one");
+		expect(received?.detail).toContain("One");
 	});
 
 	it("prompts in yolo mode too", async () => {
@@ -333,12 +446,12 @@ describe("agent-swarm gate", () => {
 		expect(await gateToolCall("subagent", threeTasks, "/cwd")).toBeUndefined();
 	});
 
-	it("skips the gate for explicit /swarm turns", async () => {
+	it("skips the swarm gate for explicit /swarm turns but still protects full children", async () => {
 		setPermissionMode("manual");
-		// No handler registered — explicit swarm must not need one.
-		expect(
-			await gateToolCall("subagent", threeTasks, "/cwd", undefined, { explicitSwarmTurn: true }),
-		).toBeUndefined();
+		expect(await gateToolCall("subagent", threeTasks, "/cwd", undefined, { explicitSwarmTurn: true })).toEqual({
+			block: true,
+			reason: "Mutating tool blocked in manual mode: no approval channel available.",
+		});
 	});
 
 	it("fails closed without an approval handler", async () => {
@@ -355,8 +468,27 @@ describe("agent-swarm gate", () => {
 			return "session" as ApprovalResponse;
 		});
 		await gateToolCall("subagent", threeTasks, "/cwd");
-		expect(await gateToolCall("subagent", { tasks: [{ task: "x", description: "X", count: 5 }] }, "/cwd")).toBeUndefined();
+		expect(
+			await gateToolCall("subagent", { tasks: [{ task: "x", description: "X", count: 5 }] }, "/cwd"),
+		).toBeUndefined();
 		expect(calls).toBe(1);
+	});
+
+	it("does not let a read-only swarm approval cover a later full child", async () => {
+		setPermissionMode("manual");
+		const actions: string[] = [];
+		registerApprovalHandler(async (request) => {
+			actions.push(request.action);
+			return actions.length === 1 ? "session" : "reject";
+		});
+		const readOnlySwarm = {
+			tasks: threeTasks.tasks.map((task) => ({ ...task, permissions: "read-only" as const })),
+		};
+		expect(await gateToolCall("subagent", readOnlySwarm, "/cwd")).toBeUndefined();
+		expect(
+			await gateToolCall("subagent", { task: "write", description: "Writer", permissions: "full" }, "/cwd"),
+		).toEqual({ block: true, reason: "Rejected by user (permission mode: manual)." });
+		expect(actions).toEqual(["swarm", "subagent-full"]);
 	});
 
 	it("reject with feedback becomes the block reason", async () => {
@@ -386,9 +518,15 @@ describe("agent-swarm gate", () => {
 			return "once" as ApprovalResponse;
 		});
 		const options = { assistantMessage };
-		expect(await gateToolCall("subagent", { task: "one", description: "One" }, "/cwd", undefined, options)).toBeUndefined();
-		expect(await gateToolCall("subagent", { task: "two", description: "Two" }, "/cwd", undefined, options)).toBeUndefined();
-		expect(await gateToolCall("subagent", { task: "three", description: "Three" }, "/cwd", undefined, options)).toBeUndefined();
+		expect(
+			await gateToolCall("subagent", { task: "one", description: "One" }, "/cwd", undefined, options),
+		).toBeUndefined();
+		expect(
+			await gateToolCall("subagent", { task: "two", description: "Two" }, "/cwd", undefined, options),
+		).toBeUndefined();
+		expect(
+			await gateToolCall("subagent", { task: "three", description: "Three" }, "/cwd", undefined, options),
+		).toBeUndefined();
 		expect(calls).toBe(1);
 	});
 

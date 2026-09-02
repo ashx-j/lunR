@@ -1,4 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname } from "node:path";
 import { getInstancesPath, getMachinePath, getOrchestratorDir } from "./config.ts";
 import type { InstanceRecord, MachineRecord } from "./types.ts";
 
@@ -9,42 +21,97 @@ function ensureOrchestratorDir(): void {
 	}
 }
 
-export function loadMachine(): MachineRecord | undefined {
-	const machinePath = getMachinePath();
-	if (!existsSync(machinePath)) {
+function atomicWriteJson(path: string, value: unknown): void {
+	ensureOrchestratorDir();
+	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+	let fd: number | undefined;
+	try {
+		fd = openSync(tempPath, "wx", 0o600);
+		writeFileSync(fd, JSON.stringify(value, null, 2));
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = undefined;
+		renameSync(tempPath, path);
+		try {
+			const directoryFd = openSync(dirname(path), "r");
+			try {
+				fsyncSync(directoryFd);
+			} finally {
+				closeSync(directoryFd);
+			}
+		} catch {
+			// Directory fsync is unavailable on some platforms.
+		}
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+		rmSync(tempPath, { force: true });
+	}
+}
+
+function quarantineCorruptFile(path: string, error: unknown): string | undefined {
+	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+	const quarantinePath = `${path}.corrupt-${timestamp}-${randomUUID()}`;
+	try {
+		renameSync(path, quarantinePath);
+		console.error(`Quarantined corrupt orchestrator state at ${quarantinePath}: ${String(error)}`);
+		return quarantinePath;
+	} catch (quarantineError) {
+		console.error(
+			`Failed to quarantine corrupt orchestrator state at ${path}: ${String(error)}; ${String(quarantineError)}`,
+		);
 		return undefined;
 	}
+}
 
-	const data = readFileSync(machinePath, "utf-8");
-	return JSON.parse(data) as MachineRecord;
+function loadJson<T>(path: string, validate: (value: unknown) => value is T): T | undefined {
+	if (!existsSync(path)) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+		if (!validate(parsed)) throw new Error("unexpected JSON shape");
+		return parsed;
+	} catch (error) {
+		quarantineCorruptFile(path, error);
+		return undefined;
+	}
+}
+
+function isMachineRecord(value: unknown): value is MachineRecord {
+	return (
+		!!value && typeof value === "object" && !Array.isArray(value) && typeof (value as MachineRecord).id === "string"
+	);
+}
+
+function isInstanceRecord(value: unknown): value is InstanceRecord {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const record = value as InstanceRecord;
+	return typeof record.id === "string" && typeof record.status === "string" && typeof record.cwd === "string";
+}
+
+export function loadMachine(): MachineRecord | undefined {
+	return loadJson(getMachinePath(), isMachineRecord);
 }
 
 export function saveMachine(machine: MachineRecord): void {
-	ensureOrchestratorDir();
-	writeFileSync(getMachinePath(), JSON.stringify(machine, null, 2));
+	atomicWriteJson(getMachinePath(), machine);
 }
 
 export function deleteMachine(): void {
 	const machinePath = getMachinePath();
-	if (!existsSync(machinePath)) {
-		return;
-	}
+	if (!existsSync(machinePath)) return;
 	rmSync(machinePath);
 }
 
 export function loadInstances(): InstanceRecord[] {
-	const instancesPath = getInstancesPath();
-	if (!existsSync(instancesPath)) {
-		return [];
-	}
-
-	const data = readFileSync(instancesPath, "utf-8");
-	return JSON.parse(data) as InstanceRecord[];
+	return (
+		loadJson(
+			getInstancesPath(),
+			(value): value is InstanceRecord[] => Array.isArray(value) && value.every(isInstanceRecord),
+		) ?? []
+	);
 }
 
 export function saveInstances(instances: InstanceRecord[]): void {
-	ensureOrchestratorDir();
-	writeFileSync(getInstancesPath(), JSON.stringify(instances, null, 2));
+	atomicWriteJson(getInstancesPath(), instances);
 }
 
 export function getInstance(instanceId: string): InstanceRecord | undefined {

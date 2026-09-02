@@ -318,13 +318,51 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
 	return null;
 }
 
-function buildEntryIndex(entries: SessionEntry[], byId?: Map<string, SessionEntry>): Map<string, SessionEntry> {
-	if (byId) return byId;
+export function validateSessionGraph(entries: SessionEntry[]): void {
 	const index = new Map<string, SessionEntry>();
 	for (const entry of entries) {
+		if (typeof entry.id !== "string" || !entry.id) {
+			throw new Error("Session graph is corrupt: every entry must have a non-empty id");
+		}
+		if (index.has(entry.id)) {
+			throw new Error(`Session graph is corrupt: duplicate entry id "${entry.id}"`);
+		}
 		index.set(entry.id, entry);
 	}
-	return index;
+
+	for (const entry of entries) {
+		if (entry.parentId === entry.id) {
+			throw new Error(`Session graph is corrupt: entry "${entry.id}" links to itself`);
+		}
+		if (entry.parentId !== null && !index.has(entry.parentId)) {
+			throw new Error(`Session graph is corrupt: entry "${entry.id}" has missing parent "${entry.parentId}"`);
+		}
+	}
+
+	const complete = new Set<string>();
+	for (const entry of entries) {
+		if (complete.has(entry.id)) continue;
+		const path: string[] = [];
+		const positions = new Map<string, number>();
+		let current: SessionEntry | undefined = entry;
+		while (current && !complete.has(current.id)) {
+			const position = positions.get(current.id);
+			if (position !== undefined) {
+				const cycle = [...path.slice(position), current.id].join(" -> ");
+				throw new Error(`Session graph is corrupt: parent cycle detected (${cycle})`);
+			}
+			positions.set(current.id, path.length);
+			path.push(current.id);
+			current = current.parentId === null ? undefined : index.get(current.parentId);
+		}
+		for (const id of path) complete.add(id);
+	}
+}
+
+function buildEntryIndex(entries: SessionEntry[], byId?: Map<string, SessionEntry>): Map<string, SessionEntry> {
+	if (byId) return byId;
+	validateSessionGraph(entries);
+	return new Map(entries.map((entry) => [entry.id, entry]));
 }
 
 function buildSessionPath(
@@ -346,9 +384,17 @@ function buildSessionPath(
 	}
 
 	const path: SessionEntry[] = [];
+	const visited = new Set<string>();
 	let current: SessionEntry | undefined = leaf;
 	while (current) {
+		if (visited.has(current.id)) {
+			throw new Error(`Session graph is corrupt: parent cycle detected at entry "${current.id}"`);
+		}
+		visited.add(current.id);
 		path.push(current);
+		if (current.parentId && !index.has(current.parentId)) {
+			throw new Error(`Session graph is corrupt: entry "${current.id}" has missing parent "${current.parentId}"`);
+		}
 		current = current.parentId ? index.get(current.parentId) : undefined;
 	}
 	path.reverse();
@@ -843,7 +889,10 @@ export class SessionManager {
 			}
 
 			const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
-			this.sessionId = header?.id ?? createSessionId();
+			if (!header) {
+				throw new Error(`Session file is not a valid pi session: ${this.sessionFile}`);
+			}
+			this.sessionId = header.id;
 
 			if (migrateToCurrentVersion(this.fileEntries)) {
 				this._rewriteFile();
@@ -887,6 +936,7 @@ export class SessionManager {
 	}
 
 	private _buildIndex(): void {
+		validateSessionGraph(this.fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session"));
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1188,10 +1238,18 @@ export class SessionManager {
 	 */
 	getBranch(fromId?: string): SessionEntry[] {
 		const path: SessionEntry[] = [];
+		const visited = new Set<string>();
 		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
 		while (current) {
+			if (visited.has(current.id)) {
+				throw new Error(`Session graph is corrupt: parent cycle detected at entry "${current.id}"`);
+			}
+			visited.add(current.id);
 			path.push(current);
+			if (current.parentId && !this.byId.has(current.parentId)) {
+				throw new Error(`Session graph is corrupt: entry "${current.id}" has missing parent "${current.parentId}"`);
+			}
 			current = current.parentId ? this.byId.get(current.parentId) : undefined;
 		}
 		path.reverse();

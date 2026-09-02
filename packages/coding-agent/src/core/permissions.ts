@@ -54,7 +54,7 @@ export interface ApprovalRequest {
 	toolName: string;
 	/** "bash" (detail = command), "edit"/"write" (detail = path),
 	 *  "edit-outside"/"write-outside" when path escapes cwd,
-	 *  "swarm" for auto-activated agent swarms (detail = summary lines). */
+	 *  "subagent-full" for full-access children, or "swarm" for swarms. */
 	action: string;
 	detail: string;
 	/** "swarm" when this is the agent-swarm approval prompt, "plan" for the
@@ -105,8 +105,9 @@ const REJECT_REASON = "Rejected by user (permission mode: manual).";
 export const NO_HANDLER_REASON = "Mutating tool blocked in manual mode: no approval channel available.";
 export const SWARM_REJECT_REASON = "Agent swarm rejected by user.";
 export const NO_SWARM_HANDLER_REASON = "Agent swarm blocked: no approval channel available.";
-/** Session-approval key for auto-activated agent swarms. */
+/** Session-approval keys for child launches. */
 const SWARM_ACTION = "swarm";
+const FULL_CHILD_ACTION = "subagent-full";
 
 interface PermissionContext {
 	mode: PermissionMode;
@@ -117,7 +118,10 @@ const contexts = new Map<string, PermissionContext>();
 let defaultContext: PermissionContext = { mode: "manual", approvals: new Set() };
 let approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined;
 /** One swarm prompt covers every sibling SINGLE `subagent` on the same assistant message. */
-const turnSwarmDecisions = new WeakMap<object, { decision: ApprovalDecision; feedback?: string }>();
+const turnSwarmDecisions = new WeakMap<
+	object,
+	{ decision: ApprovalDecision; feedback?: string; fullChildrenApproved: boolean }
+>();
 
 function getContext(sessionId?: string): PermissionContext {
 	if (!sessionId) return defaultContext;
@@ -245,8 +249,45 @@ function isMutatingTool(toolName: string): boolean {
 	return MUTATING_TOOLS.has(toolName);
 }
 
+interface RequestedChildLaunch {
+	description: string;
+	permissions: "full" | "read-only";
+}
+
+function collectRequestedChildLaunches(value: unknown, launches: RequestedChildLaunch[]): void {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return;
+	const input = value as Record<string, unknown>;
+	if (typeof input.task === "string" && input.task.trim()) {
+		launches.push({
+			description:
+				typeof input.description === "string" && input.description.trim()
+					? input.description.trim()
+					: input.task.trim(),
+			permissions: input.permissions === "read-only" ? "read-only" : "full",
+		});
+		return;
+	}
+	for (const key of ["tasks", "chain", "parallel"] as const) {
+		const children = input[key];
+		if (Array.isArray(children)) {
+			for (const child of children) collectRequestedChildLaunches(child, launches);
+		} else if (key === "parallel") {
+			collectRequestedChildLaunches(children, launches);
+		}
+	}
+}
+
+function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChildLaunch[] {
+	const launches: RequestedChildLaunch[] = [];
+	collectRequestedChildLaunches(input, launches);
+	return launches;
+}
+
 function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
 	if (isMutatingTool(toolName)) return true;
+	if (toolName === "subagent") {
+		return getRequestedChildLaunches(input).some((launch) => launch.permissions === "full");
+	}
 	return toolName === "code_rewrite" && isCodeRewriteMutating(input);
 }
 
@@ -299,20 +340,23 @@ async function gateSwarmCall(
 	input: Record<string, unknown>,
 	ctx: PermissionContext,
 	options?: GateOptions,
-): Promise<{ block: true; reason: string } | undefined> {
+): Promise<{ block: true; reason: string } | { fullChildrenApproved: boolean } | undefined> {
 	if (ctx.mode === "auto") return undefined;
 	if (options?.explicitSwarmTurn) return undefined;
 	const count = effectiveSwarmCountForTurn(input, options?.assistantMessage);
 	if (count <= SWARM_APPROVAL_THRESHOLD) return undefined;
-	if (ctx.approvals.has(SWARM_ACTION)) return undefined;
+	if (ctx.approvals.has(SWARM_ACTION)) return { fullChildrenApproved: false };
 
 	const turnKey = options?.assistantMessage;
 	const cached = turnKey ? turnSwarmDecisions.get(turnKey) : undefined;
 	if (cached) {
 		if (cached.decision === "reject") {
-			return { block: true, reason: cached.feedback ? `${SWARM_REJECT_REASON} ${cached.feedback}` : SWARM_REJECT_REASON };
+			return {
+				block: true,
+				reason: cached.feedback ? `${SWARM_REJECT_REASON} ${cached.feedback}` : SWARM_REJECT_REASON,
+			};
 		}
-		return undefined;
+		return { fullChildrenApproved: cached.fullChildrenApproved };
 	}
 
 	if (!approvalHandler) {
@@ -320,12 +364,25 @@ async function gateSwarmCall(
 	}
 
 	const summary = swarmTaskSummary(input, options?.assistantMessage);
+	const siblingLaunches = (options?.assistantMessage?.content ?? []).flatMap((block) => {
+		if (block.type !== "toolCall" || block.name !== "subagent") return [];
+		const args =
+			block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
+				? (block.arguments as Record<string, unknown>)
+				: undefined;
+		return args ? getRequestedChildLaunches(args) : [];
+	});
+	const launches = siblingLaunches.length > 0 ? siblingLaunches : getRequestedChildLaunches(input);
+	const fullChildrenApproved = launches.some((launch) => launch.permissions === "full");
+	const launchSummary = launches
+		.map((launch) => `${launch.description}\npermissions: ${launch.permissions}`)
+		.join("\n");
 	let resp: ApprovalResponse;
 	try {
 		resp = await approvalHandler({
 			toolName: "subagent",
 			action: SWARM_ACTION,
-			detail: summary ? `agent swarm (${count} subagents)\n${summary}` : `agent swarm (${count} subagents)`,
+			detail: `agent swarm (${count} subagents)${launchSummary || summary ? `\n${launchSummary || summary}` : ""}`,
 			kind: "swarm",
 		});
 	} catch (err) {
@@ -336,15 +393,18 @@ async function gateSwarmCall(
 	const rawDecision = typeof resp === "string" ? resp : resp.decision;
 	const decision: ApprovalDecision = rawDecision === "approve" ? "once" : rawDecision;
 	const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
-	if (turnKey) turnSwarmDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}) });
+	if (turnKey) {
+		turnSwarmDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}), fullChildrenApproved });
+	}
 	if (decision === "session") {
 		ctx.approvals.add(SWARM_ACTION);
-		return undefined;
+		if (fullChildrenApproved) ctx.approvals.add(FULL_CHILD_ACTION);
+		return { fullChildrenApproved };
 	}
 	if (decision === "reject") {
 		return { block: true, reason: feedback ? `${SWARM_REJECT_REASON} ${feedback}` : SWARM_REJECT_REASON };
 	}
-	return undefined;
+	return { fullChildrenApproved };
 }
 
 function sanitizeDetail(value: unknown): string {
@@ -375,9 +435,11 @@ export async function gateToolCall(
 
 	// lunr: agent-swarm gate runs before the mode early-return — it applies in
 	// yolo mode too (only auto mode bypasses it).
+	let swarmCoveredManualApproval = false;
 	if (toolName === "subagent") {
-		const swarmBlock = await gateSwarmCall(input, ctx, options);
-		if (swarmBlock) return swarmBlock;
+		const swarmResult = await gateSwarmCall(input, ctx, options);
+		if (swarmResult && "block" in swarmResult) return swarmResult;
+		swarmCoveredManualApproval = ctx.mode === "manual" && swarmResult?.fullChildrenApproved === true;
 	}
 
 	if (ctx.mode === "plan") {
@@ -386,7 +448,7 @@ export async function gateToolCall(
 	}
 
 	if (ctx.mode !== "manual") return undefined;
-	if (!requiresManualApproval(toolName, input)) return undefined;
+	if (!requiresManualApproval(toolName, input) || swarmCoveredManualApproval) return undefined;
 
 	let action: string;
 	let detail: string;
@@ -408,6 +470,12 @@ export async function gateToolCall(
 	} else if (toolName === "cron") {
 		action = "cron";
 		detail = sanitizeDetail(input.action);
+	} else if (toolName === "subagent") {
+		action = FULL_CHILD_ACTION;
+		const launches = getRequestedChildLaunches(input).filter((launch) => launch.permissions === "full");
+		detail = sanitizeDetail(
+			launches.map((launch) => `${launch.description}\npermissions: ${launch.permissions}`).join("\n"),
+		);
 	} else if (toolName === "code_rewrite") {
 		action = "code_rewrite";
 		detail = sanitizeDetail(input.path ?? input.pattern);

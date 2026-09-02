@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -206,6 +206,40 @@ describe("rollback", () => {
 		expect(readFileSync(outside, "utf8")).toBe("modified");
 	});
 
+	it("does not follow replacement symlinks or junctions outside the session root", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const externalDir = join(tmpdir(), `rollback-external-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(externalDir, { recursive: true });
+		const externalFile = join(externalDir, "target.txt");
+		writeFileSync(externalFile, "external");
+
+		try {
+			let snapshotPath: string;
+			rollback.beginTurn(testDir);
+			if (process.platform === "win32") {
+				const parent = join(testDir, "nested");
+				mkdirSync(parent);
+				snapshotPath = join(parent, "target.txt");
+				writeFileSync(snapshotPath, "original");
+				rollback.rollbackSnapshotBeforeWrite(snapshotPath);
+				rmSync(parent, { recursive: true, force: true });
+				symlinkSync(externalDir, parent, "junction");
+			} else {
+				snapshotPath = join(testDir, "target.txt");
+				writeFileSync(snapshotPath, "original");
+				rollback.rollbackSnapshotBeforeWrite(snapshotPath);
+				rmSync(snapshotPath);
+				symlinkSync(externalFile, snapshotPath);
+			}
+
+			const result = rollback.rollbackLastTurn();
+			expect(result.restored).not.toContain(snapshotPath);
+			expect(readFileSync(externalFile, "utf8")).toBe("external");
+		} finally {
+			rmSync(externalDir, { recursive: true, force: true });
+		}
+	});
+
 	it("skips unchanged tree-scope baseline files", async () => {
 		const rollback = await import("../src/core/rollback.ts");
 		mockSM.getRollbackScope = () => "tree";
@@ -302,7 +336,7 @@ describe("rollback", () => {
 		const rollback = await import("../src/core/rollback.ts");
 		const suffix = `rollback-b1-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		const agentDir = join(homedir(), CONFIG_DIR_NAME, "agent");
-		const memoryDir = join(homedir(), ".pi", "simple-memory");
+		const memoryDir = join(homedir(), CONFIG_DIR_NAME, "simple-memory");
 		const behaviorFile = join(agentDir, `behavior-${suffix}.md`);
 		const jobsFile = join(agentDir, "cron", `jobs-${suffix}.json`);
 		const memoryFile = join(memoryDir, `memory-${suffix}.md`);

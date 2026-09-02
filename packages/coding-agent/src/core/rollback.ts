@@ -27,20 +27,25 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+	closeSync,
 	cpSync,
 	existsSync,
+	fsyncSync,
+	lstatSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	rmSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, normalize, resolve } from "node:path";
+import { dirname, join, normalize, relative, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
@@ -454,16 +459,80 @@ function isPathUnderRoot(absPath: string, root: string): boolean {
 	return normPath === normRoot || normPath.startsWith(`${normRoot}/`) || normPath.startsWith(`${normRoot}\\`);
 }
 
-function isWithinAllowedRoots(absPath: string, turn: TurnSnapshots): boolean {
-	if (!turn.cwd) return true; // no recorded cwd: cannot validate, allow (tests / legacy)
-	const roots = [
+function getAllowedRoots(turn: TurnSnapshots): string[] {
+	if (!turn.cwd) return [];
+	return [
 		ROLLBACK_BASE,
-		join(homedir(), CONFIG_DIR_NAME), // lunr: agent settings / cron jobs.json live under the config dir
-		// lunr: simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
+		join(homedir(), CONFIG_DIR_NAME),
 		join(dirname(getAgentDir()), "simple-memory"),
 		resolve(turn.cwd),
 	];
-	return roots.some((root) => isPathUnderRoot(absPath, root));
+}
+
+function findAllowedRoot(absPath: string, turn: TurnSnapshots): string | undefined {
+	const matches = getAllowedRoots(turn).filter((root) => isPathUnderRoot(absPath, root));
+	return matches.sort((a, b) => b.length - a.length)[0];
+}
+
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
+	try {
+		return lstatSync(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+function safeRestoreParent(absPath: string, turn: TurnSnapshots): string | undefined {
+	const allowedRoot = findAllowedRoot(absPath, turn);
+	if (turn.cwd && !allowedRoot) return undefined;
+
+	const finalEntry = lstatIfPresent(absPath);
+	if (finalEntry?.isSymbolicLink()) return undefined;
+	if (!allowedRoot) return dirname(absPath);
+
+	const rootEntry = lstatIfPresent(allowedRoot);
+	if (!rootEntry || !rootEntry.isDirectory() || rootEntry.isSymbolicLink()) return undefined;
+	const parent = dirname(absPath);
+	const relativeParent = relative(allowedRoot, parent);
+	if (relativeParent.startsWith("..") || !isPathUnderRoot(parent, allowedRoot)) return undefined;
+
+	let current = allowedRoot;
+	for (const segment of relativeParent.split(/[\\/]/).filter(Boolean)) {
+		current = join(current, segment);
+		const entry = lstatIfPresent(current);
+		if (entry) {
+			if (entry.isSymbolicLink() || !entry.isDirectory()) return undefined;
+		} else {
+			mkdirSync(current);
+		}
+	}
+
+	const realRoot = realpathSync.native(allowedRoot);
+	const realParent = realpathSync.native(parent);
+	if (!isPathUnderRoot(realParent, realRoot)) return undefined;
+	if (lstatIfPresent(absPath)?.isSymbolicLink()) return undefined;
+	return parent;
+}
+
+function restoreFileAtomically(absPath: string, content: Buffer, turn: TurnSnapshots): boolean {
+	const parent = safeRestoreParent(absPath, turn);
+	if (!parent) return false;
+	const tempPath = join(parent, `.lunr-rollback-${randomUUID()}.tmp`);
+	let fd: number | undefined;
+	try {
+		fd = openSync(tempPath, "wx", 0o600);
+		writeFileSync(fd, content);
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = undefined;
+		if (!safeRestoreParent(absPath, turn)) return false;
+		renameSync(tempPath, absPath);
+		return true;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+		rmSync(tempPath, { force: true });
+	}
 }
 
 function warnExternalModification(ctx: RollbackContext, message: string): void {
@@ -512,7 +581,7 @@ export function rollbackLastTurn(sessionId?: string): RollbackResult {
 
 	for (const [absPath, snap] of turn.files) {
 		try {
-			if (!isWithinAllowedRoots(absPath, turn)) {
+			if (turn.cwd && !findAllowedRoot(absPath, turn)) {
 				warnExternalModification(
 					ctx,
 					`Rollback skipped ${absPath}: outside the session working directory or lunR config dir.`,
@@ -528,12 +597,24 @@ export function rollbackLastTurn(sessionId?: string): RollbackResult {
 					const current = readFileSync(absPath);
 					if (current.equals(snap.content)) continue;
 				}
-				mkdirSync(dirname(absPath), { recursive: true });
-				writeFileSync(absPath, snap.content);
+				if (!restoreFileAtomically(absPath, snap.content, turn)) {
+					warnExternalModification(
+						ctx,
+						`Rollback skipped ${absPath}: a symlink or junction made the path unsafe.`,
+					);
+					continue;
+				}
 				restored.push(absPath);
 			} else if (!snap.existed) {
 				const shouldDelete = snap.createdByTool || capture === "hybrid" || capture === "shadow-git";
-				if (shouldDelete && existsSync(absPath)) {
+				if (shouldDelete && lstatIfPresent(absPath)) {
+					if (!safeRestoreParent(absPath, turn)) {
+						warnExternalModification(
+							ctx,
+							`Rollback skipped ${absPath}: a symlink or junction made the path unsafe.`,
+						);
+						continue;
+					}
 					unlinkSync(absPath);
 					deleted.push(absPath);
 				}
