@@ -1,7 +1,7 @@
 import { Marked, type Token, Tokenizer, type Tokens } from "marked";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import { applyBackgroundToLine, sanitizeTerminalText, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -168,7 +168,7 @@ export class Markdown implements Component {
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
-		const normalizedText = this.text.replace(/\t/g, "   ");
+		const normalizedText = sanitizeTerminalText(this.text).replace(/\t/g, "   ");
 
 		// Parse markdown to HTML-like tokens
 		const tokens = markdownParser.lexer(normalizedText);

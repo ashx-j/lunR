@@ -50,8 +50,10 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Build binaries
-        run: ./scripts/build-binaries.sh
+      - name: Build binaries without catalog generation
+        run: |
+          ./scripts/build-binaries.sh
+          git diff --exit-code -- packages/ai
 
       - name: Prepare GitHub release payload
         run: |

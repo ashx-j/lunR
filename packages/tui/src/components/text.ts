@@ -1,5 +1,5 @@
 import type { Component } from "../tui.ts";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import { applyBackgroundToLine, sanitizeTerminalOutput, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 /**
  * Text component - displays multi-line text with word wrapping
@@ -75,7 +75,7 @@ export class Text implements Component {
 		}
 
 		// Replace tabs with 3 spaces
-		const normalizedText = this.text.replace(/\t/g, "   ");
+		const normalizedText = sanitizeTerminalOutput(this.text).replace(/\t/g, "   ");
 
 		// Calculate content width (subtract left/right margins)
 		const contentWidth = Math.max(1, width - this.paddingX * 2);

@@ -3,7 +3,7 @@ import { decodeKittyPrintable } from "../keys.ts";
 import { KillRing } from "../kill-ring.ts";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui.ts";
 import { UndoStack } from "../undo-stack.ts";
-import { getGraphemeSegmenter, isWhitespaceChar, sliceByColumn, visibleWidth } from "../utils.ts";
+import { getGraphemeSegmenter, isWhitespaceChar, sanitizeTerminalText, sliceByColumn, visibleWidth } from "../utils.ts";
 import { findWordBackward, findWordForward } from "../word-navigation.ts";
 
 const segmenter = getGraphemeSegmenter();
@@ -41,8 +41,8 @@ export class Input implements Component, Focusable {
 	}
 
 	setValue(value: string): void {
-		this.value = value;
-		this.cursor = Math.min(this.cursor, value.length);
+		this.value = sanitizeTerminalText(value).replace(/[\r\n]/g, "");
+		this.cursor = Math.min(this.cursor, this.value.length);
 	}
 
 	handleInput(data: string): void {
@@ -364,7 +364,11 @@ export class Input implements Component, Focusable {
 		this.pushUndo();
 
 		// Clean the pasted text - remove newlines and carriage returns
-		const cleanText = pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "").replace(/\t/g, "    ");
+		const cleanText = sanitizeTerminalText(pastedText)
+			.replace(/\r\n/g, "")
+			.replace(/\r/g, "")
+			.replace(/\n/g, "")
+			.replace(/\t/g, "    ");
 
 		// Insert at cursor position
 		this.value = this.value.slice(0, this.cursor) + cleanText + this.value.slice(this.cursor);

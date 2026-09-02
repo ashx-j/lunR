@@ -1,7 +1,8 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { Box } from "../src/components/box.ts";
 import { MOUSE_TRACKING_DISABLE, MOUSE_TRACKING_ENABLE } from "../src/mouse.ts";
-import { type Component, TUI } from "../src/tui.ts";
+import { type Component, TUI, visibleWidth } from "../src/tui.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
 class RecordingTerminal extends VirtualTerminal {
@@ -479,10 +480,75 @@ describe("TUI pinFrom dock", () => {
 		assert.ok(scrolled.slice(0, 6).every((line) => lastVisible(line) === "│" || lastVisible(line) === "█"));
 
 		chat.setLines(["C0", "C1", "C2"]);
-		tui.requestRender();
+		tui.requestRender(true);
 		const hug = tui.render(20);
 		assert.deepStrictEqual(hug, ["C0", "C1", "C2", "D0", "D1"]);
 		assert.ok(hug.every((line) => lastVisible(line) !== "│" && lastVisible(line) !== "█"));
+	});
+
+	it("does not re-layout static chat for dock-only paint requests", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new CountingLines(10_000, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		tui.render(20);
+		const afterLayout = chat.renders;
+		for (let i = 0; i < 100; i++) {
+			tui.requestRender();
+			tui.render(20);
+		}
+
+		assert.strictEqual(chat.renders, afterLayout);
+	});
+
+	it("re-layouts chat when a nested box changes", () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const tui = new TUI(terminal);
+		const chat = new Box(0, 0);
+		const dock = new Lines(["DOCK"]);
+		chat.addChild(new Lines(["first"]));
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		tui.render(20);
+		chat.addChild(new Lines(["second"]));
+		const frame = tui.render(20);
+
+		assert.ok(frame.some((line) => line.startsWith("second")));
+	});
+
+	it("keeps one-column pinned frames within the terminal width", () => {
+		const terminal = new VirtualTerminal(1, 4);
+		const tui = new TUI(terminal);
+		const chat = new Lines(6, "C");
+		const dock = new Lines(["DOCK"]);
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		const frame = tui.render(1);
+		assert.ok(frame.every((line) => visibleWidth(line) <= 1));
+		assert.ok(frame.every((line) => lastVisible(line) !== "│" && lastVisible(line) !== "█"));
+	});
+
+	it("keeps the newest line visible when the viewport starts inside Kitty image rows", () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const tui = new TUI(terminal);
+		const image = "\x1b_Ga=T,r=3,i=1;AAAA\x1b\\";
+		const chat = new Lines([image, "", "", "new-1", "newest"]);
+		const dock = new Lines(["DOCK"]);
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+
+		const frame = tui.render(20);
+		assert.ok(frame.some((line) => line.startsWith("newest")));
+		assert.strictEqual(tui.getChatScroll(), 0);
 	});
 
 	it("scrollbar glyphs are not written back into cached chat lines", () => {

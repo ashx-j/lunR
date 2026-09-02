@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { assertNoEarendil, npmNameFor, rewritePackageJsonForNpm, rewriteWorkspaceSpecifiers } from "./lunr-npm-names.mjs";
 
 const packages = [
-	{ directory: "packages/ai", name: "@earendil-works/pi-ai" },
-	{ directory: "packages/tui", name: "@earendil-works/pi-tui" },
-	{ directory: "packages/agent", name: "@earendil-works/pi-agent-core" },
-	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
+	{ directory: "packages/ai", workspaceName: "@earendil-works/pi-ai" },
+	{ directory: "packages/tui", workspaceName: "@earendil-works/pi-tui" },
+	{ directory: "packages/agent", workspaceName: "@earendil-works/pi-agent-core" },
+	{ directory: "packages/coding-agent", workspaceName: "@earendil-works/pi-coding-agent" },
 ];
+const rewriteExtensions = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
 function printUsage() {
 	console.log(`Usage: node scripts/local-release.mjs [options]
 
-Builds and packs the publishable packages, then installs the tarballs into an
-isolated directory outside the repository for local release testing.
+Builds and stages the public @ashx-j/lunr packages, packs them, then installs
+those tarballs into isolated directories outside the repository.
 
 Options:
   --out <dir>          Output directory. Defaults to a new directory under ${tmpdir()}
@@ -30,69 +32,44 @@ Options:
 }
 
 function parseArgs() {
-	const options = {
-		force: false,
-		outDir: undefined,
-		skipBunInstall: false,
-		skipCheck: false,
-		skipInstall: false,
-		skipTest: false,
-	};
+	const options = { force: false, outDir: undefined, skipBunInstall: false, skipCheck: false, skipInstall: false, skipTest: false };
 	const args = process.argv.slice(2);
-
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--help") {
 			printUsage();
 			process.exit(0);
 		}
-		if (arg === "--force") {
-			options.force = true;
-			continue;
-		}
-		if (arg === "--skip-check") {
-			options.skipCheck = true;
-			continue;
-		}
-		if (arg === "--skip-test") {
-			options.skipTest = true;
-			continue;
-		}
-		if (arg === "--skip-install") {
-			options.skipInstall = true;
-			continue;
-		}
-		if (arg === "--skip-bun-install") {
-			options.skipBunInstall = true;
-			continue;
-		}
-		if (arg === "--out") {
+		if (arg === "--force") options.force = true;
+		else if (arg === "--skip-check") options.skipCheck = true;
+		else if (arg === "--skip-test") options.skipTest = true;
+		else if (arg === "--skip-install") options.skipInstall = true;
+		else if (arg === "--skip-bun-install") options.skipBunInstall = true;
+		else if (arg === "--out") {
 			const value = args[++i];
-			if (!value) {
-				throw new Error("--out requires a directory");
-			}
+			if (!value) throw new Error("--out requires a directory");
 			options.outDir = value;
-			continue;
-		}
-		throw new Error(`Unknown option: ${arg}`);
+		} else throw new Error(`Unknown option: ${arg}`);
 	}
-
 	return options;
+}
+
+function commandForPlatform(command) {
+	return process.platform === "win32" && (command === "npm" || command === "npx") ? `${command}.cmd` : command;
 }
 
 function run(command, args, options = {}) {
 	console.log(`$ ${[command, ...args].join(" ")}`);
-	const result = spawnSync(command, args, {
+	const result = spawnSync(commandForPlatform(command), args, {
 		cwd: options.cwd,
 		encoding: "utf8",
 		shell: process.platform === "win32",
-		stdio: options.capture ? ["inherit", "pipe", "inherit"] : "inherit",
+		stdio: options.capture ? ["inherit", "pipe", "pipe"] : "inherit",
 	});
-
 	if (result.status !== 0) {
-		throw new Error(`Command failed: ${[command, ...args].join(" ")}`);
+		const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+		throw new Error(`Command failed: ${[command, ...args].join(" ")}${output ? `\n${output}` : ""}`);
 	}
-
 	return result.stdout ?? "";
 }
 
@@ -101,7 +78,7 @@ function readPackageJson(directory) {
 }
 
 function commandExists(command) {
-	return spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0;
+	return spawnSync(commandForPlatform(command), ["--version"], { stdio: "ignore", shell: process.platform === "win32" }).status === 0;
 }
 
 function isInsidePath(child, parent) {
@@ -110,25 +87,81 @@ function isInsidePath(child, parent) {
 }
 
 function prepareOutputDirectory(options, repoRoot) {
-	if (!options.outDir) {
-		return mkdtempSync(join(tmpdir(), "pi-local-release-"));
-	}
-
+	if (!options.outDir) return mkdtempSync(join(tmpdir(), "lunr-local-release-"));
 	const outDir = resolve(options.outDir);
-
-	if (isInsidePath(outDir, repoRoot)) {
-		throw new Error(`Output directory must be outside the repository: ${outDir}`);
-	}
-
+	if (isInsidePath(outDir, repoRoot)) throw new Error(`Output directory must be outside the repository: ${outDir}`);
 	if (existsSync(outDir)) {
-		if (!options.force) {
-			throw new Error(`Output directory already exists. Use --force to replace it: ${outDir}`);
-		}
+		if (!options.force) throw new Error(`Output directory already exists. Use --force to replace it: ${outDir}`);
 		rmSync(outDir, { force: true, recursive: true });
 	}
-
 	mkdirSync(outDir, { recursive: true });
 	return outDir;
+}
+
+function shouldRewrite(filePath) {
+	const normalized = filePath.replaceAll("\\", "/");
+	if (normalized.includes("/node_modules/")) return false;
+	return [...rewriteExtensions].some((extension) => normalized.endsWith(extension));
+}
+
+function rewriteTree(root) {
+	const stack = [root];
+	while (stack.length > 0) {
+		const directory = stack.pop();
+		for (const name of readdirSync(directory)) {
+			const file = join(directory, name);
+			if (statSync(file).isDirectory()) {
+				if (name !== "node_modules") stack.push(file);
+				continue;
+			}
+			if (!shouldRewrite(file)) continue;
+			const before = readFileSync(file, "utf8");
+			const after = rewriteWorkspaceSpecifiers(before);
+			if (after !== before) writeFileSync(file, after, "utf8");
+		}
+	}
+}
+
+function stagePackage(pkg, stagingRoot) {
+	const sourcePackage = readPackageJson(pkg.directory);
+	if (sourcePackage.name !== pkg.workspaceName) {
+		throw new Error(`${pkg.directory}/package.json has name ${sourcePackage.name}, expected ${pkg.workspaceName}`);
+	}
+	const publicName = npmNameFor(pkg.workspaceName);
+	if (!publicName) throw new Error(`Missing public package mapping for ${pkg.workspaceName}`);
+	const stageDirectory = join(stagingRoot, publicName.slice("@ashx-j/".length));
+	cpSync(pkg.directory, stageDirectory, {
+		recursive: true,
+		filter: (source) => {
+			const normalized = source.replaceAll("\\", "/");
+			return !normalized.includes("/node_modules") && !normalized.includes("/binaries") && !normalized.endsWith("npm-shrinkwrap.json");
+		},
+	});
+	const stagedPackage = rewritePackageJsonForNpm(sourcePackage);
+	writeFileSync(join(stageDirectory, "package.json"), `${JSON.stringify(stagedPackage, null, "\t")}\n`);
+	rewriteTree(stageDirectory);
+	assertNoEarendil(readFileSync(join(stageDirectory, "package.json"), "utf8"), `${publicName} package.json`);
+	const mainFile = join(stageDirectory, "dist", "main.js");
+	if (existsSync(mainFile)) assertNoEarendil(readFileSync(mainFile, "utf8"), `${publicName} dist/main.js`);
+	return { directory: stageDirectory, name: publicName, version: stagedPackage.version };
+}
+
+function packPackage(pkg, tarballDirectory) {
+	const output = run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", tarballDirectory], {
+		capture: true,
+		cwd: pkg.directory,
+	});
+	const packed = JSON.parse(output)[0];
+	return join(tarballDirectory, packed.filename);
+}
+
+function buildPackages(repoRoot) {
+	for (const directory of ["tui", "ai", "agent"]) {
+		run("npx", ["tsgo", "-p", `packages/${directory}/tsconfig.build.json`], { cwd: repoRoot });
+	}
+	run("npm", ["--prefix", "packages/coding-agent", "run", "build"], { cwd: repoRoot });
+	run("npm", ["--prefix", "packages/orchestrator", "run", "build"], { cwd: repoRoot });
+	run("git", ["diff", "--exit-code", "--", "packages/ai"], { cwd: repoRoot });
 }
 
 function fileSpecifier(fromDirectory, file) {
@@ -144,141 +177,83 @@ function currentBinaryPlatform() {
 }
 
 function buildBunBinaryRelease(targetDirectory, archiveDirectory) {
-	if (!commandExists("bun")) {
-		throw new Error("Bun is required for the local binary release build.");
-	}
+	if (!commandExists("bun")) throw new Error("Bun is required for the local binary release build.");
 	const platform = currentBinaryPlatform();
 	const binaryBuildDirectory = join(archiveDirectory, "binary-build");
-	run("./scripts/build-binaries.sh", [
-		"--skip-install",
-		"--skip-deps",
-		"--skip-build",
-		"--platform",
-		platform,
-		"--out",
-		binaryBuildDirectory,
-	]);
+	run("./scripts/build-binaries.sh", ["--skip-install", "--skip-deps", "--skip-build", "--platform", platform, "--out", binaryBuildDirectory]);
 	rmSync(targetDirectory, { force: true, recursive: true });
 	cpSync(join(binaryBuildDirectory, platform), targetDirectory, { recursive: true });
-	const archiveName = platform.startsWith("windows-") ? `pi-${platform}.zip` : `pi-${platform}.tar.gz`;
+	const archiveName = platform.startsWith("windows-") ? `lunr-${platform}.zip` : `lunr-${platform}.tar.gz`;
 	cpSync(join(binaryBuildDirectory, archiveName), join(archiveDirectory, archiveName));
 	return platform;
 }
 
-function createPiShim(installDirectory) {
+function createLunrShim(installDirectory) {
 	const binDirectory = join(installDirectory, "node_modules", ".bin");
 	if (process.platform === "win32") {
-		if (existsSync(join(binDirectory, "pi.cmd"))) {
-			writeFileSync(join(installDirectory, "pi.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.cmd" %*\r\n');
-			writeFileSync(join(installDirectory, "pi.ps1"), '& "$PSScriptRoot/node_modules/.bin/pi.ps1" @args\n');
-			return;
-		}
-		writeFileSync(join(installDirectory, "pi.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.exe" %*\r\n');
-		writeFileSync(join(installDirectory, "pi.ps1"), '& "$PSScriptRoot/node_modules/.bin/pi.exe" @args\n');
+		writeFileSync(join(installDirectory, "lunr.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\lunr.cmd" %*\r\n');
+		writeFileSync(join(installDirectory, "lunr.ps1"), '& "$PSScriptRoot/node_modules/.bin/lunr.ps1" @args\n');
 		return;
 	}
-	symlinkSync(join("node_modules", ".bin", "pi"), join(installDirectory, "pi"));
+	symlinkSync(join("node_modules", ".bin", "lunr"), join(installDirectory, "lunr"));
 }
 
-function packPackage(pkg, tarballDirectory) {
-	const packageJson = readPackageJson(pkg.directory);
-	if (packageJson.name !== pkg.name) {
-		throw new Error(`${pkg.directory}/package.json has name ${packageJson.name}, expected ${pkg.name}`);
-	}
-
-	const output = run("npm", ["pack", "--json", "--pack-destination", tarballDirectory], {
-		capture: true,
-		cwd: pkg.directory,
-	});
-	const packed = JSON.parse(output)[0];
-	return join(tarballDirectory, packed.filename);
+function smokeInstall(installDirectory) {
+	const shim = join(installDirectory, process.platform === "win32" ? "lunr.cmd" : "lunr");
+	run(shim, ["--version"], { cwd: installDirectory });
+	run("node", ["--input-type=module", "--eval", "await import('@ashx-j/lunr'); await import('@ashx-j/lunr-ai');"], { cwd: installDirectory });
 }
 
 const options = parseArgs();
 const repoRoot = process.cwd();
-const rootPackageJson = readPackageJson(repoRoot);
-
-if (rootPackageJson.name !== "pi-monorepo") {
-	throw new Error("Run this script from the repository root");
-}
+if (readPackageJson(repoRoot).name !== "lunr") throw new Error("Run this script from the lunR repository root");
 
 const outDir = prepareOutputDirectory(options, repoRoot);
 const tarballDirectory = join(outDir, "tarballs");
+const stagingDirectory = join(outDir, "staging");
 const nodeInstallDirectory = join(outDir, "node");
 const bunInstallDirectory = join(outDir, "bun-install");
 const binaryDirectory = join(outDir, "bun");
 mkdirSync(tarballDirectory, { recursive: true });
+mkdirSync(stagingDirectory, { recursive: true });
 
-if (!options.skipCheck) {
-	run("npm", ["run", "check"], { cwd: repoRoot });
-}
+if (!options.skipCheck) run("npm", ["run", "check"], { cwd: repoRoot });
+if (!options.skipTest) run("./test.sh", [], { cwd: repoRoot });
+buildPackages(repoRoot);
 
-if (!options.skipTest) {
-	run("./test.sh", [], { cwd: repoRoot });
-}
-
-for (const pkg of packages) {
-	run("npm", ["run", "clean"], { cwd: pkg.directory });
-	run("npm", ["run", "build"], { cwd: pkg.directory });
-}
-
-const tarballs = new Map();
-for (const pkg of packages) {
-	const tarball = packPackage(pkg, tarballDirectory);
-	tarballs.set(pkg.name, tarball);
-}
+const stagedPackages = packages.map((pkg) => stagePackage(pkg, stagingDirectory));
+const versions = new Set(stagedPackages.map((pkg) => pkg.version));
+if (versions.size !== 1) throw new Error(`Release packages are not lockstep versioned: ${[...versions].join(", ")}`);
+const tarballs = new Map(stagedPackages.map((pkg) => [pkg.name, packPackage(pkg, tarballDirectory)]));
 
 let binaryPlatform;
 if (!options.skipInstall) {
 	binaryPlatform = buildBunBinaryRelease(binaryDirectory, outDir);
-
 	mkdirSync(nodeInstallDirectory, { recursive: true });
-	const dependencies = Object.fromEntries(
-		packages.map((pkg) => [pkg.name, fileSpecifier(nodeInstallDirectory, tarballs.get(pkg.name))]),
-	);
-	const installPackageJson = `${JSON.stringify({ private: true, dependencies, overrides: dependencies }, undefined, "\t")}\n`;
-	writeFileSync(join(nodeInstallDirectory, "package.json"), installPackageJson);
-
+	const dependencies = Object.fromEntries([...tarballs].map(([name, file]) => [name, fileSpecifier(nodeInstallDirectory, file)]));
+	writeFileSync(join(nodeInstallDirectory, "package.json"), `${JSON.stringify({ private: true, type: "module", dependencies, overrides: dependencies }, null, "\t")}\n`);
 	run("npm", ["install", "--omit=dev", "--ignore-scripts"], { cwd: nodeInstallDirectory });
-	createPiShim(nodeInstallDirectory);
+	createLunrShim(nodeInstallDirectory);
+	smokeInstall(nodeInstallDirectory);
 
 	if (!options.skipBunInstall) {
-		if (!commandExists("bun")) {
-			throw new Error("Bun is required for the isolated Bun install. Use --skip-bun-install to skip it.");
-		}
+		if (!commandExists("bun")) throw new Error("Bun is required for the isolated Bun install. Use --skip-bun-install to skip it.");
 		mkdirSync(bunInstallDirectory, { recursive: true });
-		const bunDependencies = Object.fromEntries(
-			packages.map((pkg) => [pkg.name, fileSpecifier(bunInstallDirectory, tarballs.get(pkg.name))]),
-		);
-		writeFileSync(join(bunInstallDirectory, "package.json"), `${JSON.stringify({ private: true, dependencies: bunDependencies, overrides: bunDependencies }, undefined, "\t")}\n`);
+		const bunDependencies = Object.fromEntries([...tarballs].map(([name, file]) => [name, fileSpecifier(bunInstallDirectory, file)]));
+		writeFileSync(join(bunInstallDirectory, "package.json"), `${JSON.stringify({ private: true, type: "module", dependencies: bunDependencies, overrides: bunDependencies }, null, "\t")}\n`);
 		run("bun", ["install", "--production", "--ignore-scripts"], { cwd: bunInstallDirectory });
-		createPiShim(bunInstallDirectory);
+		createLunrShim(bunInstallDirectory);
+		smokeInstall(bunInstallDirectory);
 	}
 }
 
 console.log("\nLocal release artifacts created:");
 console.log(`  ${outDir}`);
-console.log("\nTarballs:");
-for (const tarball of tarballs.values()) {
-	console.log(`  ${tarball}`);
-}
-
+console.log("\nPublic tarballs:");
+for (const [name, tarball] of tarballs) console.log(`  ${name}: ${tarball}`);
 if (!options.skipInstall) {
-	console.log("\nLocal Bun binary release:");
-	console.log(`  ${binaryDirectory}`);
-	console.log(`  ${join(outDir, `pi-${binaryPlatform}.${String(binaryPlatform).startsWith("windows-") ? "zip" : "tar.gz"}`)}`);
-	console.log("\nRun the local Bun binary release from outside the repository:");
-	console.log(`  ${join(binaryDirectory, String(binaryPlatform).startsWith("windows-") ? "pi.exe" : "pi")} --help`);
-
-	console.log("\nIsolated npm install:");
-	console.log(`  ${nodeInstallDirectory}`);
-	console.log("\nRun the locally packed npm CLI from outside the repository:");
-	console.log(`  ${join(nodeInstallDirectory, process.platform === "win32" ? "pi.cmd" : "pi")} --help`);
-
-	if (!options.skipBunInstall) {
-		console.log("\nIsolated Bun package install:");
-		console.log(`  ${bunInstallDirectory}`);
-		console.log("\nRun the locally packed Bun package CLI from outside the repository:");
-		console.log(`  ${join(bunInstallDirectory, process.platform === "win32" ? "pi.cmd" : "pi")} --help`);
-	}
+	const extension = String(binaryPlatform).startsWith("windows-") ? "zip" : "tar.gz";
+	console.log(`\nBinary archive: ${join(outDir, `lunr-${binaryPlatform}.${extension}`)}`);
+	console.log(`Isolated npm install: ${nodeInstallDirectory}`);
+	if (!options.skipBunInstall) console.log(`Isolated Bun install: ${bunInstallDirectory}`);
 }

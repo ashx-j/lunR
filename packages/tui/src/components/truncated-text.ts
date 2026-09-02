@@ -1,5 +1,5 @@
 import type { Component } from "../tui.ts";
-import { truncateToWidth, visibleWidth } from "../utils.ts";
+import { sanitizeTerminalOutput, truncateToWidth, visibleWidth } from "../utils.ts";
 
 /**
  * Text component that truncates to fit viewport width
@@ -34,10 +34,11 @@ export class TruncatedText implements Component {
 		const availableWidth = Math.max(1, width - this.paddingX * 2);
 
 		// Take only the first line (stop at newline)
-		let singleLineText = this.text;
-		const newlineIndex = this.text.indexOf("\n");
+		const safeText = sanitizeTerminalOutput(this.text);
+		let singleLineText = safeText;
+		const newlineIndex = safeText.indexOf("\n");
 		if (newlineIndex !== -1) {
-			singleLineText = this.text.substring(0, newlineIndex);
+			singleLineText = safeText.substring(0, newlineIndex);
 		}
 
 		// Truncate text if needed (accounting for ANSI codes)

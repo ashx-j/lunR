@@ -9,7 +9,7 @@
 # Options:
 #   --skip-install      Skip npm ci
 #   --skip-deps         Skip installing cross-platform dependencies
-#   --skip-build        Skip npm run build
+#   --skip-build        Skip the offline package build
 #   --platform <name>   Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64)
 #   --out <dir>         Output directory (default: packages/coding-agent/binaries)
 #
@@ -108,8 +108,13 @@ else
 fi
 
 if [[ "$SKIP_BUILD" == "false" ]]; then
-    echo "==> Building all packages..."
-    npm run build
+    echo "==> Building all packages without catalog generation..."
+    npx tsgo -p packages/tui/tsconfig.build.json
+    npx tsgo -p packages/ai/tsconfig.build.json
+    npx tsgo -p packages/agent/tsconfig.build.json
+    npm --prefix packages/coding-agent run build
+    npm --prefix packages/orchestrator run build
+    git diff --exit-code -- packages/ai
 else
     echo "==> Skipping package build (--skip-build)"
 fi

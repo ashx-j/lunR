@@ -9,6 +9,7 @@ import {
 	getGraphemeSegmenter,
 	getWordSegmenter,
 	isWhitespaceChar,
+	sanitizeTerminalText,
 	truncateToWidth,
 	visibleWidth,
 } from "../utils.ts";
@@ -1136,9 +1137,10 @@ export class Editor implements Component, Focusable {
 	 * Normalize text for editor storage:
 	 * - Normalize line endings (\r\n and \r -> \n)
 	 * - Expand tabs to 4 spaces
+	 * - Remove terminal control sequences before storing untrusted text
 	 */
 	private normalizeText(text: string): string {
-		return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "    ");
+		return sanitizeTerminalText(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "    ");
 	}
 
 	/**

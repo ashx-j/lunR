@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { setKittyProtocolActive } from "./keys.ts";
 import { isNativeModifierPressed } from "./native-modifiers.ts";
 import { StdinBuffer } from "./stdin-buffer.ts";
+import { sanitizeTerminalText } from "./utils.ts";
 
 const cjsRequire = createRequire(import.meta.url);
 
@@ -194,7 +195,7 @@ export class ProcessTerminal implements Terminal {
 		// Re-wrap paste content with bracketed paste markers for existing editor handling
 		this.stdinBuffer.on("paste", (content) => {
 			if (this.inputHandler) {
-				this.inputHandler(`\x1b[200~${content}\x1b[201~`);
+				this.inputHandler(`\x1b[200~${sanitizeTerminalText(content)}\x1b[201~`);
 			}
 		});
 

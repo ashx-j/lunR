@@ -229,6 +229,11 @@ describe("StdinBuffer", () => {
 			assert.deepStrictEqual(emittedSequences, ["\x1b[224u"]);
 		});
 
+		it("should drop an astral raw duplicate after a matching Kitty printable sequence", () => {
+			processInput("\x1b[128512u😀");
+			assert.deepStrictEqual(emittedSequences, ["\x1b[128512u"]);
+		});
+
 		it("should drop raw duplicate character after matching Kitty printable sequence across chunks", () => {
 			processInput("\x1b[64u");
 			processInput("@");

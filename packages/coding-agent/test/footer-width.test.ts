@@ -1,3 +1,4 @@
+import { sep } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
@@ -21,20 +22,18 @@ function createSession(options: {
 	reasoning?: boolean;
 	thinkingLevel?: string;
 	usage?: AssistantUsage;
+	usages?: AssistantUsage[];
+	onGetEntries?: () => void;
 }): AgentSession {
-	const usage = options.usage;
-	const entries =
-		usage === undefined
-			? []
-			: [
-					{
-						type: "message",
-						message: {
-							role: "assistant",
-							usage,
-						},
-					},
-				];
+	const usages = options.usages ?? (options.usage ? [options.usage] : []);
+	const entries = usages.map((usage, index) => ({
+		id: `entry-${index}`,
+		type: "message",
+		message: {
+			role: "assistant",
+			usage,
+		},
+	}));
 
 	const session = {
 		state: {
@@ -47,7 +46,11 @@ function createSession(options: {
 			thinkingLevel: options.thinkingLevel ?? "off",
 		},
 		sessionManager: {
-			getEntries: () => entries,
+			getEntries: () => {
+				options.onGetEntries?.();
+				return entries;
+			},
+			getLeafId: () => entries.at(-1)?.id ?? null,
 			getSessionName: () => options.sessionName,
 			getCwd: () => "/tmp/project",
 		},
@@ -82,7 +85,7 @@ describe("formatCwdForFooter", () => {
 
 	it("abbreviates the home directory and descendants", () => {
 		expect(formatCwdForFooter("/home/user", "/home/user")).toBe("~");
-		expect(formatCwdForFooter("/home/user/project", "/home/user")).toBe("~/project");
+		expect(formatCwdForFooter("/home/user/project", "/home/user")).toBe(`~${sep}project`);
 	});
 });
 
@@ -124,6 +127,21 @@ describe("FooterComponent width handling", () => {
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("traverses an unchanged transcript only once across repeated renders", () => {
+		let traversals = 0;
+		const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } };
+		const session = createSession({
+			sessionName: "",
+			usages: Array.from({ length: 20_000 }, () => usage),
+			onGetEntries: () => traversals++,
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		for (let i = 0; i < 300; i++) footer.render(120);
+
+		expect(traversals).toBe(1);
 	});
 
 	it("shows the latest cache hit rate when cache usage is present", () => {

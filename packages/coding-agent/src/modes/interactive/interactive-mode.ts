@@ -7572,9 +7572,12 @@ export class InteractiveMode {
 	// lunr: /processes — view and manage background processes.
 	private showProcessesSelector(): void {
 		this.showSelector((done) => {
-			const component = new ProcessesSelectorComponent(() => {
-				done();
-			});
+			const component = new ProcessesSelectorComponent(
+				() => {
+					done();
+				},
+				() => this.ui.requestRender(),
+			);
 			return { component, focus: component };
 		});
 	}

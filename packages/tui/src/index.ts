@@ -127,4 +127,11 @@ export {
 	TUI,
 } from "./tui.ts";
 // Utilities
-export { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.ts";
+export {
+	sanitizeTerminalOutput,
+	sanitizeTerminalText,
+	sliceByColumn,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "./utils.ts";

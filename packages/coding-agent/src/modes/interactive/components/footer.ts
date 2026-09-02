@@ -46,10 +46,22 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
  * Footer component that shows pwd, token stats, and context usage.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
  */
+type UsageTotals = {
+	totalInput: number;
+	totalOutput: number;
+	totalCacheRead: number;
+	totalCacheWrite: number;
+	totalCost: number;
+	latestCacheHitRate: number | undefined;
+};
+
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	private usageCache:
+		| { manager: AgentSession["sessionManager"]; leafId: string | null; totals: UsageTotals }
+		| undefined;
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
@@ -58,6 +70,7 @@ export class FooterComponent implements Component {
 
 	setSession(session: AgentSession): void {
 		this.session = session;
+		this.usageCache = undefined;
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
@@ -80,31 +93,41 @@ export class FooterComponent implements Component {
 		// Git watcher cleanup handled by provider
 	}
 
+	private getUsageTotals(): UsageTotals {
+		const manager = this.session.sessionManager;
+		const leafId = manager.getLeafId();
+		if (this.usageCache?.manager === manager && this.usageCache.leafId === leafId) {
+			return this.usageCache.totals;
+		}
+
+		const totals: UsageTotals = {
+			totalInput: 0,
+			totalOutput: 0,
+			totalCacheRead: 0,
+			totalCacheWrite: 0,
+			totalCost: 0,
+			latestCacheHitRate: undefined,
+		};
+		for (const entry of manager.getEntries()) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			totals.totalInput += entry.message.usage.input;
+			totals.totalOutput += entry.message.usage.output;
+			totals.totalCacheRead += entry.message.usage.cacheRead;
+			totals.totalCacheWrite += entry.message.usage.cacheWrite;
+			totals.totalCost += entry.message.usage.cost.total;
+			const latestPromptTokens =
+				entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
+			totals.latestCacheHitRate =
+				latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
+		}
+		this.usageCache = { manager, leafId, totals };
+		return totals;
+	}
+
 	render(width: number): string[] {
 		const state = this.session.state;
-
-		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-		let totalInput = 0;
-		let totalOutput = 0;
-		let totalCacheRead = 0;
-		let totalCacheWrite = 0;
-		let totalCost = 0;
-		let latestCacheHitRate: number | undefined;
-
-		for (const entry of this.session.sessionManager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				totalInput += entry.message.usage.input;
-				totalOutput += entry.message.usage.output;
-				totalCacheRead += entry.message.usage.cacheRead;
-				totalCacheWrite += entry.message.usage.cacheWrite;
-				totalCost += entry.message.usage.cost.total;
-
-				const latestPromptTokens =
-					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-				latestCacheHitRate =
-					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
-			}
-		}
+		const { totalInput, totalOutput, totalCacheRead, totalCacheWrite, totalCost, latestCacheHitRate } =
+			this.getUsageTotals();
 
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.
