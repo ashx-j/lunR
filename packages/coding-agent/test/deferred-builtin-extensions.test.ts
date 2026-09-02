@@ -2,16 +2,17 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuthStorage } from "../src/core/auth-storage.ts";
-import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
-import { ModelRuntime } from "../src/core/model-runtime.ts";
-import { SessionManager } from "../src/core/session-manager.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
 import {
 	DEFERRED_BUILTIN_EXTENSION_NAMES,
 	lightBuiltinExtensions,
 	loadAllBuiltinExtensions,
+	loadDeferredBuiltinExtensionsResult,
 } from "../src/builtin-extensions/index.ts";
+import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
 
 describe("deferred builtin extensions", () => {
 	const dirs: string[] = [];
@@ -44,6 +45,25 @@ describe("deferred builtin extensions", () => {
 		expect(names).toContain("narumiruna-pi-goal");
 		expect(names).toContain("lunr-cron");
 		expect(names).toContain("pi-mcp-adapter");
+	});
+
+	it("loads deferred builtins independently while preserving roster order", async () => {
+		const first = vi.fn();
+		const third = vi.fn();
+		const result = await loadDeferredBuiltinExtensionsResult([
+			{ name: "first", load: async () => ({ default: first }) },
+			{ name: "broken", load: async () => Promise.reject(new Error("import exploded")) },
+			{ name: "third", load: async () => ({ default: third }) },
+		]);
+
+		expect(result.extensions.map((entry) => ("name" in entry ? entry.name : ""))).toEqual(["first", "third"]);
+		expect(result.failures).toMatchObject([{ name: "broken", error: { message: "import exploded" } }]);
+		expect(result.roster.map((entry) => ("name" in entry ? entry.name : ""))).toEqual(["first", "broken", "third"]);
+		expect(() => {
+			const failed = result.roster[1];
+			if (typeof failed === "function") failed({} as never);
+			else failed.factory({} as never);
+		}).toThrow("Deferred builtin import failed: import exploded");
 	});
 
 	it("attaches a late inline factory after first bind without restarting earlier extensions", async () => {

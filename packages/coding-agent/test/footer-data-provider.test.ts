@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "child_process";
+import { execFile } from "child_process";
 import { existsSync, type FSWatcher, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -33,15 +33,6 @@ vi.mock("child_process", () => ({
 			setTimeout(() => callback(new Error("unsupported"), "", ""), 0);
 		},
 	),
-	spawnSync: vi.fn((_command: string, args: readonly string[]) => {
-		if (args[1] === "symbolic-ref") {
-			return { status: resolvedBranch ? 0 : 1, stdout: resolvedBranch ? `${resolvedBranch}\n` : "", stderr: "" };
-		}
-		if (args.includes("diff") && args.includes("--numstat")) {
-			return { status: 0, stdout: "3\t1\tfoo.ts\n", stderr: "" };
-		}
-		return { status: 1, stdout: "", stderr: "" };
-	}),
 }));
 
 import { FooterDataProvider, parseGitNumstat } from "../src/core/footer-data-provider.ts";
@@ -109,7 +100,6 @@ describe("FooterDataProvider reftable branch detection", () => {
 		originalCwd = process.cwd();
 		tempDir = mkdtempSync(join(tmpdir(), "footer-data-provider-"));
 		resolvedBranch = "main";
-		vi.mocked(spawnSync).mockClear();
 		vi.mocked(execFile).mockClear();
 	});
 
@@ -120,7 +110,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 
-	it("uses HEAD directly in a regular repo from a nested directory", () => {
+	it("never starts git synchronously from render-time getters", async () => {
 		const repoDir = createPlainRepo(tempDir);
 		const nestedDir = join(repoDir, "src", "nested");
 		mkdirSync(nestedDir, { recursive: true });
@@ -128,55 +118,59 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider(nestedDir);
 		try {
-			expect(provider.getGitBranch()).toBe("main");
+			expect(provider.getGitBranch()).toBeNull();
+			expect(provider.getGitDiffstat()).toBeNull();
+			expect(vi.mocked(execFile)).not.toHaveBeenCalled();
+			await waitFor(() => provider.getGitBranch() === "main" && provider.getGitDiffstat()?.added === 3);
 			expect(provider.getGitDiffstat()).toEqual({ added: 3, removed: 1 });
-			expect(vi.mocked(spawnSync)).toHaveBeenCalled();
 		} finally {
 			provider.dispose();
 		}
 	});
 
-	it("resolves the branch via git when HEAD is .invalid in a reftable repo", () => {
+	it("resolves the branch via async git when HEAD is .invalid in a reftable repo", async () => {
 		const repoDir = createPlainReftableRepo(tempDir);
 		process.chdir(repoDir);
 
 		const provider = new FooterDataProvider(repoDir);
 		try {
-			expect(provider.getGitBranch()).toBe("main");
-			expect(vi.mocked(spawnSync)).toHaveBeenCalledWith(
+			expect(provider.getGitBranch()).toBeNull();
+			await waitFor(() => provider.getGitBranch() === "main");
+			expect(vi.mocked(execFile)).toHaveBeenCalledWith(
 				"git",
 				["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
 				expect.objectContaining({
 					cwd: expect.stringMatching(/repo$/),
 					encoding: "utf8",
-					stdio: ["ignore", "pipe", "ignore"],
+					timeout: 3000,
 				}),
+				expect.any(Function),
 			);
 		} finally {
 			provider.dispose();
 		}
 	});
 
-	it("resolves the branch via git in a reftable-backed worktree", () => {
+	it("resolves the branch via git in a reftable-backed worktree", async () => {
 		const { worktreeDir } = createReftableWorktree(tempDir);
 		process.chdir(worktreeDir);
 
 		const provider = new FooterDataProvider(worktreeDir);
 		try {
-			expect(provider.getGitBranch()).toBe("main");
+			await waitFor(() => provider.getGitBranch() === "main");
 		} finally {
 			provider.dispose();
 		}
 	});
 
-	it("treats an unresolved .invalid reftable HEAD as detached", () => {
+	it("treats an unresolved .invalid reftable HEAD as detached", async () => {
 		const repoDir = createPlainReftableRepo(tempDir);
 		process.chdir(repoDir);
 		resolvedBranch = "";
 
 		const provider = new FooterDataProvider(repoDir);
 		try {
-			expect(provider.getGitBranch()).toBe("detached");
+			await waitFor(() => provider.getGitBranch() === "detached");
 		} finally {
 			provider.dispose();
 		}
@@ -188,8 +182,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider(worktreeDir);
 		try {
-			expect(provider.getGitBranch()).toBe("main");
-			vi.mocked(spawnSync).mockClear();
+			await waitFor(() => provider.getGitBranch() === "main");
+			vi.mocked(execFile).mockClear();
 			const onBranchChange = vi.fn();
 			provider.onBranchChange(onBranchChange);
 
@@ -197,7 +191,6 @@ describe("FooterDataProvider reftable branch detection", () => {
 			await waitFor(() => vi.mocked(execFile).mock.calls.length >= 2);
 
 			expect(vi.mocked(execFile).mock.calls.length).toBeGreaterThanOrEqual(2);
-			expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
 			expect(provider.getGitBranch()).toBe("main");
 			expect(onBranchChange).not.toHaveBeenCalled();
 		} finally {
@@ -211,7 +204,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider(worktreeDir);
 		try {
-			expect(provider.getGitBranch()).toBe("main");
+			await waitFor(() => provider.getGitBranch() === "main");
 			vi.mocked(execFile).mockClear();
 
 			writeFileSync(join(reftableDir, "tables.list"), "1\n");
@@ -232,7 +225,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider(worktreeDir);
 		try {
-			expect(provider.getGitBranch()).toBe("main");
+			await waitFor(() => provider.getGitBranch() === "main");
 			resolvedBranch = "foo";
 			const onBranchChange = vi.fn();
 			provider.onBranchChange(onBranchChange);
@@ -249,12 +242,13 @@ describe("FooterDataProvider reftable branch detection", () => {
 	});
 
 	it("retries git watchers 5 seconds after an async fs.watch error", async () => {
-		vi.useFakeTimers();
 		const repoDir = createPlainRepo(tempDir);
 		process.chdir(repoDir);
 
 		const provider = new FooterDataProvider(repoDir);
 		try {
+			await waitFor(() => provider.getGitBranch() === "main");
+			vi.useFakeTimers();
 			const providerWithInternals = provider as unknown as {
 				headWatcher: FSWatcher | null;
 			};

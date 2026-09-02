@@ -141,7 +141,7 @@ export async function createAgentSessionServices(
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
 	const modelRuntime =
 		options.modelRuntime ??
-		(await ModelRuntime.create({
+		(await ModelRuntime.createForAgentSession({
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 		}));

@@ -41,10 +41,18 @@ export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("lunr-skill-creator", lunrSkillCreator),
 ];
 
-const DEFERRED_BUILTIN_LOADERS: Array<{
+export interface DeferredBuiltinLoader {
 	name: string;
 	load: () => Promise<{ default: unknown }>;
-}> = [
+}
+
+export interface DeferredBuiltinLoadResult {
+	extensions: InlineExtension[];
+	failures: Array<{ name: string; error: Error }>;
+	roster: InlineExtension[];
+}
+
+const DEFERRED_BUILTIN_LOADERS: DeferredBuiltinLoader[] = [
 	{ name: "pi-ollama-cloud", load: () => import("./pi-ollama-cloud/index.ts") },
 	{ name: "narumiruna-pi-goal", load: () => import("./narumiruna-pi-goal/src/goal.ts") },
 	{ name: "lunr-cron", load: () => import("./lunr-cron.ts") },
@@ -61,15 +69,35 @@ export const DEFERRED_BUILTIN_EXTENSION_NAMES = DEFERRED_BUILTIN_LOADERS.map((en
 /** Flags registered only after deferred builtins attach. Do not fail CLI parse for these. */
 export const DEFERRED_BUILTIN_FLAGS = ["mcp-config"] as const;
 
-/** Import MCP / LSP / web-access / intercom / subagents only when needed. */
+function failedImportExtension(name: string, error: Error): InlineExtension {
+	return ext(name, () => {
+		throw new Error(`Deferred builtin import failed: ${error.message}`, { cause: error });
+	});
+}
+
+export async function loadDeferredBuiltinExtensionsResult(
+	loaders: readonly DeferredBuiltinLoader[] = DEFERRED_BUILTIN_LOADERS,
+): Promise<DeferredBuiltinLoadResult> {
+	const settled = await Promise.allSettled(loaders.map(({ load }) => load()));
+	const extensions: InlineExtension[] = [];
+	const failures: Array<{ name: string; error: Error }> = [];
+	const roster = settled.map((result, index) => {
+		const name = loaders[index].name;
+		if (result.status === "fulfilled") {
+			const extension = ext(name, result.value.default);
+			extensions.push(extension);
+			return extension;
+		}
+		const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+		failures.push({ name, error });
+		return failedImportExtension(name, error);
+	});
+	return { extensions, failures, roster };
+}
+
+/** Import deferred builtins independently and preserve their configured attachment order. */
 export async function loadDeferredBuiltinExtensions(): Promise<InlineExtension[]> {
-	const loaded = await Promise.all(
-		DEFERRED_BUILTIN_LOADERS.map(async ({ name, load }) => {
-			const module = await load();
-			return ext(name, module.default);
-		}),
-	);
-	return loaded;
+	return (await loadDeferredBuiltinExtensionsResult()).roster;
 }
 
 /** Full roster. Print / RPC / gateway still need every factory before the first turn. */
