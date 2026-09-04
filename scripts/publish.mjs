@@ -133,9 +133,9 @@ async function isPublished(name, version) {
 }
 
 async function waitForPublished(name, version) {
-	for (let attempt = 1; attempt <= 12; attempt++) {
+	for (let attempt = 1; attempt <= 60; attempt++) {
 		if (await isPublished(name, version)) return;
-		if (attempt < 12) await new Promise((resolve) => setTimeout(resolve, 5000));
+		if (attempt < 60) await new Promise((resolve) => setTimeout(resolve, 5000));
 	}
 	throw new Error(`${name}@${version} was not visible on npm after publication`);
 }
@@ -241,6 +241,15 @@ await (async () => {
 		console.log("All packages validated; starting publication.\n");
 
 		for (const pkg of packageStates) {
+			const isDevCli = options.channel === "dev" && pkg.workspaceName === "@earendil-works/pi-coding-agent";
+			if (isDevCli) {
+				const internalPackages = packageStates.filter(
+					(candidate) => candidate.workspaceName !== "@earendil-works/pi-coding-agent",
+				);
+				await Promise.all(
+					internalPackages.map((candidate) => waitForPublished(candidate.publishedName, candidate.version)),
+				);
+			}
 			if (pkg.published) {
 				console.log(`Skipping ${pkg.publishedName}@${pkg.version}: already published\n`);
 				continue;
@@ -249,7 +258,7 @@ await (async () => {
 			const publishArgs = ["publish", "--access", "public", "--ignore-scripts"];
 			if (pkg.publishTag) publishArgs.push("--tag", pkg.publishTag);
 			run("npm", publishArgs, { cwd: pkg.stageDir });
-			await waitForPublished(pkg.publishedName, pkg.version);
+			if (options.channel !== "dev" || isDevCli) await waitForPublished(pkg.publishedName, pkg.version);
 			console.log();
 		}
 	} finally {
