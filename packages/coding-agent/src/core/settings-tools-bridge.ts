@@ -1,15 +1,29 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { isRollbackSessionForceEnabled } from "./rollback.ts";
-import type { ModelTierName, RollbackCapture, RollbackScope, SettingsManager } from "./settings-manager.ts";
+import type { RollbackCapture, RollbackScope, SettingsManager } from "./settings-manager.ts";
 
 export const SETTINGS_TOOLS_BRIDGE_SYMBOL = Symbol.for("@lunr/settings-tools");
 
 export interface SettingsToolsBridge {
 	getModelTiers(): Record<string, unknown>;
-	setModelTiers(update: { enabled?: boolean; light?: string; standard?: string; heavy?: string; lightThinking?: ThinkingLevel | null; standardThinking?: ThinkingLevel | null; heavyThinking?: ThinkingLevel | null }): void;
+	setModelTiers(update: {
+		enabled?: boolean;
+		light?: string;
+		standard?: string;
+		heavy?: string;
+		lightThinking?: ThinkingLevel | null;
+		standardThinking?: ThinkingLevel | null;
+		heavyThinking?: ThinkingLevel | null;
+	}): void;
 	getAutoManageSubscriptions(): boolean;
 	setAutoManageSubscriptions(enabled: boolean): void;
-	getRollback(): { enabled: boolean; turns: number; capture: RollbackCapture; scope: RollbackScope; forcedByAuto: boolean };
+	getRollback(): {
+		enabled: boolean;
+		turns: number;
+		capture: RollbackCapture;
+		scope: RollbackScope;
+		forcedByAuto: boolean;
+	};
 	setRollback(update: { enabled?: boolean; turns?: number; capture?: RollbackCapture; scope?: RollbackScope }): void;
 	getSessionRetentionDays(): number;
 	setSessionRetentionDays(days: number): void;

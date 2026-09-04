@@ -137,8 +137,9 @@ describe("AgentSession dynamic tool registration", () => {
 			  },
 			]
 		`);
-		expect(Object.fromEntries(settingsNames().map((name) => [name, session.systemPrompt.includes(name)])))
-			.toMatchInlineSnapshot(`
+		expect(
+			Object.fromEntries(settingsNames().map((name) => [name, session.systemPrompt.includes(name)])),
+		).toMatchInlineSnapshot(`
 				{
 				  "settings_load": false,
 				  "settings_model_tiers": false,

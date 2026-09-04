@@ -27,10 +27,7 @@ import {
 	getSessionsDir,
 	VERSION,
 } from "./config.ts";
-import {
-	type CreateAgentSessionRuntimeFactory,
-	createAgentSessionRuntime,
-} from "./core/agent-session-runtime.ts";
+import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
 	createAgentSessionFromServices,
@@ -43,9 +40,10 @@ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dis
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
-import { getModelTiersBridge, registerModelTierBridge } from "./core/model-tiers.ts";
+import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { bindRuntimeBridges } from "./core/runtime-bridges.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -56,7 +54,6 @@ import {
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
-import { bindRuntimeBridges } from "./core/runtime-bridges.ts";
 import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
