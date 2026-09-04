@@ -129,7 +129,7 @@ The interface from top to bottom:
 - **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
 - **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
 - **Editor** - Where you type; border color indicates thinking level
-- **Footer** - Working directory, git branch, session name, token/cache usage, cost, context usage, plan bar, current model. Customize under `/settings` → Customize → Footer.
+- **Footer** - Working directory, git branch, session name, token/cache usage, cost, context usage, plan bar, current model. Customize its segments under `/settings` → Customize.
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions. [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 

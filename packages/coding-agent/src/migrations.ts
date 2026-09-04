@@ -73,21 +73,31 @@ export function migrateAuthToAuthJson(): string[] {
 	return providers;
 }
 
-/** Remove the retired behavior-preset selector state without touching behavior.md. */
-export function removeRetiredBehaviorPresetSetting(agentDir: string = getAgentDir()): boolean {
+function removeRetiredGlobalSettings(keys: string[], agentDir: string = getAgentDir()): boolean {
 	const settingsPath = join(agentDir, "settings.json");
 	if (!existsSync(settingsPath)) return false;
 	try {
 		const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as unknown;
 		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
 		const settings = parsed as Record<string, unknown>;
-		if (!("behaviorPreset" in settings)) return false;
-		delete settings.behaviorPreset;
+		const retired = keys.filter((key) => key in settings);
+		if (retired.length === 0) return false;
+		for (const key of retired) delete settings[key];
 		writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
 		return true;
 	} catch {
 		return false;
 	}
+}
+
+/** Remove the retired behavior-preset selector state without touching behavior.md. */
+export function removeRetiredBehaviorPresetSetting(agentDir: string = getAgentDir()): boolean {
+	return removeRetiredGlobalSettings(["behaviorPreset"], agentDir);
+}
+
+/** Remove retired global-only TUI toggles. Project settings stay untouched until trust. */
+export function removeRetiredTuiSettings(agentDir: string = getAgentDir()): boolean {
+	return removeRetiredGlobalSettings(["gutterRail", "promptSymbol"], agentDir);
 }
 
 /**
@@ -398,6 +408,7 @@ export function runMigrations(cwd: string): {
 } {
 	const migratedAuthProviders = migrateAuthToAuthJson();
 	removeRetiredBehaviorPresetSetting();
+	removeRetiredTuiSettings();
 	migrateSessionsFromAgentRoot();
 	migrateToolsToBin();
 	migrateKeybindingsConfigFile();
