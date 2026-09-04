@@ -162,7 +162,6 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
 | `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
 | `/manual`, `/yolo`, `/auto` | Activate that permission mode |
-| `/swarm` | Orchestrate parallel subagents |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (forces session auto permission mode) |
 | `/processes` | Background processes started this session |
@@ -311,11 +310,12 @@ Use `--offline` or `PI_OFFLINE=1` to skip startup network operations (npm update
 ## Context Files
 
 lunR loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
-- `~/.lunr/agent/AGENTS.md` (global)
+- `~/.lunr/agent/agents/AGENTS.md` (global)
+- `~/.lunr/agent/agents/<model-name>/AGENTS.md` (optional model-specific instructions)
 - Parent directories (walking up from cwd)
 - Current directory
 
-Use `~/.lunr/agent/AGENTS.md` for optional global behavior and instructions; the model cannot change this user-managed file. Use project files for project conventions and commands. All matching files are concatenated. Run `/reload` after adding or editing one while lunR is open.
+Use `~/.lunr/agent/agents/AGENTS.md` for optional global behavior and instructions; the model cannot change this user-managed file. `/settings` can enable model-specific instructions and choose whether they append to or replace global instructions. Model folders use a provider-independent, filesystem-safe name derived from the active model. Use project files for project conventions and commands; they remain independent of that mode. Run `/reload` after adding or editing a context file while lunR is open.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 
@@ -465,7 +465,7 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; `/swarm`; 3+ parallel in one turn is a swarm (gated in manual **and** yolo); default parallel concurrency is unlimited
+- **Subagents** — always fresh; every child selects a configured model tier; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
 - **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
 - **Plan mode** — `/plan` plus the `present_plan` tool
 - **Todos** — lunr-todos (full-replace)

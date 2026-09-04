@@ -69,7 +69,6 @@ Built-in commands (from `slash-commands.ts`):
 | `/logout`, `/deauth` | Remove provider authentication |
 | `/new` | Start a new session |
 | `/init` | Generate a starter AGENTS.md for this project |
-| `/swarm` | Orchestrate parallel subagents for a complex task |
 | `/compact` | Manually compact the session context |
 | `/resume`, `/sessions` | Browse and resume sessions |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
@@ -121,7 +120,8 @@ See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
 lunR loads `AGENTS.md` or `CLAUDE.md` at startup from:
 
-- `~/.lunr/agent/AGENTS.md` for global instructions
+- `~/.lunr/agent/agents/AGENTS.md` for global instructions
+- `~/.lunr/agent/agents/<model-name>/AGENTS.md` for optional model-specific instructions enabled in `/settings`
 - parent directories, walking up from the current working directory
 - the current directory
 

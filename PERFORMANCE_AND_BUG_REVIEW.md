@@ -47,7 +47,7 @@ Files:
 - `packages/coding-agent/src/core/permissions.ts:248-405`
 - `packages/coding-agent/src/core/subagent-permission-inherit.ts:42-83`
 
-Manual mode prompts before direct `bash`, `edit`, and `write` calls. It does not prompt for a single `subagent` call because only a swarm of more than two children has a separate gate. Omitted child permissions resolve to `full`, and a full child starts in Auto mode.
+Manual mode prompts before direct `bash`, `edit`, and `write` calls. A launch of more than two children has a separate aggregate confirmation. Omitted child permissions resolve to `full`, and a full child starts in Auto mode.
 
 A model can therefore launch one child and ask that child to mutate files or run shell commands without the approval that Manual mode would require in the parent.
 
@@ -417,6 +417,6 @@ Require an expected version and source ref for manual dispatch. Reject publicati
 
 ## Review limits
 
-This was a broad static and targeted source review, not a proof that no other bugs exist. The swarm did not run destructive filesystem or release tests. One of the original four reviewers failed before returning results. The later launch reviewers covered its startup remit, but they did not replace a full provider and OAuth audit.
+This was a broad static and targeted source review, not a proof that no other bugs exist. The review group did not run destructive filesystem or release tests. One of the original four reviewers failed before returning results. The later launch reviewers covered its startup remit, but they did not replace a full provider and OAuth audit.
 
 The best next step is to turn the first six findings into red regression tests before changing implementation. That gives the larger launch work a safer base.
