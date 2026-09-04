@@ -37,9 +37,6 @@ export class AssistantMessageComponent extends Container {
 	private lastMessage?: AssistantMessage;
 	private thinkingSource?: AssistantMessage;
 	private hasToolCalls = false;
-	// lunr: gutter rail — prefix rendered lines with a dim │; the last line uses ╰
-	// when this component closes the turn (no tool calls follow).
-	private gutterRail: boolean;
 
 	constructor(
 		message?: AssistantMessage,
@@ -47,7 +44,6 @@ export class AssistantMessageComponent extends Container {
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
-		gutterRail = false,
 		thinkingCollapse = false,
 	) {
 		super();
@@ -57,7 +53,6 @@ export class AssistantMessageComponent extends Container {
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
-		this.gutterRail = gutterRail;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -122,7 +117,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	handleClick(localY: number, width: number): boolean {
-		const contentWidth = this.gutterRail ? Math.max(1, width - 2) : width;
+		const contentWidth = width;
 		let y = 0;
 		for (const child of this.contentContainer.children) {
 			const h = child.render(contentWidth).length;
@@ -141,11 +136,6 @@ export class AssistantMessageComponent extends Container {
 		this.thinkingTimings = timings;
 	}
 
-	// lunr: gutter rail toggle (live; applied on next render).
-	setGutterRail(enabled: boolean): void {
-		this.gutterRail = enabled;
-	}
-
 	setHiddenThinkingLabel(label: string): void {
 		this.hiddenThinkingLabel = label;
 		if (this.lastMessage) {
@@ -161,33 +151,12 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		// lunr: gutter rail — render content at width-2 and prefix each line with a
-		// dim │; the last line uses ╰ when this assistant message closes the turn
-		// (no tool calls follow). When tool calls are present the rail stays open (│)
-		// because tool-execution components render their own borders below.
-		const railEnabled = this.gutterRail;
-		const contentWidth = railEnabled ? Math.max(1, width - 2) : width;
-		const lines = super.render(contentWidth);
-		if (this.hasToolCalls || lines.length === 0) {
-			if (railEnabled && lines.length > 0) {
-				const rail = theme.fg("dim", "│ ");
-				for (let i = 0; i < lines.length; i++) {
-					lines[i] = rail + lines[i];
-				}
-			}
-			return lines;
-		}
+		const lines = super.render(width);
+		if (this.hasToolCalls || lines.length === 0) return lines;
 
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 
-		if (railEnabled) {
-			const rail = theme.fg("dim", "│ ");
-			const close = theme.fg("dim", "╰ ");
-			for (let i = 0; i < lines.length; i++) {
-				lines[i] = (i === lines.length - 1 ? close : rail) + lines[i];
-			}
-		}
 		return lines;
 	}
 

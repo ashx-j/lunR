@@ -224,8 +224,6 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `gutterRail` | boolean | `true` | Thin left rail around each turn |
-| `promptSymbol` | boolean | `true` | Show the ☾ › prompt glyph on the editor's first line |
 | `footerMcp` | boolean | `true` | Show MCP status in the footer |
 | `footerLsp` | boolean | `false` | Show LSP status in the footer |
 | `footerContext` | boolean | `true` | Show context-usage pct/window |
@@ -238,7 +236,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerPlanBar` | boolean | `true` | Show the █░ fill; off keeps the percent only |
 | `planUsageWindow` | string | `"5h"` | Preferred plan window: `"5h"` or `"weekly"`. Missing 5h falls back to weekly |
 
-Customize these from `/settings` → Customize → Footer as well.
+Customize these from `/settings` → Customize as well.
 
 ### Cron, rollback, subscriptions
 

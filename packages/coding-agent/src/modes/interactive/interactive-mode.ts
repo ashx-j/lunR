@@ -437,6 +437,17 @@ export interface InteractiveModeOptions {
 	deferredMaintenance?: () => Promise<void>;
 }
 
+type EnsureInteractiveTool = (tool: "fd" | "rg", silent?: boolean) => Promise<string | undefined>;
+
+export async function startInteractiveToolInstalls(
+	currentFdPath: string | undefined,
+	onFdInstalled: (fdPath: string) => void,
+	installer: EnsureInteractiveTool = ensureTool,
+): Promise<void> {
+	const [fdPath] = await Promise.all([installer("fd", true), installer("rg", true)]);
+	if (fdPath && fdPath !== currentFdPath) onFdInstalled(fdPath);
+}
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
@@ -861,11 +872,9 @@ export class InteractiveMode {
 		this.fdPath = getToolPath("fd") ?? undefined;
 		const toolMaintenance = startupBenchmark
 			? Promise.resolve()
-			: Promise.all([ensureTool("fd"), ensureTool("rg")]).then(([fdPath]) => {
-					if (fdPath && fdPath !== this.fdPath) {
-						this.fdPath = fdPath;
-						this.setupAutocompleteProvider();
-					}
+			: startInteractiveToolInstalls(this.fdPath, (fdPath) => {
+					this.fdPath = fdPath;
+					this.setupAutocompleteProvider();
 				});
 		time("ensureTools");
 
@@ -3458,7 +3467,6 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
-						this.settingsManager.getGutterRail(),
 						this.thinkingCollapse,
 					);
 					// lunr: collapsible reasoning — fresh timing array for this message.
@@ -3859,7 +3867,6 @@ export class InteractiveMode {
 								skillBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
-								this.settingsManager.getGutterRail(),
 							);
 							this.chatContainer.addChild(userComponent);
 						}
@@ -3868,7 +3875,6 @@ export class InteractiveMode {
 							textContent,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
-							this.settingsManager.getGutterRail(),
 						);
 						this.chatContainer.addChild(userComponent);
 					}
@@ -3885,7 +3891,6 @@ export class InteractiveMode {
 					this.getMarkdownThemeWithSettings(),
 					this.hiddenThinkingLabel,
 					this.outputPad,
-					this.settingsManager.getGutterRail(),
 					this.thinkingCollapse,
 				);
 				// lunr: collapsible reasoning — re-attach live timings when this
@@ -4808,8 +4813,6 @@ export class InteractiveMode {
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					searchCurator: getSearchCuratorSetting(),
 					// lunr: TUI customize settings
-					gutterRail: this.settingsManager.getGutterRail(),
-					promptSymbol: this.settingsManager.getPromptSymbol(),
 					footerMcp: this.settingsManager.getFooterMcp(),
 					footerLsp: this.settingsManager.getFooterLsp(),
 					footerContext: this.settingsManager.getFooterContext(),
@@ -5011,12 +5014,6 @@ export class InteractiveMode {
 						}
 					},
 					// lunr: TUI customize callbacks
-					onGutterRailChange: (enabled) => {
-						this.settingsManager.setGutterRail(enabled);
-					},
-					onPromptSymbolChange: (enabled) => {
-						this.settingsManager.setPromptSymbol(enabled);
-					},
 					onFooterMcpChange: (enabled) => {
 						this.settingsManager.setFooterMcp(enabled);
 					},
@@ -7598,12 +7595,7 @@ export class InteractiveMode {
 	private showPlanInChat(summary: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(
-			new PlanMessageComponent(
-				summary,
-				this.getMarkdownThemeWithSettings(),
-				this.outputPad,
-				this.settingsManager.getGutterRail(),
-			),
+			new PlanMessageComponent(summary, this.getMarkdownThemeWithSettings(), this.outputPad),
 		);
 		this.ui.requestRender();
 	}

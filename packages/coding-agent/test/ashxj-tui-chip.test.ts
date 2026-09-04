@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatChipEffort, thinkingThemeToken } from "../src/builtin-extensions/ashxj-tui.ts";
+import { formatChipEffort, lunrPromptGlyph, thinkingThemeToken } from "../src/builtin-extensions/ashxj-tui.ts";
+
+describe("ashxj-tui chatbox", () => {
+	it("renders only the theme-controlled prompt arrow", () => {
+		expect(lunrPromptGlyph({ glyph: () => ">" } as never)).toBe("> ");
+		expect(lunrPromptGlyph({ glyph: () => "" } as never)).toBe("");
+		expect(lunrPromptGlyph(undefined)).toBe("> ");
+	});
+});
 
 describe("ashxj-tui thinking chip", () => {
 	it("prints xhigh and max without mapping them down to high", () => {
