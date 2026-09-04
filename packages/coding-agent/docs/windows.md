@@ -18,7 +18,7 @@ For most users, [Git for Windows](https://git-scm.com/download/win) is sufficien
 
 ## Image paste
 
-Ctrl+V is the terminal's paste. lunR image paste is **Alt+V**. The editor inserts `[image_n]` chips, not a temp path. VS Code may eat Alt+V (View mnemonic); forward it with `sendSequence` `\u001b[118;3u`.
+Ctrl+V is the terminal's paste. lunR image paste is **Alt+V**. The editor inserts `[image_n]` chips, not a temp path. VS Code must forward Alt+V with `sendSequence` `\u001b[118;3u`; `/paste-image` works without a terminal shortcut.
 
 ## LSP
 
