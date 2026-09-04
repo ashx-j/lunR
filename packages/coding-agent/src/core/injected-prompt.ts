@@ -1,16 +1,16 @@
 /**
- * lunr: detect injected prompts (/swarm, /research, /goal) so the transcript can
+ * lunr: detect injected prompts (/research, /goal) so the transcript can
  * render them collapsed instead of dumping the full multi-line prompt verbatim.
  *
  * These prompts become plain {role:"user"} messages (PromptOptions.source is not
  * persisted), so detection is keyed on stable markers that already exist in the
- * prompt bodies: the `[SWARM MODE]` / `[DEEP RESEARCH]` literal prefixes and the
+ * prompt bodies: the `[DEEP RESEARCH]` literal prefix and the
  * goal extension's `<!-- pi-goal-prompt:… -->` HTML comment. This is render-time
  * only — the model still receives the full prompt unchanged, and old session
  * transcripts are cleaned up retroactively with no schema migration.
  */
 
-export type InjectedPromptKind = "swarm" | "research" | "goal";
+export type InjectedPromptKind = "research" | "goal";
 
 export interface InjectedPromptInfo {
 	kind: InjectedPromptKind;
@@ -50,11 +50,6 @@ function extractGoalObjective(text: string): string | undefined {
 export function detectInjectedPrompt(text: string): InjectedPromptInfo | undefined {
 	if (!text) return undefined;
 
-	if (text.startsWith("[SWARM MODE]")) {
-		const summary = extractAfterLabel(text, "Task:") ?? firstNonEmptyLine(text.slice("[SWARM MODE]".length).trim());
-		return { kind: "swarm", summary: summary ?? "swarm task" };
-	}
-
 	if (text.startsWith("[DEEP RESEARCH]")) {
 		const summary =
 			extractAfterLabel(text, "Question:") ?? firstNonEmptyLine(text.slice("[DEEP RESEARCH]".length).trim());
@@ -70,7 +65,6 @@ export function detectInjectedPrompt(text: string): InjectedPromptInfo | undefin
 }
 
 export const INJECTED_PROMPT_LABELS: Record<InjectedPromptKind, string> = {
-	swarm: "swarm",
 	research: "research",
 	goal: "goal",
 };

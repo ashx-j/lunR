@@ -9,6 +9,7 @@ const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Prompt children directly. There is no agent roster. Every execution task needs task (the full child prompt) and description (a concise UI label).
+• Every executable child also needs tier: "light", "standard", or "heavy". Direct model overrides and parent-model inheritance are not available. A missing, disabled, unconfigured, unavailable, or unauthenticated tier fails before launch.
 • permissions is "full" or "read-only". Omitted permissions means full. Plan-mode parents must pass permissions: "read-only"; full or omitted launches are rejected.
 • Keep execution and control separate: omit action for SINGLE/PARALLEL/CHAIN execution; use action only for status/interrupt/stop/resume/steer/append-step/doctor/watchdog.*/schedule*.
 • Async/background runs: launch with async:true only when work can proceed independently. Do not sleep or poll status just to wait. In an interactive session, normally return control and let lunR wake you; use subagent_wait when this request must run to completion in the current turn or skill. Headless sessions auto-drain current-session work.
@@ -19,12 +20,13 @@ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to generic children by prompting them directly. There are no named agent types.
 
 EXECUTION (use exactly ONE mode):
-• SINGLE: { task, description, permissions? } — one child. Multiple SINGLE calls in the same turn run concurrently; explicit concurrency/run limits still apply.
-• PARALLEL: { tasks: [{task, description, permissions?, count?, output?, reads?, progress?}, ...], concurrency?: number, worktree?: true } — one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
-• CHAIN: { chain: [{task, description, permissions?}, {parallel:[{task, description, permissions?, count:3}]}] } — sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
+• SINGLE: { task, description, tier, permissions? } — one child. Multiple SINGLE calls in the same turn run concurrently; explicit concurrency/run limits still apply.
+• PARALLEL: { tasks: [{task, description, tier, permissions?, count?, output?, reads?, progress?}, ...], concurrency?: number, worktree?: true } — one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
+• CHAIN: { chain: [{task, description, tier, permissions?}, {parallel:[{task, description, tier, permissions?, count:3}]}] } — sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
 • description is required, single-line, max 80 characters. It is UI metadata only. task is the complete child prompt.
 • permissions: "full" (default) or "read-only". Full includes coding tools (read, search, shell, edit, write, web, LSP, MCP) and excludes parent-owned tools (cron, memory, behavior, goals, nested subagents). Plan-mode parents may launch only permissions: "read-only".
-• Children always start with a fresh session (no inherited parent transcript). Model strings accept a thinking suffix (provider/model:off|minimal|low|medium|high|xhigh|max).
+• Every executable child requires tier: "light", "standard", or "heavy". Direct model overrides and parent-model inheritance are rejected. The configured tier model and credentials must be available.
+• Children always start with a fresh session (no inherited parent transcript).
 • Optional timeout: { timeoutMs } or { maxRuntimeMs } sets a run-level max runtime for foreground and async/background runs
 
 CHAIN TEMPLATE VARIABLES (use in task and description strings):
@@ -33,9 +35,9 @@ CHAIN TEMPLATE VARIABLES (use in task and description strings):
 • {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-subagents-<scope>/chain-runs/abc123/)
 
 CHAIN EXAMPLES:
-• Sequential: { chain: [{task:"Analyze {task}", description:"Analyze request"}, {task:"Plan based on {previous}", description:"Draft plan"}] }
-• Parallel fan-out: { chain: [{parallel: [{task:"Check part of {task}", description:"Check one part", permissions:"read-only", count: 3}]}] }
-• Mixed: { chain: [{task:"Research {task}", description:"Research request", permissions:"read-only"}, {parallel: [{task:"Review {previous}", description:"Review findings", permissions:"read-only", count: 2}]}, {task:"Summarize {previous}", description:"Summarize reviews"}] }
+• Sequential: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {task:"Plan based on {previous}", description:"Draft plan", tier:"heavy"}] }
+• Parallel fan-out: { chain: [{parallel: [{task:"Check part of {task}", description:"Check one part", tier:"light", permissions:"read-only", count: 3}]}] }
+• Mixed: { chain: [{task:"Research {task}", description:"Research request", tier:"standard", permissions:"read-only"}, {parallel: [{task:"Review {previous}", description:"Review findings", tier:"light", permissions:"read-only", count: 2}]}, {task:"Summarize {previous}", description:"Summarize reviews", tier:"standard"}] }
 
 CONTROL (use action field, omit task/chain/tasks):
 • { action: "watchdog.status" | "watchdog.check" | "watchdog.recommend-model" } - inspect the opt-in subagent watchdog and its strong complementary model recommendation
@@ -47,10 +49,10 @@ CONTROL (use action field, omit task/chain/tasks):
 • { action: "stop", id: "..." } - stop a current-session top-level async run; stopped runs finish with state "stopped"
 • { action: "resume", id: "...", message: "...", index?: 0 } - interrupt then follow up with a live async child, or revive a completed async/foreground child from its session
 • { action: "steer", id: "...", message: "...", index?: 0 } - await correlated child input acceptance for up to 3 seconds; returns delivered, scheduled, pending, partial, recovered, or failed with a request id. Only top-level single runs may recover after a further 15-second pause/revival bound; chain, parallel, and nested runs never auto-interrupt.
-• { action: "append-step", id: "...", chain: [{task:"Use {previous}", description:"Follow-up step"}] } - append one step to the tail of a running async chain
+• { action: "append-step", id: "...", chain: [{task:"Use {previous}", description:"Follow-up step", tier:"standard"}] } - append one step to the tail of a running async chain
 
 SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
-• { action: "schedule", task, description, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
+• { action: "schedule", task, description, tier, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
 • { action: "schedule-list" } - list scheduled runs for this session
 • { action: "schedule-status", id: "..." } - inspect one scheduled run
 • { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires
@@ -63,11 +65,11 @@ ${SUBAGENT_SAFETY_GUIDANCE}`;
 export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = `Delegate to generic children by prompting them. Use exactly one mode per call.
 
 EXECUTE:
-• SINGLE {task, description, permissions?} (same-turn singles overlap); PARALLEL {tasks:[{task,description,permissions?,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{task,description,permissions?},{parallel:[...]}]} for sequential work.
+• SINGLE {task, description, tier, permissions?} (same-turn singles overlap); PARALLEL {tasks:[{task,description,tier,permissions?,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{task,description,tier,permissions?},{parallel:[...]}]} for sequential work.
 • description is required (single-line, max 80 chars, UI only). task is the full child prompt. permissions omitted = full. Plan-mode parents must pass permissions:"read-only".
-• Children always start with a fresh session. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
+• Every executable child requires tier:"light"|"standard"|"heavy". Direct model overrides and parent-model inheritance are rejected; tier resolution fails closed. Children always start with a fresh session. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
 • Chain templates may use {task}, {previous}, {chain_dir}, and named outputs. Parallel worktree isolation requires a clean git repo.
-• Chain example: { chain: [{task:"Analyze {task}", description:"Analyze request"}, {parallel: [{task:"Check {previous}", description:"Check prior result", permissions:"read-only", count: 3}]}] }
+• Chain example: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {parallel: [{task:"Check {previous}", description:"Check prior result", tier:"light", permissions:"read-only", count: 3}]}] }
 
 CONTROL:
 • Use action without execution fields: doctor, watchdog.status, watchdog.check, watchdog.recommend-model, watchdog.configure, status, interrupt, stop, resume, steer, append-step.
@@ -199,22 +201,5 @@ export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "tool
 	} else {
 		description = FULL_SUBAGENT_TOOL_DESCRIPTION;
 	}
-	// lunr: append model-tier guidance only when lunR core's tier bridge is registered and enabled.
-	if (isModelTierModeEnabled()) return `${description}\n\n${MODEL_TIER_GUIDANCE}`;
 	return description;
-}
-
-// lunr: model tier guidance appended to the subagent tool description when tier mode is on.
-const MODEL_TIER_GUIDANCE = `MODEL TIERS: Model tiers are enabled. For each subagent choose \`tier\`: 'light' for simple lookups/formatting, 'standard' for typical coding tasks, 'heavy' for deep reasoning/complex debugging. An explicit \`model\` overrides the tier. Omit both to inherit the parent model.`;
-
-// lunr: check lunR core's model-tier bridge (Symbol.for("@lunr/model-tiers")); absent bridge means tier mode is off.
-function isModelTierModeEnabled(): boolean {
-	try {
-		const bridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
-			| { isTierModeEnabled?: () => unknown }
-			| undefined;
-		return typeof bridge?.isTierModeEnabled === "function" && bridge.isTierModeEnabled() === true;
-	} catch {
-		return false;
-	}
 }

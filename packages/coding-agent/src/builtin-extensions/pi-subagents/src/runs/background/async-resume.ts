@@ -313,20 +313,21 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"version", "lifecycleArtifactVersion", "sourceRunId", "childId", "description", "permissions", "agent", "sessionFile", "cwd", "model", "thinking", "modelSelection", "skills",
+		"version", "lifecycleArtifactVersion", "sourceRunId", "childId", "description", "permissions", "agent", "sessionFile", "cwd", "model", "thinking", "tier", "modelSelection", "skills",
 		"outputPath", "outputMode", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share",
 	]);
 	for (const field of Object.keys(parsed)) {
 		if (!allowedFields.has(field)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': unknown field '${field}'.`);
 	}
-	if (parsed.version !== 3) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 3.`);
+	if (parsed.version !== 4) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 4.`);
 	if (!isSupportedSubagentLifecycleVersion(parsed.lifecycleArtifactVersion)) throw new Error(UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE);
 	const requiredStrings = ["sourceRunId", "childId", "description", "agent", "cwd", "outputMode"] as const;
 	for (const field of requiredStrings) {
 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.permissions !== "full" && parsed.permissions !== "read-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': permissions must be full or read-only.`);
+	if (parsed.tier !== "light" && parsed.tier !== "standard" && parsed.tier !== "heavy") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier must be light, standard, or heavy.`);
 	validateChildDescription(parsed.description, `Async recovery descriptor '${descriptorPath}' description`);
 	if (parsed.outputMode !== "inline" && parsed.outputMode !== "file-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': outputMode is invalid.`);
 	for (const field of ["share"] as const) {
@@ -343,7 +344,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (parsed.modelSelection !== undefined) {
 		const selection = parsed.modelSelection as { kind?: unknown; tier?: unknown };
 		if (!selection || typeof selection !== "object") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection must be an object.`);
-		if (selection.kind !== "model" && selection.kind !== "inherit" && selection.kind !== "tier") {
+		if (selection.kind !== "tier") {
 			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.kind is invalid.`);
 		}
 		if (selection.kind === "tier" && selection.tier !== "light" && selection.tier !== "standard" && selection.tier !== "heavy") {

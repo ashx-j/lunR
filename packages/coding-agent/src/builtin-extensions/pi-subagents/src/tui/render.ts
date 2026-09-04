@@ -167,12 +167,12 @@ export function clearLegacyResultAnimationTimer(context: LegacyResultAnimationCo
 // (setText + requestRender) instead of rebuilding the whole result tree per frame.
 export interface SubagentAnimatedLine {
 	text: Text;
-	line: (frame: number) => string;
+	line: (frame: number, now: number) => string;
 }
 export const subagentAnimSink: { current: SubagentAnimatedLine[] | null } = { current: null };
 
-function animatedLine(line: (frame: number) => string, frame: number | undefined, animate: boolean): Text {
-	const text = new Text(line(frame ?? 0), 0, 0);
+function animatedLine(line: (frame: number, now: number) => string, frame: number | undefined, animate: boolean): Text {
+	const text = new Text(line(frame ?? 0, Date.now()), 0, 0);
 	if (animate && frame !== undefined && subagentAnimSink.current) {
 		subagentAnimSink.current.push({ text, line });
 	}
@@ -266,12 +266,28 @@ function formatTotalCostStat(totalCost: Details["totalCost"] | undefined): strin
 	return parts.join(" ");
 }
 
-function formatProgressStats(theme: Theme, progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs"> | undefined, includeDuration = true): string {
+function liveDurationMs(
+	progress: Pick<AgentProgress, "durationMs" | "lastActivityAt"> | undefined,
+	running: boolean,
+	now: number,
+): number {
+	if (!progress) return 0;
+	if (!running || progress.lastActivityAt === undefined) return progress.durationMs;
+	return progress.durationMs + Math.max(0, now - progress.lastActivityAt);
+}
+
+function formatProgressStats(
+	theme: Theme,
+	progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs" | "lastActivityAt"> | undefined,
+	includeDuration = true,
+	options: { running?: boolean; terminal?: boolean; now?: number } = {},
+): string {
 	if (!progress) return "";
 	const parts: string[] = [];
 	if (progress.toolCount > 0) parts.push(formatToolUseStat(progress.toolCount));
 	if (progress.tokens > 0) parts.push(formatTokenStat(progress.tokens));
-	if (includeDuration && progress.durationMs > 0) parts.push(formatDuration(progress.durationMs));
+	const durationMs = liveDurationMs(progress, options.running === true, options.now ?? Date.now());
+	if (includeDuration && durationMs > 0) parts.push(`${options.terminal ? "ran for " : ""}${formatDuration(durationMs)}`);
 	return statJoin(theme, parts);
 }
 
@@ -331,14 +347,16 @@ function resultGlyph(result: Details["results"][number], output: string, theme: 
 
 /** Compact hang row: tool count, tokens, elapsed time. */
 export function formatCompactStatsHangLine(
-	progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs"> | undefined,
+	progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs" | "lastActivityAt"> | undefined,
 	width: number,
 	paint: (s: string) => string = (s) => s,
 	prefix = "  ⎿  ",
+	now = Date.now(),
+	running = false,
 ): string {
 	const toolCount = progress?.toolCount ?? 0;
 	const tokens = progress?.tokens ?? 0;
-	const durationMs = progress?.durationMs ?? 0;
+	const durationMs = liveDurationMs(progress, running, now);
 	const body = [
 		formatToolUseStat(toolCount),
 		formatTokenStat(tokens),
@@ -390,14 +408,15 @@ function widgetJobName(job: AsyncJobState): string {
 	return job.mode ?? "subagent";
 }
 
-function widgetActivity(job: AsyncJobState): string {
+function widgetActivity(job: AsyncJobState, now = Date.now()): string {
 	const facts: string[] = [];
-	if (job.currentTool && job.currentToolStartedAt !== undefined && job.updatedAt !== undefined) facts.push(`${job.currentTool} ${formatDuration(Math.max(0, job.updatedAt - job.currentToolStartedAt))}`);
+	const snapshotNow = job.status === "running" ? now : job.updatedAt;
+	if (job.currentTool && job.currentToolStartedAt !== undefined && snapshotNow !== undefined) facts.push(`${job.currentTool} ${formatDuration(Math.max(0, snapshotNow - job.currentToolStartedAt))}`);
 	else if (job.currentTool) facts.push(job.currentTool);
 	if (job.currentPath) facts.push(shortenPath(job.currentPath));
 	if (job.turnCount !== undefined) facts.push(`${job.turnCount} turns`);
 	if (job.toolCount !== undefined) facts.push(`${job.toolCount} tools`);
-	const activity = buildLiveStatusLine(job, job.updatedAt);
+	const activity = buildLiveStatusLine(job, snapshotNow);
 	if (activity && facts.length) return `${activity} · ${facts.join(" · ")}`;
 	if (activity) return activity;
 	if (facts.length) return facts.join(" · ");
@@ -756,7 +775,7 @@ function resultRowLabel(details: Pick<Details, "mode" | "chainAgents" | "workflo
 	return `Step ${stepNumber}`;
 }
 
-function widgetStats(job: AsyncJobState, theme: Theme): string {
+function widgetStats(job: AsyncJobState, theme: Theme, now = Date.now()): string {
 	const parts: string[] = [];
 	const stepsTotal = job.stepsTotal ?? (job.agents?.length ?? 1);
 	if (job.activeParallelGroup) {
@@ -787,16 +806,25 @@ function widgetStats(job: AsyncJobState, theme: Theme): string {
 	}
 	if (job.toolCount !== undefined) parts.push(formatToolUseStat(job.toolCount));
 	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
-	if (job.startedAt !== undefined && job.updatedAt !== undefined) parts.push(formatDuration(Math.max(0, job.updatedAt - job.startedAt)));
+	if (job.startedAt !== undefined) {
+		const end = job.status === "running" ? now : job.updatedAt;
+		if (end !== undefined) parts.push(`${job.status === "running" ? "" : "ran for "}${formatDuration(Math.max(0, end - job.startedAt))}`);
+	}
 	return statJoin(theme, parts);
 }
 
-function widgetStepStats(theme: Theme, step: NonNullable<AsyncJobState["steps"]>[number]): string {
+	function widgetStepStats(theme: Theme, step: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): string {
+	const running = step.status === "running";
+	const durationMs = step.durationMs !== undefined
+		? step.durationMs + (running && step.lastActivityAt !== undefined ? Math.max(0, now - step.lastActivityAt) : 0)
+		: step.startedAt !== undefined
+			? Math.max(0, (running ? now : step.endedAt ?? step.lastActivityAt ?? now) - step.startedAt)
+			: undefined;
 	return statJoin(theme, [
 		step.turnCount !== undefined ? `${step.turnCount} turns` : "",
 		step.toolCount !== undefined ? formatToolUseStat(step.toolCount) : "",
 		step.tokens?.total ? formatTokenStat(step.tokens.total) : "",
-		step.durationMs !== undefined ? formatDuration(step.durationMs) : "",
+		durationMs !== undefined ? `${running ? "" : "ran for "}${formatDuration(durationMs)}` : "",
 	]);
 }
 
@@ -1318,7 +1346,6 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const isRunning = r.progress?.status === "running";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
-	const stats = formatProgressStats(theme, progress);
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
@@ -1329,10 +1356,13 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 		r.thinking ?? progress?.thinking,
 	);
 	const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
-	c.addChild(animatedLine((f) => truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, isRunning));
+	c.addChild(animatedLine((f, now) => {
+		const stats = formatProgressStats(theme, progress, true, { running: isRunning, terminal: !isRunning, now });
+		return truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width);
+	}, frame, isRunning));
 
 	if (isRunning && r.progress) {
-		c.addChild(new Text(formatCompactStatsHangLine(r.progress, width, (s) => theme.fg("dim", s)), 0, 0));
+		c.addChild(animatedLine((_f, now) => formatCompactStatsHangLine(r.progress, width, (s) => theme.fg("dim", s), "  ⎿  ", now, true), frame, true));
 		return c;
 	}
 
@@ -1358,7 +1388,7 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 	let totalSummary = d.progressSummary;
 	if (!totalSummary) {
 		let sawProgress = false;
-		const summary = { toolCount: 0, tokens: 0, durationMs: 0 };
+		const summary = { toolCount: 0, tokens: 0, durationMs: 0, lastActivityAt: undefined as number | undefined };
 		for (const r of d.results) {
 			const prog = r.progress || r.progressSummary;
 			if (!prog) continue;
@@ -1366,12 +1396,14 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 			summary.toolCount += prog.toolCount;
 			summary.tokens += prog.tokens;
 			summary.durationMs = d.mode === "chain" ? summary.durationMs + prog.durationMs : Math.max(summary.durationMs, prog.durationMs);
+			if (prog.status === "running" && prog.lastActivityAt !== undefined) {
+				summary.lastActivityAt = Math.max(summary.lastActivityAt ?? 0, prog.lastActivityAt);
+			}
 		}
 		if (sawProgress) totalSummary = summary;
 	}
 	const multiLabel = buildMultiProgressLabel(d, hasRunning);
 	const itemTitle = multiLabel.itemTitle;
-	const stats = statJoin(theme, [multiLabel.headerLabel, formatProgressStats(theme, totalSummary), formatTotalCostStat(d.totalCost)]);
 	const glyph = (f: number | undefined) => hasRunning
 		? theme.fg("accent", runningGlyph(f !== undefined ? (runningSeed(progressRunningSeed(totalSummary), d.currentStepIndex) ?? 0) + f : runningSeed(progressRunningSeed(totalSummary), d.currentStepIndex)))
 		: stopped
@@ -1385,7 +1417,10 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	// lunr: header line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-	c.addChild(animatedLine((f) => truncLine(`${glyph(f)} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), frame, hasRunning));
+	c.addChild(animatedLine((f, now) => {
+		const stats = statJoin(theme, [multiLabel.headerLabel, formatProgressStats(theme, totalSummary, true, { running: hasRunning, terminal: !hasRunning, now }), formatTotalCostStat(d.totalCost)]);
+		return truncLine(`${glyph(f)} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width);
+	}, frame, hasRunning));
 
 	const useResultsDirectly = multiLabel.hasParallelInChain || !d.chainAgents?.length;
 	const displayStart = multiLabel.showActiveGroupOnly ? multiLabel.groupStartIndex : 0;
@@ -1420,7 +1455,6 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
-		const stepStats = formatProgressStats(theme, rProg);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
 		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
@@ -1431,17 +1465,20 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 			r.model ?? (rProg && "model" in rProg ? rProg.model : undefined),
 			r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined),
 		);
-		c.addChild(animatedLine((f) => {
+		c.addChild(animatedLine((f, now) => {
 			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
+			const stepStats = formatProgressStats(theme, rProg, true, { running: !!rRunning, terminal: !rRunning && !rPending, now });
 			return truncLine(`  ${glyph} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
 		}, frame, !!rRunning));
 		if (rRunning && rProg && "status" in rProg) {
-			c.addChild(new Text(formatCompactStatsHangLine(
+			c.addChild(animatedLine((_f, now) => formatCompactStatsHangLine(
 				rProg,
 				width,
 				(s) => theme.fg("dim", s),
 				"    ⎿  ",
-			), 0, 0));
+				now,
+				true,
+			), frame, true));
 		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
 		}
@@ -1488,18 +1525,16 @@ export function renderSubagentResult(
 		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 		const output = r.truncation?.text || getSingleResultOutput(r);
 
-		const progressInfo = isRunning && r.progress
-			? ` | ${r.progress.toolCount} tools, ${formatTokens(r.progress.tokens)} tok, ${formatDuration(r.progress.durationMs)}`
-			: r.progressSummary
-				? ` | ${r.progressSummary.toolCount} tools, ${formatTokens(r.progressSummary.tokens)} tok, ${formatDuration(r.progressSummary.durationMs)}`
-				: "";
-
 		const w = getTermWidth() - 4;
 		const fit = (text: string) => expanded ? text : truncLine(text, w);
 		const toolCallLines = getToolCallLines(r, expanded);
 		const c = new Container();
 		const modelDisplay = modelThinkingBadge(theme, r.model, r.thinking ?? r.progress?.thinking, r.modelSelection ?? r.progress?.modelSelection);
-		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelDisplay}${contextBadge}${progressInfo}`), 0, 0));
+		const progress = r.progress ?? r.progressSummary;
+		c.addChild(animatedLine((_f, now) => {
+			const stats = formatProgressStats(theme, progress, true, { running: isRunning, terminal: !isRunning, now });
+			return fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelDisplay}${contextBadge}${stats ? ` | ${stats}` : ""}`);
+		}, frame, isRunning));
 		c.addChild(new Spacer(1));
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = expanded || r.task.length <= taskMaxLen
@@ -1617,14 +1652,6 @@ export function renderSubagentResult(
 			{ toolCount: 0, tokens: 0, durationMs: 0 },
 		);
 
-	const summaryParts = [
-		totalSummary.toolCount || totalSummary.tokens
-			? `${totalSummary.toolCount} tools, ${formatTokens(totalSummary.tokens)} tok, ${formatDuration(totalSummary.durationMs)}`
-			: "",
-		formatTotalCostStat(d.totalCost),
-	].filter(Boolean);
-	const summaryStr = summaryParts.length ? ` | ${summaryParts.join(", ")}` : "";
-
 	const modeLabel = d.mode;
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const multiLabel = buildMultiProgressLabel(d, hasRunning);
@@ -1657,13 +1684,21 @@ export function renderSubagentResult(
 	const w = getTermWidth() - 4;
 	const fit = (text: string) => expanded ? text : truncLine(text, w);
 	const c = new Container();
-	c.addChild(
-		new Text(
-			fit(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${contextBadge} · ${multiLabel.headerLabel}${summaryStr}`),
-			0,
-			0,
-		),
-	);
+	c.addChild(animatedLine((_f, now) => {
+		const durations = d.results
+			.map((result) => result.progress ?? result.progressSummary)
+			.filter(Boolean)
+			.map((progress) => liveDurationMs(progress, progress.status === "running", now));
+		const durationMs = d.mode === "chain" ? durations.reduce((sum, value) => sum + value, 0) : Math.max(0, ...durations);
+		const summaryParts = [
+			totalSummary.toolCount || totalSummary.tokens || durationMs
+				? `${totalSummary.toolCount} tools, ${formatTokens(totalSummary.tokens)} tok, ${hasRunning ? "" : "ran for "}${formatDuration(durationMs)}`
+				: "",
+			formatTotalCostStat(d.totalCost),
+		].filter(Boolean);
+		const summaryStr = summaryParts.length ? ` | ${summaryParts.join(", ")}` : "";
+		return fit(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${contextBadge} · ${multiLabel.headerLabel}${summaryStr}`);
+	}, frame, hasRunning));
 	if (chainVis) {
 		c.addChild(new Text(fit(`  ${chainVis}`), 0, 0));
 	}
@@ -1717,14 +1752,15 @@ export function renderSubagentResult(
 				: hasEmptyTextOutputWithoutOutputTarget(r.task, resultOutput)
 					? theme.fg("warning", "warning")
 					: theme.fg("success", "done");
-		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
 		const modelDisplay = modelThinkingBadge(theme, r.model, r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined), r.modelSelection ?? (rProg && "modelSelection" in rProg ? rProg.modelSelection : undefined));
 		const stepLabel = resultRowLabel(d, multiLabel, i, stepNumber);
-		const stepHeader = rRunning
-			? `${statusIcon} ${stepLabel}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
-			: `${statusIcon} ${stepLabel}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
 		const toolCallLines = getToolCallLines(r, expanded);
-		c.addChild(new Text(fit(stepHeader), 0, 0));
+		c.addChild(animatedLine((_f, now) => {
+			const stats = formatProgressStats(theme, rProg, true, { running: rRunning, terminal: !rRunning, now });
+			return fit(rRunning
+				? `${statusIcon} ${stepLabel}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats ? ` | ${stats}` : ""}`
+				: `${statusIcon} ${stepLabel}: ${theme.bold(r.agent)}${modelDisplay}${stats ? ` | ${stats}` : ""}`);
+		}, frame, rRunning));
 
 		const taskMaxLen = Math.max(20, w - 12);
 		const taskPreview = expanded || r.task.length <= taskMaxLen

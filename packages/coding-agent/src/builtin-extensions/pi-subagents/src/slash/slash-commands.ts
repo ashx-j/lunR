@@ -42,7 +42,7 @@ interface InlineConfig {
 	output?: string | false;
 	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
-	model?: string;
+	tier?: "light" | "standard" | "heavy";
 	permissions?: "full" | "read-only";
 	skill?: string[] | false;
 	progress?: boolean;
@@ -71,7 +71,7 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 			case "output": config.output = val === "false" ? false : val; break;
 			case "outputMode": if (val === "inline" || val === "file-only") config.outputMode = val; break;
 			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
-			case "model": config.model = val || undefined; break;
+			case "tier": if (val === "light" || val === "standard" || val === "heavy") config.tier = val; break;
 			case "permissions": if (val === "full" || val === "read-only") config.permissions = val; break;
 			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "progress": config.progress = val !== "false"; break;
@@ -796,11 +796,11 @@ const parseAgentArgs = (
 type ChainStepObject = {
 	description: string;
 	permissions: "full" | "read-only";
+	tier: "light" | "standard" | "heavy";
 	task?: string;
 	output?: string | false;
 	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
-	model?: string;
 	skill?: string[] | false;
 	progress?: boolean;
 	as?: string;
@@ -846,15 +846,16 @@ const mapParsedTaskToStepObject = (
 	opts: { baseCwd: string; inGroup: boolean },
 ): ChainStepObject => {
 	const { name, config, task: stepTask } = step;
+	if (!config.tier) throw new SlashParseError(`Step '${name}' requires tier=light, tier=standard, or tier=heavy.`);
 	if (config.acceptance !== undefined) validateInlineAcceptanceInput(config.acceptance, name);
 	return {
 		description: name,
 		permissions: config.permissions ?? "full",
+		tier: config.tier,
 		...(stepTask ? { task: stepTask } : isFirst && fallbackTask ? { task: fallbackTask } : {}),
 		...(config.output !== undefined ? { output: config.output } : {}),
 		...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
 		...(config.reads !== undefined ? { reads: config.reads } : {}),
-		...(config.model ? { model: config.model } : {}),
 		...(config.skill !== undefined ? { skill: config.skill } : {}),
 		...(config.progress !== undefined ? { progress: config.progress } : {}),
 		...(config.as ? { as: config.as } : {}),
@@ -965,7 +966,7 @@ export function registerSlashCommands(
 	};
 
 	pi.registerCommand("run", {
-		description: "Run a prompt-defined child: /run description[output=file] task [--bg]",
+		description: "Run a prompt-defined child: /run description[tier=standard] task [--bg]",
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
@@ -973,17 +974,16 @@ export function registerSlashCommands(
 			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--bg]", "error"); return; }
 			const { name: description, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
-			if (!description || !task) { ctx.ui.notify("Usage: /run <description> <task> [--bg]", "error"); return; }
+			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--bg]", "error"); return; }
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
 				finalTask = `[Read from: ${inline.reads.join(", ")}]\n\n${finalTask}`;
 			}
-			const params: SubagentParamsLike = { description, permissions: inline.permissions ?? "full", task: finalTask, clarify: false };
+			const params: SubagentParamsLike = { description, permissions: inline.permissions ?? "full", tier: inline.tier, task: finalTask, clarify: false };
 			if (inline.output !== undefined) params.output = inline.output;
 			if (inline.outputMode !== undefined) params.outputMode = inline.outputMode;
 			if (inline.skill !== undefined) params.skill = inline.skill;
-			if (inline.model) params.model = inline.model;
 			if (bg) params.async = true;
 			await runSlashSubagent(pi, ctx, params);
 		},
@@ -1010,14 +1010,15 @@ export function registerSlashCommands(
 			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
 				description: name,
 				permissions: config.permissions ?? "full" as const,
+				tier: config.tier,
 				task: stepTask ?? parsed.task,
 				...(config.output !== undefined ? { output: config.output } : {}),
 				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
 				...(config.reads !== undefined ? { reads: config.reads } : {}),
-				...(config.model ? { model: config.model } : {}),
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
+			if (tasks.some((task) => !task.tier)) { ctx.ui.notify("Every parallel child requires [tier=light|standard|heavy].", "error"); return; }
 			const params: SubagentParamsLike = { tasks, clarify: false };
 			if (bg) params.async = true;
 			await runSlashSubagent(pi, ctx, params);

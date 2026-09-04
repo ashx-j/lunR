@@ -7,7 +7,7 @@
  *   2. authorization (authz.ts); denied DMs get a pairing code when the
  *      behavior is "pair" and the user isn't rate-limited
  *   3. command registry (/new, /undo, /redo, /model, /sessions, /title,
- *      /context, /swarm, /compact, /thinking, /stop, /status, /help, /whoami)
+ *      /context, /compact, /thinking, /stop, /status, /help, /whoami)
  *   4. normal path: bridge.runTurn with a StreamConsumer when streaming is
  *      enabled and the adapter supports edit; the final text is
  *      silence-filtered and folded INTO the streaming preview (edit, plus
