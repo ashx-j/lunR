@@ -133,11 +133,17 @@ async function isPublished(name, version) {
 }
 
 async function waitForPublished(name, version) {
+	let lastError;
 	for (let attempt = 1; attempt <= 60; attempt++) {
-		if (await isPublished(name, version)) return;
+		try {
+			if (await isPublished(name, version)) return;
+		} catch (error) {
+			lastError = error;
+		}
 		if (attempt < 60) await new Promise((resolve) => setTimeout(resolve, 5000));
 	}
-	throw new Error(`${name}@${version} was not visible on npm after publication`);
+	const detail = lastError instanceof Error ? `: ${lastError.message}` : "";
+	throw new Error(`${name}@${version} was not visible on npm after publication${detail}`);
 }
 
 function copyPackageForPublish(directory, workspaceName) {
