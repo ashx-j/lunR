@@ -31,6 +31,7 @@ type SubmitContext = {
 	handleClipboardPaste: (options?: { textFallback?: boolean }) => Promise<void>;
 	takeSubmittedImages: () => Array<{ id: number; path: string; mimeType: string }>;
 	consumeStagedSubmitImages: () => undefined;
+	activateDeferredStartupEditor: () => void;
 	loadImageAttachments: (
 		attachments: Array<{ id: number; path: string; mimeType: string }>,
 	) => Promise<Array<{ type: "image"; mimeType: string; data: string }> | undefined>;
@@ -114,6 +115,7 @@ describe("InteractiveMode image paste chips", () => {
 			handleClipboardPaste: vi.fn(async () => {}),
 			takeSubmittedImages: vi.fn(() => [{ id: 1, path: first, mimeType: "image/png" }]),
 			consumeStagedSubmitImages: vi.fn(() => undefined),
+			activateDeferredStartupEditor: vi.fn(),
 			loadImageAttachments: vi.fn(async () => loaded),
 		};
 
@@ -145,6 +147,7 @@ describe("InteractiveMode image paste chips", () => {
 			handleClipboardPaste: vi.fn(async () => {}),
 			takeSubmittedImages: vi.fn(() => []),
 			consumeStagedSubmitImages: vi.fn(() => undefined),
+			activateDeferredStartupEditor: vi.fn(),
 			loadImageAttachments: vi.fn(async () => undefined),
 		};
 

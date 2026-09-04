@@ -117,6 +117,7 @@ Last updated: 2026-09-04 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - VS Code image paste (2026-09-01): tui → coding-agent tsgo and copy-assets pass; focused Vitest passes 52/52; changed-code Biome and `git diff --check` pass. A live Windows clipboard image inserts `[image_1]`, and rebuilt `npx lunr -p` returned `image-paste-smoke-ok` before the known print-mode timeout.
 - Reliability + instant launch (2026-09-02): offline tui → ai → agent → coding-agent → orchestrator tsgo and copy-assets pass. Focused TUI tests pass 98/98, coding-agent Vitest passes 134/134, and orchestrator Vitest passes 7/7. The isolated launch benchmark reports input armed at 127 ms, first frame at 131 ms, runtime hydrated at 2.53 s, and prompt barrier at 3.87 s. Local release staging and the full package build passed in the isolated worker. The pre-commit aggregate check still reaches known pinned-dependency failures in untracked study material.
 - TUI dev channel (2026-09-04): tui → ai → agent → coding-agent tsgo passes. Focused Vitest passes 23/23. Stable and dev publish dry-runs pack all four packages; the dev CLI stages as `@ashx-j/lunr-dev` with exact prerelease dependencies and only the `lunr-dev` binary.
+- Open PR dev integration (2026-09-04): `dev/tui` contains open PRs #38, #39, #40, and #41 without closing or merging them to master. The full tui → ai → agent → coding-agent → orchestrator build passes. Focused coding-agent tests pass 202/202 and orchestrator tests pass 7/7. The broader selected run retains 17 failures in stale resource-list expectations and existing Windows `.pi` settings fixtures; the TUI suite retains three Windows symlink-permission failures.
 
 ---
 
@@ -258,6 +259,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-02: interactive startup reuses a shell-first editor through runtime handoff so typing starts before hydration without letting prompts bypass deferred extension attachment; safety and maintenance work stays behind explicit readiness boundaries.
 - 2026-09-02: full child launches require Manual approval, and rollback, session, process, network, and persisted-state recovery fail closed or finish within a deadline.
 - 2026-09-04: use a separate `@ashx-j/lunr-dev` package and `lunr-dev` binary for direct `dev/tui` pushes so unstable TUI builds never replace stable `lunr` or move its npm `latest` tag.
+- 2026-09-04: merge open PR heads into `dev/tui` without closing their master-targeting PRs so combined behavior can be tested before release.
 
 # Deferred
 
