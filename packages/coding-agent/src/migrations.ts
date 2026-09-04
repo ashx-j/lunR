@@ -8,6 +8,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
+import { migrateLegacyGlobalInstructions } from "./core/model-instructions.ts";
 
 const MIGRATION_GUIDE_URL =
 	"https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md#extensions-migration";
@@ -413,6 +414,8 @@ export function runMigrations(cwd: string): {
 	migrateToolsToBin();
 	migrateKeybindingsConfigFile();
 	migratePiStateToLunr(); // lunr: ~/.pi → ~/.lunr carry-over (copy-only, non-fatal)
+	const instructionMigration = migrateLegacyGlobalInstructions(getAgentDir());
+	if (instructionMigration.diagnostic) console.warn(chalk.yellow(`Warning: ${instructionMigration.diagnostic}`));
 	const deprecationWarnings = migrateExtensionSystem(cwd);
 	return { migratedAuthProviders, deprecationWarnings };
 }

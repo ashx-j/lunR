@@ -180,11 +180,13 @@ describe("computeContextBreakdown", () => {
 		expect(breakdown.free).toBe(0);
 	});
 
-	it("labels only the user-level AGENTS.md as global", () => {
-		const globalAgentsPath = "C:\\Users\\test\\.lunr\\agent\\AGENTS.md";
+	it("labels global and current-model instructions separately from project context", () => {
+		const globalAgentsPath = "C:\\Users\\test\\.lunr\\agent\\agents\\AGENTS.md";
+		const modelAgentsPath = "C:\\Users\\test\\.lunr\\agent\\agents\\gpt-5.6\\AGENTS.md";
 		const prompt = [
 			"<project_context>",
-			'<project_instructions path="C:/Users/test/.lunr/agent/AGENTS.md">Global rules.</project_instructions>',
+			'<project_instructions path="C:/Users/test/.lunr/agent/agents/AGENTS.md">Global rules.</project_instructions>',
+			'<project_instructions path="C:/Users/test/.lunr/agent/agents/gpt-5.6/AGENTS.md">Model rules.</project_instructions>',
 			'<project_instructions path="C:/repo/AGENTS.md">Project rules.</project_instructions>',
 			"</project_context>",
 		].join("\n");
@@ -194,9 +196,14 @@ describe("computeContextBreakdown", () => {
 			messages: [],
 			contextWindow: 200_000,
 			globalAgentsPath,
+			modelAgentsPath,
 		});
 
-		expect(breakdown.contextFiles.map((file) => file.label)).toEqual(["Global AGENTS.md", "AGENTS.md"]);
+		expect(breakdown.contextFiles.map((file) => file.label)).toEqual([
+			"Global AGENTS.md",
+			"gpt-5.6 AGENTS.md",
+			"AGENTS.md",
+		]);
 		const rendered = renderContextBox({ breakdown }, 80).join("\n");
 		expect(rendered).toContain("Global AGENTS.md");
 	});

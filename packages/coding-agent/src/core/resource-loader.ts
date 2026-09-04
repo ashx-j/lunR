@@ -16,6 +16,7 @@ import {
 	loadExtensionsCached,
 } from "./extensions/loader.ts";
 import type { Extension, ExtensionRuntime, InlineExtension, LoadExtensionsResult } from "./extensions/types.ts";
+import { getGlobalInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
@@ -43,6 +44,7 @@ export interface ResourceLoader {
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+	contextFilesEnabled?(): boolean;
 	getSystemPrompt(): string | undefined;
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
@@ -93,6 +95,7 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 export function loadProjectContextFiles(options: {
 	cwd: string;
 	agentDir: string;
+	settingsManager?: SettingsManager;
 }): Array<{ path: string; content: string }> {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
@@ -100,10 +103,14 @@ export function loadProjectContextFiles(options: {
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
 
-	const globalContext = loadContextFileFromDir(resolvedAgentDir);
-	if (globalContext) {
-		contextFiles.push(globalContext);
-		seenPaths.add(globalContext.path);
+	const userContexts = options.settingsManager
+		? loadSelectedUserInstructions({ agentDir: resolvedAgentDir, settingsManager: options.settingsManager })
+		: [getGlobalInstructionsPath(resolvedAgentDir)]
+				.map((path) => loadContextFileFromDir(dirname(path)))
+				.filter((file): file is { path: string; content: string } => file !== null);
+	for (const userContext of userContexts) {
+		contextFiles.push(userContext);
+		seenPaths.add(userContext.path);
 	}
 
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
@@ -287,6 +294,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return { agentsFiles: this.agentsFiles };
 	}
 
+	contextFilesEnabled(): boolean {
+		return !this.noContextFiles;
+	}
+
 	getSystemPrompt(): string | undefined {
 		return this.systemPrompt;
 	}
@@ -390,7 +401,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
 		await this.settingsManager.reload();
-		const resolvedPaths = await this.packageManager.resolve(this.resolveOnMissing(options?.skipMissingPackageInstall));
+		const resolvedPaths = await this.packageManager.resolve(
+			this.resolveOnMissing(options?.skipMissingPackageInstall),
+		);
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
@@ -505,6 +518,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				: loadProjectContextFiles({
 						cwd: this.cwd,
 						agentDir: this.agentDir,
+						settingsManager: this.settingsManager,
 					}),
 		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
@@ -532,9 +546,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		includeInlineFactories: boolean;
 		skipMissingPackageInstall?: boolean;
 	}): Promise<LoadExtensionsResult> {
-		const resolvedPaths = await this.packageManager.resolve(
-			this.resolveOnMissing(options.skipMissingPackageInstall),
-		);
+		const resolvedPaths = await this.packageManager.resolve(this.resolveOnMissing(options.skipMissingPackageInstall));
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});

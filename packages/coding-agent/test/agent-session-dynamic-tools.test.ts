@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import lunrSettingsTools, { DETAILED_SETTINGS_TOOL_NAMES } from "../src/builtin-extensions/lunr-settings-tools.ts";
 import simpleMemory from "../src/builtin-extensions/simple-pi-memory.ts";
 import { MEMORY_CAP_BRIDGE_SYMBOL, registerMemoryCapBridge } from "../src/core/memory-cap.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { registerSettingsToolsBridge, SETTINGS_TOOLS_BRIDGE_SYMBOL } from "../src/core/settings-tools-bridge.ts";
 
 describe("AgentSession dynamic tool registration", () => {
 	let tempDir: string;
@@ -23,9 +25,132 @@ describe("AgentSession dynamic tool registration", () => {
 
 	afterEach(() => {
 		delete (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL];
+		delete (globalThis as Record<symbol, unknown>)[SETTINGS_TOOLS_BRIDGE_SYMBOL];
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("starts with settings_load and injects exactly four narrow tools into the live runtime", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		registerSettingsToolsBridge(settingsManager);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [lunrSettingsTools],
+		});
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			settingsManager,
+			sessionManager: SessionManager.inMemory(),
+			resourceLoader,
+		});
+		await session.bindExtensions({});
+
+		const settingsNames = () =>
+			session
+				.getAllTools()
+				.map((tool) => tool.name)
+				.filter((name) => name.startsWith("settings_"));
+		expect(settingsNames()).toMatchInlineSnapshot(`
+			[
+			  "settings_load",
+			]
+		`);
+		expect(session.getActiveToolNames().filter((name) => name.startsWith("settings_"))).toEqual(["settings_load"]);
+
+		const load = session.getToolDefinition("settings_load")!;
+		const result = await load.execute("settings-call", {}, undefined, undefined, {} as never);
+		expect(result.details).toMatchObject({ activated: [...DETAILED_SETTINGS_TOOL_NAMES], alreadyLoaded: false });
+		expect(settingsNames()).toMatchInlineSnapshot(`
+			[
+			  "settings_load",
+			  "settings_model_tiers",
+			  "settings_subscriptions",
+			  "settings_rollback",
+			  "settings_session_retention",
+			]
+		`);
+		expect(session.getActiveToolNames().filter((name) => name.startsWith("settings_"))).toEqual(settingsNames());
+
+		const schemas = session
+			.getAllTools()
+			.filter((tool) => tool.name.startsWith("settings_"))
+			.map((tool) => ({
+				name: tool.name,
+				required: (tool.parameters as { required?: string[] }).required ?? [],
+				properties: Object.keys((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}),
+			}));
+		expect(schemas).toMatchInlineSnapshot(`
+			[
+			  {
+			    "name": "settings_load",
+			    "properties": [],
+			    "required": [],
+			  },
+			  {
+			    "name": "settings_model_tiers",
+			    "properties": [
+			      "enabled",
+			      "light",
+			      "standard",
+			      "heavy",
+			      "lightThinking",
+			      "standardThinking",
+			      "heavyThinking",
+			    ],
+			    "required": [],
+			  },
+			  {
+			    "name": "settings_subscriptions",
+			    "properties": [
+			      "enabled",
+			    ],
+			    "required": [],
+			  },
+			  {
+			    "name": "settings_rollback",
+			    "properties": [
+			      "enabled",
+			      "turns",
+			      "capture",
+			      "scope",
+			    ],
+			    "required": [],
+			  },
+			  {
+			    "name": "settings_session_retention",
+			    "properties": [
+			      "days",
+			    ],
+			    "required": [],
+			  },
+			]
+		`);
+		expect(session.systemPrompt).not.toContain("settings_model_tiers");
+		expect(session.systemPrompt).not.toContain("settings_session_retention");
+
+		const tiers = session.getToolDefinition("settings_model_tiers")!;
+		await tiers.execute(
+			"tier-call",
+			{ enabled: true, light: "xai/grok-4", lightThinking: "high" },
+			undefined,
+			undefined,
+			{} as never,
+		);
+		expect(settingsManager.getModelTiers()).toMatchObject({
+			enabled: true,
+			light: "xai/grok-4",
+			lightThinking: "high",
+		});
+		const second = await load.execute("settings-call-2", {}, undefined, undefined, {} as never);
+		expect(second.details).toMatchObject({ alreadyLoaded: true });
+		expect(settingsNames()).toHaveLength(5);
+		session.dispose();
 	});
 
 	it("removes and restores memory tools when agent memory is toggled", async () => {

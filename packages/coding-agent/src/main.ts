@@ -57,6 +57,7 @@ import {
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import { registerSettingsToolsBridge } from "./core/settings-tools-bridge.ts";
 import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
@@ -910,6 +911,7 @@ export async function main(args: string[], options?: MainOptions) {
 		registerMemoryCapBridge(settingsManager);
 		registerCustomizeBridge(settingsManager);
 		registerUsageServiceBridge(modelRuntime, settingsManager);
+		registerSettingsToolsBridge(settingsManager, () => session.sessionId);
 	};
 	time("createRuntime");
 	const runtime = await createAgentSessionRuntime(createRuntime, {
