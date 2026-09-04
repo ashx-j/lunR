@@ -66,7 +66,7 @@ import {
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
-import { resolveEffectiveSubagentModel, resolveTierModelOverride } from "../shared/model-fallback.ts";
+import { captureModelSelection, resolveEffectiveSubagentModel, resolveTierModelOverride } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
@@ -322,6 +322,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				description: task.description,
 				permissions: task.permissions,
 				model: effectiveModel ?? task.model,
+				tier: task.tier,
+				modelSelection: captureModelSelection({ model: task.model, tier: task.tier }),
 				skill: task.skill,
 				cwd: taskCwd,
 				output: task.output,
@@ -1206,6 +1208,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				description: seqStep.description,
 				permissions: seqStep.permissions,
 				model: effectiveModel ?? seqStep.model,
+				tier: seqStep.tier,
+				modelSelection: tuiOverride?.model !== undefined
+					? captureModelSelection({ model: tuiOverride.model })
+					: captureModelSelection({ model: seqStep.model, tier: seqStep.tier }),
 				skill: seqStep.skill,
 				cwd: seqStep.cwd,
 				output: seqStep.output,

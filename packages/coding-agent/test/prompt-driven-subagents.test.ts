@@ -87,6 +87,7 @@ describe("child description validation", () => {
 		expect(spec.requestedPermissions).toBe("full");
 		expect(spec.effectivePermissions).toBe("full");
 		expect(spec.childId).toBe("abcd1234-0");
+		expect(spec.modelSelection).toEqual({ kind: "inherit" });
 	});
 
 	it("rejects full and omitted permissions from plan parents", () => {

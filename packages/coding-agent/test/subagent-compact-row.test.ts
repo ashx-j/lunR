@@ -1,5 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { formatModelSelection } from "../src/builtin-extensions/pi-subagents/src/shared/formatters.ts";
 import {
 	compactRowLead,
 	formatCompactStatsHangLine,
@@ -119,5 +120,160 @@ describe("renderSingleCompact thinking line", () => {
 		expect(lines[1]).toContain("172k token");
 		expect(lines[1]).toContain("9m56s");
 		expect(lines.length).toBe(2);
+	});
+
+	it("shows the selected tier instead of the resolved model", () => {
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "running" }],
+				details: {
+					mode: "single",
+					results: [
+						{
+							description: "Search auth flow for bugs",
+							permissions: "read-only",
+							task: "do the work",
+							exitCode: 0,
+							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+							model: "xai/grok-4.5",
+							thinking: "high",
+							modelSelection: { kind: "tier", tier: "light" },
+							progress: {
+								index: 0,
+								description: "Search auth flow for bugs",
+								permissions: "read-only",
+								status: "running",
+								task: "do the work",
+								model: "xai/grok-4.5",
+								thinking: "high",
+								modelSelection: { kind: "tier", tier: "light" },
+								recentTools: [],
+								recentOutput: [],
+								toolCount: 3,
+								tokens: 100,
+								durationMs: 1000,
+							},
+						},
+					],
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+		);
+		const header = result.render(120)[0]!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(header).toContain("Search auth flow for bugs");
+		expect(header).toContain("light");
+		expect(header).toContain("thinking high");
+		expect(header).not.toContain("grok-4.5");
+	});
+
+	it("shows the model id when the child was selected by model", () => {
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "running" }],
+				details: {
+					mode: "single",
+					results: [
+						{
+							description: "Search auth flow for bugs",
+							permissions: "read-only",
+							task: "do the work",
+							exitCode: 0,
+							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+							model: "xai/grok-4.5",
+							thinking: "high",
+							modelSelection: { kind: "model" },
+							progress: {
+								index: 0,
+								description: "Search auth flow for bugs",
+								permissions: "read-only",
+								status: "running",
+								task: "do the work",
+								model: "xai/grok-4.5",
+								thinking: "high",
+								modelSelection: { kind: "model" },
+								recentTools: [],
+								recentOutput: [],
+								toolCount: 3,
+								tokens: 100,
+								durationMs: 1000,
+							},
+						},
+					],
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+		);
+		const header = result.render(120)[0]!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(header).toContain("grok-4.5");
+		expect(header).not.toContain("light");
+	});
+});
+
+describe("formatModelSelection", () => {
+	it("prints the tier name for a tier selection", () => {
+		expect(formatModelSelection({ kind: "tier", tier: "standard" }, "xai/grok-4.5", "high")).toBe(
+			"standard · thinking high",
+		);
+	});
+
+	it("prints the resolved model for explicit model and inherit", () => {
+		expect(formatModelSelection({ kind: "model" }, "xai/grok-4.5", "high")).toBe("grok-4.5 · thinking high");
+		expect(formatModelSelection({ kind: "inherit" }, "xai/grok-4.5")).toBe("grok-4.5");
+		expect(formatModelSelection(undefined, "xai/grok-4.5")).toBe("grok-4.5");
+	});
+});
+
+describe("renderMultiCompact selection badge", () => {
+	const stubTheme = {
+		fg: (_token: string, value: string) => value,
+		bold: (value: string) => value,
+		italic: (value: string) => value,
+	};
+
+	it("shows the selected tier on compact parallel rows", () => {
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "running" }],
+				details: {
+					mode: "parallel",
+					results: [
+						{
+							description: "Search auth flow for bugs",
+							agent: "Search auth flow for bugs",
+							permissions: "read-only",
+							task: "do the work",
+							exitCode: 0,
+							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+							model: "xai/grok-4.5",
+							thinking: "high",
+							modelSelection: { kind: "tier", tier: "light" },
+							progress: {
+								index: 0,
+								agent: "Search auth flow for bugs",
+								description: "Search auth flow for bugs",
+								permissions: "read-only",
+								status: "running",
+								task: "do the work",
+								model: "xai/grok-4.5",
+								thinking: "high",
+								modelSelection: { kind: "tier", tier: "light" },
+								recentTools: [],
+								recentOutput: [],
+								toolCount: 3,
+								tokens: 100,
+								durationMs: 1000,
+							},
+						},
+					],
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+		);
+		const lines = result.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+		expect(lines.some((line) => line.includes("Search auth flow for bugs") && line.includes("light"))).toBe(true);
+		expect(lines.some((line) => line.includes("Search auth flow for bugs") && line.includes("grok-4.5"))).toBe(false);
 	});
 });
