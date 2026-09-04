@@ -7,9 +7,10 @@ import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
 
 markStartupMilestone("process_entry");
-process.title = "lunr";
+const startupAppName = process.env.PI_CODING_AGENT_DEV === "1" ? "lunr-dev" : "lunr";
+process.title = startupAppName;
 if (process.stdout.isTTY) {
-	process.stdout.write("\x1b]0;lunr\x07");
+	process.stdout.write(`\x1b]0;${startupAppName}\x07`);
 }
 
 try {

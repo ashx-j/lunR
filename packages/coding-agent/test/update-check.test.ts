@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleUpdateCli } from "../src/cli/update-cli.ts";
-import { NPM_CLI_PACKAGE } from "../src/config.ts";
+import { DEV_NPM_CLI_PACKAGE, NPM_CLI_PACKAGE } from "../src/config.ts";
 import {
 	checkForUpdate,
 	isPublishedInstall,
 	markUpdateNotified,
+	npmLatestUrl,
 	updateCheckPath,
 } from "../src/core/update-check.ts";
 
@@ -32,6 +33,30 @@ describe("checkForUpdate", () => {
 		dir = mkdtempSync(join(tmpdir(), "lunr-update-check-"));
 		return dir;
 	}
+
+	it("keeps stable and dev update records separate", () => {
+		const agentDir = tempDir();
+		expect(updateCheckPath(agentDir)).not.toBe(updateCheckPath(agentDir, DEV_NPM_CLI_PACKAGE));
+		expect(updateCheckPath(agentDir, DEV_NPM_CLI_PACKAGE)).toMatch(/update-check-dev\.json$/);
+	});
+
+	it("checks the dev package and names its update command", async () => {
+		const requestedUrls: string[] = [];
+		const result = await checkForUpdate({
+			currentVersion: "0.2.13-dev.1.1",
+			agentDir: tempDir(),
+			published: true,
+			packageName: DEV_NPM_CLI_PACKAGE,
+			appName: "lunr-dev",
+			fetchImpl: async (input) => {
+				requestedUrls.push(String(input));
+				return Response.json({ version: "0.2.13-dev.2.1" });
+			},
+			now: 1_000,
+		});
+		expect(requestedUrls).toEqual([npmLatestUrl(DEV_NPM_CLI_PACKAGE)]);
+		expect(result?.notice).toBe("lunr-dev 0.2.13-dev.2.1 is available. Run lunr-dev update.");
+	});
 
 	it("skips workspace installs", async () => {
 		const result = await checkForUpdate({
@@ -152,5 +177,30 @@ describe("handleUpdateCli", () => {
 		expect(spawned[0]?.join(" ")).toContain(`${NPM_CLI_PACKAGE}@0.2.9`);
 		expect(spawned[0]?.join(" ")).toContain("install");
 		expect(spawned[0]?.join(" ")).toContain("-g");
+	});
+
+	it("updates the separate dev package", async () => {
+		const spawned: string[][] = [];
+		expect(
+			await handleUpdateCli(["update"], {
+				published: true,
+				currentVersion: "0.2.13-dev.1.1",
+				npmPackage: DEV_NPM_CLI_PACKAGE,
+				appName: "lunr-dev",
+				log: () => {},
+				warn: () => {},
+				error: () => {},
+				check: async () => ({
+					latest: "0.2.13-dev.2.1",
+					current: "0.2.13-dev.1.1",
+					newer: true,
+				}),
+				spawn: async (command, argv) => {
+					spawned.push([command, ...argv]);
+					return 0;
+				},
+			}),
+		).toBe(true);
+		expect(spawned[0]?.join(" ")).toContain(`${DEV_NPM_CLI_PACKAGE}@0.2.13-dev.2.1`);
 	});
 });

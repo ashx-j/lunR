@@ -4,12 +4,18 @@
  */
 export const NPM_SCOPE = "@ashx-j";
 export const NPM_CLI_PACKAGE = "@ashx-j/lunr";
+export const NPM_DEV_CLI_PACKAGE = "@ashx-j/lunr-dev";
 
 export const WORKSPACE_TO_NPM = {
 	"@earendil-works/pi-ai": "@ashx-j/lunr-ai",
 	"@earendil-works/pi-tui": "@ashx-j/lunr-tui",
 	"@earendil-works/pi-agent-core": "@ashx-j/lunr-agent",
-	"@earendil-works/pi-coding-agent": "@ashx-j/lunr",
+	"@earendil-works/pi-coding-agent": NPM_CLI_PACKAGE,
+};
+
+export const DEV_WORKSPACE_TO_NPM = {
+	...WORKSPACE_TO_NPM,
+	"@earendil-works/pi-coding-agent": NPM_DEV_CLI_PACKAGE,
 };
 
 const DEP_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"];
@@ -18,12 +24,17 @@ export function npmNameFor(workspaceName) {
 	return WORKSPACE_TO_NPM[workspaceName];
 }
 
-const REPLACEMENTS = Object.entries(WORKSPACE_TO_NPM).sort((a, b) => b[0].length - a[0].length);
+export function publishTagFor(workspaceName, channel) {
+	if (channel === "stable") return undefined;
+	if (channel !== "dev") throw new Error(`unknown publish channel: ${channel}`);
+	return workspaceName === "@earendil-works/pi-coding-agent" ? "latest" : "dev";
+}
 
 /** Rewrite import/require specifiers in compiled JS (and similar text). */
-export function rewriteWorkspaceSpecifiers(text) {
+export function rewriteWorkspaceSpecifiers(text, packageNames = WORKSPACE_TO_NPM) {
 	let out = text;
-	for (const [from, to] of REPLACEMENTS) {
+	const replacements = Object.entries(packageNames).sort((a, b) => b[0].length - a[0].length);
+	for (const [from, to] of replacements) {
 		out = out.split(from).join(to);
 	}
 	return out;
@@ -37,22 +48,30 @@ export function assertNoEarendil(value, label = "package") {
 }
 
 /** Rewrite a package.json object for the public registry. Does not mutate the input. */
-export function rewritePackageJsonForNpm(pkg) {
+export function rewritePackageJsonForNpm(pkg, options = {}) {
+	const packageNames = options.packageNames ?? WORKSPACE_TO_NPM;
 	const out = structuredClone(pkg);
-	const mapped = WORKSPACE_TO_NPM[out.name];
+	const mapped = packageNames[out.name];
 	if (!mapped) {
 		throw new Error(`no lunR npm name for workspace package ${out.name}`);
 	}
 	out.name = mapped;
+	if (options.version) out.version = options.version;
 
 	for (const field of DEP_FIELDS) {
 		const deps = out[field];
 		if (!deps || typeof deps !== "object") continue;
 		const next = {};
 		for (const [dep, ver] of Object.entries(deps)) {
-			next[WORKSPACE_TO_NPM[dep] ?? dep] = ver;
+			const mappedDependency = packageNames[dep];
+			next[mappedDependency ?? dep] = mappedDependency && options.workspaceDependencyVersion ? options.workspaceDependencyVersion : ver;
 		}
 		out[field] = next;
+	}
+
+	if (options.bin) out.bin = structuredClone(options.bin);
+	if (options.appName) {
+		out.piConfig = { ...out.piConfig, name: options.appName };
 	}
 
 	if (Array.isArray(out.files)) {

@@ -10,7 +10,14 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoEarendil, npmNameFor, rewritePackageJsonForNpm, rewriteWorkspaceSpecifiers } from "./lunr-npm-names.mjs";
+import {
+	assertNoEarendil,
+	DEV_WORKSPACE_TO_NPM,
+	publishTagFor,
+	rewritePackageJsonForNpm,
+	rewriteWorkspaceSpecifiers,
+	WORKSPACE_TO_NPM,
+} from "./lunr-npm-names.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -23,7 +30,7 @@ function shouldRewriteFile(filePath) {
 	return false;
 }
 
-function rewritePublishedTree(root) {
+function rewritePublishedTree(root, packageNames) {
 	const stack = [root];
 	while (stack.length > 0) {
 		const dir = stack.pop();
@@ -36,7 +43,7 @@ function rewritePublishedTree(root) {
 			}
 			if (!shouldRewriteFile(full)) continue;
 			const before = readFileSync(full, "utf8");
-			const after = rewriteWorkspaceSpecifiers(before);
+			const after = rewriteWorkspaceSpecifiers(before, packageNames);
 			if (after !== before) writeFileSync(full, after, "utf8");
 		}
 	}
@@ -49,13 +56,36 @@ const packages = [
 	{ directory: "packages/coding-agent", workspaceName: "@earendil-works/pi-coding-agent" },
 ];
 
-const dryRun = process.argv.includes("--dry-run");
-const unknownArgs = process.argv.slice(2).filter((arg) => arg !== "--dry-run");
-
-if (unknownArgs.length > 0) {
-	console.error(`Usage: node scripts/publish.mjs [--dry-run]`);
-	process.exit(1);
+function parseArgs() {
+	const options = { channel: "stable", dryRun: false, version: undefined };
+	const args = process.argv.slice(2);
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--dry-run") options.dryRun = true;
+		else if (arg === "--channel") {
+			const channel = args[++index];
+			if (channel !== "stable" && channel !== "dev") throw new Error("--channel must be stable or dev");
+			options.channel = channel;
+		} else if (arg === "--version") {
+			const version = args[++index];
+			if (!version) throw new Error("--version requires a value");
+			options.version = version;
+		} else {
+			throw new Error(`Unknown argument: ${arg}`);
+		}
+	}
+	if (options.channel === "stable" && options.version) {
+		throw new Error("Stable publication reads versions from package.json; do not pass --version");
+	}
+	if (options.channel === "dev" && !/^\d+\.\d+\.\d+-dev\.\d+\.\d+$/.test(options.version ?? "")) {
+		throw new Error("Dev publication requires --version <base>-dev.<run>.<attempt>");
+	}
+	return options;
 }
+
+const options = parseArgs();
+const dryRun = options.dryRun;
+const packageNames = options.channel === "dev" ? DEV_WORKSPACE_TO_NPM : WORKSPACE_TO_NPM;
 
 function commandForPlatform(command) {
 	return process.platform === "win32" ? `${command}.cmd` : command;
@@ -102,7 +132,7 @@ async function isPublished(name, version) {
 	return true;
 }
 
-function copyPackageForPublish(directory) {
+function copyPackageForPublish(directory, workspaceName) {
 	const dest = mkdtempSync(join(tmpdir(), "lunr-publish-"));
 	cpSync(directory, dest, {
 		recursive: true,
@@ -115,12 +145,20 @@ function copyPackageForPublish(directory) {
 		},
 	});
 	const sourcePkg = readPackageJson(directory);
-	const rewritten = rewritePackageJsonForNpm(sourcePkg);
+	const isDevCli = options.channel === "dev" && workspaceName === "@earendil-works/pi-coding-agent";
+	if (isDevCli) cpSync(join("scripts", "lunr-dev-readme.md"), join(dest, "README.md"));
+	const rewritten = rewritePackageJsonForNpm(sourcePkg, {
+		packageNames,
+		version: options.version,
+		workspaceDependencyVersion: options.version,
+		bin: isDevCli ? { "lunr-dev": "dist/dev-cli.js" } : undefined,
+		appName: isDevCli ? "lunr-dev" : undefined,
+	});
 	if (rewritten.repository && rewritten.repository.directory === undefined) {
 		delete rewritten.repository.directory;
 	}
 	writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`, "utf8");
-	rewritePublishedTree(dest);
+	rewritePublishedTree(dest, packageNames);
 	const stagedMain = join(dest, "dist", "main.js");
 	if (existsSync(stagedMain)) {
 		assertNoEarendil(readFileSync(stagedMain, "utf8"), `${rewritten.name} dist/main.js`);
@@ -134,24 +172,31 @@ for (const pkg of packages) {
 	if (packageJson.name !== pkg.workspaceName) {
 		throw new Error(`${pkg.directory}/package.json has name ${packageJson.name}, expected ${pkg.workspaceName}`);
 	}
-	if (!npmNameFor(pkg.workspaceName)) {
+	if (!packageNames[pkg.workspaceName]) {
 		throw new Error(`missing npm mapping for ${pkg.workspaceName}`);
 	}
 	packageVersions.set(pkg.workspaceName, packageJson.version);
 }
 
-const versions = [...new Set(packageVersions.values())];
-if (versions.length !== 1) {
-	throw new Error(`Publish packages are not lockstep versioned: ${versions.join(", ")}`);
+const sourceVersions = [...new Set(packageVersions.values())];
+if (sourceVersions.length !== 1) {
+	throw new Error(`Publish packages are not lockstep versioned: ${sourceVersions.join(", ")}`);
 }
+if (options.channel === "dev" && !options.version?.startsWith(`${sourceVersions[0]}-dev.`)) {
+	throw new Error(`Dev version must use the package version as its base: ${sourceVersions[0]}-dev.<run>.<attempt>`);
+}
+const publishVersion = options.version ?? sourceVersions[0];
 
-console.log(`Publishing lunR packages at ${versions[0]} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`);
+console.log(
+	`Publishing ${options.channel} lunR packages at ${publishVersion} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`,
+);
 
 const packageStates = packages.map((pkg) => ({
 	...pkg,
-	publishedName: npmNameFor(pkg.workspaceName),
+	publishedName: packageNames[pkg.workspaceName],
 	published: false,
-	version: packageVersions.get(pkg.workspaceName),
+	publishTag: publishTagFor(pkg.workspaceName, options.channel),
+	version: publishVersion,
 }));
 
 await (async () => {
@@ -161,7 +206,7 @@ await (async () => {
 			assertBuildOutputExists(pkg.directory);
 			pkg.published = await isPublished(pkg.publishedName, pkg.version);
 
-			const staged = copyPackageForPublish(pkg.directory);
+			const staged = copyPackageForPublish(pkg.directory, pkg.workspaceName);
 			temps.push(staged.dest);
 			pkg.stageDir = staged.dest;
 
@@ -193,7 +238,9 @@ await (async () => {
 				continue;
 			}
 
-			run("npm", ["publish", "--access", "public", "--ignore-scripts"], { cwd: pkg.stageDir });
+			const publishArgs = ["publish", "--access", "public", "--ignore-scripts"];
+			if (pkg.publishTag) publishArgs.push("--tag", pkg.publishTag);
+			run("npm", publishArgs, { cwd: pkg.stageDir });
 			console.log();
 		}
 	} finally {

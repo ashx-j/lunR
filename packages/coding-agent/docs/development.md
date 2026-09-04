@@ -21,6 +21,38 @@ npx lunr
 
 lunR keeps the caller's current working directory.
 
+## TUI dev channel
+
+Every push to `dev/tui` builds and publishes `@ashx-j/lunr-dev`. The workflow does not run tests. If the code does not compile, npm keeps serving the previous dev build.
+
+Install it once:
+
+```bash
+npm i -g @ashx-j/lunr-dev
+```
+
+Run the stable and dev versions with separate commands:
+
+```bash
+lunr
+lunr-dev
+```
+
+After a new dev build publishes, update and run it:
+
+```bash
+lunr-dev update
+lunr-dev
+```
+
+The dev CLI has its own npm package and executable, so installing it does not replace `lunr`. It uses the same `~/.lunr/agent` data as stable lunR. Existing logins and settings work in both versions, but a broken dev change can modify shared settings or sessions.
+
+Remove only the dev CLI with:
+
+```bash
+npm uninstall -g @ashx-j/lunr-dev
+```
+
 ## Forking / Rebranding
 
 Configure via `package.json`:
