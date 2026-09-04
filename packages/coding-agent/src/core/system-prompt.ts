@@ -108,7 +108,7 @@ Guidelines:
 - Use ast_search for structural code matches.
 - Use cron only when the user asks to schedule or manage unattended prompts.
 - Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.
-- ~/.lunr/agent/AGENTS.md contains optional global instructions written by the user. Never modify it, including through shell commands.
+- ~/.lunr/agent/agents/ contains optional global and per-model AGENTS.md instructions written by the user. Never modify this tree, including through shell commands.
 - Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.
 - Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.
 

@@ -17,6 +17,7 @@ import lunrLocalProviders from "./lunr-local-providers/index.ts";
 import lunrTodos from "./lunr-todos.ts";
 import lunrPlanTools from "./lunr-plan-tools.ts";
 import lunrSkillCreator from "./lunr-skill-creator/index.ts";
+import lunrSettingsTools from "./lunr-settings-tools.ts";
 
 /**
  * Wrap a raw factory function as a named InlineExtension.
@@ -39,6 +40,7 @@ export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("lunr-todos", lunrTodos),
 	ext("lunr-plan-tools", lunrPlanTools),
 	ext("lunr-skill-creator", lunrSkillCreator),
+	ext("lunr-settings-tools", lunrSettingsTools),
 ];
 
 export interface DeferredBuiltinLoader {

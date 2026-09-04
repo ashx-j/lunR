@@ -104,6 +104,7 @@ import {
 	slugifyProviderId,
 	upsertCustomProvider,
 } from "../../core/model-config-writer.ts";
+import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/model-instructions.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
@@ -145,8 +146,6 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 // lunr: multi-subscription API-key pools (stage 3 UI).
 import type { SubEntry } from "../../core/subscriptions.ts";
-// lunr: moved to core/swarm.ts so the gateway can reuse it.
-import { buildSwarmPrompt } from "../../core/swarm.ts";
 import { time } from "../../core/timings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -528,9 +527,6 @@ export class InteractiveMode {
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
-
-	// Track whether a /swarm orchestration turn is in flight (footer status)
-	private swarmMode = false;
 
 	// lunr: mode in effect before the current plan stretch. Used by approve / `/plan off`
 	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
@@ -938,17 +934,8 @@ export class InteractiveMode {
 
 		// lunr: register the permission approval dialog handler so manual mode can prompt.
 		registerApprovalHandler(async (req) => {
-			// lunr: auto-activated agent swarms get their own dialog; on approval the
-			// footer shows the swarm status for the rest of the turn (cleared with
-			// this.swarmMode at turn end, same as an explicit /swarm).
-			if (req.kind === "swarm") {
-				const resp = await this.showSwarmApprovalDialog(req);
-				const decision = typeof resp === "string" ? resp : resp.decision;
-				if (decision !== "reject") {
-					this.swarmMode = true;
-					this.setExtensionStatus("swarm", "swarm");
-				}
-				return resp;
+			if (req.kind === "large-subagent-launch") {
+				return this.showLargeSubagentLaunchApprovalDialog(req);
 			}
 			// lunr: plan approval (present_plan tool). Any approve leaves plan mode —
 			// restore runs BEFORE resolving so the model's next tool call already
@@ -3179,12 +3166,6 @@ export class InteractiveMode {
 				await this.handleInitCommand();
 				return;
 			}
-			if (text === "/swarm" || text.startsWith("/swarm ")) {
-				const task = text.startsWith("/swarm ") ? text.slice(7).trim() : "";
-				this.editor.setText("");
-				await this.handleSwarmCommand(task);
-				return;
-			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
@@ -3630,11 +3611,6 @@ export class InteractiveMode {
 				}
 				this.pendingTools.clear();
 
-				if (this.swarmMode) {
-					this.swarmMode = false;
-					this.setExtensionStatus("swarm", undefined);
-				}
-
 				this.maybeAutoNameSession();
 
 				// lunr: capture tree-scope changes at turn boundary (bash side-effects).
@@ -3840,7 +3816,7 @@ export class InteractiveMode {
 						this.chatContainer.addChild(new Spacer(1));
 					}
 					const skillBlock = parseSkillBlock(textContent);
-					// lunr: render injected prompts (/swarm /research /goal) collapsed instead
+					// lunr: render injected prompts (/research /goal) collapsed instead
 					// of dumping the full multi-line prompt body verbatim.
 					const injected = detectInjectedPrompt(textContent);
 					if (injected) {
@@ -4809,6 +4785,13 @@ export class InteractiveMode {
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					modelTiers: this.settingsManager.getModelTiers(),
+					modelInstructions: this.settingsManager.getModelInstructions(),
+					globalInstructionsPath: getGlobalInstructionsPath(getAgentDir()),
+					modelInstructionsPath: getModelInstructionsPath(
+						getAgentDir(),
+						this.session.model?.id ?? "no-model-selected",
+					),
+					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					searchCurator: getSearchCuratorSetting(),
@@ -4994,6 +4977,17 @@ export class InteractiveMode {
 					},
 					onModelTierThinkingChange: (tier, level) => {
 						this.settingsManager.setTierThinking(tier, level);
+					},
+					onModelInstructionsEnabledChange: (enabled) => {
+						this.settingsManager.setModelInstructionsEnabled(enabled);
+						this.session.refreshToolRegistry();
+					},
+					onModelInstructionsModeChange: (mode) => {
+						this.settingsManager.setModelInstructionsMode(mode);
+						this.session.refreshToolRegistry();
+					},
+					onConfirmLargeSubagentLaunchesChange: (enabled) => {
+						this.settingsManager.setConfirmLargeSubagentLaunches(enabled);
 					},
 					getTierThinkingLevels: (tier) => {
 						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));
@@ -6695,27 +6689,6 @@ export class InteractiveMode {
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
 	}
 
-	private async handleSwarmCommand(task: string): Promise<void> {
-		if (task.length === 0) {
-			if (this.swarmMode) {
-				this.showStatus("Swarm mode is active — run /subagents-fleet to monitor the fleet.");
-			} else {
-				this.showStatus(
-					"Usage: /swarm <task> — decomposes the task across parallel subagents. Monitor with /subagents-fleet.",
-				);
-			}
-			return;
-		}
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /swarm.");
-			return;
-		}
-
-		this.swarmMode = true;
-		this.setExtensionStatus("swarm", "swarm");
-		await this.sendUserMessageAfterDeferredBuiltins(buildSwarmPrompt(task));
-	}
-
 	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
 	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
 	// pops the previous leaf and navigates back.
@@ -7292,7 +7265,8 @@ export class InteractiveMode {
 			tools,
 			messages: this.session.messages,
 			contextWindow,
-			globalAgentsPath: path.join(getAgentDir(), "AGENTS.md"),
+			globalAgentsPath: getGlobalInstructionsPath(getAgentDir()),
+			modelAgentsPath: getModelInstructionsPath(getAgentDir(), model.id),
 		});
 	}
 
@@ -7552,10 +7526,10 @@ export class InteractiveMode {
 		});
 	}
 
-	// lunr: approval dialog for auto-activated agent swarms (one subagent call
-	// launching >2 parallel subagents). "Reject with feedback" collects a one-line
+	// Approval dialog for one subagent call launching more than two children.
+	// "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showSwarmApprovalDialog(req: {
+	private async showLargeSubagentLaunchApprovalDialog(req: {
 		toolName: string;
 		action: string;
 		detail: string;
@@ -7563,19 +7537,20 @@ export class InteractiveMode {
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
-					"▶ Approve agent swarm?",
+					"Approve large subagent launch?",
 					["Approve once", "Approve for this session", "Reject", "Reject with feedback"],
 					(option) => {
 						done();
 						if (option === "Approve once") resolve("once");
 						else if (option === "Approve for this session") resolve("session");
 						else if (option === "Reject with feedback") {
-							void this.showExtensionInput("Reject agent swarm", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-								},
-							);
+							void this.showExtensionInput(
+								"Reject large subagent launch",
+								"feedback for the agent (optional)",
+							).then((feedback) => {
+								const trimmed = feedback?.trim();
+								resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
+							});
 						} else resolve("reject");
 					},
 					() => {

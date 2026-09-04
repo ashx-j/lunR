@@ -28,6 +28,8 @@ export interface ContextBreakdownInput {
 	contextWindow: number;
 	/** Absolute path of the user-level AGENTS.md, used only to distinguish its UI label. */
 	globalAgentsPath?: string;
+	/** Absolute path of the selected model's AGENTS.md, used only for its UI label. */
+	modelAgentsPath?: string;
 }
 
 export interface ContextFileBreakdown {
@@ -85,11 +87,19 @@ function estimateChars(text: string): number {
 	return text.length === 0 ? 0 : Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function contextFileLabel(filePath: string | undefined, globalAgentsPath: string | undefined): string {
+function contextFileLabel(
+	filePath: string | undefined,
+	globalAgentsPath: string | undefined,
+	modelAgentsPath: string | undefined,
+): string {
 	if (!filePath) return "AGENTS.md";
 	const normalized = filePath.replace(/\\/g, "/");
 	if (globalAgentsPath && normalized.toLowerCase() === globalAgentsPath.replace(/\\/g, "/").toLowerCase()) {
 		return "Global AGENTS.md";
+	}
+	if (modelAgentsPath && normalized.toLowerCase() === modelAgentsPath.replace(/\\/g, "/").toLowerCase()) {
+		const parts = normalized.split("/");
+		return `${parts.at(-2) ?? "Model"} AGENTS.md`;
 	}
 	const slash = normalized.lastIndexOf("/");
 	return slash === -1 ? normalized : normalized.slice(slash + 1);
@@ -150,7 +160,7 @@ export function computeContextBreakdown(input: ContextBreakdownInput): ContextBr
 	const sections = splitSystemPromptSections(input.systemPrompt);
 	const systemPrompt = estimateChars(sections.base);
 	const contextFiles = sections.contextFiles.map((file) => ({
-		label: contextFileLabel(file.path, input.globalAgentsPath),
+		label: contextFileLabel(file.path, input.globalAgentsPath, input.modelAgentsPath),
 		path: file.path,
 		tokens: estimateChars(file.content),
 	}));
