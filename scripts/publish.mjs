@@ -123,13 +123,21 @@ function assertBuildOutputExists(directory) {
 }
 
 async function isPublished(name, version) {
-	const url = `https://registry.npmjs.org/${name.replace("/", "%2f")}/${version}`;
-	const res = await fetch(url);
+	const url = `https://registry.npmjs.org/${name.replace("/", "%2f")}/${version}?cache=${Date.now()}`;
+	const res = await fetch(url, { cache: "no-store" });
 	if (res.status === 404) return false;
 	if (!res.ok) {
 		throw new Error(`Failed to query ${name}@${version}: HTTP ${res.status}`);
 	}
 	return true;
+}
+
+async function waitForPublished(name, version) {
+	for (let attempt = 1; attempt <= 12; attempt++) {
+		if (await isPublished(name, version)) return;
+		if (attempt < 12) await new Promise((resolve) => setTimeout(resolve, 5000));
+	}
+	throw new Error(`${name}@${version} was not visible on npm after publication`);
 }
 
 function copyPackageForPublish(directory, workspaceName) {
@@ -241,6 +249,7 @@ await (async () => {
 			const publishArgs = ["publish", "--access", "public", "--ignore-scripts"];
 			if (pkg.publishTag) publishArgs.push("--tag", pkg.publishTag);
 			run("npm", publishArgs, { cwd: pkg.stageDir });
+			await waitForPublished(pkg.publishedName, pkg.version);
 			console.log();
 		}
 	} finally {
