@@ -15,7 +15,7 @@ import { clearPendingForegroundControlNotices } from "../../extension/control-no
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveTierModelOverride } from "../shared/model-fallback.ts";
+import { buildModelCandidates, captureModelSelection, resolveEffectiveSubagentModel, resolveModelCandidate, resolveTierModelOverride } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
 import { recordRun } from "../shared/run-history.ts";
@@ -132,6 +132,7 @@ interface TaskParam {
 	reads?: string[] | boolean;
 	progress?: boolean;
 	model?: string;
+	tier?: "light" | "standard" | "heavy";
 	skill?: string | string[] | boolean;
 	acceptance?: AcceptanceInput;
 	toolBudget?: ToolBudgetConfig;
@@ -1241,6 +1242,8 @@ async function resumeAsyncRun(input: {
 			description: recoveryDescriptor?.description ?? target.description ?? target.agent,
 			permissions: recoveryDescriptor?.permissions ?? target.permissions ?? "read-only",
 			model: input.params.model ?? recoveryDescriptor?.model ?? target.model,
+			modelSelection: recoveryDescriptor?.modelSelection
+				?? captureModelSelection({ model: input.params.model ?? recoveryDescriptor?.model ?? target.model, tier: input.params.tier }),
 			skill: recoveryDescriptor?.skills,
 			cwd: effectiveCwd,
 			output: recoveryDescriptor?.outputPath,
@@ -2024,8 +2027,11 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const parallelTasks = params.tasks.map((task, index) => ({
 			agent: task.agent,
 			task: shouldForkAgent(contextPolicy, task.agent) ? wrapForkTask(task.task) : task.task,
+			description: task.description,
+			permissions: task.permissions,
 			cwd: task.cwd,
 			...(task.model !== undefined ? { model: task.model } : {}),
+			...(task.tier !== undefined ? { tier: task.tier } : {}),
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
 			...(task.output !== undefined && task.output !== true ? { output: task.output } : {}),
 			...(task.outputMode !== undefined ? { outputMode: task.outputMode } : {}),
@@ -2131,6 +2137,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			permissions: params.permissions,
 			model: modelOverride,
 			tier: params.tier,
+			modelSelection: captureModelSelection({ model: params.model, tier: params.tier }),
 			skill: params.skill,
 			cwd: effectiveCwd,
 			output: effectiveOutput,
@@ -2359,6 +2366,7 @@ interface ForegroundParallelRunInput {
 	availableModels: ModelInfo[];
 	modelScope?: ModelScopeConfig;
 	modelOverrides: (string | undefined)[];
+	modelSelections: ReturnType<typeof captureModelSelection>[];
 	behaviors: Array<ReturnType<typeof resolveStepBehavior>>;
 	firstProgressIndex: number;
 	controlConfig: ResolvedControlConfig;
@@ -2529,6 +2537,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			description: task.description,
 			permissions: task.permissions,
 			model: input.modelOverrides[index] ?? task.model,
+			tier: task.tier,
+			modelSelection: input.modelSelections[index] ?? captureModelSelection({ model: task.model, tier: task.tier }),
 			skill: task.skill,
 			cwd: taskCwd,
 			output: task.output,
@@ -2699,6 +2709,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		// lunr: model tiers — explicit per-task model wins; otherwise resolve task.tier via the tier bridge.
 		resolveEffectiveSubagentModel(behaviorOverrides[i]?.model ?? resolveTierModelOverride(task.tier), agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope }),
 	);
+	const modelSelections = tasks.map((task) => captureModelSelection({ model: task.model, tier: task.tier }));
 
 	if (params.clarify === true && ctx.hasUI) {
 		const behaviors = agentConfigs.map((_c, i) =>
@@ -2734,6 +2745,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			if (override?.model !== undefined) {
 				modelOverrides[i] = resolveEffectiveSubagentModel(override.model, agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
 				behaviorOverrides[i]!.model = override.model;
+				modelSelections[i] = captureModelSelection({ model: override.model });
 			}
 			if (override?.output !== undefined) behaviorOverrides[i]!.output = override.output;
 			if (override?.reads !== undefined) behaviorOverrides[i]!.reads = override.reads;
@@ -2768,8 +2780,11 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				return {
 					agent: t.agent,
 					task: taskText,
+					description: t.description,
+					permissions: t.permissions,
 					cwd: t.cwd,
-					...(behaviorOverrides[i]?.model !== undefined ? { model: behaviorOverrides[i]!.model } : {}),
+					...(behaviorOverrides[i]?.model !== undefined ? { model: behaviorOverrides[i]!.model } : t.model !== undefined ? { model: t.model } : {}),
+					...(behaviorOverrides[i]?.model === undefined && t.tier !== undefined ? { tier: t.tier } : {}),
 					...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
 					...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
 					...(behaviorOverrides[i]?.outputMode !== undefined ? { outputMode: behaviorOverrides[i]!.outputMode } : {}),
@@ -2876,6 +2891,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			availableModels,
 			modelScope: data.modelScope,
 			modelOverrides,
+			modelSelections,
 			behaviors,
 			firstProgressIndex: parallelProgressPrecreated ? -1 : firstProgressIndex,
 			controlConfig,
@@ -3087,7 +3103,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 		task = result.templates[0]!;
 		const override = result.behaviorOverrides[0];
-		if (override?.model !== undefined) modelOverride = resolveEffectiveSubagentModel(override.model, agentConfig.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
+		if (override?.model !== undefined) {
+			modelOverride = resolveEffectiveSubagentModel(override.model, agentConfig.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
+			spec = { ...spec, model: modelOverride, modelSelection: captureModelSelection({ model: override.model }) };
+		}
 		if (override?.output !== undefined) effectiveOutput = normalizeSingleOutputOverride(override.output, agentConfig.output);
 		if (override?.skills !== undefined) skillOverride = override.skills;
 

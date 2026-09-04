@@ -1,7 +1,7 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../../shared/formatters.ts";
+import { formatDuration, formatModelSelection, formatTokens, shortenPath } from "../../shared/formatters.ts";
 import { formatActivityLabel, formatParallelOutcome } from "../../shared/status-format.ts";
 import { type ActivityState, type AsyncJobStep, type AsyncParallelGroupStatus, type AsyncStatus, type CostSummary, type NestedRunSummary, type SteeringStatus, type SubagentRunMode, type TokenUsage, type TurnBudgetState } from "../../shared/types.ts";
 import { readStatus } from "../../shared/utils.ts";
@@ -35,6 +35,7 @@ interface AsyncRunStepSummary {
 	skills?: string[];
 	model?: string;
 	thinking?: string;
+	modelSelection?: import("../../shared/types.ts").ModelSelection;
 	attemptedModels?: string[];
 	error?: string;
 	timedOut?: boolean;
@@ -186,6 +187,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.skills ? { skills: step.skills } : {}),
 			...(step.model ? { model: step.model } : {}),
 			...(step.thinking ? { thinking: step.thinking } : {}),
+			...(step.modelSelection ? { modelSelection: step.modelSelection } : {}),
 			...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 			...(step.error ? { error: step.error } : {}),
 			...(step.timedOut !== undefined ? { timedOut: step.timedOut } : {}),
@@ -337,7 +339,7 @@ function formatStepLine(step: AsyncRunStepSummary): string {
 	const parts = [`${step.index + 1}. ${phase}${display}`, step.status];
 	const activity = formatActivityFacts(step);
 	if (activity) parts.push(activity);
-	const modelThinking = formatModelThinking(step.model, step.thinking);
+	const modelThinking = formatModelSelection(step.modelSelection, step.model, step.thinking);
 	if (modelThinking) parts.push(modelThinking);
 	if (step.durationMs !== undefined) parts.push(formatDuration(step.durationMs));
 	if (step.tokens) parts.push(`${formatTokens(step.tokens.total)} tok`);

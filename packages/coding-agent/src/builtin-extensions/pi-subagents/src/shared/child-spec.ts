@@ -10,9 +10,10 @@ import {
 	type ChildPermission,
 } from "../../../../core/subagent-permission-inherit.ts";
 import { resolveChildExcludeTools } from "../runs/shared/child-tools.ts";
-import type { AcceptanceInput, ChildSpec, ChildTier, JsonSchemaObject, ToolBudgetConfig } from "./types.ts";
+import { captureModelSelection } from "../runs/shared/model-fallback.ts";
+import type { AcceptanceInput, ChildSpec, ChildTier, JsonSchemaObject, ModelSelection, ToolBudgetConfig } from "./types.ts";
 
-export type { ChildSpec, ChildTier } from "./types.ts";
+export type { ChildSpec, ChildTier, ModelSelection } from "./types.ts";
 
 export const CHILD_DESCRIPTION_MAX_LENGTH = 80;
 
@@ -22,6 +23,7 @@ export interface DelegatedTaskInput {
 	permissions?: unknown;
 	model?: unknown;
 	tier?: unknown;
+	modelSelection?: unknown;
 	skill?: unknown;
 	cwd?: unknown;
 	output?: unknown;
@@ -108,6 +110,17 @@ function optionalCount(value: unknown): number | undefined {
 	return undefined;
 }
 
+function isModelSelection(value: unknown): value is ModelSelection {
+	if (!value || typeof value !== "object") return false;
+	const kind = (value as { kind?: unknown }).kind;
+	if (kind === "model" || kind === "inherit") return true;
+	if (kind === "tier") {
+		const tier = (value as { tier?: unknown }).tier;
+		return tier === "light" || tier === "standard" || tier === "heavy";
+	}
+	return false;
+}
+
 export function normalizeChildSpec(input: DelegatedTaskInput, options: NormalizeChildSpecOptions): ChildSpec {
 	const pathLabel = options.pathLabel ?? "task";
 	const description = validateChildDescription(input.description, `${pathLabel}.description`);
@@ -124,6 +137,9 @@ export function normalizeChildSpec(input: DelegatedTaskInput, options: Normalize
 	}
 	const tier = input.tier === "light" || input.tier === "standard" || input.tier === "heavy" ? input.tier : undefined;
 	const outputMode = input.outputMode === "inline" || input.outputMode === "file-only" ? input.outputMode : undefined;
+	const modelSelection = isModelSelection(input.modelSelection)
+		? input.modelSelection
+		: captureModelSelection({ model: input.model, tier: input.tier });
 	return {
 		childId: options.childId ?? allocateChildId(options.runId, options.index),
 		task,
@@ -132,6 +148,7 @@ export function normalizeChildSpec(input: DelegatedTaskInput, options: Normalize
 		effectivePermissions: resolved.effective,
 		model: optionalString(input.model),
 		tier,
+		modelSelection,
 		skill: optionalSkill(input.skill),
 		cwd: optionalString(input.cwd),
 		output: optionalOutput(input.output),

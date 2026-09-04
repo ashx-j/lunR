@@ -24,6 +24,12 @@ export type OutputMode = "inline" | "file-only";
 export type ChildPermission = "full" | "read-only";
 export type ChildTier = "light" | "standard" | "heavy";
 
+/** How the child model was chosen. Captured from requested params before resolution. */
+export type ModelSelection =
+	| { kind: "model" }
+	| { kind: "tier"; tier: ChildTier }
+	| { kind: "inherit" };
+
 export interface ChildSpec {
 	childId: string;
 	task: string;
@@ -32,6 +38,7 @@ export interface ChildSpec {
 	effectivePermissions: ChildPermission;
 	model?: string;
 	tier?: ChildTier;
+	modelSelection?: ModelSelection;
 	skill?: string | string[] | false;
 	cwd?: string;
 	output?: string | false;
@@ -357,6 +364,7 @@ export interface SteeringRecoveryDescriptor {
 	cwd: string;
 	model?: string;
 	thinking?: string;
+	modelSelection?: ModelSelection;
 	skills?: string[];
 	outputPath?: string;
 	outputMode: "inline" | "file-only";
@@ -454,6 +462,7 @@ export interface AgentProgress {
 	currentPath?: string;
 	model?: string;
 	thinking?: string;
+	modelSelection?: ModelSelection;
 	thinkingText?: string;
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
@@ -666,6 +675,7 @@ export interface SingleResult {
 	usage: Usage;
 	model?: string;
 	thinking?: string;
+	modelSelection?: ModelSelection;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	controlEvents?: ControlEvent[];
@@ -953,6 +963,7 @@ export interface AsyncStatus {
 		skills?: string[];
 		model?: string;
 		thinking?: string;
+		modelSelection?: ModelSelection;
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		totalCost?: CostSummary;
