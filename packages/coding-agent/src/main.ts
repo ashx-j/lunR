@@ -28,7 +28,6 @@ import {
 	VERSION,
 } from "./config.ts";
 import {
-	type AgentSessionRuntimeApplied,
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionRuntime,
 } from "./core/agent-session-runtime.ts";
@@ -57,11 +56,10 @@ import {
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { pruneOldSessions } from "./core/session-retention.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
-import { registerSettingsToolsBridge } from "./core/settings-tools-bridge.ts";
+import { bindRuntimeBridges } from "./core/runtime-bridges.ts";
 import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
@@ -892,15 +890,6 @@ export async function main(args: string[], options?: MainOptions) {
 			services,
 			diagnostics,
 		};
-	};
-	const bindRuntimeBridges: AgentSessionRuntimeApplied = ({ session, services }) => {
-		const { settingsManager, modelRuntime } = services;
-		registerModelTierBridge(settingsManager);
-		getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
-		registerMemoryCapBridge(settingsManager);
-		registerCustomizeBridge(settingsManager);
-		registerUsageServiceBridge(modelRuntime, settingsManager);
-		registerSettingsToolsBridge(settingsManager, () => session.sessionId);
 	};
 	time("createRuntime");
 	const runtime = await createAgentSessionRuntime(createRuntime, {
