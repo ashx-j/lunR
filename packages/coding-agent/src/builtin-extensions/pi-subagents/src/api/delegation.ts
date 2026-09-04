@@ -1,5 +1,5 @@
 // @ts-nocheck
-export const SUBAGENT_DELEGATION_PROTOCOL_VERSION = 1 as const;
+export const SUBAGENT_DELEGATION_PROTOCOL_VERSION = 2 as const;
 
 // This is the established extension-to-extension transport. The public API
 // intentionally reuses it instead of adding a second event protocol.
@@ -81,7 +81,7 @@ export interface SubagentDelegationRequest {
 	task: string;
 	context: "fresh" | "fork";
 	cwd: string;
-	model?: string;
+	tier: "light" | "standard" | "heavy";
 	timeoutMs?: number;
 	turnBudget?: SubagentDelegationTurnBudget;
 	toolBudget?: SubagentDelegationToolBudget;

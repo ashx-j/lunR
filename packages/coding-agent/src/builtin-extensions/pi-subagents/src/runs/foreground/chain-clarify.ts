@@ -470,16 +470,6 @@ export class ChainClarifyComponent implements Component {
 			return;
 		}
 
-		if (data === "m") {
-			this.enterModelSelector();
-			return;
-		}
-
-		if (data === "t") {
-			this.enterThinkingSelector();
-			return;
-		}
-
 		if (data === "s") {
 			this.editingStep = this.selectedStep;
 			this.editMode = "skills";
@@ -1113,11 +1103,11 @@ export class ChainClarifyComponent implements Component {
 
 		switch (this.mode) {
 			case 'single':
-				return ` ${shortcut("e", "Task")} ${shortcut("m", "Model")} ${shortcut("t", "Think")} ${shortcut("w", "Output")} ${shortcut("s", "Skills")} ${background}`;
+				return ` ${shortcut("e", "Task")} ${shortcut("w", "Output")} ${shortcut("s", "Skills")} ${background}`;
 			case 'parallel':
-				return ` ${shortcut("e", "Task")} ${shortcut("m", "Model")} ${shortcut("t", "Think")} ${shortcut("s", "Skills")} ${background}`;
+				return ` ${shortcut("e", "Task")} ${shortcut("s", "Skills")} ${background}`;
 			case 'chain':
-				return ` ${shortcut("e", "Task")} ${shortcut("m", "Model")} ${shortcut("t", "Think")} ${shortcut("w", "Output")} ${shortcut("r", "Reads")} ${shortcut("p", "Prog")} ${shortcut("s", "Skills")} ${background}`;
+				return ` ${shortcut("e", "Task")} ${shortcut("w", "Output")} ${shortcut("r", "Reads")} ${shortcut("p", "Prog")} ${shortcut("s", "Skills")} ${background}`;
 		}
 	}
 
@@ -1153,15 +1143,6 @@ export class ChainClarifyComponent implements Component {
 		const template = (this.templates[0] ?? "").split("\n")[0] ?? "";
 		const taskLabel = th.fg("dim", "task: ");
 		lines.push(this.row(`     ${taskLabel}${truncateToWidth(template, innerW - 12)}`));
-
-		const effectiveModel = this.getEffectiveModel(0);
-		const override = this.behaviorOverrides.get(0);
-		const isOverridden = override?.model !== undefined;
-		const modelValue = isOverridden
-			? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
-			: effectiveModel;
-		const modelLabel = th.fg("dim", "model: ");
-		lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
 
 		const writesValue = behavior.output === false
 			? th.fg("dim", "(disabled)")
@@ -1209,15 +1190,6 @@ export class ChainClarifyComponent implements Component {
 			const template = (this.templates[i] ?? "").split("\n")[0] ?? "";
 			const taskTextLabel = th.fg("dim", "task: ");
 			lines.push(this.row(`     ${taskTextLabel}${truncateToWidth(template, innerW - 12)}`));
-
-			const effectiveModel = this.getEffectiveModel(i);
-			const override = this.behaviorOverrides.get(i);
-			const isOverridden = override?.model !== undefined;
-			const modelValue = isOverridden
-				? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
-				: effectiveModel;
-			const modelLabel = th.fg("dim", "model: ");
-			lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
 
 			const behavior = this.getEffectiveBehavior(i);
 			const skillsValue = behavior.skills === false
@@ -1284,15 +1256,6 @@ export class ChainClarifyComponent implements Component {
 
 			const templateLabel = th.fg("dim", "task: ");
 			lines.push(this.row(`     ${templateLabel}${truncateToWidth(highlighted, innerW - 12)}`));
-
-			const effectiveModel = this.getEffectiveModel(i);
-			const override = this.behaviorOverrides.get(i);
-			const isOverridden = override?.model !== undefined;
-			const modelValue = isOverridden
-				? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
-				: effectiveModel;
-			const modelLabel = th.fg("dim", "model: ");
-			lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
 
 			const writesValue = behavior.output === false
 				? th.fg("dim", "(disabled)")

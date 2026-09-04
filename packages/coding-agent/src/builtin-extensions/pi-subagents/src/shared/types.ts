@@ -25,10 +25,7 @@ export type ChildPermission = "full" | "read-only";
 export type ChildTier = "light" | "standard" | "heavy";
 
 /** How the child model was chosen. Captured from requested params before resolution. */
-export type ModelSelection =
-	| { kind: "model" }
-	| { kind: "tier"; tier: ChildTier }
-	| { kind: "inherit" };
+export type ModelSelection = { kind: "tier"; tier: ChildTier };
 
 export interface ChildSpec {
 	childId: string;
@@ -37,7 +34,7 @@ export interface ChildSpec {
 	requestedPermissions: ChildPermission;
 	effectivePermissions: ChildPermission;
 	model?: string;
-	tier?: ChildTier;
+	tier: ChildTier;
 	modelSelection?: ModelSelection;
 	skill?: string | string[] | false;
 	cwd?: string;
@@ -281,7 +278,7 @@ export interface ControlEvent {
 
 export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
 export type SubagentRunMode = "single" | "parallel" | "chain";
-export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 3;
+export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 4;
 export type SubagentLifecycleArtifactVersion = typeof SUBAGENT_LIFECYCLE_ARTIFACT_VERSION;
 export const UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE =
 	"This subagent run uses an unsupported lifecycle format. Named agent types cannot be resumed. Launch a new prompt-driven child instead.";
@@ -353,7 +350,7 @@ export interface SteeringNotice {
 }
 
 export interface SteeringRecoveryDescriptor {
-	version: 3;
+	version: 4;
 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 	sourceRunId: string;
 	childId: string;
@@ -363,6 +360,7 @@ export interface SteeringRecoveryDescriptor {
 	sessionFile?: string;
 	cwd: string;
 	model?: string;
+	tier: ChildTier;
 	thinking?: string;
 	modelSelection?: ModelSelection;
 	skills?: string[];

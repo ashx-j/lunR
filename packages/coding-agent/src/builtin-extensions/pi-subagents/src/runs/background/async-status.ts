@@ -341,7 +341,10 @@ function formatStepLine(step: AsyncRunStepSummary): string {
 	if (activity) parts.push(activity);
 	const modelThinking = formatModelSelection(step.modelSelection, step.model, step.thinking);
 	if (modelThinking) parts.push(modelThinking);
-	if (step.durationMs !== undefined) parts.push(formatDuration(step.durationMs));
+	if (step.durationMs !== undefined) {
+		const duration = step.durationMs + (step.status === "running" && step.lastActivityAt !== undefined ? Math.max(0, Date.now() - step.lastActivityAt) : 0);
+		parts.push(`${step.status === "running" ? "" : "ran for "}${formatDuration(duration)}`);
+	}
 	if (step.tokens) parts.push(`${formatTokens(step.tokens.total)} tok`);
 	return parts.join(" | ");
 }

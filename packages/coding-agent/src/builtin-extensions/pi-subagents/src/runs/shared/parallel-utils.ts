@@ -8,6 +8,7 @@ export interface RunnerSubagentStep {
 	childId?: string;
 	description?: string;
 	permissions?: "full" | "read-only";
+	tier?: import("../../shared/types.ts").ChildTier;
 	task: string;
 	importAsyncRoot?: {
 		runId: string;

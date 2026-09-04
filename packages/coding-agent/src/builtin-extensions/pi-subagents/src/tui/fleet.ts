@@ -159,8 +159,9 @@ function rosterFacts(item: FleetItem, _theme: Theme): string | undefined {
 	let startedAt: number | undefined;
 	if (item.kind === "foreground-active") startedAt = item.control.startedAt;
 	else if (item.kind === "async") startedAt = item.run.startedAt;
-	if (startedAt !== undefined && Number.isFinite(startedAt) && item.updatedAt > startedAt) {
-		parts.push(formatDuration(item.updatedAt - startedAt));
+	const end = item.state === "running" ? Date.now() : item.updatedAt;
+	if (startedAt !== undefined && Number.isFinite(startedAt) && end > startedAt) {
+		parts.push(`${item.state === "running" ? "" : "ran for "}${formatDuration(end - startedAt)}`);
 	}
 	let toolCount: number | undefined;
 	if (item.kind === "foreground-active") toolCount = item.control.toolCount;

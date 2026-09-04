@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSubagentToolDescription } from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
 import {
 	captureModelSelection,
+	resolveRequiredTierModel,
 	resolveTierModelOverride,
 } from "../src/builtin-extensions/pi-subagents/src/runs/shared/model-fallback.ts";
 import {
@@ -16,7 +17,7 @@ import {
 } from "../src/core/model-tiers.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
-const TIER_GUIDANCE_MARKER = "MODEL TIERS:";
+const TIER_GUIDANCE_MARKER = "Every executable child requires tier";
 
 function clearModelTiersBridge(): void {
 	const bridge = getModelTiersBridge();
@@ -168,18 +169,18 @@ describe("subagent tool description tier guidance", () => {
 		clearModelTiersBridge();
 	});
 
-	it("omits MODEL TIERS guidance when the bridge is absent", () => {
-		expect(buildSubagentToolDescription()).not.toContain(TIER_GUIDANCE_MARKER);
+	it("requires tiers even when the bridge is absent", () => {
+		expect(buildSubagentToolDescription()).toContain(TIER_GUIDANCE_MARKER);
 	});
 
-	it("omits MODEL TIERS guidance when tier mode is disabled", () => {
+	it("requires tiers when tier mode is disabled", () => {
 		(globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] = {
 			isTierModeEnabled: () => false,
 		};
-		expect(buildSubagentToolDescription()).not.toContain(TIER_GUIDANCE_MARKER);
+		expect(buildSubagentToolDescription()).toContain(TIER_GUIDANCE_MARKER);
 	});
 
-	it("appends MODEL TIERS guidance when tier mode is enabled", () => {
+	it("requires tiers when tier mode is enabled", () => {
 		(globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] = {
 			isTierModeEnabled: () => true,
 		};
@@ -206,21 +207,21 @@ describe("resolveTierModelOverride", () => {
 		};
 	}
 
-	it("returns undefined when the bridge is absent", () => {
-		expect(resolveTierModelOverride("light")).toBeUndefined();
+	it("fails closed when the bridge is absent", () => {
+		expect(() => resolveTierModelOverride("light")).toThrow(/settings are unavailable/i);
 	});
 
-	it("returns undefined when tier mode is disabled", () => {
+	it("fails closed when tier mode is disabled", () => {
 		installBridge({ enabled: false, models: { light: "xai/grok-4" } });
-		expect(resolveTierModelOverride("light")).toBeUndefined();
+		expect(() => resolveTierModelOverride("light")).toThrow(/tiers are disabled/i);
 	});
 
-	it("returns undefined for unknown or unset tiers", () => {
+	it("fails closed for unknown or unset tiers", () => {
 		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
-		expect(resolveTierModelOverride("nope")).toBeUndefined();
-		expect(resolveTierModelOverride("standard")).toBeUndefined();
-		expect(resolveTierModelOverride("")).toBeUndefined();
-		expect(resolveTierModelOverride(undefined)).toBeUndefined();
+		expect(() => resolveTierModelOverride("nope")).toThrow(/requires tier/i);
+		expect(() => resolveTierModelOverride("standard")).toThrow(/no configured model/i);
+		expect(() => resolveTierModelOverride("")).toThrow(/requires tier/i);
+		expect(() => resolveTierModelOverride(undefined)).toThrow(/requires tier/i);
 	});
 
 	it("returns the configured provider/model when enabled", () => {
@@ -248,14 +249,29 @@ describe("resolveTierModelOverride", () => {
 		expect(resolveTierModelOverride("light")).toBe("xai/grok-4:off");
 	});
 
-	it("does not apply thinking when tiers are disabled", () => {
+	it("does not fall back when tiers are disabled", () => {
 		installBridge({
 			enabled: false,
 			models: { light: "xai/grok-4" },
 			thinking: { light: "high" },
 			parentThinking: "high",
 		});
-		expect(resolveTierModelOverride("light")).toBeUndefined();
+		expect(() => resolveTierModelOverride("light")).toThrow(/tiers are disabled/i);
+	});
+
+	it("fails when the configured model is unavailable or no credentials expose models", () => {
+		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
+		expect(() => resolveRequiredTierModel("light", [])).toThrow(/no authenticated models/i);
+		expect(() =>
+			resolveRequiredTierModel("light", [{ provider: "anthropic", id: "claude", fullId: "anthropic/claude" }]),
+		).toThrow(/unavailable or unauthenticated/i);
+	});
+
+	it("returns the exact available model with its thinking suffix", () => {
+		installBridge({ enabled: true, models: { light: "xai/grok-4" }, thinking: { light: "high" } });
+		expect(resolveRequiredTierModel("light", [{ provider: "xai", id: "grok-4", fullId: "xai/grok-4" }])).toBe(
+			"xai/grok-4:high",
+		);
 	});
 });
 
@@ -271,9 +287,9 @@ describe("captureModelSelection", () => {
 		};
 	}
 
-	it("prefers an explicit model even when a tier is also set", () => {
+	it("ignores retired explicit model input and captures the required tier", () => {
 		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ model: "xai/grok-4.5", tier: "light" })).toEqual({ kind: "model" });
+		expect(captureModelSelection({ model: "xai/grok-4.5", tier: "light" })).toEqual({ kind: "tier", tier: "light" });
 	});
 
 	it("captures a resolving tier", () => {
@@ -281,21 +297,21 @@ describe("captureModelSelection", () => {
 		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "tier", tier: "light" });
 	});
 
-	it("falls back to inherit when tiers are disabled", () => {
+	it("captures the requested tier independently of runtime configuration", () => {
 		installBridge({ enabled: false, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "inherit" });
+		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "tier", tier: "light" });
 	});
 
-	it("falls back to inherit when the tier is unconfigured", () => {
+	it("captures an unconfigured tier so later resolution can fail closed", () => {
 		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ tier: "standard" })).toEqual({ kind: "inherit" });
+		expect(captureModelSelection({ tier: "standard" })).toEqual({ kind: "tier", tier: "standard" });
 	});
 
-	it("inherits when both model and tier are omitted", () => {
-		expect(captureModelSelection({})).toEqual({ kind: "inherit" });
+	it("rejects when tier is omitted", () => {
+		expect(() => captureModelSelection({})).toThrow(/requires tier/i);
 	});
 
-	it("treats the inherit sentinel as inherit, not an explicit model", () => {
+	it("does not expose the retired inherit sentinel", () => {
 		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
 		expect(captureModelSelection({ model: "inherit", tier: "light" })).toEqual({ kind: "tier", tier: "light" });
 	});

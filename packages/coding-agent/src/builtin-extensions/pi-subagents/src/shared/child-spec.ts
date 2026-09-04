@@ -113,7 +113,6 @@ function optionalCount(value: unknown): number | undefined {
 function isModelSelection(value: unknown): value is ModelSelection {
 	if (!value || typeof value !== "object") return false;
 	const kind = (value as { kind?: unknown }).kind;
-	if (kind === "model" || kind === "inherit") return true;
 	if (kind === "tier") {
 		const tier = (value as { tier?: unknown }).tier;
 		return tier === "light" || tier === "standard" || tier === "heavy";
@@ -135,11 +134,18 @@ export function normalizeChildSpec(input: DelegatedTaskInput, options: Normalize
 	if (!resolved.ok) {
 		throw new Error(resolved.error || PLAN_MODE_WRITE_SPAWN_ERROR);
 	}
-	const tier = input.tier === "light" || input.tier === "standard" || input.tier === "heavy" ? input.tier : undefined;
+	if (input.model !== undefined && !isModelSelection(input.modelSelection)) {
+		throw new Error(`${pathLabel}.model is not supported for executable children; choose tier: "light", "standard", or "heavy".`);
+	}
+	const selectedTier = isModelSelection(input.modelSelection) ? input.modelSelection.tier : input.tier;
+	if (selectedTier !== "light" && selectedTier !== "standard" && selectedTier !== "heavy") {
+		throw new Error(`${pathLabel}.tier is required and must be "light", "standard", or "heavy".`);
+	}
+	const tier = selectedTier;
 	const outputMode = input.outputMode === "inline" || input.outputMode === "file-only" ? input.outputMode : undefined;
 	const modelSelection = isModelSelection(input.modelSelection)
 		? input.modelSelection
-		: captureModelSelection({ model: input.model, tier: input.tier });
+		: captureModelSelection({ tier });
 	return {
 		childId: options.childId ?? allocateChildId(options.runId, options.index),
 		task,

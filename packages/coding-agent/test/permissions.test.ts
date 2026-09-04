@@ -1,6 +1,11 @@
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+	effectiveLargeSubagentLaunchCount,
+	effectiveLargeSubagentLaunchCountForTurn,
+	LARGE_SUBAGENT_LAUNCH_THRESHOLD,
+} from "../src/core/large-subagent-launch.ts";
+import {
 	type ApprovalRequest,
 	type ApprovalResponse,
 	clearSessionApprovals,
@@ -11,7 +16,7 @@ import {
 	getPermissionMode,
 	isPlanModeActive,
 	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
-	NO_SWARM_HANDLER_REASON,
+	NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON,
 	nextPermissionMode,
 	registerApprovalHandler,
 	resetAllPermissionContexts,
@@ -20,12 +25,6 @@ import {
 	setPermissionMode,
 } from "../src/core/permissions.ts";
 import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
-import {
-	effectiveSwarmCount,
-	effectiveSwarmCountForTurn,
-	isExplicitSwarmTurn,
-	SWARM_APPROVAL_THRESHOLD,
-} from "../src/core/swarm.ts";
 
 describe("permissions", () => {
 	beforeEach(() => {
@@ -43,6 +42,28 @@ describe("permissions", () => {
 		setPermissionMode("manual");
 		const result = await gateToolCall("read", { path: "/foo" }, "/cwd");
 		expect(result).toBeUndefined();
+	});
+
+	it("covers bootstrap and detailed settings tools with read-vs-write permission semantics", async () => {
+		setPermissionMode("manual");
+		for (const tool of [
+			"settings_load",
+			"settings_model_tiers",
+			"settings_subscriptions",
+			"settings_rollback",
+			"settings_session_retention",
+		]) {
+			expect(await gateToolCall(tool, {}, "/cwd"), `${tool} read`).toBeUndefined();
+		}
+		expect(await gateToolCall("settings_model_tiers", { enabled: true }, "/cwd")).toEqual({
+			block: true,
+			reason: "Mutating tool blocked in manual mode: no approval channel available.",
+		});
+		setPermissionMode("plan");
+		expect(await gateToolCall("settings_session_retention", { days: 14 }, "/cwd")).toEqual({
+			block: true,
+			reason: PLAN_MODE_BLOCK_MESSAGE,
+		});
 	});
 
 	it("blocks mutating tools in manual mode when rejected", async () => {
@@ -164,7 +185,7 @@ describe("permissions", () => {
 	});
 
 	it("blocks file tools from changing user-managed global instructions in every mode", async () => {
-		const agentsPath = join(process.env.PI_CODING_AGENT_DIR!, "AGENTS.md");
+		const agentsPath = join(process.env.PI_CODING_AGENT_DIR!, "agents", "AGENTS.md");
 		for (const mode of ["manual", "yolo", "plan", "auto"] as const) {
 			setPermissionMode(mode);
 			for (const tool of ["edit", "write", "code_rewrite"]) {
@@ -173,6 +194,20 @@ describe("permissions", () => {
 					reason: GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
 				});
 			}
+		}
+	});
+
+	it("blocks traversal and model-specific files anywhere in the user instruction tree", async () => {
+		setPermissionMode("auto");
+		const root = process.env.PI_CODING_AGENT_DIR!;
+		for (const agentsPath of [
+			join(root, "agents", "gpt-5", "AGENTS.md"),
+			join(root, "agents", "gpt-5", "..", "claude", "AGENTS.md"),
+		]) {
+			expect(await gateToolCall("write", { path: agentsPath }, "/cwd")).toEqual({
+				block: true,
+				reason: GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
+			});
 		}
 	});
 
@@ -277,19 +312,19 @@ describe("permissions", () => {
 	});
 });
 
-describe("swarm helpers", () => {
+describe("large subagent launch helpers", () => {
 	it("counts parallel tasks with count multipliers", () => {
 		expect(
-			effectiveSwarmCount({
+			effectiveLargeSubagentLaunchCount({
 				tasks: [
 					{ task: "a", description: "A" },
 					{ task: "b", description: "B" },
 				],
 			}),
 		).toBe(2);
-		expect(effectiveSwarmCount({ tasks: [{ task: "a", description: "A", count: 3 }] })).toBe(3);
+		expect(effectiveLargeSubagentLaunchCount({ tasks: [{ task: "a", description: "A", count: 3 }] })).toBe(3);
 		expect(
-			effectiveSwarmCount({
+			effectiveLargeSubagentLaunchCount({
 				tasks: [
 					{ task: "a", description: "A", count: 0 },
 					{ task: "b", description: "B" },
@@ -300,7 +335,7 @@ describe("swarm helpers", () => {
 
 	it("counts chain parallel fan-out blocks", () => {
 		expect(
-			effectiveSwarmCount({
+			effectiveLargeSubagentLaunchCount({
 				chain: [
 					{ task: "a", description: "A" },
 					{
@@ -315,10 +350,10 @@ describe("swarm helpers", () => {
 	});
 
 	it("counts zero for single-agent and management calls", () => {
-		expect(effectiveSwarmCount({ task: "x", description: "Scout files" })).toBe(0);
-		expect(effectiveSwarmCount({ action: "status" })).toBe(0);
+		expect(effectiveLargeSubagentLaunchCount({ task: "x", description: "Scout files" })).toBe(0);
+		expect(effectiveLargeSubagentLaunchCount({ action: "status" })).toBe(0);
 		expect(
-			effectiveSwarmCount({
+			effectiveLargeSubagentLaunchCount({
 				chain: [
 					{ task: "a", description: "A" },
 					{ task: "b", description: "B" },
@@ -327,7 +362,7 @@ describe("swarm helpers", () => {
 		).toBe(0);
 	});
 
-	it("counts same-turn sibling SINGLE calls toward the swarm threshold", () => {
+	it("counts same-turn sibling SINGLE calls toward the launch threshold", () => {
 		const assistantMessage = {
 			content: [
 				{ type: "toolCall", name: "subagent", arguments: { task: "one", description: "One" } },
@@ -335,9 +370,9 @@ describe("swarm helpers", () => {
 				{ type: "toolCall", name: "subagent", arguments: { task: "three", description: "Three" } },
 			],
 		};
-		expect(effectiveSwarmCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(3);
+		expect(effectiveLargeSubagentLaunchCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(3);
 		expect(
-			effectiveSwarmCountForTurn(
+			effectiveLargeSubagentLaunchCountForTurn(
 				{
 					tasks: [
 						{ task: "a", description: "A" },
@@ -357,24 +392,11 @@ describe("swarm helpers", () => {
 				{ type: "toolCall", name: "subagent", arguments: { action: "status" } },
 			],
 		};
-		expect(effectiveSwarmCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(1);
-	});
-
-	it("detects explicit /swarm turns from the last user message", () => {
-		const swarmBranch = [
-			{ type: "message", message: { role: "user", content: [{ type: "text", text: "[SWARM MODE] Task: x" }] } },
-		];
-		expect(isExplicitSwarmTurn(swarmBranch)).toBe(true);
-		const plainBranch = [
-			{ type: "message", message: { role: "user", content: "do something" } },
-			{ type: "message", message: { role: "assistant", content: "ok" } },
-		];
-		expect(isExplicitSwarmTurn(plainBranch)).toBe(false);
-		expect(isExplicitSwarmTurn([])).toBe(false);
+		expect(effectiveLargeSubagentLaunchCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(1);
 	});
 });
 
-describe("agent-swarm gate", () => {
+describe("large subagent launch gate", () => {
 	const threeTasks = {
 		tasks: [
 			{ task: "one", description: "One" },
@@ -391,7 +413,7 @@ describe("agent-swarm gate", () => {
 	});
 
 	it("threshold is 2 parallel subagents", () => {
-		expect(SWARM_APPROVAL_THRESHOLD).toBe(2);
+		expect(LARGE_SUBAGENT_LAUNCH_THRESHOLD).toBe(2);
 	});
 
 	it("allows read-only subagent calls at or below the threshold without a handler", async () => {
@@ -422,9 +444,9 @@ describe("agent-swarm gate", () => {
 		});
 		const result = await gateToolCall("subagent", threeTasks, "/cwd");
 		expect(result).toBeUndefined();
-		expect(received?.kind).toBe("swarm");
-		expect(received?.action).toBe("swarm");
-		expect(received?.detail).toContain("agent swarm (3 subagents)");
+		expect(received?.kind).toBe("large-subagent-launch");
+		expect(received?.action).toBe("large-subagent-launch");
+		expect(received?.detail).toContain("large subagent launch (3 children)");
 		expect(received?.detail).toContain("One");
 	});
 
@@ -437,7 +459,7 @@ describe("agent-swarm gate", () => {
 		});
 		const result = await gateToolCall("subagent", threeTasks, "/cwd");
 		expect(calls).toBe(1);
-		expect(result).toEqual({ block: true, reason: "Agent swarm rejected by user." });
+		expect(result).toEqual({ block: true, reason: "Large subagent launch rejected by user." });
 	});
 
 	it("never prompts in auto mode", async () => {
@@ -446,9 +468,11 @@ describe("agent-swarm gate", () => {
 		expect(await gateToolCall("subagent", threeTasks, "/cwd")).toBeUndefined();
 	});
 
-	it("skips the swarm gate for explicit /swarm turns but still protects full children", async () => {
+	it("can disable only aggregate confirmation while still protecting full children", async () => {
 		setPermissionMode("manual");
-		expect(await gateToolCall("subagent", threeTasks, "/cwd", undefined, { explicitSwarmTurn: true })).toEqual({
+		expect(
+			await gateToolCall("subagent", threeTasks, "/cwd", undefined, { confirmLargeSubagentLaunches: false }),
+		).toEqual({
 			block: true,
 			reason: "Mutating tool blocked in manual mode: no approval channel available.",
 		});
@@ -457,10 +481,10 @@ describe("agent-swarm gate", () => {
 	it("fails closed without an approval handler", async () => {
 		setPermissionMode("manual");
 		const result = await gateToolCall("subagent", threeTasks, "/cwd");
-		expect(result).toEqual({ block: true, reason: NO_SWARM_HANDLER_REASON });
+		expect(result).toEqual({ block: true, reason: NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON });
 	});
 
-	it("persists session approval across swarm calls", async () => {
+	it("persists session approval across large launches", async () => {
 		setPermissionMode("manual");
 		let calls = 0;
 		registerApprovalHandler(async () => {
@@ -474,21 +498,21 @@ describe("agent-swarm gate", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("does not let a read-only swarm approval cover a later full child", async () => {
+	it("does not let a read-only aggregate approval cover a later full child", async () => {
 		setPermissionMode("manual");
 		const actions: string[] = [];
 		registerApprovalHandler(async (request) => {
 			actions.push(request.action);
 			return actions.length === 1 ? "session" : "reject";
 		});
-		const readOnlySwarm = {
+		const readOnlyLaunch = {
 			tasks: threeTasks.tasks.map((task) => ({ ...task, permissions: "read-only" as const })),
 		};
-		expect(await gateToolCall("subagent", readOnlySwarm, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("subagent", readOnlyLaunch, "/cwd")).toBeUndefined();
 		expect(
 			await gateToolCall("subagent", { task: "write", description: "Writer", permissions: "full" }, "/cwd"),
 		).toEqual({ block: true, reason: "Rejected by user (permission mode: manual)." });
-		expect(actions).toEqual(["swarm", "subagent-full"]);
+		expect(actions).toEqual(["large-subagent-launch", "subagent-full"]);
 	});
 
 	it("reject with feedback becomes the block reason", async () => {
@@ -497,7 +521,7 @@ describe("agent-swarm gate", () => {
 		const result = await gateToolCall("subagent", threeTasks, "/cwd");
 		expect(result).toEqual({
 			block: true,
-			reason: "Agent swarm rejected by user. too many agents, use one",
+			reason: "Large subagent launch rejected by user. too many agents, use one",
 		});
 	});
 
@@ -513,8 +537,8 @@ describe("agent-swarm gate", () => {
 		let calls = 0;
 		registerApprovalHandler(async (req) => {
 			calls++;
-			expect(req.kind).toBe("swarm");
-			expect(req.detail).toContain("agent swarm (3 subagents)");
+			expect(req.kind).toBe("large-subagent-launch");
+			expect(req.detail).toContain("large subagent launch (3 children)");
 			return "once" as ApprovalResponse;
 		});
 		const options = { assistantMessage };
@@ -547,8 +571,8 @@ describe("agent-swarm gate", () => {
 		const options = { assistantMessage };
 		const first = await gateToolCall("subagent", { task: "one", description: "One" }, "/cwd", undefined, options);
 		const second = await gateToolCall("subagent", { task: "two", description: "Two" }, "/cwd", undefined, options);
-		expect(first).toEqual({ block: true, reason: "Agent swarm rejected by user. use tasks" });
-		expect(second).toEqual({ block: true, reason: "Agent swarm rejected by user. use tasks" });
+		expect(first).toEqual({ block: true, reason: "Large subagent launch rejected by user. use tasks" });
+		expect(second).toEqual({ block: true, reason: "Large subagent launch rejected by user. use tasks" });
 		expect(calls).toBe(1);
 	});
 });

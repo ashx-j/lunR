@@ -20,7 +20,7 @@ import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, resolveTierModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveRequiredTierModel, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
@@ -604,14 +604,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
 		});
 
-		const primaryModel = resolveEffectiveSubagentModel(
-			spec.model ?? resolveTierModelOverride(spec.tier),
-			undefined,
-			ctx.currentModel,
-			availableModels,
-			ctx.currentModelProvider,
-			{ scope: ctx.modelScope },
-		);
+		const primaryModel = resolveRequiredTierModel(spec.tier, availableModels, ctx.currentModelProvider);
 		const thinkingOverride = flatIndex === undefined ? undefined : thinkingOverridesByFlatIndex?.[flatIndex];
 		const effectiveThinking = thinkingOverride;
 		const model = applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
@@ -621,6 +614,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			childId: spec.childId,
 			description: spec.description,
 			permissions: spec.effectivePermissions,
+			tier: spec.tier,
 			agent: spec.description,
 			task,
 			phase: s.phase,
@@ -1091,12 +1085,7 @@ export function executeAsyncSingle(
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, childToolShape);
-	const primaryModel = resolveSubagentModelOverride(
-		params.modelOverride ?? spec.model,
-		ctx.currentModel,
-		availableModels,
-		ctx.currentModelProvider,
-	);
+	const primaryModel = resolveRequiredTierModel(spec.tier, availableModels, ctx.currentModelProvider);
 	const effectiveThinking = params.thinkingOverride;
 	const model = applyThinkingSuffix(primaryModel, effectiveThinking, params.thinkingOverride !== undefined);
 	const toolBudgetInput = params.toolBudget ?? spec.toolBudget ?? params.configToolBudget;
@@ -1118,7 +1107,7 @@ export function executeAsyncSingle(
 		async: true,
 	});
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
-		version: 3,
+		version: 4,
 		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 		sourceRunId: id,
 		childId: spec.childId,
@@ -1128,6 +1117,7 @@ export function executeAsyncSingle(
 		...(sessionFile ? { sessionFile } : {}),
 		cwd: runnerCwd,
 		...(model ? { model } : {}),
+		tier: spec.tier,
 		...(effectiveThinking ? { thinking: resolveEffectiveThinking(model, effectiveThinking) } : {}),
 		...(spec.modelSelection ? { modelSelection: spec.modelSelection } : {}),
 		...(resolvedSkills.length ? { skills: resolvedSkills.map((skill) => skill.name) } : {}),

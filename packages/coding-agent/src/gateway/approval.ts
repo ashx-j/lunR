@@ -81,10 +81,11 @@ async function createApprovalPrompt(
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<ApprovalResponse> {
 	const id = generateId();
-	// lunr: auto-activated agent swarms get the "agent swarm" title; buttons stay
-	// once/session/reject (inline buttons cannot capture reject feedback).
+	// Large child launches get a dedicated title; inline buttons cannot capture feedback.
 	const title =
-		req.kind === "swarm" ? `▶ Approve agent swarm?\n${req.detail}` : `Approve ${req.toolName}?\n${req.detail}`;
+		req.kind === "large-subagent-launch"
+			? `Approve large subagent launch?\n${req.detail}`
+			: `Approve ${req.toolName}?\n${req.detail}`;
 	const rows: ButtonSpec[][] = [
 		[
 			{ label: "✓ Approve once", data: makeCallbackData(id, "once") },

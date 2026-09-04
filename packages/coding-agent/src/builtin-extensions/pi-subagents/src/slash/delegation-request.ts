@@ -18,7 +18,7 @@ const supportedFields = new Set([
 	"task",
 	"context",
 	"cwd",
-	"model",
+	"tier",
 	"timeoutMs",
 	"turnBudget",
 	"toolBudget",
@@ -62,8 +62,8 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 		return { ok: false, requestId, error: "Delegation context must be fresh or fork." };
 	}
 	if (!nonEmptyString(value.cwd)) return { ok: false, requestId, error: "Delegation cwd must be a non-empty string." };
-	if (value.model !== undefined && !nonEmptyString(value.model)) {
-		return { ok: false, requestId, error: "model must be a non-empty string when provided." };
+	if (value.tier !== "light" && value.tier !== "standard" && value.tier !== "heavy") {
+		return { ok: false, requestId, error: "tier must be light, standard, or heavy." };
 	}
 	if (value.timeoutMs !== undefined && (typeof value.timeoutMs !== "number" || !Number.isInteger(value.timeoutMs) || value.timeoutMs < 1)) {
 		return { ok: false, requestId, error: "timeoutMs must be an integer >= 1." };

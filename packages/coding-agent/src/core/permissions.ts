@@ -21,8 +21,9 @@
 
 import { dirname, join, resolve } from "node:path";
 import { getAgentDir } from "../config.ts";
+import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
+import { isUserInstructionsPath } from "./model-instructions.ts";
 import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
-import { effectiveSwarmCountForTurn, SWARM_APPROVAL_THRESHOLD } from "./swarm.ts";
 
 /** Shift+Tab cycle order. */
 export const PERMISSION_MODES = ["manual", "yolo", "plan", "auto"] as const;
@@ -54,13 +55,13 @@ export interface ApprovalRequest {
 	toolName: string;
 	/** "bash" (detail = command), "edit"/"write" (detail = path),
 	 *  "edit-outside"/"write-outside" when path escapes cwd,
-	 *  "subagent-full" for full-access children, or "swarm" for swarms. */
+	 *  "subagent-full" for full-access children, or "large-subagent-launch" for aggregate confirmation. */
 	action: string;
 	detail: string;
-	/** "swarm" when this is the agent-swarm approval prompt, "plan" for the
+	/** "large-subagent-launch" for aggregate child confirmation, "plan" for the
 	 *  present_plan plan-approval prompt — the UI renders a dedicated dialog
 	 *  for each instead of the generic tool dialog. */
-	kind?: "swarm" | "plan";
+	kind?: "large-subagent-launch" | "plan";
 }
 
 export type ApprovalDecision = "once" | "session" | "reject";
@@ -96,6 +97,7 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_code_actions",
 	"lsp_completions",
 	"memory_load",
+	"settings_load",
 ]);
 
 /** Tools that mutate state and must be gated in manual mode. */
@@ -103,10 +105,10 @@ const MUTATING_TOOLS = new Set(["bash", "edit", "write", "memory_add", "memory_r
 
 const REJECT_REASON = "Rejected by user (permission mode: manual).";
 export const NO_HANDLER_REASON = "Mutating tool blocked in manual mode: no approval channel available.";
-export const SWARM_REJECT_REASON = "Agent swarm rejected by user.";
-export const NO_SWARM_HANDLER_REASON = "Agent swarm blocked: no approval channel available.";
+export const LARGE_SUBAGENT_LAUNCH_REJECT_REASON = "Large subagent launch rejected by user.";
+export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch blocked: no approval channel available.";
 /** Session-approval keys for child launches. */
-const SWARM_ACTION = "swarm";
+const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 const FULL_CHILD_ACTION = "subagent-full";
 
 interface PermissionContext {
@@ -117,8 +119,8 @@ interface PermissionContext {
 const contexts = new Map<string, PermissionContext>();
 let defaultContext: PermissionContext = { mode: "manual", approvals: new Set() };
 let approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined;
-/** One swarm prompt covers every sibling SINGLE `subagent` on the same assistant message. */
-const turnSwarmDecisions = new WeakMap<
+/** One aggregate prompt covers every sibling SINGLE `subagent` on the same assistant message. */
+const turnLargeLaunchDecisions = new WeakMap<
 	object,
 	{ decision: ApprovalDecision; feedback?: string; fullChildrenApproved: boolean }
 >();
@@ -174,7 +176,7 @@ export function planApprovalResultText(resp: ApprovalResponse): string {
 }
 
 /**
- * lunr: present_plan approval request. Unlike the mutating-tool and swarm gates
+ * lunr: present_plan approval request. Unlike mutating-tool and aggregate launch gates
  * this fails OPEN when no approval handler is registered (or none is reachable,
  * e.g. a gateway turn without a chat context): headless sessions have no one to
  * show the dialog to, so the plan is presented and the user replies in chat
@@ -223,7 +225,7 @@ function resolvePath(cwd: string, p: unknown): string {
 }
 
 export const GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON =
-	"The global AGENTS.md file is user-managed. The agent cannot change ~/.lunr/agent/AGENTS.md.";
+	"The agents instruction tree is user-managed. The agent cannot change ~/.lunr/agent/agents/.";
 export const MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON =
 	"Memory is model-managed through the memory tools. Do not directly change ~/.lunr/simple-memory/memory.md.";
 
@@ -235,8 +237,7 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 		const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
 		return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 	};
-	const agentsPaths = [join(getAgentDir(), "AGENTS.md"), join(getAgentDir(), "AGENTS.MD")];
-	if (agentsPaths.some((candidate) => normalize(target) === normalize(candidate))) {
+	if (isUserInstructionsPath(target, getAgentDir())) {
 		return GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON;
 	}
 	if (normalize(target) === normalize(join(dirname(getAgentDir()), "simple-memory", "memory.md"))) {
@@ -285,6 +286,7 @@ function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChi
 
 function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
 	if (isMutatingTool(toolName)) return true;
+	if (toolName.startsWith("settings_") && toolName !== "settings_load") return Object.keys(input).length > 0;
 	if (toolName === "subagent") {
 		return getRequestedChildLaunches(input).some((launch) => launch.permissions === "full");
 	}
@@ -292,11 +294,10 @@ function requiresManualApproval(toolName: string, input: Record<string, unknown>
 }
 
 export interface GateOptions {
-	/** True when the current turn started from an explicit /swarm prompt — the
-	 *  user already asked for the swarm, so the swarm approval gate is skipped. */
-	explicitSwarmTurn?: boolean;
+	/** Global preference for aggregate confirmation. Defaults to enabled. */
+	confirmLargeSubagentLaunches?: boolean;
 	/** Assistant message that issued this tool call. Same-turn sibling SINGLE
-	 *  `subagent` calls count toward the swarm threshold. */
+	 *  `subagent` calls count toward the aggregate threshold. */
 	assistantMessage?: {
 		content?: ReadonlyArray<{ type?: string; name?: string; arguments?: unknown }>;
 	};
@@ -308,7 +309,10 @@ function firstTaskText(value: unknown): string {
 }
 
 /** First task text of a parallel fan-out or sibling SINGLE, used as the dialog summary. */
-function swarmTaskSummary(input: Record<string, unknown>, assistantMessage?: GateOptions["assistantMessage"]): string {
+function largeLaunchTaskSummary(
+	input: Record<string, unknown>,
+	assistantMessage?: GateOptions["assistantMessage"],
+): string {
 	if (Array.isArray(input.tasks)) {
 		for (const task of input.tasks) {
 			const text = task && typeof task === "object" ? firstTaskText((task as { task?: unknown }).task) : "";
@@ -330,40 +334,42 @@ function swarmTaskSummary(input: Record<string, unknown>, assistantMessage?: Gat
 }
 
 /**
- * Agent-swarm gate. An auto-activated swarm (more than SWARM_APPROVAL_THRESHOLD
+ * Aggregate launch gate. A launch above LARGE_SUBAGENT_LAUNCH_THRESHOLD
  * parallel subagents in one `tasks`/`chain.parallel` call, or that many same-turn
  * SINGLE `subagent` calls) requires user approval in manual AND yolo modes; auto
- * mode runs it unconditionally and explicit /swarm turns are pre-approved.
+ * mode runs it unconditionally.
  * Fail-closed without an approval handler, same as the mutating-tool gate.
  */
-async function gateSwarmCall(
+async function gateLargeSubagentLaunch(
 	input: Record<string, unknown>,
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | { fullChildrenApproved: boolean } | undefined> {
 	if (ctx.mode === "auto") return undefined;
-	if (options?.explicitSwarmTurn) return undefined;
-	const count = effectiveSwarmCountForTurn(input, options?.assistantMessage);
-	if (count <= SWARM_APPROVAL_THRESHOLD) return undefined;
-	if (ctx.approvals.has(SWARM_ACTION)) return { fullChildrenApproved: false };
+	if (options?.confirmLargeSubagentLaunches === false) return undefined;
+	const count = effectiveLargeSubagentLaunchCountForTurn(input, options?.assistantMessage);
+	if (count <= LARGE_SUBAGENT_LAUNCH_THRESHOLD) return undefined;
+	if (ctx.approvals.has(LARGE_SUBAGENT_LAUNCH_ACTION)) return { fullChildrenApproved: false };
 
 	const turnKey = options?.assistantMessage;
-	const cached = turnKey ? turnSwarmDecisions.get(turnKey) : undefined;
+	const cached = turnKey ? turnLargeLaunchDecisions.get(turnKey) : undefined;
 	if (cached) {
 		if (cached.decision === "reject") {
 			return {
 				block: true,
-				reason: cached.feedback ? `${SWARM_REJECT_REASON} ${cached.feedback}` : SWARM_REJECT_REASON,
+				reason: cached.feedback
+					? `${LARGE_SUBAGENT_LAUNCH_REJECT_REASON} ${cached.feedback}`
+					: LARGE_SUBAGENT_LAUNCH_REJECT_REASON,
 			};
 		}
 		return { fullChildrenApproved: cached.fullChildrenApproved };
 	}
 
 	if (!approvalHandler) {
-		return { block: true, reason: NO_SWARM_HANDLER_REASON };
+		return { block: true, reason: NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON };
 	}
 
-	const summary = swarmTaskSummary(input, options?.assistantMessage);
+	const summary = largeLaunchTaskSummary(input, options?.assistantMessage);
 	const siblingLaunches = (options?.assistantMessage?.content ?? []).flatMap((block) => {
 		if (block.type !== "toolCall" || block.name !== "subagent") return [];
 		const args =
@@ -381,12 +387,12 @@ async function gateSwarmCall(
 	try {
 		resp = await approvalHandler({
 			toolName: "subagent",
-			action: SWARM_ACTION,
-			detail: `agent swarm (${count} subagents)${launchSummary || summary ? `\n${launchSummary || summary}` : ""}`,
-			kind: "swarm",
+			action: LARGE_SUBAGENT_LAUNCH_ACTION,
+			detail: `large subagent launch (${count} children)${launchSummary || summary ? `\n${launchSummary || summary}` : ""}`,
+			kind: "large-subagent-launch",
 		});
 	} catch (err) {
-		const message = err instanceof Error ? err.message : NO_SWARM_HANDLER_REASON;
+		const message = err instanceof Error ? err.message : NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON;
 		return { block: true, reason: message };
 	}
 
@@ -394,15 +400,18 @@ async function gateSwarmCall(
 	const decision: ApprovalDecision = rawDecision === "approve" ? "once" : rawDecision;
 	const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
 	if (turnKey) {
-		turnSwarmDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}), fullChildrenApproved });
+		turnLargeLaunchDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}), fullChildrenApproved });
 	}
 	if (decision === "session") {
-		ctx.approvals.add(SWARM_ACTION);
+		ctx.approvals.add(LARGE_SUBAGENT_LAUNCH_ACTION);
 		if (fullChildrenApproved) ctx.approvals.add(FULL_CHILD_ACTION);
 		return { fullChildrenApproved };
 	}
 	if (decision === "reject") {
-		return { block: true, reason: feedback ? `${SWARM_REJECT_REASON} ${feedback}` : SWARM_REJECT_REASON };
+		return {
+			block: true,
+			reason: feedback ? `${LARGE_SUBAGENT_LAUNCH_REJECT_REASON} ${feedback}` : LARGE_SUBAGENT_LAUNCH_REJECT_REASON,
+		};
 	}
 	return { fullChildrenApproved };
 }
@@ -433,13 +442,13 @@ export async function gateToolCall(
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
-	// lunr: agent-swarm gate runs before the mode early-return — it applies in
+	// Aggregate launch confirmation runs before the mode early-return, including YOLO.
 	// yolo mode too (only auto mode bypasses it).
-	let swarmCoveredManualApproval = false;
+	let largeLaunchCoveredManualApproval = false;
 	if (toolName === "subagent") {
-		const swarmResult = await gateSwarmCall(input, ctx, options);
-		if (swarmResult && "block" in swarmResult) return swarmResult;
-		swarmCoveredManualApproval = ctx.mode === "manual" && swarmResult?.fullChildrenApproved === true;
+		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);
+		if (launchResult && "block" in launchResult) return launchResult;
+		largeLaunchCoveredManualApproval = ctx.mode === "manual" && launchResult?.fullChildrenApproved === true;
 	}
 
 	if (ctx.mode === "plan") {
@@ -448,7 +457,7 @@ export async function gateToolCall(
 	}
 
 	if (ctx.mode !== "manual") return undefined;
-	if (!requiresManualApproval(toolName, input) || swarmCoveredManualApproval) return undefined;
+	if (!requiresManualApproval(toolName, input) || largeLaunchCoveredManualApproval) return undefined;
 
 	let action: string;
 	let detail: string;
