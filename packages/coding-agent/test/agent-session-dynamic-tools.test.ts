@@ -82,17 +82,20 @@ describe("AgentSession dynamic tool registration", () => {
 			.filter((tool) => tool.name.startsWith("settings_"))
 			.map((tool) => ({
 				name: tool.name,
+				description: tool.description,
 				required: (tool.parameters as { required?: string[] }).required ?? [],
 				properties: Object.keys((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}),
 			}));
 		expect(schemas).toMatchInlineSnapshot(`
 			[
 			  {
+			    "description": "Load four narrow agent-managed settings tools for model tiers, subscription management, rollback, and session retention. Call only when the task requires inspecting or changing those settings.",
 			    "name": "settings_load",
 			    "properties": [],
 			    "required": [],
 			  },
 			  {
+			    "description": "Read or partially update light, standard, and heavy subagent model routes and their thinking levels. Models use provider/model ids. Omitted fields are unchanged.",
 			    "name": "settings_model_tiers",
 			    "properties": [
 			      "enabled",
@@ -106,6 +109,7 @@ describe("AgentSession dynamic tool registration", () => {
 			    "required": [],
 			  },
 			  {
+			    "description": "Read or update automatic management of multiple stored provider subscriptions. Omit enabled to read without changing it.",
 			    "name": "settings_subscriptions",
 			    "properties": [
 			      "enabled",
@@ -113,6 +117,7 @@ describe("AgentSession dynamic tool registration", () => {
 			    "required": [],
 			  },
 			  {
+			    "description": "Read or partially update rollback behavior: enabled, retained turns, capture strategy, and scope. Omitted fields are unchanged. Auto permission mode force-enables rollback for its current session.",
 			    "name": "settings_rollback",
 			    "properties": [
 			      "enabled",
@@ -123,6 +128,7 @@ describe("AgentSession dynamic tool registration", () => {
 			    "required": [],
 			  },
 			  {
+			    "description": "Read or update how many days saved sessions are retained. Set days to 0 to keep sessions forever. Cleanup applies on a later launch, not retroactively in this turn.",
 			    "name": "settings_session_retention",
 			    "properties": [
 			      "days",
@@ -131,8 +137,16 @@ describe("AgentSession dynamic tool registration", () => {
 			  },
 			]
 		`);
-		expect(session.systemPrompt).not.toContain("settings_model_tiers");
-		expect(session.systemPrompt).not.toContain("settings_session_retention");
+		expect(Object.fromEntries(settingsNames().map((name) => [name, session.systemPrompt.includes(name)])))
+			.toMatchInlineSnapshot(`
+				{
+				  "settings_load": false,
+				  "settings_model_tiers": false,
+				  "settings_rollback": false,
+				  "settings_session_retention": false,
+				  "settings_subscriptions": false,
+				}
+			`);
 
 		const tiers = session.getToolDefinition("settings_model_tiers")!;
 		await tiers.execute(
