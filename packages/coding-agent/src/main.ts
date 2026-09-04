@@ -27,7 +27,11 @@ import {
 	getSessionsDir,
 	VERSION,
 } from "./config.ts";
-import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
+import {
+	type AgentSessionRuntimeApplied,
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionRuntime,
+} from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
 	createAgentSessionFromServices,
@@ -888,11 +892,20 @@ export async function main(args: string[], options?: MainOptions) {
 			diagnostics,
 		};
 	};
+	const bindRuntimeBridges: AgentSessionRuntimeApplied = ({ session, services }) => {
+		const { settingsManager, modelRuntime } = services;
+		registerModelTierBridge(settingsManager);
+		getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
+		registerMemoryCapBridge(settingsManager);
+		registerCustomizeBridge(settingsManager);
+		registerUsageServiceBridge(modelRuntime, settingsManager);
+	};
 	time("createRuntime");
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd: sessionManager.getCwd(),
 		agentDir,
 		sessionManager,
+		onRuntimeApplied: bindRuntimeBridges,
 	});
 	if (startupShell?.isExitRequested) {
 		await runtime.dispose();
@@ -905,14 +918,6 @@ export async function main(args: string[], options?: MainOptions) {
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
-
-	// Point the model-tier bridge at the live runtime settings manager so /settings
-	// changes take effect without a restart.
-	registerModelTierBridge(settingsManager);
-	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
-	registerMemoryCapBridge(settingsManager);
-	registerCustomizeBridge(settingsManager);
-	registerUsageServiceBridge(modelRuntime, settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

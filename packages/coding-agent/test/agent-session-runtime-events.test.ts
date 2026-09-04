@@ -35,7 +35,10 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		}
 	});
 
-	async function createRuntimeHost(extensionFactory: ExtensionFactory) {
+	async function createRuntimeHost(
+		extensionFactory: ExtensionFactory,
+		onRuntimeApplied?: Parameters<typeof createAgentSessionRuntime>[1]["onRuntimeApplied"],
+	) {
 		const tempDir = join(tmpdir(), `pi-runtime-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
@@ -98,6 +101,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.create(tempDir),
+			onRuntimeApplied,
 		});
 		await runtimeHost.session.bindExtensions({});
 
@@ -111,6 +115,29 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 
 		return { runtimeHost, faux };
 	}
+
+	it("rebinds host-owned runtime state after initial creation and every replacement", async () => {
+		const appliedSessionFiles: Array<string | undefined> = [];
+		const { runtimeHost } = await createRuntimeHost(
+			() => {},
+			(result) => appliedSessionFiles.push(result.session.sessionFile),
+		);
+		expect(appliedSessionFiles).toEqual([runtimeHost.session.sessionFile]);
+
+		await runtimeHost.session.prompt("hello");
+		const firstSessionFile = runtimeHost.session.sessionFile;
+		await runtimeHost.newSession();
+		await runtimeHost.session.bindExtensions({});
+		expect(appliedSessionFiles).toHaveLength(2);
+
+		await runtimeHost.switchSession(firstSessionFile!);
+		await runtimeHost.session.bindExtensions({});
+		expect(appliedSessionFiles).toHaveLength(3);
+
+		const userMessage = runtimeHost.session.getUserMessagesForForking()[0];
+		await runtimeHost.fork(userMessage.entryId);
+		expect(appliedSessionFiles).toHaveLength(4);
+	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {
 		const events: RecordedSessionEvent[] = [];
