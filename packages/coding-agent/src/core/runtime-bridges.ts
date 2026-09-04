@@ -1,4 +1,4 @@
-import type { CreateAgentSessionRuntimeResult } from "./agent-session-services.ts";
+import type { CreateAgentSessionRuntimeResult } from "./agent-session-runtime.ts";
 import { registerCustomizeBridge } from "./customize.ts";
 import { registerMemoryCapBridge } from "./memory-cap.ts";
 import { getModelTiersBridge, registerModelTierBridge } from "./model-tiers.ts";

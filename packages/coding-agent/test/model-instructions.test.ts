@@ -53,13 +53,18 @@ describe("model-specific user instructions", () => {
 		expect(modelInstructionFolderName("../../CON")).not.toMatch(/^(con|\.\.?$)/i);
 		expect(modelInstructionFolderName("provider/a:b")).not.toBe(modelInstructionFolderName("provider/a?b"));
 
-		for (const id of ["../../AGENTS.md", "provider/a:b", "provider/a?b", "provider/.."] ) {
+		for (const id of ["../../AGENTS.md", "provider/a:b", "provider/a?b", "provider/.."]) {
 			const path = getModelInstructionsPath(agentDir, id);
 			expect(relative(resolve(getInstructionsRoot(agentDir)), resolve(path))).not.toMatch(/^\.\.(?:[\\/]|$)/);
 			expect(basename(path)).toBe("AGENTS.md");
 			expect(isUserInstructionsPath(path, agentDir)).toBe(true);
 		}
 		expect(isUserInstructionsPath(join(agentDir, "agents-escape", "AGENTS.md"), agentDir)).toBe(false);
+		if (process.platform === "win32") {
+			expect(
+				isUserInstructionsPath(getModelInstructionsPath(agentDir, "OPENAI/GPT-5.6").toUpperCase(), agentDir),
+			).toBe(true);
+		}
 	});
 
 	it("loads global instructions while disabled and applies both/model-only selection to the current model", () => {
@@ -72,18 +77,32 @@ describe("model-specific user instructions", () => {
 		writeFileSync(firstModelPath, "gpt rule");
 		writeFileSync(secondModelPath, "claude rule");
 
-		expect(loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "openai/gpt-5.6" } }))
-			.toEqual([{ path: globalPath, content: "global rule" }]);
+		expect(
+			loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "openai/gpt-5.6" } }),
+		).toEqual([{ path: globalPath, content: "global rule" }]);
 
 		manager.setModelInstructionsEnabled(true);
-		expect(loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "openai/gpt-5.6" } }))
-			.toEqual([{ path: globalPath, content: "global rule" }, { path: firstModelPath, content: "gpt rule" }]);
-		expect(loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "anthropic/claude-sonnet-4-5" } }))
-			.toEqual([{ path: globalPath, content: "global rule" }, { path: secondModelPath, content: "claude rule" }]);
+		expect(
+			loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "openai/gpt-5.6" } }),
+		).toEqual([
+			{ path: globalPath, content: "global rule" },
+			{ path: firstModelPath, content: "gpt rule" },
+		]);
+		expect(
+			loadSelectedUserInstructions({
+				agentDir,
+				settingsManager: manager,
+				model: { id: "anthropic/claude-sonnet-4-5" },
+			}),
+		).toEqual([
+			{ path: globalPath, content: "global rule" },
+			{ path: secondModelPath, content: "claude rule" },
+		]);
 
 		manager.setModelInstructionsMode("model-only");
-		expect(loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "openai/gpt-5.6" } }))
-			.toEqual([{ path: firstModelPath, content: "gpt rule" }]);
+		expect(
+			loadSelectedUserInstructions({ agentDir, settingsManager: manager, model: { id: "openai/gpt-5.6" } }),
+		).toEqual([{ path: firstModelPath, content: "gpt rule" }]);
 	});
 
 	it("persists model-instruction mode and large-launch confirmation defaults", async () => {
@@ -101,13 +120,29 @@ describe("model-specific user instructions", () => {
 	});
 
 	it("backfills directories for the current, default, enabled, and tier models", () => {
-		const diagnostics = ensureModelInstructionDirs(agentDir, {
-			defaultModel: "openai/gpt-default",
-			enabledModels: ["anthropic/claude-enabled", "openrouter/*"],
-			modelTiers: { enabled: true, light: "xai/grok-light", standard: "google/gemini-standard", heavy: "openai/gpt-heavy" },
-		}, { id: "current/current-model" });
+		const diagnostics = ensureModelInstructionDirs(
+			agentDir,
+			{
+				defaultModel: "openai/gpt-default",
+				enabledModels: ["anthropic/claude-enabled", "openrouter/*"],
+				modelTiers: {
+					enabled: true,
+					light: "xai/grok-light",
+					standard: "google/gemini-standard",
+					heavy: "openai/gpt-heavy",
+				},
+			},
+			{ id: "current/current-model" },
+		);
 		expect(diagnostics).toEqual([]);
-		for (const id of ["gpt-default", "claude-enabled", "grok-light", "gemini-standard", "gpt-heavy", "current-model"]) {
+		for (const id of [
+			"gpt-default",
+			"claude-enabled",
+			"grok-light",
+			"gemini-standard",
+			"gpt-heavy",
+			"current-model",
+		]) {
 			expect(existsSync(join(getInstructionsRoot(agentDir), id))).toBe(true);
 		}
 		expect(existsSync(join(getInstructionsRoot(agentDir), "*"))).toBe(false);
@@ -122,8 +157,19 @@ describe("model-specific user instructions", () => {
 		const normal = new DefaultResourceLoader({ cwd: projectDir, agentDir, settingsManager: manager });
 		await normal.reload();
 		expect(normal.getAgentsFiles().agentsFiles.map((file) => file.content)).toEqual(["global rule", "project rule"]);
+		writeFileSync(getGlobalInstructionsPath(agentDir), "global rule after reload");
+		await normal.reload();
+		expect(normal.getAgentsFiles().agentsFiles.map((file) => file.content)).toEqual([
+			"global rule after reload",
+			"project rule",
+		]);
 
-		const disabled = new DefaultResourceLoader({ cwd: projectDir, agentDir, settingsManager: manager, noContextFiles: true });
+		const disabled = new DefaultResourceLoader({
+			cwd: projectDir,
+			agentDir,
+			settingsManager: manager,
+			noContextFiles: true,
+		});
 		await disabled.reload();
 		expect(disabled.contextFilesEnabled()).toBe(false);
 		expect(disabled.getAgentsFiles().agentsFiles).toEqual([]);
