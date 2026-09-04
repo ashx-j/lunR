@@ -5,7 +5,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Usage, SingleResult } from "./types.ts";
+import type { ModelSelection, Usage, SingleResult } from "./types.ts";
 import type { ChainStep } from "./settings.ts";
 import { isDynamicParallelStep, isParallelStep } from "./settings.ts";
 import { splitKnownThinkingSuffix, THINKING_LEVELS } from "./model-info.ts";
@@ -17,16 +17,29 @@ export function formatTokens(n: number): string {
 	return n < 1000 ? String(n) : n < 10000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`;
 }
 
+function formatThinkingLabel(model?: string, thinking?: string): string | undefined {
+	const parsed = model ? splitKnownThinkingSuffix(model) : undefined;
+	const explicitThinking = THINKING_LEVELS.find((level) => level === thinking?.trim());
+	const displayThinking = parsed?.thinkingSuffix ? parsed.thinkingSuffix.slice(1) : explicitThinking;
+	return displayThinking ? `thinking ${displayThinking}` : undefined;
+}
+
 export function formatModelThinking(model?: string, thinking?: string): string {
 	const parsed = model ? splitKnownThinkingSuffix(model) : undefined;
 	let displayModel = parsed?.baseModel ?? model;
-	const explicitThinking = THINKING_LEVELS.find((level) => level === thinking?.trim());
-	const displayThinking = parsed?.thinkingSuffix ? parsed.thinkingSuffix.slice(1) : explicitThinking;
 	if (displayModel) {
 		const slashIdx = displayModel.lastIndexOf("/");
 		if (slashIdx !== -1) displayModel = displayModel.slice(slashIdx + 1);
 	}
-	return [displayModel, displayThinking ? `thinking ${displayThinking}` : undefined].filter(Boolean).join(" · ");
+	return [displayModel, formatThinkingLabel(model, thinking)].filter(Boolean).join(" · ");
+}
+
+/** Compact/header badge: selected tier name, or resolved model when selected by model / inherit. */
+export function formatModelSelection(selection?: ModelSelection, resolvedModel?: string, thinking?: string): string {
+	if (selection?.kind === "tier" && selection.tier) {
+		return [selection.tier, formatThinkingLabel(resolvedModel, thinking)].filter(Boolean).join(" · ");
+	}
+	return formatModelThinking(resolvedModel, thinking);
 }
 
 /**

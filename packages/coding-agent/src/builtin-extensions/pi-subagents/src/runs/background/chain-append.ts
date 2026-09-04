@@ -141,6 +141,7 @@ function statusStepForTask(task: RunnerSubagentStep): StatusStep {
 		skills: task.skills,
 		model: task.model,
 		thinking: task.thinking,
+		...(task.modelSelection ? { modelSelection: task.modelSelection } : {}),
 		attemptedModels: task.modelCandidates && task.modelCandidates.length > 0 ? task.modelCandidates : task.model ? [task.model] : undefined,
 		recentTools: [],
 		recentOutput: [],

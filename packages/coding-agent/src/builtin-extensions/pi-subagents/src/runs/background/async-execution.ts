@@ -20,7 +20,7 @@ import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, resolveTierModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
@@ -605,7 +605,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		});
 
 		const primaryModel = resolveEffectiveSubagentModel(
-			spec.model,
+			spec.model ?? resolveTierModelOverride(spec.tier),
 			undefined,
 			ctx.currentModel,
 			availableModels,
@@ -630,6 +630,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			cwd: stepCwd,
 			model,
 			thinking: resolveEffectiveThinking(model, effectiveThinking),
+			...(spec.modelSelection ? { modelSelection: spec.modelSelection } : {}),
 			modelCandidates: buildModelCandidates(primaryModel, undefined, availableModels, ctx.currentModelProvider, { scope: ctx.modelScope }).map((candidate) =>
 				applyThinkingSuffix(candidate, effectiveThinking, thinkingOverride !== undefined),
 			),
@@ -1128,6 +1129,7 @@ export function executeAsyncSingle(
 		cwd: runnerCwd,
 		...(model ? { model } : {}),
 		...(effectiveThinking ? { thinking: resolveEffectiveThinking(model, effectiveThinking) } : {}),
+		...(spec.modelSelection ? { modelSelection: spec.modelSelection } : {}),
 		...(resolvedSkills.length ? { skills: resolvedSkills.map((skill) => skill.name) } : {}),
 		...(outputPath ? { outputPath } : {}),
 		outputMode,
@@ -1165,6 +1167,7 @@ export function executeAsyncSingle(
 						cwd: runnerCwd,
 						model,
 						thinking: resolveEffectiveThinking(model, effectiveThinking),
+						...(spec.modelSelection ? { modelSelection: spec.modelSelection } : {}),
 						modelCandidates: buildModelCandidates(primaryModel, undefined, availableModels, ctx.currentModelProvider, { scope: ctx.modelScope }).map((candidate) =>
 							applyThinkingSuffix(candidate, effectiveThinking, params.thinkingOverride !== undefined),
 						),
