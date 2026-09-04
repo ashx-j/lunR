@@ -40,6 +40,9 @@ export type CreateAgentSessionRuntimeFactory = (options: {
 	projectTrustContext?: ProjectTrustContext;
 }) => Promise<CreateAgentSessionRuntimeResult>;
 
+/** Host callback for rebinding process-global state to the applied runtime. */
+export type AgentSessionRuntimeApplied = (result: CreateAgentSessionRuntimeResult) => void;
+
 /**
  * Thrown when /import references a JSONL file path that does not exist.
  */
@@ -77,6 +80,7 @@ export class AgentSessionRuntime {
 	private _session: AgentSession;
 	private _services: AgentSessionServices;
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+	private readonly onRuntimeApplied?: AgentSessionRuntimeApplied;
 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
 	private _modelFallbackMessage?: string;
 
@@ -86,12 +90,14 @@ export class AgentSessionRuntime {
 		createRuntime: CreateAgentSessionRuntimeFactory,
 		_diagnostics: AgentSessionRuntimeDiagnostic[] = [],
 		_modelFallbackMessage?: string,
+		onRuntimeApplied?: AgentSessionRuntimeApplied,
 	) {
 		this._session = _session;
 		this._services = _services;
 		this.createRuntime = createRuntime;
 		this._diagnostics = _diagnostics;
 		this._modelFallbackMessage = _modelFallbackMessage;
+		this.onRuntimeApplied = onRuntimeApplied;
 	}
 
 	get services(): AgentSessionServices {
@@ -179,6 +185,7 @@ export class AgentSessionRuntime {
 		this._services = result.services;
 		this._diagnostics = result.diagnostics;
 		this._modelFallbackMessage = result.modelFallbackMessage;
+		this.onRuntimeApplied?.(result);
 	}
 
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
@@ -415,17 +422,21 @@ export async function createAgentSessionRuntime(
 		agentDir: string;
 		sessionManager: SessionManager;
 		sessionStartEvent?: SessionStartEvent;
+		onRuntimeApplied?: AgentSessionRuntimeApplied;
 	},
 ): Promise<AgentSessionRuntime> {
 	assertSessionCwdExists(options.sessionManager, options.cwd);
 	const result = await createRuntime(options);
-	return new AgentSessionRuntime(
+	const runtime = new AgentSessionRuntime(
 		result.session,
 		result.services,
 		createRuntime,
 		result.diagnostics,
 		result.modelFallbackMessage,
+		options.onRuntimeApplied,
 	);
+	options.onRuntimeApplied?.(result);
+	return runtime;
 }
 
 export {
