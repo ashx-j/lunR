@@ -1,8 +1,10 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.13`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.14`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.14] - 2026-09-05
 
 ### Documentation
 
@@ -10,12 +12,15 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.13`**.
 
 ### New Features
 
+- **Autonomous model catalog** — Codex uses public metadata plus authenticated, version-gated discovery, with idle refresh and checksummed hourly snapshots that do not require an agent turn.
 - **Mid-message skill tags** — `/settings` Skill tag (`+`, `~`, or `$`) lists loaded skills after a space so you can insert `{char}{name}` without expanding SKILL.md. `/skill:name` remains the force-load path.
 - **Agent-managed factual memory** — Added an Agent memory setting beside the character cap. Turning it off removes memory injection and tools without deleting stored facts. Global behavior now comes only from a user-created `~/.lunr/agent/AGENTS.md`; behavior presets and `behavior.md` injection were removed.
 - **Qwen Token Plan** — Added built-in providers for QwenCloud's Credits-based Token Plan (`qwen-token-plan` international and `qwen-token-plan-cn` China), using the DashScope OpenAI-compatible endpoint with `DASHSCOPE_TOKEN_PLAN_API_KEY` / `DASHSCOPE_TOKEN_PLAN_CN_API_KEY`. Includes 15 text models and defaults to the token-plan-only `qwen3.8-max-preview`.
 
 ### Changed
 
+- **Real TUI first paint** — The normal moon chatbox, header, and stats render before runtime hydration while retaining the same terminal, editor, draft, cursor, and image chips through feature attachment.
+- **Offline release validation** — Routine builds no longer regenerate the live model catalog; published dependencies and standalone installer locks preserve exact reviewed resolutions.
 - **Settings menu copy** — `/settings` rows use short feature summaries instead of implementation inventories; choice-specific details stay beside the relevant option.
 - **Global AGENTS.md label** — `/context` and `/usage` label `~/.lunr/agent/AGENTS.md` as `Global AGENTS.md`; project instruction files stay `AGENTS.md`.
 

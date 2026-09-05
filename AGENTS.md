@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-05 (v0.2.14 shipped). Public npm is `@ashx-j/lunr@0.2.14`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **v0.2.14:** ships the autonomous catalog, real TUI first paint, VS Code `/paste-image`, offline CI/release builds, exact coding-agent dependencies, and workspace-aware standalone installer locks. PR #41 was closed because #45 superseded its startup shell and review found a deferred-feature prompt-barrier bug; its unrelated reliability work remains unshipped.
 
 - **VS Code image paste (`fix/vscode-image-paste`):** image paste flows through the normal app action for default and custom editors. `/paste-image` invokes the same image-only clipboard path when VS Code owns the key. The retained first-paint editor releases its startup paste callback at activation so the runtime action takes over. Tests: image-paste-keybinding + image-paste-markers + real-tui-first-paint + slash-commands + clipboard-image + extensions-runner.
 - **Real TUI first paint (`fix/real-tui-first-paint`):** the Node CLI paints the normal moon chatbox, boot header, and stats before runtime imports. InteractiveMode reuses the terminal/editor; Enter holds the editable draft until features finish, then uses the normal command/message handler. Failed feature loading keeps the draft. Theme validation/highlighting load on demand; footer git reads are asynchronous. Startup dialogs share the terminal. For startup changes or measurements, read `packages/coding-agent/docs/interactive-startup.md` and run `scripts/check-interactive-first-paint.mjs` after building. This replaces #41's temporary presentation without its unrelated reliability changes.
@@ -84,7 +86,7 @@ Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.13**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.14**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -98,6 +100,7 @@ Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 
 ## Build & run
 
+- v0.2.14 release (2026-09-05): offline tui → ai → agent → coding-agent → orchestrator build passes at 0.2.14; focused AI catalog tests pass 42/42 and coding-agent catalog/startup/image-paste tests pass 140/140. Stalled/failed-runtime first-paint checks and all four public-package dry-run packs pass; generated shrinkwrap and installer locks are current.
 - Real TUI first paint (2026-09-05): all five offline tsgo builds pass. Focused startup/footer/input/theme/feature tests pass; the expanded run retains 14 failures reproduced against master's entrypoints and interactive module, comprising 12 Windows resource-list assertions and 2 native source-launch `.js` resolution failures. The built-CLI stalled/failing-runtime checks pass. Three isolated moon launches wrote the first content frame at 94.8–95.3ms; three warm launches at 96.6–99.1ms. Feature readiness was 2.01–2.43s. These include Node entry loading and measure content writes, without measuring terminal compositor latency or compiled Bun binaries.
 
 - Autonomous catalog master port (2026-09-05): offline tui → ai → agent → coding-agent → orchestrator tsgo passes; 255 coding-agent tests across 21 files and 42 AI tests pass. Generated catalog validates 1,457 models across 39 providers. The idle refresh hook waits for master's existing deferred-builtins attachment, without importing instant-launch APIs from dev/tui.
@@ -272,6 +275,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: exclude vendored builtin extensions and gitignored study trees from the relative-import policy check because their ESM `.js` specifiers are outside repository policy.
 - 2026-09-05: use package builds for production type safety and Vitest for test code; the root no-emit pass mixed incompatible fixture types and kept CI permanently red.
 - 2026-09-05: release the first-paint editor's temporary paste callback at activation so the shared runtime app action owns image paste after hydration.
+- 2026-09-05: v0.2.14 ships the focused catalog, first-paint, and image-paste work; keep #41's mixed reliability changes out until they are split and corrected.
 
 # Deferred
 
