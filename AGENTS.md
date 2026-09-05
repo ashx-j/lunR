@@ -22,9 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-05 (v0.2.14 shipped). Public npm is `@ashx-j/lunr@0.2.14`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-05 (v0.2.15 on `release/v0.2.15`). Public npm is still `@ashx-j/lunr@0.2.14` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
-- **v0.2.14:** ships the autonomous catalog, real TUI first paint, VS Code `/paste-image`, offline CI/release builds, exact coding-agent dependencies, and workspace-aware standalone installer locks. PR #41 was closed because #45 superseded its startup shell and review found a deferred-feature prompt-barrier bug; its unrelated reliability work remains unshipped.
+- **v0.2.15:** ports lunr-dev settings work onto master without #41's temporary startup shell. `/settings` gains Model instructions and Confirm large subagent launches. Global instructions move to `~/.lunr/agent/agents/AGENTS.md` with optional per-model files. `settings_load` injects four narrow settings tools. Enabled model tiers require `light`/`standard`/`heavy` on every child (no inherit, no child `model`). `/swarm` is removed. Real TUI first paint from 0.2.14 stays. PR #41 reliability (terminal sanitization, rollback symlink, orchestrator timeouts) remains unshipped.
+- **v0.2.14:** ships the autonomous catalog, real TUI first paint, VS Code `/paste-image`, offline CI/release builds, exact coding-agent dependencies, and workspace-aware standalone installer locks. PR #41 was closed because #45 superseded its startup shell.
 
 - **VS Code image paste (`fix/vscode-image-paste`):** image paste flows through the normal app action for default and custom editors. `/paste-image` invokes the same image-only clipboard path when VS Code owns the key. The retained first-paint editor releases its startup paste callback at activation so the runtime action takes over. Tests: image-paste-keybinding + image-paste-markers + real-tui-first-paint + slash-commands + clipboard-image + extensions-runner.
 - **Real TUI first paint (`fix/real-tui-first-paint`):** the Node CLI paints the normal moon chatbox, boot header, and stats before runtime imports. InteractiveMode reuses the terminal/editor; Enter holds the editable draft until features finish, then uses the normal command/message handler. Failed feature loading keeps the draft. Theme validation/highlighting load on demand; footer git reads are asynchronous. Startup dialogs share the terminal. For startup changes or measurements, read `packages/coding-agent/docs/interactive-startup.md` and run `scripts/check-interactive-first-paint.mjs` after building. This replaces #41's temporary presentation without its unrelated reliability changes.
@@ -131,12 +132,12 @@ Last updated: 2026-09-05 (v0.2.14 shipped). Public npm is `@ashx-j/lunr@0.2.14`.
 
 # Architecture
 
-- **Features = baked-in extensions + bridges.** `builtin-extensions/` (inline factories in main.ts; hidden; vendored `// @ts-nocheck`; biome-excluded). Light roster: simple-pi-memory, pi-tps, ashxj-tui, ashxj-spinners, ashxj-thinking, lunr-local-providers, lunr-todos, lunr-plan-tools, lunr-skill-creator. Deferred (interactive after paint; print/RPC/gateway before first turn): pi-ollama-cloud, narumiruna-pi-goal, lunr-cron, pi-intercom, pi-prompt-template-model, pi-subagents, pi-web-access, pi-lsp-extension, pi-mcp-adapter. Removed: lunr-behavior, context-mode, MattDevy + narumiruna collections.
+- **Features = baked-in extensions + bridges.** `builtin-extensions/` (inline factories in main.ts; hidden; vendored `// @ts-nocheck`; biome-excluded). Light roster: simple-pi-memory, pi-tps, ashxj-tui, ashxj-spinners, ashxj-thinking, lunr-local-providers, lunr-todos, lunr-plan-tools, lunr-skill-creator, lunr-settings-tools. Deferred (interactive after paint; print/RPC/gateway before first turn): pi-ollama-cloud, narumiruna-pi-goal, lunr-cron, pi-intercom, pi-prompt-template-model, pi-subagents, pi-web-access, pi-lsp-extension, pi-mcp-adapter. Removed: lunr-behavior, context-mode, MattDevy + narumiruna collections.
 - **Bridges:** `globalThis[Symbol.for("@lunr/...")]`. Never runtime-barrel-import `@earendil-works/pi-coding-agent` under `builtin-extensions/` — concrete modules only. `complete`/`streamSimple`/`getModel` from `@earendil-works/pi-ai/compat`.
 - **Cron:** `core/cron` in TUI (live session) and gateway (fresh headless session). One `jobs.json` `~/.lunr/agent/cron/`. `runWithOrigin` ALS. Gateway fallback: `cronFallbackModels`.
 - **Gateway:** Telegram long-poll + Discord (mention-gated, no GuildMembers intent). Authz fail-closed. `ADAPTER_FACTORIES`.
 - **Footer:** ashxj-tui `setFooter` only. Toggles are render-time `CustomizeBridge` reads.
-- **Permissions:** `manual | yolo | plan | auto`; Shift+Tab cycles that order. Plan = `gateToolCall` + `PLAN_MODE_ADDENDUM`. Fail-closed without handler. Swarm (>2 parallel in one `tasks`/`chain.parallel` call, or that many same-turn SINGLE `subagent` calls) gated in manual AND yolo.
+- **Permissions:** `manual | yolo | plan | auto`; Shift+Tab cycles that order. Plan = `gateToolCall` + `PLAN_MODE_ADDENDUM`. Fail-closed without handler. 3+ children in one `tasks`/`chain.parallel` call, or that many same-turn SINGLE `subagent` calls, share one confirmation in manual AND yolo unless `/settings` Confirm large subagent launches is off. Auto bypasses it. There is no `/swarm` command.
 - **Rollback:** per-turn snapshots; `/rollback` forks and restores files. `/undo` and `/edit` stay in the same session via `navigateTree` (no fork).
 
 # Renamed vs still "pi"
@@ -157,8 +158,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - vite/oxc: `import type { A, B }` not `import type { A, type B }`.
 - Telegram length = `string.length` (UTF-16). Busy-session `/stop` `/new` must bypass session guard.
 - `// lunr:` = upstream edit markers. Hot sync files: `ashxj-tui.ts`, `interactive-mode.ts`, `agent-session.ts`, `bash.ts`, `settings-manager.ts`, `main.ts`, `builtin-extensions/*`.
-- Injected-prompt collapse is render-only (`[SWARM MODE]` / `[DEEP RESEARCH]` / goal marker).
-- `LUNR_SYSTEM_INJECTION.md` is a point-in-time effective-prompt snapshot, not an input. Regenerate it after changes to `system-prompt.ts`, active tools/extensions, `AGENTS.md`, skills, permission mode, goal state, `~/.lunr/simple-memory/memory.md`, or `~/.lunr/agent/AGENTS.md`.
+- Injected-prompt collapse is render-only (`[DEEP RESEARCH]` / goal marker).
+- `LUNR_SYSTEM_INJECTION.md` is a point-in-time effective-prompt snapshot, not an input. Regenerate it after changes to `system-prompt.ts`, active tools/extensions, `AGENTS.md`, skills, permission mode, goal state, `~/.lunr/simple-memory/memory.md`, or `~/.lunr/agent/agents/AGENTS.md`.
 - Tool schemas are the always-available discovery layer. Keep recovery/workflow instructions conditional in tool results where possible; reserve base-prompt rules for guidance required before the first call.
 - `/plan <task>`: enter plan + send; if already in plan, restore previous mode + send.
 - Catalog: `models.json` is one minified line on purpose; `/refresh` does not download it (shards only). Cache-only create prefers `official-catalog-cache.json` over parsing bundled `models.json`.
@@ -168,11 +169,11 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). I keep segment state on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Pinned chat scroll reuses the last chat layout; do not re-layout on offset. Overflow gutter is sticky so we do not probe full width every frame.
 - Collapsed same-name tool rows are header-only; click the card to reveal bodies/notices. Subagent compact widgets are the exception. Collapsed grouped errors stay in the tree and print under the last leaf. `app.tools.expand` has no default key; `/tree` still uses `ctrl+o` to cycle filters.
-- Global behavior is optional `~/.lunr/agent/AGENTS.md`: never auto-create it, add an in-app editor, or let model file tools modify it. `behavior.md` is retired and inert. Memory is durable facts only; off removes injection/tools but preserves the file, and direct file edits stay blocked.
+- Global behavior is optional `~/.lunr/agent/agents/AGENTS.md`: never auto-create it, add an in-app editor, or let model file tools modify it. A leftover `~/.lunr/agent/AGENTS.md` migrates there when the new path is empty. Model-specific files are `~/.lunr/agent/agents/<model>/AGENTS.md` behind `/settings` Model instructions. `behavior.md` is retired and inert. Memory is durable facts only; off removes injection/tools but preserves the file, and direct file edits stay blocked.
 - Context breakdown labels the resolved user-level instruction path as `Global AGENTS.md`; do not relabel project `AGENTS.md` files or alter the injected prompt path.
 - Skill tag is a mention in the user text (`+pdf-tools`). Do not expand it into a `<skill>` block; `/skill:name` remains the force-load path. Open the picker only at a token start (start of line or whitespace before the character). When the tag character is `~`, `~/` and `~\` stay file paths.
 - Tab title: `process.title` + OSC 0 `lunr` in `cli.ts` before importing main; InteractiveMode then sets `lunr - [session -] cwd`. Do not call `ctx.ui.setTitle` from ashxj-spinners.
-- Advertised children always start fresh. `fork-context.ts` stays for upstream sync; do not advertise `context: fork` in the tool schema/description. There are no named agent types; prompt children with `task` + `description` + optional `permissions`.
+- Advertised children always start fresh. `fork-context.ts` stays for upstream sync; do not advertise `context: fork` in the tool schema/description. There are no named agent types; prompt children with `task` + `description` + `tier` + optional `permissions`. When model tiers are enabled, omit-to-inherit and child `model` are rejected.
 - Child `permissions: "full"` is not parent-equivalent. It includes coding tools (read/search/shell/edit/write/web/LSP/MCP) and excludes cron, memory_*, goals, present_plan, and nested `subagent` (unless fanout-authorized). Read-only omits edit/write/code_rewrite and runs as Plan.
 - Compact subagent rows are description-first. Do not restore model-first `compactRowLead`. Never display worker/scout/reviewer role names. When a single result is visible, its call header must not repeat the description.
 - Compact/header badges use `modelSelection` captured at spawn. Do not format them from `result.model` alone; that is the resolved runtime id. A resolving `tier` prints the tier name, not the mapped model.
@@ -183,7 +184,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Live thinking is a 4-line max tail of the **full** thinking string (not the smooth-stream prefix). Do not pad empty rows; the slot grows 1→4 then rolls. History still collapses to `✻ Thought` + first sentence.
 - `/undo` = same-session `navigateTree` rewind, no editor paste. `/edit` = that rewind then paste. Neither forks. `/rollback` still forks.
 - Compact running subagent row is header + one `⎿` tools · tokens · time line. Do not hang thinking text. Do not print activity or `⚠ Subagent needs attention` TUI cards (`display: false`).
-- Feature statuses ≠ TPS. The Customize TPS counter gates `tps`; statuses only gate plan/goal/swarm.
+- Feature statuses ≠ TPS. The Customize TPS counter gates `tps`; statuses only gate plan/goal.
 - Default parallel subagent launch is unlimited. Honor an explicit `concurrency` / config override. Do not restore the 4-wide default.
 - xAI effort maps and Responses transport live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses). Humans do not invent catalog JSON; `withXaiEffortMetadata` also runs in `mergeCatalogLayers` so a stale shard cannot keep 4.6 on Completions. Named Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`, not a frozen id allowlist.
 - OpenAI GPT effort floors live in `generate-models.ts` / `openai-effort.ts` as fallback metadata. Authoritative provider effort maps take precedence. Codex public generation and live discovery share `packages/ai/src/catalog/codex.ts`; new Codex IDs need no explicit generator list.
@@ -276,6 +277,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: use package builds for production type safety and Vitest for test code; the root no-emit pass mixed incompatible fixture types and kept CI permanently red.
 - 2026-09-05: release the first-paint editor's temporary paste callback at activation so the shared runtime app action owns image paste after hydration.
 - 2026-09-05: v0.2.14 ships the focused catalog, first-paint, and image-paste work; keep #41's mixed reliability changes out until they are split and corrected.
+- 2026-09-05: ship model instructions, required child tiers, and settings_load on master as 0.2.15; drop /swarm instead of restoring the lunr-dev command.
 
 # Deferred
 
