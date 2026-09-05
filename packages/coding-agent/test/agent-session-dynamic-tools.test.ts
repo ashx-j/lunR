@@ -8,10 +8,11 @@ import lunrSettingsTools, { DETAILED_SETTINGS_TOOL_NAMES } from "../src/builtin-
 import simpleMemory from "../src/builtin-extensions/simple-pi-memory.ts";
 import { MEMORY_CAP_BRIDGE_SYMBOL, registerMemoryCapBridge } from "../src/core/memory-cap.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
+import { bindRuntimeBridges } from "../src/core/runtime-bridges.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { registerSettingsToolsBridge, SETTINGS_TOOLS_BRIDGE_SYMBOL } from "../src/core/settings-tools-bridge.ts";
+import { getSettingsToolsBridge, registerSettingsToolsBridge, SETTINGS_TOOLS_BRIDGE_SYMBOL } from "../src/core/settings-tools-bridge.ts";
 
 describe("AgentSession dynamic tool registration", () => {
 	let tempDir: string;
@@ -165,6 +166,46 @@ describe("AgentSession dynamic tool registration", () => {
 		const second = await load.execute("settings-call-2", {}, undefined, undefined, {} as never);
 		expect(second.details).toMatchObject({ alreadyLoaded: true });
 		expect(settingsNames()).toHaveLength(5);
+		session.dispose();
+	});
+
+	it("headless bindRuntimeBridges activates settings tools without a prior registerSettingsToolsBridge call", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		expect(getSettingsToolsBridge()).toBeUndefined();
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [lunrSettingsTools],
+		});
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			settingsManager,
+			sessionManager: SessionManager.inMemory(),
+			resourceLoader,
+		});
+		bindRuntimeBridges({
+			session,
+			services: {
+				settingsManager,
+				modelRuntime: session.modelRuntime,
+			},
+		} as Parameters<typeof bindRuntimeBridges>[0]);
+		expect(getSettingsToolsBridge()).toBeDefined();
+		await session.bindExtensions({});
+		const load = session.getToolDefinition("settings_load")!;
+		await load.execute("settings-call", {}, undefined, undefined, {} as never);
+		const rollback = session.getToolDefinition("settings_rollback")!;
+		const result = await rollback.execute("rollback-call", {}, undefined, undefined, {} as never);
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				enabled: expect.any(Boolean),
+				turns: expect.any(Number),
+			}),
+		);
 		session.dispose();
 	});
 
