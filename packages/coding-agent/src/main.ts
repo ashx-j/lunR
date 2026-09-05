@@ -17,6 +17,7 @@ import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
+import { handleUpdateCli } from "./cli/update-cli.ts";
 import {
 	APP_NAME,
 	appendDebugLog,
@@ -34,14 +35,12 @@ import {
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { registerCustomizeBridge } from "./core/customize.ts";
-import { exportFromFile } from "./core/export-html/index.ts";
-import type { InlineExtension } from "./core/extensions/types.ts";
+import type { InlineExtension, ProjectTrustContext } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
 import { getModelTiersBridge, registerModelTierBridge } from "./core/model-tiers.ts";
-import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
@@ -57,12 +56,12 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { handleGatewayCommand } from "./gateway/command.ts";
+import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode } from "./modes/interactive/interactive-mode.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
-import { handleUpdateCli } from "./cli/update-cli.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
+import type { InteractiveView } from "./startup/interactive-view.ts";
+import { markStartupMilestone } from "./startup/startup-milestones.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
@@ -245,7 +244,10 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 }
 
 /** Prompt user for yes/no confirmation */
-async function promptConfirm(message: string): Promise<boolean> {
+async function promptConfirm(message: string, startupView?: InteractiveView): Promise<boolean> {
+	if (startupView) {
+		return startupView.confirm("Confirm", message);
+	}
 	return new Promise((resolve) => {
 		const rl = createInterface({
 			input: process.stdin,
@@ -322,6 +324,7 @@ async function createSessionManager(
 	cwd: string,
 	sessionDir: string | undefined,
 	settingsManager: SettingsManager,
+	startupView?: InteractiveView,
 ): Promise<SessionManager> {
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -360,7 +363,7 @@ async function createSessionManager(
 
 			case "global": {
 				console.log(chalk.yellow(`Session found in different project: ${resolved.cwd}`));
-				const shouldFork = await promptConfirm("Fork this session into current directory?");
+				const shouldFork = await promptConfirm("Fork this session into current directory?", startupView);
 				if (!shouldFork) {
 					console.log(chalk.dim("Aborted."));
 					process.exit(0);
@@ -376,11 +379,13 @@ async function createSessionManager(
 
 	if (parsed.resume) {
 		try {
-			const selectedPath = await selectSession(
-				(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
-				(onProgress) => SessionManager.listAll(sessionDir, onProgress),
-				settingsManager,
-			);
+			const currentSessionsLoader = (onProgress?: Parameters<typeof SessionManager.list>[2]) =>
+				SessionManager.list(cwd, sessionDir, onProgress);
+			const allSessionsLoader = (onProgress?: Parameters<typeof SessionManager.listAll>[1]) =>
+				SessionManager.listAll(sessionDir, onProgress);
+			const selectedPath = startupView
+				? await startupView.selectSession(currentSessionsLoader, allSessionsLoader)
+				: await selectSession(currentSessionsLoader, allSessionsLoader, settingsManager);
 			if (!selectedPath) {
 				console.log(chalk.dim("No session selected"));
 				process.exit(0);
@@ -512,18 +517,41 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 	return paths?.map((value) => (isLocalPath(value) ? resolvePath(value, cwd) : value));
 }
 
+function createStartupViewTrustContext(cwd: string, startupView: InteractiveView): ProjectTrustContext {
+	return {
+		cwd,
+		mode: "tui",
+		hasUI: true,
+		ui: {
+			select: (title, options) =>
+				startupView.select(
+					title,
+					options.map((option) => ({ label: option, value: option })),
+				),
+			confirm: (title, message) => startupView.confirm(title, message),
+			input: (title, placeholder) => startupView.input(title, placeholder),
+			notify: () => {},
+		},
+	};
+}
+
 async function promptForMissingSessionCwd(
 	issue: SessionCwdIssue,
 	settingsManager: SettingsManager,
+	startupView?: InteractiveView,
 ): Promise<string | undefined> {
-	return showStartupSelector(settingsManager, formatMissingSessionCwdPrompt(issue), [
+	const options = [
 		{ label: "Continue", value: issue.fallbackCwd },
 		{ label: "Cancel", value: undefined },
-	]);
+	];
+	return startupView
+		? startupView.select(formatMissingSessionCwdPrompt(issue), options)
+		: showStartupSelector(settingsManager, formatMissingSessionCwdPrompt(issue), options);
 }
 
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
+	startupView?: InteractiveView;
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -557,11 +585,9 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	// lunr: `lunr gateway` daemon/subcommands — same interception seam as the
-	// package/config commands above (before parseArgs, which knows nothing
-	// about gateway args).
-	if (await handleGatewayCommand(args)) {
-		return;
+	if (args[0] === "gateway") {
+		const { handleGatewayCommand } = await import("./gateway/command.ts");
+		if (await handleGatewayCommand(args)) return;
 	}
 
 	const parsed = parseArgs(args);
@@ -584,6 +610,7 @@ export async function main(args: string[], options?: MainOptions) {
 	if (parsed.export) {
 		let result: string;
 		try {
+			const { exportFromFile } = await import("./core/export-html/index.ts");
 			const outputPath = parsed.messages.length > 0 ? parsed.messages[0] : undefined;
 			result = await exportFromFile(parsed.export, outputPath);
 		} catch (error: unknown) {
@@ -596,6 +623,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	const interactiveModeImport =
+		appMode === "interactive" ? import("./modes/interactive/interactive-mode.ts") : undefined;
+	const startupView = appMode === "interactive" ? options?.startupView : undefined;
+	if (options?.startupView && !startupView) options.startupView.stop();
 	// lunr: parent-delegated children inherit plan or auto before any tool call.
 	// Non-child print/json stays fail-closed (module default manual, no handler).
 	applyInheritedSubagentPermissions();
@@ -633,7 +664,9 @@ export async function main(args: string[], options?: MainOptions) {
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
+		startupView?.pause();
 		await showFirstTimeSetup(startupSettingsManager);
+		startupView?.resume();
 		time("firstTimeSetup");
 	}
 
@@ -647,11 +680,15 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
+	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager, startupView);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
-			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager);
+			const selectedCwd = await promptForMissingSessionCwd(
+				missingSessionCwdIssue,
+				startupSettingsManager,
+				startupView,
+			);
 			if (!selectedCwd) {
 				process.exit(0);
 			}
@@ -671,32 +708,27 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createSessionManager");
 
-	// lunr: session retention — delete session files older than sessionRetentionDays
-	// (default 30; 0 = keep forever). Best-effort: per-file errors are swallowed,
-	// deletions go to the debug log only, and the active session file is never deleted.
-	try {
-		const retentionDays = startupSettingsManager.getSessionRetentionDays();
-		if (retentionDays > 0) {
+	const runSessionRetention = async () => {
+		try {
+			const retentionDays = startupSettingsManager.getSessionRetentionDays();
+			if (retentionDays <= 0) return;
 			const activeSessionFile = sessionManager.getSessionFile();
 			const { deleted } = await pruneOldSessions(getSessionsDir(), retentionDays, {
 				excludeFile: activeSessionFile,
 			});
-			// Also cover a custom session dir (--session-dir / settings), which is a flat
-			// .jsonl directory outside the default sessions root.
 			if (sessionDir) {
 				const extra = await pruneOldSessions(sessionDir, retentionDays, { excludeFile: activeSessionFile });
 				deleted.push(...extra.deleted);
 			}
 			if (deleted.length > 0) {
 				appendDebugLog(
-					`session-retention: deleted ${deleted.length} file(s):\n${deleted.map((p) => `  ${p}`).join("\n")}`,
+					`session-retention: deleted ${deleted.length} file(s):\n${deleted.map((path) => `  ${path}`).join("\n")}`,
 				);
 			}
+		} catch (error) {
+			appendDebugLog(`session-retention: prune failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
-	} catch (error) {
-		appendDebugLog(`session-retention: prune failed: ${error instanceof Error ? error.message : String(error)}`);
-	}
-	time("pruneOldSessions");
+	};
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
@@ -711,8 +743,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
-	let builtinRoster =
-		appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const builtinRoster = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
 	const rememberAttachedFactories = (factories: InlineExtension[]) => {
 		const seen = new Set(
 			builtinRoster.map((entry) => (typeof entry === "function" ? undefined : entry.name)).filter(Boolean),
@@ -761,12 +792,14 @@ export async function main(args: string[], options?: MainOptions) {
 								extensionsResult,
 								projectTrustContext:
 									projectTrustContext ??
-									createProjectTrustContext({
-										cwd,
-										mode: isInitialRuntime ? trustPromptMode : appMode,
-										settingsManager: startupSettingsManager,
-										hasUI: isInitialRuntime && trustPromptMode === "interactive",
-									}),
+									(isInitialRuntime && startupView
+										? createStartupViewTrustContext(cwd, startupView)
+										: createProjectTrustContext({
+												cwd,
+												mode: isInitialRuntime ? trustPromptMode : appMode,
+												settingsManager: startupSettingsManager,
+												hasUI: isInitialRuntime && trustPromptMode === "interactive",
+											})),
 								onExtensionError: (message) => projectTrustDiagnostics.push({ type: "warning", message }),
 							});
 							projectTrustByCwd.set(cwd, trusted);
@@ -792,6 +825,17 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		if (
+			parsed.model &&
+			!resolveCliModel({
+				cliProvider: parsed.provider,
+				cliModel: parsed.model,
+				cliThinking: parsed.thinking,
+				modelRuntime,
+			}).model
+		) {
+			await modelRuntime.refreshIfStale();
+		}
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
@@ -861,7 +905,13 @@ export async function main(args: string[], options?: MainOptions) {
 		agentDir,
 		sessionManager,
 	});
+	if (startupView?.isExitRequested) {
+		await runtime.dispose();
+		return;
+	}
+	markStartupMilestone("runtime_hydrated");
 	time("createAgentSessionRuntime");
+	if (appMode !== "interactive") await runSessionRetention();
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
@@ -910,17 +960,26 @@ export async function main(args: string[], options?: MainOptions) {
 	initTheme(settingsManager.getTheme(), appMode === "interactive");
 	time("initTheme");
 
-	// Show deprecation warnings in interactive mode
-	if (appMode === "interactive" && deprecationWarnings.length > 0) {
+	if (appMode === "interactive" && !startupView && deprecationWarnings.length > 0) {
 		await showDeprecationWarnings(deprecationWarnings);
 	}
 
 	time("resolveModelScope");
-	reportDiagnostics(runtime.diagnostics);
+	if (!(appMode === "interactive" && startupView)) reportDiagnostics(runtime.diagnostics);
 	if (runtime.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
-		if (runtime.diagnostics.some((diagnostic) => diagnostic.message.includes("Failed to load extension"))) {
-			console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT));
+		const extensionHint = runtime.diagnostics.some((diagnostic) =>
+			diagnostic.message.includes("Failed to load extension"),
+		)
+			? `\n${EXTENSION_LOAD_FAILURE_HINT}`
+			: "";
+		if (startupView) {
+			process.exitCode = 1;
+			await startupView.fail(
+				`${runtime.diagnostics.map((diagnostic) => diagnostic.message).join("\n")}${extensionHint}`,
+			);
+			return;
 		}
+		if (extensionHint) console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT));
 		process.exit(1);
 	}
 	time("createAgentSession");
@@ -940,7 +999,10 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
-		const { loadDeferredBuiltinExtensions } = await import("./builtin-extensions/index.ts");
+		const [{ InteractiveMode }, { loadDeferredBuiltinExtensions }] = await Promise.all([
+			interactiveModeImport!,
+			import("./builtin-extensions/index.ts"),
+		]);
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,
 			modelFallbackMessage,
@@ -949,16 +1011,21 @@ export async function main(args: string[], options?: MainOptions) {
 			initialImages,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
+			deprecationWarnings: startupView ? deprecationWarnings : undefined,
+			startupDiagnostics: startupView
+				? runtime.diagnostics.filter((diagnostic) => diagnostic.type !== "error")
+				: undefined,
+			startupView: startupView?.binding(),
+			deferredMaintenance: runSessionRetention,
 			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensions,
 			onDeferredBuiltinsAttached: rememberAttachedFactories,
 		});
 		if (startupBenchmark) {
 			await interactiveMode.init();
 			time("interactiveMode.init");
-			await interactiveMode.waitForDeferredBuiltins();
-			time("attachDeferredBuiltins");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
+			await interactiveMode.waitForStartupReady();
+			time("promptBarrier");
+			// Consume terminal-query replies before returning control to the shell.
 			await new Promise((resolve) => setTimeout(resolve, 150));
 			interactiveMode.stop();
 			stopThemeWatcher();

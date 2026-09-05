@@ -174,7 +174,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private async refreshModels(): Promise<void> {
 		try {
-			const result = await this.modelRuntime.refresh({ signal: this.refreshAbortController.signal });
+			const result = await this.modelRuntime.refreshIfStale({ signal: this.refreshAbortController.signal });
 			if (this.closed) return;
 			this.refreshStatusMessage = "";
 			const liveErrors = result.live.filter((entry) => entry.status === "error" || entry.status === "timeout");
@@ -314,6 +314,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const selected = this.filteredModels[this.selectedIndex];
 			this.listContainer.addChild(new Spacer(1));
 			this.listContainer.addChild(new Text(theme.fg("muted", `  Model Name: ${selected.model.name}`), 0, 0));
+			if (selected.model.catalog?.pricing === "unknown") {
+				this.listContainer.addChild(
+					new Text(theme.fg("muted", "  Pricing unavailable; cost totals may be incomplete."), 0, 0),
+				);
+			}
 		}
 		if (this.refreshStatusMessage) {
 			this.listContainer.addChild(new Spacer(1));

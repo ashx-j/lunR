@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatCatalogRefreshSummary, mergeCatalogLayers } from "../src/core/catalog-merge.ts";
 import { evictUserModelsOnOfficial } from "../src/core/user-models.ts";
@@ -32,6 +32,31 @@ describe("catalog merge precedence", () => {
 			"c:user:c",
 			"d:official:d",
 		]);
+	});
+
+	it("stamps gpt-6-astra xhigh/max even when live omitted the map", () => {
+		const live = model("gpt-6-astra", "live", "openai");
+		const merged = mergeCatalogLayers({
+			bakedIn: [model("gpt-4o", "baked", "openai")],
+			live: [live],
+		});
+		const astra = merged.find((entry) => entry.id === "gpt-6-astra");
+		expect(astra?.reasoning).toBe(true);
+		expect(astra?.thinkingLevelMap).toMatchObject({
+			off: null,
+			minimal: null,
+			xhigh: "xhigh",
+			max: "max",
+		});
+		expect(getSupportedThinkingLevels(astra!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+	});
+
+	it("does not stamp GPT effort metadata onto unrelated providers", () => {
+		const live = model("openai/gpt-6-astra", "live", "openrouter");
+		const merged = mergeCatalogLayers({ bakedIn: [], live: [live] });
+		expect(merged[0]).toBe(live);
+		expect(merged[0]?.reasoning).toBe(false);
+		expect(merged[0]?.thinkingLevelMap).toBeUndefined();
 	});
 
 	it("stamps grok-4.6 xhigh even when live omitted the map", () => {

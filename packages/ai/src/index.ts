@@ -33,6 +33,15 @@ export type {
 export * from "./images-models.ts";
 export * from "./models.ts";
 export * from "./models-store.ts";
+export {
+	canonicalOpenAiModelId,
+	isOpenAiChatModel,
+	OPENAI_GPT6_THINKING_LEVEL_MAP,
+	parseOpenAiGptVersion,
+	supportsOpenAiMax,
+	supportsOpenAiXhigh,
+	withOpenAiEffortMetadata,
+} from "./openai-effort.ts";
 export * from "./providers/faux.ts";
 export * from "./session-resources.ts";
 export * from "./types.ts";

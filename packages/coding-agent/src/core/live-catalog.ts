@@ -1,6 +1,9 @@
-import type { Api, Credential, Model } from "@earendil-works/pi-ai";
+import { type Api, type Credential, isOpenAiChatModel, type Model, parseOpenAiGptVersion } from "@earendil-works/pi-ai";
+import { codexModelsUrl, resolveCodexCatalogVersion } from "@earendil-works/pi-ai/catalog/codex";
+import { normalizeCatalogPricing } from "@earendil-works/pi-ai/catalog/metadata";
 import { VERSION } from "../config.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
+import { discoverCodexModels } from "./codex-catalog.ts";
 import { modelKey } from "./official-catalog.ts";
 
 export const LIVE_CATALOG_TIMEOUT_MS = 4000;
@@ -9,6 +12,7 @@ export const DEFAULT_CONTEXT_WINDOW = 128000;
 export const DEFAULT_MAX_TOKENS = 8192;
 
 export const LIVE_LIST_PROVIDER_IDS = [
+	"openai-codex",
 	"xai",
 	"openrouter",
 	"qwen-cloud",
@@ -52,6 +56,7 @@ export interface IncompleteLiveModel {
 export type LiveCatalogStatus = "ok" | "timeout" | "error" | "skipped";
 
 export interface LiveCatalogResult {
+	discoveryClientVersion?: string;
 	providerId: string;
 	status: LiveCatalogStatus;
 	discoveries: LiveModelDiscovery[];
@@ -121,6 +126,24 @@ export function firstBakedInModel(models: readonly Model<Api>[]): Model<Api> | u
 	return models[0];
 }
 
+export function selectLiveTemplate(
+	providerId: string,
+	id: string,
+	bakedIn: readonly Model<Api>[],
+): Model<Api> | undefined {
+	const exact = bakedIn.find((model) => model.id === id);
+	if (exact) return exact;
+	const version = parseOpenAiGptVersion(id);
+	if (providerId !== "openai" || !version || version.major < 5 || isOpenAiChatModel(id)) {
+		return firstBakedInModel(bakedIn);
+	}
+	let reasoning: Model<Api> | undefined;
+	for (const model of bakedIn) {
+		if (model.reasoning && parseOpenAiGptVersion(model.id)) reasoning = model;
+	}
+	return reasoning ?? firstBakedInModel(bakedIn);
+}
+
 export function uniqueApis(models: readonly Model<Api>[]): Api[] {
 	const seen = new Set<Api>();
 	const apis: Api[] = [];
@@ -138,7 +161,8 @@ export function synthesizeLiveModel(
 	raw: Record<string, unknown> = {},
 ): LiveModelDiscovery {
 	const name = typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id;
-	return {
+	const exact = id === template.id;
+	const discovery: LiveModelDiscovery = {
 		model: {
 			id,
 			name,
@@ -146,18 +170,46 @@ export function synthesizeLiveModel(
 			provider: template.provider,
 			baseUrl: template.baseUrl,
 			reasoning: template.reasoning,
-			input: template.input ?? ["text"],
+			input: exact ? template.input : ["text"],
 			cost: ZERO_COST,
 			contextWindow: DEFAULT_CONTEXT_WINDOW,
 			maxTokens: DEFAULT_MAX_TOKENS,
 			compat: template.compat,
-			thinkingLevelMap: template.thinkingLevelMap,
+			thinkingLevelMap: exact ? template.thinkingLevelMap : undefined,
+			catalog: { source: "provider", supplied: typeof raw.name === "string" ? ["name"] : [], pricing: "unknown" },
 		},
 		supplied: {
 			...NONE_SUPPLIED,
 			name: typeof raw.name === "string" && raw.name.trim().length > 0,
 		},
 	};
+	const context = asFiniteNumber(raw.context_window ?? raw.context_length ?? raw.max_context_length);
+	const output = asFiniteNumber(raw.max_output_tokens ?? raw.max_completion_tokens);
+	if (context && context > 0) {
+		discovery.model.contextWindow = context;
+		discovery.supplied.contextWindow = true;
+	}
+	if (output && output > 0) {
+		discovery.model.maxTokens = output;
+		discovery.supplied.maxTokens = true;
+	}
+	if (typeof raw.reasoning === "boolean") {
+		discovery.model.reasoning = raw.reasoning;
+		discovery.supplied.reasoning = true;
+	}
+	if (Array.isArray(raw.input_modalities)) {
+		const input = raw.input_modalities.filter(
+			(value): value is "text" | "image" => value === "text" || value === "image",
+		);
+		if (input.length) {
+			discovery.model.input = input;
+			discovery.supplied.input = true;
+		}
+	}
+	discovery.model.catalog!.supplied = Object.entries(discovery.supplied)
+		.filter(([, value]) => value)
+		.map(([field]) => field) as NonNullable<Model<Api>["catalog"]>["supplied"];
+	return discovery;
 }
 
 /** OpenRouter field mapping (tools filter, pricing × 1e6, context) from generate-models. */
@@ -208,7 +260,7 @@ export function mapOpenRouterModel(raw: Record<string, unknown>, template: Model
 			maxTokens: maxTokens !== undefined,
 			input: true,
 			name: typeof raw.name === "string" && raw.name.trim().length > 0,
-			cost: pricing !== undefined,
+			cost: asFiniteNumber(pricing?.prompt) !== undefined && asFiniteNumber(pricing?.completion) !== undefined,
 			reasoning: supported.includes("reasoning"),
 		},
 	};
@@ -219,19 +271,40 @@ export function discoverLiveModels(
 	payload: unknown,
 	bakedIn: readonly Model<Api>[],
 ): LiveModelDiscovery[] {
-	const template = firstBakedInModel(bakedIn);
-	if (!template) return [];
+	if (providerId === "openai-codex")
+		return discoverCodexModels(payload, bakedIn[0]?.baseUrl ?? "https://chatgpt.com/backend-api");
+	const fallback = firstBakedInModel(bakedIn);
+	if (!fallback) return [];
 	const rows = parseOpenAIModelsList(payload);
 	const discoveries: LiveModelDiscovery[] = [];
 	for (const raw of rows) {
 		const id = typeof raw.id === "string" ? raw.id.trim() : "";
 		if (!id) continue;
+		if (
+			raw.tool_call === false ||
+			raw.type === "embedding" ||
+			(providerId === "openai" &&
+				/^(?:text-embedding-|tts-|whisper-|dall-e-|gpt-image-|gpt-audio|gpt-realtime|sora-|.*moderation)/i.test(id))
+		)
+			continue;
+		const template = { ...(selectLiveTemplate(providerId, id, bakedIn) ?? fallback), provider: providerId };
 		if (providerId === "openrouter") {
-			const mapped = mapOpenRouterModel(raw, { ...template, provider: providerId });
-			if (mapped) discoveries.push(mapped);
+			const mapped = mapOpenRouterModel(raw, template);
+			if (mapped) {
+				mapped.model.catalog = {
+					source: "provider",
+					...(!mapped.supplied.cost ? { pricing: "unknown" as const } : {}),
+					supplied: Object.entries(mapped.supplied)
+						.filter(([, supplied]) => supplied)
+						.map(([key]) => key) as NonNullable<Model<Api>["catalog"]>["supplied"],
+				};
+				mapped.model = normalizeCatalogPricing(mapped.model);
+				if (mapped.model.catalog?.pricing === "unknown") mapped.supplied.cost = false;
+				discoveries.push(mapped);
+			}
 			continue;
 		}
-		discoveries.push(synthesizeLiveModel(id, { ...template, provider: providerId }, raw));
+		discoveries.push(synthesizeLiveModel(id, template, raw));
 	}
 	return discoveries;
 }
@@ -284,6 +357,10 @@ export function buildLiveOverlay(
 		}
 		overlay.push({
 			...baked,
+			catalog: discovery.model.catalog,
+			thinkingLevelMap: discovery.model.catalog?.supplied.includes("thinkingLevelMap")
+				? discovery.model.thinkingLevelMap
+				: baked.thinkingLevelMap,
 			name: discovery.supplied.name ? discovery.model.name : baked.name,
 			contextWindow: discovery.supplied.contextWindow ? discovery.model.contextWindow : baked.contextWindow,
 			maxTokens: discovery.supplied.maxTokens ? discovery.model.maxTokens : baked.maxTokens,
@@ -336,6 +413,7 @@ export function applyIncompleteAnswers(draft: Model<Api>, answers: IncompleteMod
 }
 
 export interface FetchLiveProviderModelsOptions {
+	discoveryClientVersion?: string;
 	providerId: string;
 	baseUrl: string;
 	bakedIn: readonly Model<Api>[];
@@ -356,7 +434,7 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 		incomplete: [],
 	};
 	const template = firstBakedInModel(options.bakedIn);
-	if (!template || !options.baseUrl) return empty;
+	if ((!template && options.providerId !== "openai-codex") || !options.baseUrl) return empty;
 
 	const timeoutMs = options.timeoutMs ?? LIVE_CATALOG_TIMEOUT_MS;
 	const controller = new AbortController();
@@ -371,15 +449,35 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 
 	try {
 		const fetchImpl = options.fetchImpl ?? fetch;
-		const response = await Promise.race([
-			fetchImpl(modelsListUrl(options.baseUrl), {
-				headers: {
-					accept: "application/json",
-					"User-Agent": getPiUserAgent(VERSION),
-					...credentialAuthHeaders(options.credential),
-				},
-				signal: controller.signal,
-			}),
+		const codex = options.providerId === "openai-codex";
+		const accountId =
+			options.credential?.type === "oauth" && typeof options.credential.accountId === "string"
+				? options.credential.accountId
+				: undefined;
+		let discoveryClientVersion = options.discoveryClientVersion;
+		const payload = await Promise.race([
+			(async () => {
+				if (codex)
+					discoveryClientVersion = await resolveCodexCatalogVersion(
+						fetchImpl,
+						controller.signal,
+						discoveryClientVersion,
+					);
+				const response = await fetchImpl(
+					codex ? codexModelsUrl(options.baseUrl, discoveryClientVersion) : modelsListUrl(options.baseUrl),
+					{
+						headers: {
+							accept: "application/json",
+							"User-Agent": getPiUserAgent(VERSION),
+							...credentialAuthHeaders(options.credential),
+							...(accountId ? { "ChatGPT-Account-ID": accountId } : {}),
+						},
+						signal: controller.signal,
+					},
+				);
+				if (!response.ok) throw new Error(`HTTP ${response.status}`);
+				return response.json();
+			})(),
 			new Promise<never>((_, reject) => {
 				const abortError = new Error("The operation was aborted");
 				abortError.name = "AbortError";
@@ -387,18 +485,15 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 				if (controller.signal.aborted) reject(abortError);
 			}),
 		]);
-		if (!response.ok) {
-			return {
-				...empty,
-				status: "error",
-				error: `HTTP ${response.status}`,
-			};
-		}
-		const discoveries = discoverLiveModels(options.providerId, await response.json(), options.bakedIn);
+		const discoveries = codex
+			? discoverCodexModels(payload, options.baseUrl)
+			: discoverLiveModels(options.providerId, payload, options.bakedIn);
+		if (!discoveries.length) throw new Error("No usable models returned; retaining cached models");
 		const bakedIds = new Set(options.bakedIn.map((model) => model.id));
 		const added = discoveries.filter((discovery) => !bakedIds.has(discovery.model.id)).length;
 		return {
 			providerId: options.providerId,
+			discoveryClientVersion,
 			status: "ok",
 			discoveries,
 			added,
