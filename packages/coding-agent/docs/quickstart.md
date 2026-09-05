@@ -121,7 +121,8 @@ lunR loads context files at startup. Add an `AGENTS.md` file to tell it how to w
 
 lunR loads:
 
-- `~/.lunr/agent/AGENTS.md` for global instructions
+- `~/.lunr/agent/agents/AGENTS.md` for global instructions
+- `~/.lunr/agent/agents/<model-name>/AGENTS.md` for optional model-specific instructions enabled in `/settings`
 - `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
 
 Restart lunR, or run `/reload`, after changing context files.
