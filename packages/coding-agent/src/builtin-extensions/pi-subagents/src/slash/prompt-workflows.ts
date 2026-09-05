@@ -15,7 +15,7 @@ interface PromptWorkflow {
 	filePath: string;
 	childDescription: string;
 	permissions: "full" | "read-only";
-	model?: string;
+	tier: "light" | "standard" | "heavy";
 	skill?: string | string[] | false;
 	cwd?: string;
 	worktree?: boolean;
@@ -89,7 +89,8 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 	const { frontmatter, body } = parseFrontmatter(content);
 	const name = path.basename(filePath, ".md");
 	if (!name || RESERVED_COMMAND_NAMES.has(name)) return undefined;
-	const model = stringField(frontmatter, "model");
+	const tierValue = stringField(frontmatter, "tier");
+	if (tierValue !== "light" && tierValue !== "standard" && tierValue !== "heavy") return undefined;
 	const skill = parseSkill(stringField(frontmatter, "skill"));
 	const cwd = stringField(frontmatter, "cwd");
 	const chain = stringField(frontmatter, "chain");
@@ -100,7 +101,7 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 		filePath,
 		childDescription: stringField(frontmatter, "child-description") ?? name,
 		permissions: stringField(frontmatter, "permissions") === "read-only" ? "read-only" : "full",
-		...(model ? { model } : {}),
+		tier: tierValue,
 		...(skill !== undefined ? { skill } : {}),
 		...(cwd ? { cwd } : {}),
 		...(booleanField(frontmatter, "worktree") === true ? { worktree: true } : {}),
@@ -217,8 +218,8 @@ function workflowParams(workflow: PromptWorkflow, args: string[], runtime: Retur
 		task,
 		description: runtime.descriptionOverride ?? workflow.childDescription,
 		permissions: runtime.permissions ?? workflow.permissions,
+		tier: workflow.tier,
 		clarify: false,
-		...(workflow.model ? { model: workflow.model } : {}),
 		...(workflow.skill !== undefined ? { skill: workflow.skill } : {}),
 		...(workflow.cwd ? { cwd: workflow.cwd } : {}),
 		...(runtime.worktree || workflow.worktree ? { worktree: true } : {}),
@@ -231,8 +232,8 @@ function workflowChainStep(workflow: PromptWorkflow, args: string[], runtime: Re
 	return {
 		description: params.description ?? workflow.childDescription,
 		permissions: params.permissions ?? workflow.permissions,
+		tier: params.tier,
 		task: params.task,
-		...(params.model ? { model: params.model } : {}),
 		...(params.skill !== undefined ? { skill: params.skill } : {}),
 		...(params.cwd ? { cwd: params.cwd } : {}),
 	};

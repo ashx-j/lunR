@@ -12,7 +12,7 @@ import type { AcceptanceInput, ToolBudgetConfig, TurnBudgetConfig } from "../sha
 export interface PromptTemplateDelegationTask {
 	agent: string;
 	task: string;
-	model?: string;
+	tier: "light" | "standard" | "heavy";
 	cwd?: string;
 }
 
@@ -29,7 +29,7 @@ export interface PromptTemplateDelegationRequest {
 	task: string;
 	tasks?: PromptTemplateDelegationTask[];
 	context: "fresh" | "fork";
-	model: string;
+	tier: "light" | "standard" | "heavy";
 	cwd: string;
 	worktree?: boolean;
 }
@@ -51,7 +51,7 @@ interface PromptTemplateDelegationTaskProgress {
 	recentOutput?: string;
 	recentOutputLines?: string[];
 	recentTools?: Array<{ tool: string; args: string }>;
-	model?: string;
+	tier: "light" | "standard" | "heavy";
 	toolCount?: number;
 	durationMs?: number;
 	tokens?: number;
@@ -145,12 +145,12 @@ function parseDelegationTasks(tasks: unknown): PromptTemplateDelegationTask[] {
 		const value = item as Partial<PromptTemplateDelegationTask>;
 		if (typeof value.agent !== "string" || !value.agent.trim()) return [];
 		if (typeof value.task !== "string" || !value.task.trim()) return [];
-		const model = typeof value.model === "string" && value.model.trim().length > 0 ? value.model : undefined;
+		if (value.tier !== "light" && value.tier !== "standard" && value.tier !== "heavy") return [];
 		const cwd = typeof value.cwd === "string" && value.cwd.trim().length > 0 ? value.cwd : undefined;
 		parsed.push({
 			agent: value.agent,
 			task: value.task,
-			...(model ? { model } : {}),
+			tier: value.tier,
 			...(cwd ? { cwd } : {}),
 		});
 	}
@@ -161,7 +161,7 @@ export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegat
 	if (!data || typeof data !== "object") return undefined;
 	const value = data as Partial<PromptTemplateDelegationRequest> & { tasks?: unknown };
 	if (typeof value.requestId !== "string" || !value.requestId) return undefined;
-	if (typeof value.model !== "string" || !value.model) return undefined;
+	if (value.tier !== "light" && value.tier !== "standard" && value.tier !== "heavy") return undefined;
 	if (typeof value.cwd !== "string" || !value.cwd) return undefined;
 	if (value.context !== "fresh" && value.context !== "fork") return undefined;
 	const tasks = parseDelegationTasks(value.tasks);
@@ -180,7 +180,7 @@ export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegat
 		task: hasSingle ? value.task : fallbackTask!.task,
 		...(tasks.length > 0 ? { tasks } : {}),
 		context: value.context,
-		model: value.model,
+		tier: value.tier,
 		cwd: value.cwd,
 		...(worktree ? { worktree } : {}),
 	};
@@ -327,7 +327,7 @@ export function toLegacyExecutionParams(request: PromptTemplateDelegationRequest
 		agent: request.agent,
 		task: request.task,
 		context: request.context,
-		model: request.model,
+		tier: request.tier,
 		cwd: request.cwd,
 		async: false,
 		foregroundOnly: true,
@@ -341,7 +341,7 @@ export function toSubagentDelegationExecutionParams(request: SubagentDelegationR
 		task: request.task,
 		context: request.context,
 		cwd: request.cwd,
-		model: request.model,
+		tier: request.tier,
 		timeoutMs: request.timeoutMs,
 		turnBudget: request.turnBudget,
 		toolBudget: request.toolBudget,

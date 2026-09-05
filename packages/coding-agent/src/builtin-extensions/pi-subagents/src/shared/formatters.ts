@@ -34,7 +34,7 @@ export function formatModelThinking(model?: string, thinking?: string): string {
 	return [displayModel, formatThinkingLabel(model, thinking)].filter(Boolean).join(" · ");
 }
 
-/** Compact/header badge: selected tier name, or resolved model when selected by model / inherit. */
+/** Compact/header badge: selected tier name plus its effective thinking level. */
 export function formatModelSelection(selection?: ModelSelection, resolvedModel?: string, thinking?: string): string {
 	if (selection?.kind === "tier" && selection.tier) {
 		return [selection.tier, formatThinkingLabel(resolvedModel, thinking)].filter(Boolean).join(" · ");
@@ -62,7 +62,7 @@ export function formatUsage(u: Usage, model?: string): string {
  */
 export function formatDuration(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+	if (ms < 60000) return `${Math.floor(ms / 1000)}s`;
 	return `${Math.floor(ms / 60000)}m${Math.floor((ms % 60000) / 1000)}s`;
 }
 

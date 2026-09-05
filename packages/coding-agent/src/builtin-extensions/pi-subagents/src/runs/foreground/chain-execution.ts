@@ -66,7 +66,7 @@ import {
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
-import { captureModelSelection, resolveEffectiveSubagentModel, resolveTierModelOverride } from "../shared/model-fallback.ts";
+import { captureModelSelection, resolveRequiredTierModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
@@ -237,15 +237,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 	let aborted = false;
 	const effectiveModels = input.step.parallel.map((task) => {
 		const taskChildConfig = input.agents.find((child) => child.name === task.agent);
-		return resolveEffectiveSubagentModel(
-			// lunr: model tiers — explicit per-task model wins; otherwise resolve task.tier via the tier bridge.
-			task.model ?? resolveTierModelOverride(task.tier),
-			taskChildConfig?.model,
-			input.ctx.model,
-			input.availableModels,
-			input.ctx.model?.provider,
-			{ scope: input.modelScope },
-		);
+		return resolveRequiredTierModel(task.tier, input.availableModels, input.ctx.model?.provider);
 	});
 	for (let taskIndex = 0; taskIndex < input.step.parallel.length; taskIndex++) {
 		const task = input.step.parallel[taskIndex]!;
@@ -323,7 +315,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				permissions: task.permissions,
 				model: effectiveModel ?? task.model,
 				tier: task.tier,
-				modelSelection: captureModelSelection({ model: task.model, tier: task.tier }),
+				modelSelection: captureModelSelection({ tier: task.tier }),
 				skill: task.skill,
 				cwd: taskCwd,
 				output: task.output,
@@ -659,7 +651,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				return {
 					...step,
 					task: result.templates[i]!,
-					...(override?.model !== undefined ? { model: override.model } : {}),
 					...(override?.output !== undefined ? { output: override.output } : {}),
 					...("outputMode" in step && step.outputMode !== undefined ? { outputMode: step.outputMode } : {}),
 					...(override?.reads !== undefined ? { reads: override.reads } : {}),
@@ -1146,16 +1137,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 
-			// lunr: model tiers — explicit step model wins; otherwise resolve seqStep.tier via the tier bridge.
-			const explicitStepModel = tuiOverride?.model ?? seqStep.model ?? resolveTierModelOverride(seqStep.tier);
-			const effectiveModel = resolveEffectiveSubagentModel(
-				explicitStepModel,
-				agentConfig.model,
-				ctx.model,
-				availableModels,
-				ctx.model?.provider,
-				{ scope: modelScope },
-			);
+			const effectiveModel = resolveRequiredTierModel(seqStep.tier, availableModels, ctx.model?.provider);
 
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
@@ -1209,9 +1191,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				permissions: seqStep.permissions,
 				model: effectiveModel ?? seqStep.model,
 				tier: seqStep.tier,
-				modelSelection: tuiOverride?.model !== undefined
-					? captureModelSelection({ model: tuiOverride.model })
-					: captureModelSelection({ model: seqStep.model, tier: seqStep.tier }),
+				modelSelection: captureModelSelection({ tier: seqStep.tier }),
 				skill: seqStep.skill,
 				cwd: seqStep.cwd,
 				output: seqStep.output,

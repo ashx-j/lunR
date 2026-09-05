@@ -1,12 +1,21 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatAsyncRunList } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-status.ts";
 import { formatModelSelection } from "../src/builtin-extensions/pi-subagents/src/shared/formatters.ts";
+import { SubagentFleetComponent } from "../src/builtin-extensions/pi-subagents/src/tui/fleet.ts";
 import {
+	buildWidgetLines,
 	compactRowLead,
 	formatCompactStatsHangLine,
 	renderSubagentResult,
 	stripTaskChrome,
+	subagentAnimSink,
 } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
+
+afterEach(() => {
+	subagentAnimSink.current = null;
+	vi.useRealTimers();
+});
 
 describe("stripTaskChrome", () => {
 	it("drops leading Read from / Write to lines", () => {
@@ -38,11 +47,14 @@ describe("compactRowLead", () => {
 describe("compact stats hang line", () => {
 	it("prints tool count, tokens, and elapsed time", () => {
 		expect(
-			formatCompactStatsHangLine({
-				toolCount: 52,
-				tokens: 172000,
-				durationMs: 9 * 60_000 + 56_000,
-			}, 80),
+			formatCompactStatsHangLine(
+				{
+					toolCount: 52,
+					tokens: 172000,
+					durationMs: 9 * 60_000 + 56_000,
+				},
+				80,
+			),
 		).toBe("  ⎿  52 tool uses · 172k token · 9m56s");
 	});
 
@@ -51,12 +63,104 @@ describe("compact stats hang line", () => {
 	});
 
 	it("truncates to terminal width without wrapping", () => {
-		const line = formatCompactStatsHangLine(
-			{ toolCount: 12, tokens: 999999, durationMs: 12_000 },
-			20,
-		);
+		const line = formatCompactStatsHangLine({ toolCount: 12, tokens: 999999, durationMs: 12_000 }, 20);
 		expect(visibleWidth(line)).toBeLessThanOrEqual(20);
 		expect(line.split("\n")).toHaveLength(1);
+	});
+
+	it("advances running time in whole seconds and freezes a terminal duration", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(10_000);
+		const progress = { toolCount: 1, tokens: 10, durationMs: 1_500, lastActivityAt: 10_000 };
+		expect(formatCompactStatsHangLine(progress, 80, (text) => text, "  ⎿  ", Date.now(), true)).toContain("1s");
+		vi.advanceTimersByTime(1_000);
+		expect(formatCompactStatsHangLine(progress, 80, (text) => text, "  ⎿  ", Date.now(), true)).toContain("2s");
+		vi.advanceTimersByTime(1_000);
+		const running = formatCompactStatsHangLine(progress, 80, (text) => text, "  ⎿  ", Date.now(), true);
+		expect(running).toContain("3s");
+		expect(running).not.toMatch(/\d+\.\d+s/);
+		expect(formatCompactStatsHangLine(progress, 80, (text) => text, "  ⎿  ", Date.now(), false)).toContain("1s");
+	});
+});
+
+describe("async widget, fleet, and status timing", () => {
+	const theme = {
+		fg: (_token: string, value: string) => value,
+		bold: (value: string) => value,
+		italic: (value: string) => value,
+	};
+
+	it("uses a live render clock and freezes terminal async durations", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(12_000);
+		const job = {
+			asyncId: "timer-run",
+			asyncDir: "Z:/missing/timer-run",
+			status: "running",
+			mode: "single",
+			agents: ["Check timer"],
+			startedAt: 10_000,
+			updatedAt: 10_000,
+			toolCount: 1,
+		};
+		expect(buildWidgetLines([job] as never, theme as never, 120).join("\n")).toContain("2s");
+		vi.advanceTimersByTime(1_000);
+		expect(buildWidgetLines([job] as never, theme as never, 120).join("\n")).toContain("3s");
+
+		job.status = "complete";
+		job.updatedAt = 12_000;
+		const terminal = buildWidgetLines([job] as never, theme as never, 120).join("\n");
+		vi.advanceTimersByTime(5_000);
+		expect(terminal).toContain("ran for 2s");
+		expect(buildWidgetLines([job] as never, theme as never, 120).join("\n")).toBe(terminal);
+	});
+
+	it("uses ran for in terminal status and fleet rows", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(20_000);
+		const run = {
+			id: "timer-run",
+			asyncDir: "Z:/missing/timer-run",
+			state: "complete",
+			mode: "single",
+			startedAt: 10_000,
+			lastUpdate: 12_000,
+			steps: [{ index: 0, agent: "Check timer", status: "complete", durationMs: 2_000 }],
+		};
+		expect(formatAsyncRunList([run] as never)).toContain("ran for 2s");
+
+		const state = {
+			currentSessionId: null,
+			asyncJobs: new Map(),
+			fleetJobs: new Map([
+				[
+					"timer-run",
+					{
+						asyncId: "timer-run",
+						asyncDir: "Z:/missing/timer-run",
+						status: "complete",
+						mode: "single",
+						agents: ["T"],
+						startedAt: 10_000,
+						updatedAt: 12_000,
+					},
+				],
+			]),
+			foregroundControls: new Map(),
+			foregroundRuns: new Map(),
+		};
+		const component = new SubagentFleetComponent(
+			{ terminal: { rows: 32 }, requestRender() {} } as never,
+			theme as never,
+			state as never,
+			() => {},
+			{ refreshMs: 1_000 },
+		);
+		try {
+			expect(component.render(140).join("\n")).toContain("ran for 2s");
+		} finally {
+			component.dispose();
+		}
 	});
 });
 
@@ -66,6 +170,70 @@ describe("renderSingleCompact thinking line", () => {
 		bold: (value: string) => value,
 		italic: (value: string) => value,
 	};
+
+	it("registers live clock lines and terminal rows say ran for a frozen duration", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(20_000);
+		const makeResult = (status: "running" | "completed") => ({
+			content: [{ type: "text", text: status }],
+			details: {
+				mode: "single",
+				results: [
+					{
+						description: "Check timer",
+						permissions: "read-only",
+						task: "check time",
+						exitCode: 0,
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+						progress:
+							status === "running"
+								? {
+										index: 0,
+										status,
+										task: "check time",
+										recentTools: [],
+										recentOutput: [],
+										toolCount: 1,
+										tokens: 10,
+										durationMs: 2_000,
+										lastActivityAt: 20_000,
+									}
+								: undefined,
+						progressSummary:
+							status === "completed"
+								? {
+										index: 0,
+										status,
+										task: "check time",
+										recentTools: [],
+										recentOutput: [],
+										toolCount: 1,
+										tokens: 10,
+										durationMs: 2_000,
+										lastActivityAt: 20_000,
+									}
+								: undefined,
+					},
+				],
+			},
+		});
+
+		subagentAnimSink.current = [];
+		const live = renderSubagentResult(makeResult("running") as never, { expanded: false }, stubTheme, 0);
+		expect(subagentAnimSink.current).toHaveLength(2);
+		vi.advanceTimersByTime(1_000);
+		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(1, Date.now()));
+		expect(live.render(120).join("\n")).toContain("3s");
+
+		subagentAnimSink.current = [];
+		const terminal = renderSubagentResult(makeResult("completed") as never, { expanded: false }, stubTheme, 0);
+		const first = terminal.render(120).join("\n");
+		vi.advanceTimersByTime(5_000);
+		const later = terminal.render(120).join("\n");
+		expect(first).toContain("ran for 2s");
+		expect(later).toBe(first);
+		expect(subagentAnimSink.current).toHaveLength(0);
+	});
 
 	it("shows description-first header plus one stats hang line, not thinking text", () => {
 		const result = renderSubagentResult(

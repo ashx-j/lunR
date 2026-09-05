@@ -9,7 +9,7 @@ Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`
 Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cycles that order. Thinking cycle is unbound; use `/thinking`, `/effort`, or `/reasoning`.
 
 - **manual** — approve every tool
-- **yolo** — auto-approve tools; **does not** bypass the swarm gate
+- **yolo** — auto-approve ordinary tools; large subagent launches still request confirmation
 - **plan** — read-oriented planning; the model calls `present_plan` with a summary; you approve or decline in a dock
 - **auto** — fully autonomous
 
@@ -17,13 +17,11 @@ Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cy
 
 `present_plan` is only available in plan mode. After approval, interactive lunR leaves plan mode before the tool result resolves.
 
-## Subagents and swarm
+## Subagents
 
 Advertised subagents always start **fresh** (no forked parent context). Default parallel concurrency / max tasks / global run cap are unlimited; an explicit `concurrency` is still honored.
 
-A **swarm** is 3+ parallel subagents in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. Swarms are gated in **manual and yolo**. Sequential work stays `chain`.
-
-- `/swarm <task>` — orchestrate parallel subagents
+A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **manual and yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 
@@ -31,7 +29,8 @@ A **swarm** is 3+ parallel subagents in one `tasks`/`chain.parallel` call, or 3+
 
 - **Todos** — lunr-todos is a full-replace list. Completed todos prune on the next user turn (no leftover `✓ N done` footer).
 - **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
-- **Global instructions** — create `~/.lunr/agent/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file. The retired `behavior.md` file and behavior presets are no longer loaded.
+- **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file. The retired `behavior.md` file and behavior presets are no longer loaded.
+- **Model instructions** — `/settings` can enable `~/.lunr/agent/agents/<model-name>/AGENTS.md` and choose **Both** (global then model-specific) or **Model only**. The folder name is provider-independent and filesystem-safe. Project `AGENTS.md`/`CLAUDE.md` files are unaffected, and `--no-context-files` disables all instruction files.
 
 ## Cron
 
@@ -86,7 +85,8 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
 - Smooth streaming (`smoothStreaming`, default off) is **interactive TUI only** (grapheme reveal at ~30 FPS). Print, RPC, and gateway stay unsmoothed.
 - Image paste inserts `[image_n]` chips. Windows uses **Alt+V**; VS Code must forward it because it owns Ctrl+V and Alt+V. `/paste-image` bypasses terminal shortcuts.
-- Model tiers: `/settings` Enable model tiers. Per-tier thinking; unset = parent session.
+- Model tiers: every child launch selects `light`, `standard`, or `heavy`. Configure authenticated models for those routes in `/settings`; a missing, disabled, unauthenticated, or unavailable route fails closed. Per-tier thinking is optional; unset inherits the parent session.
+- Settings tools: `settings_load` is always available to the model. It injects four narrowly scoped tools for model tiers, model instruction subscriptions, rollback behavior, and session retention only after the model requests them.
 
 ## Updates, catalogs, local models
 

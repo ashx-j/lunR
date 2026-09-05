@@ -238,27 +238,25 @@ export function resolveEffectiveSubagentModel(
 	);
 }
 
-// lunr: model tier bridge — resolve a subagent `tier` param through lunR core's
-// model-tiers global (Symbol.for("@lunr/model-tiers")). Absent bridge, disabled tier
-// mode, unknown tier, or unconfigured tier all resolve to undefined so callers fall
-// back to normal inherit behavior. Never throws.
+// lunr: model tier bridge — every executable child must resolve one configured tier.
 export function resolveTierModelOverride(tier: unknown): string | undefined {
-	if (typeof tier !== "string" || !tier.trim()) return undefined;
+	if (tier !== "light" && tier !== "standard" && tier !== "heavy") {
+		throw new Error("Every subagent execution requires tier: \"light\", \"standard\", or \"heavy\".");
+	}
 	const tierName = tier.trim();
 	try {
 		const bridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
 			| { getTierModel?: (tier: string) => unknown; isTierModeEnabled?: () => unknown }
 			| undefined;
 		if (typeof bridge?.isTierModeEnabled !== "function" || typeof bridge?.getTierModel !== "function") {
-			return undefined;
+			throw new Error("Model tier settings are unavailable. Reload lunR and try again.");
 		}
-		if (bridge.isTierModeEnabled() !== true) return undefined;
+		if (bridge.isTierModeEnabled() !== true) {
+			throw new Error("Model tiers are disabled. Enable them in /settings before launching a subagent.");
+		}
 		const model = bridge.getTierModel(tierName);
 		if (typeof model !== "string" || !model.trim()) {
-			if (process.env.PI_SUBAGENTS_DEBUG) {
-				console.warn(`[pi-subagents] model tier '${tierName}' has no configured model; inheriting parent model.`);
-			}
-			return undefined;
+			throw new Error(`Model tier '${tierName}' has no configured model. Configure it in /settings before launching a subagent.`);
 		}
 		const trimmed = model.trim();
 		const thinking =
@@ -268,13 +266,29 @@ export function resolveTierModelOverride(tier: unknown): string | undefined {
 		if (!level) return trimmed;
 		return applyThinkingSuffix(trimmed, level, true) ?? trimmed;
 	} catch (error) {
-		if (process.env.PI_SUBAGENTS_DEBUG) {
-			console.warn(
-				`[pi-subagents] model tier resolution failed for '${tierName}': ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-		return undefined;
+		throw error instanceof Error ? error : new Error(String(error));
 	}
+}
+
+/** Resolve a required tier and prove its configured model is available to this session. */
+export function resolveRequiredTierModel(
+	tier: unknown,
+	availableModels: AvailableModelInfo[] | undefined,
+	preferredProvider?: string,
+): string {
+	const configured = resolveTierModelOverride(tier);
+	if (!configured) throw new Error(`Model tier '${String(tier)}' could not be resolved.`);
+	if (!availableModels?.length) {
+		throw new Error(`Model tier '${String(tier)}' cannot launch because no authenticated models are available.`);
+	}
+	const { baseModel, thinkingSuffix } = splitThinkingSuffix(configured);
+	const resolvedBase = resolveBaseModelCandidate(baseModel, availableModels, preferredProvider);
+	if (!resolvedBase) {
+		throw new Error(
+			`Model tier '${String(tier)}' resolves to '${baseModel}', but that model is unavailable or unauthenticated. Configure an available model in /settings.`,
+		);
+	}
+	return `${resolvedBase}${thinkingSuffix}`;
 }
 
 function requestedModelString(model: unknown): string | undefined {
@@ -291,10 +305,9 @@ function requestedTier(tier: unknown): ChildTier | undefined {
  * Explicit model wins; a tier only counts when it actually resolves.
  */
 export function captureModelSelection(input: { model?: unknown; tier?: unknown }): ModelSelection {
-	if (requestedModelString(input.model)) return { kind: "model" };
 	const tier = requestedTier(input.tier);
-	if (tier && resolveTierModelOverride(tier)) return { kind: "tier", tier };
-	return { kind: "inherit" };
+	if (!tier) throw new Error("Every subagent execution requires tier: \"light\", \"standard\", or \"heavy\".");
+	return { kind: "tier", tier };
 }
 
 export interface BuildModelCandidatesOptions {

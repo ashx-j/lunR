@@ -1,6 +1,6 @@
 # Subagent Example (sample)
 
-This is an **Extension API sample**, not lunR's product subagent implementation. lunR ships baked-in subagents (always fresh; swarm gate for 3+ parallel). See [docs/features.md](../../../docs/features.md).
+This is an **Extension API sample**, not lunR's product subagent implementation. lunR ships baked-in subagents (always fresh; aggregate confirmation for 3+ parallel). See [docs/features.md](../../../docs/features.md).
 
 Delegate tasks to specialized subagents with isolated context windows.
 

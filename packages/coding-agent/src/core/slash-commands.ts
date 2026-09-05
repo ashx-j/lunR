@@ -61,7 +61,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "deauth", description: "Remove provider authentication (alias of /logout)" },
 	{ name: "new", description: "Start a new session" },
 	{ name: "init", description: "Generate a starter AGENTS.md for this project" },
-	{ name: "swarm", description: "Orchestrate parallel subagents for a complex task", argumentHint: "<task>" },
 	{ name: "compact", description: "Manually compact the session context" },
 	{ name: "resume", description: "Resume a different session" },
 	{ name: "sessions", description: "Browse and resume sessions" },

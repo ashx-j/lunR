@@ -52,11 +52,10 @@ const OutputModeOverride = Type.String({
 	description: "Return saved output inline (default) or only a concise file reference. file-only requires output to be a path.",
 });
 
-// lunr: model tier override for 3-tier subagent routing; resolved through the
-// @lunr/model-tiers bridge and ignored when tier mode is disabled.
+// lunr: required 3-tier subagent routing, resolved through the @lunr/model-tiers bridge.
 const TierOverride = Type.String({
 	enum: ["light", "standard", "heavy"],
-	description: "Model tier ('light' cheap/fast, 'standard' typical, 'heavy' complex reasoning) when model tiers are enabled. An explicit model overrides the tier; omit both to inherit the parent model.",
+	description: "Required model tier: 'light' for simple/fast work, 'standard' for typical coding, or 'heavy' for complex reasoning. The configured tier model must be available and authenticated.",
 });
 
 const ReadsOverride = Type.Unsafe({
@@ -121,8 +120,7 @@ const TaskItem = Type.Object({
 	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking for this task" })),
-	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
-	tier: Type.Optional(TierOverride), // lunr: model tiers
+	tier: TierOverride,
 	skill: Type.Optional(SkillOverride),
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
@@ -144,8 +142,7 @@ export const ParallelTaskSchema = Type.Object({
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for this task" })),
-	tier: Type.Optional(TierOverride), // lunr: model tiers
+	tier: TierOverride,
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
 });
@@ -178,8 +175,7 @@ export const DynamicParallelTemplateSchema = Type.Object({
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for this task" })),
-	tier: Type.Optional(TierOverride), // lunr: model tiers
+	tier: TierOverride,
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
 }, { additionalProperties: false });
@@ -206,8 +202,7 @@ export const ChainItem = Type.Object({
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for this step" })),
-	tier: Type.Optional(TierOverride), // lunr: model tiers
+	tier: TierOverride,
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
 	parallel: Type.Optional(Type.Unsafe({
@@ -225,7 +220,7 @@ export const ChainItem = Type.Object({
 		description: "Create isolated git worktrees for each parallel task."
 	})),
 }, {
-	description: "Chain step: use {task, description, permissions?} for sequential, {parallel: [...]} for static concurrent execution, or {expand, parallel: {...}, collect} for dynamic fanout.",
+	description: "Chain step: use {task, description, tier, permissions?} for sequential, {parallel: [...]} for static concurrent execution, or {expand, parallel: {...}, collect} for dynamic fanout. Every executable child requires tier.",
 	additionalProperties: false,
 });
 
@@ -273,7 +268,7 @@ const SubagentParamsSchema = Type.Object({
 	thinking: Type.Optional(Type.Unsafe({ anyOf: [{ type: "string" }, { type: "boolean", enum: [false] }], description: "Thinking level for action='watchdog.configure' (off/minimal/low/medium/high/xhigh/max, inherit, or false for off)." })),
 	schedule: Type.Optional(Type.String({ description: "Explicit one-shot schedule for action='schedule'. Only honored when scheduledRuns.enabled is true. Use '+10m' or a future ISO timestamp with timezone; scheduled runs always launch async with fresh context." })),
 	scheduleName: Type.Optional(Type.String({ description: "Optional display name for action='schedule'." })),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{task, description, permissions?, count?, output?, outputMode?, reads?, progress?}, ...]" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{task, description, tier, permissions?, count?, output?, outputMode?, reads?, progress?}, ...]" })),
 	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or unlimited." })),
 	worktree: Type.Optional(Type.Boolean({
 		description: "Create isolated git worktrees for parallel tasks; requires clean git state."
@@ -308,8 +303,10 @@ const SubagentParamsSchema = Type.Object({
 	})),
 	outputMode: Type.Optional(OutputModeOverride),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for a single child (e.g. 'anthropic/claude-sonnet-4')" })),
-	tier: Type.Optional(TierOverride), // lunr: model tiers
+	tier: Type.Optional(Type.String({
+		enum: ["light", "standard", "heavy"],
+		description: "Required for SINGLE execution. Omit for control actions; PARALLEL and CHAIN children carry their own required tier.",
+	})),
 	acceptance: Type.Optional(AcceptanceOverride),
 });
 

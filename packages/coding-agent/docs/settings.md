@@ -64,6 +64,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
+| `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |
+| `confirmLargeSubagentLaunches` | boolean | `true` | Ask once before aggregate launches of three or more children outside Auto mode |
 | `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |
 | `trackingId` | string | - | Analytics tracking identifier, generated when `enableAnalytics` is turned on |
 | `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
@@ -230,7 +232,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerTokens` | boolean | `true` | Show ↑in ↓out token totals |
 | `footerCacheHitRate` | boolean | `true` | Show the latest prompt cache-hit rate when reported |
 | `footerTps` | boolean | `true` | Show tokens/second. Independent of feature statuses |
-| `footerStatuses` | boolean | `true` | Show plan/goal/swarm status segments |
+| `footerStatuses` | boolean | `true` | Show plan and goal status segments |
 | `footerGit` | boolean | `true` | Show git branch + added/removed |
 | `footerPlan` | boolean | `true` | Show the subscription usage segment |
 | `footerPlanBar` | boolean | `true` | Show the █░ fill; off keeps the percent only |

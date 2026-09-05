@@ -181,7 +181,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 	const state = context.state as {
 		subagentResultAnimationTimer?: ReturnType<typeof setInterval>;
 		frame?: number;
-		animEntries?: Array<{ text: Text; line: (frame: number) => string }>;
+		animEntries?: Array<{ text: Text; line: (frame: number, now: number) => string }>;
 	};
 	if (state.subagentResultAnimationTimer) return;
 	if (typeof context.invalidate !== "function") return;
@@ -191,7 +191,8 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 		try {
 			const entries = state.animEntries;
 			if (entries?.length && typeof context.requestRender === "function") {
-				for (const entry of entries) entry.text.setText(entry.line(state.frame ?? 0));
+				const now = Date.now();
+				for (const entry of entries) entry.text.setText(entry.line(state.frame ?? 0, now));
 				context.requestRender();
 			} else {
 				context.invalidate();

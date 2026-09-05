@@ -40,9 +40,10 @@ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dis
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
-import { getModelTiersBridge, registerModelTierBridge } from "./core/model-tiers.ts";
+import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { bindRuntimeBridges } from "./core/runtime-bridges.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -56,7 +57,6 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { registerUsageServiceBridge } from "./core/usage-service.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
@@ -904,6 +904,7 @@ export async function main(args: string[], options?: MainOptions) {
 		cwd: sessionManager.getCwd(),
 		agentDir,
 		sessionManager,
+		onRuntimeApplied: bindRuntimeBridges,
 	});
 	if (startupView?.isExitRequested) {
 		await runtime.dispose();
@@ -916,14 +917,6 @@ export async function main(args: string[], options?: MainOptions) {
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
-
-	// Point the model-tier bridge at the live runtime settings manager so /settings
-	// changes take effect without a restart.
-	registerModelTierBridge(settingsManager);
-	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
-	registerMemoryCapBridge(settingsManager);
-	registerCustomizeBridge(settingsManager);
-	registerUsageServiceBridge(modelRuntime, settingsManager);
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

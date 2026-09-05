@@ -4,7 +4,7 @@ import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 /**
- * lunr: renders an injected prompt (/swarm, /research, /goal) as a collapsed
+ * lunr: renders an injected prompt (/research, /goal) as a collapsed
  * one-line summary instead of the full multi-line prompt body. The model still
  * receives the complete prompt — this is a transcript-rendering affordance only.
  *

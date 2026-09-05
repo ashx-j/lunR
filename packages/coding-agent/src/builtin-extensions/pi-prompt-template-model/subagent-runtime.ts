@@ -10,7 +10,7 @@ export const DEFAULT_SUBAGENT_NAME = "delegate";
 export interface DelegatedSubagentTask {
 	agent: string;
 	task: string;
-	model?: string;
+	tier: "light" | "standard" | "heavy";
 	cwd?: string;
 }
 
@@ -27,7 +27,7 @@ export interface DelegatedSubagentRequest {
 	task: string;
 	tasks?: DelegatedSubagentTask[];
 	context: "fresh" | "fork";
-	model: string;
+	tier: "light" | "standard" | "heavy";
 	cwd: string;
 	worktree?: boolean;
 }

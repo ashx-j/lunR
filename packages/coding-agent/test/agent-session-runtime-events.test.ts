@@ -10,8 +10,14 @@ import {
 	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { getCustomizeBridge } from "../src/core/customize.ts";
+import { getMemoryCapBridge } from "../src/core/memory-cap.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { getModelTiersBridge } from "../src/core/model-tiers.ts";
+import { bindRuntimeBridges } from "../src/core/runtime-bridges.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { getSettingsToolsBridge } from "../src/core/settings-tools-bridge.ts";
+import { getUsageServiceBridge } from "../src/core/usage-service.ts";
 import type {
 	ExtensionFactory,
 	SessionBeforeForkEvent,
@@ -35,7 +41,10 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		}
 	});
 
-	async function createRuntimeHost(extensionFactory: ExtensionFactory) {
+	async function createRuntimeHost(
+		extensionFactory: ExtensionFactory,
+		onRuntimeApplied?: Parameters<typeof createAgentSessionRuntime>[1]["onRuntimeApplied"],
+	) {
 		const tempDir = join(tmpdir(), `pi-runtime-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
@@ -98,6 +107,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.create(tempDir),
+			onRuntimeApplied,
 		});
 		await runtimeHost.session.bindExtensions({});
 
@@ -111,6 +121,48 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 
 		return { runtimeHost, faux };
 	}
+
+	it("rebinds host-owned runtime state after initial creation and every replacement", async () => {
+		const appliedSessionFiles: Array<string | undefined> = [];
+		const { runtimeHost } = await createRuntimeHost(
+			() => {},
+			(result) => {
+				bindRuntimeBridges(result);
+				appliedSessionFiles.push(result.session.sessionFile);
+			},
+		);
+		expect(appliedSessionFiles).toEqual([runtimeHost.session.sessionFile]);
+
+		await runtimeHost.session.prompt("hello");
+		const firstSessionFile = runtimeHost.session.sessionFile;
+		const retiredManager = runtimeHost.services.settingsManager;
+		await runtimeHost.newSession();
+		await runtimeHost.session.bindExtensions({});
+		expect(appliedSessionFiles).toHaveLength(2);
+		const replacementManager = runtimeHost.services.settingsManager;
+		expect(replacementManager).not.toBe(retiredManager);
+		retiredManager.setFooterTps(true);
+		replacementManager.setFooterTps(false);
+		replacementManager.setMemoryCharCap(777);
+		replacementManager.setModelTiersEnabled(true);
+		replacementManager.setTierModel("light", "faux/replacement");
+		replacementManager.setPlanUsageWindow("5h");
+		replacementManager.setAutoManageSubscriptions(true);
+		expect(getCustomizeBridge()?.getFooterTps()).toBe(false);
+		expect(getMemoryCapBridge()?.getCharCap()).toBe(777);
+		expect(getModelTiersBridge()?.isTierModeEnabled()).toBe(true);
+		expect(getModelTiersBridge()?.getTierModel("light")).toBe("faux/replacement");
+		expect(getUsageServiceBridge()?.getPreferredWindow()).toBe("5h");
+		expect(getSettingsToolsBridge()?.getAutoManageSubscriptions()).toBe(true);
+
+		await runtimeHost.switchSession(firstSessionFile!);
+		await runtimeHost.session.bindExtensions({});
+		expect(appliedSessionFiles).toHaveLength(3);
+
+		const userMessage = runtimeHost.session.getUserMessagesForForking()[0];
+		await runtimeHost.fork(userMessage.entryId);
+		expect(appliedSessionFiles).toHaveLength(4);
+	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {
 		const events: RecordedSessionEvent[] = [];

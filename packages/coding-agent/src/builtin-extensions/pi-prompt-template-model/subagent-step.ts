@@ -382,7 +382,7 @@ async function requestDelegatedRun(
 			widgetSet = true;
 			ctx.ui.setWidget(
 				DELEGATED_WIDGET_KEY,
-				(_tui, theme) => createDelegatedProgressWidget(request.requestId, request.agent, request.context, request.task, request.tasks, theme, request.model),
+				(_tui, theme) => createDelegatedProgressWidget(request.requestId, request.agent, request.context, request.task, request.tasks, theme, preparedTasks[0]?.model),
 				{ placement: "aboveEditor" },
 			);
 			// Force TUI repaints every second so the elapsed timer ticks during idle periods
@@ -569,13 +569,13 @@ export async function executeSubagentPromptStep(options: DelegatedPromptOptions)
 				tasks: preparedTasks.map<DelegatedSubagentTask>((task) => ({
 					agent: task.agent,
 					task: task.task,
-					model: task.model,
+					tier: "standard",
 					cwd: task.cwd,
 				})),
 			}
 			: {}),
 		context: requestContext,
-		model: preparedTasks[0]!.model,
+		tier: "standard",
 		cwd: requestCwd,
 		...(options.worktree ? { worktree: true } : {}),
 	};

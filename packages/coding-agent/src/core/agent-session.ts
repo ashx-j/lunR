@@ -94,6 +94,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { Extension, InlineExtension } from "./extensions/types.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-cap.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { gateToolCall } from "./permissions.ts";
@@ -105,7 +106,6 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
-import { isExplicitSwarmTurn } from "./swarm.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
@@ -188,6 +188,7 @@ export interface AgentSessionConfig {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	cwd: string;
+	agentDir?: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	/** Resource loader for extensions, skills, prompts, themes, context files, and system prompt */
@@ -343,6 +344,7 @@ export class AgentSession {
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
 	private _cwd: string;
+	private _agentDir: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
 	private _allowedToolNames?: Set<string>;
@@ -382,6 +384,7 @@ export class AgentSession {
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
+		this._agentDir = config.agentDir ?? getAgentDir();
 		this._modelRuntime = config.modelRuntime;
 		this._syncOpenAIServiceTier();
 		this._extensionRunnerRef = config.extensionRunnerRef;
@@ -487,16 +490,15 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
-			// Explicit /swarm turns are pre-approved for the agent-swarm gate: the last
-			// user message carries the literal [SWARM MODE] prefix on both TUI and gateway.
-			const explicitSwarmTurn =
-				toolCall.name === "subagent" ? isExplicitSwarmTurn(this.sessionManager.getBranch()) : undefined;
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
 				this._cwd,
 				this.sessionId,
-				{ explicitSwarmTurn, assistantMessage },
+				{
+					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
+					assistantMessage,
+				},
 			);
 			if (permBlock) {
 				return { block: true, reason: permBlock.reason };
@@ -1153,12 +1155,23 @@ export class AgentSession {
 			loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
 		const loadedSkills = this._resourceLoader.getSkills().skills;
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
+		const contextFiles =
+			this._resourceLoader.contextFilesEnabled?.() === false
+				? []
+				: [
+						...loadSelectedUserInstructions({
+							agentDir: this._agentDir,
+							settingsManager: this.settingsManager,
+							model: this.model,
+						}),
+						...loadedContextFiles.filter((file) => !isUserInstructionsPath(file.path, this._agentDir)),
+					];
 
 		this._baseSystemPromptOptions = {
 			cwd: this._cwd,
 			modelSlug: this.model ? `${this.model.provider}/${this.model.id}` : undefined,
 			skills: loadedSkills,
-			contextFiles: loadedContextFiles,
+			contextFiles,
 			customPrompt: loaderSystemPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,

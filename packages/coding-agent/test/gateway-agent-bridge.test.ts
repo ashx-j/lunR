@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
 import { AgentBridge, QUEUED } from "../src/gateway/agent-bridge.ts";
@@ -186,5 +189,13 @@ describe("AgentBridge LRU eviction", () => {
 
 		release?.();
 		await first.catch(() => {});
+	});
+});
+
+describe("headless factory wiring", () => {
+	it("binds runtime bridges after gateway and cron session create", () => {
+		const dir = join(dirname(fileURLToPath(import.meta.url)), "../src/gateway");
+		expect(readFileSync(join(dir, "agent-bridge.ts"), "utf8")).toContain("bindRuntimeBridges({ session, services })");
+		expect(readFileSync(join(dir, "cron.ts"), "utf8")).toContain("bindRuntimeBridges({ session, services })");
 	});
 });

@@ -1,8 +1,25 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.14`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.15`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.15] - 2026-09-05
+
+### New Features
+
+- **Model instructions** — `/settings` Model instructions loads `~/.lunr/agent/agents/<model>/AGENTS.md` for the selected model. Instruction mode is **Both** (global then model) or **Model only**. A leftover `~/.lunr/agent/AGENTS.md` migrates into `~/.lunr/agent/agents/AGENTS.md` when the new path is empty.
+- **On-demand settings tools** — `settings_load` injects four narrow tools for model tiers, subscription management, rollback, and session retention.
+
+### Changed
+
+- **Required child tiers** — when model tiers are enabled, every child must select `light`, `standard`, or `heavy`. Inherit and an explicit child `model` are rejected. Missing, disabled, or unauthenticated routes fail closed.
+- **Large-launch confirmation** — `/settings` Confirm large subagent launches (default on) asks before 3+ children in manual and yolo. Auto still bypasses it.
+- **Global instructions path** — user-managed global instructions live at `~/.lunr/agent/agents/AGENTS.md`. `/context` still labels that file `Global AGENTS.md`.
+
+### Removed
+
+- **`/swarm`** — the slash command, gateway command, and swarm prompt wrapper are gone. Parallel children still use generic `subagent` launches; 3+ children still share one confirmation.
 
 ## [0.2.14] - 2026-09-05
 

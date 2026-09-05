@@ -58,6 +58,11 @@ export interface ModelTiersSettings {
 	heavyThinking?: ThinkingLevel;
 }
 
+export interface ModelInstructionsSettings {
+	enabled?: boolean;
+	mode?: "both" | "model-only";
+}
+
 export interface ThinkingBudgetsSettings {
 	minimal?: number;
 	low?: number;
@@ -147,6 +152,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	modelTiers?: ModelTiersSettings;
+	modelInstructions?: ModelInstructionsSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
@@ -157,7 +163,7 @@ export interface Settings {
 	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
 	footerCacheHitRate?: boolean; // default: true - show the latest prompt cache-hit rate
 	footerTps?: boolean; // default: true - show the pi-tps t/s segment
-	footerStatuses?: boolean; // default: true - show the plan/goal/swarm status segments
+	footerStatuses?: boolean; // default: true - show the plan/goal status segments
 	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
 	footerPlan?: boolean; // default: true - show the subscription usage segment
 	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
@@ -170,6 +176,7 @@ export interface Settings {
 	rollbackCapture?: RollbackCapture; // default "copies"
 	rollbackScope?: RollbackScope; // default "tools"
 	autoManageSubscriptions?: boolean; // lunr: when true, subscription key switching is fully automatic (no manual picker)
+	confirmLargeSubagentLaunches?: boolean; // default true - ask before launching 3+ children outside Auto mode
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -1516,6 +1523,45 @@ export class SettingsManager {
 
 	getModelTiers(): ModelTiersSettings {
 		return { ...(this.settings.modelTiers ?? {}) };
+	}
+
+	getModelInstructions(): Required<ModelInstructionsSettings> {
+		return {
+			enabled: this.settings.modelInstructions?.enabled ?? false,
+			mode: this.settings.modelInstructions?.mode === "model-only" ? "model-only" : "both",
+		};
+	}
+
+	getModelInstructionsEnabled(): boolean {
+		return this.settings.modelInstructions?.enabled ?? false;
+	}
+
+	setModelInstructionsEnabled(enabled: boolean): void {
+		this.globalSettings.modelInstructions ??= {};
+		this.globalSettings.modelInstructions.enabled = enabled;
+		this.markModified("modelInstructions", "enabled");
+		this.save();
+	}
+
+	getModelInstructionsMode(): "both" | "model-only" {
+		return this.settings.modelInstructions?.mode === "model-only" ? "model-only" : "both";
+	}
+
+	setModelInstructionsMode(mode: "both" | "model-only"): void {
+		this.globalSettings.modelInstructions ??= {};
+		this.globalSettings.modelInstructions.mode = mode;
+		this.markModified("modelInstructions", "mode");
+		this.save();
+	}
+
+	getConfirmLargeSubagentLaunches(): boolean {
+		return this.settings.confirmLargeSubagentLaunches ?? true;
+	}
+
+	setConfirmLargeSubagentLaunches(enabled: boolean): void {
+		this.globalSettings.confirmLargeSubagentLaunches = enabled;
+		this.markModified("confirmLargeSubagentLaunches");
+		this.save();
 	}
 
 	getModelTiersEnabled(): boolean {

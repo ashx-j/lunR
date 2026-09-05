@@ -21,6 +21,7 @@ import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import {
 	type DefaultPermissionMode,
 	type DefaultProjectTrust,
+	type ModelInstructionsSettings,
 	type ModelTierName,
 	type ModelTiersSettings,
 	type RollbackCapture,
@@ -98,6 +99,10 @@ export interface SettingsConfig {
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
 	modelTiers: ModelTiersSettings;
+	modelInstructions: Required<ModelInstructionsSettings>;
+	globalInstructionsPath: string;
+	modelInstructionsPath: string;
+	confirmLargeSubagentLaunches: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
@@ -160,6 +165,9 @@ export interface SettingsCallbacks {
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onModelTierThinkingChange: (tier: ModelTierName, level: ThinkingLevel | undefined) => void;
+	onModelInstructionsEnabledChange: (enabled: boolean) => void;
+	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
+	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
@@ -340,6 +348,57 @@ class ModelTiersSubmenu extends Container {
 	}
 }
 
+class ModelInstructionsSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+		const state = { ...config.modelInstructions };
+		const items: SettingItem[] = [
+			{
+				id: "enabled",
+				label: "Model instructions",
+				description: "Load instructions for the selected model",
+				currentValue: state.enabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "mode",
+				label: "Instruction mode",
+				description: "Load global and model instructions, or model only",
+				currentValue: state.mode,
+				values: ["both", "model-only"],
+				disabled: () => !state.enabled,
+			},
+		];
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Model Instructions")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.settingsList = new SettingsList(
+			items,
+			items.length,
+			getSettingsListTheme(),
+			(id, value) => {
+				if (id === "enabled") {
+					state.enabled = value === "on";
+					callbacks.onModelInstructionsEnabledChange(state.enabled);
+				} else if (id === "mode") {
+					state.mode = value === "model-only" ? "model-only" : "both";
+					callbacks.onModelInstructionsModeChange(state.mode);
+				}
+			},
+			() => done(state.enabled ? "on" : "off"),
+		);
+		this.addChild(this.settingsList);
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("muted", `Global: ${config.globalInstructionsPath}`), 0, 0));
+		this.addChild(new Text(theme.fg("muted", `Current model: ${config.modelInstructionsPath}`), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
 /**
  * Numeric input submenu for the simple-pi-memory character cap.
  * Enter validates and applies via done(newValue); Esc cancels.
@@ -448,7 +507,7 @@ class CustomizeSubmenu extends Container {
 			{
 				id: "footer-statuses",
 				label: "Feature statuses",
-				description: "Active plan, goal, and swarm status",
+				description: "Active plan and goal status",
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
@@ -1418,6 +1477,20 @@ export class SettingsSelectorComponent extends Container {
 				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
 			},
 			{
+				id: "model-instructions",
+				label: "Model instructions",
+				description: "Global and selected-model AGENTS.md loading",
+				currentValue: config.modelInstructions.enabled ? "on" : "off",
+				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
+			},
+			{
+				id: "confirm-large-subagent-launches",
+				label: "Confirm large subagent launches",
+				description: "Confirm 3+ children; Auto bypasses confirmation",
+				currentValue: config.confirmLargeSubagentLaunches ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "plan-usage-window",
 				label: "Plan usage window",
 				description: "Subscription usage period shown in the footer",
@@ -1701,6 +1774,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "auto-manage-subscriptions":
 						callbacks.onAutoManageSubscriptionsChange(newValue === "on");
+						break;
+					case "confirm-large-subagent-launches":
+						callbacks.onConfirmLargeSubagentLaunchesChange(newValue === "on");
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

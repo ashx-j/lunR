@@ -689,7 +689,7 @@ export function renderStatsLine(
 	const sep = color(theme, "accent2", " | "); // lunr: theme-polish — separator uses subtle accent2 blue (was bright-black plain fallback)
 	const parts: string[] = [];
 
-	// lunr: mode zone — permission mode + agent-mode statuses (plan/goal/swarm)
+	// lunr: mode zone — permission mode + agent-mode statuses (plan/goal)
 	// render as ONE segment (dim middot-separated), not scattered across piped sections.
 	const modeZone: string[] = [];
 
@@ -707,11 +707,11 @@ export function renderStatsLine(
 	const statuses = footerData.getExtensionStatuses?.();
 	if (statuses && statuses.size > 0) {
 		// lunr: status segments are toggle-gated via the customize bridge:
-		// footerStatuses gates plan/goal/swarm, footerTps gates tps,
+		// footerStatuses gates plan/goal, footerTps gates tps,
 		// footerMcp gates mcp/mcp-auth, footerLsp gates lsp. Publishers keep
 		// calling ctx.ui.setStatus harmlessly when their segment is hidden.
-		// lunr: plan/goal/swarm join the mode zone; tps/mcp/lsp stay piped.
-		const modeKeys: string[] = footerToggles.statuses ? ["plan", "goal", "swarm"] : [];
+		// lunr: plan/goal join the mode zone; tps/mcp/lsp stay piped.
+		const modeKeys: string[] = footerToggles.statuses ? ["plan", "goal"] : [];
 		for (const key of modeKeys) {
 			const v = statuses.get(key);
 			if (v) modeZone.push(color(theme, "white", stripAnsi(v)));
