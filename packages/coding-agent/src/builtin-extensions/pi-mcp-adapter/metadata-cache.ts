@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "
 import { dirname } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
 import { createHash } from "node:crypto";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+import { createRequire } from "node:module";
 import type { McpTool, McpResource, ServerEntry, ToolMetadata } from "./types.ts";
 import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
@@ -193,9 +193,15 @@ function stableStringify(value: unknown): string {
   return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
 }
 
+const requireExtApps = createRequire(import.meta.url);
+let getToolUiResourceUri: ((tool: { _meta?: Record<string, unknown> }) => string | undefined) | undefined;
+
 function tryGetToolUiResourceUri(tool: McpTool): string | undefined {
   try {
-    return getToolUiResourceUri({ _meta: tool._meta });
+    if (!getToolUiResourceUri) {
+      getToolUiResourceUri = requireExtApps("@modelcontextprotocol/ext-apps/app-bridge").getToolUiResourceUri;
+    }
+    return getToolUiResourceUri!({ _meta: tool._meta });
   } catch {
     return undefined;
   }
