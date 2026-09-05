@@ -27,6 +27,7 @@ function formatTokenCount(count: number): string {
  * List available models, optionally filtered by search pattern
  */
 export async function listModels(modelRuntime: ModelRuntime, searchPattern?: string): Promise<void> {
+	await modelRuntime.refreshIfStale();
 	const loadError = modelRuntime.getError();
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));

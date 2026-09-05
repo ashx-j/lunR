@@ -4,6 +4,26 @@
 import type { Model } from "../types.ts";
 
 export const OPENAI_CODEX_MODELS = {
+	"gpt-6-astra": {
+		id: "gpt-6-astra",
+		name: "GPT-6 Astra",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://chatgpt.com/backend-api",
+		compat: {"supportsToolSearch":true},
+		reasoning: true,
+		thinkingLevelMap: {"off":null,"minimal":null,"xhigh":"xhigh","max":"max"},
+		input: ["text", "image"],
+		cost: {
+			input: 10,
+			output: 50,
+			cacheRead: 1,
+			cacheWrite: 12.5,
+			tiers: [{"inputTokensAbove":272000,"input":20,"output":75,"cacheRead":2,"cacheWrite":25}],
+		},
+		contextWindow: 1050000,
+		maxTokens: 128000,
+	} satisfies Model<"openai-codex-responses">,
 	"gpt-5.3-codex-spark": {
 		id: "gpt-5.3-codex-spark",
 		name: "GPT-5.3 Codex Spark",

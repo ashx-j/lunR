@@ -6,6 +6,7 @@ import {
 	isLiveModelIncomplete,
 	mapOpenRouterModel,
 	parseOpenAIModelsList,
+	selectLiveTemplate,
 	synthesizeLiveModel,
 } from "../src/core/live-catalog.ts";
 
@@ -25,6 +26,23 @@ function template(provider = "xai"): Model<"openai-completions"> {
 }
 
 describe("live-catalog", () => {
+	it("does not mistake missing or negative router prices for free models", () => {
+		const models = discoverLiveModels(
+			"openrouter",
+			{
+				data: [
+					{ id: "missing-price", supported_parameters: ["tools"] },
+					{ id: "dynamic-price", supported_parameters: ["tools"], pricing: { prompt: "-1", completion: "-1" } },
+					{ id: "free", supported_parameters: ["tools"], pricing: { prompt: "0", completion: "0" } },
+				],
+			},
+			[template("openrouter")],
+		);
+		expect(models.slice(0, 2).map((row) => row.model.catalog?.pricing)).toEqual(["unknown", "unknown"]);
+		expect(models[2].model.catalog?.pricing).toBeUndefined();
+		expect(models.every((row) => row.model.cost.input >= 0)).toBe(true);
+	});
+
 	it("parses an OpenAI { data: [{ id }] } list", () => {
 		expect(
 			parseOpenAIModelsList({ data: [{ id: "grok-4.6" }, { id: "grok-4.3" }, { nope: 1 }] }).map((row) => row.id),
@@ -88,6 +106,45 @@ describe("live-catalog", () => {
 		});
 		expect(result.status).toBe("timeout");
 		expect(result.incomplete).toEqual([]);
+	});
+
+	it("uses a reasoning GPT sibling as the live template for new gpt ids", () => {
+		const gpt4 = {
+			...template("openai"),
+			id: "gpt-4o",
+			name: "GPT-4o",
+			api: "openai-responses" as const,
+			reasoning: false,
+		};
+		const sol = {
+			...template("openai"),
+			id: "gpt-5.6-sol",
+			name: "GPT-5.6 Sol",
+			api: "openai-responses" as const,
+			reasoning: true,
+			thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+		};
+		const picked = selectLiveTemplate("openai", "gpt-6-astra", [gpt4, sol]);
+		expect(picked?.id).toBe("gpt-5.6-sol");
+		const discoveries = discoverLiveModels("openai", { data: [{ id: "gpt-6-astra" }] }, [gpt4, sol]);
+		expect(discoveries[0]?.model.api).toBe("openai-responses");
+		expect(discoveries[0]?.model.reasoning).toBe(true);
+	});
+
+	it("does not apply the reasoning GPT fallback to GPT-4, chat, or other providers", () => {
+		const gpt4 = {
+			...template("openai"),
+			id: "gpt-4o",
+			reasoning: false,
+		};
+		const reasoning = {
+			...template("openai"),
+			id: "gpt-5.6-sol",
+			reasoning: true,
+		};
+		expect(selectLiveTemplate("openai", "gpt-4.2", [gpt4, reasoning])?.id).toBe("gpt-4o");
+		expect(selectLiveTemplate("openai", "gpt-6-chat-latest", [gpt4, reasoning])?.id).toBe("gpt-4o");
+		expect(selectLiveTemplate("openrouter", "openai/gpt-6-astra", [gpt4, reasoning])?.id).toBe("gpt-4o");
 	});
 
 	it("discovers new xAI ids from a live list payload", () => {
