@@ -6,7 +6,10 @@ import { registerSettingsToolsBridge } from "./settings-tools-bridge.ts";
 import { registerUsageServiceBridge } from "./usage-service.ts";
 
 /** Re-point every settings-backed process-global bridge at the applied runtime. */
-export function bindRuntimeBridges({ session, services }: CreateAgentSessionRuntimeResult): void {
+export function bindRuntimeBridges({
+	session,
+	services,
+}: Pick<CreateAgentSessionRuntimeResult, "session" | "services">): void {
 	const { settingsManager, modelRuntime } = services;
 	registerModelTierBridge(settingsManager);
 	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
