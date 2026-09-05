@@ -1,46 +1,67 @@
 #!/usr/bin/env node
-/**
- * CLI entry point for the refactored coding agent.
- * Uses main.ts with AgentSession and new mode modules.
- *
- * Test with: npx tsx src/cli-new.ts [args...]
- */
 import { enableCompileCache } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { InteractiveView } from "./startup/interactive-view.ts";
+import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
+import { markStartupMilestone } from "./startup/startup-milestones.ts";
 
-// lunr: set the process / tab title before the slow dynamic import of main.ts
-// so Windows Terminal does not sit on "node" during cold start.
+markStartupMilestone("process_entry");
 process.title = "lunr";
 if (process.stdout.isTTY) {
 	process.stdout.write("\x1b]0;lunr\x07");
 }
 
-// Enable before importing the rest of the graph so subsequent processes can
-// reuse V8 code cache. Helps the first start after a reboot when the OS page
-// cache is cold. Static imports are hoisted, so main is loaded dynamically.
 try {
 	const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
 	enableCompileCache(join(agentDir, "compile-cache"));
-} catch {
-	// Node < 22.8 or unwritable cache dir.
-}
+} catch {}
 
-const importStarted = Date.now();
-const [{ APP_NAME }, { configureHttpDispatcher }, { main }, { noteImportMain }] = await Promise.all([
-	import("./config.ts"),
-	import("./core/http-dispatcher.ts"),
-	import("./main.ts"),
-	import("./core/timings.ts"),
-]);
-noteImportMain(Date.now() - importStarted);
-
-process.title = APP_NAME;
 process.env.PI_CODING_AGENT = "true";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
-// Configure undici's global dispatcher before provider SDKs issue requests.
-// Runtime settings are applied once SettingsManager has loaded global/project settings.
-configureHttpDispatcher();
+const args = process.argv.slice(2);
+const startupBenchmark = process.env.PI_STARTUP_BENCHMARK === "1";
+const preloadMode = resolvePreloadLaunchMode(args, {
+	stdinIsTTY: process.stdin.isTTY === true,
+	stdoutIsTTY: process.stdout.isTTY === true,
+	startupBenchmark,
+});
+markStartupMilestone("mode_routed");
 
-await main(process.argv.slice(2));
+let startupView: InteractiveView | undefined;
+if (preloadMode === "interactive") {
+	const { InteractiveView } = await import("./startup/interactive-view.ts");
+	startupView = new InteractiveView();
+	startupView.start();
+	await startupView.waitForFirstFrame();
+	if (startupView.isExitRequested) process.exit(0);
+}
+
+const startRuntime = async () => {
+	const importStarted = performance.now();
+	try {
+		const [{ APP_NAME }, { main }, { noteImportMain }] = await Promise.all([
+			import("./config.ts"),
+			import("./main.ts"),
+			import("./core/timings.ts"),
+		]);
+		noteImportMain(performance.now() - importStarted);
+		process.title = APP_NAME;
+		await main(args, { startupView });
+	} catch (error) {
+		if (startupView && !startupView.isExitRequested) {
+			process.exitCode = 1;
+			await startupView.fail(error);
+		} else {
+			throw error;
+		}
+	}
+};
+process.once("exit", () => startupView?.stop());
+if (startupView) {
+	await Promise.race([startRuntime(), startupView.waitForExit()]);
+	if (startupView.isExitRequested) process.exit(process.exitCode ?? 0);
+} else {
+	await startRuntime();
+}

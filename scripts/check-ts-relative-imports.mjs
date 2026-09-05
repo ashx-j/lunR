@@ -2,13 +2,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 
-const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules"]);
+const ignoredDirectories = new Set([".git", "builtin-extensions", "coverage", "dist", "node_modules"]);
+const ignoredRootDirectories = new Set(["codex", "extension-repos", "hermes-agent", "kimi-cli", "pi"]);
 const files = [];
 
 function collectTypescriptFiles(directory) {
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
-			if (!ignoredDirectories.has(entry.name)) {
+			if (!ignoredDirectories.has(entry.name) && !(directory === "." && ignoredRootDirectories.has(entry.name))) {
 				collectTypescriptFiles(join(directory, entry.name));
 			}
 			continue;

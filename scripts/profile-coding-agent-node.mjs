@@ -42,7 +42,7 @@ Options:
 
 Notes:
   - By default the benchmark uses your normal configured agent dir, so global models/auth/settings work.
-  - TUI mode measures startup until the interactive UI reaches first usable state.
+  - TUI mode reports input armed, first frame, and prompt barrier milestones.
   - RPC mode measures startup until a real get_state request receives a response, then closes stdin to exit cleanly.
   - CPU profiles are kept in the selected profile directory for later analysis.
 `);
@@ -215,30 +215,41 @@ function summarize(values) {
 	};
 }
 
-function parseStartupTimings(stderr) {
+export function parseStartupTimings(stderr) {
 	const lines = stderr.split(/\r?\n/);
 	const timings = new Map();
-	let inBlock = false;
+	let namespace;
 
 	for (const line of lines) {
-		if (line.includes("--- Startup Timings ---")) {
-			inBlock = true;
+		const header = line.match(/^--- Startup Timings: ([^-]+?) ---$/);
+		if (header) {
+			namespace = header[1].trim();
 			continue;
 		}
-		if (!inBlock) {
+		if (!namespace) continue;
+		if (/^-{4,}$/.test(line.trim())) {
+			namespace = undefined;
 			continue;
 		}
-		if (line.includes("------------------------")) {
-			break;
-		}
-		const match = line.match(/^\s+([^:]+):\s+(\d+)ms$/);
-		if (!match) {
-			continue;
-		}
-		timings.set(match[1], Number.parseInt(match[2], 10));
+		const match = line.match(/^\s+(.+?):\s+(\d+(?:\.\d+)?)ms$/);
+		if (!match || match[1] === "TOTAL") continue;
+		const label = namespace === "main" ? match[1] : `${namespace}:${match[1]}`;
+		timings.set(label, Number.parseFloat(match[2]));
 	}
 
 	return timings;
+}
+
+export function parseStartupMilestones(stderr) {
+	const milestones = new Map();
+	for (const line of stderr.split(/\r?\n/)) {
+		if (!line.startsWith("LUNR_STARTUP_MILESTONE ")) continue;
+		try {
+			const value = JSON.parse(line.slice("LUNR_STARTUP_MILESTONE ".length));
+			if (typeof value?.name === "string" && Number.isFinite(value?.ms)) milestones.set(value.name, value.ms);
+		} catch {}
+	}
+	return milestones;
 }
 
 function summarizeTimingMaps(runs) {
@@ -279,53 +290,22 @@ async function waitForExit(child, errorPrefix) {
 }
 
 async function runBuild() {
-	process.stdout.write("Building packages/tui, packages/ai, packages/agent, and packages/coding-agent...\n");
-	const startedAt = performance.now();
-	const child = spawn(
-		"npm",
-		[
-			"run",
-			"build",
-			"--workspace",
-			"packages/tui",
-			"--workspace",
-			"packages/ai",
-			"--workspace",
-			"packages/agent",
-			"--workspace",
-			"packages/coding-agent",
-		],
-		{
-			cwd: repoRoot,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-			shell: process.platform === "win32",
-		},
-	);
-
-	let stdout = "";
-	let stderr = "";
-	child.stdout.setEncoding("utf8");
-	child.stdout.on("data", (chunk) => {
-		stdout += chunk;
-	});
-	child.stderr.setEncoding("utf8");
-	child.stderr.on("data", (chunk) => {
-		stderr += chunk;
-	});
-
-	const exitCode = await waitForExit(child, "Build");
-	if (exitCode !== 0) {
-		if (stdout.trim()) {
-			process.stdout.write(`${stdout}${stdout.endsWith("\n") ? "" : "\n"}`);
-		}
-		if (stderr.trim()) {
-			process.stderr.write(`${stderr}${stderr.endsWith("\n") ? "" : "\n"}`);
-		}
-		throw new Error(`Build failed with exit code ${exitCode}`);
-	}
-
-	process.stdout.write(`Build completed in ${formatMs(performance.now() - startedAt)}\n`);
+ process.stdout.write("Building offline: tui -> ai -> agent -> coding-agent...\n");
+ const startedAt = performance.now();
+ const tsgo = join(repoRoot, "node_modules/@typescript/native-preview/bin/tsgo.js");
+ const commands = [
+  ...["tui", "ai", "agent", "coding-agent"].map((pkg) => ({ executable: process.execPath, args: [tsgo, "-p", `packages/${pkg}/tsconfig.build.json`], shell: false })),
+  { executable: "npm", args: ["run", "copy-assets", "--workspace", "packages/coding-agent"], shell: process.platform === "win32" },
+ ];
+ for (const command of commands) {
+  const child = spawn(command.executable, command.args, { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], shell: command.shell });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  const exitCode = await waitForExit(child, "Build");
+  if (exitCode !== 0) throw new Error(`Build failed with exit code ${exitCode}\n${output}`);
+ }
+ process.stdout.write(`Build completed in ${formatMs(performance.now() - startedAt)}\n`);
 }
 
 function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
@@ -364,9 +344,8 @@ function createBenchmarkEnv(options, isolatedAgentDir) {
 	} else if (isolatedAgentDir) {
 		env[agentDirEnvName] = isolatedAgentDir;
 	}
-	if (options.mode === "tui") {
-		env[startupBenchmarkEnvName] = "1";
-	}
+	env.PI_TIMING = "1";
+	if (options.mode === "tui") env[startupBenchmarkEnvName] = "1";
 	if (options.offline) {
 		env.PI_OFFLINE = "1";
 		env.PI_SKIP_VERSION_CHECK = "1";
@@ -388,7 +367,7 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 	const child = spawn(command.executable, command.args, {
 		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
-		stdio: ["inherit", "ignore", "pipe"],
+		stdio: [process.stdin.isTTY ? "inherit" : "ignore", "ignore", "pipe"],
 		shell: process.platform === "win32" && runtime === "bun",
 	});
 
@@ -412,7 +391,14 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 			throw new Error(`CPU profile was not written: ${profilePath}`);
 		}
 
-		return { elapsedMs, profilePath, timings: parseStartupTimings(stderr) };
+		const milestones = parseStartupMilestones(stderr);
+		return {
+			elapsedMs: milestones.get("prompt_barrier_open") ?? elapsedMs,
+			wallElapsedMs: elapsedMs,
+			profilePath,
+			timings: parseStartupTimings(stderr),
+			milestones,
+		};
 	} finally {
 		if (tempRoot) {
 			rmSync(tempRoot, { recursive: true, force: true });
@@ -514,7 +500,13 @@ async function runRpcBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 			throw new Error(`CPU profile was not written: ${profilePath}`);
 		}
 
-		return { elapsedMs: readyElapsedMs, profilePath, timings: parseStartupTimings(stderr) };
+		return {
+			elapsedMs: readyElapsedMs,
+			wallElapsedMs: readyElapsedMs,
+			profilePath,
+			timings: parseStartupTimings(stderr),
+			milestones: parseStartupMilestones(stderr),
+		};
 	} finally {
 		if (tempRoot) {
 			rmSync(tempRoot, { recursive: true, force: true });
@@ -538,10 +530,6 @@ async function main() {
 
 	if (options.agentDir && options.isolatedAgentDir) {
 		throw new Error("--agent-dir and --isolated-agent-dir cannot be combined");
-	}
-
-	if (options.mode === "tui" && (!process.stdin.isTTY || !process.stdout.isTTY)) {
-		throw new Error("TUI benchmark must be run from an interactive terminal.");
 	}
 
 	const runtime = resolveRuntime(options.runtime);
@@ -576,8 +564,11 @@ async function main() {
 			profileDir,
 		});
 
+		const milestoneText = [...result.milestones.entries()]
+			.map(([name, ms]) => `${name}=${formatMs(ms)}`)
+			.join(" ");
 		process.stdout.write(
-			`[${measuredIndex === undefined ? `warmup ${runIndex + 1}` : `run ${measuredIndex}`}] elapsed=${formatMs(result.elapsedMs)}\n`,
+			`[${measuredIndex === undefined ? `warmup ${runIndex + 1}` : `run ${measuredIndex}`}] elapsed=${formatMs(result.elapsedMs)}${milestoneText ? ` ${milestoneText}` : ""}\n`,
 		);
 
 		if (measuredIndex !== undefined) {
@@ -632,8 +623,10 @@ async function main() {
 	}
 }
 
-main().catch((error) => {
-	const message = error instanceof Error ? error.message : String(error);
-	console.error(message);
-	process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	main().catch((error) => {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(message);
+		process.exit(1);
+	});
+}

@@ -1,5 +1,13 @@
-import hljs from "highlight.js/lib/index.js";
+import { createRequire } from "node:module";
+import type Highlighter from "highlight.js/lib/index.js";
 import { decodeHtmlEntityAt } from "./html.ts";
+
+const require = createRequire(import.meta.url);
+let highlighter: typeof Highlighter | undefined;
+function getHighlighter(): typeof Highlighter {
+	highlighter ??= require("highlight.js/lib/index.js") as typeof Highlighter;
+	return highlighter;
+}
 
 export type HighlightFormatter = (text: string) => string;
 export type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
@@ -133,14 +141,14 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 
 export function highlight(code: string, options: HighlightOptions = {}): string {
 	const html = options.language
-		? hljs.highlight(code, {
+		? getHighlighter().highlight(code, {
 				language: options.language,
 				ignoreIllegals: options.ignoreIllegals,
 			}).value
-		: hljs.highlightAuto(code, options.languageSubset).value;
+		: getHighlighter().highlightAuto(code, options.languageSubset).value;
 	return renderHighlightedHtml(html, options.theme);
 }
 
 export function supportsLanguage(name: string): boolean {
-	return hljs.getLanguage(name) !== undefined;
+	return getHighlighter().getLanguage(name) !== undefined;
 }
