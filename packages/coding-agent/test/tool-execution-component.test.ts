@@ -2,6 +2,8 @@ import { join, resolve } from "node:path";
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
+import { renderSubagentCall } from "../src/builtin-extensions/pi-subagents/src/extension/index.ts";
+import { renderSubagentResult } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
 import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
@@ -100,7 +102,11 @@ function compactWrite(toolCallId: string, path: string): ToolExecutionComponent 
 		process.cwd(),
 	);
 	component.updateResult(
-		{ content: [{ type: "text", text: `Successfully wrote 5 bytes to ${path}` }], details: undefined, isError: false },
+		{
+			content: [{ type: "text", text: `Successfully wrote 5 bytes to ${path}` }],
+			details: undefined,
+			isError: false,
+		},
 		false,
 	);
 	return component;
@@ -162,7 +168,11 @@ function compactLs(toolCallId: string, path: string): ToolExecutionComponent {
 		process.cwd(),
 	);
 	component.updateResult(
-		{ content: [{ type: "text", text: "a.ts\nb.ts\n\n[500 entries limit reached]" }], details: undefined, isError: false },
+		{
+			content: [{ type: "text", text: "a.ts\nb.ts\n\n[500 entries limit reached]" }],
+			details: undefined,
+			isError: false,
+		},
 		false,
 	);
 	return component;
@@ -229,6 +239,74 @@ function compactSearch(toolCallId: string, query: string, totalResults: number):
 		false,
 	);
 	return component;
+}
+
+function subagentCard(state: "partial" | "success" | "error"): ToolExecutionComponent {
+	const description = "Inspect auth flow";
+	const running = state === "partial";
+	const failed = state === "error";
+	const progress = {
+		index: 0,
+		description,
+		permissions: "read-only",
+		status: running ? "running" : failed ? "failed" : "completed",
+		task: "Inspect the authentication implementation",
+		model: "xai/grok-4.5",
+		thinking: "high",
+		activityState: "active",
+		recentTools: [],
+		recentOutput: [],
+		toolCount: 3,
+		tokens: 1200,
+		durationMs: 2500,
+	};
+	const details = {
+		mode: "single",
+		context: "fresh",
+		results: [
+			{
+				agent: description,
+				description,
+				permissions: "read-only",
+				task: "Inspect the authentication implementation",
+				exitCode: failed ? 1 : 0,
+				error: failed ? "Child failed" : undefined,
+				output: failed ? "Child failed" : "Authentication review complete",
+				usage: { input: 600, output: 600, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 2 },
+				model: "xai/grok-4.5",
+				thinking: "high",
+				progress: running ? progress : undefined,
+				progressSummary: running ? undefined : progress,
+			},
+		],
+	};
+	const toolDefinition: ToolDefinition = {
+		...createBaseToolDefinition("subagent"),
+		renderCall: renderSubagentCall,
+		renderResult: renderSubagentResult,
+	};
+	const component = new ToolExecutionComponent(
+		"subagent",
+		`subagent-${state}`,
+		{ task: "Inspect the authentication implementation", description },
+		{},
+		toolDefinition,
+		createFakeTui(),
+		process.cwd(),
+	);
+	component.updateResult(
+		{
+			content: [{ type: "text", text: failed ? "Child failed" : "Authentication review complete" }],
+			details,
+			isError: failed,
+		},
+		running,
+	);
+	return component;
+}
+
+function descriptionCount(component: ToolExecutionComponent): number {
+	return stripAnsi(component.render(120).join("\n")).split("Inspect auth flow").length - 1;
 }
 
 function compactFallback(toolCallId: string, name: string): ToolExecutionComponent {
@@ -315,6 +393,26 @@ describe("ToolExecutionComponent parity", () => {
 		const expanded = stripAnsi(component.render(120).join("\n"));
 		expect(expanded).toContain("custom call");
 		expect(expanded).toContain("custom result");
+	});
+
+	test.each([
+		["live partial", "partial", false],
+		["expanded finished", "success", true],
+		["errored", "error", false],
+		["collapsed success", "success", false],
+	] as const)("keeps one subagent description on %s cards", (_label, state, expanded) => {
+		const component = subagentCard(state);
+		component.setExpanded(expanded);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+
+		expect(descriptionCount(component)).toBe(1);
+		expect(rendered).toContain("subagent");
+		if (state === "partial") {
+			expect(rendered).toContain("read-only");
+			expect(rendered).toContain("3 tool uses");
+		}
+		if (state === "error") expect(rendered).toContain("Child failed");
+		if (expanded) expect(rendered).toContain("grok-4.5");
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {

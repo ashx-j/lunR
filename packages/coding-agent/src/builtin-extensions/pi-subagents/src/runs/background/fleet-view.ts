@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../../shared/formatters.ts";
+import { formatDuration, formatModelSelection, formatTokens, shortenPath } from "../../shared/formatters.ts";
 import { formatActivityLabel } from "../../shared/status-format.ts";
 import {
 	ASYNC_DIR,
@@ -285,7 +285,7 @@ function formatAsyncFleetLines(runs: AsyncRunSummary[]): string[] {
 			const display = step.label ? `${step.label} (${step.agent})` : step.agent;
 			const phase = step.phase ? `[${step.phase}] ` : "";
 			const stepActivity = formatActivityFacts(step);
-			const modelThinking = formatModelThinking(step.model, step.thinking);
+			const modelThinking = formatModelSelection(step.modelSelection, step.model, step.thinking);
 			const parts = [`${step.index}. ${phase}${display}`, step.status, stepActivity, modelThinking].filter(Boolean);
 			lines.push(`  ${parts.join(" | ")}`);
 			const output = path.join(run.asyncDir, `output-${step.index}.log`);
@@ -385,7 +385,7 @@ function selectTranscriptStep(status: AsyncStatus, options: TranscriptOptions): 
 
 function stepStateLine(mode: SubagentRunMode, index: number | undefined, step: AsyncJobStep | undefined): string | undefined {
 	if (index === undefined || !step) return undefined;
-	const modelThinking = formatModelThinking(step.model, step.thinking);
+	const modelThinking = formatModelSelection(step.modelSelection, step.model, step.thinking);
 	const parts = [
 		`${mode === "parallel" ? "Agent" : "Step"}: ${index} (${step.agent})`,
 		step.status,

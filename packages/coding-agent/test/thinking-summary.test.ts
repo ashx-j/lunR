@@ -168,7 +168,6 @@ describe("AssistantMessageComponent collapsed thinking", () => {
 			undefined,
 			"Thinking...",
 			1,
-			false,
 			true,
 		);
 		component.setThinkingTimings([{ start: 0, end: 8000 }]);
@@ -194,7 +193,6 @@ describe("AssistantMessageComponent collapsed thinking", () => {
 			undefined,
 			"Thinking...",
 			1,
-			false,
 			true,
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
@@ -208,7 +206,7 @@ describe("AssistantMessageComponent collapsed thinking", () => {
 		initTheme("moon");
 
 		const message = createAssistantMessage([{ type: "thinking", thinking: "still reasoning along" }]);
-		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, false, true);
+		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, true);
 		component.setThinkingTimings([{ start: 0 }]);
 		component.setThinkingCollapse(true);
 		const rendered = stripAnsi(component.render(80).join("\n"));

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
-import type { Usage } from "../../shared/types.ts";
+import type { ChildTier, ModelSelection, Usage } from "../../shared/types.ts";
 import { checkModelScope, type ModelScopeConfig, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 import { applyThinkingSuffix } from "./pi-args.ts";
 
@@ -275,6 +275,26 @@ export function resolveTierModelOverride(tier: unknown): string | undefined {
 		}
 		return undefined;
 	}
+}
+
+function requestedModelString(model: unknown): string | undefined {
+	return typeof model === "string" && model.trim() && model.trim() !== INHERIT_MODEL ? model.trim() : undefined;
+}
+
+function requestedTier(tier: unknown): ChildTier | undefined {
+	return tier === "light" || tier === "standard" || tier === "heavy" ? tier : undefined;
+}
+
+/**
+ * Capture how a child model was selected from the original requested params.
+ * Must run before callers replace `model` with a resolved override.
+ * Explicit model wins; a tier only counts when it actually resolves.
+ */
+export function captureModelSelection(input: { model?: unknown; tier?: unknown }): ModelSelection {
+	if (requestedModelString(input.model)) return { kind: "model" };
+	const tier = requestedTier(input.tier);
+	if (tier && resolveTierModelOverride(tier)) return { kind: "tier", tier };
+	return { kind: "inherit" };
 }
 
 export interface BuildModelCandidatesOptions {

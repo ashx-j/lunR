@@ -33,11 +33,9 @@
 
 import { CustomEditor } from "../modes/interactive/components/custom-editor.js";
 
-// lunr: customize bridge — read the prompt-symbol toggle (bridgeless → no symbol).
-const PROMPT_SYMBOL_BRIDGE = Symbol.for("@lunr/customize");
+const CUSTOMIZE_BRIDGE = Symbol.for("@lunr/customize");
 const PERMISSION_MODE_BRIDGE = Symbol.for("@lunr/permission-mode");
 interface CustomizeBridgeForPrompt {
-	getPromptSymbol(): boolean;
 	getOpenAIFastMode?(): boolean;
 	// lunr: footer element toggles (added to the same bridge).
 	getFooterMcp?(): boolean;
@@ -55,13 +53,10 @@ interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
 }
 function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
-	return (globalThis as Record<symbol, unknown>)[PROMPT_SYMBOL_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+	return (globalThis as Record<symbol, unknown>)[CUSTOMIZE_BRIDGE] as CustomizeBridgeForPrompt | undefined;
 }
 function lunrPermissionModeBridge(): PermissionModeBridgeForFooter | undefined {
 	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE] as PermissionModeBridgeForFooter | undefined;
-}
-function lunrPromptSymbolEnabled(): boolean {
-	return lunrCustomizeBridge()?.getPromptSymbol() ?? false;
 }
 // lunr: footer toggles, read at render time. Bridgeless / missing-getter fallback
 // matches the settings-manager defaults: MCP on, LSP off, everything else on.
@@ -114,14 +109,9 @@ function compactPlanBar(percent: number, theme: Theme): string {
 function lunrPermissionMode(): string | undefined {
 	return lunrPermissionModeBridge()?.getMode();
 }
-// lunr: prompt glyph comes from the theme tokens `glyphs.promptMoon` /
-// `glyphs.promptArrow` (defaults below match moon.json). An empty token hides
-// that part; both empty = no glyph at all.
-function lunrPromptGlyph(theme: Theme | undefined): string {
-	const moon = theme?.glyph?.("promptMoon") ?? "☾";
+export function lunrPromptGlyph(theme: Theme | undefined): string {
 	const arrow = theme?.glyph?.("promptArrow") ?? ">";
-	const parts = [moon, arrow].filter((s) => s !== "");
-	return parts.length > 0 ? `${parts.join(" ")} ` : "";
+	return arrow ? `${arrow} ` : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +151,7 @@ export function formatChipEffort(level: ThinkingLevel): string {
 interface Theme {
 	fg(token: string, text: string): string;
 	/** lunr: prompt glyph tokens (optional for forward/backward compat). */
-	glyph?(name: "promptMoon" | "promptArrow"): string;
+	glyph?(name: "promptArrow"): string;
 }
 
 /** Trimmed view of `pi-tui`'s `TUI` — only the method we use. */
@@ -583,9 +573,8 @@ class ChatboxEditor extends CustomEditor {
 		}
 
 		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
-		const promptSymbol = lunrPromptSymbolEnabled();
 		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
-		const glyphW = promptSymbol ? displayWidth(glyph) : 0;
+		const glyphW = displayWidth(glyph);
 		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
@@ -625,8 +614,8 @@ class ChatboxEditor extends CustomEditor {
 		const top = border("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
 
 		// Body: │ <padded line> │ (auto-grows with the number of wrapped lines)
-		// lunr: prefix the first body line with the dim theme prompt glyph (☾ > by
-		// default); a same-width blank gutter keeps subsequent lines aligned.
+		// lunr: prefix the first body line with the theme-controlled prompt arrow.
+		// A same-width blank gutter keeps subsequent lines aligned.
 		const gutter = glyphW > 0 ? " ".repeat(glyphW) : "";
 		const bodyLines = body.map((ln: string, i: number) => {
 			const prefix = i === 0 && glyphW > 0 ? this.color("dim", glyph) : gutter;

@@ -150,9 +150,6 @@ export interface Settings {
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
-	// lunr: TUI customize settings (gutter rail, prompt symbol)
-	gutterRail?: boolean; // default: true - render a thin left rail around each turn
-	promptSymbol?: boolean; // default: true - show the ☾ › prompt glyph on the editor's first line
 	// lunr: footer element toggles (ashxj-tui stats line)
 	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
@@ -1017,27 +1014,6 @@ export class SettingsManager {
 	setMemoryCharCap(cap: number): void {
 		this.globalSettings.memoryCharCap = Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(cap)));
 		this.markModified("memoryCharCap");
-		this.save();
-	}
-
-	// lunr: TUI customize settings getters/setters.
-	getGutterRail(): boolean {
-		return this.settings.gutterRail ?? true;
-	}
-
-	setGutterRail(enabled: boolean): void {
-		this.globalSettings.gutterRail = enabled;
-		this.markModified("gutterRail");
-		this.save();
-	}
-
-	getPromptSymbol(): boolean {
-		return this.settings.promptSymbol ?? true;
-	}
-
-	setPromptSymbol(enabled: boolean): void {
-		this.globalSettings.promptSymbol = enabled;
-		this.markModified("promptSymbol");
 		this.save();
 	}
 

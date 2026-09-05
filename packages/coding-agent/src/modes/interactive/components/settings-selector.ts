@@ -103,8 +103,6 @@ export interface SettingsConfig {
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
-	gutterRail: boolean;
-	promptSymbol: boolean;
 	footerMcp: boolean;
 	footerLsp: boolean;
 	footerContext: boolean;
@@ -167,8 +165,6 @@ export interface SettingsCallbacks {
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
-	onGutterRailChange: (enabled: boolean) => void;
-	onPromptSymbolChange: (enabled: boolean) => void;
 	onFooterMcpChange: (enabled: boolean) => void;
 	onFooterLspChange: (enabled: boolean) => void;
 	onFooterContextChange: (enabled: boolean) => void;
@@ -408,85 +404,71 @@ class CustomizeSubmenu extends Container {
 		const bridge = getCustomizeBridge();
 		const items: SettingItem[] = [
 			{
-				id: "gutter-rail",
-				label: "Gutter rail",
-				description: "Turn boundary rail",
-				currentValue: (bridge?.getGutterRail() ?? true) ? "on" : "off",
-				values: ["on", "off"],
-			},
-			{
-				id: "prompt-symbol",
-				label: "Prompt symbol",
-				description: "Moon prompt glyph",
-				currentValue: (bridge?.getPromptSymbol() ?? true) ? "on" : "off",
-				values: ["on", "off"],
-			},
-			{
 				id: "footer-mcp",
-				label: "Footer: MCP status",
+				label: "MCP status",
 				description: "MCP server status",
 				currentValue: (bridge?.getFooterMcp() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-lsp",
-				label: "Footer: LSP status",
+				label: "LSP status",
 				description: "Language server status",
 				currentValue: (bridge?.getFooterLsp() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-context",
-				label: "Footer: context meter",
+				label: "Context meter",
 				description: "Context usage",
 				currentValue: (bridge?.getFooterContext() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-tokens",
-				label: "Footer: token counter",
+				label: "Token counter",
 				description: "Input and output token counts",
 				currentValue: (bridge?.getFooterTokens() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-cache-hit-rate",
-				label: "Footer: cache hit rate",
+				label: "Cache hit rate",
 				description: "Latest prompt cache hit rate",
 				currentValue: (bridge?.getFooterCacheHitRate() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-tps",
-				label: "Footer: TPS counter",
+				label: "TPS counter",
 				description: "Token generation speed",
 				currentValue: (bridge?.getFooterTps() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-statuses",
-				label: "Footer: feature statuses",
+				label: "Feature statuses",
 				description: "Active plan, goal, and swarm status",
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-git",
-				label: "Footer: git branch",
+				label: "Git branch",
 				description: "Git branch and line changes",
 				currentValue: (bridge?.getFooterGit() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-plan",
-				label: "Footer: plan usage",
+				label: "Plan usage",
 				description: "Subscription usage percentage",
 				currentValue: (bridge?.getFooterPlan() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
 				id: "footer-plan-bar",
-				label: "Footer: plan bar",
+				label: "Plan bar",
 				description: "Bar beside the subscription usage percentage",
 				currentValue: (bridge?.getFooterPlanBar() ?? true) ? "on" : "off",
 				values: ["on", "off"],
@@ -499,12 +481,6 @@ class CustomizeSubmenu extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				switch (id) {
-					case "gutter-rail":
-						callbacks.onGutterRailChange(newValue === "on");
-						break;
-					case "prompt-symbol":
-						callbacks.onPromptSymbolChange(newValue === "on");
-						break;
 					case "footer-mcp":
 						callbacks.onFooterMcpChange(newValue === "on");
 						break;
