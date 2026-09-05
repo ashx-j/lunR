@@ -111,7 +111,7 @@ Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - From this repo, `npx lunr` uses the workspace bin (`packages/coding-agent/dist/cli.js`); rebuild coding-agent `dist` first. The startup benchmark reports first content frame separately from runtime and feature readiness.
 - Smooth streaming unit tests: `npx vitest --run test/smooth-streaming.test.ts` from `packages/coding-agent` (10 tests as of 2026-08-18).
 - Watchdog cold-start verification (2026-08-28): full tsgo sequence passed; focused Vitest 25/25; touched-file Biome passed (watchdog source remains excluded); dirty-worktree benchmark prompt-ready 2.23s, deferred attach 265ms, subagent factory 6ms. Full coding-agent Vitest: 2236 passed / 125 unrelated current-master Windows failures. Full Biome: 35 pre-existing errors + 1 warning outside touched files.
-- Watchdog PR CI caveat: the workflow still runs the forbidden `npm run build` in `packages/ai`; live catalog generation currently produces a Cloudflare transport TS2353 before reaching this patch. The explicit offline tsgo sequence above is green.
+- CI uses the offline tui → ai → agent → coding-agent → orchestrator build sequence and asserts that `packages/ai` stays clean; live catalog generation is never part of pull-request validation.
 - lunR system prompt (2026-08-29): coding-agent `tsgo` passes; focused prompt/tool/model tests pass (29/29). Expanded run passes the new SDK prompt assertion but retains two unrelated Windows path failures; full suite remains red from pre-existing environment/working-tree failures.
 - Published npm docs are `packages/coding-agent/{README.md,docs/**,examples/**,CHANGELOG.md}` (packed via `package.json` `files`). Repo-root README and untracked `lunr-docs/` are not what npmjs shows. `npm pack --dry-run --ignore-scripts --json --workspace=@earendil-works/pi-coding-agent` lists them.
 - Prompt-driven subagents (2026-08-29): coding-agent build/copy-assets passes; focused 13-file Vitest run passes 172/172; `npx lunr --version` is 0.2.11, a rebuilt print message returned `smoke-ok`, and an end-to-end generic `{ description: "Verify generic child smoke", permissions: "read-only" }` launch returned `child-smoke-ok`. Full coding-agent Vitest remains red with 2261 passed / 114 unrelated current-master Windows/fixture failures / 47 skipped. Full Biome remains red with 37 pre-existing errors + 1 warning outside the touched extension/test files.
@@ -264,6 +264,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: port only the catalog commit from #43 to master so unrelated dev/tui features remain independently reviewable.
 
 - 2026-09-05: paint the production TUI before runtime imports and bind the existing editor in place, so startup speed does not depend on feature hydration or lose drafts during attachment.
+- 2026-09-05: CI and the root build use offline package builds so routine validation cannot rewrite or drift the generated model catalog.
 
 # Deferred
 
