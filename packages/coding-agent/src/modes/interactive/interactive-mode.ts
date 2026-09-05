@@ -71,6 +71,7 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCatalogRefreshSummary } from "../../core/catalog-merge.ts";
+import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
 import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -90,13 +91,6 @@ import { hasGrokCliXaiAuth } from "../../core/grok-cli-auth.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
-import {
-	applyIncompleteAnswers,
-	describeIncomplete,
-	INCOMPLETE_PROMPT_CAP,
-	type IncompleteLiveModel,
-	parsePositiveInt,
-} from "../../core/live-catalog.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import {
 	isValidProviderBaseUrl,
@@ -143,16 +137,15 @@ import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/sea
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
-import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 // lunr: multi-subscription API-key pools (stage 3 UI).
 import type { SubEntry } from "../../core/subscriptions.ts";
+import { buildSwarmPrompt } from "../../core/swarm.ts";
 import { time } from "../../core/timings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
 import { getAllPlanUsageResults, getUsageServiceBridge } from "../../core/usage-service.ts";
-import { modelToUserEntry } from "../../core/user-models.ts";
 import type { InteractiveShellBinding } from "../../startup/interactive-shell.ts";
 import { markStartupMilestone } from "../../startup/startup-milestones.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -468,6 +461,7 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
+	private stopCatalogRefresh: (() => void) | undefined;
 	private onInputCallback?: (input: QueuedUserInput) => void;
 	private pendingUserInputs: QueuedUserInput[] = [];
 	private startupUserInputs: Promise<QueuedUserInput>[] = [];
@@ -1020,6 +1014,18 @@ export class InteractiveMode {
 		const callerMaintenance = startupBenchmark
 			? Promise.resolve()
 			: this.waitForPromptBarrier().then(() => this.options.deferredMaintenance?.());
+		if (!startupBenchmark)
+			void this.waitForPromptBarrier().then(() => {
+				if (!this.isInitialized) return;
+				this.stopCatalogRefresh = startCatalogRefreshPolling({
+					refresh: (signal) => this.session.modelRuntime.refreshIfStale({ signal }),
+					isBusy: () => this.session.isStreaming,
+					onUpdate: () => {
+						this.session.refreshModelFromRegistry();
+						this.footer.invalidate();
+					},
+				});
+			});
 		void Promise.allSettled([toolMaintenance, updateMaintenance, providerMaintenance, callerMaintenance]).then(() => {
 			markStartupMilestone("deferred_maintenance_idle");
 		});
@@ -1812,9 +1818,7 @@ export class InteractiveMode {
 				this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 			}
 			if (failures.length > 0) {
-				this.showError(
-					`Failed to load deferred extensions: ${failures.map(({ name }) => name).join(", ")}`,
-				);
+				this.showError(`Failed to load deferred extensions: ${failures.map(({ name }) => name).join(", ")}`);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -3612,6 +3616,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				this.session.refreshModelFromRegistry();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -5162,39 +5167,9 @@ export class InteractiveMode {
 			return;
 		}
 
-		const incomplete = result.incomplete;
-		const toPrompt = incomplete.slice(0, INCOMPLETE_PROMPT_CAP);
-		const extraDefaults = Math.max(0, incomplete.length - toPrompt.length);
-		const persisted = [];
+		// Discovered metadata stays in its cache, not in user overrides. Enrichment is automatic.
+		const extraDefaults = result.incomplete.length;
 		const asked: string[] = [];
-		let skipRemaining = false;
-		for (const item of toPrompt) {
-			if (skipRemaining) {
-				persisted.push(modelToUserEntry(item.draft));
-				continue;
-			}
-			const choice = await this.showExtensionSelector(describeIncomplete(item), [
-				"Enter details",
-				"Use defaults",
-				"Skip remaining",
-			]);
-			asked.push(`${item.provider}/${item.id}`);
-			if (choice === "Skip remaining") {
-				skipRemaining = true;
-				persisted.push(modelToUserEntry(item.draft));
-				continue;
-			}
-			if (choice === "Enter details") {
-				const detailed = await this.promptIncompleteModelDetails(item);
-				persisted.push(modelToUserEntry(detailed ?? item.draft));
-				continue;
-			}
-			persisted.push(modelToUserEntry(item.draft));
-		}
-		for (const item of incomplete.slice(toPrompt.length)) {
-			persisted.push(modelToUserEntry(item.draft));
-		}
-		if (persisted.length > 0) runtime.persistUserModels(persisted);
 
 		let ollama: string | undefined;
 		const runner = this.session.extensionRunner;
@@ -5218,58 +5193,26 @@ export class InteractiveMode {
 							evictedUserRows: result.official.evictedUserRows,
 						}
 					: undefined,
-				providers: result.live.map((entry) => ({
-					id: entry.providerId,
-					status: entry.status,
-					added: entry.added,
-					total: entry.total,
-					error: entry.error,
-				})),
+				providers: [
+					...result.live.map((entry) => ({
+						id: entry.providerId,
+						status: entry.status,
+						added: entry.added,
+						total: entry.total,
+						error: entry.error,
+					})),
+					...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
+						id,
+						status: "error" as const,
+						error,
+					})),
+				],
 				asked,
 				extraDefaults,
 				ollama,
 			}),
 		);
 		this.footer.invalidate();
-	}
-
-	private async promptIncompleteModelDetails(item: IncompleteLiveModel): Promise<Model<any> | undefined> {
-		const contextInput = await this.showExtensionInput(
-			`${item.provider}/${item.id} — context window:`,
-			String(item.draft.contextWindow || 128000),
-		);
-		if (contextInput === undefined) return undefined;
-		const maxTokensInput = await this.showExtensionInput(
-			`${item.provider}/${item.id} — max output tokens:`,
-			String(item.draft.maxTokens || 8192),
-		);
-		if (maxTokensInput === undefined) return undefined;
-		const inputChoice = await this.showExtensionSelector(`${item.provider}/${item.id} — input:`, [
-			"text",
-			"text + image",
-		]);
-		if (inputChoice === undefined) return undefined;
-		const reasoningChoice = await this.showExtensionSelector(`${item.provider}/${item.id} — reasoning:`, [
-			"yes",
-			"no",
-		]);
-		if (reasoningChoice === undefined) return undefined;
-		let api = item.draft.api;
-		if (item.availableApis.length > 1) {
-			const apiChoice = await this.showExtensionSelector(
-				`${item.provider}/${item.id} — API protocol:`,
-				item.availableApis.map(String),
-			);
-			if (apiChoice === undefined) return undefined;
-			api = apiChoice;
-		}
-		return applyIncompleteAnswers(item.draft, {
-			contextWindow: parsePositiveInt(contextInput, item.draft.contextWindow),
-			maxTokens: parsePositiveInt(maxTokensInput, item.draft.maxTokens),
-			input: inputChoice === "text + image" ? ["text", "image"] : ["text"],
-			reasoning: reasoningChoice === "yes",
-			api,
-		});
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
@@ -8045,6 +7988,8 @@ ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` 
 	}
 
 	stop(): void {
+		this.stopCatalogRefresh?.();
+		this.stopCatalogRefresh = undefined;
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}

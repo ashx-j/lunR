@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-04 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Autonomous catalog (`feat/autonomous-model-catalog`, local/unreleased):** builds on the existing Astra edits. Codex IDs now come from public upstream metadata and authenticated account discovery, including version-gated `/codex/models`; no agent runs. Provider-supplied capabilities beat stale published rows; explicit configuration stays last. Interactive idle refresh runs after startup, caches are account-scoped, and `/refresh` no longer asks metadata questions. Hourly CI publishes checksummed immutable snapshots on a data branch, with last-good source recovery and shrink guards. Astra live default context is 272K on Codex versus 1.05M on the OpenAI API; recognized efforts are low/medium/high/xhigh/max. For catalog changes or publication failures, read `packages/coding-agent/docs/model-catalog.md`. Existing installed npm releases are unchanged until release deployment.
 - **TUI dev channel (`dev/tui`):** every push builds without a test gate and publishes `@ashx-j/lunr-dev` with the `lunr-dev` binary. Stable `lunr` remains installed. Internal prerelease packages use exact lockstep versions under the npm `dev` tag; the separate dev CLI uses its own `latest`. `lunr-dev update` updates only the dev package. Stable and dev share `~/.lunr/agent` credentials, settings, and sessions.
 - **Reliability + instant launch (`fix/reliability-and-instant-launch`):** interactive startup reuses a small TUI shell and accepts input before full runtime hydration; an isolated offline run armed input at 127 ms and painted at 131 ms, with the prompt barrier at 3.87 s. Model setup runs one cache refresh, footer git work is async, retention is deferred, and deferred builtin import failures are isolated. Manual mode now approves full children. Rollback rejects symlink escapes. Session graphs reject cycles. Orchestrator shutdown and state writes are bounded and crash-safe. TUI text strips unsafe terminal controls, pinned chat avoids paint-only relayout, and release builds stay offline. Reports: `PERFORMANCE_AND_BUG_REVIEW.md` and `INTERACTIVE_LAUNCH_PERFORMANCE_REVIEW.md`.
 - **Subagent selection indicator (`feat/subagent-selection-indicator`):** compact and expanded subagent rows, plus async widget / fleet / status, show the selected tier and resolved model. A resolving `tier` prints `light`/`standard`/`heavy`; terminal rows retain the resolved model id. Thinking stays a suffix. Compact multi rows get the same badge. Tests: compact-row + model-tiers.
@@ -71,7 +72,7 @@ Last updated: 2026-09-04 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 
 ## On origin/master (`a698e57`)
 
-- **Catalog (pi-style):** `generate-models.ts --strict --json-only` → `.artifacts/model-catalog`; `scripts/sync-model-catalog.mjs` validates (≥500 models; require anthropic/openai/openrouter) → `catalog/` (`models.json` minified, `providers.json`, `providers/{id}.json`, `publication.json`). CDN = GitHub raw `master/catalog/`. `/refresh` GETs `providers.json` (4s) then shards only for **stored-cred** providers (4s; skip 404). Fallback: `~/.lunr/agent/official-catalog-cache.json` → bundled `catalog/` (`copy-assets` → `dist/catalog/`). Merge: official > user-models > live `/models` > baked-in `*.models.ts`. New live ids can prompt (cap 8); official id evicts user row. Humans edit the **generator**, not the JSON. CI `.github/workflows/publish-model-catalog.yml` every 4h + dispatch. `npm run sync:model-catalog`. No R2, no `pi.dev`. `catalog/official-models.json` gone.
+- **Catalog baseline:** master uses the legacy index/shards under `master/catalog/`; the autonomous-catalog branch replaces generation/publication/merge behavior as documented above. Cached and bundled fallbacks remain. Humans edit the generator/adapters, then regenerate JSON; release builds stay offline. No R2 or `pi.dev`.
 - **`/refresh` OAuth:** live list calls `getAuth` before `GET /models` so expired SuperGrok tokens refresh (`ec59883` / PR #4). Toast reports only attempted providers and includes `error`. Remap to `xai login expired (run /login xai)` only on `invalid_grant` / revoked refresh, not a timeout or generic OAuth error. Tests: catalog-auth + catalog-merge.
 - **xAI SuperGrok + Grok CLI:** same OAuth client as official `grok`. xAI rotates refresh tokens and revokes the family on reuse. lunR keeps its own live rotation when Grok still has the previous family; adopts `~/.grok/auth.json` only when lunR is expired or after `invalid_grant`. Write-through uses RFC3339 `expires_at`, refuses to overwrite a newer Grok family, and does not treat `modify(undefined)` as adopt. `/login xai` can import the Grok CLI session. `/logout xai` does not delete `~/.grok/auth.json`. `/usage` remaps only 401 billing + `invalid_grant` to `xAI login expired. Run /login xai.` Tests: grok-cli-auth + catalog-auth + usage-service.
 - **`/model` listing:** stored cred only (`auth.json` / subscriptions / `--api-key`). Ambient `OPENROUTER_API_KEY` does not list models. `getAuth`/stream still resolve env if a model is already selected. Logout deletes that provider’s `models-store` + user-models. Tests: catalog-auth.
@@ -90,13 +91,15 @@ Last updated: 2026-09-04 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 
 ## Not merged
 
-- None for 0.2.13.
+- Autonomous catalog (`feat/autonomous-model-catalog`) targets `dev/tui`; default-branch publication and CLI release remain deployment steps.
 
 ## Uncommitted (working tree)
 
-- None for 0.2.13.
+- Unrelated local study material and review artifacts remain untracked; catalog implementation and existing Astra changes are included together on the feature branch.
 
 ## Build & run
+
+- Autonomous catalog (2026-09-05): offline tui → ai → agent → coding-agent → orchestrator tsgo and copy-assets pass. Focused coding-agent Vitest passes 258/258 across 21 files; AI effort/catalog tests pass 42/42. Live Codex discovery selected Astra with 272K context and low/medium/high/xhigh/max, then a low-effort response returned `catalog-smoke-ok`. Generator validates 1,457 models across 39 providers without inference. Public package dry-run passes all four packages. Isolated offline `-ne` startup exits cleanly (input armed 66ms, runtime hydrated 1.38s). Touched-code Biome and diff checks pass. Broader tests retain 12 existing Windows resource-list failures and the documented stale xAI compat assertion; those unrelated tests were not rewritten.
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
@@ -119,6 +122,7 @@ Last updated: 2026-09-04 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - Reliability + instant launch (2026-09-02): offline tui → ai → agent → coding-agent → orchestrator tsgo and copy-assets pass. Focused TUI tests pass 98/98, coding-agent Vitest passes 134/134, and orchestrator Vitest passes 7/7. The isolated launch benchmark reports input armed at 127 ms, first frame at 131 ms, runtime hydrated at 2.53 s, and prompt barrier at 3.87 s. Local release staging and the full package build passed in the isolated worker. The pre-commit aggregate check still reaches known pinned-dependency failures in untracked study material.
 - TUI dev channel (2026-09-04): tui → ai → agent → coding-agent tsgo passes. Focused Vitest passes 23/23. Stable and dev publish dry-runs pack all four packages; the dev CLI stages as `@ashx-j/lunr-dev` with exact prerelease dependencies and only the `lunr-dev` binary.
 - Open PR dev integration (2026-09-05): `dev/tui` now has review-fixed heads of #40, #41, and #42 for lunr-dev testing. Those PRs stay open against their original bases. #38 and #39 already landed on master.
+- GPT-6 Astra (2026-09-05): required offline tui → ai → agent → coding-agent → orchestrator tsgo and copy-assets pass. Focused AI tests pass 42/42; focused live/merge tests pass 19/19; catalog validation, changed-file Biome, and `git diff --check` pass. The broader catalog run passes 44/45; its one stale xAI compat expectation is unrelated. The rebuilt CLI lists `openai-codex/gpt-6-astra` and a live low-effort message returned `astra-smoke-ok` before the known print-mode timeout.
 - Subagent routes + model instructions (2026-09-04): required offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused bridge/settings/instruction/tier/permission/timing/gateway coverage passes 182/182; the broader subagent/prompt/slash run passes 115/115. Changed-file Biome passes all 35 eligible files and `git diff --check` passes. A broad settings/resource run passes 127/153; its 26 failures are the existing dev/tui Windows debt: 12 stale interactive resource snapshots, 7 `.pi`/symlink resource-loader cases, 5 `.pi` settings cases, and 2 external-edit settings fixtures.
 
 ---
@@ -138,6 +142,8 @@ Last updated: 2026-09-04 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Codex discovery visibility is client-version-gated: a frozen older version can return HTTP 200 while omitting new models. Keep release-version resolution separate from lunR's package version; fetch metadata only. The live smoke uses an unexpired credential in an in-memory store so it cannot rotate or overwrite the user's saved session.
 
 - Theme: `moon.json` is the builtin; `default.json` untracked/unwired. The chatbox uses `promptArrow`; legacy `promptMoon` input remains accepted but is ignored.
 - Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; click expands/collapses a thinking run or tool card; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
@@ -176,6 +182,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Feature statuses ≠ TPS. The Customize TPS counter gates `tps`; statuses only gate plan/goal.
 - Default parallel subagent launch is unlimited. Honor an explicit `concurrency` / config override. Do not restore the 4-wide default.
 - xAI effort maps and Responses transport live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses). Humans do not invent catalog JSON; `withXaiEffortMetadata` also runs in `mergeCatalogLayers` so a stale shard cannot keep 4.6 on Completions. Named Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`, not a frozen id allowlist.
+- OpenAI GPT effort floors live in `generate-models.ts` / `openai-effort.ts` as fallback metadata. Authoritative provider effort maps take precedence. Codex public generation and live discovery share `packages/ai/src/catalog/codex.ts`; new Codex IDs need no explicit generator list.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 - Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
 - Push untested TUI work directly to `dev/tui`; its workflow may publish only after the code compiles. Use `lunr-dev update` to test the newest build. Keep internal prereleases on npm's `dev` tag with exact matching versions, publish the dev CLI last as `@ashx-j/lunr-dev`, and never move stable package `latest` tags.
@@ -269,6 +276,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-02: full child launches require Manual approval, and rollback, session, process, network, and persisted-state recovery fail closed or finish within a deadline.
 - 2026-09-04: use a separate `@ashx-j/lunr-dev` package and `lunr-dev` binary for direct `dev/tui` pushes so unstable TUI builds never replace stable `lunr` or move its npm `latest` tag.
 - 2026-09-04: merge open PR heads into `dev/tui` without closing their master-targeting PRs so combined behavior can be tested before release.
+- 2026-09-05: use provider-native discovery plus deterministic public snapshots so routine new models require neither hardcoded Codex IDs nor AI catalog runs; keep explicit overrides, account boundaries, and offline startup intact.
 
 # Deferred
 

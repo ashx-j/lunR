@@ -23,6 +23,7 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: [
+			{ find: /^@earendil-works\/pi-ai\/catalog\/(.+)$/, replacement: fileURLToPath(new URL("../ai/src/catalog", import.meta.url)) + "/$1.ts" },
 			{ find: /^@earendil-works\/pi-ai$/, replacement: aiSrcIndex },
 			{ find: /^@earendil-works\/pi-ai\/compat$/, replacement: aiSrcCompat },
 			{ find: /^@earendil-works\/pi-ai\/oauth$/, replacement: aiSrcOAuth },
