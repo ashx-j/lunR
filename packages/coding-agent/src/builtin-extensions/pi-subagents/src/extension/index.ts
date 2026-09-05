@@ -134,6 +134,49 @@ function subagentResultIsRunning(result: { details?: Details }): boolean {
 		|| false;
 }
 
+function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefined): number {
+	if (!tasks || tasks.length === 0) return 0;
+	return tasks.reduce((total, task) => {
+		const count = typeof task.count === "number" && Number.isInteger(task.count) && task.count >= 1 ? task.count : 1;
+		return total + count;
+	}, 0);
+}
+
+export function renderSubagentCall(args, theme, context): Text {
+	if (args.action) {
+		const target = args.id || args.runId || "";
+		return new Text(
+			`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
+			0,
+			0,
+		);
+	}
+	const isParallel = (args.tasks?.length ?? 0) > 0;
+	const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
+	const asyncLabel = args.async === true && args.clarify !== true ? theme.fg("warning", " [async]") : "";
+	if (args.chain?.length) {
+		return new Text(
+			`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
+			0,
+			0,
+		);
+	}
+	if (isParallel) {
+		return new Text(
+			`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})${asyncLabel}`,
+			0,
+			0,
+		);
+	}
+	const showDescription = !context?.isPartial && !context?.expanded && !context?.isError;
+	const description = showDescription ? theme.fg("accent", args.description || args.task || "?") : "";
+	return new Text(
+		`${theme.fg("toolTitle", theme.bold(description ? "subagent " : "subagent"))}${description}${asyncLabel}`,
+		0,
+		0,
+	);
+}
+
 function ensureSubagentResultAnimation(context: { state: Record<string, unknown>; invalidate?: () => void; requestRender?: () => void }): void {
 	const state = context.state as {
 		subagentResultAnimationTimer?: ReturnType<typeof setInterval>;
@@ -409,14 +452,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		execute: (id, params, signal, onUpdate, ctx) => executor.execute(id, params, signal, onUpdate, ctx),
 	});
 
-	function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefined): number {
-		if (!tasks || tasks.length === 0) return 0;
-		return tasks.reduce((total, task) => {
-			const count = typeof task.count === "number" && Number.isInteger(task.count) && task.count >= 1 ? task.count : 1;
-			return total + count;
-		}, 0);
-	}
-
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
@@ -437,35 +472,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return executeSubagentCollapsed(id, params, signal, onUpdate, ctx);
 		},
 
-		renderCall(args, theme) {
-			if (args.action) {
-				const target = args.id || args.runId || "";
-				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
-					0, 0,
-				);
-			}
-			const isParallel = (args.tasks?.length ?? 0) > 0;
-			const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
-			const asyncLabel = args.async === true && args.clarify !== true ? theme.fg("warning", " [async]") : "";
-			if (args.chain?.length)
-				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
-					0,
-					0,
-				);
-			if (isParallel)
-				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})${asyncLabel}`,
-					0,
-					0,
-				);
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.description || args.task || "?")}${asyncLabel}`,
-				0,
-				0,
-			);
-		},
+		renderCall: renderSubagentCall,
 
 		renderResult(result, options, theme, context) {
 			if (subagentResultIsRunning(result)) {

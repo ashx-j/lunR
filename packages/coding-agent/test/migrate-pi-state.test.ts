@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { migratePiStateToLunr, removeRetiredBehaviorPresetSetting } from "../src/migrations.ts";
+import {
+	migratePiStateToLunr,
+	removeRetiredBehaviorPresetSetting,
+	removeRetiredTuiSettings,
+} from "../src/migrations.ts";
 
 let root: string;
 let piHome: string;
@@ -92,6 +96,22 @@ describe("migratePiStateToLunr", () => {
 
 		expect(copied).toEqual([]);
 		expect(readFileSync(join(lunrAgentDir, "pi-goal-state.json"), "utf-8")).toBe(`{"a":2}`);
+	});
+});
+
+describe("removeRetiredTuiSettings", () => {
+	test("removes retired global TUI toggles and preserves current settings", () => {
+		write(
+			join(lunrAgentDir, "settings.json"),
+			JSON.stringify({ gutterRail: false, promptSymbol: false, footerMcp: true, theme: "moon" }),
+		);
+
+		expect(removeRetiredTuiSettings(lunrAgentDir)).toBe(true);
+		expect(JSON.parse(readFileSync(join(lunrAgentDir, "settings.json"), "utf-8"))).toEqual({
+			footerMcp: true,
+			theme: "moon",
+		});
+		expect(removeRetiredTuiSettings(lunrAgentDir)).toBe(false);
 	});
 });
 

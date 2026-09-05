@@ -13,26 +13,18 @@ export class UserMessageComponent extends Container {
 	private text: string;
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
-	// lunr: gutter rail — prefix rendered lines with a dim │ (last line ╰ when this
-	// component closes a turn; user messages open the rail so all lines use │).
-	private gutterRail: boolean;
 
-	constructor(text: string, markdownTheme: MarkdownTheme = getMarkdownTheme(), outputPad = 1, gutterRail = false) {
+	constructor(text: string, markdownTheme: MarkdownTheme = getMarkdownTheme(), outputPad = 1) {
 		super();
 		this.text = text;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
-		this.gutterRail = gutterRail;
 		this.rebuild();
 	}
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
 		this.rebuild();
-	}
-
-	setGutterRail(enabled: boolean): void {
-		this.gutterRail = enabled;
 	}
 
 	private rebuild(): void {
@@ -57,11 +49,7 @@ export class UserMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		// lunr: gutter rail — render content at width-2 and prefix each line with a
-		// dim │ so a thin rail runs down the left of the user message.
-		const railEnabled = this.gutterRail;
-		const contentWidth = railEnabled ? Math.max(1, width - 2) : width;
-		const lines = super.render(contentWidth);
+		const lines = super.render(width);
 		if (lines.length === 0) {
 			return lines;
 		}
@@ -69,12 +57,6 @@ export class UserMessageComponent extends Container {
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 
-		if (railEnabled) {
-			const rail = theme.fg("dim", "│ ");
-			for (let i = 0; i < lines.length; i++) {
-				lines[i] = rail + lines[i];
-			}
-		}
 		return lines;
 	}
 }

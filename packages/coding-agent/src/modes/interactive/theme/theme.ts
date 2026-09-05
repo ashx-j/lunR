@@ -95,8 +95,6 @@ const ThemeJsonSchema = Type.Object({
 		// Bash Mode (1 color)
 		bashMode: ColorValueSchema,
 	}),
-	// lunr: non-color glyph customization. Both optional; empty string hides
-	// that part of the prompt glyph. Defaults: promptMoon "☾", promptArrow ">".
 	glyphs: Type.Optional(
 		Type.Object({
 			promptMoon: Type.Optional(Type.String()),
@@ -346,11 +344,9 @@ function withThemeColorFallbacks(
 // Theme Class
 // ============================================================================
 
-// lunr: non-color glyph tokens (ThemeJson.glyphs). Empty string hides that part.
-export type ThemeGlyph = "promptMoon" | "promptArrow";
+export type ThemeGlyph = "promptArrow";
 
 export const DEFAULT_THEME_GLYPHS: Record<ThemeGlyph, string> = {
-	promptMoon: "☾",
 	promptArrow: ">",
 };
 
@@ -654,10 +650,7 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 	return new Theme(fgColors, bgColors, colorMode, {
 		name: themeJson.name,
 		sourcePath,
-		// lunr: `??` (not `||`) is intentional — an explicitly empty glyph stays
-		// empty (hidden); only a missing key falls back to the default.
 		glyphs: {
-			promptMoon: themeJson.glyphs?.promptMoon ?? DEFAULT_THEME_GLYPHS.promptMoon,
 			promptArrow: themeJson.glyphs?.promptArrow ?? DEFAULT_THEME_GLYPHS.promptArrow,
 		},
 	});

@@ -7,7 +7,7 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { InteractiveMode, startInteractiveToolInstalls } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 function renderLastLine(container: Container, width = 120): string {
@@ -271,6 +271,31 @@ describe("InteractiveMode.showExtensionCustom", () => {
 		} finally {
 			ui.stop();
 		}
+	});
+});
+
+describe("InteractiveMode background tool installs", () => {
+	test("installs fd and rg silently and refreshes autocomplete after late fd completion", async () => {
+		let resolveFd: ((path: string | undefined) => void) | undefined;
+		const fdResult = new Promise<string | undefined>((resolve) => {
+			resolveFd = resolve;
+		});
+		const installer = vi.fn((tool: "fd" | "rg", _silent?: boolean) =>
+			tool === "fd" ? fdResult : Promise.resolve("/tools/rg"),
+		);
+		const refreshAutocomplete = vi.fn();
+
+		const installs = startInteractiveToolInstalls("/old/fd", refreshAutocomplete, installer);
+		expect(installer.mock.calls).toEqual([
+			["fd", true],
+			["rg", true],
+		]);
+		expect(refreshAutocomplete).not.toHaveBeenCalled();
+
+		resolveFd?.("/tools/fd");
+		await installs;
+		expect(refreshAutocomplete).toHaveBeenCalledOnce();
+		expect(refreshAutocomplete).toHaveBeenCalledWith("/tools/fd");
 	});
 });
 

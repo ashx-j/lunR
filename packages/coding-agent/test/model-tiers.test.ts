@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSubagentToolDescription } from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
-import { resolveTierModelOverride } from "../src/builtin-extensions/pi-subagents/src/runs/shared/model-fallback.ts";
+import {
+	captureModelSelection,
+	resolveTierModelOverride,
+} from "../src/builtin-extensions/pi-subagents/src/runs/shared/model-fallback.ts";
 import {
 	getModelTiersBridge,
 	getTierModel,
@@ -253,5 +256,47 @@ describe("resolveTierModelOverride", () => {
 			parentThinking: "high",
 		});
 		expect(resolveTierModelOverride("light")).toBeUndefined();
+	});
+});
+
+describe("captureModelSelection", () => {
+	afterEach(() => {
+		clearModelTiersBridge();
+	});
+
+	function installBridge(opts: { enabled: boolean; models?: Record<string, string | undefined> }): void {
+		(globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] = {
+			isTierModeEnabled: () => opts.enabled,
+			getTierModel: (tier: string) => opts.models?.[tier],
+		};
+	}
+
+	it("prefers an explicit model even when a tier is also set", () => {
+		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
+		expect(captureModelSelection({ model: "xai/grok-4.5", tier: "light" })).toEqual({ kind: "model" });
+	});
+
+	it("captures a resolving tier", () => {
+		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
+		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "tier", tier: "light" });
+	});
+
+	it("falls back to inherit when tiers are disabled", () => {
+		installBridge({ enabled: false, models: { light: "xai/grok-4" } });
+		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "inherit" });
+	});
+
+	it("falls back to inherit when the tier is unconfigured", () => {
+		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
+		expect(captureModelSelection({ tier: "standard" })).toEqual({ kind: "inherit" });
+	});
+
+	it("inherits when both model and tier are omitted", () => {
+		expect(captureModelSelection({})).toEqual({ kind: "inherit" });
+	});
+
+	it("treats the inherit sentinel as inherit, not an explicit model", () => {
+		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
+		expect(captureModelSelection({ model: "inherit", tier: "light" })).toEqual({ kind: "tier", tier: "light" });
 	});
 });
