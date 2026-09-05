@@ -72,10 +72,11 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 		{ getAgentDir },
 		{ registerCustomizeBridge },
 		{ registerMemoryCapBridge },
-		{ getModelTiersBridge, registerModelTierBridge },
+		{ registerModelTierBridge },
 		{ createAgentSessionFromServices, createAgentSessionServices },
 		{ SessionManager },
 		{ SettingsManager },
+		{ bindRuntimeBridges },
 	] = await Promise.all([
 		import("../builtin-extensions/index.ts"),
 		import("../config.ts"),
@@ -85,6 +86,7 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 		import("../core/agent-session-services.ts"),
 		import("../core/session-manager.ts"),
 		import("../core/settings-manager.ts"),
+		import("../core/runtime-bridges.ts"),
 	]);
 	const cwd = job.workdir ?? process.cwd();
 	const agentDir = getAgentDir();
@@ -119,7 +121,7 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 		model = resolved;
 	}
 	const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
-	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
+	bindRuntimeBridges({ session, services });
 	await session.bindExtensions({
 		mode: "print",
 		onError: (err) => console.error(`[gateway cron] extension error (${err.extensionPath}): ${err.error}`),

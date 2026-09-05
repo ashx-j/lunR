@@ -14,6 +14,7 @@ import { findExactModelReferenceMatch } from "../core/model-resolver.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
+import { buildSwarmPrompt } from "../core/swarm.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
 import { createPicker, type PickerItem } from "./buttons.ts";
 import type { BridgeLike } from "./router.ts";
@@ -574,6 +575,22 @@ const contextCommand: ChatCommand = {
 	},
 };
 
+const swarmCommand: ChatCommand = {
+	name: "swarm",
+	description: "decompose a task across parallel subagents",
+	bypassBusy: false,
+	needsSession: true,
+	async handler(ctx) {
+		const task = ctx.args.trim();
+		if (!task) {
+			await ctx.reply("Usage: /swarm <task> — decomposes the task across parallel subagents.");
+			return true;
+		}
+		ctx.event.text = buildSwarmPrompt(task);
+		return false;
+	},
+};
+
 const compactCommand: ChatCommand = {
 	name: "compact",
 	description: "summarize and compress session context",
@@ -671,6 +688,7 @@ export const CHAT_COMMANDS: ChatCommand[] = [
 	sessionsCommand,
 	titleCommand,
 	contextCommand,
+	swarmCommand,
 	compactCommand,
 	thinkingCommand,
 ];
@@ -694,7 +712,7 @@ export function formatHelpText(): string {
 /**
  * Run a chat command with busy/session guards and error → "⚠ one-line".
  * Returns true when the event was consumed by the command, false when the
- * router should continue when a command mutates the event and wants a normal turn.
+ * router should continue (e.g. /swarm mutates the event and wants a normal turn).
  */
 export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext): Promise<boolean> {
 	if (!cmd.bypassBusy && ctx.bridge.getStatus(ctx.key).busy) {

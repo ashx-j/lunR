@@ -187,6 +187,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/init` | Generate a starter AGENTS.md |
+| `/swarm` | Orchestrate parallel subagents |
 | `/quit`, `/exit` | Quit lunR |
 
 There is no `/changelog` or `/token-usage` command.
@@ -465,7 +466,7 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; every child selects a configured model tier; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
+- **Subagents** — always fresh; `/swarm`; every child selects a configured model tier; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
 - **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
 - **Plan mode** — `/plan` plus the `present_plan` tool
 - **Todos** — lunr-todos (full-replace)

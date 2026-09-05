@@ -296,6 +296,8 @@ function requiresManualApproval(toolName: string, input: Record<string, unknown>
 export interface GateOptions {
 	/** Global preference for aggregate confirmation. Defaults to enabled. */
 	confirmLargeSubagentLaunches?: boolean;
+	/** True when the current turn started from an explicit /swarm prompt. */
+	explicitSwarmTurn?: boolean;
 	/** Assistant message that issued this tool call. Same-turn sibling SINGLE
 	 *  `subagent` calls count toward the aggregate threshold. */
 	assistantMessage?: {
@@ -346,6 +348,7 @@ async function gateLargeSubagentLaunch(
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | { fullChildrenApproved: boolean } | undefined> {
 	if (ctx.mode === "auto") return undefined;
+	if (options?.explicitSwarmTurn) return undefined;
 	if (options?.confirmLargeSubagentLaunches === false) return undefined;
 	const count = effectiveLargeSubagentLaunchCountForTurn(input, options?.assistantMessage);
 	if (count <= LARGE_SUBAGENT_LAUNCH_THRESHOLD) return undefined;

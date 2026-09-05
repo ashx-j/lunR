@@ -256,6 +256,7 @@ describe("command registry", () => {
 
 	it("formatHelpText includes all commands", () => {
 		const text = formatHelpText();
+		expect(text).toContain("/swarm");
 		expect(text).toContain("/thinking");
 		expect(text).toContain("/effort");
 		expect(text).toContain("/reasoning");
@@ -417,6 +418,24 @@ describe("/context", () => {
 		expect(adapter.sent[0].text).toContain("12,340 / 131,072 tokens");
 		expect(adapter.sent[0].text).toContain("Session: 14 messages · 2 turns");
 		expect(adapter.sent[0].text).toContain("model ollama-cloud/deepseek-v4-flash");
+	});
+});
+
+describe("/swarm", () => {
+	it("rejects an empty task", async () => {
+		const ctx = makeCtx("/swarm");
+		const consumed = await runChatCommand(findCommand("swarm"), ctx);
+		expect(consumed).toBe(true);
+		expect(adapter.sent[0].text).toContain("Usage");
+	});
+
+	it("mutates the event text and returns passthrough for a normal turn", async () => {
+		const ctx = makeCtx("/swarm research the moon");
+		const consumed = await runChatCommand(findCommand("swarm"), ctx);
+		expect(consumed).toBe(false);
+		expect(ctx.event.text).toContain("[SWARM MODE]");
+		expect(ctx.event.text).toContain("research the moon");
+		expect(ctx.event.text).toContain("tier");
 	});
 });
 

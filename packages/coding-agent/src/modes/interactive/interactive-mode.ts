@@ -143,6 +143,7 @@ import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/sea
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import { buildSwarmPrompt } from "../../core/swarm.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 // lunr: multi-subscription API-key pools (stage 3 UI).
 import type { SubEntry } from "../../core/subscriptions.ts";
@@ -527,6 +528,9 @@ export class InteractiveMode {
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
+
+	// Track whether a /swarm orchestration turn is in flight (footer status)
+	private swarmMode = false;
 
 	// lunr: mode in effect before the current plan stretch. Used by approve / `/plan off`
 	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
@@ -3166,6 +3170,12 @@ export class InteractiveMode {
 				await this.handleInitCommand();
 				return;
 			}
+			if (text === "/swarm" || text.startsWith("/swarm ")) {
+				const task = text.startsWith("/swarm ") ? text.slice(7).trim() : "";
+				this.editor.setText("");
+				await this.handleSwarmCommand(task);
+				return;
+			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
@@ -3610,6 +3620,11 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+
+				if (this.swarmMode) {
+					this.swarmMode = false;
+					this.setExtensionStatus("swarm", undefined);
+				}
 
 				this.maybeAutoNameSession();
 
@@ -6687,6 +6702,27 @@ export class InteractiveMode {
 
 		await this.sendUserMessageAfterDeferredBuiltins(prompt);
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
+	}
+
+	private async handleSwarmCommand(task: string): Promise<void> {
+		if (task.length === 0) {
+			if (this.swarmMode) {
+				this.showStatus("Swarm mode is active — run /subagents-fleet to monitor the fleet.");
+			} else {
+				this.showStatus(
+					"Usage: /swarm <task> — decomposes the task across parallel subagents. Monitor with /subagents-fleet.",
+				);
+			}
+			return;
+		}
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /swarm.");
+			return;
+		}
+
+		this.swarmMode = true;
+		this.setExtensionStatus("swarm", "swarm");
+		await this.sendUserMessageAfterDeferredBuiltins(buildSwarmPrompt(task));
 	}
 
 	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).

@@ -99,6 +99,7 @@ import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-in
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { gateToolCall } from "./permissions.ts";
+import { isExplicitSwarmTurn } from "./swarm.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
@@ -491,6 +492,8 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
+			const explicitSwarmTurn =
+				toolCall.name === "subagent" ? isExplicitSwarmTurn(this.sessionManager.getBranch()) : undefined;
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
@@ -498,6 +501,7 @@ export class AgentSession {
 				this.sessionId,
 				{
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
+					explicitSwarmTurn,
 					assistantMessage,
 				},
 			);

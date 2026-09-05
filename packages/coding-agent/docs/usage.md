@@ -69,6 +69,7 @@ Built-in commands (from `slash-commands.ts`):
 | `/logout`, `/deauth` | Remove provider authentication |
 | `/new` | Start a new session |
 | `/init` | Generate a starter AGENTS.md for this project |
+| `/swarm` | Orchestrate parallel subagents for a complex task |
 | `/compact` | Manually compact the session context |
 | `/resume`, `/sessions` | Browse and resume sessions |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
