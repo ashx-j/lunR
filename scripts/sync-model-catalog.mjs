@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-const REQUIRED_PROVIDERS = ["anthropic", "openai", "openrouter"];
+const REQUIRED_PROVIDERS = ["anthropic", "openai", "openai-codex", "openrouter"];
 const MINIMUM_MODEL_COUNT = 500;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_INPUT = join(REPO_ROOT, ".artifacts", "model-catalog");
@@ -33,10 +33,12 @@ function parseArgs(args) {
 		output: DEFAULT_OUTPUT,
 		sourceCommit: undefined,
 		check: false,
+		versioned: false,
 	};
 
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
+		if (arg === "--versioned") { options.versioned = true; continue; }
 		if (arg === "--check" || arg === "--check-only") {
 			options.check = true;
 			continue;
@@ -100,6 +102,13 @@ function validateBundle(inputDir) {
 			if (!isRecord(model) || model.id !== modelId || model.provider !== providerId) {
 				throw new Error(`Invalid model entry: ${providerId}/${modelId}`);
 			}
+			if (typeof model.api !== "string" || !model.api || typeof model.baseUrl !== "string" ||
+				!Number.isFinite(model.contextWindow) || model.contextWindow <= 0 ||
+				!Number.isFinite(model.maxTokens) || model.maxTokens <= 0 ||
+				!Array.isArray(model.input) || !model.input.length || !isRecord(model.cost) ||
+				!["input", "output", "cacheRead", "cacheWrite"].every((key) => Number.isFinite(model.cost[key]) && model.cost[key] >= 0)) {
+				throw new Error(`Invalid model capabilities: ${providerId}/${modelId}`);
+			}
 			modelCount++;
 		}
 	}
@@ -115,6 +124,7 @@ function validateBundle(inputDir) {
 
 	const digest = createHash("sha256").update(modelsBytes).digest("hex");
 	return {
+		inputDir,
 		modelsPath,
 		providerIndexPath,
 		providersDir,
@@ -143,7 +153,9 @@ function resolveCheckInput(explicitInput, outputDir) {
 	throw new Error("No catalog bundle found at .artifacts/model-catalog or catalog/");
 }
 
-function syncBundle(bundle, outputDir, sourceCommit) {
+function syncBundle(bundle, outputDir, sourceCommit, versioned = false) {
+	const publicationDir = outputDir;
+	if (versioned) outputDir = join(outputDir, "snapshots", bundle.revision);
 	mkdirSync(join(outputDir, "providers"), { recursive: true });
 	copyFileSync(bundle.modelsPath, join(outputDir, "models.json"));
 	copyFileSync(bundle.providerIndexPath, join(outputDir, "providers.json"));
@@ -162,12 +174,19 @@ function syncBundle(bundle, outputDir, sourceCommit) {
 	if (existsSync(leftover)) rmSync(leftover);
 
 	const publication = {
+		version: 2,
+		revision: bundle.revision,
+		providers: bundle.providerIds,
+		shards: Object.fromEntries(bundle.providerIds.map((id) => [id, createHash("sha256").update(JSON.stringify(readJson(join(bundle.providersDir, `${id}.json`)))).digest("hex")])),
+		sources: existsSync(join(bundle.inputDir, "sources.json")) ? readJson(join(bundle.inputDir, "sources.json")) : [],
 		generatedAt: new Date().toISOString(),
 		sourceCommit,
 		providerCount: bundle.providerCount,
 		modelCount: bundle.modelCount,
 	};
-	writeFileSync(join(outputDir, "publication.json"), `${JSON.stringify(publication, null, 2)}\n`);
+	const publicationPath = join(publicationDir, "publication.json");
+	// Data revisions are content-addressed; health timestamps remain in the manifest.
+	writeFileSync(publicationPath, `${JSON.stringify(publication, null, 2)}\n`);
 	return publication;
 }
 
@@ -200,7 +219,7 @@ function main() {
 		return;
 	}
 
-	const publication = syncBundle(bundle, outputDir, options.sourceCommit || gitSourceCommit());
+	const publication = syncBundle(bundle, outputDir, options.sourceCommit || gitSourceCommit(), options.versioned);
 	console.log(JSON.stringify({ ...publication, output: outputDir, revision: bundle.revision }, null, 2));
 }
 

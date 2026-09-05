@@ -30,6 +30,13 @@ describe("max thinking level", () => {
 		expect(clampThinkingLevel(model, "max")).toBe("high");
 	});
 
+	it("exposes xhigh and max for openai-codex/gpt-6-astra", () => {
+		const model = getModel("openai-codex", "gpt-6-astra");
+		expect(model).toBeDefined();
+		expect(model?.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
+		expect(getSupportedThinkingLevels(model!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+	});
+
 	it.each(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"] as const)(
 		"exposes xhigh and max for openai-codex/%s",
 		(modelId) => {

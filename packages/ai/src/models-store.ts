@@ -1,6 +1,9 @@
 import type { Api, Model } from "./types.ts";
 
 export interface ModelsStoreEntry {
+	/** Hash of provider endpoint and account identity; never a credential. */
+	scope?: string;
+	discoveryClientVersion?: string;
 	models: readonly Model<Api>[];
 	/** Unix timestamp of the last completed remote check. */
 	checkedAt?: number;

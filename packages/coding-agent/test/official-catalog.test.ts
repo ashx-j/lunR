@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
 	officialCatalogUrlFor,
 	officialEntryToModel,
 	parseOfficialCatalog,
+	VERSIONED_CATALOG_URL,
 } from "../src/core/official-catalog.ts";
 
 const tempDirs: string[] = [];
@@ -81,6 +83,58 @@ function shardFetch(handlers: Record<string, unknown | number>): typeof fetch {
 		return new Response("missing", { status: 404 });
 	}) as typeof fetch;
 }
+
+describe("versioned catalog publication", () => {
+	it("reads shards from one immutable revision and checks their digest", async () => {
+		const shard = { [grok47.id]: grok47 };
+		const hash = createHash("sha256").update(JSON.stringify(shard)).digest("hex");
+		const revision = `sha256-${"a".repeat(64)}`;
+		const fetchImpl = vi.fn(async (url) =>
+			String(url).endsWith("/publication.json")
+				? jsonResponse({
+						version: 2,
+						revision,
+						generatedAt: "2026-09-05T00:00:00Z",
+						providers: ["xai"],
+						shards: { xai: hash },
+					})
+				: jsonResponse(shard),
+		);
+		const result = await loadOfficialCatalog({
+			allowNetwork: true,
+			providerIds: ["xai"],
+			bundled: { version: 1, updatedAt: "", models: [] },
+			fetchImpl,
+		});
+		expect(result.source).toBe("github");
+		expect(result.catalog.updatedAt).toBe("2026-09-05T00:00:00Z");
+		expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
+			`${VERSIONED_CATALOG_URL}/publication.json`,
+			`${VERSIONED_CATALOG_URL}/snapshots/${revision}/providers/xai.json`,
+		]);
+	});
+
+	it("retains the last-good provider when a shard fails integrity validation", async () => {
+		const fetchImpl = vi.fn(async (url) =>
+			String(url).endsWith("/publication.json")
+				? jsonResponse({
+						version: 2,
+						revision: `sha256-${"a".repeat(64)}`,
+						providers: ["xai"],
+						shards: { xai: "incorrect" },
+					})
+				: jsonResponse({ [grok47.id]: grok47 }),
+		);
+		const result = await loadOfficialCatalog({
+			allowNetwork: true,
+			providerIds: ["xai"],
+			bundled: { version: 1, updatedAt: "", models: [grok46] },
+			fetchImpl,
+		});
+		expect(result.catalog.models.map((row) => row.id)).toEqual([grok46.id]);
+		expect(result.errors?.xai).toMatch(/checksum/);
+	});
+});
 
 describe("parseOfficialCatalog", () => {
 	it("parses the seeded document and ignores junk rows", () => {
@@ -212,11 +266,13 @@ describe("loadOfficialCatalog", () => {
 			bundled: {
 				version: 1,
 				updatedAt: "2026-01-01T00:00:00Z",
-				models: [{
-					...cachedOnly,
-					id: "bundled-only",
-					name: "Bundled Only",
-				}],
+				models: [
+					{
+						...cachedOnly,
+						id: "bundled-only",
+						name: "Bundled Only",
+					},
+				],
 			},
 		});
 		expect(loaded.source).toBe("cache");
@@ -294,6 +350,7 @@ describe("loadOfficialCatalog", () => {
 		expect(urls).toEqual(
 			[
 				officialCatalogUrlFor("providers.json"),
+				`${VERSIONED_CATALOG_URL}/publication.json`,
 				officialCatalogUrlFor("providers/openai.json"),
 				officialCatalogUrlFor("providers/xai.json"),
 			].sort(),

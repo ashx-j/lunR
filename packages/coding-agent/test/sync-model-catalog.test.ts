@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +31,48 @@ function writeTinyBundle(dir: string): void {
 }
 
 describe("sync-model-catalog", () => {
+	it("publishes a checksummed immutable snapshot", () => {
+		const directory = mkdtempSync(join(tmpdir(), "lunr-versioned-catalog-"));
+		try {
+			const input = join(directory, "input");
+			const providers: Record<string, Record<string, unknown>> = {};
+			mkdirSync(join(input, "providers"), { recursive: true });
+			for (const provider of ["anthropic", "openai", "openai-codex", "openrouter"]) {
+				providers[provider] = {};
+				for (let i = 0; i < 130; i++)
+					providers[provider][`future-${i}`] = {
+						id: `future-${i}`,
+						provider,
+						name: `Future ${i}`,
+						api: "openai-completions",
+						baseUrl: "https://example.test",
+						contextWindow: 1000,
+						maxTokens: 100,
+						input: ["text"],
+						reasoning: false,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					};
+				writeFileSync(join(input, "providers", `${provider}.json`), JSON.stringify(providers[provider]));
+			}
+			writeFileSync(join(input, "models.json"), JSON.stringify(providers));
+			writeFileSync(join(input, "providers.json"), JSON.stringify(Object.keys(providers)));
+			const output = join(directory, "published");
+			const result = spawnSync(
+				process.execPath,
+				[script, "--input", input, "--output", output, "--versioned", "--source-commit", "test"],
+				{ encoding: "utf8" },
+			);
+			expect(result.status, result.stderr).toBe(0);
+			const manifest = JSON.parse(readFileSync(join(output, "publication.json"), "utf8"));
+			const shard = JSON.parse(
+				readFileSync(join(output, "snapshots", manifest.revision, "providers", "openai-codex.json"), "utf8"),
+			);
+			expect(manifest.shards["openai-codex"]).toBe(createHash("sha256").update(JSON.stringify(shard)).digest("hex"));
+			expect(Object.keys(shard)).toHaveLength(130);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("rejects a tiny invalid bundle", () => {
 		const dir = join(tmpdir(), `lunr-sync-catalog-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		writeTinyBundle(dir);

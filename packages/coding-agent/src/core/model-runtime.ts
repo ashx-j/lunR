@@ -32,6 +32,7 @@ import {
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "../config.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { catalogCacheScope } from "./catalog-cache-scope.ts";
 import { CatalogOverlaySource, knownModelKeys, withCatalogOverlay } from "./catalog-merge.ts";
 import { readGrokCliXaiOAuth, wrapXaiGrokCliCredentials } from "./grok-cli-auth.ts";
 import {
@@ -153,6 +154,8 @@ export class ModelRuntime implements Models {
 	private lastOfficial: OfficialCatalogLoadResult | undefined;
 	private catalogRefresh: Promise<CatalogRefreshResult> | undefined;
 	private catalogRefreshAllowsNetwork = false;
+	private nextAutomaticRefresh = 0;
+	private automaticRefreshIdentity = "";
 	private readonly grokHome: string | undefined;
 
 	private constructor(
@@ -268,7 +271,10 @@ export class ModelRuntime implements Models {
 			return;
 		}
 		try {
-			this.models.setProvider(this.withLocalCatalog(composeModelProvider(providerId, base, this.config, extension)));
+			// Discovery is metadata beneath explicit user configuration and extension model definitions.
+			this.models.setProvider(
+				composeModelProvider(providerId, base ? this.withLocalCatalog(base) : undefined, this.config, extension),
+			);
 			this.compositionErrors.delete(providerId);
 		} catch (error) {
 			this.compositionErrors.set(providerId, error instanceof Error ? error.message : String(error));
@@ -297,8 +303,19 @@ export class ModelRuntime implements Models {
 		this.snapshot = {
 			...this.snapshot,
 			all,
-			available: all.filter((model) => this.snapshot.configuredProviders.has(model.provider)),
+			available: all.filter(
+				(model) => this.snapshot.configuredProviders.has(model.provider) && this.isCatalogModelAvailable(model),
+			),
 		};
+	}
+
+	private isCatalogModelAvailable(model: Model<Api>): boolean {
+		const config = this.config.getProvider(model.provider);
+		return (
+			!!config?.models?.some((row) => row.id === model.id) ||
+			!!this.extensionProviders.get(model.provider)?.models?.some((row) => row.id === model.id) ||
+			this.overlay.isAvailable(model)
+		);
 	}
 
 	private async listStoredProviderIds(): Promise<Set<string>> {
@@ -345,7 +362,9 @@ export class ModelRuntime implements Models {
 		const configuredProviders = this.configuredProviderIds(storedProviders);
 		this.snapshot = {
 			all: [...this.models.getModels()],
-			available: available.filter((model) => configuredProviders.has(model.provider)),
+			available: available.filter(
+				(model) => configuredProviders.has(model.provider) && this.isCatalogModelAvailable(model),
+			),
 			configuredProviders,
 			storedProviders,
 			auth,
@@ -403,7 +422,7 @@ export class ModelRuntime implements Models {
 				return this.snapshot.available.filter((model) => model.provider === providerId);
 			}
 			try {
-				return await this.models.getAvailable(providerId);
+				return (await this.models.getAvailable(providerId)).filter((model) => this.isCatalogModelAvailable(model));
 			} catch (error) {
 				this.availabilityError = error instanceof Error ? error.message : String(error);
 				throw error;
@@ -496,7 +515,9 @@ export class ModelRuntime implements Models {
 			auth,
 			configuredProviders,
 			storedProviders,
-			available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
+			available: this.snapshot.all.filter(
+				(model) => configuredProviders.has(model.provider) && this.isCatalogModelAvailable(model),
+			),
 		};
 		await this.refresh({ allowNetwork: options?.allowNetwork ?? this.allowModelNetwork });
 	}
@@ -668,6 +689,7 @@ export class ModelRuntime implements Models {
 			errors: new Map(),
 		};
 		const errors = new Map(result.errors);
+		for (const [id, error] of Object.entries(official?.errors ?? {})) errors.set(id, new Error(error));
 		for (const entry of live) {
 			if (entry.status === "error" || entry.status === "timeout") {
 				errors.set(entry.providerId, new Error(entry.error ?? entry.status));
@@ -692,6 +714,27 @@ export class ModelRuntime implements Models {
 
 	getLastCatalogRefresh(): CatalogRefreshResult {
 		return this.lastCatalogRefresh;
+	}
+
+	/** Called after first paint and by the picker; explicit /refresh always bypasses this gate. */
+	async refreshIfStale(options: { signal?: AbortSignal } = {}): Promise<CatalogRefreshResult> {
+		if (!this.allowModelNetwork || options.signal?.aborted) return this.lastCatalogRefresh;
+		if (this.catalogRefresh) return this.refresh({ allowNetwork: true, signal: options.signal });
+		const providers = [...(await this.listStoredProviderIds())].sort();
+		const identity = (await Promise.all(providers.map(async (id) => this.scopeFor(id)))).join(":");
+		if (identity === this.automaticRefreshIdentity && Date.now() < this.nextAutomaticRefresh)
+			return this.lastCatalogRefresh;
+		this.automaticRefreshIdentity = identity;
+		// Bound retries on a broken source; a successful refresh extends the deadline to one hour.
+		this.nextAutomaticRefresh = Date.now() + 60_000;
+		const result = await this.refresh({ allowNetwork: true, signal: options.signal });
+		if (!result.aborted && !result.errors.size) this.nextAutomaticRefresh = Date.now() + 3_600_000;
+		return result;
+	}
+
+	private async scopeFor(providerId: string): Promise<string> {
+		const provider = this.models.getProvider(providerId) ?? this.defaultBuiltins.get(providerId);
+		return catalogCacheScope(providerId, provider?.baseUrl ?? "", await this.credentials.read(providerId));
 	}
 
 	persistUserModels(rows: readonly UserModelEntry[]): void {
@@ -735,7 +778,9 @@ export class ModelRuntime implements Models {
 		const results: LiveCatalogResult[] = [];
 		for (const providerId of LIVE_LIST_PROVIDER_IDS) {
 			const stored = storedProviders.has(providerId) ? await this.modelsStore.read(providerId) : undefined;
-			if (stored?.models) this.overlay.setLive(providerId, stored.models);
+			const valid =
+				(!stored?.scope && providerId !== "openai-codex") || stored?.scope === (await this.scopeFor(providerId));
+			if (valid && stored?.models) this.overlay.setLive(providerId, stored.models);
 			else this.overlay.setLive(providerId, []);
 			results.push({
 				providerId,
@@ -772,7 +817,10 @@ export class ModelRuntime implements Models {
 				}
 
 				const stored = await this.modelsStore.read(providerId);
-				if (stored?.models) this.overlay.setLive(providerId, stored.models);
+				const initialScope = await this.scopeFor(providerId);
+				if (stored?.models && (stored.scope === initialScope || (!stored.scope && providerId !== "openai-codex")))
+					this.overlay.setLive(providerId, stored.models);
+				else this.overlay.setLive(providerId, []);
 				if (signal?.aborted) {
 					return {
 						providerId,
@@ -824,7 +872,9 @@ export class ModelRuntime implements Models {
 					};
 				}
 
+				const requestScope = catalogCacheScope(providerId, baseUrl, credential);
 				const result = await fetchLiveProviderModels({
+					discoveryClientVersion: stored?.scope === requestScope ? stored.discoveryClientVersion : undefined,
 					providerId,
 					baseUrl,
 					bakedIn,
@@ -832,11 +882,22 @@ export class ModelRuntime implements Models {
 					knownKeys: known,
 					signal,
 				});
+				// A login/logout during the request must not install the previous account's result.
+				const accountChanged = (await this.scopeFor(providerId)) !== requestScope;
+				if (accountChanged) this.overlay.setLive(providerId, []);
+				if (signal?.aborted || accountChanged) {
+					return { ...result, status: "skipped" as const, discoveries: [], incomplete: [] };
+				}
 				if (result.status === "ok") {
 					const overlayModels = buildLiveOverlay(bakedIn, result.discoveries);
 					this.overlay.setLive(providerId, overlayModels);
 					try {
-						await this.modelsStore.write(providerId, { models: overlayModels, checkedAt: Date.now() });
+						await this.modelsStore.write(providerId, {
+							models: overlayModels,
+							checkedAt: Date.now(),
+							scope: requestScope,
+							discoveryClientVersion: result.discoveryClientVersion,
+						});
 					} catch {
 						// Store write is best-effort.
 					}
@@ -848,12 +909,12 @@ export class ModelRuntime implements Models {
 	}
 
 	private async refreshCredentialFor(providerId: string): Promise<Credential | undefined> {
-		const stored = await this.credentials.read(providerId);
 		// Same lock + persist path as chat. Returning stored OAuth here skips
 		// refresh and sends expired SuperGrok tokens to GET /models (HTTP 403).
 		const resolved = await this.getAuth(providerId);
+		const stored = await this.credentials.read(providerId);
+		if (stored?.type === "oauth") return { ...stored, access: resolved?.auth.apiKey ?? stored.access };
 		if (resolved?.auth.apiKey) return { type: "api_key", key: resolved.auth.apiKey, env: resolved.env };
-		if (stored?.type === "oauth" && stored.access) return stored;
 		if (stored?.type === "api_key" && stored.key) return stored;
 		return undefined;
 	}
@@ -889,7 +950,9 @@ export class ModelRuntime implements Models {
 				...this.snapshot,
 				auth,
 				configuredProviders,
-				available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
+				available: this.snapshot.all.filter(
+					(model) => configuredProviders.has(model.provider) && this.isCatalogModelAvailable(model),
+				),
 			};
 		}
 		void this.refresh({ allowNetwork: false });

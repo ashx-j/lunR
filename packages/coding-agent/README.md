@@ -99,7 +99,9 @@ lunR ships a built-in catalog. First paint is **cache-only** (no GitHub or live 
 
 `/model` lists **stored-credential** providers only (`~/.lunr/agent/auth.json`, subscriptions, or `--api-key`). An ambient `OPENROUTER_API_KEY` does not make OpenRouter models appear in `/model`.
 
-Refresh catalogs with **`/refresh`**, not `lunr update`. `/refresh` downloads `providers.json` and then shards for providers that already have stored credentials. `lunr update` only reinstalls the global CLI.
+Model catalogs refresh automatically after startup and periodically while lunR is idle. Startup itself uses cached or bundled data. **`/refresh`** forces an immediate check for providers with stored credentials; `lunr update` only reinstalls the global CLI.
+
+For ChatGPT/Codex, lunR discovers the models available to your account directly, including new model IDs. Provider-supplied context and reasoning capabilities take priority over older published metadata; explicit `models.json` overrides remain yours. Failed requests keep the last successful catalog for the same account. Models with missing pricing are marked as such in the model picker; new IDs do not trigger metadata questions.
 
 **Subscriptions:**
 - Anthropic Claude Pro/Max

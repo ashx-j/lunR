@@ -2,85 +2,103 @@ name: Publish model catalog
 
 on:
   schedule:
-    - cron: "17 */4 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
   push:
     branches: [master]
     paths:
-      - "packages/ai/scripts/generate-models.ts"
+      - "packages/ai/scripts/**"
+      - "packages/ai/src/catalog/**"
+      - "packages/ai/src/*effort.ts"
       - "scripts/sync-model-catalog.mjs"
       - ".github/workflows/publish-model-catalog.yml"
   pull_request:
     branches: [master]
     paths:
-      - "packages/ai/scripts/generate-models.ts"
+      - "packages/ai/scripts/**"
+      - "packages/ai/src/catalog/**"
+      - "packages/ai/src/*effort.ts"
       - "scripts/sync-model-catalog.mjs"
       - ".github/workflows/publish-model-catalog.yml"
       - "catalog/**"
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: model-catalog-${{ github.event_name == 'pull_request' && github.ref || 'publication' }}
+  cancel-in-progress: false
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+          node-version: 24
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Generate model catalog
-        run: npm run generate:model-catalog
-
-      - name: Validate generated catalog
-        run: node scripts/sync-model-catalog.mjs --check
-
-      - name: Sync catalog into repo
-        if: github.event_name != 'pull_request'
-        run: node scripts/sync-model-catalog.mjs --source-commit ${{ github.sha }}
-
-      - name: Commit catalog if changed
-        id: commit
-        if: github.event_name != 'pull_request'
+      - run: npm ci --ignore-scripts
+      - name: Restore last-good public sources
+        uses: actions/cache@v4
+        with:
+          path: .artifacts/model-catalog-sources
+          key: catalog-sources-v2-${{ github.run_id }}
+          restore-keys: catalog-sources-v2-
+      - name: Test discovery and publication contracts
+        working-directory: packages/coding-agent
+        run: npx vitest --run test/codex-catalog.test.ts test/catalog-autonomy.test.ts test/catalog-sources.test.ts test/sync-model-catalog.test.ts test/official-catalog.test.ts
+      - name: Generate and validate
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add catalog
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Catalog unchanged."
-          else
-            git commit -m "chore: refresh generated model catalog"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          npm run generate:model-catalog
+          node scripts/sync-model-catalog.mjs --check
+      - name: Report source freshness
+        if: always()
+        run: |
+          if test -f .artifacts/model-catalog/sources.json; then
+            node -e 'const s=require("./.artifacts/model-catalog/sources.json"); for(const x of s) console.log(x.status+": "+x.url+" ("+x.fetchedAt+")")' >> "$GITHUB_STEP_SUMMARY"
           fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-catalog
+          path: .artifacts/model-catalog
+          retention-days: 7
 
-      - name: Push to master
-        id: push
-        if: github.event_name != 'pull_request' && steps.commit.outputs.changed == 'true'
-        continue-on-error: true
-        run: git push origin HEAD:${{ github.ref_name }}
-
-      - name: Open PR if push was rejected
-        if: github.event_name != 'pull_request' && steps.commit.outputs.changed == 'true' && steps.push.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  publish:
+    needs: generate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-catalog
+          path: .artifacts/model-catalog
+      - name: Open catalog data checkout
         run: |
-          BRANCH="chore/refresh-model-catalog-${{ github.run_id }}"
-          git checkout -b "$BRANCH"
-          git push -u origin "$BRANCH"
-          gh pr create \
-            --base master \
-            --head "$BRANCH" \
-            --title "chore: refresh generated model catalog" \
-            --body "Automated catalog refresh. Direct push to \`${{ github.ref_name }}\` was rejected."
+          if git ls-remote --exit-code --heads origin model-catalog; then
+            git fetch origin model-catalog
+            git worktree add --detach .catalog-published FETCH_HEAD
+          else
+            git worktree add --detach .catalog-published HEAD
+            git -C .catalog-published switch --orphan model-catalog
+          fi
+      - name: Publish immutable snapshot and manifest
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          node scripts/sync-model-catalog.mjs --versioned --output .catalog-published/catalog --source-commit "$SOURCE_COMMIT"
+          git -C .catalog-published config user.name "github-actions[bot]"
+          git -C .catalog-published config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C .catalog-published add catalog
+          if ! git -C .catalog-published diff --cached --quiet; then
+            git -C .catalog-published commit -m "chore: publish model catalog snapshot"
+            git -C .catalog-published push origin HEAD:model-catalog
+          fi
