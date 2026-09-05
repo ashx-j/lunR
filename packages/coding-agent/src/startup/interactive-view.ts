@@ -187,6 +187,7 @@ export class InteractiveView {
 		if (this.exitRequested) return;
 		this.inputUnsubscribe?.();
 		this.inputUnsubscribe = undefined;
+		this.editor.onPasteImage = undefined;
 		this.editor.disableSubmit = false;
 		this.status.setText("");
 		if (this.submitRequested) {

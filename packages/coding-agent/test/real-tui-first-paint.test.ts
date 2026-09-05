@@ -79,9 +79,11 @@ describe("real TUI first paint", () => {
 		terminal.input("\r");
 		expect(submit).not.toHaveBeenCalled();
 		expect(view.editor.getText()).toBe("hello");
+		expect(view.editor.onPasteImage).toBeTypeOf("function");
 		terminal.input("!");
 		view.activate();
 		expect(submit).toHaveBeenCalledExactlyOnceWith("hello!");
+		expect(view.editor.onPasteImage).toBeUndefined();
 	});
 
 	it("preserves editor identity, cursor, and image chips when the real extension binds", async () => {

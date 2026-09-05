@@ -19,6 +19,10 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.13`**.
 - **Settings menu copy** — `/settings` rows use short feature summaries instead of implementation inventories; choice-specific details stay beside the relevant option.
 - **Global AGENTS.md label** — `/context` and `/usage` label `~/.lunr/agent/AGENTS.md` as `Global AGENTS.md`; project instruction files stay `AGENTS.md`.
 
+### Fixed
+
+- **VS Code image paste** — Image paste flows through the normal app action, including custom editors, and `/paste-image` works without a terminal shortcut when VS Code owns Alt+V.
+
 ## [0.80.10] - 2026-07-16
 
 ### New Features

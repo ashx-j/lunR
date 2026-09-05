@@ -23,7 +23,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | Path completion | Press Tab to complete paths |
 | Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
 | Copy response | Ctrl+X copies the last assistant message; in `/tree`, it copies the selected message |
-| Images | Paste with Ctrl+V, Alt+V on Windows, or drag into the terminal. Images insert `[image_n]` chips, not a temp path. |
+| Images | Paste with Ctrl+V, Alt+V on Windows, `/paste-image`, or drag into the terminal. VS Code must forward Alt+V. Images insert `[image_n]` chips. |
 | Shell command | `!command` runs and sends output to the model |
 | Hidden shell command | `!!command` runs without sending output to the model |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
@@ -46,6 +46,7 @@ Built-in commands (from `slash-commands.ts`):
 | `/import` | Import and resume a session from a JSONL file |
 | `/share` | Share session as a secret GitHub gist. HTML viewer still defaults to https://pi.dev/session/ (leftover, not lunR-hosted). Override with `PI_SHARE_VIEWER_URL`. |
 | `/copy` | Copy last agent message to clipboard |
+| `/paste-image` | Paste an image from the clipboard |
 | `/name`, `/title` | Set session display name |
 | `/session` | Show session info and stats |
 | `/usage` | This-session token totals, context, and every stored subscription plan (no `/token-usage`) |

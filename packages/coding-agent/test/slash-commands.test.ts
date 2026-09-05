@@ -12,6 +12,10 @@ describe("BUILTIN_SLASH_COMMANDS", () => {
 		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "research")).toBe(false);
 	});
 
+	it("includes a terminal-independent image paste command", () => {
+		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "paste-image")).toBe(true);
+	});
+
 	it("includes /edit and describes /undo as same-session rewind", () => {
 		const edit = BUILTIN_SLASH_COMMANDS.find((command) => command.name === "edit");
 		const undo = BUILTIN_SLASH_COMMANDS.find((command) => command.name === "undo");

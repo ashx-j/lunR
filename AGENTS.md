@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` (tag `v0.2.13` = `8e1f0fc`). **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **VS Code image paste (`fix/vscode-image-paste`):** image paste flows through the normal app action for default and custom editors. `/paste-image` invokes the same image-only clipboard path when VS Code owns the key. The retained first-paint editor releases its startup paste callback at activation so the runtime action takes over. Tests: image-paste-keybinding + image-paste-markers + real-tui-first-paint + slash-commands + clipboard-image + extensions-runner.
 - **Real TUI first paint (`fix/real-tui-first-paint`):** the Node CLI paints the normal moon chatbox, boot header, and stats before runtime imports. InteractiveMode reuses the terminal/editor; Enter holds the editable draft until features finish, then uses the normal command/message handler. Failed feature loading keeps the draft. Theme validation/highlighting load on demand; footer git reads are asynchronous. Startup dialogs share the terminal. For startup changes or measurements, read `packages/coding-agent/docs/interactive-startup.md` and run `scripts/check-interactive-first-paint.mjs` after building. This replaces #41's temporary presentation without its unrelated reliability changes.
 
 - **Autonomous catalog (`fix/autonomous-model-catalog-master`):** port of #43 from `dev/tui`, without unrelated development changes. Codex uses public upstream metadata and authenticated version-gated discovery; idle refresh and checksummed hourly snapshots need no agent runs. Provider capabilities beat stale metadata; explicit overrides and account-scoped last-good caches remain. Read `packages/coding-agent/docs/model-catalog.md` when changing discovery or handling publication failures. CLI release remains separate from the master merge.
@@ -120,6 +121,7 @@ Last updated: 2026-09-05 (v0.2.13 shipped). Public npm is `@ashx-j/lunr@0.2.13` 
 - Global context label (2026-08-30): coding-agent tsgo passes; focused context/usage Vitest passes 15/15. Biome passes the changed core/test files; `interactive-mode.ts` retains its pre-existing import-order finding.
 - Skill tag character (2026-08-30): coding-agent tsgo passes. Focused Vitest: skill-tag-autocomplete 11/11, settings-manager skill-tag 2/2, interactive-mode wiring/trigger-merge 4/4. New files pass Biome; `settings-selector.ts` keeps its pre-existing format finding and `interactive-mode.ts` its pre-existing import-order finding.
 - Settings menu copy (2026-08-30): coding-agent tsgo, settings-selector Biome, and `git diff --check` pass. Focused Vitest passes 49/52; the three unrelated existing Windows failures are in rollback memory-path coverage and settings-manager external-edit fixtures, while model-tiers and memory-cap pass. The pre-commit aggregate check retains the documented pinned-dependency failures from study material and coding-agent dependencies.
+- VS Code image paste (2026-09-01): tui → coding-agent tsgo and copy-assets pass; focused Vitest passes 52/52; changed-code Biome and `git diff --check` pass. A live Windows clipboard image inserts `[image_1]`, and rebuilt `npx lunr -p` returned `image-paste-smoke-ok` before the known print-mode timeout.
 - TUI cleanup + Linux first paint (2026-09-01): coding-agent tsgo, touched-file Biome, and `git diff --check` pass. Focused Vitest passes 107/107 across subagent cards, silent background installs, chatbox/messages, and migrations. The expanded touched-file run passes 164/181; its 17 existing Windows `.pi`/resource-layout failures remain unrelated. Rebuilt CLI reports 0.2.13 and returns `smoke-ok`; the documented print-mode timeout still exits 124 after output.
 
 ---
@@ -147,7 +149,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Theme: `moon.json` is the builtin; `default.json` untracked/unwired. The chatbox uses `promptArrow`; legacy `promptMoon` input remains accepted but is ignored.
 - Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; click expands/collapses a thinking run or tool card; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
-- Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`. Paste inserts `[image_n]` chips, not a temp path. Do not expand those chips back to paths on submit.
+- Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`. VS Code must forward that key; `/paste-image` bypasses terminal key ownership. Paste inserts `[image_n]` chips, not a temp path. Do not expand those chips back to paths on submit.
 - Process registry: direct children only; `nohup &` grandchildren untracked.
 - vite/oxc: `import type { A, B }` not `import type { A, type B }`.
 - Telegram length = `string.length` (UTF-16). Busy-session `/stop` `/new` must bypass session guard.
@@ -259,6 +261,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-08-30: mid-message skill tagging uses a dedicated `/settings` character (`+`/`~`/`$`) and inserts a tag only; do not reuse `/` or dump SKILL.md.
 - 2026-08-30: persist `modelSelection` at spawn from requested params because resolved `spec.model` cannot distinguish tier routing from an explicit model.
 - 2026-08-30: `/settings` descriptions are short feature summaries so the menu stays scannable; choice details stay in submenus.
+- 2026-09-01: `/paste-image` is the guaranteed VS Code path because a terminal process cannot recover paste keys the host never sends.
 - 2026-09-01: visible subagent results own the description, optional tool installers write no startup text after TUI takeover, and retired turn-rail/prompt toggles are migrated out.
 
 - 2026-09-05: port only the catalog commit from #43 to master so unrelated dev/tui features remain independently reviewable.
@@ -268,6 +271,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: pin coding-agent external dependencies and map workspace-local dependency rows into the installer lock so published installs resolve the reviewed versions.
 - 2026-09-05: exclude vendored builtin extensions and gitignored study trees from the relative-import policy check because their ESM `.js` specifiers are outside repository policy.
 - 2026-09-05: use package builds for production type safety and Vitest for test code; the root no-emit pass mixed incompatible fixture types and kept CI permanently red.
+- 2026-09-05: release the first-paint editor's temporary paste callback at activation so the shared runtime app action owns image paste after hydration.
 
 # Deferred
 

@@ -28,6 +28,7 @@ type SubmitContext = {
 	ui: { setChatScroll: (n: number) => void };
 	settingsManager: { getImageAutoResize: () => boolean };
 	showStatus: (message: string) => void;
+	handleClipboardPaste: (options?: { textFallback?: boolean }) => Promise<void>;
 	takeSubmittedImages: () => Array<{ id: number; path: string; mimeType: string }>;
 	consumeStagedSubmitImages: () => undefined;
 	loadImageAttachments: (
@@ -110,6 +111,7 @@ describe("InteractiveMode image paste chips", () => {
 			ui: { setChatScroll: vi.fn() },
 			settingsManager: { getImageAutoResize: () => false },
 			showStatus: vi.fn(),
+			handleClipboardPaste: vi.fn(async () => {}),
 			takeSubmittedImages: vi.fn(() => [{ id: 1, path: first, mimeType: "image/png" }]),
 			consumeStagedSubmitImages: vi.fn(() => undefined),
 			loadImageAttachments: vi.fn(async () => loaded),
@@ -120,5 +122,37 @@ describe("InteractiveMode image paste chips", () => {
 
 		expect(context.pendingUserInputs).toEqual([{ text: "look at [image_1]", images: loaded }]);
 		expect(context.flushPendingBashComponents).toHaveBeenCalledTimes(1);
+	});
+
+	it("runs /paste-image without sending a model prompt", async () => {
+		const context: SubmitContext = {
+			defaultEditor: {},
+			editor: {
+				addToHistory: vi.fn(),
+				setText: vi.fn(),
+			},
+			session: {
+				isCompacting: false,
+				isStreaming: false,
+				isBashRunning: false,
+				prompt: vi.fn(async () => {}),
+			},
+			flushPendingBashComponents: vi.fn(),
+			pendingUserInputs: [],
+			ui: { setChatScroll: vi.fn() },
+			settingsManager: { getImageAutoResize: () => false },
+			showStatus: vi.fn(),
+			handleClipboardPaste: vi.fn(async () => {}),
+			takeSubmittedImages: vi.fn(() => []),
+			consumeStagedSubmitImages: vi.fn(() => undefined),
+			loadImageAttachments: vi.fn(async () => undefined),
+		};
+
+		proto.setupEditorSubmitHandler.call(context);
+		await context.defaultEditor.onSubmit?.("/paste-image");
+
+		expect(context.handleClipboardPaste).toHaveBeenCalledWith({ textFallback: false });
+		expect(context.pendingUserInputs).toEqual([]);
+		expect(context.session.prompt).not.toHaveBeenCalled();
 	});
 });

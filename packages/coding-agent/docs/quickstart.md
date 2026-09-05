@@ -137,7 +137,7 @@ lunr @README.md "Summarize this"
 lunr @src/app.ts @src/app.test.ts "Review these together"
 ```
 
-Paste images with Ctrl+V (Alt+V on Windows). The editor inserts `[image_1]`, `[image_2]`, … chips instead of a temp path. Dragging images into supported terminals also works.
+Paste images with Ctrl+V or Alt+V on Windows. VS Code owns those keys, so `/paste-image` pastes without a terminal shortcut. The editor inserts `[image_1]`, `[image_2]`, … chips instead of a temp path. Dragging images into supported terminals also works.
 
 ### Run shell commands
 

@@ -143,7 +143,7 @@ The editor can be temporarily replaced by other UI, like built-in `/settings` or
 | Path completion | Tab to complete paths |
 | Multi-line | Shift+Enter (or Ctrl+Enter on Windows Terminal) |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
-| Clipboard | Ctrl+V to paste text or an image (Alt+V on Windows). Images insert `[image_n]` chips, not a temp path. Drag images onto the terminal also works. |
+| Clipboard | Ctrl+V normally, Alt+V on Windows. VS Code must forward Alt+V, or use `/paste-image` without a shortcut. Images insert `[image_n]` chips, not a temp path. |
 | Bash commands | `!command` runs and sends output to LLM, `!!command` runs without sending |
 
 Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.md](docs/keybindings.md).
@@ -183,6 +183,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/clone` | Duplicate the current active branch |
 | `/compact [prompt]` | Manually compact context |
 | `/copy` | Copy last assistant message |
+| `/paste-image` | Paste an image from the clipboard |
 | `/export [file]` | Export session to HTML or JSONL |
 | `/import <file>` | Import and resume a JSONL session |
 | `/share` | Upload as a private GitHub gist (HTML viewer still defaults to https://pi.dev/session/ — leftover, not lunR-hosted) |
