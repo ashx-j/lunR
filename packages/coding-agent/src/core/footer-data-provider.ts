@@ -1,5 +1,6 @@
-import { type ExecFileException, execFile, spawnSync } from "child_process";
-import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatchFile, watchFile } from "fs";
+import { type ExecFileException, execFile } from "child_process";
+import { existsSync, type FSWatcher, type Stats, unwatchFile, watchFile } from "fs";
+import { readFile, stat } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.ts";
 
@@ -13,49 +14,34 @@ type GitPaths = {
  * Find git metadata paths by walking up from cwd.
  * Handles both regular git repos (.git is a directory) and worktrees (.git is a file).
  */
-function findGitPaths(cwd: string): GitPaths | null {
+async function findGitPaths(cwd: string): Promise<GitPaths | null> {
 	let dir = cwd;
 	while (true) {
 		const gitPath = join(dir, ".git");
-		if (existsSync(gitPath)) {
-			try {
-				const stat = statSync(gitPath);
-				if (stat.isFile()) {
-					const content = readFileSync(gitPath, "utf8").trim();
-					if (content.startsWith("gitdir: ")) {
-						const gitDir = resolve(dir, content.slice(8).trim());
-						const headPath = join(gitDir, "HEAD");
-						if (!existsSync(headPath)) return null;
-						const commonDirPath = join(gitDir, "commondir");
-						const commonGitDir = existsSync(commonDirPath)
-							? resolve(gitDir, readFileSync(commonDirPath, "utf8").trim())
-							: gitDir;
-						return { repoDir: dir, commonGitDir, headPath };
-					}
-				} else if (stat.isDirectory()) {
-					const headPath = join(gitPath, "HEAD");
-					if (!existsSync(headPath)) return null;
-					return { repoDir: dir, commonGitDir: gitPath, headPath };
+		try {
+			const gitStat = await stat(gitPath);
+			if (gitStat.isFile()) {
+				const content = (await readFile(gitPath, "utf8")).trim();
+				if (content.startsWith("gitdir: ")) {
+					const gitDir = resolve(dir, content.slice(8).trim());
+					const headPath = join(gitDir, "HEAD");
+					await stat(headPath);
+					let commonGitDir = gitDir;
+					try {
+						commonGitDir = resolve(gitDir, (await readFile(join(gitDir, "commondir"), "utf8")).trim());
+					} catch {}
+					return { repoDir: dir, commonGitDir, headPath };
 				}
-			} catch {
-				return null;
+			} else if (gitStat.isDirectory()) {
+				const headPath = join(gitPath, "HEAD");
+				await stat(headPath);
+				return { repoDir: dir, commonGitDir: gitPath, headPath };
 			}
-		}
+		} catch {}
 		const parent = dirname(dir);
 		if (parent === dir) return null;
 		dir = parent;
 	}
-}
-
-/** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitSync(repoDir: string): string | null {
-	const result = spawnSync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
-		cwd: repoDir,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "ignore"],
-	});
-	const branch = result.status === 0 ? result.stdout.trim() : "";
-	return branch || null;
 }
 
 /** Sum added/removed columns from `git diff --numstat`. Binary rows (`-`) are ignored. */
@@ -82,16 +68,6 @@ export function parseGitNumstat(stdout: string): { added: number; removed: numbe
 	return { added, removed };
 }
 
-function resolveDiffstatWithGitSync(repoDir: string): { added: number; removed: number } | null {
-	const result = spawnSync("git", ["--no-optional-locks", "diff", "--numstat", "HEAD"], {
-		cwd: repoDir,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "ignore"],
-	});
-	if (result.status !== 0) return null;
-	return parseGitNumstat(result.stdout ?? "");
-}
-
 function resolveDiffstatWithGitAsync(repoDir: string): Promise<{ added: number; removed: number } | null> {
 	return new Promise((resolvePromise) => {
 		execFile(
@@ -100,6 +76,7 @@ function resolveDiffstatWithGitAsync(repoDir: string): Promise<{ added: number; 
 			{
 				cwd: repoDir,
 				encoding: "utf8",
+				timeout: 3000,
 			},
 			(error: ExecFileException | null, stdout: string) => {
 				if (error) {
@@ -121,6 +98,7 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
 			{
 				cwd: repoDir,
 				encoding: "utf8",
+				timeout: 3000,
 			},
 			(error: ExecFileException | null, stdout: string) => {
 				if (error) {
@@ -174,24 +152,22 @@ export class FooterDataProvider {
 
 	constructor(cwd: string) {
 		this.cwd = cwd;
-		this.gitPaths = findGitPaths(cwd);
-		this.setupGitWatcher();
 	}
 
-	/** Current git branch, null if not in repo, "detached" if detached HEAD */
+	/** Current git branch, null until the asynchronous lookup completes or when not in a repo. */
 	getGitBranch(): string | null {
-		if (this.cachedBranch === undefined) {
-			this.cachedBranch = this.resolveGitBranchSync();
+		if (this.cachedBranch === undefined && !this.refreshInFlight) {
+			void this.refreshGitData();
 		}
-		return this.cachedBranch;
+		return this.cachedBranch ?? null;
 	}
 
-	/** Staged + unstaged added/removed vs HEAD. Null when not a repo or git failed. */
+	/** Staged + unstaged added/removed vs HEAD. Null until the asynchronous lookup completes. */
 	getGitDiffstat(): { added: number; removed: number } | null {
-		if (this.cachedDiffstat === undefined) {
-			this.cachedDiffstat = this.gitPaths ? resolveDiffstatWithGitSync(this.gitPaths.repoDir) : null;
+		if (this.cachedDiffstat === undefined && !this.refreshInFlight) {
+			void this.refreshGitData();
 		}
-		return this.cachedDiffstat;
+		return this.cachedDiffstat ?? null;
 	}
 
 	/** Extension status texts set via ctx.ui.setStatus() */
@@ -242,8 +218,8 @@ export class FooterDataProvider {
 		this.clearGitWatchers();
 		this.cachedBranch = undefined;
 		this.cachedDiffstat = undefined;
-		this.gitPaths = findGitPaths(cwd);
-		this.setupGitWatcher();
+		this.gitPaths = undefined;
+		if (this.refreshInFlight) this.refreshPending = true;
 		this.notifyBranchChange();
 	}
 
@@ -270,11 +246,11 @@ export class FooterDataProvider {
 		}
 		this.refreshTimer = setTimeout(() => {
 			this.refreshTimer = null;
-			void this.refreshGitBranchAsync();
+			void this.refreshGitData();
 		}, FooterDataProvider.WATCH_DEBOUNCE_MS);
 	}
 
-	private async refreshGitBranchAsync(): Promise<void> {
+	private async refreshGitData(): Promise<void> {
 		if (this.disposed) return;
 		if (this.refreshInFlight) {
 			this.refreshPending = true;
@@ -282,15 +258,23 @@ export class FooterDataProvider {
 		}
 
 		this.refreshInFlight = true;
+		const cwd = this.cwd;
 		try {
-			const nextBranch = await this.resolveGitBranchAsync();
-			const nextDiff = this.gitPaths ? await resolveDiffstatWithGitAsync(this.gitPaths.repoDir) : null;
-			if (this.disposed) return;
-			const branchChanged = this.cachedBranch !== undefined && this.cachedBranch !== nextBranch;
+			const gitPaths = this.gitPaths === undefined ? await findGitPaths(cwd) : this.gitPaths;
+			if (this.disposed || this.cwd !== cwd) return;
+			if (this.gitPaths === undefined) {
+				this.gitPaths = gitPaths;
+				this.setupGitWatcher();
+			}
+			const [nextBranch, nextDiff] = await Promise.all([
+				this.resolveGitBranchAsync(),
+				gitPaths ? resolveDiffstatWithGitAsync(gitPaths.repoDir) : null,
+			]);
+			if (this.disposed || this.cwd !== cwd) return;
+			const prevBranch = this.cachedBranch;
 			const prevDiff = this.cachedDiffstat;
-			const diffChanged =
-				prevDiff !== undefined &&
-				(prevDiff?.added !== nextDiff?.added || prevDiff?.removed !== nextDiff?.removed);
+			const branchChanged = prevBranch !== nextBranch;
+			const diffChanged = prevDiff?.added !== nextDiff?.added || prevDiff?.removed !== nextDiff?.removed;
 			this.cachedBranch = nextBranch;
 			this.cachedDiffstat = nextDiff;
 			if (branchChanged || diffChanged) {
@@ -305,24 +289,10 @@ export class FooterDataProvider {
 		}
 	}
 
-	private resolveGitBranchSync(): string | null {
-		try {
-			if (!this.gitPaths) return null;
-			const content = readFileSync(this.gitPaths.headPath, "utf8").trim();
-			if (content.startsWith("ref: refs/heads/")) {
-				const branch = content.slice(16);
-				return branch === ".invalid" ? (resolveBranchWithGitSync(this.gitPaths.repoDir) ?? "detached") : branch;
-			}
-			return "detached";
-		} catch {
-			return null;
-		}
-	}
-
 	private async resolveGitBranchAsync(): Promise<string | null> {
 		try {
 			if (!this.gitPaths) return null;
-			const content = readFileSync(this.gitPaths.headPath, "utf8").trim();
+			const content = (await readFile(this.gitPaths.headPath, "utf8")).trim();
 			if (content.startsWith("ref: refs/heads/")) {
 				const branch = content.slice(16);
 				return branch === ".invalid"
