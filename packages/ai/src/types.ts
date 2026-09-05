@@ -715,6 +715,14 @@ export interface ModelCost extends ModelCostRates {
 
 // Model interface for the unified model system
 export interface Model<TApi extends Api> {
+	/** Discovery provenance. Defaults are not authoritative provider capabilities. */
+	catalog?: {
+		source: "provider";
+		supplied: ("name" | "contextWindow" | "maxTokens" | "input" | "cost" | "reasoning" | "thinkingLevelMap")[];
+		hidden?: boolean;
+		pricing?: "unknown";
+		reasoningLevels?: string[];
+	};
 	id: string;
 	name: string;
 	api: TApi;

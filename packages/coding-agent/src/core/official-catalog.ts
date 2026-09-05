@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Api, Model, ThinkingLevelMap } from "@earendil-works/pi-ai";
@@ -7,6 +8,7 @@ import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 
 /** Directory on GitHub raw (`providers.json` + `providers/{id}.json`). Override with `LUNR_OFFICIAL_CATALOG_URL`. */
 export const OFFICIAL_CATALOG_DEFAULT_URL = "https://raw.githubusercontent.com/ashx-j/lunR/master/catalog";
+export const VERSIONED_CATALOG_URL = "https://raw.githubusercontent.com/ashx-j/lunR/model-catalog/catalog";
 export const OFFICIAL_CATALOG_TIMEOUT_MS = 4000;
 export const OFFICIAL_CATALOG_CACHE_FILENAME = "official-catalog-cache.json";
 
@@ -14,6 +16,7 @@ const THINKING_LEVEL_KEYS = ["off", "minimal", "low", "medium", "high", "xhigh",
 const META_KEYS = new Set(["version", "updatedAt", "generatedAt", "sourceCommit", "providerCount", "modelCount"]);
 
 export interface OfficialModelCost {
+	tiers?: Model<Api>["cost"]["tiers"];
 	input: number;
 	output: number;
 	cacheRead: number;
@@ -21,6 +24,7 @@ export interface OfficialModelCost {
 }
 
 export interface OfficialModelEntry {
+	catalog?: Model<Api>["catalog"];
 	id: string;
 	name: string;
 	api: Api;
@@ -45,6 +49,7 @@ export interface OfficialCatalogFile {
 export type OfficialCatalogSource = "github" | "cache" | "bundled";
 
 export interface OfficialCatalogLoadResult {
+	errors?: Record<string, string>;
 	catalog: OfficialCatalogFile;
 	source: OfficialCatalogSource;
 }
@@ -116,6 +121,21 @@ function parseCost(value: unknown): OfficialModelCost | undefined {
 		output,
 		cacheRead: asFiniteNumber(value.cacheRead) ?? 0,
 		cacheWrite: asFiniteNumber(value.cacheWrite) ?? 0,
+		...(Array.isArray(value.tiers)
+			? {
+					tiers: value.tiers.flatMap((tier) => {
+						if (!isRecord(tier) || !(typeof tier.inputTokensAbove === "number" && tier.inputTokensAbove >= 0))
+							return [];
+						const rates = parseCost({
+							input: tier.input,
+							output: tier.output,
+							cacheRead: tier.cacheRead,
+							cacheWrite: tier.cacheWrite,
+						});
+						return rates ? [{ ...rates, inputTokensAbove: tier.inputTokensAbove }] : [];
+					}),
+				}
+			: {}),
 	};
 }
 
@@ -166,6 +186,9 @@ function parseOfficialEntry(value: unknown): OfficialModelEntry | undefined {
 	const headers = parseHeaders(value.headers);
 	return {
 		id,
+		...(isRecord(value.catalog) && value.catalog.source === "provider" && Array.isArray(value.catalog.supplied)
+			? { catalog: value.catalog as Model<Api>["catalog"] }
+			: {}),
 		name,
 		api: api as Api,
 		provider,
@@ -270,11 +293,19 @@ export function loadCachedOfficialCatalog(cachePath?: string): OfficialCatalogFi
 }
 
 export function writeOfficialCatalogCache(catalog: OfficialCatalogFile, cachePath: string): void {
+	const temporary = `${cachePath}.${randomUUID()}.tmp`;
 	try {
 		mkdirSync(dirname(cachePath), { recursive: true, mode: 0o700 });
-		writeFileSync(cachePath, `${JSON.stringify(catalog, null, 2)}\n`, "utf-8");
+		writeFileSync(temporary, `${JSON.stringify(catalog, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+		renameSync(temporary, cachePath);
 	} catch {
 		// Cache is best-effort.
+	} finally {
+		try {
+			unlinkSync(temporary);
+		} catch {
+			/* Renamed or never created. */
+		}
 	}
 }
 
@@ -318,7 +349,7 @@ export function preferOfficialCatalog(
 	next: OfficialCatalogLoadResult,
 ): OfficialCatalogLoadResult {
 	if (next.source === "github") return next;
-	if (previous?.source === "github") return previous;
+	if (previous?.source === "github") return { ...previous, errors: next.errors };
 	return next;
 }
 
@@ -330,6 +361,7 @@ const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 export function officialEntryToModel(entry: OfficialModelEntry, template?: Model<Api>): Model<Api> {
 	return {
+		catalog: entry.catalog,
 		id: entry.id,
 		name: entry.name,
 		api: entry.api || template?.api || "openai-completions",
@@ -392,18 +424,20 @@ async function fetchJson(
 			error.name = "AbortError";
 			return error;
 		};
-		const response = await Promise.race([
-			options.fetchImpl(url, {
-				headers: options.headers,
-				signal: controller.signal,
-			}),
+		return await Promise.race([
+			(async () => {
+				const response = await options.fetchImpl(url, {
+					headers: options.headers,
+					signal: controller.signal,
+				});
+				if (!response.ok) return { ok: false as const, status: response.status };
+				return { ok: true as const, value: await response.json() };
+			})(),
 			new Promise<never>((_, reject) => {
 				controller.signal.addEventListener("abort", () => reject(abortError()), { once: true });
 				if (controller.signal.aborted) reject(abortError());
 			}),
 		]);
-		if (!response.ok) return { ok: false, status: response.status };
-		return { ok: true, value: await response.json() };
 	} catch {
 		return { ok: false };
 	} finally {
@@ -435,13 +469,38 @@ export async function loadOfficialCatalog(
 		"User-Agent": getPiUserAgent(VERSION),
 	};
 	const fetchOptions = { timeoutMs, signal: options.signal, fetchImpl, headers };
-	const base = options.url ?? officialCatalogBaseUrl();
+	const unavailable = (): OfficialCatalogLoadResult => ({
+		...fallbackCatalog(bundled, cachePath),
+		errors: Object.fromEntries(
+			(options.providerIds ?? []).map((id) => [id, "Published catalog unavailable; using cached metadata"]),
+		),
+	});
+	let base = options.url ?? officialCatalogBaseUrl();
+	let manifest: Record<string, unknown> | undefined;
+	// Existing custom mirrors remain compatible with the v1 index/shard format.
+	if (!options.url && !process.env.LUNR_OFFICIAL_CATALOG_URL) {
+		const result = await fetchJson(`${VERSIONED_CATALOG_URL}/publication.json`, fetchOptions);
+		if (
+			result.ok &&
+			isRecord(result.value) &&
+			result.value.version === 2 &&
+			typeof result.value.revision === "string" &&
+			/^sha256-[a-f0-9]{64}$/.test(result.value.revision) &&
+			isRecord(result.value.shards) &&
+			parseProviderIndex(result.value.providers)
+		) {
+			manifest = result.value;
+			base = `${VERSIONED_CATALOG_URL}/snapshots/${result.value.revision}`;
+		}
+	}
 
 	try {
-		const indexResult = await fetchJson(officialCatalogUrlFor("providers.json", base), fetchOptions);
-		if (!indexResult.ok) return fallbackCatalog(bundled, cachePath);
+		const indexResult = manifest
+			? { ok: true as const, value: manifest.providers }
+			: await fetchJson(officialCatalogUrlFor("providers.json", base), fetchOptions);
+		if (!indexResult.ok) return unavailable();
 		const index = parseProviderIndex(indexResult.value);
-		if (!index) return fallbackCatalog(bundled, cachePath);
+		if (!index) return unavailable();
 
 		const wanted = new Set(index);
 		const requested = options.providerIds ?? [];
@@ -449,24 +508,43 @@ export async function loadOfficialCatalog(
 		if (shardIds.length === 0) return fallbackCatalog(bundled, cachePath);
 
 		const replacements = new Map<string, OfficialModelEntry[]>();
+		const errors: Record<string, string> = {};
 		await Promise.all(
 			shardIds.map(async (providerId) => {
 				const result = await fetchJson(
 					officialCatalogUrlFor(`providers/${encodeURIComponent(providerId)}.json`, base),
 					fetchOptions,
 				);
-				if (!result.ok) return;
+				if (!result.ok) {
+					errors[providerId] = "Catalog shard unavailable; using cached metadata";
+					return;
+				}
+				if (
+					manifest &&
+					(manifest.shards as Record<string, unknown>)[providerId] !==
+						createHash("sha256").update(JSON.stringify(result.value)).digest("hex")
+				) {
+					errors[providerId] = "Catalog shard checksum mismatch; using cached metadata";
+					return;
+				}
 				const parsed = parseOfficialCatalog(result.value);
-				if (!parsed || parsed.models.length === 0) return;
+				if (!parsed || parsed.models.length === 0 || parsed.models.some((model) => model.provider !== providerId)) {
+					errors[providerId] = "Invalid catalog shard; using cached metadata";
+					return;
+				}
 				replacements.set(providerId, parsed.models);
 			}),
 		);
-		if (replacements.size === 0) return fallbackCatalog(bundled, cachePath);
+		if (replacements.size === 0) return { ...fallbackCatalog(bundled, cachePath), errors };
 
-		const catalog = mergeOfficialCatalogByProvider(officialCatalogBase(bundled, cachePath), replacements);
+		const catalog = mergeOfficialCatalogByProvider(
+			officialCatalogBase(bundled, cachePath),
+			replacements,
+			typeof manifest?.generatedAt === "string" ? manifest.generatedAt : undefined,
+		);
 		if (cachePath) writeOfficialCatalogCache(catalog, cachePath);
-		return { catalog, source: "github" };
+		return { catalog, source: "github", ...(Object.keys(errors).length ? { errors } : {}) };
 	} catch {
-		return fallbackCatalog(bundled, cachePath);
+		return unavailable();
 	}
 }

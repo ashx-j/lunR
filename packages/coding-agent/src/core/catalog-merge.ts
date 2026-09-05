@@ -1,4 +1,4 @@
-import { type Api, type Model, withXaiEffortMetadata } from "@earendil-works/pi-ai";
+import { type Api, type Model, withOpenAiEffortMetadata, withXaiEffortMetadata } from "@earendil-works/pi-ai";
 import { modelKey, type OfficialCatalogSource } from "./official-catalog.ts";
 
 export type CatalogProviderRefreshStatus = "ok" | "timeout" | "error" | "skipped" | "static";
@@ -30,7 +30,23 @@ export function mergeCatalogLayers(args: {
 		result.push(winner);
 		seen.add(model.id);
 	}
-	return result.map((model) => withXaiEffortMetadata(model));
+	const liveById = new Map((args.live ?? []).map((model) => [model.id, model]));
+	const pricedIds = new Set(
+		[...args.bakedIn, ...(args.official ?? []), ...(args.user ?? [])]
+			.filter((model) => model.catalog?.pricing !== "unknown")
+			.map((model) => model.id),
+	);
+	return result.map((model) => {
+		let resolved = withXaiEffortMetadata(model);
+		if (!model.catalog?.supplied.includes("thinkingLevelMap")) resolved = withOpenAiEffortMetadata(resolved);
+		const live = liveById.get(model.id);
+		if (!live?.catalog) return resolved;
+		resolved = { ...resolved, catalog: { ...live.catalog } };
+		// Only supplied fields may override curated metadata. Inferred defaults never win.
+		for (const field of live.catalog.supplied) Object.assign(resolved, { [field]: live[field] });
+		if (pricedIds.has(model.id) || live.catalog.supplied.includes("cost")) delete resolved.catalog!.pricing;
+		return resolved;
+	});
 }
 
 export class CatalogOverlaySource {
@@ -60,6 +76,17 @@ export class CatalogOverlaySource {
 
 	liveFor(providerId: string): Model<Api>[] {
 		return this.live.get(providerId) ?? [];
+	}
+
+	/** Codex's complete account catalog is authoritative for picker availability only. */
+	isAvailable(model: Model<Api>): boolean {
+		if (model.catalog?.hidden) return false;
+		const live = this.liveFor(model.provider);
+		return (
+			model.provider !== "openai-codex" ||
+			!live.length ||
+			live.some((row) => row.id === model.id && !row.catalog?.hidden)
+		);
 	}
 }
 

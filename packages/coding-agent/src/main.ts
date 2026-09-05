@@ -825,6 +825,17 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		if (
+			parsed.model &&
+			!resolveCliModel({
+				cliProvider: parsed.provider,
+				cliModel: parsed.model,
+				cliThinking: parsed.thinking,
+				modelRuntime,
+			}).model
+		) {
+			await modelRuntime.refreshIfStale();
+		}
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,

@@ -11,6 +11,10 @@
 		"./dist/providers/images/register-builtins.js"
 	],
 	"exports": {
+		"./catalog/*": {
+			"types": "./dist/catalog/*.d.ts",
+			"import": "./dist/catalog/*.js"
+		},
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
