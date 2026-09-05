@@ -257,24 +257,27 @@ interface RequestedChildLaunch {
 function collectRequestedChildLaunches(value: unknown, launches: RequestedChildLaunch[]): void {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const input = value as Record<string, unknown>;
-	if (typeof input.task === "string" && input.task.trim()) {
-		launches.push({
-			description:
-				typeof input.description === "string" && input.description.trim()
-					? input.description.trim()
-					: input.task.trim(),
-			permissions: input.permissions === "read-only" ? "read-only" : "full",
-		});
-		return;
-	}
+	let nested = false;
 	for (const key of ["tasks", "chain", "parallel"] as const) {
 		const children = input[key];
 		if (Array.isArray(children)) {
+			nested = true;
 			for (const child of children) collectRequestedChildLaunches(child, launches);
-		} else if (key === "parallel") {
+		} else if (key === "parallel" && children && typeof children === "object") {
+			nested = true;
 			collectRequestedChildLaunches(children, launches);
 		}
 	}
+	if (nested) return;
+	const task = typeof input.task === "string" ? input.task.trim() : "";
+	const description = typeof input.description === "string" ? input.description.trim() : "";
+	const hasPermissions = input.permissions === "full" || input.permissions === "read-only";
+	// Chain steps may omit task (later steps default to {previous}) and still launch.
+	if (!task && !description && !hasPermissions) return;
+	launches.push({
+		description: description || task || "subagent",
+		permissions: input.permissions === "read-only" ? "read-only" : "full",
+	});
 }
 
 function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChildLaunch[] {

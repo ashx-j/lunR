@@ -60,7 +60,8 @@ class StartupProcessTerminal extends ProcessTerminal {
 
 	override write(data: string): void {
 		super.write(data);
-		if (this.watchForFirstFrame && data.includes("Starting lunR")) {
+		// Narrow terminals wrap the status line, so do not key off a substring.
+		if (this.watchForFirstFrame && data.length > 0) {
 			this.watchForFirstFrame = false;
 			markStartupMilestone("first_frame_committed");
 			this.firstFrameCallback?.();

@@ -296,14 +296,10 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	const entries: FileEntry[] = [];
 	const lines = content.trim().split("\n");
 
-	for (const line of lines) {
+	for (const [index, line] of lines.entries()) {
 		if (!line.trim()) continue;
-		try {
-			const entry = JSON.parse(line) as FileEntry;
-			entries.push(entry);
-		} catch {
-			// Skip malformed lines
-		}
+		const entry = parseSessionEntryLine(line, `line ${index + 1}`);
+		if (entry) entries.push(entry);
 	}
 
 	return entries;
@@ -532,13 +528,13 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
 
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 
-function parseSessionEntryLine(line: string): FileEntry | null {
-	if (!line.trim()) return null;
+function parseSessionEntryLine(line: string, location?: string): FileEntry | null {
+	const trimmed = line.replace(/ /g, "").trim();
+	if (!trimmed) return null;
 	try {
-		return JSON.parse(line) as FileEntry;
+		return JSON.parse(trimmed) as FileEntry;
 	} catch {
-		// Skip malformed lines
-		return null;
+		throw new Error(location ? `Malformed session line ${location}` : "Malformed session line");
 	}
 }
 
@@ -553,6 +549,7 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 		const decoder = new StringDecoder("utf8");
 		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
 		let pending = "";
+		let lineNumber = 0;
 
 		while (true) {
 			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
@@ -562,7 +559,11 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 			let lineStart = 0;
 			let newlineIndex = pending.indexOf("\n", lineStart);
 			while (newlineIndex !== -1) {
-				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
+				lineNumber++;
+				const entry = parseSessionEntryLine(
+					pending.slice(lineStart, newlineIndex),
+					`in ${resolvedFilePath}:${lineNumber}`,
+				);
 				if (entry) entries.push(entry);
 				lineStart = newlineIndex + 1;
 				newlineIndex = pending.indexOf("\n", lineStart);
@@ -571,8 +572,11 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 		}
 
 		pending += decoder.end();
-		const finalEntry = parseSessionEntryLine(pending);
-		if (finalEntry) entries.push(finalEntry);
+		if (pending.trim()) {
+			lineNumber++;
+			const finalEntry = parseSessionEntryLine(pending, `in ${resolvedFilePath}:${lineNumber}`);
+			if (finalEntry) entries.push(finalEntry);
+		}
 	} finally {
 		closeSync(fd);
 	}

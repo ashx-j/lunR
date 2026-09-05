@@ -115,4 +115,27 @@ describe("InteractiveMode startup input", () => {
 		await queued;
 		expect(prompt).toHaveBeenCalledWith("hello", undefined);
 	});
+
+	it("still opens the prompt barrier when deferred imports fail", async () => {
+		const showError = vi.fn();
+		const context = {
+			deferredBuiltinsAttached: false,
+			options: {
+				deferredBuiltinFactories: async () => ({
+					extensions: [],
+					failures: [{ name: "broken", error: new Error("import exploded") }],
+				}),
+			},
+			setExtensionStatus: vi.fn(),
+			showError,
+			session: { attachInlineExtensions: vi.fn() },
+		};
+		const proto = InteractiveMode.prototype as unknown as {
+			attachDeferredBuiltinExtensions(this: typeof context): Promise<void>;
+		};
+
+		await expect(proto.attachDeferredBuiltinExtensions.call(context)).resolves.toBeUndefined();
+		expect(context.deferredBuiltinsAttached).toBe(true);
+		expect(showError).toHaveBeenCalledWith("Failed to load deferred extensions: broken");
+	});
 });

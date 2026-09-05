@@ -4,7 +4,7 @@ import { Editor } from "../src/components/editor.ts";
 import { Markdown } from "../src/components/markdown.ts";
 import { Text } from "../src/components/text.ts";
 import { TUI } from "../src/tui.ts";
-import { sanitizeTerminalText } from "../src/utils.ts";
+import { sanitizeTerminalOutput, sanitizeTerminalText } from "../src/utils.ts";
 import { defaultEditorTheme, defaultMarkdownTheme } from "./test-themes.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -24,6 +24,12 @@ describe("terminal control sanitization", () => {
 		editor.handleInput(`\x1b[200~safe${OSC52}\x1b[201~`);
 		assert.strictEqual(editor.getText(), "safe");
 		assert.ok(editor.render(80).every((line) => !line.includes("\x1b]52") && !line.includes("\x07")));
+	});
+
+	it("strips private CSI sequences such as ESC[>4;2m", () => {
+		const safe = sanitizeTerminalOutput(`ok\x1b[>4;2mnope\x1b[31mred\x1b[0m`);
+		assert.strictEqual(safe, "oknope\x1b[31mred\x1b[0m");
+		assert.ok(!safe.includes("\x1b[>"));
 	});
 
 	it("keeps trusted SGR styling while stripping controls from text and markdown", () => {

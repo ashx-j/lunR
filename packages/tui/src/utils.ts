@@ -346,7 +346,7 @@ export function sanitizeTerminalOutput(str: string, allowImageProtocol = false):
 		if (str[i] === "\x1b" && str[i + 1] === "[") {
 			const end = terminalCsiEnd(str, i + 2);
 			const sequence = str.slice(i, end);
-			if (/^\x1b\[[0-9:;<=>?]*m$/.test(sequence)) result += sequence;
+			if (/^\x1b\[[0-9:;]*m$/.test(sequence)) result += sequence;
 			i = end;
 			continue;
 		}
