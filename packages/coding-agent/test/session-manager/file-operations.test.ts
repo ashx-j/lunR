@@ -34,10 +34,10 @@ describe("loadEntriesFromFile", () => {
 		expect(loadEntriesFromFile(file)).toEqual([]);
 	});
 
-	it("returns empty array for malformed JSON", () => {
+	it("fails closed on malformed JSON", () => {
 		const file = join(tempDir, "malformed.jsonl");
 		writeFileSync(file, "not json\n");
-		expect(loadEntriesFromFile(file)).toEqual([]);
+		expect(() => loadEntriesFromFile(file)).toThrow(/Malformed session line/);
 	});
 
 	it("loads valid session file", () => {
@@ -53,7 +53,7 @@ describe("loadEntriesFromFile", () => {
 		expect(entries[1].type).toBe("message");
 	});
 
-	it("skips malformed lines but keeps valid ones", () => {
+	it("fails closed when a later line is malformed", () => {
 		const file = join(tempDir, "mixed.jsonl");
 		writeFileSync(
 			file,
@@ -61,8 +61,7 @@ describe("loadEntriesFromFile", () => {
 				"not valid json\n" +
 				'{"type":"message","id":"1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}\n',
 		);
-		const entries = loadEntriesFromFile(file);
-		expect(entries).toHaveLength(2);
+		expect(() => loadEntriesFromFile(file)).toThrow(/Malformed session line/);
 	});
 
 	it("opens session files larger than Node's max string length", () => {

@@ -989,10 +989,16 @@ export class InteractiveMode {
 		}
 		for (const warning of this.options.deprecationWarnings ?? []) this.showWarning(warning);
 		this.deferredBuiltinAttachPromise = this.attachDeferredBuiltinExtensions();
-		this.promptBarrierPromise = this.deferredBuiltinAttachPromise.then(() => {
-			time("attachDeferredBuiltins");
-			markStartupMilestone("prompt_barrier_open");
-		});
+		this.promptBarrierPromise = this.deferredBuiltinAttachPromise.then(
+			() => {
+				time("attachDeferredBuiltins");
+				markStartupMilestone("prompt_barrier_open");
+			},
+			() => {
+				time("attachDeferredBuiltins");
+				markStartupMilestone("prompt_barrier_open");
+			},
+		);
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -1806,18 +1812,15 @@ export class InteractiveMode {
 				this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 			}
 			if (failures.length > 0) {
-				throw new AggregateError(
-					failures.map(({ error }) => error),
-					`Failed to import deferred builtins: ${failures.map(({ name }) => name).join(", ")}`,
+				this.showError(
+					`Failed to load deferred extensions: ${failures.map(({ name }) => name).join(", ")}`,
 				);
 			}
-			this.deferredBuiltinsAttached = true;
 		} catch (error) {
-			this.deferredBuiltinsAttached = false;
 			const message = error instanceof Error ? error.message : String(error);
 			this.showError(`Failed to load deferred extensions: ${message}`);
-			throw error;
 		} finally {
+			this.deferredBuiltinsAttached = true;
 			this.setExtensionStatus("deferred-builtins", undefined);
 		}
 	}

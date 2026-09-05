@@ -32,6 +32,20 @@ describe("startup shell handoff", () => {
 		shell.stop();
 		expect(shell.isExitRequested).toBe(true);
 	});
+
+	it("resolves first-frame readiness even when the status line wraps", async () => {
+		const originalColumns = process.stdout.columns;
+		Object.defineProperty(process.stdout, "columns", { configurable: true, value: 8 });
+		const shell = new InteractiveStartupShell();
+		try {
+			const firstFrame = shell.waitForFirstFrame();
+			shell.start();
+			await expect(firstFrame).resolves.toBeUndefined();
+		} finally {
+			shell.stop();
+			Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+		}
+	});
 });
 
 describe("startup benchmark parsing", () => {

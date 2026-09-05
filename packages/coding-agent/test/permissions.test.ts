@@ -150,6 +150,22 @@ describe("permissions", () => {
 		expect(requests[0].detail).toContain("Fixer");
 	});
 
+	it("requires approval for a taskless full-access chain step in manual mode", async () => {
+		setPermissionMode("manual");
+		let calls = 0;
+		registerApprovalHandler(async () => {
+			calls++;
+			return "reject";
+		});
+		const result = await gateToolCall(
+			"subagent",
+			{ chain: [{ description: "Implement storage", permissions: "full" }] },
+			"/cwd",
+		);
+		expect(calls).toBe(1);
+		expect(result).toEqual({ block: true, reason: "Rejected by user (permission mode: manual)." });
+	});
+
 	it("allows all tools in yolo mode", async () => {
 		setPermissionMode("yolo");
 		const result = await gateToolCall("bash", { command: "rm -rf /" }, "/cwd");
