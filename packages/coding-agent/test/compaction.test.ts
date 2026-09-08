@@ -355,6 +355,32 @@ describe("findCutPoint", () => {
 		}
 	});
 
+	it("keeps the assistant tool call when the budget is reached in its trailing result", () => {
+		const toolCall = createAssistantMessage("");
+		toolCall.content = [{ type: "toolCall", id: "call-1", name: "dump", arguments: {} }];
+		const toolResult: AgentMessage = {
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "dump",
+			content: [{ type: "text", text: "x".repeat(4000) }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("old")),
+			createMessageEntry(createAssistantMessage("old answer")),
+			createMessageEntry(createUserMessage("current")),
+			createMessageEntry(toolCall),
+			createMessageEntry(toolResult),
+		];
+
+		const result = findCutPoint(entries, 0, entries.length, 1);
+
+		expect(result.firstKeptEntryIndex).toBe(3);
+		expect(result.isSplitTurn).toBe(true);
+		expect(result.turnStartIndex).toBe(2);
+	});
+
 	it("should budget context-visible custom message entries", () => {
 		const entries: SessionEntry[] = [
 			createMessageEntry(createUserMessage("hi")),

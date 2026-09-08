@@ -42,7 +42,7 @@ export function parseCodexCatalog(payload: unknown, baseUrl: string): Model<"ope
 		if (typeof row.slug !== "string" || !row.slug.trim()) throw new Error("Codex model is missing its slug");
 		const supplied: NonNullable<Model<any>["catalog"]>["supplied"] = [];
 		const positive = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;
-		const context = positive(row.context_window) ? row.context_window : row.max_context_window;
+		const context = row.context_window;
 		if (positive(context)) supplied.push("contextWindow");
 		if (positive(row.max_output_tokens)) supplied.push("maxTokens");
 		const name = typeof row.display_name === "string" && row.display_name.trim() ? row.display_name : row.slug;

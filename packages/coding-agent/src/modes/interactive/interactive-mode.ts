@@ -537,6 +537,7 @@ export class InteractiveMode {
 
 	// Auto-compaction state
 	private autoCompactionEscapeHandler?: () => void;
+	private pendingCompactionRender?: { summary: string; tokensBefore: number };
 
 	// Auto-retry state
 	private retryEscapeHandler?: () => void;
@@ -1958,6 +1959,7 @@ export class InteractiveMode {
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
+		this.pendingCompactionRender = undefined;
 		this.stopSmoothStreaming();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
@@ -3609,6 +3611,11 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				if (this.pendingCompactionRender) {
+					const result = this.pendingCompactionRender;
+					this.pendingCompactionRender = undefined;
+					this.renderCompactionResult(result);
+				}
 				await this.checkShutdownRequested();
 				break;
 
@@ -3642,16 +3649,11 @@ export class InteractiveMode {
 						this.showStatus("Auto-compaction cancelled");
 					}
 				} else if (event.result) {
-					this.chatContainer.clear();
-					this.rebuildChatFromMessages();
-					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
-					);
-					this.footer.invalidate();
+					if (this.session.isIdle) {
+						this.renderCompactionResult(event.result);
+					} else {
+						this.pendingCompactionRender = event.result;
+					}
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {
 						this.showError(event.errorMessage);
@@ -4621,6 +4623,15 @@ export class InteractiveMode {
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		return !!extensionRunner.getCommand(commandName);
+	}
+
+	private renderCompactionResult(result: { summary: string; tokensBefore: number }): void {
+		this.chatContainer.clear();
+		this.rebuildChatFromMessages();
+		this.addMessageToChat(
+			createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString()),
+		);
+		this.footer.invalidate();
 	}
 
 	private async flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {

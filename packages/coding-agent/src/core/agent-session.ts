@@ -322,6 +322,7 @@ export class AgentSession {
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
+	private _manualCompactionPromise: Promise<CompactionResult> | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
 
@@ -594,7 +595,21 @@ export class AgentSession {
 				: undefined);
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
-			const previousContext = previousSnapshot?.context ?? turn.context;
+			let previousContext = previousSnapshot?.context ?? turn.context;
+			const model = this.model;
+			const settings = this.settingsManager.getCompactionSettings();
+			if (
+				model?.provider === "openai-codex" &&
+				settings.enabled &&
+				shouldCompact(estimateContextTokens(previousContext.messages).tokens, model.contextWindow, settings)
+			) {
+				const previousCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+				await this._runAutoCompaction("threshold", true);
+				const currentCompaction = getLatestCompactionEntry(this.sessionManager.getBranch());
+				if (currentCompaction && currentCompaction.id !== previousCompactionId) {
+					previousContext = { ...previousContext, messages: this.agent.state.messages.slice() };
+				}
+			}
 
 			return {
 				...previousSnapshot,
@@ -1949,14 +1964,46 @@ export class AgentSession {
 	// Compaction
 	// =========================================================================
 
+	private _latestCompactionResult(): CompactionResult | undefined {
+		const pathEntries = this.sessionManager.getBranch();
+		const lastEntry = pathEntries[pathEntries.length - 1];
+		if (lastEntry?.type !== "compaction") return undefined;
+		return {
+			summary: lastEntry.summary,
+			firstKeptEntryId: lastEntry.firstKeptEntryId,
+			tokensBefore: lastEntry.tokensBefore,
+			estimatedTokensAfter: estimateMessagesTokens(this.sessionManager.buildSessionContext().messages),
+			details: lastEntry.details,
+		};
+	}
+
 	/**
 	 * Manually compact the session context.
 	 * Aborts current agent operation first.
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
+		const existing = this._latestCompactionResult();
+		if (existing) return existing;
+		if (this._manualCompactionPromise) return this._manualCompactionPromise;
+
+		const promise = this._compact(customInstructions);
+		this._manualCompactionPromise = promise;
+		try {
+			return await promise;
+		} finally {
+			if (this._manualCompactionPromise === promise) this._manualCompactionPromise = undefined;
+		}
+	}
+
+	private async _compact(customInstructions?: string): Promise<CompactionResult> {
 		this._disconnectFromAgent();
 		await this.abort();
+		const existing = this._latestCompactionResult();
+		if (existing) {
+			this._reconnectToAgent();
+			return existing;
+		}
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
 
@@ -2213,14 +2260,11 @@ export class AgentSession {
 	 * Internal: Run auto-compaction with events.
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		if (!this.model || this._compactionAbortController || this._autoCompactionAbortController) return false;
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 
 		try {
-			if (!this.model) {
-				return false;
-			}
-
 			let apiKey: string | undefined;
 			let headers: Record<string, string> | undefined;
 			let env: Record<string, string> | undefined;
