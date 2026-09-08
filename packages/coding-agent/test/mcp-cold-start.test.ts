@@ -18,11 +18,7 @@ const HEAVY_STATIC_IMPORTS = [
 	"./mcp-setup-panel.ts",
 ];
 
-const HEAVY_PACKAGE_MARKERS = [
-	"@modelcontextprotocol/sdk",
-	"@modelcontextprotocol/ext-apps",
-	"recheck",
-];
+const HEAVY_PACKAGE_MARKERS = ["@modelcontextprotocol/sdk", "@modelcontextprotocol/ext-apps", "recheck"];
 
 type RegisteredTool = {
 	name: string;
@@ -137,10 +133,14 @@ async function emit(pi: ReturnType<typeof createMockPi>, event: string) {
 }
 
 function mockHeavyModules(options?: {
-	initializeMcp?: () => Promise<unknown>;
+	initializeMcp?: (
+		pi: unknown,
+		ctx: unknown,
+		options: { signal?: AbortSignal; onState?: (state: unknown) => void },
+	) => Promise<unknown>;
 	executeStatus?: (state: unknown) => Promise<unknown>;
 	createDirectToolExecutor?: (...args: unknown[]) => (...args: unknown[]) => Promise<unknown>;
-	onInitModuleLoad?: () => void;
+	onInitModuleLoad?: () => void | Promise<void>;
 }) {
 	const gracefulShutdown = vi.fn(async () => {});
 	const shutdownOAuth = vi.fn(async () => {});
@@ -154,8 +154,8 @@ function mockHeavyModules(options?: {
 			details: { ok: true },
 		}));
 
-	vi.doMock("../src/builtin-extensions/pi-mcp-adapter/init.ts", () => {
-		options?.onInitModuleLoad?.();
+	vi.doMock("../src/builtin-extensions/pi-mcp-adapter/init.ts", async () => {
+		await options?.onInitModuleLoad?.();
 		return {
 			initializeMcp:
 				options?.initializeMcp ??
@@ -407,6 +407,51 @@ describe("mcp cold-start dependency split", () => {
 		expect(initCalls).toBe(2);
 	});
 
+	it("can cancel and shut down while implementation imports are stalled", async () => {
+		const agentDir = tempAgentDir();
+		const configPath = writeConfig(agentDir, { mcpServers: {} });
+		process.argv = ["node", "lunr", "--mcp-config", configPath];
+		let release!: () => void;
+		let started!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const loading = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const initializeMcp = vi.fn(async () => ({}));
+		mockHeavyModules({
+			onInitModuleLoad: () => {
+				started();
+				return gate;
+			},
+			initializeMcp,
+		});
+		const { default: install } = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+		const pi = createMockPi(agentDir);
+		install(pi);
+		await emit(pi, "session_start");
+		const signal = new AbortController();
+		const pending = pi.tools.find((tool) => tool.name === "mcp")!.execute!(
+			"call",
+			{},
+			signal.signal,
+			undefined,
+			pi.ctx,
+		);
+		try {
+			await loading;
+			signal.abort(new Error("fixture cancelled"));
+			await expect(pending).resolves.toMatchObject({
+				details: { error: "init_failed", message: "fixture cancelled" },
+			});
+			await emit(pi, "session_shutdown");
+			expect(initializeMcp).not.toHaveBeenCalled();
+		} finally {
+			release();
+		}
+	});
+
 	it("does not let a stale init assign state after session shutdown", async () => {
 		const agentDir = tempAgentDir();
 		const configPath = writeConfig(agentDir, {
@@ -457,6 +502,7 @@ describe("mcp cold-start dependency split", () => {
 		await new Promise((resolve) => setTimeout(resolve, 30));
 
 		expect(gracefulShutdown).toHaveBeenCalled();
+		await emit(pi, "session_start");
 
 		const proxy = pi.tools.find((tool) => tool.name === "mcp");
 		const result = (await proxy!.execute!("call", {}, undefined, undefined, pi.ctx)) as {
@@ -466,6 +512,85 @@ describe("mcp cold-start dependency split", () => {
 		expect(result.details?.id).toBe(2);
 		expect(result.content[0]?.text).toBe("state-2");
 		expect(states).toHaveLength(2);
+	});
+
+	it("closes partially initialized state before a stalled connection finishes", async () => {
+		const agentDir = tempAgentDir();
+		const configPath = writeConfig(agentDir, { mcpServers: { eager: { command: "fixture", lifecycle: "eager" } } });
+		process.argv = ["node", "lunr", "--mcp-config", configPath];
+		let release!: () => void;
+		let started!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const active = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gracefulShutdown = vi.fn(async () => {});
+		let initSignal: AbortSignal | undefined;
+		mockHeavyModules({
+			initializeMcp: async (_pi, _ctx, options) => {
+				const partial = { uiServer: null, lifecycle: { gracefulShutdown } };
+				initSignal = options.signal;
+				options.onState?.(partial);
+				started();
+				await gate;
+				return partial;
+			},
+		});
+		const { default: install } = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+		const pi = createMockPi(agentDir);
+		install(pi);
+		await emit(pi, "session_start");
+		await active;
+		try {
+			await emit(pi, "session_shutdown");
+			expect(initSignal?.aborted).toBe(true);
+			expect(gracefulShutdown).toHaveBeenCalledOnce();
+		} finally {
+			release();
+		}
+	});
+
+	it("does not reconnect a direct tool after its OAuth wait is cancelled", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const authenticate = vi.fn(() => gate);
+		const lazyConnect = vi.fn(async () => false);
+		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/init.ts", () => ({ lazyConnect }));
+		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/mcp-auth-flow.ts", () => ({
+			authenticate,
+			supportsOAuth: () => true,
+		}));
+		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts");
+		const { createDirectToolExecutor } = await import(
+			"../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts"
+		);
+		const close = vi.fn();
+		const state = {
+			config: {
+				settings: { autoAuth: true },
+				mcpServers: { remote: { url: "https://example.invalid", oauth: { grantType: "client_credentials" } } },
+			},
+			manager: { getConnection: () => ({ status: "needs-auth" }), close },
+			failureTracker: new Map(),
+		};
+		const execute = createDirectToolExecutor(
+			() => state as never,
+			() => null,
+			{ serverName: "remote", originalName: "test", prefixedName: "remote_test" } as never,
+		);
+		const controller = new AbortController();
+		const pending = execute("call", {}, controller.signal, undefined, {} as never);
+		const rejected = expect(pending).rejects.toThrow("session ended");
+		await vi.waitFor(() => expect(authenticate).toHaveBeenCalled());
+		controller.abort(new Error("session ended"));
+		release();
+		await rejected;
+		expect(close).not.toHaveBeenCalled();
+		expect(lazyConnect).toHaveBeenCalledTimes(1);
 	});
 
 	it("background-autostarts eager servers without blocking registration", async () => {

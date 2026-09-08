@@ -36,6 +36,7 @@ function getDirectAuthFailedMessage(state: McpExtensionState, serverName: string
 async function attemptDirectAutoAuth(
   state: McpExtensionState,
   serverName: string,
+  signal?: AbortSignal,
 ): Promise<DirectAutoAuthResult> {
   if (state.config.settings?.autoAuth !== true) {
     return { status: "skipped" };
@@ -59,9 +60,11 @@ async function attemptDirectAutoAuth(
   }
 
   try {
-    await authenticate(serverName, definition.url, definition);
+    await abortable(authenticate(serverName, definition.url, definition), signal);
+    throwIfAborted(signal);
     return { status: "success" };
   } catch (error) {
+    throwIfAborted(signal);
     const message = error instanceof Error ? error.message : String(error);
     return {
       status: "failed",
@@ -107,11 +110,13 @@ export function createDirectToolExecutor(
     }
 
     let connected = await lazyConnect(state, spec.serverName, signal);
+    throwIfAborted(signal);
     let autoAuthAttempted = false;
 
     if (!connected && state.manager.getConnection(spec.serverName)?.status === "needs-auth") {
       autoAuthAttempted = true;
-      const autoAuth = await attemptDirectAutoAuth(state, spec.serverName);
+      const autoAuth = await attemptDirectAutoAuth(state, spec.serverName, signal);
+      throwIfAborted(signal);
       if (autoAuth.status === "failed") {
         return {
           content: [{ type: "text" as const, text: autoAuth.message }],
@@ -120,8 +125,10 @@ export function createDirectToolExecutor(
       }
       if (autoAuth.status === "success") {
         await state.manager.close(spec.serverName);
+        throwIfAborted(signal);
         state.failureTracker.delete(spec.serverName);
         connected = await lazyConnect(state, spec.serverName, signal);
+        throwIfAborted(signal);
       }
     }
 
@@ -182,6 +189,7 @@ export function createDirectToolExecutor(
           })
         : null;
 
+      throwIfAborted(signal);
       const resultPromise = connection.client.callTool({
         name: spec.originalName,
         arguments: params ?? {},
@@ -189,6 +197,7 @@ export function createDirectToolExecutor(
       }, undefined, requestOptions);
 
       const result = await abortable(resultPromise, signal);
+      throwIfAborted(signal);
       uiSession?.sendToolResult(result as unknown as import("@modelcontextprotocol/sdk/types.js").CallToolResult);
 
       if (result.isError) {

@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.ts";
 import {
-	LspRuntimeHost,
 	type LspRuntimeBindOptions,
+	LspRuntimeHost,
 	type LspRuntimeModuleLoaders,
 	type LspRuntimeServices,
 } from "../src/builtin-extensions/pi-lsp-extension/src/runtime.ts";
-import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -82,6 +82,12 @@ function createDeferred<T>() {
 	return { promise, resolve, reject };
 }
 
+function createConstructorMock<T>(instance: T) {
+	return vi.fn(function ConstructorMock() {
+		return instance;
+	});
+}
+
 function createLoadersFromServices(
 	getServices: () => ReturnType<typeof createMockServices>["services"],
 	gates?: { beforeLoad?: () => Promise<void> },
@@ -95,11 +101,7 @@ function createLoadersFromServices(
 			return wrap(() => {
 				const services = getServices();
 				return {
-					LspManager: class {
-						constructor() {
-							return services.manager;
-						}
-					} as never,
+					LspManager: createConstructorMock(services.manager) as never,
 				};
 			});
 		},
@@ -107,11 +109,7 @@ function createLoadersFromServices(
 			return wrap(() => {
 				const services = getServices();
 				return {
-					FileSync: class {
-						constructor() {
-							return services.fileSync;
-						}
-					} as never,
+					FileSync: createConstructorMock(services.fileSync) as never,
 				};
 			});
 		},
@@ -119,11 +117,7 @@ function createLoadersFromServices(
 			return wrap(() => {
 				const services = getServices();
 				return {
-					TreeSitterManager: class {
-						constructor() {
-							return services.treeSitter;
-						}
-					} as never,
+					TreeSitterManager: createConstructorMock(services.treeSitter) as never,
 				};
 			});
 		},
@@ -131,11 +125,7 @@ function createLoadersFromServices(
 			return wrap(() => {
 				const services = getServices();
 				return {
-					WorkspaceIndex: class {
-						constructor() {
-							return services.workspaceIndex;
-						}
-					} as never,
+					WorkspaceIndex: createConstructorMock(services.workspaceIndex) as never,
 				};
 			});
 		},
@@ -243,38 +233,22 @@ describe("LspRuntimeHost lazy loading", () => {
 			async loadLspManager() {
 				if (shouldFail) throw new Error("boom");
 				return {
-					LspManager: class {
-						constructor() {
-							return mock.manager;
-						}
-					} as never,
+					LspManager: createConstructorMock(mock.manager) as never,
 				};
 			},
 			async loadFileSync() {
 				return {
-					FileSync: class {
-						constructor() {
-							return mock.fileSync;
-						}
-					} as never,
+					FileSync: createConstructorMock(mock.fileSync) as never,
 				};
 			},
 			async loadTreeSitter() {
 				return {
-					TreeSitterManager: class {
-						constructor() {
-							return mock.treeSitter;
-						}
-					} as never,
+					TreeSitterManager: createConstructorMock(mock.treeSitter) as never,
 				};
 			},
 			async loadWorkspaceIndex() {
 				return {
-					WorkspaceIndex: class {
-						constructor() {
-							return mock.workspaceIndex;
-						}
-					} as never,
+					WorkspaceIndex: createConstructorMock(mock.workspaceIndex) as never,
 				};
 			},
 		});
@@ -430,7 +404,10 @@ describe("pi-lsp-extension startup readiness", () => {
 
 		const start = harness.emit("session_start", { type: "session_start" }, harness.ctx);
 		await expect(
-			Promise.race([start.then(() => "ready" as const), new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50))]),
+			Promise.race([
+				start.then(() => "ready" as const),
+				new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+			]),
 		).resolves.toBe("ready");
 		await start;
 
@@ -534,6 +511,35 @@ describe("pi-lsp-extension startup readiness", () => {
 		expect(constructed).toBe(1);
 	});
 
+	it("does not run an old write-result hook against replacement services", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "lsp-old-write-"));
+		dirs.push(cwd);
+		const old = createMockServices(cwd);
+		const replacement = createMockServices(join(cwd, "next"));
+		let current = old.services;
+		const gate = createDeferred<void>();
+		old.fileSync.handleFileWrite.mockImplementation(() => gate.promise);
+		vi.spyOn(LspRuntimeHost.prototype, "ensureServices").mockImplementation(async () => current);
+		vi.spyOn(LspRuntimeHost.prototype, "getServicesIfReady").mockImplementation(() => current);
+		const harness = createExtensionHarness();
+		harness.setCwd(cwd);
+		await harness.emit("session_start", {}, harness.ctx);
+		const pending = harness.emit("tool_result", {
+			type: "tool_result",
+			toolName: "write",
+			input: { path: "index.ts" },
+			content: [],
+			isError: false,
+		});
+		await vi.waitFor(() => expect(old.fileSync.handleFileWrite).toHaveBeenCalled());
+		current = replacement.services;
+		harness.setCwd(join(cwd, "next"));
+		await harness.emit("session_start", {}, harness.ctx);
+		gate.resolve();
+		await pending;
+		expect(replacement.manager.getLanguageId).not.toHaveBeenCalled();
+	});
+
 	it("autoStart from .pi-lsp.json still ensures runtime and starts languages", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "lsp-ext-autostart-"));
 		dirs.push(cwd);
@@ -608,8 +614,8 @@ describe("pi-lsp-extension startup readiness", () => {
 		harness.setCwd(cwd);
 		await harness.emit("session_start", { type: "session_start" }, harness.ctx);
 
+		await vi.waitFor(() => expect(startEagerly).toHaveBeenCalledWith(["typescript"]));
 		expect(constructed).toEqual([cwd]);
-		expect(startEagerly).toHaveBeenCalledWith(["typescript"]);
 		expect(harness.statuses.some((status) => status.includes("auto-starting typescript"))).toBe(true);
 		expect(harness.tools.some((tool) => tool.name === "lsp_hover")).toBe(true);
 	});

@@ -300,6 +300,13 @@ function resolveProvider(
 
 const pendingFetches = new Map<string, AbortController>();
 let sessionActive = false;
+let sessionGeneration = 0;
+let sessionAbort = new AbortController();
+
+function assertActiveRequest(generation: number, signal?: AbortSignal): void {
+	signal?.throwIfAborted();
+	if (generation !== sessionGeneration) throw new Error("Web request cancelled: session changed");
+}
 let widgetVisible = false;
 let widgetUnsubscribe: (() => void) | null = null;
 const pendingCurates = new Map<string, PendingCurate>();
@@ -569,6 +576,9 @@ function formatEntryLine(
 }
 
 function handleSessionChange(ctx: ExtensionContext): void {
+	sessionGeneration++;
+	sessionAbort.abort();
+	sessionAbort = new AbortController();
 	abortPendingFetches();
 	closeCurator();
 	runSessionCleanups();
@@ -1300,6 +1310,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_tree", async (_event, ctx) => handleSessionChange(ctx));
 
 	pi.on("session_shutdown", () => {
+		sessionGeneration++;
+		sessionAbort.abort();
 		sessionActive = false;
 		abortPendingFetches();
 		closeCurator();
@@ -1338,7 +1350,10 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 
-		async execute(callId, params, signal, onUpdate, ctx) {
+		async execute(callId, params, incomingSignal, onUpdate, ctx) {
+			const generation = sessionGeneration;
+			const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+			assertActiveRequest(generation, signal);
 			const rawQueryList: unknown[] = Array.isArray(params.queries)
 				? params.queries
 				: (params.query !== undefined ? [params.query] : []);
@@ -1381,6 +1396,7 @@ export default function (pi: ExtensionAPI) {
 					numResults: params.numResults,
 					recencyFilter: params.recencyFilter,
 				});
+				assertActiveRequest(generation, signal);
 				const availableProviders = bootstrap.availableProviders;
 				const defaultProvider = bootstrap.defaultProvider;
 				const rawSearchProvider = normalizeProviderInput(params.provider ?? loadConfig().provider ?? "auto") ?? "auto";
@@ -1395,6 +1411,7 @@ export default function (pi: ExtensionAPI) {
 					isProjectTrusted: () => ctx.isProjectTrusted(),
 				};
 				const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
+				assertActiveRequest(generation, signal);
 
 				const pc: PendingCurate = {
 					phase: "searching",
@@ -1535,6 +1552,7 @@ export default function (pi: ExtensionAPI) {
 			const resolvedProvider = normalizeProviderInput(params.provider ?? loadConfig().provider);
 
 			for (let i = 0; i < queryList.length; i++) {
+				assertActiveRequest(generation, signal);
 				const query = queryList[i];
 
 				onUpdate?.({
@@ -1553,6 +1571,7 @@ export default function (pi: ExtensionAPI) {
 						extensionContext: ctx,
 					});
 
+					assertActiveRequest(generation, signal);
 					searchResults.push({ query, answer, results, error: null, provider });
 					for (const r of results) {
 						if (!allUrls.includes(r.url)) {
@@ -1561,6 +1580,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					if (inlineContent) allInlineContent.push(...inlineContent);
 				} catch (err) {
+					assertActiveRequest(generation, signal);
 					const message = err instanceof Error ? err.message : String(err);
 					const requestedProvider = typeof resolvedProvider === "string" && resolvedProvider !== "auto"
 						? resolvedProvider
@@ -1595,6 +1615,7 @@ export default function (pi: ExtensionAPI) {
 				summaryMeta = generated.meta;
 			}
 
+			assertActiveRequest(generation, signal);
 			return buildSearchReturn({
 				queryList,
 				results: searchResults,
@@ -1762,7 +1783,10 @@ export default function (pi: ExtensionAPI) {
 			})),
 		}),
 
-		async execute(_toolCallId, params, signal, onUpdate) {
+		async execute(_toolCallId, params, incomingSignal, onUpdate) {
+			const generation = sessionGeneration;
+			const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+			assertActiveRequest(generation, signal);
 			const { urlList, options } = normalizeFetchContentParams(params);
 			if (urlList.length === 0) {
 				return {
@@ -1784,6 +1808,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 			const fetchResults = await fetchAllContent(urlList, signal, options);
+			assertActiveRequest(generation, signal);
 			const successful = fetchResults.filter((r) => !r.error).length;
 			const totalChars = fetchResults.reduce((sum, r) => sum + r.content.length, 0);
 
@@ -2114,6 +2139,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("websearch", {
 		description: "Open web search curator",
 		handler: async (args, ctx) => {
+			const generation = sessionGeneration;
+			const sessionSignal = sessionAbort.signal;
 			const sessionToken = randomUUID();
 			const commandCallId = `cmd:${sessionToken}`;
 			closeCurator(commandCallId);
@@ -2127,10 +2154,12 @@ export default function (pi: ExtensionAPI) {
 			try {
 				bootstrap = await loadCuratorBootstrap(undefined, ctx);
 			} catch (err) {
+				if (generation !== sessionGeneration) return;
 				const message = err instanceof Error ? err.message : String(err);
 				ctx.ui.notify(`Failed to load web search config: ${message}`, "error");
 				return;
 			}
+			if (generation !== sessionGeneration) return;
 			const availableProviders = bootstrap.availableProviders;
 			const initialProvider = bootstrap.defaultProvider;
 			const curatorTimeoutSeconds = bootstrap.timeoutSeconds;
@@ -2144,14 +2173,16 @@ export default function (pi: ExtensionAPI) {
 				isProjectTrusted: () => ctx.isProjectTrusted(),
 			};
 			const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
+			if (generation !== sessionGeneration) return;
 
 			ctx.ui.notify("Opening web search curator...", "info");
 
 			const collected = new Map<number, QueryResultData>();
 			const searchAbort = new AbortController();
+			const searchSignal = AbortSignal.any([searchAbort.signal, sessionSignal]);
 			let aborted = false;
 			let commandHandle: CuratorServerHandle | null = null;
-			const isCommandActive = () => commandHandle !== null && activeCurators.get(commandCallId) === commandHandle;
+			const isCommandActive = () => generation === sessionGeneration && (commandHandle === null || activeCurators.get(commandCallId) === commandHandle);
 
 			function sendFollowUpFromReturn(payload: ReturnType<typeof buildSearchReturn>) {
 				pi.sendMessage({
@@ -2167,6 +2198,7 @@ export default function (pi: ExtensionAPI) {
 					loadCuratorServer(),
 					ensureSummaryReview(),
 				]);
+				if (!isCommandActive()) return;
 				const handle = await startCuratorServer(
 					{
 						queries,
@@ -2180,7 +2212,7 @@ export default function (pi: ExtensionAPI) {
 					},
 					{
 						async onSummarize(selectedQueryIndices, summarizeSignal, model, feedback) {
-							if (commandHandle && !isCommandActive()) {
+							if (!isCommandActive()) {
 								throw new Error("Curator session is no longer active.");
 							}
 							return generateSummaryForSelectedIndices(
@@ -2193,7 +2225,7 @@ export default function (pi: ExtensionAPI) {
 							);
 						},
 						onSubmit(payload) {
-							if (commandHandle && !isCommandActive()) return;
+							if (!isCommandActive()) return;
 							aborted = true;
 							searchAbort.abort();
 							const filtered = payload.selectedQueryIndices.length > 0
@@ -2217,7 +2249,7 @@ export default function (pi: ExtensionAPI) {
 							closeCurator(commandCallId);
 						},
 						onCancel(reason) {
-							if (commandHandle && !isCommandActive()) return;
+							if (!isCommandActive()) return;
 							aborted = true;
 							searchAbort.abort();
 							if (reason === "timeout") {
@@ -2238,7 +2270,7 @@ export default function (pi: ExtensionAPI) {
 							closeCurator(commandCallId);
 						},
 						onProviderChange(provider) {
-							if (commandHandle && !isCommandActive()) return;
+							if (!isCommandActive()) return;
 							const normalized = normalizeProviderInput(provider);
 							if (!normalized || normalized === "auto") return;
 							currentProvider = normalized;
@@ -2251,7 +2283,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						async onAddSearch(query, queryIndex, provider) {
-							if (commandHandle && !isCommandActive()) {
+							if (!isCommandActive()) {
 								throw new Error("Curator session is no longer active.");
 							}
 							const normalizedProvider = normalizeProviderInput(provider);
@@ -2261,10 +2293,10 @@ export default function (pi: ExtensionAPI) {
 							try {
 								const { answer, results, provider: actualProvider } = await runSearch(query, {
 									provider: requestedProvider,
-									signal: searchAbort.signal,
+									signal: searchSignal,
 									extensionContext: ctx,
 								});
-								if (commandHandle && !isCommandActive()) {
+								if (!isCommandActive()) {
 									throw new Error("Curator session is no longer active.");
 								}
 								collected.set(queryIndex, { query, answer, results, error: null, provider: actualProvider });
@@ -2275,14 +2307,14 @@ export default function (pi: ExtensionAPI) {
 								};
 							} catch (err) {
 								const message = err instanceof Error ? err.message : String(err);
-								if (!commandHandle || isCommandActive()) {
+								if (isCommandActive()) {
 									collected.set(queryIndex, { query, answer: "", results: [], error: message, provider: requestedProvider });
 								}
 								throw err;
 							}
 						},
 						async onRewriteQuery(query, rewriteSignal) {
-							if (commandHandle && !isCommandActive()) {
+							if (!isCommandActive()) {
 								throw new Error("Curator session is no longer active.");
 							}
 							return rewriteSearchQuery(query, summaryContext, rewriteSignal);
@@ -2290,9 +2322,11 @@ export default function (pi: ExtensionAPI) {
 					},
 				);
 
+				if (!isCommandActive()) { handle.close(); return; }
 				commandHandle = handle;
 				activeCurators.set(commandCallId, handle);
 				const open = platform() === "darwin" ? await getGlimpseOpen() : null;
+				if (!isCommandActive()) return;
 				let browserOpenError: string | null = null;
 				if (open) {
 					try {
@@ -2321,6 +2355,7 @@ export default function (pi: ExtensionAPI) {
 						browserOpenError = browserErr instanceof Error ? browserErr.message : String(browserErr);
 					}
 				}
+				if (!isCommandActive()) return;
 				if (browserOpenError) {
 					console.error(`Failed to open curator UI: ${browserOpenError}`);
 					ctx.ui.notify(`Search curator is running, but the browser did not open automatically. Open manually: ${handle.url}`, "info");
@@ -2334,7 +2369,7 @@ export default function (pi: ExtensionAPI) {
 							try {
 								const { answer, results, provider } = await runSearch(queries[qi], {
 									provider: requestedProvider,
-									signal: searchAbort.signal,
+									signal: searchSignal,
 									extensionContext: ctx,
 								});
 								if (aborted || !isCommandActive()) break;
@@ -2358,6 +2393,7 @@ export default function (pi: ExtensionAPI) {
 				}
 			} catch (err) {
 				closeCurator(commandCallId);
+				if (generation !== sessionGeneration) return;
 				const message = err instanceof Error ? err.message : String(err);
 				ctx.ui.notify(`Failed to open curator: ${message}`, "error");
 			}

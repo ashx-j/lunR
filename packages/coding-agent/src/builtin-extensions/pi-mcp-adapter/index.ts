@@ -11,6 +11,7 @@ import { getMetadataCachePath, loadMetadataCache } from "./metadata-cache.ts";
 import { getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord } from "./utils.ts";
 import { createMcpDirectToolCallRenderer, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
 import { toolErrorOverride } from "./error-signal.ts";
+import { abortable, throwIfAborted } from "./abort.ts";
 
 type McpHeavyModules = {
   init: typeof import("./init.ts");
@@ -39,6 +40,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   let state: McpExtensionState | null = null;
   let initPromise: Promise<McpExtensionState> | null = null;
   let lifecycleGeneration = 0;
+  let sessionAbort = new AbortController();
+  const initializingStates = new Set<McpExtensionState>();
   let heavyModules: McpHeavyModules | null = null;
   let heavyModulesPromise: Promise<McpHeavyModules> | null = null;
   const directExecutors = new Map<string, ReturnType<McpHeavyModules["directToolExecutor"]["createDirectToolExecutor"]>>();
@@ -57,7 +60,10 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         const loaded: McpHeavyModules = { init, authFlow, commands, proxyModes, directToolExecutor };
         heavyModules = loaded;
         return loaded;
-      })();
+      })().catch((error) => {
+        heavyModulesPromise = null;
+        throw error;
+      });
     }
     return heavyModulesPromise;
   }
@@ -94,14 +100,13 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     }
   }
 
+  async function shutdownInitializingStates(): Promise<void> {
+    const pending = [...initializingStates];
+    initializingStates.clear();
+    await Promise.all(pending.map((entry) => shutdownState(entry, "initialization_cancelled")));
+  }
+
   async function shutdownLoadedRuntime(): Promise<void> {
-    if (heavyModulesPromise) {
-      try {
-        await heavyModulesPromise;
-      } catch {
-        // Ignore load failures during cleanup.
-      }
-    }
     if (!heavyModules) return;
     await heavyModules.authFlow.shutdownOAuth();
   }
@@ -111,7 +116,9 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     sessionPi: ExtensionAPI,
     ctx: ExtensionContext,
   ): Promise<McpExtensionState> {
+    const signal = sessionAbort.signal;
     const heavy = await loadHeavyModules();
+    throwIfAborted(signal);
     if (generation !== lifecycleGeneration) {
       throw new Error("MCP initialization aborted (session changed)");
     }
@@ -124,7 +131,27 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       throw new Error("MCP initialization aborted (session changed)");
     }
 
-    return heavy.init.initializeMcp(sessionPi, ctx);
+    let partial: McpExtensionState | undefined;
+    try {
+      const initialized = await heavy.init.initializeMcp(sessionPi, ctx, {
+        signal,
+        onState: (entry: McpExtensionState) => {
+          partial = entry;
+          initializingStates.add(entry);
+        },
+      });
+      if (!partial) {
+        partial = initialized;
+        initializingStates.add(initialized);
+      }
+      throwIfAborted(signal);
+      return initialized;
+    } catch (error) {
+      if (partial && initializingStates.delete(partial)) await shutdownState(partial, "initialization_failed");
+      throw error;
+    } finally {
+      if (partial) initializingStates.delete(partial);
+    }
   }
 
   function startSessionInit(generation: number, sessionPi: ExtensionAPI, ctx: ExtensionContext): Promise<McpExtensionState> {
@@ -160,7 +187,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     return promise;
   }
 
-  async function ensureState(sessionPi: ExtensionAPI, ctx: ExtensionContext): Promise<McpExtensionState> {
+  async function ensureState(sessionPi: ExtensionAPI, ctx: ExtensionContext, signal?: AbortSignal): Promise<McpExtensionState> {
+    throwIfAborted(signal);
     if (state) return state;
 
     const generation = lifecycleGeneration;
@@ -173,9 +201,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     }
 
     try {
-      const nextState = await promise;
+      const nextState = await abortable(promise, signal);
       if (generation !== lifecycleGeneration) {
-        if (state) return state;
         throw new Error("MCP initialization aborted (session changed)");
       }
       if (state) return state;
@@ -185,17 +212,23 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       }
       return state;
     } catch (error) {
-      if (initPromise === promise) {
+      if (initPromise === promise && !signal?.aborted) {
         initPromise = null;
       }
       throw error;
     }
   }
 
+  function assertCurrentState(currentState: McpExtensionState): void {
+    if (currentState !== state) throw new Error("MCP session changed before execution");
+  }
+
   function createLazyDirectToolExecute(spec: DirectToolSpec) {
-    return async function execute(toolCallId, params, signal, onUpdate, ctx) {
+    return async function execute(toolCallId, params, incomingSignal, onUpdate, ctx) {
+      const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+      let currentState: McpExtensionState;
       try {
-        await ensureState(pi, ctx);
+        currentState = await ensureState(pi, ctx, signal);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
@@ -205,9 +238,11 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       }
 
       const heavy = await loadHeavyModules();
+      throwIfAborted(signal);
+      assertCurrentState(currentState);
       let executor = directExecutors.get(spec.prefixedName);
       if (!executor) {
-        executor = heavy.directToolExecutor.createDirectToolExecutor(() => state, () => initPromise, spec);
+        executor = heavy.directToolExecutor.createDirectToolExecutor(() => currentState, () => null, spec);
         directExecutors.set(spec.prefixedName, executor);
       }
       return executor(toolCallId, params, signal, onUpdate, ctx);
@@ -256,6 +291,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++lifecycleGeneration;
+    sessionAbort.abort(new Error("MCP session changed"));
+    sessionAbort = new AbortController();
     const previousState = state;
     state = null;
     initPromise = null;
@@ -264,6 +301,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     try {
       await Promise.all([
         shutdownState(previousState, "session_restart"),
+        shutdownInitializingStates(),
         shutdownLoadedRuntime(),
       ]);
     } catch (error) {
@@ -287,6 +325,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     ++lifecycleGeneration;
+    sessionAbort.abort(new Error("MCP session ended"));
     const currentState = state;
     state = null;
     initPromise = null;
@@ -295,6 +334,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     try {
       await Promise.all([
         shutdownState(currentState, "session_shutdown"),
+        shutdownInitializingStates(),
         shutdownLoadedRuntime(),
       ]);
     } catch (error) {
@@ -318,6 +358,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       }
 
       const heavy = await loadHeavyModules();
+      assertCurrentState(currentState);
       const parts = args?.trim()?.split(/\s+/) ?? [];
       const subcommand = parts[0] ?? "";
       const targetServer = parts[1];
@@ -382,6 +423,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       }
 
       const heavy = await loadHeavyModules();
+      assertCurrentState(currentState);
 
       if (!serverName) {
         await heavy.commands.openMcpAuthPanel(currentState, pi, ctx, earlyConfigPath);
@@ -421,7 +463,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         includeSchemas?: boolean;
         server?: string;
         action?: string;
-      }, signal, _onUpdate, ctx) {
+      }, incomingSignal, _onUpdate, ctx) {
+        const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
         let parsedArgs: Record<string, unknown> | undefined;
         if (params.args) {
           try {
@@ -440,7 +483,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
 
         let currentState: McpExtensionState;
         try {
-          currentState = await ensureState(pi, ctx);
+          currentState = await ensureState(pi, ctx, signal);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return {
@@ -450,6 +493,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         }
 
         const heavy = await loadHeavyModules();
+        throwIfAborted(signal);
+        assertCurrentState(currentState);
 
         if (params.action === "ui-messages") {
           return heavy.proxyModes.executeUiMessages(currentState);

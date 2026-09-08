@@ -10,15 +10,15 @@
 	"bin": {
 		"lunr": "dist/cli.js"
 	},
-	"main": "./dist/index.js",
+	"main": "./dist/node-runtime/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
+			"import": "./dist/node-runtime/index.js"
 		},
 		"./rpc-entry": {
-			"import": "./dist/rpc-entry.js"
+			"import": "./dist/node-runtime/rpc-entry.js"
 		}
 	},
 	"files": [

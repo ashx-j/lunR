@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const webAccessDir = join(dirname(fileURLToPath(import.meta.url)), "../src/builtin-extensions/pi-web-access");
 
@@ -123,7 +123,6 @@ describe("pi-web-access lazy first-use runtime", () => {
 			loadYoutubeExtract: vi.fn(),
 			loadVideoExtract: vi.fn(),
 			loadGeminiUrlContext: vi.fn(),
-			resetLazyCachesForTests: vi.fn(),
 		}));
 	});
 
@@ -132,29 +131,32 @@ describe("pi-web-access lazy first-use runtime", () => {
 		vi.resetModules();
 	});
 
+	type TestTool = { name: string; execute: (...args: unknown[]) => Promise<{ details?: Record<string, unknown> }> };
+	type Handler = (...args: unknown[]) => unknown;
+
 	function createPi() {
-		const tools = new Map<string, any>();
-		const commands = new Map<string, any>();
-		const handlers = new Map<string, Array<(...args: any[]) => any>>();
-		const messages: any[] = [];
-		const entries: any[] = [];
+		const tools = new Map<string, TestTool>();
+		const commands = new Map<string, unknown>();
+		const handlers = new Map<string, Handler[]>();
+		const messages: Array<{ customType?: string }> = [];
+		const entries: Array<{ type: string; data: { type?: string } }> = [];
 		const pi = {
-			registerTool(tool: any) {
+			registerTool(tool: TestTool) {
 				tools.set(tool.name, tool);
 			},
-			registerCommand(name: string, command: any) {
+			registerCommand(name: string, command: unknown) {
 				commands.set(name, command);
 			},
 			registerShortcut() {},
-			on(event: string, handler: (...args: any[]) => any) {
+			on(event: string, handler: Handler) {
 				const list = handlers.get(event) ?? [];
 				list.push(handler);
 				handlers.set(event, list);
 			},
-			appendEntry(type: string, data: unknown) {
+			appendEntry(type: string, data: { type?: string }) {
 				entries.push({ type, data });
 			},
-			sendMessage(msg: unknown) {
+			sendMessage(msg: { customType?: string }) {
 				messages.push(msg);
 			},
 		};
@@ -163,7 +165,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 
 	async function loadFactory() {
 		const mod = await import("../src/builtin-extensions/pi-web-access/index.ts");
-		return mod.default as (pi: any) => void;
+		return mod.default as unknown as (pi: ReturnType<typeof createPi>["pi"]) => void;
 	}
 
 	it("registers tools and commands without loading heavy implementation modules", async () => {
@@ -207,12 +209,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(tool).toBeTruthy();
 
 		const controller = new AbortController();
-		const executePromise = tool.execute(
-			"call-1",
-			{ url: "https://example.com/page" },
-			controller.signal,
-			undefined,
-		);
+		const executePromise = tool.execute("call-1", { url: "https://example.com/page" }, controller.signal, undefined);
 		await new Promise((r) => setTimeout(r, 5));
 		controller.abort();
 		const result = await executePromise;
@@ -250,6 +247,88 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(loadCuratorServer).not.toHaveBeenCalled();
 		expect(result.details?.error).toBeUndefined();
 		expect(entries.some((e) => e.type === "web-search-results")).toBe(true);
+	});
+
+	it.each(["fetch_content", "web_search"])(
+		"does not publish stale %s results after session replacement",
+		async (name) => {
+			let release!: () => void;
+			let started!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const active = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			loadExtract.mockResolvedValue({
+				fetchAllContent: async () => {
+					started();
+					await gate;
+					return [{ url: "https://example.com", title: "old", content: "old result", error: null }];
+				},
+			});
+			loadGeminiSearch.mockResolvedValue({
+				search: async () => {
+					started();
+					await gate;
+					throw new DOMException("Aborted", "AbortError");
+				},
+			});
+			const factory = await loadFactory();
+			const { pi, tools, handlers, entries } = createPi();
+			factory(pi);
+			const pending = tools
+				.get(name)
+				.execute("stale", { url: "https://example.com", query: "test", workflow: "none" }, undefined, undefined, {
+					hasUI: false,
+				});
+			const rejected = expect(pending).rejects.toThrow(/abort|cancel/i);
+			await active;
+			for (const handler of handlers.get("session_start") ?? [])
+				await handler({}, { sessionManager: { getBranch: () => [] } });
+			release();
+			await rejected;
+			expect(entries).toEqual([]);
+		},
+	);
+
+	it("does not open a stale curator command after its implementation loads", async () => {
+		loadOpenAISearch.mockResolvedValue({ isOpenAISearchAvailable: async () => false });
+		loadBrave.mockResolvedValue({ isBraveAvailable: () => false });
+		loadParallel.mockResolvedValue({ isParallelAvailable: () => false });
+		loadTavily.mockResolvedValue({ isTavilyAvailable: () => false });
+		loadPerplexity.mockResolvedValue({ isPerplexityAvailable: () => false });
+		loadExa.mockResolvedValue({ isExaAvailable: () => false });
+		loadGeminiApi.mockResolvedValue({ isGeminiApiAvailable: () => false });
+		loadGeminiWeb.mockResolvedValue({ isGeminiWebAvailable: async () => null });
+		loadSummaryReview.mockResolvedValue({});
+		const startCuratorServer = vi.fn();
+		let release!: (module: { startCuratorServer: typeof startCuratorServer }) => void;
+		loadCuratorServer.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		);
+		const factory = await loadFactory();
+		const { pi, commands, handlers } = createPi();
+		factory(pi);
+		const command = commands.get("websearch") as { handler: (args: string, ctx: unknown) => Promise<void> };
+		const notify = vi.fn();
+		const pending = command.handler("", {
+			cwd: webAccessDir,
+			modelRegistry: { getAvailable: () => [] },
+			isProjectTrusted: () => false,
+			ui: { notify },
+		});
+		await vi.waitFor(() => expect(loadCuratorServer).toHaveBeenCalled());
+		for (const handler of handlers.get("session_start") ?? [])
+			await handler({}, { sessionManager: { getBranch: () => [] } });
+		notify.mockClear();
+		release({ startCuratorServer });
+		await pending;
+		expect(startCuratorServer).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
 	});
 
 	it("drops stale background fetch completions after session change during extract import", async () => {
@@ -302,7 +381,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 
 		// Session change aborts/clears pending fetches before extract resolves, so work must not resume.
 		expect(fetchAllContent).not.toHaveBeenCalled();
-		expect(messages.some((m: any) => m?.customType === "web-search-content-ready")).toBe(false);
+		expect(messages.some((m) => m?.customType === "web-search-content-ready")).toBe(false);
 		expect(entries.filter((e) => e.type === "web-search-results" && e.data?.type === "fetch")).toHaveLength(0);
 	});
 });

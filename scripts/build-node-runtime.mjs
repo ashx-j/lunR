@@ -23,26 +23,44 @@ const result = await build({
 	metafile: true,
 	minifySyntax: true,
 	external: [
-		"@earendil-works/*", "@ashx-j/*", "typebox", "chalk", "jiti",
-		"@mariozechner/clipboard", "@silvia-odwyer/photon-node", "canvas",
-		"web-tree-sitter", "tree-sitter-wasms", "recheck", "open", "unpdf", "discord.js",
+		"@earendil-works/*",
+		"@ashx-j/*",
+		"typebox",
+		"chalk",
+		"jiti",
+		"@mariozechner/clipboard",
+		"@silvia-odwyer/photon-node",
+		"canvas",
+		"web-tree-sitter",
+		"tree-sitter-wasms",
+		"recheck",
+		"open",
+		"unpdf",
+		"discord.js",
 	],
-	banner: { js: 'import { createRequire as __lunrRequire } from "node:module"; const require = __lunrRequire(import.meta.url);' },
-	plugins: [{
-		name: "preserve-module-asset-paths",
-		setup(builder) {
-			builder.onLoad({ filter: /\.js$/ }, (args) => {
-				if (!args.path.startsWith(`${dist}/`) && !args.path.startsWith(`${dist}\\`)) return;
-				let contents = readFileSync(args.path, "utf8");
-				if (contents.includes("import.meta.url")) {
-					// Flat output chunks resolve asset and extension aliases against the original dist layout.
-					const original = `../${relative(dist, args.path).replaceAll("\\", "/")}`;
-					contents = contents.replaceAll("import.meta.url", `new URL(${JSON.stringify(original)}, import.meta.url).href`);
-				}
-				return { contents, loader: "js" };
-			});
+	banner: {
+		js: 'import { createRequire as __lunrRequire } from "node:module"; const require = __lunrRequire(import.meta.url);',
+	},
+	plugins: [
+		{
+			name: "preserve-module-asset-paths",
+			setup(builder) {
+				builder.onLoad({ filter: /\.js$/ }, (args) => {
+					if (!args.path.startsWith(`${dist}/`) && !args.path.startsWith(`${dist}\\`)) return;
+					let contents = readFileSync(args.path, "utf8");
+					if (contents.includes("import.meta.url")) {
+						// Flat output chunks resolve asset and extension aliases against the original dist layout.
+						const original = `../${relative(dist, args.path).replaceAll("\\", "/")}`;
+						contents = contents.replaceAll(
+							"import.meta.url",
+							`new URL(${JSON.stringify(original)}, import.meta.url).href`,
+						);
+					}
+					return { contents, loader: "js" };
+				});
+			},
 		},
-	}],
+	],
 });
 mkdirSync(artifactDir, { recursive: true });
 writeFileSync(join(artifactDir, "metafile.json"), `${JSON.stringify(result.metafile, null, 2)}\n`);

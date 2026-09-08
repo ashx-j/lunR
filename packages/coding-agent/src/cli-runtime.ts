@@ -2,6 +2,7 @@
 import { enableCompileCache } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isNodeBundle } from "./config.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
@@ -12,10 +13,12 @@ if (process.stdout.isTTY) {
 	process.stdout.write("\x1b]0;lunr\x07");
 }
 
-try {
-	const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
-	enableCompileCache(join(agentDir, "compile-cache"));
-} catch {}
+if (!isNodeBundle) {
+	try {
+		const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
+		enableCompileCache(join(agentDir, "compile-cache"));
+	} catch {}
+}
 
 process.env.PI_CODING_AGENT = "true";
 process.emitWarning = (() => {}) as typeof process.emitWarning;

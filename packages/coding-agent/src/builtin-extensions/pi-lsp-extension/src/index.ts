@@ -25,7 +25,9 @@
  *   3. LSP servers start lazily when you first use a tool on a file
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import { awaitWithAbort } from "../../../utils/await-with-abort.ts";
 import {
   isReadToolResult,
   isWriteToolResult,
@@ -124,15 +126,18 @@ function createServiceProxy<T extends object>(getTarget: () => T | null, label: 
   });
 }
 
-function registerToolWithRuntime(pi: ExtensionAPI, tool: { execute?: (...args: unknown[]) => unknown }, ensure: () => Promise<unknown>) {
-  const original = tool.execute;
-  if (typeof original === "function") {
-    tool.execute = async function runtimeGuardedExecute(this: unknown, ...args: unknown[]) {
-      await ensure();
-      return original.apply(this, args);
-    };
-  }
-  pi.registerTool(tool as never);
+function registerToolWithRuntime<T extends TSchema, D>(pi: ExtensionAPI, tool: ToolDefinition<T, D>, ensure: () => Promise<unknown>, host: LspRuntimeHost) {
+  pi.registerTool({
+    ...tool,
+    async execute(id, params, signal, onUpdate, ctx) {
+      const generation = host.getGeneration();
+      signal?.throwIfAborted();
+      await awaitWithAbort(ensure(), signal);
+      signal?.throwIfAborted();
+      if (host.getGeneration() !== generation) throw new Error("LSP session changed before execution");
+      return tool.execute(id, params, signal, onUpdate, ctx);
+    },
+  });
 }
 
 export default function lspExtension(pi: ExtensionAPI) {
@@ -286,13 +291,18 @@ export default function lspExtension(pi: ExtensionAPI) {
 
     if (projectConfig?.autoStart && projectConfig.autoStart.length > 0) {
       const langs = projectConfig.autoStart;
-      const services = await ensureRuntime();
-      const lombokJar = services.manager.getLombokJar?.() ?? null;
-      const lombokNote = langs.includes("java") && lombokJar
-        ? ` (lombok: ${String(lombokJar).split(/[/\\]/).pop()})`
-        : "";
-      setLspStatus("warning", `LSP: auto-starting ${langs.join(", ")}${lombokNote}...`);
-      services.manager.startEagerly(langs);
+      const generation = host.getGeneration();
+      void ensureRuntime().then((services) => {
+        if (host.getGeneration() !== generation) return;
+        const lombokJar = services.manager.getLombokJar?.() ?? null;
+        const lombokNote = langs.includes("java") && lombokJar
+          ? ` (lombok: ${String(lombokJar).split(/[/\\]/).pop()})`
+          : "";
+        setLspStatus("warning", `LSP: auto-starting ${langs.join(", ")}${lombokNote}...`);
+        services.manager.startEagerly(langs);
+      }).catch((error) => {
+        if (host.getGeneration() === generation) setLspStatus("error", `LSP startup failed: ${String(error)}`);
+      });
     }
   });
 
@@ -309,16 +319,14 @@ export default function lspExtension(pi: ExtensionAPI) {
     "Workspace index",
   );
 
-  registerToolWithRuntime(pi, createDiagnosticsTool(managerProxy, treeSitterProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createHoverTool(managerProxy, treeSitterProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createDefinitionTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createReferencesTool(managerProxy, treeSitterProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createSymbolsTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createRenameTool(managerProxy, treeSitterProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createCodeActionsTool(managerProxy, treeSitterProxy), ensureRuntime);
-  registerToolWithRuntime(
-    pi,
-    createCompletionsTool(
+  registerToolWithRuntime(pi, createDiagnosticsTool(managerProxy, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createHoverTool(managerProxy, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createDefinitionTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createReferencesTool(managerProxy, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createSymbolsTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createRenameTool(managerProxy, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createCodeActionsTool(managerProxy, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createCompletionsTool(
       managerProxy,
       {
         getTrackedVersion: (uri) => {
@@ -332,38 +340,34 @@ export default function lspExtension(pi: ExtensionAPI) {
         isSyntheticDotActive: (uri) => syntheticDotLocks.has(uri),
       },
       treeSitterProxy,
-    ),
-    ensureRuntime,
-  );
+    ), ensureRuntime, host);
   const getRootDir = () => {
     const manager = host.getServicesIfReady()?.manager;
     if (manager) return manager.resolvePath(".");
     return sessionCwd || process.cwd();
   };
-  registerToolWithRuntime(pi, createCodeOverviewTool(getRootDir, treeSitterProxy, workspaceIndexProxy), ensureRuntime);
-  registerToolWithRuntime(pi, createCodeSearchTool(getRootDir, treeSitterProxy), ensureRuntime);
-  registerToolWithRuntime(
-    pi,
-    createCodeRewriteTool(getRootDir, treeSitterProxy, {
+  registerToolWithRuntime(pi, createCodeOverviewTool(getRootDir, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createCodeSearchTool(getRootDir, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createCodeRewriteTool(getRootDir, treeSitterProxy, {
       onFileModified: (filePath: string) => {
         const services = host.getServicesIfReady();
         if (!services) return;
         services.fileSync.handleFileWrite(filePath).catch(() => {});
       },
-    }),
-    ensureRuntime,
-  );
+    }), ensureRuntime, host);
 
   // File sync: track file reads/writes/edits without loading runtime on plain reads
   // when LSP was never used. Writes may start a server (existing behavior) so they
   // ensure runtime. After writes/edits, append file-scoped error diagnostics.
   pi.on("tool_result", async (event) => {
+    const generation = host.getGeneration();
     try {
       if (isReadToolResult(event) && !event.isError) {
         const services = host.getServicesIfReady();
         if (services) {
           const path = (event.input as any)?.path;
           if (path) await services.fileSync.handleFileRead(path);
+          if (host.getGeneration() !== generation) return;
         }
       }
 
@@ -371,6 +375,7 @@ export default function lspExtension(pi: ExtensionAPI) {
         const path = (event.input as any)?.path;
         if (path) {
           const services = await ensureRuntime();
+          if (host.getGeneration() !== generation) return;
           await services.fileSync.handleFileWrite(path);
         }
       }
@@ -378,6 +383,7 @@ export default function lspExtension(pi: ExtensionAPI) {
       // File sync errors are non-fatal
     }
 
+    if (host.getGeneration() !== generation) return;
     // Auto-append diagnostics for the changed file (write/edit only)
     const services = host.getServicesIfReady();
     if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError && services) {
@@ -398,6 +404,7 @@ export default function lspExtension(pi: ExtensionAPI) {
 
       // Wait briefly for the LSP to publish updated diagnostics
       await new Promise((r) => setTimeout(r, DIAGNOSTIC_SETTLE_DELAY_MS));
+      if (host.getGeneration() !== generation) return;
 
       const uri = manager.getFileUri(path);
       const diagnostics = client.getDiagnostics(uri);

@@ -20,6 +20,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { keyText } from "../../../../modes/interactive/components/keybinding-hints.ts";
+import { awaitWithAbort } from "../../../../utils/await-with-abort.ts";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -382,7 +383,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					if (executorPromise === pending) executorPromise = undefined;
 				});
 			}
-			const ready = await executorPromise;
+			const ready = await awaitWithAbort(executorPromise, signal);
 			signal?.throwIfAborted();
 			if (generation !== currentGeneration) throw new Error("Subagent session changed before execution");
 			return ready.execute(id, params, signal, onUpdate, ctx);

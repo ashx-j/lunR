@@ -8,6 +8,12 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 	const faux = createFauxCore({ provider: "lunr-startup-benchmark" });
 	const toolUrl = process.env.PI_STARTUP_BENCHMARK_TOOL_URL;
 	if (toolUrl && new URL(toolUrl).hostname !== "127.0.0.1") throw new Error("Startup tool fixture must be local");
+	const requestedTool = process.env.PI_STARTUP_BENCHMARK_TOOL;
+	let toolCall = toolUrl ? fauxToolCall("fetch_content", { url: toolUrl }) : undefined;
+	if (requestedTool === "mcp") toolCall = fauxToolCall("mcp", {});
+	else if (requestedTool === "subagent") toolCall = fauxToolCall("subagent", { action: "status", view: "fleet" });
+	else if (requestedTool === "lsp") toolCall = fauxToolCall("code_overview", { path: "." });
+	else if (requestedTool) throw new Error(`Unknown startup fixture tool: ${requestedTool}`);
 	faux.setResponses([
 		(context) => {
 			markStartupMilestone("first_request_dispatched");
@@ -20,8 +26,8 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 			process.stderr.write(
 				`LUNR_STARTUP_REQUEST ${JSON.stringify({ tools: actual, toolSchemaHash, hasSystemPrompt: true })}\n`,
 			);
-			return toolUrl
-				? fauxAssistantMessage([fauxToolCall("fetch_content", { url: toolUrl })], { stopReason: "toolUse" })
+			return toolCall
+				? fauxAssistantMessage([toolCall], { stopReason: "toolUse" })
 				: fauxAssistantMessage("startup-request-ok");
 		},
 		(context) => {
@@ -29,9 +35,13 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 			if (
 				result?.role !== "toolResult" ||
 				result.isError ||
-				!JSON.stringify(result.content).includes("This local article verifies")
+				result.toolName !== toolCall?.name ||
+				(toolUrl && !JSON.stringify(result.content).includes("This local article verifies")) ||
+				(requestedTool === "lsp" && !JSON.stringify(result.content).includes("increment"))
 			) {
-				throw new Error("Startup tool did not fetch the local fixture");
+				throw new Error(
+					`Startup tool ${toolCall?.name} did not complete its local fixture: ${JSON.stringify(result?.content)}`,
+				);
 			}
 			markStartupMilestone("first_tool_completed");
 			return fauxAssistantMessage("startup-request-ok");
@@ -45,9 +55,11 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 	});
 	session.agent.state.model = faux.getModel();
 	return async () => {
-		await session.prompt("Reply with startup-request-ok. Do not use tools.");
+		await session.prompt(
+			toolCall ? "Use the local startup fixture tool." : "Reply with startup-request-ok. Do not use tools.",
+		);
 		const last = session.state.messages.at(-1);
-		if (last?.role !== "assistant" || last.stopReason === "error" || faux.state.callCount !== (toolUrl ? 2 : 1)) {
+		if (last?.role !== "assistant" || last.stopReason === "error" || faux.state.callCount !== (toolCall ? 2 : 1)) {
 			const error = new Error(
 				`Startup benchmark did not complete its local provider request: ${last?.role === "assistant" ? (last.errorMessage ?? last.stopReason) : last?.role}, calls=${faux.state.callCount}`,
 			);
