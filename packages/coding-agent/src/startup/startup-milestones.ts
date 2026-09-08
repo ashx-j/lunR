@@ -9,7 +9,10 @@ export type StartupMilestoneName =
 	| "raw_mode_active"
 	| "first_frame_committed"
 	| "runtime_hydrated"
-	| "prompt_barrier_open";
+	| "prompt_barrier_open"
+	| "first_request_dispatched"
+	| "first_tool_completed"
+	| "first_response_completed";
 
 const enabled = process.env.PI_TIMING === "1" || process.env.PI_STARTUP_BENCHMARK === "1";
 const recorded = new Set<StartupMilestoneName>();

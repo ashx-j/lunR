@@ -62,8 +62,7 @@ import {
 	shouldCompact,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
-import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
-import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
+import type { ToolHtmlRenderer } from "./export-html/index.ts";
 import {
 	type ContextUsage,
 	type ExtensionCommandContextActions,
@@ -107,6 +106,7 @@ import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import { measureStartup } from "./timings.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -2517,7 +2517,11 @@ export class AgentSession {
 			if (!handlers) continue;
 			for (const handler of handlers) {
 				try {
-					await handler(this._sessionStartEvent, ctx);
+					await measureStartup(
+						`${ext.path} session_start`,
+						() => handler(this._sessionStartEvent, ctx),
+						"lifecycle",
+					);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					const stack = err instanceof Error ? err.stack : undefined;
@@ -3531,6 +3535,10 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
+		const [{ exportSessionToHtml }, { createToolHtmlRenderer }] = await Promise.all([
+			import("./export-html/index.ts"),
+			import("./export-html/tool-renderer.ts"),
+		]);
 		const configuredThemeName = this.settingsManager.getTheme();
 		const themeName = configuredThemeName && getThemeByName(configuredThemeName) ? configuredThemeName : undefined;
 

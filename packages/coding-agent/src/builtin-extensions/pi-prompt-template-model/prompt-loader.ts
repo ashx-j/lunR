@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
+import { parseFrontmatter } from "../../utils/frontmatter.ts";
 import { parseChainDeclaration } from "./chain-parser.ts";
 
 const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;

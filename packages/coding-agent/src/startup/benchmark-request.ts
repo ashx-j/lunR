@@ -1,0 +1,59 @@
+import { createHash } from "node:crypto";
+import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentSession } from "../core/agent-session.ts";
+import { markStartupMilestone } from "./startup-milestones.ts";
+
+export function prepareBenchmarkRequest(session: AgentSession): () => Promise<void> {
+	session.setSessionName("Startup benchmark");
+	const faux = createFauxCore({ provider: "lunr-startup-benchmark" });
+	const toolUrl = process.env.PI_STARTUP_BENCHMARK_TOOL_URL;
+	if (toolUrl && new URL(toolUrl).hostname !== "127.0.0.1") throw new Error("Startup tool fixture must be local");
+	faux.setResponses([
+		(context) => {
+			markStartupMilestone("first_request_dispatched");
+			const expected = session.agent.state.tools.map((tool) => tool.name).sort();
+			const actual = context.tools?.map((tool) => tool.name).sort() ?? [];
+			if (JSON.stringify(actual) !== JSON.stringify(expected) || !context.systemPrompt) {
+				throw new Error("Startup request lost registered tools or instructions");
+			}
+			const toolSchemaHash = createHash("sha256").update(JSON.stringify(context.tools)).digest("hex");
+			process.stderr.write(
+				`LUNR_STARTUP_REQUEST ${JSON.stringify({ tools: actual, toolSchemaHash, hasSystemPrompt: true })}\n`,
+			);
+			return toolUrl
+				? fauxAssistantMessage([fauxToolCall("fetch_content", { url: toolUrl })], { stopReason: "toolUse" })
+				: fauxAssistantMessage("startup-request-ok");
+		},
+		(context) => {
+			const result = context.messages.at(-1);
+			if (
+				result?.role !== "toolResult" ||
+				result.isError ||
+				!JSON.stringify(result.content).includes("This local article verifies")
+			) {
+				throw new Error("Startup tool did not fetch the local fixture");
+			}
+			markStartupMilestone("first_tool_completed");
+			return fauxAssistantMessage("startup-request-ok");
+		},
+	]);
+	session.modelRuntime.registerProvider("lunr-startup-benchmark", {
+		api: faux.api,
+		apiKey: "local-benchmark-only",
+		models: faux.models,
+		streamSimple: faux.streamSimple,
+	});
+	session.agent.state.model = faux.getModel();
+	return async () => {
+		await session.prompt("Reply with startup-request-ok. Do not use tools.");
+		const last = session.state.messages.at(-1);
+		if (last?.role !== "assistant" || last.stopReason === "error" || faux.state.callCount !== (toolUrl ? 2 : 1)) {
+			const error = new Error(
+				`Startup benchmark did not complete its local provider request: ${last?.role === "assistant" ? (last.errorMessage ?? last.stopReason) : last?.role}, calls=${faux.state.callCount}`,
+			);
+			console.error(error.message);
+			throw error;
+		}
+		markStartupMilestone("first_response_completed");
+	};
+}

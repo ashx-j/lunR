@@ -41,8 +41,9 @@ Options:
   --help                 Show this help
 
 Notes:
-  - By default the benchmark uses your normal configured agent dir, so global models/auth/settings work.
-  - TUI mode reports input armed, first frame, and prompt barrier milestones.
+  - By default the benchmark uses a fresh isolated agent dir, home, and temp directory.
+  - TUI mode reports input armed, first frame, prompt readiness, and a local provider request.
+  It changes only the selected benchmark agent directory; prefer --isolated-agent-dir.
   - RPC mode measures startup until a real get_state request receives a response, then closes stdin to exit cleanly.
   - CPU profiles are kept in the selected profile directory for later analysis.
 `);
@@ -212,6 +213,7 @@ function summarize(values) {
 		max: sorted[sorted.length - 1],
 		avg: total / sorted.length,
 		median,
+		p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
 	};
 }
 
@@ -296,6 +298,7 @@ async function runBuild() {
  const commands = [
   ...["tui", "ai", "agent", "coding-agent"].map((pkg) => ({ executable: process.execPath, args: [tsgo, "-p", `packages/${pkg}/tsconfig.build.json`], shell: false })),
   { executable: "npm", args: ["run", "copy-assets", "--workspace", "packages/coding-agent"], shell: process.platform === "win32" },
+  { executable: process.execPath, args: [join(repoRoot, "scripts/build-node-runtime.mjs")], shell: false },
  ];
  for (const command of commands) {
   const child = spawn(command.executable, command.args, { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], shell: command.shell });
@@ -309,7 +312,7 @@ async function runBuild() {
 }
 
 function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
-	const benchmarkArgs = ["--no-session"];
+	const benchmarkArgs = ["--no-session", "--no-approve"];
 	if (mode === "rpc") {
 		benchmarkArgs.push("--mode", "rpc");
 	}
@@ -339,6 +342,14 @@ function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
 
 function createBenchmarkEnv(options, isolatedAgentDir) {
 	const env = { ...process.env };
+	const sandbox = isolatedAgentDir ?? options.agentDir;
+	if (sandbox) {
+		const home = join(sandbox, "home");
+		const temp = join(sandbox, "tmp");
+		mkdirSync(join(home, "workspace"), { recursive: true });
+		mkdirSync(temp, { recursive: true });
+		Object.assign(env, { HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, TMP: temp, TEMP: temp, TMPDIR: temp });
+	}
 	if (options.agentDir) {
 		env[agentDirEnvName] = options.agentDir;
 	} else if (isolatedAgentDir) {
@@ -365,8 +376,8 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 
 	const command = getRuntimeCommand(runtime, "tui", profileDir, profileName, options.cpuProfile);
 	const child = spawn(command.executable, command.args, {
-		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
+		cwd: isolatedAgentDir || options.agentDir ? join(isolatedAgentDir ?? options.agentDir, "home/workspace") : packageDir,
 		stdio: [process.stdin.isTTY ? "inherit" : "ignore", "ignore", "pipe"],
 		shell: process.platform === "win32" && runtime === "bun",
 	});
@@ -393,7 +404,7 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 
 		const milestones = parseStartupMilestones(stderr);
 		return {
-			elapsedMs: milestones.get("prompt_barrier_open") ?? elapsedMs,
+			elapsedMs: milestones.get("first_request_dispatched") ?? milestones.get("prompt_barrier_open") ?? elapsedMs,
 			wallElapsedMs: elapsedMs,
 			profilePath,
 			timings: parseStartupTimings(stderr),
@@ -431,8 +442,8 @@ async function runRpcBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 
 	const command = getRuntimeCommand(runtime, "rpc", profileDir, profileName, options.cpuProfile);
 	const child = spawn(command.executable, command.args, {
-		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
+		cwd: isolatedAgentDir || options.agentDir ? join(isolatedAgentDir ?? options.agentDir, "home/workspace") : packageDir,
 		stdio: ["pipe", "pipe", "pipe"],
 		shell: process.platform === "win32" && runtime === "bun",
 	});
@@ -532,6 +543,7 @@ async function main() {
 		throw new Error("--agent-dir and --isolated-agent-dir cannot be combined");
 	}
 
+	if (!options.agentDir) options.isolatedAgentDir = true;
 	const runtime = resolveRuntime(options.runtime);
 	options.label = resolveLabel(options.mode, options.label);
 	const profileDir = resolveProfileDir(runtime, options.profileDir);
@@ -610,6 +622,7 @@ async function main() {
 	process.stdout.write(`  elapsed median:   ${formatMs(elapsedSummary.median)}\n`);
 	process.stdout.write(`  elapsed avg:      ${formatMs(elapsedSummary.avg)}\n`);
 	process.stdout.write(`  elapsed max:      ${formatMs(elapsedSummary.max)}\n`);
+	process.stdout.write(`  elapsed p95:      ${formatMs(elapsedSummary.p95)}\n`);
 	for (const [label, summary] of timingSummaries.entries()) {
 		process.stdout.write(`  ${label} median: ${formatMs(summary.median)}\n`);
 	}
