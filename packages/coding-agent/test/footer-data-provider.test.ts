@@ -93,6 +93,22 @@ describe("parseGitNumstat", () => {
 });
 
 describe("FooterDataProvider reftable branch detection", () => {
+	it("refreshes the new cwd when it changes during the first lookup", async () => {
+		const first = createPlainRepo(join(tempDir, "first"));
+		const second = createPlainRepo(join(tempDir, "second"));
+		writeFileSync(join(second, ".git", "HEAD"), "ref: refs/heads/second\n");
+		const provider = new FooterDataProvider(first);
+		const branches: Array<string | null> = [];
+		provider.onBranchChange(() => branches.push(provider.getGitBranch()));
+		try {
+			expect(provider.getGitBranch()).toBeNull();
+			provider.setCwd(second);
+			await waitFor(() => branches.includes("second"));
+			expect(branches).not.toContain("main");
+		} finally {
+			provider.dispose();
+		}
+	});
 	let originalCwd: string;
 	let tempDir: string;
 

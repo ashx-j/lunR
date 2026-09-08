@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { Agent, type AgentTool, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { createReadOnlyTools, convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createReadOnlyTools } from "../../../../core/tools/index.ts";
+import { convertToLlm } from "../../../../core/messages.ts";
 import { streamSimple, type Model } from "@earendil-works/pi-ai/compat";
 import { Type, type Static } from "typebox";
 import { resolveModelCandidate } from "../runs/shared/model-fallback.ts";

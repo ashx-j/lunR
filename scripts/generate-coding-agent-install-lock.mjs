@@ -210,22 +210,46 @@ function addInternalWorkspace(installLockPackages, addedPaths, queue, name, work
 	addedPaths.add(outputPath);
 
 	for (const dependencyName of Object.keys(packageDependencies(packageJson))) {
-		queue.push({ name: dependencyName, from: outputPath });
+		queue.push({
+			name: dependencyName,
+			sourceFrom: workspace.lockPath,
+			sourceRoot: workspace.lockPath,
+			outputRoot: outputPath,
+		});
 	}
 }
 
-function addExternalPackage(lockPackages, installLockPackages, addedPaths, queue, name, from) {
-	const lockPath = resolveExternalDependency(lockPackages, name, from);
-	if (addedPaths.has(lockPath)) {
+function mapLockPathToInstallPath(lockPath, sourceRoot, outputRoot) {
+	if (!sourceRoot) {
+		return lockPath;
+	}
+
+	const sourcePrefix = `${sourceRoot}/node_modules/`;
+	if (!lockPath.startsWith(sourcePrefix)) {
+		return lockPath;
+	}
+
+	return `${outputRoot}/node_modules/${lockPath.slice(sourcePrefix.length)}`;
+}
+
+function addExternalPackage(lockPackages, installLockPackages, addedPaths, queue, name, item) {
+	const lockPath = resolveExternalDependency(lockPackages, name, item.sourceFrom);
+	const outputPath = mapLockPathToInstallPath(lockPath, item.sourceRoot, item.outputRoot);
+	if (addedPaths.has(outputPath)) {
 		return;
 	}
 
 	const entry = lockPackages[lockPath];
-	installLockPackages[lockPath] = copyLockEntry(entry);
-	addedPaths.add(lockPath);
+	installLockPackages[outputPath] = copyLockEntry(entry);
+	addedPaths.add(outputPath);
 
 	for (const dependencyName of Object.keys(packageDependencies(entry))) {
-		queue.push({ name: dependencyName, from: lockPath });
+		queue.push({
+			name: dependencyName,
+			sourceFrom: lockPath,
+			sourceRoot: item.sourceRoot,
+			outputRoot: item.outputRoot,
+		});
 	}
 }
 
@@ -371,7 +395,12 @@ function generateInstallLock() {
 	};
 	const addedPaths = new Set([""]);
 	const internalNames = new Set();
-	const queue = Object.keys(packageDependencies(installerPackageJson)).map((name) => ({ name, from: "" }));
+	const queue = Object.keys(packageDependencies(installerPackageJson)).map((name) => ({
+		name,
+		sourceFrom: "",
+		sourceRoot: "",
+		outputRoot: "",
+	}));
 
 	while (queue.length > 0) {
 		const item = queue.shift();
@@ -389,7 +418,7 @@ function generateInstallLock() {
 			continue;
 		}
 
-		addExternalPackage(lockPackages, installLockPackages, addedPaths, queue, item.name, item.from);
+		addExternalPackage(lockPackages, installLockPackages, addedPaths, queue, item.name, item);
 	}
 
 	const installLock = {

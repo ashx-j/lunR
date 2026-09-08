@@ -12,12 +12,10 @@ import { lightBuiltinExtensions, loadAllBuiltinExtensions } from "./builtin-exte
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
-import { handleInstallCli } from "./cli/install-cli.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { handleUpdateCli } from "./cli/update-cli.ts";
 import {
 	APP_NAME,
 	appendDebugLog,
@@ -59,8 +57,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
-import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
-import type { InteractiveStartupShell } from "./startup/interactive-shell.ts";
+import type { InteractiveView } from "./startup/interactive-view.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
@@ -244,9 +241,9 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 }
 
 /** Prompt user for yes/no confirmation */
-async function promptConfirm(message: string, startupShell?: InteractiveStartupShell): Promise<boolean> {
-	if (startupShell) {
-		return startupShell.confirm("Confirm", message);
+async function promptConfirm(message: string, startupView?: InteractiveView): Promise<boolean> {
+	if (startupView) {
+		return startupView.confirm("Confirm", message);
 	}
 	return new Promise((resolve) => {
 		const rl = createInterface({
@@ -324,7 +321,7 @@ async function createSessionManager(
 	cwd: string,
 	sessionDir: string | undefined,
 	settingsManager: SettingsManager,
-	startupShell?: InteractiveStartupShell,
+	startupView?: InteractiveView,
 ): Promise<SessionManager> {
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -363,7 +360,7 @@ async function createSessionManager(
 
 			case "global": {
 				console.log(chalk.yellow(`Session found in different project: ${resolved.cwd}`));
-				const shouldFork = await promptConfirm("Fork this session into current directory?", startupShell);
+				const shouldFork = await promptConfirm("Fork this session into current directory?", startupView);
 				if (!shouldFork) {
 					console.log(chalk.dim("Aborted."));
 					process.exit(0);
@@ -383,8 +380,8 @@ async function createSessionManager(
 				SessionManager.list(cwd, sessionDir, onProgress);
 			const allSessionsLoader = (onProgress?: Parameters<typeof SessionManager.listAll>[1]) =>
 				SessionManager.listAll(sessionDir, onProgress);
-			const selectedPath = startupShell
-				? await startupShell.selectSession(currentSessionsLoader, allSessionsLoader)
+			const selectedPath = startupView
+				? await startupView.selectSession(currentSessionsLoader, allSessionsLoader)
 				: await selectSession(currentSessionsLoader, allSessionsLoader, settingsManager);
 			if (!selectedPath) {
 				console.log(chalk.dim("No session selected"));
@@ -517,19 +514,19 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 	return paths?.map((value) => (isLocalPath(value) ? resolvePath(value, cwd) : value));
 }
 
-function createStartupShellTrustContext(cwd: string, startupShell: InteractiveStartupShell): ProjectTrustContext {
+function createStartupViewTrustContext(cwd: string, startupView: InteractiveView): ProjectTrustContext {
 	return {
 		cwd,
 		mode: "tui",
 		hasUI: true,
 		ui: {
 			select: (title, options) =>
-				startupShell.select(
+				startupView.select(
 					title,
 					options.map((option) => ({ label: option, value: option })),
 				),
-			confirm: (title, message) => startupShell.confirm(title, message),
-			input: (title, placeholder) => startupShell.input(title, placeholder),
+			confirm: (title, message) => startupView.confirm(title, message),
+			input: (title, placeholder) => startupView.input(title, placeholder),
 			notify: () => {},
 		},
 	};
@@ -538,20 +535,20 @@ function createStartupShellTrustContext(cwd: string, startupShell: InteractiveSt
 async function promptForMissingSessionCwd(
 	issue: SessionCwdIssue,
 	settingsManager: SettingsManager,
-	startupShell?: InteractiveStartupShell,
+	startupView?: InteractiveView,
 ): Promise<string | undefined> {
 	const options = [
 		{ label: "Continue", value: issue.fallbackCwd },
 		{ label: "Cancel", value: undefined },
 	];
-	return startupShell
-		? startupShell.select(formatMissingSessionCwdPrompt(issue), options)
+	return startupView
+		? startupView.select(formatMissingSessionCwdPrompt(issue), options)
 		: showStartupSelector(settingsManager, formatMissingSessionCwdPrompt(issue), options);
 }
 
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
-	startupShell?: InteractiveStartupShell;
+	startupView?: InteractiveView;
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -567,22 +564,23 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (await handleInstallCli(args)) {
-		return;
+	if (["setup", "features", "uninstall"].includes(args[0])) {
+		const { handleInstallCli } = await import("./cli/install-cli.ts");
+		if (await handleInstallCli(args)) return;
 	}
 
-	if (await handleUpdateCli(args)) {
-		return;
+	if (args[0] === "update") {
+		const { handleUpdateCli } = await import("./cli/update-cli.ts");
+		if (await handleUpdateCli(args)) return;
 	}
 
-	if (await handlePackageCommand(args, { extensionFactories: options?.extensionFactories })) {
-		const exitCode = process.exitCode ?? 0;
-		process.exit(exitCode);
-		return;
-	}
-
-	if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) {
-		return;
+	if (["install", "remove", "uninstall", "list", "config"].includes(args[0])) {
+		const { handleConfigCommand, handlePackageCommand } = await import("./package-manager-cli.ts");
+		if (await handlePackageCommand(args, { extensionFactories: options?.extensionFactories })) {
+			process.exit(process.exitCode ?? 0);
+			return;
+		}
+		if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) return;
 	}
 
 	if (args[0] === "gateway") {
@@ -625,8 +623,8 @@ export async function main(args: string[], options?: MainOptions) {
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
 	const interactiveModeImport =
 		appMode === "interactive" ? import("./modes/interactive/interactive-mode.ts") : undefined;
-	const startupShell = appMode === "interactive" ? options?.startupShell : undefined;
-	if (options?.startupShell && !startupShell) options.startupShell.stop();
+	const startupView = appMode === "interactive" ? options?.startupView : undefined;
+	if (options?.startupView && !startupView) options.startupView.stop();
 	// lunr: parent-delegated children inherit plan or auto before any tool call.
 	// Non-child print/json stays fail-closed (module default manual, no handler).
 	applyInheritedSubagentPermissions();
@@ -664,9 +662,9 @@ export async function main(args: string[], options?: MainOptions) {
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
-		startupShell?.pause();
+		startupView?.pause();
 		await showFirstTimeSetup(startupSettingsManager);
-		startupShell?.resume();
+		startupView?.resume();
 		time("firstTimeSetup");
 	}
 
@@ -680,14 +678,14 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager, startupShell);
+	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager, startupView);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
 			const selectedCwd = await promptForMissingSessionCwd(
 				missingSessionCwdIssue,
 				startupSettingsManager,
-				startupShell,
+				startupView,
 			);
 			if (!selectedCwd) {
 				process.exit(0);
@@ -792,8 +790,8 @@ export async function main(args: string[], options?: MainOptions) {
 								extensionsResult,
 								projectTrustContext:
 									projectTrustContext ??
-									(isInitialRuntime && startupShell
-										? createStartupShellTrustContext(cwd, startupShell)
+									(isInitialRuntime && startupView
+										? createStartupViewTrustContext(cwd, startupView)
 										: createProjectTrustContext({
 												cwd,
 												mode: isInitialRuntime ? trustPromptMode : appMode,
@@ -906,7 +904,7 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager,
 		onRuntimeApplied: bindRuntimeBridges,
 	});
-	if (startupShell?.isExitRequested) {
+	if (startupView?.isExitRequested) {
 		await runtime.dispose();
 		return;
 	}
@@ -953,20 +951,21 @@ export async function main(args: string[], options?: MainOptions) {
 	initTheme(settingsManager.getTheme(), appMode === "interactive");
 	time("initTheme");
 
-	if (appMode === "interactive" && !startupShell && deprecationWarnings.length > 0) {
+	if (appMode === "interactive" && !startupView && deprecationWarnings.length > 0) {
 		await showDeprecationWarnings(deprecationWarnings);
 	}
 
 	time("resolveModelScope");
-	if (!(appMode === "interactive" && startupShell)) reportDiagnostics(runtime.diagnostics);
+	if (!(appMode === "interactive" && startupView)) reportDiagnostics(runtime.diagnostics);
 	if (runtime.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
 		const extensionHint = runtime.diagnostics.some((diagnostic) =>
 			diagnostic.message.includes("Failed to load extension"),
 		)
 			? `\n${EXTENSION_LOAD_FAILURE_HINT}`
 			: "";
-		if (startupShell) {
-			await startupShell.fail(
+		if (startupView) {
+			process.exitCode = 1;
+			await startupView.fail(
 				`${runtime.diagnostics.map((diagnostic) => diagnostic.message).join("\n")}${extensionHint}`,
 			);
 			return;
@@ -991,7 +990,7 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
-		const [{ InteractiveMode }, { loadDeferredBuiltinExtensionsResult }] = await Promise.all([
+		const [{ InteractiveMode }, { loadDeferredBuiltinExtensions }] = await Promise.all([
 			interactiveModeImport!,
 			import("./builtin-extensions/index.ts"),
 		]);
@@ -1003,21 +1002,27 @@ export async function main(args: string[], options?: MainOptions) {
 			initialImages,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
-			deprecationWarnings: startupShell ? deprecationWarnings : undefined,
-			startupDiagnostics: startupShell
+			deprecationWarnings: startupView ? deprecationWarnings : undefined,
+			startupDiagnostics: startupView
 				? runtime.diagnostics.filter((diagnostic) => diagnostic.type !== "error")
 				: undefined,
-			startupShellBinding: startupShell?.binding(),
+			startupView: startupView?.binding(),
 			deferredMaintenance: runSessionRetention,
-			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensionsResult,
+			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensions,
 			onDeferredBuiltinsAttached: rememberAttachedFactories,
 		});
 		if (startupBenchmark) {
+			const { prepareBenchmarkRequest } = await import("./startup/benchmark-request.ts");
+			const request = await prepareBenchmarkRequest(session);
 			await interactiveMode.init();
 			time("interactiveMode.init");
-			await interactiveMode.waitForPromptBarrier();
+			await interactiveMode.waitForStartupReady();
 			time("promptBarrier");
+			await request();
+			// Consume terminal-query replies before returning control to the shell.
+			await new Promise((resolve) => setTimeout(resolve, 150));
 			interactiveMode.stop();
+			await runtime.dispose();
 			stopThemeWatcher();
 			printTimings();
 			if (process.stdout.writableLength > 0) {

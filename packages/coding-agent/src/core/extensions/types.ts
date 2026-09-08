@@ -596,7 +596,7 @@ export interface SessionBeforeCompactEvent {
 	customInstructions?: string;
 	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
 	reason: "manual" | "threshold" | "overflow";
-	/** True when the aborted turn is retried after this compaction (overflow recovery) */
+	/** True when the active run sends another provider request after compaction */
 	willRetry: boolean;
 	signal: AbortSignal;
 }
@@ -608,7 +608,7 @@ export interface SessionCompactEvent {
 	fromExtension: boolean;
 	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
 	reason: "manual" | "threshold" | "overflow";
-	/** True when the aborted turn is retried after this compaction (overflow recovery) */
+	/** True when the active run sends another provider request after compaction */
 	willRetry: boolean;
 }
 

@@ -7,6 +7,7 @@
  */
 
 import type { ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
+import { measureStartup } from "../core/timings.ts";
 
 import simplePiMemory from "./simple-pi-memory.ts";
 import piTps from "./pi-tps.ts";
@@ -43,17 +44,10 @@ export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("lunr-settings-tools", lunrSettingsTools),
 ];
 
-export interface DeferredBuiltinLoader {
+const DEFERRED_BUILTIN_LOADERS: Array<{
 	name: string;
 	load: () => Promise<{ default: unknown }>;
-}
-
-export interface DeferredBuiltinLoadResult {
-	extensions: InlineExtension[];
-	failures: Array<{ name: string; error: Error }>;
-}
-
-const DEFERRED_BUILTIN_LOADERS: DeferredBuiltinLoader[] = [
+}> = [
 	{ name: "pi-ollama-cloud", load: () => import("./pi-ollama-cloud/index.ts") },
 	{ name: "narumiruna-pi-goal", load: () => import("./narumiruna-pi-goal/src/goal.ts") },
 	{ name: "lunr-cron", load: () => import("./lunr-cron.ts") },
@@ -70,34 +64,15 @@ export const DEFERRED_BUILTIN_EXTENSION_NAMES = DEFERRED_BUILTIN_LOADERS.map((en
 /** Flags registered only after deferred builtins attach. Do not fail CLI parse for these. */
 export const DEFERRED_BUILTIN_FLAGS = ["mcp-config"] as const;
 
-export async function loadDeferredBuiltinExtensionsResult(
-	loaders: readonly DeferredBuiltinLoader[] = DEFERRED_BUILTIN_LOADERS,
-): Promise<DeferredBuiltinLoadResult> {
-	const settled = await Promise.allSettled(loaders.map(({ load }) => load()));
-	const extensions: InlineExtension[] = [];
-	const failures: Array<{ name: string; error: Error }> = [];
-	for (const [index, result] of settled.entries()) {
-		const name = loaders[index].name;
-		if (result.status === "fulfilled") {
-			extensions.push(ext(name, result.value.default));
-			continue;
-		}
-		const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
-		failures.push({ name, error });
-	}
-	return { extensions, failures };
-}
-
-/** Non-interactive modes require the complete builtin roster before their first turn. */
+/** Import MCP / LSP / web-access / intercom / subagents only when needed. */
 export async function loadDeferredBuiltinExtensions(): Promise<InlineExtension[]> {
-	const result = await loadDeferredBuiltinExtensionsResult();
-	if (result.failures.length > 0) {
-		throw new AggregateError(
-			result.failures.map(({ error }) => error),
-			`Failed to import deferred builtins: ${result.failures.map(({ name }) => name).join(", ")}`,
-		);
-	}
-	return result.extensions;
+	const loaded = await Promise.all(
+		DEFERRED_BUILTIN_LOADERS.map(async ({ name, load }) => {
+			const module = await measureStartup(name, load, "imports");
+			return ext(name, module.default);
+		}),
+	);
+	return loaded;
 }
 
 /** Full roster. Print / RPC / gateway still need every factory before the first turn. */

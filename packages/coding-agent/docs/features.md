@@ -23,7 +23,6 @@ Advertised subagents always start **fresh** (no forked parent context). Default 
 
 A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **manual and yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
 
-
 `/goal` sets a session goal and **forces session auto** permission mode.
 
 ## Todos, memory, and global instructions

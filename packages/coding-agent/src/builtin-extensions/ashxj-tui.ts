@@ -540,9 +540,30 @@ function buildChip(ctx: ExtensionContextLike, pi: ExtensionAPI): { left: string;
 // The prompt box — `ChatboxEditor extends CustomEditor`
 // ---------------------------------------------------------------------------
 
-class ChatboxEditor extends CustomEditor {
-	private readonly ctx: ExtensionContextLike;
-	private readonly pi: ExtensionAPI;
+export class ChatboxEditor extends CustomEditor {
+	private ctx: ExtensionContextLike;
+	private pi: ExtensionAPI;
+
+	bind(ctx: ExtensionContextLike, pi: ExtensionAPI): void {
+		this.ctx = ctx;
+		this.pi = pi;
+	}
+
+	/** Keep the displayed values while /new or /resume replaces the old runtime. */
+	unbind(): void {
+		const level = this.pi.getThinkingLevel();
+		this.bind(
+			{
+				mode: "tui",
+				hasUI: true,
+				model: this.ctx.model,
+				sessionManager: { getEntries: () => [] },
+				getContextUsage: () => undefined,
+				ui: { theme: this.ctx.ui?.theme, setEditorComponent() {}, setFooter() {} },
+			},
+			{ getThinkingLevel: () => level, on() {} },
+		);
+	}
 
 	constructor(
 		tui: TUIHandle,
@@ -778,12 +799,32 @@ export function renderStatsLine(
 // Install / teardown
 // ---------------------------------------------------------------------------
 
+const chatboxEditors = new WeakMap<TUIHandle, ChatboxEditor>();
+
+/** The startup view and extension bind the same editor, preserving its complete draft state. */
+export function getChatboxEditor(
+	tui: TUIHandle,
+	theme: EditorThemeLike,
+	keybindings: KeybindingsLike,
+	ctx: ExtensionContextLike,
+	pi: ExtensionAPI,
+): ChatboxEditor {
+	let editor = chatboxEditors.get(tui);
+	if (editor) editor.bind(ctx, pi);
+	else {
+		editor = new ChatboxEditor(tui, theme, keybindings, ctx, pi);
+		chatboxEditors.set(tui, editor);
+	}
+	return editor;
+}
+
 function installEditor(
 	ctx: ExtensionContextLike,
 	pi: ExtensionAPI,
 	setRequestor: (r: () => void) => void,
-): void {
+): (() => void) | undefined {
 	if (typeof ctx.ui.setEditorComponent !== "function") return;
+	let editor: ChatboxEditor | undefined;
 	const factory: EditorFactoryLike = (tui, _theme, _keybindings) => {
 		setRequestor(() => {
 			try {
@@ -792,9 +833,11 @@ function installEditor(
 				/* ignore */
 			}
 		});
-		return new ChatboxEditor(tui, _theme, _keybindings, ctx, pi);
+		editor = getChatboxEditor(tui, _theme, _keybindings, ctx, pi);
+		return editor;
 	};
 	ctx.ui.setEditorComponent(factory);
+	return () => editor?.unbind();
 }
 
 function installFooter(
@@ -832,6 +875,7 @@ function installFooter(
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI): void {
+	let unbindEditor: (() => void) | undefined;
 	let renderRequestor: (() => void) | undefined = undefined;
 	const requestRender = (): void => {
 		try {
@@ -843,7 +887,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI || ctx.mode !== "tui") return;
-		installEditor(ctx, pi, (r) => {
+		unbindEditor = installEditor(ctx, pi, (r) => {
 			renderRequestor = r;
 		});
 		installFooter(ctx, (r) => {
@@ -852,6 +896,8 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		unbindEditor?.();
+		unbindEditor = undefined;
 		try {
 			if (typeof ctx.ui?.setEditorComponent === "function") ctx.ui.setEditorComponent(undefined);
 		} catch {

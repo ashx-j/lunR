@@ -62,6 +62,8 @@ export function getAssistantTexts(harness: Harness): string[] {
 
 export interface HarnessOptions {
 	models?: FauxModelDefinition[];
+	provider?: string;
+	api?: string;
 	settings?: Partial<Settings>;
 	systemPrompt?: string;
 	tools?: AgentTool[];
@@ -101,6 +103,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const tempDir = createTempDir();
 	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
 		models: options.models,
+		provider: options.provider,
+		api: options.api,
 	});
 	fauxProvider.setResponses([]);
 	const model = fauxProvider.getModel();

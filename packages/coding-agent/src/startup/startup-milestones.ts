@@ -10,16 +10,18 @@ export type StartupMilestoneName =
 	| "first_frame_committed"
 	| "runtime_hydrated"
 	| "prompt_barrier_open"
-	| "deferred_maintenance_idle"
-	| "first_provider_request_started";
+	| "first_request_dispatched"
+	| "first_tool_completed"
+	| "first_response_completed";
 
 const enabled = process.env.PI_TIMING === "1" || process.env.PI_STARTUP_BENCHMARK === "1";
-const startedAt = performance.now();
 const recorded = new Set<StartupMilestoneName>();
 
 export function markStartupMilestone(name: StartupMilestoneName): void {
 	if (!enabled || recorded.has(name)) return;
 	recorded.add(name);
-	const ms = name === "process_entry" ? 0 : performance.now() - startedAt;
+	// performance.now() includes Node's entry-module loading, before this module
+	// could start its own timer. Report time since process start, not import end.
+	const ms = performance.now();
 	process.stderr.write(`${STARTUP_MILESTONE_PREFIX}${JSON.stringify({ name, ms: Number(ms.toFixed(3)) })}\n`);
 }

@@ -45,7 +45,6 @@ import {
 } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
-import { markStartupMilestone } from "../startup/startup-milestones.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
@@ -63,8 +62,7 @@ import {
 	shouldCompact,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
-import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
-import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
+import type { ToolHtmlRenderer } from "./export-html/index.ts";
 import {
 	type ContextUsage,
 	type ExtensionCommandContextActions,
@@ -99,7 +97,6 @@ import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-in
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { gateToolCall } from "./permissions.ts";
-import { isExplicitSwarmTurn } from "./swarm.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
@@ -109,6 +106,7 @@ import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import { measureStartup } from "./timings.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -324,6 +322,7 @@ export class AgentSession {
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
+	private _manualCompactionPromise: Promise<CompactionResult> | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
 
@@ -492,8 +491,6 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
-			const explicitSwarmTurn =
-				toolCall.name === "subagent" ? isExplicitSwarmTurn(this.sessionManager.getBranch()) : undefined;
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
@@ -501,7 +498,6 @@ export class AgentSession {
 				this.sessionId,
 				{
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
-					explicitSwarmTurn,
 					assistantMessage,
 				},
 			);
@@ -599,7 +595,21 @@ export class AgentSession {
 				: undefined);
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
-			const previousContext = previousSnapshot?.context ?? turn.context;
+			let previousContext = previousSnapshot?.context ?? turn.context;
+			const model = this.model;
+			const settings = this.settingsManager.getCompactionSettings();
+			if (
+				model?.provider === "openai-codex" &&
+				settings.enabled &&
+				shouldCompact(estimateContextTokens(previousContext.messages).tokens, model.contextWindow, settings)
+			) {
+				const previousCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+				await this._runAutoCompaction("threshold", true);
+				const currentCompaction = getLatestCompactionEntry(this.sessionManager.getBranch());
+				if (currentCompaction && currentCompaction.id !== previousCompactionId) {
+					previousContext = { ...previousContext, messages: this.agent.state.messages.slice() };
+				}
+			}
 
 			return {
 				...previousSnapshot,
@@ -1200,7 +1210,6 @@ export class AgentSession {
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._isAgentRunActive = true;
 		try {
-			markStartupMilestone("first_provider_request_started");
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
 				await this.agent.continue();
@@ -1955,14 +1964,46 @@ export class AgentSession {
 	// Compaction
 	// =========================================================================
 
+	private _latestCompactionResult(): CompactionResult | undefined {
+		const pathEntries = this.sessionManager.getBranch();
+		const lastEntry = pathEntries[pathEntries.length - 1];
+		if (lastEntry?.type !== "compaction") return undefined;
+		return {
+			summary: lastEntry.summary,
+			firstKeptEntryId: lastEntry.firstKeptEntryId,
+			tokensBefore: lastEntry.tokensBefore,
+			estimatedTokensAfter: estimateMessagesTokens(this.sessionManager.buildSessionContext().messages),
+			details: lastEntry.details,
+		};
+	}
+
 	/**
 	 * Manually compact the session context.
 	 * Aborts current agent operation first.
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
+		const existing = this._latestCompactionResult();
+		if (existing) return existing;
+		if (this._manualCompactionPromise) return this._manualCompactionPromise;
+
+		const promise = this._compact(customInstructions);
+		this._manualCompactionPromise = promise;
+		try {
+			return await promise;
+		} finally {
+			if (this._manualCompactionPromise === promise) this._manualCompactionPromise = undefined;
+		}
+	}
+
+	private async _compact(customInstructions?: string): Promise<CompactionResult> {
 		this._disconnectFromAgent();
 		await this.abort();
+		const existing = this._latestCompactionResult();
+		if (existing) {
+			this._reconnectToAgent();
+			return existing;
+		}
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
 
@@ -2219,14 +2260,11 @@ export class AgentSession {
 	 * Internal: Run auto-compaction with events.
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		if (!this.model || this._compactionAbortController || this._autoCompactionAbortController) return false;
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 
 		try {
-			if (!this.model) {
-				return false;
-			}
-
 			let apiKey: string | undefined;
 			let headers: Record<string, string> | undefined;
 			let env: Record<string, string> | undefined;
@@ -2479,7 +2517,11 @@ export class AgentSession {
 			if (!handlers) continue;
 			for (const handler of handlers) {
 				try {
-					await handler(this._sessionStartEvent, ctx);
+					await measureStartup(
+						`${ext.path} session_start`,
+						() => handler(this._sessionStartEvent, ctx),
+						"lifecycle",
+					);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					const stack = err instanceof Error ? err.stack : undefined;
@@ -3493,6 +3535,10 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
+		const [{ exportSessionToHtml }, { createToolHtmlRenderer }] = await Promise.all([
+			import("./export-html/index.ts"),
+			import("./export-html/tool-renderer.ts"),
+		]);
 		const configuredThemeName = this.settingsManager.getTheme();
 		const themeName = configuredThemeName && getThemeByName(configuredThemeName) ? configuredThemeName : undefined;
 
