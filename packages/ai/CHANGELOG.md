@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-09-08
+
+### Fixed
+
+- Codex model discovery uses `context_window` as the operating limit and does not promote `max_context_window` to the default.
+
 ## [0.2.15] - 2026-09-05
 
 ## [0.2.14] - 2026-09-05

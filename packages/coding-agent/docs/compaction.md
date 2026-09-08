@@ -34,7 +34,9 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.lunr/agent/settings.json` or `<project-dir>/.lunr/settings.json`). This leaves room for the LLM's response.
 
-You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
+For Codex OAuth models, lunR checks the threshold after each complete batch of tool results. If the batch crosses the threshold, lunR compacts before sending the next provider request.
+
+You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary. Running `/compact` again at an unchanged compaction boundary is a no-op.
 
 ### How It Works
 
@@ -114,7 +116,7 @@ Valid cut points are:
 - BashExecution messages
 - Custom messages (custom_message, branch_summary)
 
-Never cut at tool results (they must stay with their tool call).
+Never cut at tool results (they must stay with their tool call). If the recent-token budget lands on a tool result, lunR keeps the assistant message containing its tool call.
 
 ### CompactionEntry Structure
 
@@ -288,7 +290,7 @@ pi.on("session_before_compact", async (event, ctx) => {
 
   // branchEntries - all entries on current branch (for custom state)
   // reason - "manual" (/compact), "threshold", or "overflow"
-  // willRetry - whether the aborted turn is retried after compaction (overflow recovery)
+  // willRetry - whether the active run sends another provider request after compaction
   // signal - AbortSignal (pass to LLM calls)
 
   // Cancel:
