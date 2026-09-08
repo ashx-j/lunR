@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-08 (v0.2.16 on `release/v0.2.16`). Public npm is `@ashx-j/lunr@0.2.15` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.16`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.16:** ships the Codex context and compaction fixes below.
 - **Codex context + compaction:** all current baked Codex windows match their default route limits: Spark is **128000**; GPT-5.4, 5.5, 5.6 variants, and Astra are **272000**. Live discovery uses `context_window` only; `max_context_window` never becomes the default budget. Codex checks compaction after complete tool-result batches, before the next provider request. Repeated manual compaction at the same boundary is a no-op. Tests: openai-thinking + codex-catalog + compaction + agent-session-compaction.
@@ -89,7 +89,7 @@ Last updated: 2026-09-08 (v0.2.16 on `release/v0.2.16`). Public npm is `@ashx-j/
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.15**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.16**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
