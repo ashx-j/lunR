@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-08 (v0.2.15 on `release/v0.2.15`). Public npm is still `@ashx-j/lunr@0.2.14` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-08 (v0.2.16 on `release/v0.2.16`). Public npm is `@ashx-j/lunr@0.2.15` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.16:** ships the Codex context and compaction fixes below.
 - **Codex context + compaction:** all current baked Codex windows match their default route limits: Spark is **128000**; GPT-5.4, 5.5, 5.6 variants, and Astra are **272000**. Live discovery uses `context_window` only; `max_context_window` never becomes the default budget. Codex checks compaction after complete tool-result batches, before the next provider request. Repeated manual compaction at the same boundary is a no-op. Tests: openai-thinking + codex-catalog + compaction + agent-session-compaction.
 - **v0.2.15:** ports lunr-dev settings work onto master without #41's temporary startup shell. `/settings` gains Model instructions and Confirm large subagent launches. Global instructions move to `~/.lunr/agent/agents/AGENTS.md` with optional per-model files. `settings_load` injects four narrow settings tools. Enabled model tiers require `light`/`standard`/`heavy` on every child (no inherit, no child `model`). `/swarm` is removed. Real TUI first paint from 0.2.14 stays. PR #41 reliability (terminal sanitization, rollback symlink, orchestrator timeouts) remains unshipped.
 - **v0.2.14:** ships the autonomous catalog, real TUI first paint, VS Code `/paste-image`, offline CI/release builds, exact coding-agent dependencies, and workspace-aware standalone installer locks. PR #41 was closed because #45 superseded its startup shell.
@@ -88,7 +89,7 @@ Last updated: 2026-09-08 (v0.2.15 on `release/v0.2.15`). Public npm is still `@a
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.14**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.15**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -102,7 +103,7 @@ Last updated: 2026-09-08 (v0.2.15 on `release/v0.2.15`). Public npm is still `@a
 
 ## Build & run
 
-- Codex context + compaction (2026-09-08): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 58/58 with 7 skipped; AI passes 17/17. Touched-file Biome and `git diff --check` pass. Rebuilt `npx lunr --version` reports 0.2.15; print mode returned `compaction-smoke-ok` before the known timeout exit 124.
+- v0.2.16 release (2026-09-08): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 58/58 with 7 skipped; AI passes 17/17. Touched-file Biome, relative-import, workflow-publish, browser smoke, and `git diff --check` pass; the repository-wide Biome and pinned-dependency checks retain known findings in unrelated tracked files and gitignored study trees. All four public-package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.16; print mode returned `release-0.2.16-ok` before the known timeout exit 124.
 - v0.2.14 release (2026-09-05): offline tui → ai → agent → coding-agent → orchestrator build passes at 0.2.14; focused AI catalog tests pass 42/42 and coding-agent catalog/startup/image-paste tests pass 140/140. Stalled/failed-runtime first-paint checks and all four public-package dry-run packs pass; generated shrinkwrap and installer locks are current.
 - Real TUI first paint (2026-09-05): all five offline tsgo builds pass. Focused startup/footer/input/theme/feature tests pass; the expanded run retains 14 failures reproduced against master's entrypoints and interactive module, comprising 12 Windows resource-list assertions and 2 native source-launch `.js` resolution failures. The built-CLI stalled/failing-runtime checks pass. Three isolated moon launches wrote the first content frame at 94.8–95.3ms; three warm launches at 96.6–99.1ms. Feature readiness was 2.01–2.43s. These include Node entry loading and measure content writes, without measuring terminal compositor latency or compiled Bun binaries.
 
@@ -112,7 +113,7 @@ Last updated: 2026-09-08 (v0.2.15 on `release/v0.2.15`). Public npm is still `@a
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / published CLI → **0.2.13**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / workspace CLI → **0.2.16**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` uses the workspace bin (`packages/coding-agent/dist/cli.js`); rebuild coding-agent `dist` first. The startup benchmark reports first content frame separately from runtime and feature readiness.

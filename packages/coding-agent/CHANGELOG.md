@@ -1,8 +1,14 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.15`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.16`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.16] - 2026-09-08
+
+### Fixed
+
+- **Codex context and compaction.** Codex OAuth uses each route's advertised default context window instead of its optional maximum. Current 272k routes compact around 255,616 tokens with the default reserve. lunR checks again after complete tool-result batches, before the next provider request. Repeated `/compact` calls at the same boundary are harmless, and the TUI waits for the active turn to settle before rebuilding compacted history.
 
 ## [0.2.15] - 2026-09-05
 
