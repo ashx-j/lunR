@@ -219,6 +219,7 @@ export class FooterDataProvider {
 		this.cachedBranch = undefined;
 		this.cachedDiffstat = undefined;
 		this.gitPaths = undefined;
+		if (this.refreshInFlight) this.refreshPending = true;
 		this.notifyBranchChange();
 	}
 

@@ -4,7 +4,9 @@
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { getMarkdownTheme, keyText, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme } from "../../../../modes/interactive/theme/theme.ts";
+import { keyText } from "../../../../modes/interactive/components/keybinding-hints.ts";
 import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
 	type AgentProgress,

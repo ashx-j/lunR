@@ -3,10 +3,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum, complete, type Model } from "@earendil-works/pi-ai/compat";
-import { fetchAllContent, type ExtractedContent } from "./extract.ts";
+import type { ExtractedContent } from "./extract.ts";
 import { normalizeFetchContentParams } from "./fetch-params.ts";
-import { clearCloneCache } from "./github-extract.ts";
-import { search, type SearchProvider, type ResolvedSearchProvider } from "./gemini-search.ts";
+import type { SearchProvider, ResolvedSearchProvider } from "./gemini-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { getWebSearchConfigDir, getWebSearchConfigPath } from "./utils.ts";
 import {
@@ -21,12 +20,10 @@ import {
 	type StoredSearchData,
 } from "./storage.ts";
 import { activityMonitor, type ActivityEntry } from "./activity.ts";
-import { startCuratorServer, type CuratorServerHandle } from "./curator-server.ts";
-import {
-	buildDeterministicSummary,
-	generateSummaryDraft,
-	type SummaryGenerationContext,
-	type SummaryMeta,
+import type { CuratorServerHandle } from "./curator-server.ts";
+import type {
+	SummaryGenerationContext,
+	SummaryMeta,
 } from "./summary-review.ts";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -34,15 +31,22 @@ import { createRequire } from "node:module";
 import { platform } from "node:os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { isPerplexityAvailable } from "./perplexity.ts";
-import { isExaAvailable } from "./exa.ts";
-import { isGeminiApiAvailable } from "./gemini-api.ts";
-import { getActiveGoogleEmail, isGeminiWebAvailable } from "./gemini-web.ts";
 import { isBrowserCookieAccessAllowed } from "./gemini-web-config.ts";
-import { isBraveAvailable } from "./brave.ts";
-import { isOpenAISearchAvailable } from "./openai-search.ts";
-import { isParallelAvailable } from "./parallel.ts";
-import { isTavilyAvailable } from "./tavily.ts";
+import {
+	loadBrave,
+	loadCuratorServer,
+	loadExa,
+	loadExtract,
+	loadGeminiApi,
+	loadGeminiSearch,
+	loadGeminiWeb,
+	loadOpenAISearch,
+	loadParallel,
+	loadPerplexity,
+	loadSummaryReview,
+	loadTavily,
+} from "./lazy.ts";
+import { runSessionCleanups } from "./session-cleanup.ts";
 import { buildSearchErrorPlan, type SearchErrorDetails, type SearchErrorPlan } from "./render-search-error.ts";
 import {
 	collectFetchUrls,
@@ -191,15 +195,38 @@ function getCuratorTimeoutSeconds(): number {
 }
 
 async function getProviderAvailability(ctx: ExtensionContext): Promise<ProviderAvailability> {
-	const geminiWebAvail = await isGeminiWebAvailable();
+	const [
+		openaiMod,
+		braveMod,
+		parallelMod,
+		tavilyMod,
+		perplexityMod,
+		exaMod,
+		geminiApiMod,
+	] = await Promise.all([
+		loadOpenAISearch(),
+		loadBrave(),
+		loadParallel(),
+		loadTavily(),
+		loadPerplexity(),
+		loadExa(),
+		loadGeminiApi(),
+	]);
+
+	let geminiWebAvail: Awaited<ReturnType<Awaited<ReturnType<typeof loadGeminiWeb>>["isGeminiWebAvailable"]>> = null;
+	if (isBrowserCookieAccessAllowed()) {
+		const geminiWebMod = await loadGeminiWeb();
+		geminiWebAvail = await geminiWebMod.isGeminiWebAvailable();
+	}
+
 	return {
-		openai: await isOpenAISearchAvailable(ctx),
-		brave: isBraveAvailable(),
-		parallel: isParallelAvailable(),
-		tavily: isTavilyAvailable(),
-		perplexity: isPerplexityAvailable(),
-		exa: isExaAvailable(),
-		gemini: isGeminiApiAvailable() || !!geminiWebAvail,
+		openai: await openaiMod.isOpenAISearchAvailable(ctx),
+		brave: braveMod.isBraveAvailable(),
+		parallel: parallelMod.isParallelAvailable(),
+		tavily: tavilyMod.isTavilyAvailable(),
+		perplexity: perplexityMod.isPerplexityAvailable(),
+		exa: exaMod.isExaAvailable(),
+		gemini: geminiApiMod.isGeminiApiAvailable() || !!geminiWebAvail,
 	};
 }
 
@@ -273,6 +300,13 @@ function resolveProvider(
 
 const pendingFetches = new Map<string, AbortController>();
 let sessionActive = false;
+let sessionGeneration = 0;
+let sessionAbort = new AbortController();
+
+function assertActiveRequest(generation: number, signal?: AbortSignal): void {
+	signal?.throwIfAborted();
+	if (generation !== sessionGeneration) throw new Error("Web request cancelled: session changed");
+}
 let widgetVisible = false;
 let widgetUnsubscribe: (() => void) | null = null;
 const pendingCurates = new Map<string, PendingCurate>();
@@ -542,9 +576,12 @@ function formatEntryLine(
 }
 
 function handleSessionChange(ctx: ExtensionContext): void {
+	sessionGeneration++;
+	sessionAbort.abort();
+	sessionAbort = new AbortController();
 	abortPendingFetches();
 	closeCurator();
-	clearCloneCache();
+	runSessionCleanups();
 	sessionActive = true;
 	restoreFromSession(ctx);
 	// Unsubscribe before clear() to avoid callback with stale ctx
@@ -562,6 +599,21 @@ export default function (pi: ExtensionAPI) {
 	const initConfig = loadConfigForExtensionInit();
 	const curateKey = initConfig.shortcuts?.curate || DEFAULT_SHORTCUTS.curate;
 	const activityKey = initConfig.shortcuts?.activity || DEFAULT_SHORTCUTS.activity;
+	/** Populated on first summary/curator use so sync curator submit/cancel can build fallbacks. */
+	let warmSummaryReview: Awaited<ReturnType<typeof loadSummaryReview>> | null = null;
+
+	async function ensureSummaryReview(): Promise<Awaited<ReturnType<typeof loadSummaryReview>>> {
+		if (!warmSummaryReview) warmSummaryReview = await loadSummaryReview();
+		return warmSummaryReview;
+	}
+
+	async function runSearch(
+		query: string,
+		options: Parameters<Awaited<ReturnType<typeof loadGeminiSearch>>["search"]>[1],
+	) {
+		const { search } = await loadGeminiSearch();
+		return search(query, options);
+	}
 
 	// lunr: expose curator workflow state to core (/settings "Extensions" submenu)
 	// so the /settings toggle writes through the same web-search.json saveConfig
@@ -580,8 +632,11 @@ export default function (pi: ExtensionAPI) {
 		const fetchId = generateId();
 		const controller = new AbortController();
 		pendingFetches.set(fetchId, controller);
-		fetchAllContent(urls, controller.signal)
-			.then((fetched) => {
+		void (async () => {
+			try {
+				const { fetchAllContent } = await loadExtract();
+				if (!sessionActive || !pendingFetches.has(fetchId)) return;
+				const fetched = await fetchAllContent(urls, controller.signal);
 				if (!sessionActive || !pendingFetches.has(fetchId)) return;
 				const data: StoredSearchData = {
 					id: fetchId,
@@ -600,8 +655,7 @@ export default function (pi: ExtensionAPI) {
 					},
 					{ triggerTurn: true },
 				);
-			})
-			.catch((err) => {
+			} catch (err) {
 				if (!sessionActive || !pendingFetches.has(fetchId)) return;
 				const message = err instanceof Error ? err.message : String(err);
 				const isAbort = (err instanceof Error && err.name === "AbortError") || message.toLowerCase().includes("abort");
@@ -615,8 +669,10 @@ export default function (pi: ExtensionAPI) {
 						{ triggerTurn: false },
 					);
 				}
-			})
-			.finally(() => { pendingFetches.delete(fetchId); });
+			} finally {
+				pendingFetches.delete(fetchId);
+			}
+		})();
 		return fetchId;
 	}
 
@@ -766,12 +822,13 @@ export default function (pi: ExtensionAPI) {
 		if (selectedResults.length === 0) {
 			throw new Error("No selected results available for summary generation");
 		}
+		const summaryReview = await ensureSummaryReview();
 		try {
-			return await generateSummaryDraft(selectedResults, summaryContext, signal, modelOverride, feedback);
+			return await summaryReview.generateSummaryDraft(selectedResults, summaryContext, signal, modelOverride, feedback);
 		} catch (err) {
 			const isEmptyResponse = err instanceof Error && err.message.includes("Summary model returned empty response");
 			if (!isEmptyResponse) throw err;
-			const deterministic = buildDeterministicSummary(selectedResults);
+			const deterministic = summaryReview.buildDeterministicSummary(selectedResults);
 			return {
 				summary: deterministic.summary,
 				meta: {
@@ -856,7 +913,11 @@ export default function (pi: ExtensionAPI) {
 
 		const selected = filterByQueryIndices(payload.selectedQueryIndices, resultsByIndex).results;
 		const fallbackResults = selected.length > 0 ? selected : [...resultsByIndex.values()];
-		const deterministic = buildDeterministicSummary(fallbackResults);
+		// Curator paths preload summary-review before opening; sync submit/cancel need it warm.
+		if (!warmSummaryReview) {
+			throw new Error("Summary review module is not loaded");
+		}
+		const deterministic = warmSummaryReview.buildDeterministicSummary(fallbackResults);
 		return {
 			approvedSummary: deterministic.summary,
 			summaryMeta: deterministic.meta,
@@ -991,6 +1052,11 @@ export default function (pi: ExtensionAPI) {
 				: searchAbort.signal;
 
 			const sessionToken = randomUUID();
+			const [{ startCuratorServer }] = await Promise.all([
+				loadCuratorServer(),
+				ensureSummaryReview(),
+			]);
+			if (pendingCurates.get(callId) !== pc) return;
 			handle = await startCuratorServer(
 				{
 					queries: pc.queryList,
@@ -1101,7 +1167,7 @@ export default function (pi: ExtensionAPI) {
 							? pc.searchProvider
 							: normalizedProvider;
 						try {
-							const { answer, results, inlineContent, provider: actualProvider } = await search(query, {
+							const { answer, results, inlineContent, provider: actualProvider } = await runSearch(query, {
 								provider: requestedProvider,
 								numResults: pc.numResults,
 								recencyFilter: pc.recencyFilter,
@@ -1244,10 +1310,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_tree", async (_event, ctx) => handleSessionChange(ctx));
 
 	pi.on("session_shutdown", () => {
+		sessionGeneration++;
+		sessionAbort.abort();
 		sessionActive = false;
 		abortPendingFetches();
 		closeCurator();
-		clearCloneCache();
+		runSessionCleanups();
 		clearResults();
 		// Unsubscribe before clear() to avoid callback with stale ctx
 		widgetUnsubscribe?.();
@@ -1282,7 +1350,10 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 
-		async execute(callId, params, signal, onUpdate, ctx) {
+		async execute(callId, params, incomingSignal, onUpdate, ctx) {
+			const generation = sessionGeneration;
+			const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+			assertActiveRequest(generation, signal);
 			const rawQueryList: unknown[] = Array.isArray(params.queries)
 				? params.queries
 				: (params.query !== undefined ? [params.query] : []);
@@ -1325,6 +1396,7 @@ export default function (pi: ExtensionAPI) {
 					numResults: params.numResults,
 					recencyFilter: params.recencyFilter,
 				});
+				assertActiveRequest(generation, signal);
 				const availableProviders = bootstrap.availableProviders;
 				const defaultProvider = bootstrap.defaultProvider;
 				const rawSearchProvider = normalizeProviderInput(params.provider ?? loadConfig().provider ?? "auto") ?? "auto";
@@ -1339,6 +1411,7 @@ export default function (pi: ExtensionAPI) {
 					isProjectTrusted: () => ctx.isProjectTrusted(),
 				};
 				const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
+				assertActiveRequest(generation, signal);
 
 				const pc: PendingCurate = {
 					phase: "searching",
@@ -1404,7 +1477,7 @@ export default function (pi: ExtensionAPI) {
 					});
 					const requestedProvider = pc.searchProvider;
 					try {
-						const { answer, results, inlineContent, provider } = await search(queryList[qi], {
+						const { answer, results, inlineContent, provider } = await runSearch(queryList[qi], {
 							provider: requestedProvider,
 							numResults: params.numResults,
 							recencyFilter: params.recencyFilter,
@@ -1479,6 +1552,7 @@ export default function (pi: ExtensionAPI) {
 			const resolvedProvider = normalizeProviderInput(params.provider ?? loadConfig().provider);
 
 			for (let i = 0; i < queryList.length; i++) {
+				assertActiveRequest(generation, signal);
 				const query = queryList[i];
 
 				onUpdate?.({
@@ -1487,7 +1561,7 @@ export default function (pi: ExtensionAPI) {
 				});
 
 				try {
-					const { answer, results, inlineContent, provider } = await search(query, {
+					const { answer, results, inlineContent, provider } = await runSearch(query, {
 						provider: resolvedProvider,
 						numResults: params.numResults,
 						recencyFilter: params.recencyFilter,
@@ -1497,6 +1571,7 @@ export default function (pi: ExtensionAPI) {
 						extensionContext: ctx,
 					});
 
+					assertActiveRequest(generation, signal);
 					searchResults.push({ query, answer, results, error: null, provider });
 					for (const r of results) {
 						if (!allUrls.includes(r.url)) {
@@ -1505,6 +1580,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					if (inlineContent) allInlineContent.push(...inlineContent);
 				} catch (err) {
+					assertActiveRequest(generation, signal);
 					const message = err instanceof Error ? err.message : String(err);
 					const requestedProvider = typeof resolvedProvider === "string" && resolvedProvider !== "auto"
 						? resolvedProvider
@@ -1533,11 +1609,13 @@ export default function (pi: ExtensionAPI) {
 					isProjectTrusted: () => ctx.isProjectTrusted(),
 				};
 				const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
-				const generated = await generateSummaryDraft(searchResults, summaryContext, signal, summaryModelChoices.defaultSummaryModel ?? undefined);
+				const summaryReview = await ensureSummaryReview();
+				const generated = await summaryReview.generateSummaryDraft(searchResults, summaryContext, signal, summaryModelChoices.defaultSummaryModel ?? undefined);
 				approvedSummary = generated.summary;
 				summaryMeta = generated.meta;
 			}
 
+			assertActiveRequest(generation, signal);
 			return buildSearchReturn({
 				queryList,
 				results: searchResults,
@@ -1705,7 +1783,10 @@ export default function (pi: ExtensionAPI) {
 			})),
 		}),
 
-		async execute(_toolCallId, params, signal, onUpdate) {
+		async execute(_toolCallId, params, incomingSignal, onUpdate) {
+			const generation = sessionGeneration;
+			const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+			assertActiveRequest(generation, signal);
 			const { urlList, options } = normalizeFetchContentParams(params);
 			if (urlList.length === 0) {
 				return {
@@ -1719,7 +1800,15 @@ export default function (pi: ExtensionAPI) {
 				details: { phase: "fetch", progress: 0 },
 			});
 
+			const { fetchAllContent } = await loadExtract();
+			if (signal?.aborted) {
+				return {
+					content: [{ type: "text", text: "Error: Aborted" }],
+					details: { error: "Aborted", urls: urlList, urlCount: urlList.length, successful: 0 },
+				};
+			}
 			const fetchResults = await fetchAllContent(urlList, signal, options);
+			assertActiveRequest(generation, signal);
 			const successful = fetchResults.filter((r) => !r.error).length;
 			const totalChars = fetchResults.reduce((sum, r) => sum + r.content.length, 0);
 
@@ -2050,6 +2139,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("websearch", {
 		description: "Open web search curator",
 		handler: async (args, ctx) => {
+			const generation = sessionGeneration;
+			const sessionSignal = sessionAbort.signal;
 			const sessionToken = randomUUID();
 			const commandCallId = `cmd:${sessionToken}`;
 			closeCurator(commandCallId);
@@ -2063,10 +2154,12 @@ export default function (pi: ExtensionAPI) {
 			try {
 				bootstrap = await loadCuratorBootstrap(undefined, ctx);
 			} catch (err) {
+				if (generation !== sessionGeneration) return;
 				const message = err instanceof Error ? err.message : String(err);
 				ctx.ui.notify(`Failed to load web search config: ${message}`, "error");
 				return;
 			}
+			if (generation !== sessionGeneration) return;
 			const availableProviders = bootstrap.availableProviders;
 			const initialProvider = bootstrap.defaultProvider;
 			const curatorTimeoutSeconds = bootstrap.timeoutSeconds;
@@ -2080,14 +2173,16 @@ export default function (pi: ExtensionAPI) {
 				isProjectTrusted: () => ctx.isProjectTrusted(),
 			};
 			const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
+			if (generation !== sessionGeneration) return;
 
 			ctx.ui.notify("Opening web search curator...", "info");
 
 			const collected = new Map<number, QueryResultData>();
 			const searchAbort = new AbortController();
+			const searchSignal = AbortSignal.any([searchAbort.signal, sessionSignal]);
 			let aborted = false;
 			let commandHandle: CuratorServerHandle | null = null;
-			const isCommandActive = () => commandHandle !== null && activeCurators.get(commandCallId) === commandHandle;
+			const isCommandActive = () => generation === sessionGeneration && (commandHandle === null || activeCurators.get(commandCallId) === commandHandle);
 
 			function sendFollowUpFromReturn(payload: ReturnType<typeof buildSearchReturn>) {
 				pi.sendMessage({
@@ -2099,6 +2194,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			try {
+				const [{ startCuratorServer }] = await Promise.all([
+					loadCuratorServer(),
+					ensureSummaryReview(),
+				]);
+				if (!isCommandActive()) return;
 				const handle = await startCuratorServer(
 					{
 						queries,
@@ -2112,7 +2212,7 @@ export default function (pi: ExtensionAPI) {
 					},
 					{
 						async onSummarize(selectedQueryIndices, summarizeSignal, model, feedback) {
-							if (commandHandle && !isCommandActive()) {
+							if (!isCommandActive()) {
 								throw new Error("Curator session is no longer active.");
 							}
 							return generateSummaryForSelectedIndices(
@@ -2125,7 +2225,7 @@ export default function (pi: ExtensionAPI) {
 							);
 						},
 						onSubmit(payload) {
-							if (commandHandle && !isCommandActive()) return;
+							if (!isCommandActive()) return;
 							aborted = true;
 							searchAbort.abort();
 							const filtered = payload.selectedQueryIndices.length > 0
@@ -2149,7 +2249,7 @@ export default function (pi: ExtensionAPI) {
 							closeCurator(commandCallId);
 						},
 						onCancel(reason) {
-							if (commandHandle && !isCommandActive()) return;
+							if (!isCommandActive()) return;
 							aborted = true;
 							searchAbort.abort();
 							if (reason === "timeout") {
@@ -2170,7 +2270,7 @@ export default function (pi: ExtensionAPI) {
 							closeCurator(commandCallId);
 						},
 						onProviderChange(provider) {
-							if (commandHandle && !isCommandActive()) return;
+							if (!isCommandActive()) return;
 							const normalized = normalizeProviderInput(provider);
 							if (!normalized || normalized === "auto") return;
 							currentProvider = normalized;
@@ -2183,7 +2283,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						async onAddSearch(query, queryIndex, provider) {
-							if (commandHandle && !isCommandActive()) {
+							if (!isCommandActive()) {
 								throw new Error("Curator session is no longer active.");
 							}
 							const normalizedProvider = normalizeProviderInput(provider);
@@ -2191,12 +2291,12 @@ export default function (pi: ExtensionAPI) {
 								? currentSearchProvider
 								: normalizedProvider;
 							try {
-								const { answer, results, provider: actualProvider } = await search(query, {
+								const { answer, results, provider: actualProvider } = await runSearch(query, {
 									provider: requestedProvider,
-									signal: searchAbort.signal,
+									signal: searchSignal,
 									extensionContext: ctx,
 								});
-								if (commandHandle && !isCommandActive()) {
+								if (!isCommandActive()) {
 									throw new Error("Curator session is no longer active.");
 								}
 								collected.set(queryIndex, { query, answer, results, error: null, provider: actualProvider });
@@ -2207,14 +2307,14 @@ export default function (pi: ExtensionAPI) {
 								};
 							} catch (err) {
 								const message = err instanceof Error ? err.message : String(err);
-								if (!commandHandle || isCommandActive()) {
+								if (isCommandActive()) {
 									collected.set(queryIndex, { query, answer: "", results: [], error: message, provider: requestedProvider });
 								}
 								throw err;
 							}
 						},
 						async onRewriteQuery(query, rewriteSignal) {
-							if (commandHandle && !isCommandActive()) {
+							if (!isCommandActive()) {
 								throw new Error("Curator session is no longer active.");
 							}
 							return rewriteSearchQuery(query, summaryContext, rewriteSignal);
@@ -2222,9 +2322,11 @@ export default function (pi: ExtensionAPI) {
 					},
 				);
 
+				if (!isCommandActive()) { handle.close(); return; }
 				commandHandle = handle;
 				activeCurators.set(commandCallId, handle);
 				const open = platform() === "darwin" ? await getGlimpseOpen() : null;
+				if (!isCommandActive()) return;
 				let browserOpenError: string | null = null;
 				if (open) {
 					try {
@@ -2253,6 +2355,7 @@ export default function (pi: ExtensionAPI) {
 						browserOpenError = browserErr instanceof Error ? browserErr.message : String(browserErr);
 					}
 				}
+				if (!isCommandActive()) return;
 				if (browserOpenError) {
 					console.error(`Failed to open curator UI: ${browserOpenError}`);
 					ctx.ui.notify(`Search curator is running, but the browser did not open automatically. Open manually: ${handle.url}`, "info");
@@ -2264,9 +2367,9 @@ export default function (pi: ExtensionAPI) {
 							if (aborted || !isCommandActive()) break;
 							const requestedProvider = currentSearchProvider;
 							try {
-								const { answer, results, provider } = await search(queries[qi], {
+								const { answer, results, provider } = await runSearch(queries[qi], {
 									provider: requestedProvider,
-									signal: searchAbort.signal,
+									signal: searchSignal,
 									extensionContext: ctx,
 								});
 								if (aborted || !isCommandActive()) break;
@@ -2290,6 +2393,7 @@ export default function (pi: ExtensionAPI) {
 				}
 			} catch (err) {
 				closeCurator(commandCallId);
+				if (generation !== sessionGeneration) return;
 				const message = err instanceof Error ? err.message : String(err);
 				ctx.ui.notify(`Failed to open curator: ${message}`, "error");
 			}
@@ -2351,7 +2455,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const cookies = await isGeminiWebAvailable();
+			const geminiWeb = await loadGeminiWeb();
+			const cookies = await geminiWeb.isGeminiWebAvailable();
 			if (!cookies) {
 				pi.sendMessage({
 					customType: "google-account",
@@ -2362,7 +2467,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const email = await getActiveGoogleEmail(cookies);
+			const email = await geminiWeb.getActiveGoogleEmail(cookies);
 			const text = email
 				? `Active Google account: ${email}`
 				: "Gemini Web is available, but the active Google account could not be determined.";

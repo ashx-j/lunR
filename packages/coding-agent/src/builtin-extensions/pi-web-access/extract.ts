@@ -5,15 +5,55 @@ import TurndownService from "turndown";
 import pLimit from "p-limit";
 import { activityMonitor } from "./activity.ts";
 import { extractRSCContent } from "./rsc-extract.ts";
-import { extractPDFToMarkdown, isPDF } from "./pdf-extract.ts";
-import { extractGitHub } from "./github-extract.ts";
-import { isYouTubeURL, isYouTubeEnabled, extractYouTube, extractYouTubeFrame, extractYouTubeFrames, getYouTubeStreamInfo } from "./youtube-extract.ts";
-import { extractWithUrlContext, extractWithGeminiWeb } from "./gemini-url-context.ts";
-import { extractWithParallel, isParallelAvailable } from "./parallel.ts";
-import { isVideoFile, extractVideo, extractVideoFrame, getLocalVideoDuration } from "./video-extract.ts";
+import {
+	loadGeminiUrlContext,
+	loadGithubExtract,
+	loadParallel,
+	loadPdfExtract,
+	loadVideoExtract,
+	loadYoutubeExtract,
+} from "./lazy.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { fetchRemoteUrl, validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 import { formatSeconds, getWebSearchConfigPath } from "./utils.ts";
+
+const YOUTUBE_URL_RE =
+	/(?:(?:www\.|m\.)?youtube\.com\/(?:watch\?.*v=|shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+
+function isYouTubeURL(url: string): { isYouTube: boolean; videoId: string | null } {
+	try {
+		const parsed = new URL(url);
+		if (parsed.pathname === "/playlist") {
+			return { isYouTube: false, videoId: null };
+		}
+	} catch {
+	}
+	const match = url.match(YOUTUBE_URL_RE);
+	if (!match) return { isYouTube: false, videoId: null };
+	return { isYouTube: true, videoId: match[1] };
+}
+
+function isPDF(url: string, contentType?: string): boolean {
+	if (contentType?.includes("application/pdf")) return true;
+	try {
+		return new URL(url).pathname.toLowerCase().endsWith(".pdf");
+	} catch {
+		return false;
+	}
+}
+
+function looksLikeLocalPath(input: string): boolean {
+	return input.startsWith("/") || input.startsWith("./") || input.startsWith("../") || input.startsWith("file://");
+}
+
+function looksLikeGitHubUrl(url: string): boolean {
+	try {
+		const host = new URL(url).hostname.toLowerCase();
+		return host === "github.com" || host === "www.github.com" || host.endsWith(".github.com");
+	} catch {
+		return false;
+	}
+}
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const CONCURRENT_LIMIT = 3;
@@ -229,6 +269,7 @@ function buildFrameResult(
 async function extractLocalFrames(
 	filePath: string, timestamps: number[],
 ): Promise<{ frames: VideoFrame[]; error: string | null }> {
+	const { extractVideoFrame } = await loadVideoExtract();
 	const results = await Promise.all(timestamps.map(async (t) => {
 		const frame = await extractVideoFrame(filePath, t);
 		if ("error" in frame) return { error: frame.error };
@@ -239,8 +280,10 @@ async function extractLocalFrames(
 	return { frames, error: frames.length === 0 && firstError ? firstError.error : null };
 }
 
-function safeVideoInfo(url: string): { info: ReturnType<typeof isVideoFile>; error?: string } {
+async function safeVideoInfo(url: string): Promise<{ info: Awaited<ReturnType<typeof loadVideoExtract>> extends { isVideoFile: infer F } ? (F extends (...args: any) => infer R ? R : null) : null; error?: string }> {
+	if (!looksLikeLocalPath(url)) return { info: null };
 	try {
+		const { isVideoFile } = await loadVideoExtract();
 		return { info: isVideoFile(url) };
 	} catch (err) {
 		return { info: null, error: errorMessage(err) };
@@ -260,7 +303,8 @@ export async function extractContent(
 		const frameCount = options.frames;
 		const ytInfo = isYouTubeURL(url);
 		if (ytInfo.isYouTube && ytInfo.videoId) {
-			const streamInfo = await getYouTubeStreamInfo(ytInfo.videoId);
+			const yt = await loadYoutubeExtract();
+			const streamInfo = await yt.getYouTubeStreamInfo(ytInfo.videoId);
 			if ("error" in streamInfo) {
 				return { url, title: "Frames", content: streamInfo.error, error: streamInfo.error };
 			}
@@ -270,16 +314,17 @@ export async function extractContent(
 			}
 			const dur = Math.floor(streamInfo.duration);
 			const timestamps = computeRangeTimestamps(0, dur, frameCount);
-			const result = await extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
+			const result = await yt.extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
 			const label = `${formatSeconds(0)}-${formatSeconds(dur)}`;
 			return buildFrameResult(url, label, timestamps.length, result.frames, result.error, streamInfo.duration);
 		}
 
-		const localVideo = safeVideoInfo(url);
+		const localVideo = await safeVideoInfo(url);
 		if (localVideo.error) {
 			return { url, title: "", content: "", error: localVideo.error };
 		}
 		if (localVideo.info) {
+			const { getLocalVideoDuration } = await loadVideoExtract();
 			const durationResult = await getLocalVideoDuration(localVideo.info.absolutePath);
 			if (typeof durationResult !== "number") {
 				return { url, title: "Frames", content: durationResult.error, error: durationResult.error };
@@ -308,7 +353,8 @@ export async function extractContent(
 		const frameCount = options.frames;
 		const ytInfo = isYouTubeURL(url);
 		if (ytInfo.isYouTube && ytInfo.videoId) {
-			const streamInfo = await getYouTubeStreamInfo(ytInfo.videoId);
+			const yt = await loadYoutubeExtract();
+			const streamInfo = await yt.getYouTubeStreamInfo(ytInfo.videoId);
 			if ("error" in streamInfo) {
 				if (spec.type === "range") {
 					const label = `${formatSeconds(spec.start)}-${formatSeconds(spec.end)}`;
@@ -331,7 +377,7 @@ export async function extractContent(
 				const timestamps = frameCount
 					? computeRangeTimestamps(spec.start, spec.end, frameCount)
 					: computeRangeTimestamps(spec.start, spec.end);
-				const result = await extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
+				const result = await yt.extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
 				return buildFrameResult(url, label, timestamps.length, result.frames, result.error, result.duration ?? undefined);
 			}
 
@@ -343,7 +389,7 @@ export async function extractContent(
 					return { url, title: `Frames ${label}`, content: error, error };
 				}
 				const timestamps = computeRangeTimestamps(spec.seconds, end, frameCount);
-				const result = await extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
+				const result = await yt.extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
 				return buildFrameResult(url, label, timestamps.length, result.frames, result.error, result.duration ?? undefined);
 			}
 
@@ -351,14 +397,14 @@ export async function extractContent(
 				const error = `Timestamp ${formatSeconds(spec.seconds)} exceeds video duration (${formatSeconds(Math.floor(streamInfo.duration))})`;
 				return { url, title: `Frame at ${options.timestamp}`, content: error, error };
 			}
-			const frame = await extractYouTubeFrame(ytInfo.videoId, spec.seconds, streamInfo);
+			const frame = await yt.extractYouTubeFrame(ytInfo.videoId, spec.seconds, streamInfo);
 			if ("error" in frame) {
 				return { url, title: `Frame at ${options.timestamp}`, content: frame.error, error: frame.error };
 			}
 			return { url, title: `Frame at ${options.timestamp}`, content: `Video frame at ${options.timestamp}`, error: null, thumbnail: frame };
 		}
 
-		const localVideo = safeVideoInfo(url);
+		const localVideo = await safeVideoInfo(url);
 		if (localVideo.error) {
 			return { url, title: "", content: "", error: localVideo.error };
 		}
@@ -380,6 +426,7 @@ export async function extractContent(
 				return buildFrameResult(url, label, timestamps.length, result.frames, result.error);
 			}
 
+			const { extractVideoFrame } = await loadVideoExtract();
 			const frame = await extractVideoFrame(localVideo.info.absolutePath, spec.seconds);
 			if ("error" in frame) {
 				return { url, title: `Frame at ${options.timestamp}`, content: frame.error, error: frame.error };
@@ -390,12 +437,13 @@ export async function extractContent(
 		return { url, title: "", content: "", error: "Timestamp extraction only works with YouTube and local video files" };
 	}
 
-	const localVideo = safeVideoInfo(url);
+	const localVideo = await safeVideoInfo(url);
 	if (localVideo.error) {
 		return { url, title: "", content: "", error: localVideo.error };
 	}
 	if (localVideo.info) {
 		try {
+			const { extractVideo } = await loadVideoExtract();
 			const result = await extractVideo(localVideo.info, signal, options);
 			if (signal?.aborted) return abortedResult(url);
 			return result ?? { url, title: "", content: "", error: `Video analysis requires Gemini access. Either:\n  1. Sign into gemini.google.com in Chrome (free, uses cookies)\n  2. Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH}` };
@@ -414,41 +462,48 @@ export async function extractContent(
 		return { url, title: "", content: "", error: errorMessage(err) };
 	}
 
-	try {
-		const ghResult = await extractGitHub(url, signal, options?.forceClone);
-		if (ghResult) return ghResult;
-		if (signal?.aborted) return abortedResult(url);
-	} catch (err) {
-		const message = errorMessage(err);
-		if (isAbortError(err)) return abortedResult(url);
-		if (isConfigParseError(err)) {
-			return { url, title: "", content: "", error: message };
-		}
-	}
-
-	const ytInfo = isYouTubeURL(url);
-	let youtubeEnabled = false;
-	try {
-		youtubeEnabled = isYouTubeEnabled();
-	} catch (err) {
-		return { url, title: "", content: "", error: errorMessage(err) };
-	}
-	if (ytInfo.isYouTube && youtubeEnabled) {
+	if (looksLikeGitHubUrl(url)) {
 		try {
-			const ytResult = await extractYouTube(url, signal, options?.prompt, options?.model);
-			if (ytResult) return ytResult;
+			const { extractGitHub } = await loadGithubExtract();
+			const ghResult = await extractGitHub(url, signal, options?.forceClone);
+			if (ghResult) return ghResult;
 			if (signal?.aborted) return abortedResult(url);
 		} catch (err) {
 			const message = errorMessage(err);
 			if (isAbortError(err)) return abortedResult(url);
-			return { url, title: "", content: "", error: message };
+			if (isConfigParseError(err)) {
+				return { url, title: "", content: "", error: message };
+			}
 		}
-		return {
-			url,
-			title: "",
-			content: "",
-			error: "Could not extract YouTube video content. Sign into Google in Chrome for automatic access, or set GEMINI_API_KEY.",
-		};
+	}
+
+	const ytInfo = isYouTubeURL(url);
+	if (ytInfo.isYouTube) {
+		let youtubeEnabled = false;
+		let yt;
+		try {
+			yt = await loadYoutubeExtract();
+			youtubeEnabled = yt.isYouTubeEnabled();
+		} catch (err) {
+			return { url, title: "", content: "", error: errorMessage(err) };
+		}
+		if (youtubeEnabled) {
+			try {
+				const ytResult = await yt.extractYouTube(url, signal, options?.prompt, options?.model);
+				if (ytResult) return ytResult;
+				if (signal?.aborted) return abortedResult(url);
+			} catch (err) {
+				const message = errorMessage(err);
+				if (isAbortError(err)) return abortedResult(url);
+				return { url, title: "", content: "", error: message };
+			}
+			return {
+				url,
+				title: "",
+				content: "",
+				error: "Could not extract YouTube video content. Sign into Google in Chrome for automatic access, or set GEMINI_API_KEY.",
+			};
+		}
 	}
 
 	if (signal?.aborted) return abortedResult(url);
@@ -465,8 +520,9 @@ export async function extractContent(
 
 	let parallelError: string | null = null;
 	try {
-		if (isParallelAvailable()) {
-			const parallelResult = await extractWithParallel(url, signal, options);
+		const parallel = await loadParallel();
+		if (parallel.isParallelAvailable()) {
+			const parallelResult = await parallel.extractWithParallel(url, signal, options);
 			if (parallelResult) return parallelResult;
 		}
 	} catch (err) {
@@ -480,8 +536,9 @@ export async function extractContent(
 
 	let geminiResult: ExtractedContent | null = null;
 	try {
-		geminiResult = await extractWithUrlContext(url, signal)
-			?? await extractWithGeminiWeb(url, signal);
+		const geminiUrl = await loadGeminiUrlContext();
+		geminiResult = await geminiUrl.extractWithUrlContext(url, signal)
+			?? await geminiUrl.extractWithGeminiWeb(url, signal);
 	} catch (err) {
 		if (isAbortError(err)) return abortedResult(url);
 		if (isConfigParseError(err)) {
@@ -591,6 +648,7 @@ async function extractViaHttp(
 		if (isPDFContent) {
 			try {
 				const buffer = await response.arrayBuffer();
+				const { extractPDFToMarkdown } = await loadPdfExtract();
 				const result = await extractPDFToMarkdown(buffer, url);
 				activityMonitor.logComplete(activityId, response.status);
 				return {

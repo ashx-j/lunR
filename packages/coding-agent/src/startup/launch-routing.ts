@@ -23,17 +23,19 @@ export function resolvePreloadLaunchMode(
 	environment: PreloadLaunchEnvironment,
 ): PreloadLaunchMode {
 	if (DEFERRED_COMMANDS.has(args[0] ?? "")) return "deferred";
-	if (args.some((arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v")) {
+	const parsed = parseArgs([...args]);
+	if (
+		parsed.help ||
+		parsed.version ||
+		parsed.print ||
+		parsed.export ||
+		parsed.listModels !== undefined ||
+		parsed.mode === "rpc" ||
+		parsed.mode === "json"
+	)
 		return "deferred";
-	}
-	if (args.some((arg) => arg === "--print" || arg === "-p" || arg === "--export" || arg === "--list-models")) {
-		return "deferred";
-	}
-	for (let index = 0; index < args.length - 1; index++) {
-		if (args[index] === "--mode" && (args[index + 1] === "rpc" || args[index + 1] === "json")) {
-			return "deferred";
-		}
-	}
 	if (environment.startupBenchmark) return "interactive";
 	return environment.stdinIsTTY && environment.stdoutIsTTY ? "interactive" : "deferred";
 }
+
+import { parseArgs } from "../cli/args.ts";

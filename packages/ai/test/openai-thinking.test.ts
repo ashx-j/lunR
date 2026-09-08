@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { getModel, getSupportedThinkingLevels } from "../src/compat.ts";
+import { getModel, getModels, getSupportedThinkingLevels } from "../src/compat.ts";
 import {
 	parseOpenAiGptVersion,
 	supportsOpenAiMax,
@@ -94,10 +94,32 @@ describe("GPT-6 Astra catalogs", () => {
 			expect(model).toBeDefined();
 			expect(model?.name).toBe("GPT-6 Astra");
 			expect(model?.reasoning).toBe(true);
-			expect(model?.contextWindow).toBe(1050000);
+			// OpenAI API advertises 1.05M; Codex OAuth's default context_window is 272k.
+			expect(model?.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
 			expect(getSupportedThinkingLevels(model!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		}
 	});
+
+	it("keeps every baked Codex model on its audited default window", () => {
+		expect(Object.fromEntries(getModels("openai-codex").map((model) => [model.id, model.contextWindow]))).toEqual({
+			"gpt-5.3-codex-spark": 128000,
+			"gpt-5.4": 272000,
+			"gpt-5.4-mini": 272000,
+			"gpt-5.5": 272000,
+			"gpt-5.6-luna": 272000,
+			"gpt-5.6-sol": 272000,
+			"gpt-5.6-terra": 272000,
+			"gpt-6-astra": 272000,
+		});
+	});
+
+	it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+		"keeps the Codex default window for %s at 272k",
+		(modelId) => {
+			expect(getModel("openai-codex", modelId)?.contextWindow).toBe(272000);
+			expect(loadCatalogProvider("openai-codex")[modelId]?.contextWindow).toBe(272000);
+		},
+	);
 
 	it("publishes GPT-6 Astra in every official catalog shard used by refresh", () => {
 		for (const provider of ["openai", "openai-codex", "azure-openai-responses"]) {

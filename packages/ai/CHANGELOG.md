@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-09-08
+
+### Fixed
+
+- Codex model discovery uses `context_window` as the operating limit and does not promote `max_context_window` to the default.
+
+## [0.2.15] - 2026-09-05
+
+## [0.2.14] - 2026-09-05
+
 ### Added
 
 - Added Qwen Token Plan providers (`qwen-token-plan`, `qwen-token-plan-cn`) on the DashScope OpenAI-compatible endpoint, authenticating with `DASHSCOPE_TOKEN_PLAN_API_KEY` / `DASHSCOPE_TOKEN_PLAN_CN_API_KEY` (falling back to `DASHSCOPE_API_KEY`), with 15 text models including the token-plan-only `qwen3.8-max-preview`.

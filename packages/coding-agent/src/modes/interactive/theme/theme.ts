@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
@@ -10,8 +11,7 @@ import {
 	type SettingsListTheme,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { type Static, Type } from "typebox";
-import { Compile } from "typebox/compile";
+import type { Static } from "typebox";
 import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
 import type { SourceInfo } from "../../../core/source-info.ts";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
@@ -21,98 +21,107 @@ import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts"
 // Types & Schema
 // ============================================================================
 
-const ColorValueSchema = Type.Union([
-	Type.String(), // hex "#ff0000", var ref "primary", or empty ""
-	Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
-]);
+const require = createRequire(import.meta.url);
+type ColorValue = string | number;
+type ThemeJson = Static<ReturnType<typeof createThemeSchema>>;
 
-type ColorValue = Static<typeof ColorValueSchema>;
+// The shipped moon theme needs no schema compiler. Load validation only when
+// a custom theme is parsed, preserving the same schema and diagnostics.
+function createThemeSchema() {
+	const { Type } = require("typebox") as typeof import("typebox");
+	const ColorValueSchema = Type.Union([
+		Type.String(), // hex "#ff0000", var ref "primary", or empty ""
+		Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
+	]);
 
-const ThemeJsonSchema = Type.Object({
-	$schema: Type.Optional(Type.String()),
-	name: Type.String(),
-	vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
-	colors: Type.Object({
-		// Core UI (10 colors)
-		accent: ColorValueSchema,
-		accent2: Type.Optional(ColorValueSchema),
-		border: ColorValueSchema,
-		borderAccent: ColorValueSchema,
-		borderMuted: ColorValueSchema,
-		success: ColorValueSchema,
-		error: ColorValueSchema,
-		warning: ColorValueSchema,
-		muted: ColorValueSchema,
-		dim: ColorValueSchema,
-		text: ColorValueSchema,
-		white: Type.Optional(ColorValueSchema),
-		thinkingText: ColorValueSchema,
-		// Backgrounds & Content Text (11 colors)
-		selectedBg: ColorValueSchema,
-		userMessageBg: ColorValueSchema,
-		userMessageText: ColorValueSchema,
-		customMessageBg: ColorValueSchema,
-		customMessageText: ColorValueSchema,
-		customMessageLabel: ColorValueSchema,
-		toolPendingBg: ColorValueSchema,
-		toolSuccessBg: ColorValueSchema,
-		toolErrorBg: ColorValueSchema,
-		toolTitle: ColorValueSchema,
-		toolOutput: ColorValueSchema,
-		// Markdown (10 colors)
-		mdHeading: ColorValueSchema,
-		mdLink: ColorValueSchema,
-		mdLinkUrl: ColorValueSchema,
-		mdCode: ColorValueSchema,
-		mdCodeBlock: ColorValueSchema,
-		mdCodeBlockBorder: ColorValueSchema,
-		mdQuote: ColorValueSchema,
-		mdQuoteBorder: ColorValueSchema,
-		mdHr: ColorValueSchema,
-		mdListBullet: ColorValueSchema,
-		// Tool Diffs (3 colors)
-		toolDiffAdded: ColorValueSchema,
-		toolDiffRemoved: ColorValueSchema,
-		toolDiffContext: ColorValueSchema,
-		// Syntax Highlighting (9 colors)
-		syntaxComment: ColorValueSchema,
-		syntaxKeyword: ColorValueSchema,
-		syntaxFunction: ColorValueSchema,
-		syntaxVariable: ColorValueSchema,
-		syntaxString: ColorValueSchema,
-		syntaxNumber: ColorValueSchema,
-		syntaxType: ColorValueSchema,
-		syntaxOperator: ColorValueSchema,
-		syntaxPunctuation: ColorValueSchema,
-		// Thinking Level Borders (6 colors)
-		thinkingOff: ColorValueSchema,
-		thinkingMinimal: ColorValueSchema,
-		thinkingLow: ColorValueSchema,
-		thinkingMedium: ColorValueSchema,
-		thinkingHigh: ColorValueSchema,
-		thinkingXhigh: ColorValueSchema,
-		thinkingMax: Type.Optional(ColorValueSchema),
-		// Bash Mode (1 color)
-		bashMode: ColorValueSchema,
-	}),
-	glyphs: Type.Optional(
-		Type.Object({
-			promptMoon: Type.Optional(Type.String()),
-			promptArrow: Type.Optional(Type.String()),
+	return Type.Object({
+		$schema: Type.Optional(Type.String()),
+		name: Type.String(),
+		vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
+		colors: Type.Object({
+			// Core UI (10 colors)
+			accent: ColorValueSchema,
+			accent2: Type.Optional(ColorValueSchema),
+			border: ColorValueSchema,
+			borderAccent: ColorValueSchema,
+			borderMuted: ColorValueSchema,
+			success: ColorValueSchema,
+			error: ColorValueSchema,
+			warning: ColorValueSchema,
+			muted: ColorValueSchema,
+			dim: ColorValueSchema,
+			text: ColorValueSchema,
+			white: Type.Optional(ColorValueSchema),
+			thinkingText: ColorValueSchema,
+			// Backgrounds & Content Text (11 colors)
+			selectedBg: ColorValueSchema,
+			userMessageBg: ColorValueSchema,
+			userMessageText: ColorValueSchema,
+			customMessageBg: ColorValueSchema,
+			customMessageText: ColorValueSchema,
+			customMessageLabel: ColorValueSchema,
+			toolPendingBg: ColorValueSchema,
+			toolSuccessBg: ColorValueSchema,
+			toolErrorBg: ColorValueSchema,
+			toolTitle: ColorValueSchema,
+			toolOutput: ColorValueSchema,
+			// Markdown (10 colors)
+			mdHeading: ColorValueSchema,
+			mdLink: ColorValueSchema,
+			mdLinkUrl: ColorValueSchema,
+			mdCode: ColorValueSchema,
+			mdCodeBlock: ColorValueSchema,
+			mdCodeBlockBorder: ColorValueSchema,
+			mdQuote: ColorValueSchema,
+			mdQuoteBorder: ColorValueSchema,
+			mdHr: ColorValueSchema,
+			mdListBullet: ColorValueSchema,
+			// Tool Diffs (3 colors)
+			toolDiffAdded: ColorValueSchema,
+			toolDiffRemoved: ColorValueSchema,
+			toolDiffContext: ColorValueSchema,
+			// Syntax Highlighting (9 colors)
+			syntaxComment: ColorValueSchema,
+			syntaxKeyword: ColorValueSchema,
+			syntaxFunction: ColorValueSchema,
+			syntaxVariable: ColorValueSchema,
+			syntaxString: ColorValueSchema,
+			syntaxNumber: ColorValueSchema,
+			syntaxType: ColorValueSchema,
+			syntaxOperator: ColorValueSchema,
+			syntaxPunctuation: ColorValueSchema,
+			// Thinking Level Borders (6 colors)
+			thinkingOff: ColorValueSchema,
+			thinkingMinimal: ColorValueSchema,
+			thinkingLow: ColorValueSchema,
+			thinkingMedium: ColorValueSchema,
+			thinkingHigh: ColorValueSchema,
+			thinkingXhigh: ColorValueSchema,
+			thinkingMax: Type.Optional(ColorValueSchema),
+			// Bash Mode (1 color)
+			bashMode: ColorValueSchema,
 		}),
-	),
-	export: Type.Optional(
-		Type.Object({
-			pageBg: Type.Optional(ColorValueSchema),
-			cardBg: Type.Optional(ColorValueSchema),
-			infoBg: Type.Optional(ColorValueSchema),
-		}),
-	),
-});
+		glyphs: Type.Optional(
+			Type.Object({
+				promptMoon: Type.Optional(Type.String()),
+				promptArrow: Type.Optional(Type.String()),
+			}),
+		),
+		export: Type.Optional(
+			Type.Object({
+				pageBg: Type.Optional(ColorValueSchema),
+				cardBg: Type.Optional(ColorValueSchema),
+				infoBg: Type.Optional(ColorValueSchema),
+			}),
+		),
+	});
+}
 
-type ThemeJson = Static<typeof ThemeJsonSchema>;
-
-const validateThemeJson = Compile(ThemeJsonSchema);
+function createThemeValidator() {
+	const { Compile } = require("typebox/compile") as typeof import("typebox/compile");
+	return Compile(createThemeSchema());
+}
+let themeValidator: ReturnType<typeof createThemeValidator> | undefined;
 
 export type ThemeColor =
 	| "accent"
@@ -555,6 +564,8 @@ function assertThemeNameIsValid(name: string): void {
 }
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
+	themeValidator ??= createThemeValidator();
+	const validateThemeJson = themeValidator;
 	if (!validateThemeJson.Check(json)) {
 		const errors = Array.from(validateThemeJson.Errors(json));
 		const missingColors = new Set<string>();

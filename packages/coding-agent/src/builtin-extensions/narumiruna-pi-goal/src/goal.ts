@@ -611,7 +611,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	pi.on("session_before_compact", (event, ctx) => {
 		if (runtime.queueFrozen) return;
 		if (runtime.activeGoal?.status === "budget_limited") {
-			if ((event as { willRetry?: boolean }).willRetry === true) return { cancel: true as const };
+			if (event.reason === "overflow" && (event as { willRetry?: boolean }).willRetry === true) {
+				return { cancel: true as const };
+			}
 			return;
 		}
 		if (runtime.activeGoal?.status !== "active") return;
@@ -620,7 +622,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		persistGoal(runtime.activeGoal);
 		updateStatus(ctx, runtime.activeGoal);
 		if (runtime.pendingQueueAction) return;
-		if (limitActiveGoalForBudget(ctx, false)) return { cancel: true as const };
+		if (limitActiveGoalForBudget(ctx, false)) {
+			if (event.reason === "threshold" && (event as { willRetry?: boolean }).willRetry === true) return;
+			return { cancel: true as const };
+		}
 	});
 
 	pi.on("session_compact", async (event, ctx) => {

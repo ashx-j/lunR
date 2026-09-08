@@ -5,6 +5,7 @@ import { extname, join, resolve as resolvePath, sep as pathSep } from "node:path
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { checkGhAvailable, checkRepoSize, fetchViaApi, showGhHint } from "./github-api.ts";
+import { registerSessionCleanup } from "./session-cleanup.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -633,3 +634,5 @@ export function clearCloneCache(): void {
 	cloneCache.clear();
 	cachedConfig = null;
 }
+
+registerSessionCleanup(clearCloneCache);
