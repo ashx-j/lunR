@@ -68,7 +68,9 @@ compile-cache measurements, not reboot-cold filesystem measurements.
 ## Measured results
 
 Windows, Node 24.15.0, offline, empty workspace, builtin extensions, 2026-09-08.
-Baseline is `b709d12` with benchmark instrumentation only. Ten launches per cell
+Baseline is `b709d12` with benchmark instrumentation only. Measurements preceded
+the rebase onto v0.2.16; build and first-turn checks were repeated afterward.
+Ten launches per cell
 alternated baseline and changed builds. Repeated launches reused each variant's
 own profile after one warmup. The last repeated baseline sample ran separately
 after the comparison runner reached its time limit.
@@ -84,8 +86,8 @@ for repeated launches. With ten samples, nearest-rank p95 is the maximum.
 First-use fixtures on Node 24 added 68 ms for subagent status, 3075 ms for MCP
 status, 143 ms for LSP parsing, and 257 ms for local HTTP extraction after request
 dispatch. These are single observations of complete tool execution, not isolated
-import costs. MCP's first-use delay remains visible rather than moving behind a
-readiness label.
+import costs. Later checks measured 126 to 482 ms for MCP status, so the first-use
+observations are not a stable latency bound.
 
 The packaged CLI passed the same checks on Node 22.19.0. A separately instrumented
 Node 22 run took 6 seconds to dispatch, so these medians are not a latency bound.
