@@ -225,14 +225,24 @@ describe("AgentSession compaction characterization", () => {
 		});
 		harness.sessionManager.appendMessage(createAssistant(harness, { timestamp: Date.now() - 300 }));
 		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		let requestCount = 0;
 		let secondRequestSawCompaction = false;
-		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("dump", {}), { stopReason: "toolUse" }),
-			(context) => {
-				secondRequestSawCompaction = JSON.stringify(context.messages).includes("mid-turn summary");
-				return fauxAssistantMessage("done");
-			},
-		]);
+		harness.session.agent.streamFn = (_model, context) => {
+			requestCount++;
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistant(harness, {
+					stopReason: requestCount === 1 ? "toolUse" : "stop",
+					totalTokens: requestCount === 1 ? 4800 : 100,
+				});
+				message.content = requestCount === 1 ? [fauxToolCall("dump", {})] : [{ type: "text", text: "done" }];
+				if (requestCount === 2) {
+					secondRequestSawCompaction = JSON.stringify(context.messages).includes("mid-turn summary");
+				}
+				stream.push({ type: "done", reason: message.stopReason, message });
+			});
+			return stream;
+		};
 
 		await harness.session.prompt("start");
 
