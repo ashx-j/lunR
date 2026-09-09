@@ -348,7 +348,6 @@ export default function (pi: ExtensionAPI): void {
 				}
 				if (level === currentLevel) return; // no-op
 				pi.setThinkingLevel(level);
-				ctx.ui.notify(`Thinking level: ${pi.getThinkingLevel()}`, "info");
 				return;
 			}
 
@@ -361,12 +360,8 @@ export default function (pi: ExtensionAPI): void {
 				);
 				return;
 			}
-			if (requested === currentLevel) {
-				ctx.ui.notify(`Thinking level: ${requested} (unchanged)`, "info");
-				return;
-			}
+			if (requested === currentLevel) return;
 			pi.setThinkingLevel(requested);
-			ctx.ui.notify(`Thinking level: ${pi.getThinkingLevel()}`, "info");
 		},
 	};
 
