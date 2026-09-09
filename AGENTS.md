@@ -63,6 +63,7 @@ Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 - **Thinking aliases:** `/thinking` picker copy has no fake token budgets. `/effort` and `/reasoning` are full-parity aliases of `/thinking` (TUI extension + gateway). Tests: ashxj-thinking + gateway-commands.
 - **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
+- **Thinking level slash commands (`feat/thinking-level-slash-commands`):** `/off` `/minimal` `/low` `/medium` `/high` `/xhigh` `/max` set the session thinking level. `/` autocomplete shows only levels the current model supports. Tests: ashxj-thinking + thinking-level-slash.
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
 - **xAI grok-4.5+ Responses:** generator + `withXaiEffortMetadata` use `shouldUseXaiResponsesApi` (`parseXaiGrok4Minor >= 5`), not a frozen `grok-4.5` id. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`. Completions compat must not leak onto Responses (`supportsDeveloperRole: false` would drop the developer system role). Tests: xai-thinking + xai-responses + model-refresh-merge.
@@ -282,6 +283,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: v0.2.14 ships the focused catalog, first-paint, and image-paste work; keep #41's mixed reliability changes out until they are split and corrected.
 - 2026-09-05: ship model instructions, required child tiers, and settings_load on master as 0.2.15; drop /swarm instead of restoring the lunr-dev command.
 - 2026-09-08: Codex uses each route's `context_window` as its compaction budget, checks that budget between tool turns, and treats duplicate manual compaction as a no-op; maximum windows remain non-default.
+- 2026-09-09: `/xhigh` and the other thinking-level commands exist, but `/` only lists ones the live model supports.
 
 # Deferred
 
