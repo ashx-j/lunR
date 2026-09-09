@@ -2951,9 +2951,8 @@ export class InteractiveMode {
 			const image = await readClipboardImage();
 			if (image) {
 				const saved = this.writeClipboardImageFile(image);
-				const id = this.insertImageChip(saved);
+				this.insertImageChip(saved);
 				this.ui.requestRender();
-				this.showStatus(`Pasted ${formatImageMarker(id)}`);
 				return;
 			}
 

@@ -30,6 +30,7 @@ Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - **v0.2.14:** ships the autonomous catalog, real TUI first paint, VS Code `/paste-image`, offline CI/release builds, exact coding-agent dependencies, and workspace-aware standalone installer locks. PR #41 was closed because #45 superseded its startup shell.
 
 - **VS Code image paste (`fix/vscode-image-paste`):** image paste flows through the normal app action for default and custom editors. `/paste-image` invokes the same image-only clipboard path when VS Code owns the key. The retained first-paint editor releases its startup paste callback at activation so the runtime action takes over. Tests: image-paste-keybinding + image-paste-markers + real-tui-first-paint + slash-commands + clipboard-image + extensions-runner.
+- **Image paste toast (`fix/image-paste-status`):** pasting an image inserts `[image_n]` only. No `Pasted [image_n]` status line at runtime or during startup.
 - **Real TUI first paint (`fix/real-tui-first-paint`):** the Node CLI paints the normal moon chatbox, boot header, and stats before runtime imports. InteractiveMode reuses the terminal/editor; Enter holds the editable draft until features finish, then uses the normal command/message handler. Failed feature loading keeps the draft. Theme validation/highlighting load on demand; footer git reads are asynchronous. Startup dialogs share the terminal. For startup changes or measurements, read `packages/coding-agent/docs/interactive-startup.md` and run `scripts/check-interactive-first-paint.mjs` after building. This replaces #41's temporary presentation without its unrelated reliability changes.
 
 - **Autonomous catalog (`fix/autonomous-model-catalog-master`):** port of #43 from `dev/tui`, without unrelated development changes. Codex uses public upstream metadata and authenticated version-gated discovery; idle refresh and checksummed hourly snapshots need no agent runs. Provider capabilities beat stale metadata; explicit overrides and account-scoped last-good caches remain. Read `packages/coding-agent/docs/model-catalog.md` when changing discovery or handling publication failures. CLI release remains separate from the master merge.
@@ -282,6 +283,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: v0.2.14 ships the focused catalog, first-paint, and image-paste work; keep #41's mixed reliability changes out until they are split and corrected.
 - 2026-09-05: ship model instructions, required child tiers, and settings_load on master as 0.2.15; drop /swarm instead of restoring the lunr-dev command.
 - 2026-09-08: Codex uses each route's `context_window` as its compaction budget, checks that budget between tool turns, and treats duplicate manual compaction as a no-op; maximum windows remain non-default.
+- 2026-09-09: image paste inserts the chip and skips the Pasted status toast.
 
 # Deferred
 
