@@ -155,4 +155,68 @@ describe("ashxj-thinking", () => {
 		expect(notify).toHaveBeenCalledWith("Thinking level: medium", "info");
 		expect(select).not.toHaveBeenCalled();
 	});
+
+	it("completions follow session_start when pi.getModel is missing", () => {
+		const commands = new Map<string, RegisteredCommand>();
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		ashxjThinking({
+			registerCommand(name: string, spec: RegisteredCommand) {
+				commands.set(name, spec);
+			},
+			getThinkingLevel: () => "high",
+			setThinkingLevel() {},
+			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+				handlers.set(event, handler);
+			},
+		} as never);
+		const before = (commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map(
+			(item) => item.value,
+		);
+		expect(before).not.toContain("xhigh");
+		handlers.get("session_start")?.(
+			{},
+			{
+				model: {
+					id: "grok-4.6",
+					reasoning: true,
+					thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+				},
+			},
+		);
+		const after = (commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map(
+			(item) => item.value,
+		);
+		expect(after).toEqual(expect.arrayContaining(["xhigh", "max", "high"]));
+	});
+
+	it("completions follow model_select when the session model changes", () => {
+		const commands = new Map<string, RegisteredCommand>();
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		ashxjThinking({
+			registerCommand(name: string, spec: RegisteredCommand) {
+				commands.set(name, spec);
+			},
+			getThinkingLevel: () => "high",
+			setThinkingLevel() {},
+			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+				handlers.set(event, handler);
+			},
+		} as never);
+		handlers.get("session_start")?.(
+			{},
+			{
+				model: { id: "claude-opus-4", reasoning: true },
+			},
+		);
+		expect(
+			(commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map((item) => item.value),
+		).not.toContain("xhigh");
+		handlers.get("model_select")?.(
+			{ model: { id: "grok-4.6", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } } },
+			{ model: undefined },
+		);
+		expect(
+			(commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map((item) => item.value),
+		).toContain("xhigh");
+	});
 });
