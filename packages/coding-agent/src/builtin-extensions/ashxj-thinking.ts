@@ -122,10 +122,11 @@ function formatLevelLabel(level: ThinkingLevel): string {
 // Persisted thinking-block visibility (hideThinkingBlock)
 //
 // pi has no public extension API to toggle thinking-block visibility live.
-// The live in-session toggle is `app.thinking.toggle` (default Ctrl+T) wired to
+// The live in-session toggle is `app.thinking.toggle` (unbound by default) wired to
 // `toggleThinkingBlockVisibility()` in interactive-mode.js, which calls
 // `SettingsManager.setHideThinkingBlock()` + rebuilds the chat. That method is
 // not exposed on ExtensionContext / ExtensionCommandContext / ExtensionAPI.
+// Ctrl+T cycles thinking level (`app.thinking.cycle`).
 //
 // What extensions CAN do is persist the `hideThinkingBlock` boolean to the
 // global agent settings file (`~/.lunr/agent/settings.json`); the
@@ -138,9 +139,7 @@ function formatLevelLabel(level: ThinkingLevel): string {
 // (verified against pi 0.80.3). In non-TUI modes `ctx.reload()` is a no-op,
 // so the setting simply applies on next start.
 //
-// The instant keybinding path (Ctrl+T) still works and is the lowest-latency
-// toggle; the command is the discoverable, persistable, completions-friendly
-// equivalent.
+// `/thinking show|hide|toggle` is the discoverable, persistable path.
 // ---------------------------------------------------------------------------
 
 /** Returns the path to lunR's global agent settings file.
@@ -305,7 +304,7 @@ export default function (pi: ExtensionAPI): void {
 				// this.hideThinkingBlock → rebuildChatFromMessages() rebuilds every
 				// AssistantMessageComponent with the new hide flag). In non-TUI
 				// modes ctx.reload() is a no-op; the setting then applies on next
-				// start. The instant keybinding path (Ctrl+T) also still works.
+				// start.
 				const verb = next ? "hidden" : "shown";
 				const note = result.createdFresh
 					? `Thinking blocks ${verb}. (Created ${agentSettingsPath()} with this setting.)`
