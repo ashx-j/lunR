@@ -44,6 +44,20 @@ function schemaProperties(schema: { properties?: Record<string, unknown> }): str
 	return Object.keys(schema.properties ?? {});
 }
 
+function nestedSchema(
+	schema: unknown,
+	path: string[],
+): { properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] } {
+	let current: unknown = schema;
+	for (const key of path) {
+		if (!current || typeof current !== "object") return {};
+		current = (current as Record<string, unknown>)[key];
+	}
+	return current && typeof current === "object"
+		? (current as { properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] })
+		: {};
+}
+
 describe("prompt-driven subagent schema", () => {
 	it("does not require or expose agent on execution shapes", () => {
 		for (const schema of [SubagentParams, ParallelTaskSchema, DynamicParallelTemplateSchema, ChainItem]) {
@@ -57,6 +71,18 @@ describe("prompt-driven subagent schema", () => {
 		expect(schemaProperties(DynamicParallelTemplateSchema)).toContain("description");
 		expect((ParallelTaskSchema as { required?: string[] }).required).toContain("description");
 		expect((DynamicParallelTemplateSchema as { required?: string[] }).required).toContain("description");
+	});
+
+	it("keeps the description parameter on the pruned subagent schema", () => {
+		const taskItems = nestedSchema(SubagentParams, ["properties", "tasks", "items"]);
+		const chainItems = nestedSchema(SubagentParams, ["properties", "chain", "items"]);
+		const parallelAnyOf = nestedSchema(chainItems, ["properties", "parallel"]).anyOf ?? [];
+		expect(schemaProperties(SubagentParams)).toContain("description");
+		expect(schemaProperties(taskItems)).toContain("description");
+		expect(taskItems.required).toContain("description");
+		expect(schemaProperties(chainItems)).toContain("description");
+		expect(schemaProperties(nestedSchema(parallelAnyOf[0], ["items"]))).toContain("description");
+		expect(schemaProperties(nestedSchema(parallelAnyOf[1], []))).toContain("description");
 	});
 
 	it("requires tier on executable task schemas and exposes no direct model override", () => {
