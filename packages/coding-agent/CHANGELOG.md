@@ -4,6 +4,12 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.16`**.
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-09-11
+
+### Fixed
+
+- **Subagent launches.** Nested JSON Schema cleanup no longer deletes the child `description` UI label. A control `action` mixed into a launch is dropped, and dummy `tasks`/`chain` are dropped when a real `task` is present, so filling every optional field cannot turn a spawn into status or a stub chain.
+
 ## [0.2.16] - 2026-09-08
 
 ### Fixed
