@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-09 (`fix/subagent-launch-schema` on master). Public npm is `@ashx-j/lunr@0.2.16`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-11 (v0.2.17 on `release/v0.2.17`). Public npm is `@ashx-j/lunr@0.2.16` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.17:** ships the subagent launch-schema fix so Grok can spawn children again.
 - **Subagent launch schema (`fix/subagent-launch-schema`):** the nested-help-text prune kept deleting the real `description` UI-label parameter because that key is also a JSON Schema keyword. The prune now keeps `description` when it is a `properties` field and still strips nested help text. A control `action` mixed into a launch payload is dropped so Grok filling the flat schema cannot turn a spawn into `status`. If that payload also has a non-empty `task`, dummy `tasks`/`chain` are dropped so mode inference cannot steal the single launch. Tests: prompt-driven-subagents pruned-schema + request-params coverage.
 - **v0.2.16:** ships the Codex context and compaction fixes below.
 - **Codex context + compaction:** all current baked Codex windows match their default route limits: Spark is **128000**; GPT-5.4, 5.5, 5.6 variants, and Astra are **272000**. Live discovery uses `context_window` only; `max_context_window` never becomes the default budget. Codex checks compaction after complete tool-result batches, before the next provider request. Repeated manual compaction at the same boundary is a no-op. Tests: openai-thinking + codex-catalog + compaction + agent-session-compaction.
@@ -90,7 +91,7 @@ Last updated: 2026-09-09 (`fix/subagent-launch-schema` on master). Public npm is
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.16**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.16** until `v0.2.17` publishes.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -104,6 +105,7 @@ Last updated: 2026-09-09 (`fix/subagent-launch-schema` on master). Public npm is
 
 ## Build & run
 
+- v0.2.17 release (2026-09-11): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 26/26. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.17.
 - v0.2.16 release (2026-09-08): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 58/58 with 7 skipped; AI passes 17/17. Touched-file Biome, relative-import, workflow-publish, browser smoke, and `git diff --check` pass; the repository-wide Biome and pinned-dependency checks retain known findings in unrelated tracked files and gitignored study trees. All four public-package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.16; print mode returned `release-0.2.16-ok` before the known timeout exit 124.
 - v0.2.14 release (2026-09-05): offline tui → ai → agent → coding-agent → orchestrator build passes at 0.2.14; focused AI catalog tests pass 42/42 and coding-agent catalog/startup/image-paste tests pass 140/140. Stalled/failed-runtime first-paint checks and all four public-package dry-run packs pass; generated shrinkwrap and installer locks are current.
 - Real TUI first paint (2026-09-05): all five offline tsgo builds pass. Focused startup/footer/input/theme/feature tests pass; the expanded run retains 14 failures reproduced against master's entrypoints and interactive module, comprising 12 Windows resource-list assertions and 2 native source-launch `.js` resolution failures. The built-CLI stalled/failing-runtime checks pass. Three isolated moon launches wrote the first content frame at 94.8–95.3ms; three warm launches at 96.6–99.1ms. Feature readiness was 2.01–2.43s. These include Node entry loading and measure content writes, without measuring terminal compositor latency or compiled Bun binaries.
@@ -114,7 +116,7 @@ Last updated: 2026-09-09 (`fix/subagent-launch-schema` on master). Public npm is
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / workspace CLI → **0.2.16**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / workspace CLI → **0.2.17**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` uses the workspace bin (`packages/coding-agent/dist/cli.js`); rebuild coding-agent `dist` first. The startup benchmark reports first content frame separately from runtime and feature readiness.
@@ -285,6 +287,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: ship model instructions, required child tiers, and settings_load on master as 0.2.15; drop /swarm instead of restoring the lunr-dev command.
 - 2026-09-08: Codex uses each route's `context_window` as its compaction budget, checks that budget between tool turns, and treats duplicate manual compaction as a no-op; maximum windows remain non-default.
 - 2026-09-09: keep `description` when it is a JSON Schema properties key so the child UI label survives nested-help-text pruning, drop a mixed control action so a filled mega-schema cannot become status, and drop dummy `tasks`/`chain` when that payload still has a real `task`.
+- 2026-09-11: ship that launch-schema fix as 0.2.17.
 
 # Deferred
 
