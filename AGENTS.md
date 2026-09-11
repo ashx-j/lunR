@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-11 (v0.2.17 on `release/v0.2.17`). Public npm is `@ashx-j/lunr@0.2.16` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.17`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.17:** ships the subagent launch-schema fix so Grok can spawn children again.
 - **Subagent launch schema (`fix/subagent-launch-schema`):** the nested-help-text prune kept deleting the real `description` UI-label parameter because that key is also a JSON Schema keyword. The prune now keeps `description` when it is a `properties` field and still strips nested help text. A control `action` mixed into a launch payload is dropped so Grok filling the flat schema cannot turn a spawn into `status`. If that payload also has a non-empty `task`, dummy `tasks`/`chain` are dropped so mode inference cannot steal the single launch. Tests: prompt-driven-subagents pruned-schema + request-params coverage.
@@ -91,7 +91,7 @@ Last updated: 2026-09-11 (v0.2.17 on `release/v0.2.17`). Public npm is `@ashx-j/
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.16** until `v0.2.17` publishes.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.17**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
