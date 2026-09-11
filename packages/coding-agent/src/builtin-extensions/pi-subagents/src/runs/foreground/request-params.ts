@@ -33,6 +33,11 @@ function omitConflictingControlAction<T extends RequestParams>(params: T): T {
 	if (!action || LAUNCH_COMPATIBLE_ACTIONS.has(action) || !hasLaunchFields(params)) return params;
 	const rest = { ...params };
 	delete rest.action;
+	// Grok fills the flat schema, so a real single launch also carries dummy tasks/chain.
+	if (typeof rest.task === "string" && rest.task.length > 0) {
+		delete rest.tasks;
+		delete rest.chain;
+	}
 	return rest;
 }
 

@@ -85,6 +85,14 @@ describe("prompt-driven subagent schema", () => {
 		expect(schemaProperties(chainItems)).toContain("description");
 		expect(schemaProperties(nestedSchema(parallelAnyOf[0], ["items"]))).toContain("description");
 		expect(schemaProperties(nestedSchema(parallelAnyOf[1], []))).toContain("description");
+		expect(nestedSchema(SubagentParams, ["properties", "task"]).description).toEqual(expect.any(String));
+		expect(nestedSchema(SubagentParams, ["properties", "description"]).description).toEqual(expect.any(String));
+		expect(
+			nestedSchema(SubagentParams, ["properties", "tasks", "items", "properties", "task"]).description,
+		).toBeUndefined();
+		expect(
+			nestedSchema(SubagentParams, ["properties", "tasks", "items", "properties", "description"]).description,
+		).toBeUndefined();
 	});
 
 	it("accepts a single launch and rejects parallel tasks that omit description", () => {
@@ -121,6 +129,14 @@ describe("prompt-driven subagent schema", () => {
 		});
 		expect(mixed.action).toBeUndefined();
 		expect(mixed.task).toBe("Review the web search hot path");
+		expect(mixed.tasks).toBeUndefined();
+		expect(mixed.chain).toBeUndefined();
+		expect(
+			resolveSubagentRequestParams({
+				action: "status",
+				tasks: [{ task: "Review the web search hot path", description: "Review web perf", tier: "heavy" }],
+			}).tasks,
+		).toEqual([{ task: "Review the web search hot path", description: "Review web perf", tier: "heavy" }]);
 		expect(resolveSubagentRequestParams({ action: "status", id: "web-perf-review" }).action).toBe("status");
 		expect(
 			resolveSubagentRequestParams({
