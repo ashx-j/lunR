@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.16`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-09 (`fix/subagent-launch-schema` on master). Public npm is `@ashx-j/lunr@0.2.16`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Subagent launch schema (`fix/subagent-launch-schema`):** the nested-help-text prune kept deleting the real `description` UI-label parameter because that key is also a JSON Schema keyword. The prune now keeps `description` when it is a `properties` field and still strips nested help text. A control `action` mixed into a launch payload is dropped so Grok filling the flat schema cannot turn a spawn into `status`. Tests: prompt-driven-subagents pruned-schema + request-params coverage.
 - **v0.2.16:** ships the Codex context and compaction fixes below.
 - **Codex context + compaction:** all current baked Codex windows match their default route limits: Spark is **128000**; GPT-5.4, 5.5, 5.6 variants, and Astra are **272000**. Live discovery uses `context_window` only; `max_context_window` never becomes the default budget. Codex checks compaction after complete tool-result batches, before the next provider request. Repeated manual compaction at the same boundary is a no-op. Tests: openai-thinking + codex-catalog + compaction + agent-session-compaction.
 - **v0.2.15:** ports lunr-dev settings work onto master without #41's temporary startup shell. `/settings` gains Model instructions and Confirm large subagent launches. Global instructions move to `~/.lunr/agent/agents/AGENTS.md` with optional per-model files. `settings_load` injects four narrow settings tools. Enabled model tiers require `light`/`standard`/`heavy` on every child (no inherit, no child `model`). `/swarm` is removed. Real TUI first paint from 0.2.14 stays. PR #41 reliability (terminal sanitization, rollback symlink, orchestrator timeouts) remains unshipped.
@@ -181,6 +182,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Compact subagent rows are description-first. Do not restore model-first `compactRowLead`. Never display worker/scout/reviewer role names. When a single result is visible, its call header must not repeat the description.
 - Compact/header badges use `modelSelection` captured at spawn. Do not format them from `result.model` alone; that is the resolved runtime id. A resolving `tier` prints the tier name, not the mapped model.
 - `description` is presentation only. Persist and route intercom/resume/steer by private `childId`; dynamic fanout suffixes it per item, and appended async steps require a fresh append namespace so they cannot collide with existing children.
+- Subagent schema prune must keep properties named `description`; that key is the child UI label, not only JSON Schema help text. Assert the pruned `SubagentParams` export. Drop control `action` when `task`/`tasks`/`chain` are also present, except `schedule`/`append-step`/`resume`/`steer`.
 - `lunr update` is npm global `@ashx-j/lunr` only. Workspace `PACKAGE_NAME !== NPM_CLI_PACKAGE` skips the nag and refuses to self-update.
 - Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps `wk 32%`.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
@@ -282,6 +284,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: v0.2.14 ships the focused catalog, first-paint, and image-paste work; keep #41's mixed reliability changes out until they are split and corrected.
 - 2026-09-05: ship model instructions, required child tiers, and settings_load on master as 0.2.15; drop /swarm instead of restoring the lunr-dev command.
 - 2026-09-08: Codex uses each route's `context_window` as its compaction budget, checks that budget between tool turns, and treats duplicate manual compaction as a no-op; maximum windows remain non-default.
+- 2026-09-09: keep `description` when it is a JSON Schema properties key so the child UI label survives nested-help-text pruning, and drop a mixed control action so a filled mega-schema cannot become status.
 
 # Deferred
 

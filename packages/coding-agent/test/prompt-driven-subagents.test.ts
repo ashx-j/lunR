@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Compile } from "typebox/compile";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	ChainItem,
@@ -18,6 +19,7 @@ import {
 	resolveAsyncResumeTarget,
 } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-resume.ts";
 import { sanitizeScheduledParams } from "../src/builtin-extensions/pi-subagents/src/runs/background/scheduled-runs.ts";
+import { resolveSubagentRequestParams } from "../src/builtin-extensions/pi-subagents/src/runs/foreground/request-params.ts";
 import {
 	PARENT_OWNED_CHILD_TOOLS,
 	READ_ONLY_EXCLUDED_CHILD_TOOLS,
@@ -44,6 +46,20 @@ function schemaProperties(schema: { properties?: Record<string, unknown> }): str
 	return Object.keys(schema.properties ?? {});
 }
 
+function nestedSchema(
+	schema: unknown,
+	path: string[],
+): { properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] } {
+	let current: unknown = schema;
+	for (const key of path) {
+		if (!current || typeof current !== "object") return {};
+		current = (current as Record<string, unknown>)[key];
+	}
+	return current && typeof current === "object"
+		? (current as { properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] })
+		: {};
+}
+
 describe("prompt-driven subagent schema", () => {
 	it("does not require or expose agent on execution shapes", () => {
 		for (const schema of [SubagentParams, ParallelTaskSchema, DynamicParallelTemplateSchema, ChainItem]) {
@@ -57,6 +73,70 @@ describe("prompt-driven subagent schema", () => {
 		expect(schemaProperties(DynamicParallelTemplateSchema)).toContain("description");
 		expect((ParallelTaskSchema as { required?: string[] }).required).toContain("description");
 		expect((DynamicParallelTemplateSchema as { required?: string[] }).required).toContain("description");
+	});
+
+	it("keeps the description parameter on the pruned subagent schema", () => {
+		const taskItems = nestedSchema(SubagentParams, ["properties", "tasks", "items"]);
+		const chainItems = nestedSchema(SubagentParams, ["properties", "chain", "items"]);
+		const parallelAnyOf = nestedSchema(chainItems, ["properties", "parallel"]).anyOf ?? [];
+		expect(schemaProperties(SubagentParams)).toContain("description");
+		expect(schemaProperties(taskItems)).toContain("description");
+		expect(taskItems.required).toContain("description");
+		expect(schemaProperties(chainItems)).toContain("description");
+		expect(schemaProperties(nestedSchema(parallelAnyOf[0], ["items"]))).toContain("description");
+		expect(schemaProperties(nestedSchema(parallelAnyOf[1], []))).toContain("description");
+	});
+
+	it("accepts a single launch and rejects parallel tasks that omit description", () => {
+		const validator = Compile(SubagentParams);
+		expect(
+			validator.Check({
+				task: "Review the web search hot path",
+				description: "Review web perf",
+				tier: "heavy",
+				permissions: "read-only",
+			}),
+		).toBe(true);
+		expect(
+			validator.Check({
+				tasks: [{ task: "Review the web search hot path", tier: "heavy" }],
+			}),
+		).toBe(false);
+		expect(
+			validator.Check({
+				tasks: [{ task: "Review the web search hot path", description: "Review web perf", tier: "heavy" }],
+			}),
+		).toBe(true);
+	});
+
+	it("drops a control action mixed into a launch payload", () => {
+		const mixed = resolveSubagentRequestParams({
+			action: "status",
+			id: "web-perf-review",
+			task: "Review the web search hot path",
+			description: "Review web perf",
+			tier: "heavy",
+			tasks: [{ task: "x", description: "stub", tier: "heavy" }],
+			chain: [{ tier: "heavy" }],
+		});
+		expect(mixed.action).toBeUndefined();
+		expect(mixed.task).toBe("Review the web search hot path");
+		expect(resolveSubagentRequestParams({ action: "status", id: "web-perf-review" }).action).toBe("status");
+		expect(
+			resolveSubagentRequestParams({
+				action: "schedule",
+				task: "Review later",
+				description: "Review web perf",
+				tier: "heavy",
+			}).action,
+		).toBe("schedule");
+		expect(
+			resolveSubagentRequestParams({
+				action: "append-step",
+				id: "run-1",
+				chain: [{ task: "Follow up", description: "Follow-up", tier: "standard" }],
+			}).action,
+		).toBe("append-step");
 	});
 
 	it("requires tier on executable task schemas and exposes no direct model override", () => {
