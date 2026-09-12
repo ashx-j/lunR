@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
 import { validateChildDescription } from "../../shared/child-spec.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
-import { validateAcceptanceInput } from "../shared/acceptance.ts";
+import { validatePersistedAcceptance } from "../shared/acceptance.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
 import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
 import { deliverInterruptRequest } from "./control-channel.ts";
@@ -108,6 +108,18 @@ export interface AsyncRunLocation {
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+const TURN_BUDGET_RUNTIME_KEYS = new Set(["outcome", "turnCount", "wrapUpRequestedAtTurn", "exceededAtTurn"]);
+
+function persistedTurnBudgetConfig(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const config: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+		if (TURN_BUDGET_RUNTIME_KEYS.has(key)) continue;
+		config[key] = value;
+	}
+	return config;
 }
 
 function ensureObject(value: unknown, source: string): Record<string, unknown> {
@@ -353,8 +365,12 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	}
 	if (parsed.absoluteDeadlineAt !== undefined && (!Number.isFinite(parsed.absoluteDeadlineAt) || (parsed.absoluteDeadlineAt as number) <= 0)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': absoluteDeadlineAt must be a positive timestamp.`);
 	if (parsed.initialTurnBudget !== undefined) {
-		const result = resolveTurnBudgetConfig(parsed.initialTurnBudget, "recoveryDescriptor.initialTurnBudget");
+		const result = resolveTurnBudgetConfig(
+			persistedTurnBudgetConfig(parsed.initialTurnBudget),
+			"recoveryDescriptor.initialTurnBudget",
+		);
 		if (result.error) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${result.error}`);
+		if (result.turnBudget) parsed.initialTurnBudget = result.turnBudget;
 	}
 	if (parsed.initialToolBudget !== undefined) {
 		const result = validateToolBudgetConfig(parsed.initialToolBudget, "recoveryDescriptor.initialToolBudget");
@@ -390,7 +406,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (!Array.isArray(control.notifyChannels) || control.notifyChannels.some((item) => item !== "event" && item !== "async" && item !== "intercom")) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': controlConfig.notifyChannels is invalid.`);
 	}
 	if (parsed.acceptance !== undefined) {
-		const errors = validateAcceptanceInput(parsed.acceptance, "recoveryDescriptor.acceptance");
+		const errors = validatePersistedAcceptance(parsed.acceptance, "recoveryDescriptor.acceptance");
 		if (errors.length) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${errors.join(" ")}`);
 	}
 	return parsed as unknown as SteeringRecoveryDescriptor;

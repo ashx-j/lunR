@@ -366,7 +366,7 @@ export interface SteeringRecoveryDescriptor {
 	skills?: string[];
 	outputPath?: string;
 	outputMode: "inline" | "file-only";
-	acceptance?: AcceptanceInput;
+	acceptance?: ResolvedAcceptanceConfig;
 	controlConfig?: ResolvedControlConfig;
 	absoluteDeadlineAt?: number;
 	initialTurnBudget?: ResolvedTurnBudget;

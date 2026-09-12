@@ -30,6 +30,7 @@ import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { resolveEffectiveAcceptance } from "../shared/acceptance.ts";
 import {
 	type AcceptanceInput,
+	type ResolvedAcceptanceConfig,
 	type ArtifactConfig,
 	type ChildSpec,
 	type Details,
@@ -184,6 +185,7 @@ interface AsyncSingleParams {
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	nestedRoute?: NestedRouteInfo;
 	acceptance?: AcceptanceInput;
+	restoredAcceptance?: ResolvedAcceptanceConfig;
 	timeoutMs?: number;
 	absoluteDeadlineAt?: number;
 	turnBudget?: ResolvedTurnBudget;
@@ -1017,6 +1019,24 @@ export function executeAsyncChain(
 	};
 }
 
+export function resolveAsyncSingleAcceptance(input: {
+	restoredAcceptance?: ResolvedAcceptanceConfig;
+	launchAcceptance?: AcceptanceInput;
+	agentName?: string;
+	permissions?: "full" | "read-only";
+	task: string;
+}): ResolvedAcceptanceConfig {
+	if (input.restoredAcceptance) return input.restoredAcceptance;
+	return resolveEffectiveAcceptance({
+		explicit: input.launchAcceptance,
+		agentName: input.agentName,
+		permissions: input.permissions,
+		task: input.task,
+		mode: "single",
+		async: true,
+	});
+}
+
 /**
  * Execute a single agent asynchronously
  */
@@ -1098,13 +1118,12 @@ export function executeAsyncSingle(
 	if (timeoutMs !== undefined && timeoutMs <= 0) return formatAsyncStartError("single", "The source run's absolute deadline expired before recovery could launch.");
 	const initialTurnBudget = params.turnBudget ? initialTurnBudgetState(params.turnBudget) : undefined;
 	const resolvedSessionDir = params.sessionDir ?? (sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined);
-	const resolvedAcceptance = resolveEffectiveAcceptance({
-		explicit: params.acceptance ?? spec.acceptance,
+	const resolvedAcceptance = resolveAsyncSingleAcceptance({
+		restoredAcceptance: params.restoredAcceptance,
+		launchAcceptance: params.acceptance ?? spec.acceptance,
 		agentName: agent,
 		permissions: spec.effectivePermissions,
 		task,
-		mode: "single",
-		async: true,
 	});
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
 		version: 4,
