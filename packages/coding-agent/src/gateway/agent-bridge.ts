@@ -35,7 +35,7 @@ import type { Model } from "@earendil-works/pi-ai/compat";
 import type { AgentSession, AgentSessionEvent, SessionStats } from "../core/agent-session.ts";
 import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
-import type { ContextUsage, ToolDefinition } from "../core/extensions/types.ts";
+import type { ContextUsage, SessionShutdownEvent, ToolDefinition } from "../core/extensions/types.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import { createPermissionContext, deletePermissionContext } from "../core/permissions.ts";
 import type { ReadonlySessionManager, SessionManager, SessionMessageEntry } from "../core/session-manager.ts";
@@ -88,6 +88,10 @@ export interface BridgeSession {
 	abort(): Promise<void> | void;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 	readonly state: { messages: AgentMessage[] };
+	readonly extensionRunner?: {
+		hasHandlers(eventType: string): boolean;
+		emit(event: SessionShutdownEvent): Promise<unknown>;
+	};
 	dispose?(): void;
 	readonly isStreaming: boolean;
 	readonly isCompacting?: boolean;
@@ -115,6 +119,26 @@ export interface BridgeSession {
 }
 
 export type SessionFactory = (key: string, reopen: { sessionFile: string } | undefined) => Promise<BridgeSession>;
+
+export async function shutdownBridgeSession(
+	session: BridgeSession,
+	reason: SessionShutdownEvent["reason"],
+	targetSessionFile?: string,
+): Promise<void> {
+	try {
+		if (session.extensionRunner?.hasHandlers("session_shutdown")) {
+			await session.extensionRunner.emit({
+				type: "session_shutdown",
+				reason,
+				...(targetSessionFile ? { targetSessionFile } : {}),
+			});
+		}
+	} catch (error) {
+		console.error("[gateway] session shutdown handler failed", error);
+	} finally {
+		session.dispose?.();
+	}
+}
 
 interface CacheEntry {
 	session: BridgeSession;
@@ -277,7 +301,7 @@ export class AgentBridge {
 			const oldSessionId = entry.session.sessionManager?.getSessionId();
 			entry.unsubscribe?.();
 			this.cache.delete(key);
-			entry.session.dispose?.();
+			await shutdownBridgeSession(entry.session, "resume", sessionFile);
 			if (oldSessionId) deletePermissionContext(oldSessionId);
 		}
 		removeSession(key);
@@ -294,8 +318,8 @@ export class AgentBridge {
 		}
 		const newEntry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
 		this.cache.set(key, newEntry);
-		this._enforceCacheCap(key);
 		newEntry.unsubscribe = this._subscribeToSession(key, newEntry);
+		await this._enforceCacheCap(key);
 	}
 
 	/** Undo the last user turn and push the previous leaf onto the redo stack. */
@@ -375,7 +399,7 @@ export class AgentBridge {
 			}
 			entry.unsubscribe?.();
 			this.cache.delete(key);
-			entry.session.dispose?.();
+			await shutdownBridgeSession(entry.session, "new");
 		}
 		removeSession(key);
 		this.redoStack.delete(key);
@@ -518,12 +542,12 @@ export class AgentBridge {
 		}
 		const entry: CacheEntry = { session, busy: false, queue: [], dropped: 0, unsubscribe: undefined };
 		this.cache.set(key, entry);
-		this._enforceCacheCap(key);
 		entry.unsubscribe = this._subscribeToSession(key, entry);
+		await this._enforceCacheCap(key);
 		return entry;
 	}
 
-	private _enforceCacheCap(protectedKey?: string): void {
+	private async _enforceCacheCap(protectedKey?: string): Promise<void> {
 		while (this.cache.size > this.cap) {
 			let oldestKey: string | undefined;
 			let oldest: CacheEntry | undefined;
@@ -542,7 +566,7 @@ export class AgentBridge {
 			}
 			oldest.unsubscribe?.();
 			this.cache.delete(oldestKey);
-			oldest.session.dispose?.();
+			await shutdownBridgeSession(oldest.session, "quit");
 			const evictedSessionId = oldest.session.sessionManager?.getSessionId();
 			if (evictedSessionId) deletePermissionContext(evictedSessionId);
 		}

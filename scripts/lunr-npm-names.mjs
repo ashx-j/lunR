@@ -1,3 +1,6 @@
+import { existsSync, globSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
 /**
  * Publish-time npm identity. Workspace package.json names stay
  * @earendil-works/pi-*. Tarballs we upload must use these names.
@@ -33,6 +36,54 @@ export function assertNoEarendil(value, label = "package") {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
 	if (text.includes("@earendil-works/")) {
 		throw new Error(`${label} still references @earendil-works/* — refusing to publish`);
+	}
+}
+
+const PUBLISHED_TEXT_EXTENSIONS = [".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"];
+
+export function assertPublishedEntryPointsExist(root, pkg, label = "package") {
+	const targets = new Set();
+	const visit = (value) => {
+		if (typeof value === "string") {
+			if (/^\.?\/?dist\//.test(value)) targets.add(value.replace(/^\.\//, ""));
+			return;
+		}
+		if (Array.isArray(value)) {
+			for (const item of value) visit(item);
+			return;
+		}
+		if (value && typeof value === "object") {
+			for (const item of Object.values(value)) visit(item);
+		}
+	};
+	visit({ main: pkg.main, types: pkg.types, bin: pkg.bin, exports: pkg.exports });
+	for (const target of targets) {
+		const exists = target.includes("*") ? globSync(target, { cwd: root }).length > 0 : existsSync(join(root, target));
+		if (!exists) {
+			throw new Error(`${label} ${target} does not exist — refusing to publish`);
+		}
+	}
+}
+
+export function assertPublishedTreeHasNoEarendil(root, label = "package") {
+	const stack = [join(root, "dist")];
+	let scannedJavaScript = 0;
+	while (stack.length > 0) {
+		const directory = stack.pop();
+		for (const name of readdirSync(directory)) {
+			const fullPath = join(directory, name);
+			if (statSync(fullPath).isDirectory()) {
+				if (name !== "node_modules") stack.push(fullPath);
+				continue;
+			}
+			if (!PUBLISHED_TEXT_EXTENSIONS.some((extension) => fullPath.endsWith(extension))) continue;
+			const relativePath = relative(root, fullPath).replaceAll("\\", "/");
+			if (/^dist\/.*\.(?:js|mjs|cjs)$/.test(relativePath)) scannedJavaScript++;
+			assertNoEarendil(readFileSync(fullPath, "utf8"), `${label} ${relativePath}`);
+		}
+	}
+	if (scannedJavaScript === 0) {
+		throw new Error(`${label} has no compiled JavaScript under dist — refusing to publish`);
 	}
 }
 

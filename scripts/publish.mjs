@@ -10,7 +10,13 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoEarendil, npmNameFor, rewritePackageJsonForNpm, rewriteWorkspaceSpecifiers } from "./lunr-npm-names.mjs";
+import {
+	assertPublishedEntryPointsExist,
+	assertPublishedTreeHasNoEarendil,
+	npmNameFor,
+	rewritePackageJsonForNpm,
+	rewriteWorkspaceSpecifiers,
+} from "./lunr-npm-names.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -88,8 +94,9 @@ function readPackageJson(directory) {
 
 function assertBuildOutputExists(directory) {
 	if (!existsSync(join(directory, "dist"))) {
-		throw new Error(`${directory}/dist does not exist. Build with tsgo before publishing.`);
+		throw new Error(`${directory}/dist does not exist. Run the package build before publishing.`);
 	}
+	assertPublishedEntryPointsExist(directory, readPackageJson(directory), directory);
 }
 
 async function isPublished(name, version) {
@@ -121,10 +128,7 @@ function copyPackageForPublish(directory) {
 	}
 	writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`, "utf8");
 	rewritePublishedTree(dest);
-	const stagedMain = join(dest, "dist", "main.js");
-	if (existsSync(stagedMain)) {
-		assertNoEarendil(readFileSync(stagedMain, "utf8"), `${rewritten.name} dist/main.js`);
-	}
+	assertPublishedTreeHasNoEarendil(dest, rewritten.name);
 	return { dest, publishedName: rewritten.name, version: rewritten.version };
 }
 

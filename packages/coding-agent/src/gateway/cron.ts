@@ -35,7 +35,7 @@ import { beginCronFire, endCronFire } from "../core/cron/fire-guard.ts";
 import type { CronJob, CronJobOrigin } from "../core/cron/jobs.ts";
 import { setCronDeliverValidator } from "../core/cron/jobs.ts";
 import { startScheduler } from "../core/cron/scheduler.ts";
-import type { BridgeSession } from "./agent-bridge.ts";
+import { type BridgeSession, shutdownBridgeSession } from "./agent-bridge.ts";
 import { type GatewayConfig, platformConfigFor } from "./config.ts";
 import { splitMessage } from "./text.ts";
 import type { PlatformAdapter } from "./types.ts";
@@ -368,7 +368,7 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 				} catch (err) {
 					errors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
 				} finally {
-					session?.dispose?.();
+					if (session) await shutdownBridgeSession(session, "quit");
 				}
 			}
 			throw new Error(errors.join(" | ") || "no model candidates");
