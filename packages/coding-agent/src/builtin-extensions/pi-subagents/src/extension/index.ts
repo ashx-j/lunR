@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { createSubagentCancellation, registerSubagentCancellation } from "../../../../core/subagent-cancellation.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -348,10 +349,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let generation = 0;
 	let executorPromise: Promise<ReturnType<typeof createSubagentExecutor>> | undefined;
 	const pendingLaunches = new Set<Promise<void>>();
+	const pendingAsyncLaunches = new Set<Promise<void>>();
+	let unregisterCancellation: (() => void) | undefined;
 	const runtimeCleanup = () => {
 		generation++;
 		executorPromise = undefined;
 		pendingLaunches.clear();
+		pendingAsyncLaunches.clear();
+		unregisterCancellation?.();
 		mainWatchdog.dispose();
 		stopResultWatcher();
 		scheduledRunManager.stop();
@@ -393,9 +398,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				if (launchReady) return;
 				launchReady = true;
 				pendingLaunches.delete(launchReadyPromise);
+				pendingAsyncLaunches.delete(launchReadyPromise);
 				resolveLaunchReady();
 			};
 			pendingLaunches.add(launchReadyPromise);
+			if ((params.task || params.tasks || params.chain) && !params.clarify &&
+				(params.async === true || (params.async === undefined && asyncByDefault) || config.forceTopLevelAsync === true)) {
+				pendingAsyncLaunches.add(launchReadyPromise);
+			}
 			try {
 				const currentGeneration = generation;
 				signal?.throwIfAborted();
@@ -615,6 +625,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		generation++;
 		executorPromise = undefined;
 		pendingLaunches.clear();
+		pendingAsyncLaunches.clear();
+		unregisterCancellation?.();
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
@@ -634,6 +646,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		clearPendingForegroundControlNotices(state);
 		resetJobs(ctx);
 		restoreActiveJobs(ctx);
+		const sessionId = state.currentSessionId;
+		const sessionGeneration = generation;
+		if (sessionId) unregisterCancellation = registerSubagentCancellation(sessionId, createSubagentCancellation({
+			pendingLaunches: pendingAsyncLaunches,
+			isCurrent: () => generation === sessionGeneration && state.currentSessionId === sessionId,
+			getActiveRunIds: () => [...state.asyncJobs.values()]
+				.filter((job) => job.sessionId === sessionId && (job.status === "queued" || job.status === "running"))
+				.map((job) => job.asyncId),
+			async stopRun(id) {
+				const result = await executor.execute(randomUUID(), { action: "stop", id }, new AbortController().signal, undefined, ctx);
+				return !result.isError;
+			},
+		}));
 		scheduledRunManager.bindSession(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
 		primeExistingResults();
@@ -649,6 +674,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		generation++;
 		executorPromise = undefined;
 		pendingLaunches.clear();
+		pendingAsyncLaunches.clear();
+		unregisterCancellation?.();
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		for (const unsubscribe of eventUnsubscribes) {
 			try {

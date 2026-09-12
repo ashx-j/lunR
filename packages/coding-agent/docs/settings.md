@@ -68,7 +68,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `confirmLargeSubagentLaunches` | boolean | `true` | Ask once before aggregate launches of three or more children outside Auto mode |
 | `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |
 | `trackingId` | string | - | Analytics tracking identifier, generated when `enableAnalytics` is turned on |
-| `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
+| `doubleEscapeAction` | string | `"tree"` | Idle action for double-escape: `"tree"`, `"fork"`, or `"none"`. Active async subagents take priority: double-Escape requests their stop |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
 | `outputPad` | number | `1` | Horizontal padding for user messages, assistant messages, and thinking (0 or 1) |

@@ -67,15 +67,15 @@ type ResultFileData = {
 	intercomTarget?: string;
 };
 
-function sanitizeNestedResultChildren(value: unknown, resultPath: string, label: string): NestedRunSummary[] | undefined {
+function sanitizeNestedResultChildren(value: unknown, resultPath: string, label: string, report: (message: string) => void): NestedRunSummary[] | undefined {
 	if (value === undefined) return undefined;
 	if (!Array.isArray(value)) {
-		console.error(`Ignoring invalid nested children in subagent result file '${resultPath}' at ${label}: expected an array.`);
+		report(`Ignoring invalid nested children in subagent result file '${resultPath}' at ${label}: expected an array.`);
 		return undefined;
 	}
 	const children = value.map((child) => sanitizeSummary(child)).filter((child): child is NestedRunSummary => Boolean(child));
 	if (children.length !== value.length) {
-		console.error(`Ignoring ${value.length - children.length} invalid nested child record(s) in subagent result file '${resultPath}' at ${label}.`);
+		report(`Ignoring ${value.length - children.length} invalid nested child record(s) in subagent result file '${resultPath}' at ${label}.`);
 	}
 	return children.length ? children : undefined;
 }
@@ -97,7 +97,7 @@ function shouldFallBackToPolling(error: unknown): boolean {
 
 
 export function createResultWatcher(
-	pi: { events: IntercomEventBus },
+	pi: { events: IntercomEventBus; appendEntry?: (type: string, data: unknown) => void },
 	state: SubagentState,
 	resultsDir: string,
 	completionTtlMs: number,
@@ -110,30 +110,38 @@ export function createResultWatcher(
 	const fsApi = deps.fs ?? fs;
 	const timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };
 
+	let generation = 0;
+	const inFlight = new Set<string>();
+	const attempts = new Map<string, number>();
+	const report = (message: string, error?: unknown) => {
+		pi.appendEntry?.("subagent_result_delivery", { message, error: error instanceof Error ? error.message : error });
+	};
+
 	const handleResult = async (file: string) => {
+		if (inFlight.has(file) || (attempts.get(file) ?? 0) >= 3) return;
+		const currentGeneration = generation;
+		const sessionId = state.currentSessionId;
+		const isCurrent = () => generation === currentGeneration && state.currentSessionId === sessionId;
 		const resultPath = path.join(resultsDir, file);
 		if (!fsApi.existsSync(resultPath)) return;
+		inFlight.add(file);
 		try {
 			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as ResultFileData;
 			if (typeof data.sessionId !== "string" || data.sessionId !== state.currentSessionId) return;
 
 			const runId = data.runId ?? data.id ?? file.replace(/\.json$/i, "");
 			const hasExplicitNestedChildren = data.nestedChildren !== undefined;
-			let nestedChildren = compactNestedResultChildren(sanitizeNestedResultChildren(data.nestedChildren, resultPath, "nestedChildren"));
+			let nestedChildren = compactNestedResultChildren(sanitizeNestedResultChildren(data.nestedChildren, resultPath, "nestedChildren", report));
 			if (!nestedChildren?.length && !hasExplicitNestedChildren) {
 				try {
 					nestedChildren = compactNestedResultChildren(projectNestedRegistryForRoot(runId)?.children);
 				} catch (error) {
-					console.error(`Failed to enrich subagent result file '${resultPath}' with nested registry children; will retry later:`, error);
+					report(`Failed to enrich subagent result file '${resultPath}' with nested registry children; will retry later:`, error);
 					return;
 				}
 			}
 			const now = Date.now();
 			const completionKey = buildCompletionKey(data, `result:${file}`);
-			if (markSeenWithTtl(state.completionSeen, completionKey, now, completionTtlMs)) {
-				fsApi.unlinkSync(resultPath);
-				return;
-			}
 
 			const hasResultChildren = Array.isArray(data.results) && data.results.length > 0;
 			const resultChildren = hasResultChildren
@@ -151,7 +159,7 @@ export function createResultWatcher(
 					? `${result.error}${hasRealOutput ? `\n\nOutput:\n${baseOutput}` : ""}`
 					: output;
 				const sessionPath = result.sessionFile ?? (resultChildren.length === 1 ? data.sessionFile : undefined);
-				const childNestedChildren = sanitizeNestedResultChildren(result.children, resultPath, `results[${index}].children`);
+				const childNestedChildren = sanitizeNestedResultChildren(result.children, resultPath, `results[${index}].children`, report);
 				const childState = result.state === "paused" || result.state === "stopped"
 					? result.state
 					: result.stopped === true
@@ -174,7 +182,19 @@ export function createResultWatcher(
 				};
 			}), nestedChildren);
 
-			const intercomTarget = data.intercomTarget?.trim();
+			if (!markSeenWithTtl(state.completionSeen, completionKey, now, completionTtlMs)) {
+				pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+					...data,
+					runId,
+					...(nestedChildren?.length ? { nestedChildren } : {}),
+					...(Array.isArray(data.results) ? { results: hasResultChildren ? normalizedChildren.map((child, index) => ({
+						...data.results![index], agent: child.agent, status: child.status, summary: child.summary,
+						index: child.index, artifactPath: child.artifactPath, sessionPath: child.sessionPath, children: child.children,
+					})) : [] } : {}),
+				});
+			}
+			if (!isCurrent()) return;
+			const intercomTarget = data.state === "stopped" ? undefined : data.intercomTarget?.trim();
 			if (intercomTarget) {
 				const mode = data.mode === "single" || data.mode === "parallel" || data.mode === "chain"
 					? data.mode
@@ -188,35 +208,23 @@ export function createResultWatcher(
 					asyncId: data.id,
 					asyncDir: data.asyncDir,
 				});
+				payload.requestId = `async-result:${sessionId}:${completionKey}`;
+				attempts.set(file, (attempts.get(file) ?? 0) + 1);
 				const delivered = await deliverSubagentResultIntercomEvent(pi.events, payload);
+				if (!isCurrent()) return;
 				if (!delivered) {
-					console.error(`Subagent async grouped result intercom delivery was not acknowledged for '${resultPath}'.`);
+					report(`Async result delivery pending for '${runId}'; output retained.`, resultPath);
+					if (attempts.get(file)! < 3) state.resultFileCoalescer.schedule(file, 1000);
+					return;
 				}
 			}
 
-			pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
-				...data,
-				runId,
-				...(nestedChildren?.length ? { nestedChildren } : {}),
-				...(Array.isArray(data.results) ? {
-					results: hasResultChildren
-						? normalizedChildren.map((child, index) => ({
-							...data.results![index],
-							agent: child.agent,
-							status: child.status,
-							summary: child.summary,
-							index: child.index,
-							artifactPath: child.artifactPath,
-							sessionPath: child.sessionPath,
-							children: child.children,
-						}))
-						: [],
-				} : {}),
-			});
-			fsApi.unlinkSync(resultPath);
+			if (isCurrent()) fsApi.unlinkSync(resultPath);
 		} catch (error) {
 			if (isNotFoundError(error)) return;
-			console.error(`Failed to process subagent result file '${resultPath}':`, error);
+			report(`Failed to process subagent result file '${resultPath}'.`, error);
+		} finally {
+			inFlight.delete(file);
 		}
 	};
 
@@ -231,7 +239,7 @@ export function createResultWatcher(
 				.forEach((file) => state.resultFileCoalescer.schedule(file, 0));
 		} catch (error) {
 			if (isNotFoundError(error)) return;
-			console.error(`Failed to scan subagent result directory '${resultsDir}':`, error);
+			report(`Failed to scan subagent result directory '${resultsDir}':`, error);
 		}
 	};
 
@@ -240,7 +248,7 @@ export function createResultWatcher(
 		state.watcher = null;
 		if (state.watcherRestartTimer) return;
 
-		console.error(
+		report(
 			`Subagent result watcher for '${resultsDir}' fell back to polling because native fs.watch is unavailable (${getErrorCode(reason) ?? "unknown error"}).`,
 		);
 		primeExistingResults();
@@ -260,7 +268,7 @@ export function createResultWatcher(
 					startPollingFallback(error);
 					return;
 				}
-				console.error(`Failed to restart subagent result watcher for '${resultsDir}':`, error);
+				report(`Failed to restart subagent result watcher for '${resultsDir}':`, error);
 				scheduleRestart();
 			}
 		}, WATCHER_RESTART_DELAY_MS);
@@ -287,7 +295,7 @@ export function createResultWatcher(
 					startPollingFallback(error);
 					return;
 				}
-				console.error(`Subagent result watcher failed for '${resultsDir}':`, error);
+				report(`Subagent result watcher failed for '${resultsDir}':`, error);
 				state.watcher?.close();
 				state.watcher = null;
 				scheduleRestart();
@@ -298,13 +306,15 @@ export function createResultWatcher(
 				startPollingFallback(error);
 				return;
 			}
-			console.error(`Failed to start subagent result watcher for '${resultsDir}':`, error);
+			report(`Failed to start subagent result watcher for '${resultsDir}':`, error);
 			state.watcher = null;
 			scheduleRestart();
 		}
 	};
 
 	const stopResultWatcher = () => {
+		generation++;
+		attempts.clear();
 		state.watcher?.close();
 		state.watcher = null;
 		if (state.watcherRestartTimer) {
