@@ -16,13 +16,13 @@ import {
 	getPermissionMode,
 	isPlanModeActive,
 	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
-	SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
 	NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON,
 	nextPermissionMode,
 	registerApprovalHandler,
 	resetAllPermissionContexts,
 	resetPermissions,
 	restorePermissionModeAfterPlan,
+	SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
 	setPermissionMode,
 } from "../src/core/permissions.ts";
 import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";

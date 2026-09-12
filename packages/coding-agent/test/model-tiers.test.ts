@@ -298,15 +298,19 @@ describe("captureModelSelection", () => {
 });
 
 describe("explicit model resolution", () => {
-	const available = [{ provider: "xai", id: "grok-4", fullId: "xai/grok-4", thinkingLevelMap: { high: "high", low: "low" } }];
+	const available = [
+		{ provider: "xai", id: "grok-4", fullId: "xai/grok-4", thinkingLevelMap: { high: "high", low: "low" } },
+	];
 
 	it("resolves an available explicit model and optional thinking", () => {
 		expect(resolveRequiredExplicitModel("xai/grok-4", available, undefined, "high")).toBe("xai/grok-4:high");
-		expect(resolveExecutableChildModel({
-			model: "xai/grok-4",
-			thinking: "low",
-			availableModels: available,
-		})).toBe("xai/grok-4:low");
+		expect(
+			resolveExecutableChildModel({
+				model: "xai/grok-4",
+				thinking: "low",
+				availableModels: available,
+			}),
+		).toBe("xai/grok-4:low");
 	});
 
 	it("does not silently fall back when the explicit model is missing", () => {

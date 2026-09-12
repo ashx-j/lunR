@@ -45,7 +45,12 @@ describe("AgentSession dynamic tool registration", () => {
 			resourceLoader,
 		});
 		await session.bindExtensions({});
-		expect(session.getAllTools().map((tool) => tool.name).filter((name) => name.startsWith("settings_"))).toEqual([]);
+		expect(
+			session
+				.getAllTools()
+				.map((tool) => tool.name)
+				.filter((name) => name.startsWith("settings_")),
+		).toEqual([]);
 		session.dispose();
 	});
 
