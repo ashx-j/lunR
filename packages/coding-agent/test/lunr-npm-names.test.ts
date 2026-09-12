@@ -1,13 +1,13 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	assertNoEarendil,
-	DEV_WORKSPACE_TO_NPM,
+	assertPublishedEntryPointsExist,
+	assertPublishedTreeHasNoEarendil,
 	NPM_CLI_PACKAGE,
-	NPM_DEV_CLI_PACKAGE,
-	publishTagFor,
 	rewritePackageJsonForNpm,
 	rewriteWorkspaceSpecifiers,
 	WORKSPACE_TO_NPM,
@@ -42,45 +42,70 @@ describe("lunR npm publish names", () => {
 		assertNoEarendil(rewritten);
 	});
 
-	it("stages a separate dev CLI with exact prerelease dependencies", () => {
-		const raw = JSON.parse(readFileSync(join(repoRoot, "packages/coding-agent/package.json"), "utf8"));
-		const version = "0.2.13-dev.12.1";
-		const rewritten = rewritePackageJsonForNpm(raw, {
-			packageNames: DEV_WORKSPACE_TO_NPM,
-			version,
-			workspaceDependencyVersion: version,
-			bin: { "lunr-dev": "dist/dev-cli.js" },
-			appName: "lunr-dev",
-		});
-		expect(rewritten.name).toBe(NPM_DEV_CLI_PACKAGE);
-		expect(rewritten.version).toBe(version);
-		expect(rewritten.bin).toEqual({ "lunr-dev": "dist/dev-cli.js" });
-		expect(rewritten.piConfig).toEqual({ name: "lunr-dev", configDir: ".lunr" });
-		expect(rewritten.dependencies["@ashx-j/lunr-ai"]).toBe(version);
-		expect(rewritten.dependencies["@ashx-j/lunr-tui"]).toBe(version);
-		expect(rewritten.dependencies["@ashx-j/lunr-agent"]).toBe(version);
-		assertNoEarendil(rewritten);
-	});
-
-	it("assigns dev tags without touching stable latest tags", () => {
-		expect(publishTagFor("@earendil-works/pi-ai", "stable")).toBeUndefined();
-		expect(publishTagFor("@earendil-works/pi-ai", "dev")).toBe("dev");
-		expect(publishTagFor("@earendil-works/pi-coding-agent", "dev")).toBe("latest");
-		expect(() => publishTagFor("@earendil-works/pi-ai", "unknown")).toThrow(/unknown publish channel/);
-	});
-
 	it("rewrites compiled import specifiers", () => {
 		const src = 'import { modelsAreEqual } from "@earendil-works/pi-ai";\nfrom "@earendil-works/pi-agent-core";';
 		const out = rewriteWorkspaceSpecifiers(src);
 		expect(out).toContain('from "@ashx-j/lunr-ai"');
 		expect(out).toContain('from "@ashx-j/lunr-agent"');
 		expect(out).not.toContain("@earendil-works");
-		expect(rewriteWorkspaceSpecifiers('from "@earendil-works/pi-coding-agent"', DEV_WORKSPACE_TO_NPM)).toContain(
-			'from "@ashx-j/lunr-dev"',
-		);
 	});
 
 	it("refuses leftover @earendil-works strings", () => {
 		expect(() => assertNoEarendil({ name: "@earendil-works/pi-ai" })).toThrow(/earendil-works/);
+	});
+
+	it("scans bundled publish chunks even when dist/main.js is absent", () => {
+		const root = mkdtempSync(join(tmpdir(), "lunr-publish-scan-"));
+		try {
+			mkdirSync(join(root, "dist", "node-runtime"), { recursive: true });
+			writeFileSync(join(root, "dist", "node-runtime", "chunk.js"), 'import "@earendil-works/pi-ai";\n');
+			expect(() => assertPublishedTreeHasNoEarendil(root, "test package")).toThrow(/node-runtime.*earendil-works/i);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses missing staged package entry points", () => {
+		const root = mkdtempSync(join(tmpdir(), "lunr-publish-entry-"));
+		try {
+			mkdirSync(join(root, "dist"), { recursive: true });
+			expect(() =>
+				assertPublishedEntryPointsExist(
+					root,
+					{ main: "./dist/node-runtime/index.js", exports: { "./rpc-entry": "./dist/rpc.js" } },
+					"test package",
+				),
+			).toThrow(/node-runtime\/index\.js does not exist/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts populated wildcard entry points", () => {
+		const root = mkdtempSync(join(tmpdir(), "lunr-publish-wildcard-"));
+		try {
+			mkdirSync(join(root, "dist", "catalog"), { recursive: true });
+			writeFileSync(join(root, "dist", "catalog", "index.js"), "export {};\n");
+			expect(() =>
+				assertPublishedEntryPointsExist(
+					root,
+					{ exports: { "./catalog/*": { import: "./dist/catalog/*.js" } } },
+					"test package",
+				),
+			).not.toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a clean staged publish tree", () => {
+		const root = mkdtempSync(join(tmpdir(), "lunr-publish-clean-"));
+		try {
+			mkdirSync(join(root, "dist", "node-runtime"), { recursive: true });
+			writeFileSync(join(root, "dist", "node-runtime", "chunk.js"), 'import "@ashx-j/lunr-ai";\n');
+			expect(() => assertPublishedTreeHasNoEarendil(root, "test package")).not.toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

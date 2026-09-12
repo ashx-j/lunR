@@ -67,6 +67,13 @@ describe("pi-web-access startup dependency reduction", () => {
 		expect(specs).toContain("./lazy.ts");
 	});
 
+	it("keeps lazy first-use loaders pointed at their heavy modules", () => {
+		const source = readFileSync(join(webAccessDir, "lazy.ts"), "utf8");
+		expect(source).toContain('loadExtract = () => import("./extract.ts")');
+		expect(source).toContain('loadGeminiSearch = () => import("./gemini-search.ts")');
+		expect(source).toContain('loadCuratorServer = () => import("./curator-server.ts")');
+	});
+
 	it("keeps extract free of specialized extractor value imports", () => {
 		const source = readFileSync(join(webAccessDir, "extract.ts"), "utf8");
 		const specs = valueImportSpecifiers(source);
@@ -247,6 +254,92 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(loadCuratorServer).not.toHaveBeenCalled();
 		expect(result.details?.error).toBeUndefined();
 		expect(entries.some((e) => e.type === "web-search-results")).toBe(true);
+	});
+
+	it("does not cancel another factory's background content fetch on session start", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const active = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		loadGeminiSearch.mockResolvedValue({
+			search: async () => ({
+				answer: "ok",
+				results: [{ title: "t", url: "https://example.com", snippet: "" }],
+				provider: "brave",
+			}),
+		});
+		loadExtract.mockResolvedValue({
+			fetchAllContent: async () => {
+				started();
+				await gate;
+				return [{ url: "https://example.com", title: "ok", content: "body", error: null }];
+			},
+		});
+
+		const factory = await loadFactory();
+		const first = createPi();
+		const second = createPi();
+		factory(first.pi);
+		factory(second.pi);
+		const sessionContext = { sessionManager: { getBranch: () => [] } };
+		for (const handler of first.handlers.get("session_start") ?? []) await handler({}, sessionContext);
+
+		await first.tools
+			.get("web_search")
+			.execute(
+				"first",
+				{ query: "test", workflow: "none", provider: "brave", includeContent: true },
+				undefined,
+				undefined,
+				{ hasUI: false },
+			);
+		await active;
+		for (const handler of second.handlers.get("session_start") ?? []) await handler({}, sessionContext);
+		release();
+
+		await vi.waitFor(() =>
+			expect(first.messages.some((message) => message.customType === "web-search-content-ready")).toBe(true),
+		);
+	});
+
+	it("does not abort another factory's in-flight fetch on session start", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const active = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		loadExtract.mockResolvedValue({
+			fetchAllContent: async () => {
+				started();
+				await gate;
+				return [{ url: "https://example.com", title: "ok", content: "body", error: null }];
+			},
+		});
+
+		const factory = await loadFactory();
+		const first = createPi();
+		const second = createPi();
+		factory(first.pi);
+		factory(second.pi);
+
+		const pending = first.tools
+			.get("fetch_content")
+			.execute("first", { url: "https://example.com" }, undefined, undefined, { hasUI: false });
+		await active;
+		for (const handler of second.handlers.get("session_start") ?? []) {
+			await handler({}, { sessionManager: { getBranch: () => [] } });
+		}
+		release();
+
+		const result = await pending;
+		expect(result.details?.error).toBeUndefined();
 	});
 
 	it.each(["fetch_content", "web_search"])(

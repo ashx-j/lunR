@@ -35,6 +35,7 @@ export class LspRuntimeHost {
 	private services: LspRuntimeServices | null = null;
 	private initPromise: Promise<LspRuntimeServices> | null = null;
 	private bindOptions: LspRuntimeBindOptions | null = null;
+	private shutdownTail: Promise<void> = Promise.resolve();
 	private readonly loaders: typeof defaultLoaders;
 
 	constructor(loaders?: LspRuntimeModuleLoaders) {
@@ -57,13 +58,18 @@ export class LspRuntimeHost {
 		return this.bindOptions;
 	}
 
-	bindSession(options: LspRuntimeBindOptions): void {
+	isInitializing(): boolean {
+		return this.initPromise !== null;
+	}
+
+	bindSession(options: LspRuntimeBindOptions): Promise<void> {
 		this.generation++;
 		const previous = this.services;
 		this.services = null;
 		this.initPromise = null;
 		this.bindOptions = options;
-		if (previous) void this.shutdownServices(previous);
+		if (previous) this.enqueueShutdown(previous);
+		return this.shutdownTail;
 	}
 
 	setPendingProvider(provider: WorkspaceProvider | null): void {
@@ -79,7 +85,7 @@ export class LspRuntimeHost {
 			this.bindOptions = fallbackOptions;
 		}
 		const gen = this.generation;
-		const pending = this.loadServices(gen);
+		const pending = this.loadServicesAfterShutdown(gen);
 		this.initPromise = pending;
 		try {
 			return await pending;
@@ -95,7 +101,23 @@ export class LspRuntimeHost {
 		this.services = null;
 		this.initPromise = null;
 		this.bindOptions = null;
-		if (previous) await this.shutdownServices(previous);
+		if (previous) this.enqueueShutdown(previous);
+		await this.shutdownTail;
+	}
+
+	private enqueueShutdown(services: LspRuntimeServices): void {
+		this.shutdownTail = this.shutdownTail
+			.catch(() => {})
+			.then(() => this.shutdownServices(services))
+			.catch(() => {});
+	}
+
+	private async loadServicesAfterShutdown(gen: number): Promise<LspRuntimeServices> {
+		await this.shutdownTail;
+		if (gen !== this.generation || !this.bindOptions) {
+			throw new Error("LSP runtime initialization aborted: session replaced");
+		}
+		return this.loadServices(gen);
 	}
 
 	private async loadServices(gen: number): Promise<LspRuntimeServices> {
@@ -129,6 +151,8 @@ export class LspRuntimeHost {
 
 	private async shutdownServices(services: LspRuntimeServices): Promise<void> {
 		await services.manager.shutdownAll().catch(() => {});
-		services.treeSitter.shutdown();
+		try {
+			services.treeSitter.shutdown();
+		} catch {}
 	}
 }

@@ -296,10 +296,14 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	const entries: FileEntry[] = [];
 	const lines = content.trim().split("\n");
 
-	for (const [index, line] of lines.entries()) {
+	for (const line of lines) {
 		if (!line.trim()) continue;
-		const entry = parseSessionEntryLine(line, `line ${index + 1}`);
-		if (entry) entries.push(entry);
+		try {
+			const entry = JSON.parse(line) as FileEntry;
+			entries.push(entry);
+		} catch {
+			// Skip malformed lines
+		}
 	}
 
 	return entries;
@@ -314,51 +318,13 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
 	return null;
 }
 
-export function validateSessionGraph(entries: SessionEntry[]): void {
-	const index = new Map<string, SessionEntry>();
-	for (const entry of entries) {
-		if (typeof entry.id !== "string" || !entry.id) {
-			throw new Error("Session graph is corrupt: every entry must have a non-empty id");
-		}
-		if (index.has(entry.id)) {
-			throw new Error(`Session graph is corrupt: duplicate entry id "${entry.id}"`);
-		}
-		index.set(entry.id, entry);
-	}
-
-	for (const entry of entries) {
-		if (entry.parentId === entry.id) {
-			throw new Error(`Session graph is corrupt: entry "${entry.id}" links to itself`);
-		}
-		if (entry.parentId !== null && !index.has(entry.parentId)) {
-			throw new Error(`Session graph is corrupt: entry "${entry.id}" has missing parent "${entry.parentId}"`);
-		}
-	}
-
-	const complete = new Set<string>();
-	for (const entry of entries) {
-		if (complete.has(entry.id)) continue;
-		const path: string[] = [];
-		const positions = new Map<string, number>();
-		let current: SessionEntry | undefined = entry;
-		while (current && !complete.has(current.id)) {
-			const position = positions.get(current.id);
-			if (position !== undefined) {
-				const cycle = [...path.slice(position), current.id].join(" -> ");
-				throw new Error(`Session graph is corrupt: parent cycle detected (${cycle})`);
-			}
-			positions.set(current.id, path.length);
-			path.push(current.id);
-			current = current.parentId === null ? undefined : index.get(current.parentId);
-		}
-		for (const id of path) complete.add(id);
-	}
-}
-
 function buildEntryIndex(entries: SessionEntry[], byId?: Map<string, SessionEntry>): Map<string, SessionEntry> {
 	if (byId) return byId;
-	validateSessionGraph(entries);
-	return new Map(entries.map((entry) => [entry.id, entry]));
+	const index = new Map<string, SessionEntry>();
+	for (const entry of entries) {
+		index.set(entry.id, entry);
+	}
+	return index;
 }
 
 function buildSessionPath(
@@ -380,17 +346,9 @@ function buildSessionPath(
 	}
 
 	const path: SessionEntry[] = [];
-	const visited = new Set<string>();
 	let current: SessionEntry | undefined = leaf;
 	while (current) {
-		if (visited.has(current.id)) {
-			throw new Error(`Session graph is corrupt: parent cycle detected at entry "${current.id}"`);
-		}
-		visited.add(current.id);
 		path.push(current);
-		if (current.parentId && !index.has(current.parentId)) {
-			throw new Error(`Session graph is corrupt: entry "${current.id}" has missing parent "${current.parentId}"`);
-		}
 		current = current.parentId ? index.get(current.parentId) : undefined;
 	}
 	path.reverse();
@@ -528,13 +486,13 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
 
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 
-function parseSessionEntryLine(line: string, location?: string): FileEntry | null {
-	const trimmed = line.replace(/\u0000/g, "").trim();
-	if (!trimmed) return null;
+function parseSessionEntryLine(line: string): FileEntry | null {
+	if (!line.trim()) return null;
 	try {
-		return JSON.parse(trimmed) as FileEntry;
+		return JSON.parse(line) as FileEntry;
 	} catch {
-		throw new Error(location ? `Malformed session line ${location}` : "Malformed session line");
+		// Skip malformed lines
+		return null;
 	}
 }
 
@@ -549,7 +507,6 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 		const decoder = new StringDecoder("utf8");
 		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
 		let pending = "";
-		let lineNumber = 0;
 
 		while (true) {
 			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
@@ -559,11 +516,7 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 			let lineStart = 0;
 			let newlineIndex = pending.indexOf("\n", lineStart);
 			while (newlineIndex !== -1) {
-				lineNumber++;
-				const entry = parseSessionEntryLine(
-					pending.slice(lineStart, newlineIndex),
-					`in ${resolvedFilePath}:${lineNumber}`,
-				);
+				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
 				if (entry) entries.push(entry);
 				lineStart = newlineIndex + 1;
 				newlineIndex = pending.indexOf("\n", lineStart);
@@ -572,11 +525,8 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 		}
 
 		pending += decoder.end();
-		if (pending.trim()) {
-			lineNumber++;
-			const finalEntry = parseSessionEntryLine(pending, `in ${resolvedFilePath}:${lineNumber}`);
-			if (finalEntry) entries.push(finalEntry);
-		}
+		const finalEntry = parseSessionEntryLine(pending);
+		if (finalEntry) entries.push(finalEntry);
 	} finally {
 		closeSync(fd);
 	}
@@ -893,10 +843,7 @@ export class SessionManager {
 			}
 
 			const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
-			if (!header) {
-				throw new Error(`Session file is not a valid pi session: ${this.sessionFile}`);
-			}
-			this.sessionId = header.id;
+			this.sessionId = header?.id ?? createSessionId();
 
 			if (migrateToCurrentVersion(this.fileEntries)) {
 				this._rewriteFile();
@@ -940,7 +887,6 @@ export class SessionManager {
 	}
 
 	private _buildIndex(): void {
-		validateSessionGraph(this.fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session"));
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1242,18 +1188,10 @@ export class SessionManager {
 	 */
 	getBranch(fromId?: string): SessionEntry[] {
 		const path: SessionEntry[] = [];
-		const visited = new Set<string>();
 		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
 		while (current) {
-			if (visited.has(current.id)) {
-				throw new Error(`Session graph is corrupt: parent cycle detected at entry "${current.id}"`);
-			}
-			visited.add(current.id);
 			path.push(current);
-			if (current.parentId && !this.byId.has(current.parentId)) {
-				throw new Error(`Session graph is corrupt: entry "${current.id}" has missing parent "${current.parentId}"`);
-			}
 			current = current.parentId ? this.byId.get(current.parentId) : undefined;
 		}
 		path.reverse();

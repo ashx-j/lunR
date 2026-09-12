@@ -280,7 +280,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     sessionCwd = ctx.cwd;
 
     projectConfig = loadProjectConfig(ctx.cwd);
-    host.bindSession(buildBindOptions(ctx.cwd));
+    await host.bindSession(buildBindOptions(ctx.cwd));
 
     const statusText = pendingProvider?.getStatusText?.() ?? "";
     if (statusText) {
@@ -461,7 +461,10 @@ export default function lspExtension(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const services = host.getServicesIfReady();
       if (!services) {
-        ctx.ui.notify("LSP manager not initialized", "warning");
+        ctx.ui.notify(
+          host.isInitializing() ? "LSP runtime is starting" : "LSP runtime is idle (not started)",
+          "info",
+        );
         return;
       }
 
@@ -489,7 +492,16 @@ export default function lspExtension(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const services = host.getServicesIfReady();
       if (!services) {
-        ctx.ui.notify("LSP manager not initialized", "warning");
+        if (args?.trim()) {
+          ctx.ui.notify(
+            host.isInitializing()
+              ? "LSP runtime is starting"
+              : "LSP runtime is idle. Run an LSP tool before restarting a server.",
+            "info",
+          );
+        } else {
+          ctx.ui.notify("No LSP servers are running.\n\nUsage: /lsp-restart <language>", "info");
+        }
         return;
       }
 

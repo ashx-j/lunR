@@ -34,8 +34,6 @@ export async function handleUpdateCli(
 		log?: (msg: string) => void;
 		error?: (msg: string) => void;
 		packageDir?: string;
-		npmPackage?: string;
-		appName?: string;
 	} = {},
 ): Promise<boolean> {
 	if (args[0] !== "update") return false;
@@ -53,9 +51,7 @@ export async function handleUpdateCli(
 		return true;
 	}
 
-	const npmPackage = deps.npmPackage ?? NPM_CLI_PACKAGE;
-	const appName = deps.appName ?? APP_NAME;
-	const published = deps.published ?? isPublishedInstall(PACKAGE_NAME, npmPackage);
+	const published = deps.published ?? isPublishedInstall();
 	if (!published) {
 		(deps.error ?? console.error)(
 			`This tree is ${PACKAGE_NAME}, not a global ${NPM_CLI_PACKAGE} install. Use \`npm i -g ${NPM_CLI_PACKAGE}\` to update the published CLI; workspace \`npx ${APP_NAME}\` is not self-updated.`,
@@ -71,8 +67,6 @@ export async function handleUpdateCli(
 		currentVersion: deps.currentVersion ?? VERSION,
 		agentDir: getAgentDir(),
 		published: true,
-		packageName: npmPackage,
-		appName,
 		offline: process.env.PI_OFFLINE === "1",
 		force: true,
 	});
@@ -82,7 +76,7 @@ export async function handleUpdateCli(
 		return true;
 	}
 	if (!result.newer) {
-		log(`${appName} ${result.current} is up to date.`);
+		log(`${APP_NAME} ${result.current} is up to date.`);
 		process.exitCode = 0;
 		return true;
 	}
@@ -90,12 +84,12 @@ export async function handleUpdateCli(
 	const cwd = process.cwd();
 	const settings = SettingsManager.create(cwd, getAgentDir(), { projectTrusted: false });
 	const npmArgv = settings.getNpmCommand() ?? ["npm"];
-	const installArgv = [...npmArgv.slice(1), "install", "-g", `${npmPackage}@${result.latest}`];
+	const installArgv = [...npmArgv.slice(1), "install", "-g", `${NPM_CLI_PACKAGE}@${result.latest}`];
 	const command = npmArgv[0] ?? "npm";
 
 	const packageDir = deps.packageDir ?? getPackageDir();
 	(deps.warn ?? console.warn)(
-		`Installing ${npmPackage}@${result.latest}. If this process is the global install (${packageDir}), Windows may fail to overwrite files until ${appName} exits.`,
+		`Installing ${NPM_CLI_PACKAGE}@${result.latest}. If this process is the global install (${packageDir}), Windows may fail to overwrite files until lunr exits.`,
 	);
 
 	const spawn =
@@ -108,7 +102,7 @@ export async function handleUpdateCli(
 	const code = await spawn(command, installArgv);
 	process.exitCode = code === 0 || code === null ? 0 : code;
 	if ((process.exitCode ?? 0) === 0) {
-		log(`Updated ${appName} ${result.current} → ${result.latest}.`);
+		log(`Updated ${APP_NAME} ${result.current} → ${result.latest}.`);
 	}
 	return true;
 }

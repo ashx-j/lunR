@@ -5,6 +5,7 @@ import { formatModelSelection } from "../src/builtin-extensions/pi-subagents/src
 import { SubagentFleetComponent } from "../src/builtin-extensions/pi-subagents/src/tui/fleet.ts";
 import {
 	buildWidgetLines,
+	clearWidgetPaintTimer,
 	compactRowLead,
 	formatCompactStatsHangLine,
 	renderSubagentResult,
@@ -14,6 +15,7 @@ import {
 
 afterEach(() => {
 	subagentAnimSink.current = null;
+	clearWidgetPaintTimer();
 	vi.useRealTimers();
 });
 
@@ -111,8 +113,44 @@ describe("async widget, fleet, and status timing", () => {
 		job.updatedAt = 12_000;
 		const terminal = buildWidgetLines([job] as never, theme as never, 120).join("\n");
 		vi.advanceTimersByTime(5_000);
-		expect(terminal).toContain("ran for 2s");
+		expect(terminal).toContain("2s");
+		expect(terminal).not.toContain("3s");
 		expect(buildWidgetLines([job] as never, theme as never, 120).join("\n")).toBe(terminal);
+	});
+
+	it("matches compact foreground rows for a single async child", () => {
+		const job = {
+			asyncId: "review-run",
+			asyncDir: "Z:/missing/review-run",
+			status: "running",
+			mode: "single",
+			agents: ["Review startup lifecycle"],
+			toolCount: 46,
+			totalTokens: { total: 78_000 },
+			startedAt: 0,
+			updatedAt: 0,
+			steps: [
+				{
+					agent: "Review startup lifecycle",
+					description: "Review startup lifecycle risks",
+					status: "running",
+					modelSelection: { kind: "tier", tier: "standard" },
+					thinking: "high",
+					toolCount: 46,
+					tokens: { total: 78_000 },
+					startedAt: 0,
+				},
+			],
+		};
+		const rendered = buildWidgetLines([job] as never, theme as never, 120).join("\n");
+		expect(rendered).toContain("Review startup lifecycle risks");
+		expect(rendered).toContain("standard");
+		expect(rendered).toContain("46 tool uses");
+		expect(rendered).toContain("78k token");
+		expect(rendered).toContain("⎿");
+		expect(rendered).not.toContain("async subagent");
+		expect(rendered).not.toContain("Step 1/1");
+		expect(rendered).not.toContain("Press");
 	});
 
 	it("uses ran for in terminal status and fleet rows", () => {

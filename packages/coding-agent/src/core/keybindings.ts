@@ -74,7 +74,7 @@ export const KEYBINDINGS = {
 		description: "Suspend to background",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: [],
+		defaultKeys: "ctrl+t",
 		description: "Cycle thinking level",
 	},
 	"app.mode.cycle": {
@@ -100,7 +100,7 @@ export const KEYBINDINGS = {
 		description: "Scroll chat down",
 	},
 	"app.thinking.toggle": {
-		defaultKeys: "ctrl+t",
+		defaultKeys: [],
 		description: "Toggle thinking blocks",
 	},
 	"app.session.toggleNamedFilter": {

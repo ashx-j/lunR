@@ -94,8 +94,12 @@ const optionalModules = [
 	"pi-lsp-extension/src/lsp-manager.js",
 	"pi-lsp-extension/src/tree-sitter/parser-manager.js",
 	"pi-subagents/src/runs/foreground/subagent-executor.js",
+	"pi-mcp-adapter/init.js",
+	"pi-mcp-adapter/mcp-auth-flow.js",
+	"pi-mcp-adapter/commands.js",
 	"pi-mcp-adapter/server-manager.js",
 	"pi-mcp-adapter/proxy-modes.js",
+	"pi-mcp-adapter/direct-tool-executor.js",
 ];
 
 async function checkRequest(toolUrl, toolKind) {
@@ -188,7 +192,7 @@ registerHooks({load(url, context, nextLoad) {
 		}
 		assert.equal(
 			request.toolSchemaHash,
-			"c49c06a8013a173c71e6886d9c71935e02bc919678acb4d2aa1c5a0e0dc81856",
+			"4f2d0fa019699b29f632f271c69723d0a822743b84ef837582b0a9be8c941411",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);

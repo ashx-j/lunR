@@ -31,9 +31,12 @@ import {
 import { interpolateEnvRecord, resolveBearerToken, resolveConfigPath } from "./utils.ts";
 import { abortable, throwIfAborted } from "./abort.ts";
 
-interface ServerConnection {
+interface PendingConnection {
   client: Client;
   transport: Transport;
+}
+
+interface ServerConnection extends PendingConnection {
   definition: ServerDefinition;
   tools: McpTool[];
   resources: McpResource[];
@@ -47,6 +50,8 @@ type UiStreamListener = (serverName: string, notification: ServerStreamResultPat
 export class McpServerManager {
   private connections = new Map<string, ServerConnection>();
   private connectPromises = new Map<string, Promise<ServerConnection>>();
+  private pendingConnections = new Map<string, PendingConnection>();
+  private closing = false;
   private uiStreamListeners = new Map<string, UiStreamListener>();
   private samplingConfig: ServerSamplingConfig | undefined;
   private elicitationConfig: ServerElicitationConfig | undefined;
@@ -98,6 +103,7 @@ export class McpServerManager {
 
   async connect(name: string, definition: ServerDefinition, signal?: AbortSignal): Promise<ServerConnection> {
     throwIfAborted(signal);
+    if (this.closing) throw new Error("MCP server manager is closed");
     // Dedupe concurrent connection attempts
     if (this.connectPromises.has(name)) {
       return abortable(this.connectPromises.get(name)!, signal);
@@ -110,15 +116,21 @@ export class McpServerManager {
       return existing;
     }
 
-    const promise = this.createConnection(name, definition, signal);
+    const promise = this.createConnection(name, definition, signal).then(async connection => {
+      if (this.closing || signal?.aborted) {
+        await this.disposeConnection(connection);
+        throwIfAborted(signal);
+        throw new Error("MCP server manager closed during connection");
+      }
+      this.connections.set(name, connection);
+      return connection;
+    });
     this.connectPromises.set(name, promise);
 
     try {
-      const connection = await promise;
-      this.connections.set(name, connection);
-      return connection;
+      return await promise;
     } finally {
-      this.connectPromises.delete(name);
+      if (this.connectPromises.get(name) === promise) this.connectPromises.delete(name);
     }
   }
 
@@ -160,6 +172,8 @@ export class McpServerManager {
     }
 
     const requestOptions = this.buildRequestOptions(definition, signal);
+    const pending = { client, transport };
+    this.pendingConnections.set(name, pending);
 
     try {
       await client.connect(transport, requestOptions);
@@ -204,6 +218,8 @@ export class McpServerManager {
       await client.close().catch(() => {});
       await transport.close().catch(() => {});
       throw error;
+    } finally {
+      if (this.pendingConnections.get(name) === pending) this.pendingConnections.delete(name);
     }
   }
 
@@ -415,6 +431,11 @@ export class McpServerManager {
     }
   }
 
+  private async disposeConnection(connection: PendingConnection): Promise<void> {
+    await connection.client.close().catch(() => {});
+    await connection.transport.close().catch(() => {});
+  }
+
   async close(name: string): Promise<void> {
     const connection = this.connections.get(name);
     if (!connection) return;
@@ -425,13 +446,17 @@ export class McpServerManager {
     connection.status = "closed";
     this.connections.delete(name);
     this.acceptedUrlElicitations.delete(name);
-    await connection.client.close().catch(() => {});
-    await connection.transport.close().catch(() => {});
+    await this.disposeConnection(connection);
   }
 
   async closeAll(): Promise<void> {
+    this.closing = true;
     const names = [...this.connections.keys()];
-    await Promise.all(names.map(name => this.close(name)));
+    const pending = [...this.pendingConnections.values()];
+    await Promise.all([
+      ...names.map(name => this.close(name)),
+      ...pending.map(connection => this.disposeConnection(connection)),
+    ]);
   }
 
   getConnection(name: string): ServerConnection | undefined {

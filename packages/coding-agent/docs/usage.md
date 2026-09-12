@@ -76,7 +76,7 @@ Built-in commands (from `slash-commands.ts`):
 
 There is no `/changelog` command.
 
-Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/effort`, `/reasoning`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/websearch`. See [Built-in features](features.md).
+Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/effort`, `/reasoning`, `/off` through `/max`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/websearch`. See [Built-in features](features.md).
 
 ## Message Queue
 

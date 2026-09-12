@@ -17,14 +17,7 @@ import {
 	type TerminalColorScheme,
 } from "./terminal-colors.ts";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
-import {
-	extractSegments,
-	normalizeTerminalOutput,
-	sanitizeTerminalOutput,
-	sliceByColumn,
-	sliceWithWidth,
-	visibleWidth,
-} from "./utils.ts";
+import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 
@@ -275,17 +268,9 @@ type ChatHitRange = {
 	end: number;
 };
 
-type ChatComponentState = {
-	component: Component;
-	revision: number;
-	childCount: number | undefined;
-	firstChild: Component | undefined;
-	lastChild: Component | undefined;
-};
-
 type ChatLayoutCache = {
+	epoch: number;
 	chatWidth: number;
-	components: ChatComponentState[];
 	scrollLines: string[];
 	ranges: ChatHitRange[];
 };
@@ -305,52 +290,26 @@ type ChatScrollbar = {
  */
 export class Container implements Component {
 	children: Component[] = [];
-	private revision = 0;
-	private parents = new Set<Container>();
 
 	addChild(component: Component): void {
 		this.children.push(component);
-		if (component instanceof Container) component.parents.add(this);
-		this.markDirty();
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
-			if (component instanceof Container && !this.children.includes(component)) component.parents.delete(this);
-			this.markDirty();
 		}
 	}
 
 	clear(): void {
-		for (const child of this.children) {
-			if (child instanceof Container) child.parents.delete(this);
-		}
 		this.children = [];
-		this.markDirty();
 	}
 
 	invalidate(): void {
-		this.markDirty();
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
-	}
-
-	getRenderRevision(): number {
-		return this.revision;
-	}
-
-	syncChildParents(): void {
-		for (const child of this.children) {
-			if (child instanceof Container) child.parents.add(this);
-		}
-	}
-
-	protected markDirty(): void {
-		this.revision++;
-		for (const parent of this.parents) parent.markDirty();
 	}
 
 	render(width: number): string[] {
@@ -358,7 +317,7 @@ export class Container implements Component {
 		for (const child of this.children) {
 			const childLines = child.render(width);
 			for (const line of childLines) {
-				lines.push(sanitizeTerminalOutput(line, isImageLine(line)));
+				lines.push(line);
 			}
 		}
 		return lines;
@@ -426,6 +385,8 @@ export class TUI extends Container {
 	private lastChatScrollMax = 0;
 	private chatLaidOut = false;
 	private chatUsesGutter = false;
+	/** Bumped on non-scroll `requestRender` so offset-only paints can reuse chat layout. */
+	private contentEpoch = 0;
 	private chatLayoutCache: ChatLayoutCache | undefined;
 	private alternateScreen = false;
 	private alternateScreenActive = false;
@@ -443,11 +404,6 @@ export class TUI extends Container {
 		if (showHardwareCursor !== undefined) {
 			this.showHardwareCursor = showHardwareCursor;
 		}
-	}
-
-	protected override markDirty(): void {
-		super.markDirty();
-		if (this.started) this.queueRender(false);
 	}
 
 	get fullRedraws(): number {
@@ -691,30 +647,6 @@ export class TUI extends Container {
 		return this.children.indexOf(this.pinComponent);
 	}
 
-	private captureChatComponentState(to: number): ChatComponentState[] {
-		return this.children.slice(0, to).map((component) => ({
-			component,
-			revision: component instanceof Container ? component.getRenderRevision() : 0,
-			childCount: component instanceof Container ? component.children.length : undefined,
-			firstChild: component instanceof Container ? component.children[0] : undefined,
-			lastChild: component instanceof Container ? component.children[component.children.length - 1] : undefined,
-		}));
-	}
-
-	private chatComponentStateMatches(cached: ChatComponentState[], current: ChatComponentState[]): boolean {
-		return (
-			cached.length === current.length &&
-			cached.every(
-				(state, index) =>
-					state.component === current[index]?.component &&
-					state.revision === current[index]?.revision &&
-					state.childCount === current[index]?.childCount &&
-					state.firstChild === current[index]?.firstChild &&
-					state.lastChild === current[index]?.lastChild,
-			)
-		);
-	}
-
 	private collectChildLines(from: number, to: number, width: number, ranges?: ChatHitRange[]): string[] {
 		const lines: string[] = [];
 		for (let i = from; i < to; i++) {
@@ -735,7 +667,7 @@ export class TUI extends Container {
 		}
 		const start = lines.length;
 		for (const line of child.render(width)) {
-			lines.push(sanitizeTerminalOutput(line, isImageLine(line)));
+			lines.push(line);
 		}
 		ranges?.push({ component: child, start, end: lines.length });
 	}
@@ -779,22 +711,16 @@ export class TUI extends Container {
 		this.lastChatViewportHeight = viewH;
 		this.chatLaidOut = true;
 
-		const canUseGutter = width >= 2;
-		if (!canUseGutter) this.chatUsesGutter = false;
-		let chatWidth = this.chatUsesGutter ? width - 1 : width;
+		let chatWidth = this.chatUsesGutter ? Math.max(1, width - 1) : width;
 		let scrollLines: string[];
 		let ranges: ChatHitRange[];
 		let fromCache = false;
 		const cache = this.chatLayoutCache;
-		const componentState = this.captureChatComponentState(pinIndex);
-		if (cache && cache.chatWidth === chatWidth && this.chatComponentStateMatches(cache.components, componentState)) {
+		if (cache && cache.epoch === this.contentEpoch && cache.chatWidth === chatWidth) {
 			scrollLines = cache.scrollLines;
 			ranges = cache.ranges;
 			fromCache = true;
 		} else {
-			for (const state of componentState) {
-				if (state.component instanceof Container) state.component.syncChildParents();
-			}
 			ranges = [];
 			scrollLines = this.collectChildLines(0, pinIndex, chatWidth, ranges);
 		}
@@ -807,9 +733,9 @@ export class TUI extends Container {
 				scrollLines = this.collectChildLines(0, pinIndex, chatWidth, ranges);
 				fromCache = false;
 			}
-		} else if (canUseGutter && scrollLines.length > viewH) {
+		} else if (scrollLines.length > viewH) {
 			this.chatUsesGutter = true;
-			chatWidth = width - 1;
+			chatWidth = Math.max(1, width - 1);
 			ranges = [];
 			scrollLines = this.collectChildLines(0, pinIndex, chatWidth, ranges);
 			fromCache = false;
@@ -817,8 +743,8 @@ export class TUI extends Container {
 
 		if (!fromCache) {
 			this.chatLayoutCache = {
+				epoch: this.contentEpoch,
 				chatWidth,
-				components: this.captureChatComponentState(pinIndex),
 				scrollLines,
 				ranges,
 			};
@@ -838,7 +764,7 @@ export class TUI extends Container {
 			this.lastChatScrollMax = scrollLines.length - viewH;
 			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.lastChatScrollMax));
 			start = scrollLines.length - viewH - this.chatScrollOffset;
-			if (this.chatScrollOffset > 0) start = this.snapStartToKittyImageHeader(scrollLines, start);
+			start = this.snapStartToKittyImageHeader(scrollLines, start);
 			start = Math.max(0, start);
 			this.lastChatStart = start;
 			chatSlice = scrollLines.slice(start, start + viewH);
@@ -851,33 +777,27 @@ export class TUI extends Container {
 				this.lastChatScrollMax === 0
 					? viewH - thumbH
 					: Math.round(travel * (1 - this.chatScrollOffset / this.lastChatScrollMax));
-			if (this.chatUsesGutter) {
-				this.chatScrollbar = {
-					x: width,
-					y0: 1,
-					y1: viewH,
-					viewH,
-					scrollMax: this.lastChatScrollMax,
-					thumbTop,
-					thumbH,
-				};
-				const RESET = "\x1b[0m";
-				const track = `${RESET}\x1b[2m│\x1b[0m`;
-				const thumb = `${RESET}\x1b[1m█\x1b[0m`;
-				for (let i = 0; i < chatSlice.length; i++) {
-					const glyph = i >= thumbTop && i < thumbTop + thumbH ? thumb : track;
-					chatSlice[i] = `${padToWidth(chatSlice[i] ?? "", chatWidth)}${glyph}`;
-				}
-			} else {
-				this.chatScrollbar = undefined;
-				this.scrollbarDrag = undefined;
+			this.chatScrollbar = {
+				x: width,
+				y0: 1,
+				y1: viewH,
+				viewH,
+				scrollMax: this.lastChatScrollMax,
+				thumbTop,
+				thumbH,
+			};
+			// Reset SGR so error/thinking colors cannot bleed into the gutter.
+			const RESET = "\x1b[0m";
+			const track = `${RESET}\x1b[2m│\x1b[0m`;
+			const thumb = `${RESET}\x1b[1m█\x1b[0m`;
+			for (let i = 0; i < chatSlice.length; i++) {
+				const glyph = i >= thumbTop && i < thumbTop + thumbH ? thumb : track;
+				chatSlice[i] = `${padToWidth(chatSlice[i] ?? "", chatWidth)}${glyph}`;
 			}
 		}
 
 		this.lastChatSliceHeight = chatSlice.length;
-		const frame = [...chatSlice, ...dockLines];
-		if (width > 1) return frame;
-		return frame.map((line) => (visibleWidth(line) > width ? sliceByColumn(line, 0, width, true) : line));
+		return [...chatSlice, ...dockLines];
 	}
 
 	/**
@@ -1115,12 +1035,8 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
-		this.chatLayoutCache = undefined;
+		this.contentEpoch++;
 		this.queueRender(force);
-	}
-
-	requestPaint(): void {
-		this.queueRender(false);
 	}
 
 	private requestRenderFromScroll(): void {
@@ -1646,7 +1562,7 @@ export class TUI extends Container {
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (!isImageLine(line)) {
-				lines[i] = normalizeTerminalOutput(sanitizeTerminalOutput(line)) + reset;
+				lines[i] = normalizeTerminalOutput(line) + reset;
 			}
 		}
 		return lines;
