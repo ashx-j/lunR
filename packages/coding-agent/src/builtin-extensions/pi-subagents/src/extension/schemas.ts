@@ -57,10 +57,12 @@ const OutputModeOverride = Type.String({
 	description: "Return saved output inline (default) or only a concise file reference. file-only requires output to be a path.",
 });
 
+const TIER_SELECTION_DESCRIPTION = "Choose the lowest model tier that can reliably complete the task: 'light' for quick checks, fact gathering, and small code inspections; 'standard' for everyday coding, clearly described bugs, and focused reviews; 'heavy' for complex implementation, difficult debugging, architectural decisions, and large or high-risk reviews.";
+
 // lunr: choose exactly one of tier or model per executable child.
 const TierOverride = Type.Optional(Type.String({
 	enum: ["light", "standard", "heavy"],
-	description: "Preferred model tier: 'light' for simple/fast work, 'standard' for typical coding, or 'heavy' for complex reasoning. Required by default. Do not combine with model.",
+	description: `Required by default. ${TIER_SELECTION_DESCRIPTION} Do not combine with model. The configured tier model must be available and authenticated.`,
 }));
 
 const ModelOverride = Type.Optional(Type.String({
@@ -325,7 +327,7 @@ const SubagentParamsSchema = Type.Object({
 	skill: Type.Optional(SkillOverride),
 	tier: Type.Optional(Type.String({
 		enum: ["light", "standard", "heavy"],
-		description: "Preferred for SINGLE execution. Required by default. Omit for control actions. Do not combine with model; PARALLEL and CHAIN children carry their own tier or model.",
+		description: `Preferred for SINGLE execution. Required by default. Omit for control actions. Do not combine with model; PARALLEL and CHAIN children carry their own tier or model. ${TIER_SELECTION_DESCRIPTION}`,
 	})),
 	model: Type.Optional(Type.String({
 		minLength: 1,

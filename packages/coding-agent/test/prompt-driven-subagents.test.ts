@@ -163,6 +163,13 @@ describe("prompt-driven subagent schema", () => {
 		}
 		expect((ParallelTaskSchema as { required?: string[] }).required ?? []).not.toContain("tier");
 		expect((DynamicParallelTemplateSchema as { required?: string[] }).required ?? []).not.toContain("tier");
+		for (const schema of [SubagentParams, ParallelTaskSchema]) {
+			const description = nestedSchema(schema, ["properties", "tier"]).description as string;
+			expect(description).toContain("Choose the lowest model tier that can reliably complete the task");
+			expect(description).toContain("'light' for quick checks");
+			expect(description).toContain("'standard' for everyday coding");
+			expect(description).toContain("'heavy' for complex implementation");
+		}
 	});
 
 	it("removes agent-definition management actions", () => {

@@ -7,10 +7,17 @@ import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 const CUSTOM_TOOL_DESCRIPTION_FILE = "subagent-tool-description.md";
 const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 
+export const SUBAGENT_TIER_GUIDANCE = `TIER SELECTION:
+• Choose the lowest tier that can reliably complete the task.
+• light: Use for simple, straightforward tasks that require little reasoning. Good for quick checks, finding information, collecting facts for research, inspecting a small amount of code, or verifying a specific fact.
+• standard: Use for moderately difficult work and everyday coding tasks. Good for writing simple code, fixing a clearly described bug, reviewing a focused change, or completing work with clear requirements. Use heavy when the task requires deep architectural understanding or complex reasoning.
+• heavy: Use for complex or ambiguous tasks that require deep reasoning and strong code understanding. Good for implementing complex plans, debugging difficult or poorly understood problems, reviewing large or high-risk changes, and making architectural decisions.`;
+
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Prompt children directly. There is no agent roster. Every execution task needs task (the full child prompt) and description (a concise UI label).
 • Every executable child chooses exactly one of tier: "light"|"standard"|"heavy" (default) or model: "provider/id" when the user names a model. Do not pass both, and do not use inherit. Missing, disabled, unconfigured, unavailable, or unauthenticated selections fail before launch.
 • Optional thinking (off/minimal/low/medium/high/xhigh/max) is only valid with an explicit model. Tier launches use the configured tier thinking level.
+${SUBAGENT_TIER_GUIDANCE}
 • permissions is "full" or "read-only". Omitted permissions means full. Plan-mode parents must pass permissions: "read-only"; full or omitted launches are rejected.
 • Keep execution and control separate: omit action for SINGLE/PARALLEL/CHAIN execution; use action only for status/interrupt/stop/resume/steer/append-step/doctor/watchdog.status|check|recommend-model/schedule*.
 • Async/background runs: launch with async:true only when work can proceed independently. Do not sleep or poll status just to wait. In an interactive session, normally return control and let lunR wake you; use subagent_wait when this request must run to completion in the current turn or skill. Headless sessions auto-drain current-session work.
@@ -68,6 +75,7 @@ EXECUTE:
 • SINGLE {task, description, tier|model, thinking?, permissions?} (same-turn singles overlap); PARALLEL {tasks:[{task,description,tier|model,thinking?,permissions?,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{task,description,tier|model,thinking?,permissions?},{parallel:[...]}]} for sequential work.
 • description is required (single-line, max 80 chars, UI only). task is the full child prompt. permissions omitted = full. Plan-mode parents must pass permissions:"read-only".
 • Exactly one of tier:"light"|"standard"|"heavy" (default) or model:"provider/id" when the user names a model. thinking only with model. No inherit; fail closed on unavailable selections. Children always start fresh. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
+${SUBAGENT_TIER_GUIDANCE}
 • Chain templates may use {task}, {previous}, {chain_dir}, and named outputs. Parallel worktree isolation requires a clean git repo.
 • Chain example: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {parallel: [{task:"Check {previous}", description:"Check prior result", tier:"light", permissions:"read-only", count: 3}]}] }
 
