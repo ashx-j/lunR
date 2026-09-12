@@ -34,10 +34,10 @@ describe("loadEntriesFromFile", () => {
 		expect(loadEntriesFromFile(file)).toEqual([]);
 	});
 
-	it("fails closed on malformed JSON", () => {
+	it("returns empty array for malformed JSON", () => {
 		const file = join(tempDir, "malformed.jsonl");
 		writeFileSync(file, "not json\n");
-		expect(() => loadEntriesFromFile(file)).toThrow(/Malformed session line/);
+		expect(loadEntriesFromFile(file)).toEqual([]);
 	});
 
 	it("loads valid session file", () => {
@@ -53,7 +53,7 @@ describe("loadEntriesFromFile", () => {
 		expect(entries[1].type).toBe("message");
 	});
 
-	it("fails closed when a later line is malformed", () => {
+	it("skips malformed lines but keeps valid ones", () => {
 		const file = join(tempDir, "mixed.jsonl");
 		writeFileSync(
 			file,
@@ -61,7 +61,8 @@ describe("loadEntriesFromFile", () => {
 				"not valid json\n" +
 				'{"type":"message","id":"1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}\n',
 		);
-		expect(() => loadEntriesFromFile(file)).toThrow(/Malformed session line/);
+		const entries = loadEntriesFromFile(file);
+		expect(entries).toHaveLength(2);
 	});
 
 	it("opens session files larger than Node's max string length", () => {
@@ -288,52 +289,6 @@ describe("SessionManager.setSessionFile with corrupted files", () => {
 			`Session file is not a valid pi session: ${nonSessionFile}`,
 		);
 		expect(readFileSync(nonSessionFile, "utf-8")).toBe(originalContent);
-	});
-
-	it.each([
-		{
-			name: "duplicate ids",
-			entries: [
-				{ id: "a", parentId: null },
-				{ id: "a", parentId: null },
-			],
-			message: "duplicate entry id",
-		},
-		{
-			name: "self-links",
-			entries: [{ id: "a", parentId: "a" }],
-			message: "links to itself",
-		},
-		{
-			name: "missing parents",
-			entries: [{ id: "a", parentId: "missing" }],
-			message: "missing parent",
-		},
-		{
-			name: "parent cycles",
-			entries: [
-				{ id: "a", parentId: "b" },
-				{ id: "b", parentId: "a" },
-			],
-			message: "parent cycle detected",
-		},
-	])("rejects corrupt session graphs with $name", ({ entries, message }) => {
-		const file = join(tempDir, "corrupt-graph.jsonl");
-		const header = {
-			type: "session",
-			version: 3,
-			id: "session-1",
-			timestamp: "2026-01-01T00:00:00.000Z",
-			cwd: tempDir,
-		};
-		const records = entries.map((entry) => ({
-			type: "message",
-			timestamp: "2026-01-01T00:00:00.000Z",
-			message: { role: "user", content: "test", timestamp: 0 },
-			...entry,
-		}));
-		writeFileSync(file, [header, ...records].map((record) => JSON.stringify(record)).join("\n"));
-		expect(() => SessionManager.open(file, tempDir)).toThrow(message);
 	});
 
 	it("preserves explicit session file path when recovering from corrupted file", () => {

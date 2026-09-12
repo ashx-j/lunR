@@ -6,12 +6,16 @@ import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
 import { AgentBridge, QUEUED } from "../src/gateway/agent-bridge.ts";
 import type { MessageEvent, SessionSource } from "../src/gateway/types.ts";
 
-function fakeSession(dispose = vi.fn()): BridgeSession {
+function fakeSession(dispose = vi.fn(), onShutdown?: (event: unknown) => void): BridgeSession {
 	return {
 		prompt: vi.fn().mockResolvedValue(undefined),
 		abort: vi.fn().mockResolvedValue(undefined),
 		subscribe: () => () => {},
 		state: { messages: [] },
+		extensionRunner: {
+			hasHandlers: () => true,
+			emit: vi.fn(async (event: unknown) => onShutdown?.(event)),
+		},
 		dispose,
 		isStreaming: false,
 		modelRuntime: {} as unknown as BridgeSession["modelRuntime"],
@@ -50,12 +54,24 @@ describe("AgentBridge LRU eviction", () => {
 		vi.useRealTimers();
 	});
 
-	it("evicts the oldest idle session when the cache is over capacity", async () => {
+	it("evicts the oldest idle session after emitting session_shutdown", async () => {
 		const sessions = new Map<string, BridgeSession>();
+		const lifecycle: string[] = [];
 		const bridge = new AgentBridge({
 			cacheCap: 2,
 			sessionFactory: async (key) => {
-				if (!sessions.has(key)) sessions.set(key, fakeSession());
+				if (!sessions.has(key)) {
+					sessions.set(
+						key,
+						fakeSession(
+							vi.fn(() => lifecycle.push(`${key}:dispose`)),
+							(event) =>
+								lifecycle.push(
+									`${key}:${(event as { type: string; reason: string }).type}:${(event as { reason: string }).reason}`,
+								),
+						),
+					);
+				}
 				return sessions.get(key)!;
 			},
 		});
@@ -65,6 +81,7 @@ describe("AgentBridge LRU eviction", () => {
 		await bridge.runTurn("k3", makeEvent("k3"));
 
 		expect(sessions.get("k1")?.dispose).toHaveBeenCalled();
+		expect(lifecycle).toEqual(["k1:session_shutdown:quit", "k1:dispose"]);
 		expect(sessions.get("k2")?.dispose).not.toHaveBeenCalled();
 		expect(sessions.get("k3")?.dispose).not.toHaveBeenCalled();
 	});
@@ -160,10 +177,17 @@ describe("AgentBridge LRU eviction", () => {
 		await first;
 	});
 
-	it("reset aborts a busy session, drops the queue, then disposes", async () => {
+	it("reset aborts a busy session, emits shutdown, drops the queue, then disposes", async () => {
 		let release: (() => void) | undefined;
+		const lifecycle: string[] = [];
 		const session = {
-			...fakeSession(),
+			...fakeSession(
+				vi.fn(() => lifecycle.push("dispose")),
+				(event) =>
+					lifecycle.push(
+						`${(event as { type: string; reason: string }).type}:${(event as { reason: string }).reason}`,
+					),
+			),
 			prompt: () =>
 				new Promise<void>((resolve) => {
 					release = resolve;
@@ -184,11 +208,40 @@ describe("AgentBridge LRU eviction", () => {
 
 		expect(session.abort).toHaveBeenCalled();
 		expect(session.dispose).toHaveBeenCalled();
+		expect(lifecycle).toEqual(["session_shutdown:new", "dispose"]);
 		expect(bridge.getStatus("k1").busy).toBe(false);
 		expect(bridge.getStatus("k1").queueDepth).toBe(0);
 
 		release?.();
 		await first.catch(() => {});
+	});
+
+	it("emits resume shutdown with the target before switching sessions", async () => {
+		const events: unknown[] = [];
+		const oldSession = fakeSession(undefined, (event) => events.push(event));
+		const replacement = fakeSession();
+		const factory = vi.fn().mockResolvedValueOnce(oldSession).mockResolvedValueOnce(replacement);
+		const bridge = new AgentBridge({ sessionFactory: factory });
+		await bridge.runTurn("k1", makeEvent("k1"));
+
+		await bridge.switchSession("k1", "target.jsonl");
+
+		expect(events).toEqual([{ type: "session_shutdown", reason: "resume", targetSessionFile: "target.jsonl" }]);
+		expect(oldSession.dispose).toHaveBeenCalled();
+	});
+
+	it("still disposes when a shutdown handler throws", async () => {
+		const dispose = vi.fn();
+		const session = fakeSession(dispose, () => {
+			throw new Error("shutdown failed");
+		});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		await bridge.runTurn("k1", makeEvent("k1"));
+
+		await expect(bridge.reset("k1")).resolves.toBeUndefined();
+		expect(dispose).toHaveBeenCalled();
+		expect(error).toHaveBeenCalled();
 	});
 });
 

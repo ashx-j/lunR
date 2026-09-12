@@ -12,23 +12,8 @@ import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process
 import { getInstance, loadInstances, removeInstance, saveInstances, upsertInstance } from "./storage.ts";
 import type { InstanceRecord, InstanceStatus } from "./types.ts";
 
-export type RpcProcessHandle = Pick<
-	RpcProcessInstance,
-	"send" | "handleUiResponse" | "setUiRequestHandler" | "onEvent" | "onExit" | "dispose"
->;
-
-export interface RadiusClient {
-	registerPi(instance: InstanceRecord): Promise<InstanceRecord>;
-	disconnectPi(instance: InstanceRecord): Promise<void>;
-}
-
-export interface OrchestratorSupervisorOptions {
-	createRpcProcess?: (options: { cwd: string }) => RpcProcessHandle;
-	radius?: RadiusClient;
-}
-
 interface LiveInstanceResources {
-	rpcProcess?: RpcProcessHandle;
+	rpcProcess?: RpcProcessInstance;
 	radiusPiId?: string;
 	sessionId?: string;
 }
@@ -38,7 +23,6 @@ interface LiveInstance {
 	resources: LiveInstanceResources;
 	subscribers: Set<AgentSessionEventListener>;
 	onUiRequest?: (request: RpcExtensionUIRequest) => void;
-	activeRpcStream?: symbol;
 	unsubscribeEvents?: () => void;
 	unsubscribeExit?: () => void;
 }
@@ -78,13 +62,6 @@ function isGetStateSuccess(
 
 export class OrchestratorSupervisor {
 	private readonly liveInstances = new Map<string, LiveInstance>();
-	private readonly createRpcProcess: (options: { cwd: string }) => RpcProcessHandle;
-	private readonly radius: RadiusClient;
-
-	constructor(options: OrchestratorSupervisorOptions = {}) {
-		this.createRpcProcess = options.createRpcProcess ?? createRpcProcessInstance;
-		this.radius = options.radius ?? radiusPresence;
-	}
 
 	private setStatus(live: LiveInstance, status: InstanceStatus): void {
 		live.record = {
@@ -116,11 +93,10 @@ export class OrchestratorSupervisor {
 		live.unsubscribeEvents = undefined;
 		live.unsubscribeExit = undefined;
 		live.onUiRequest = undefined;
-		live.activeRpcStream = undefined;
 		live.resources.rpcProcess?.setUiRequestHandler(undefined);
 	}
 
-	private bindRpcProcess(live: LiveInstance, rpcProcess: RpcProcessHandle): void {
+	private bindRpcProcess(live: LiveInstance, rpcProcess: RpcProcessInstance): void {
 		this.clearBindings(live);
 		live.resources.rpcProcess = rpcProcess;
 		live.unsubscribeEvents = rpcProcess.onEvent((event) => {
@@ -148,7 +124,7 @@ export class OrchestratorSupervisor {
 		live.resources.rpcProcess = undefined;
 		if (live.resources.radiusPiId) {
 			try {
-				await this.radius.disconnectPi(live.record);
+				await radiusPresence.disconnectPi(live.record);
 				this.updateRecord(live, { radiusPiId: undefined });
 			} catch (error) {
 				console.error(`Failed to disconnect Radius Pi ${live.record.id}: ${String(error)}`);
@@ -157,7 +133,7 @@ export class OrchestratorSupervisor {
 		this.liveInstances.delete(live.record.id);
 	}
 
-	private getRpcProcess(live: LiveInstance): RpcProcessHandle | undefined {
+	private getRpcProcess(live: LiveInstance): RpcProcessInstance | undefined {
 		return live.resources.rpcProcess;
 	}
 
@@ -180,29 +156,20 @@ export class OrchestratorSupervisor {
 
 	private async cleanupAcquiredResources(live: LiveInstance): Promise<void> {
 		const rpcProcess = live.resources.rpcProcess;
-		const radiusRecord = live.record;
-		const shouldDisconnectRadius = !!live.resources.radiusPiId;
 		this.clearBindings(live);
-		live.resources.rpcProcess = undefined;
-		live.resources.radiusPiId = undefined;
+		if (live.resources.radiusPiId) {
+			await radiusPresence.disconnectPi(live.record);
+			live.resources.radiusPiId = undefined;
+			live.record = {
+				...live.record,
+				radiusPiId: undefined,
+				lastSeenAt: new Date().toISOString(),
+			};
+		}
 		live.resources.sessionId = undefined;
-		live.record = {
-			...live.record,
-			radiusPiId: undefined,
-			lastSeenAt: new Date().toISOString(),
-		};
-
-		const cleanupTasks: Promise<unknown>[] = [];
-		if (rpcProcess) cleanupTasks.push(rpcProcess.dispose());
-		if (shouldDisconnectRadius) cleanupTasks.push(this.radius.disconnectPi(radiusRecord));
-		const failures = (await Promise.allSettled(cleanupTasks)).filter(
-			(result): result is PromiseRejectedResult => result.status === "rejected",
-		);
-		if (failures.length > 0) {
-			throw new AggregateError(
-				failures.map((failure) => failure.reason),
-				`Failed to clean up instance ${live.record.id}`,
-			);
+		if (rpcProcess) {
+			live.resources.rpcProcess = undefined;
+			await rpcProcess.dispose();
 		}
 	}
 
@@ -210,8 +177,6 @@ export class OrchestratorSupervisor {
 		this.setStatus(live, "error");
 		try {
 			await this.cleanupAcquiredResources(live);
-		} catch (cleanupError) {
-			console.error(`Failed to clean up instance ${live.record.id} after spawn error: ${String(cleanupError)}`);
 		} finally {
 			this.setStatus(live, "stopped");
 			this.liveInstances.delete(live.record.id);
@@ -245,14 +210,8 @@ export class OrchestratorSupervisor {
 		if (!live || !rpcProcess) {
 			return undefined;
 		}
-		if (live.activeRpcStream) {
-			throw new Error(`Instance ${instanceId} already has an active RPC stream`);
-		}
-		const streamId = Symbol(instanceId);
-		live.activeRpcStream = streamId;
 		live.subscribers.add(onEvent);
 		live.onUiRequest = onUiRequest;
-		let closed = false;
 		return {
 			handleRpc: async (command) => {
 				const response = await rpcProcess.send(command);
@@ -265,10 +224,7 @@ export class OrchestratorSupervisor {
 				rpcProcess.handleUiResponse(response);
 			},
 			close: () => {
-				if (closed) return;
-				closed = true;
-				if (live.activeRpcStream === streamId) {
-					live.activeRpcStream = undefined;
+				if (live.onUiRequest === onUiRequest) {
 					live.onUiRequest = undefined;
 				}
 				live.subscribers.delete(onEvent);
@@ -292,13 +248,9 @@ export class OrchestratorSupervisor {
 			status: instance.status === "online" || instance.status === "starting" ? "stopped" : instance.status,
 			lastSeenAt: recoveredAt,
 		}));
-		await runWithConcurrency(instances, 4, async (instance) => {
-			try {
-				await this.radius.disconnectPi(instance);
-			} catch (error) {
-				console.error(`Failed to disconnect recovered Radius Pi ${instance.id}: ${String(error)}`);
-			}
-		});
+		for (const instance of instances) {
+			await radiusPresence.disconnectPi(instance);
+		}
 		saveInstances(instances);
 	}
 
@@ -333,10 +285,10 @@ export class OrchestratorSupervisor {
 		upsertInstance(live.record);
 
 		try {
-			const rpcProcess = this.createRpcProcess({ cwd: options.cwd });
+			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd });
 			this.bindRpcProcess(live, rpcProcess);
 			await this.syncInstanceRecord(live);
-			const registeredRecord = await this.radius.registerPi(live.record);
+			const registeredRecord = await radiusPresence.registerPi(live.record);
 			this.updateRecord(live, { radiusPiId: registeredRecord.radiusPiId });
 			this.setStatus(live, "online");
 			return cloneInstance(live.record);
@@ -354,8 +306,6 @@ export class OrchestratorSupervisor {
 		this.setStatus(live, "stopping");
 		try {
 			await this.cleanupAcquiredResources(live);
-		} catch (error) {
-			console.error(`Instance ${instanceId} stopped with incomplete remote cleanup: ${String(error)}`);
 		} finally {
 			live.record = {
 				...live.record,
@@ -383,26 +333,10 @@ export class OrchestratorSupervisor {
 	}
 
 	async shutdown(): Promise<void> {
-		await runWithConcurrency([...this.liveInstances.keys()], 4, async (instanceId) => {
-			try {
-				await this.stopInstance(instanceId);
-			} catch (error) {
-				console.error(`Failed to stop instance ${instanceId} during shutdown: ${String(error)}`);
-			}
-		});
-	}
-}
-
-async function runWithConcurrency<T>(items: T[], concurrency: number, run: (item: T) => Promise<void>): Promise<void> {
-	let nextIndex = 0;
-	const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-		for (;;) {
-			const index = nextIndex++;
-			if (index >= items.length) return;
-			await run(items[index]);
+		for (const instanceId of [...this.liveInstances.keys()]) {
+			await this.stopInstance(instanceId);
 		}
-	});
-	await Promise.all(workers);
+	}
 }
 
 export const supervisor = new OrchestratorSupervisor();

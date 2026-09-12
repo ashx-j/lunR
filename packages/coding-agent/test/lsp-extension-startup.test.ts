@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -295,6 +295,59 @@ describe("LspRuntimeHost lazy loading", () => {
 		rmSync(cwd2, { recursive: true, force: true });
 	});
 
+	it("waits for old services to shut down before loading a rebound session", async () => {
+		const cwd1 = mkdtempSync(join(tmpdir(), "lsp-runtime-live-rebind-a-"));
+		const cwd2 = mkdtempSync(join(tmpdir(), "lsp-runtime-live-rebind-b-"));
+		const gate = createDeferred<void>();
+		const first = createMockServices(cwd1);
+		const second = createMockServices(cwd2);
+		first.shutdownAll.mockImplementation(() => gate.promise);
+		let current = first.services;
+		let loadCalls = 0;
+		const host = new LspRuntimeHost(
+			createLoadersFromServices(() => {
+				loadCalls += 1;
+				return current;
+			}),
+		);
+
+		host.bindSession(createBindOptions(cwd1));
+		await host.ensureServices();
+		loadCalls = 0;
+		current = second.services;
+		host.bindSession(createBindOptions(cwd2));
+		const replacement = host.ensureServices();
+		await vi.waitFor(() => expect(first.shutdownAll).toHaveBeenCalledTimes(1));
+		expect(loadCalls).toBe(0);
+		gate.resolve();
+		await expect(replacement).resolves.toMatchObject({ manager: second.manager });
+		expect(loadCalls).toBe(4);
+
+		rmSync(cwd1, { recursive: true, force: true });
+		rmSync(cwd2, { recursive: true, force: true });
+	});
+
+	it("recovers when an old Tree-sitter shutdown throws", async () => {
+		const cwd1 = mkdtempSync(join(tmpdir(), "lsp-runtime-shutdown-error-a-"));
+		const cwd2 = mkdtempSync(join(tmpdir(), "lsp-runtime-shutdown-error-b-"));
+		const first = createMockServices(cwd1);
+		const second = createMockServices(cwd2);
+		first.treeShutdown.mockImplementation(() => {
+			throw new Error("shutdown failed");
+		});
+		let current = first.services;
+		const host = new LspRuntimeHost(createLoadersFromServices(() => current));
+
+		host.bindSession(createBindOptions(cwd1));
+		await host.ensureServices();
+		current = second.services;
+		await host.bindSession(createBindOptions(cwd2));
+		await expect(host.ensureServices()).resolves.toMatchObject({ manager: second.manager });
+
+		rmSync(cwd1, { recursive: true, force: true });
+		rmSync(cwd2, { recursive: true, force: true });
+	});
+
 	it("shutdown during loading prevents stale attachment and never-used shutdown loads nothing", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "lsp-runtime-shutdown-"));
 		const gate = createDeferred<void>();
@@ -389,30 +442,38 @@ describe("pi-lsp-extension startup readiness", () => {
 		expect(harness.hooks.has("tool_execution_end")).toBe(true);
 	});
 
-	it("session_start without autoStart stays ready while heavy imports are stalled", async () => {
-		const cwd = mkdtempSync(join(tmpdir(), "lsp-ext-stall-"));
+	it("keeps session bind free of heavy runtime imports", () => {
+		const indexSource = readFileSync(
+			join(process.cwd(), "src/builtin-extensions/pi-lsp-extension/src/index.ts"),
+			"utf8",
+		);
+		const runtimeSource = readFileSync(
+			join(process.cwd(), "src/builtin-extensions/pi-lsp-extension/src/runtime.ts"),
+			"utf8",
+		);
+		expect(indexSource).not.toMatch(/from ["']\.\/lsp-manager/);
+		expect(indexSource).not.toMatch(/from ["']\.\/file-sync/);
+		expect(runtimeSource).toContain('loadLspManager: () => import("./lsp-manager.js")');
+		expect(runtimeSource).toContain('loadTreeSitter: () => import("./tree-sitter/parser-manager.js")');
+	});
+
+	it("reports an idle bound runtime without loading it", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "lsp-ext-idle-command-"));
 		dirs.push(cwd);
-
-		let heavyLoads = 0;
-		vi.doMock("../src/builtin-extensions/pi-lsp-extension/src/lsp-manager.ts", () => {
-			heavyLoads += 1;
-			return new Promise(() => {});
-		});
-
 		const harness = createExtensionHarness();
 		harness.setCwd(cwd);
+		await harness.emit("session_start", { type: "session_start" }, harness.ctx);
 
-		const start = harness.emit("session_start", { type: "session_start" }, harness.ctx);
-		await expect(
-			Promise.race([
-				start.then(() => "ready" as const),
-				new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
-			]),
-		).resolves.toBe("ready");
-		await start;
+		const statusCommand = harness.commands.find((command) => command.name === "lsp");
+		const restartCommand = harness.commands.find((command) => command.name === "lsp-restart");
+		await statusCommand?.handler("", harness.ctx);
+		await restartCommand?.handler("", harness.ctx);
 
-		expect(harness.statuses.some((status) => status.includes("LSP: idle"))).toBe(true);
-		expect(heavyLoads).toBe(0);
+		expect(harness.notifications).toContainEqual({ message: "LSP runtime is idle (not started)", level: "info" });
+		expect(harness.notifications).toContainEqual({
+			message: "No LSP servers are running.\n\nUsage: /lsp-restart <language>",
+			level: "info",
+		});
 	});
 
 	it("first tool use waits for runtime initialization before execute body runs", async () => {

@@ -22,12 +22,10 @@ type SubmitContext = {
 	takeSubmittedImages: () => [];
 	consumeStagedSubmitImages: () => undefined;
 	loadImageAttachments: (attachments: unknown[]) => Promise<undefined>;
-	activateDeferredStartupEditor: () => void;
 };
 
 type InputContext = {
 	onInputCallback?: (input: QueuedUserInput) => void;
-	startupUserInputs: Promise<QueuedUserInput>[];
 	pendingUserInputs: QueuedUserInput[];
 };
 
@@ -57,7 +55,6 @@ function createSubmitContext(): SubmitContext {
 		takeSubmittedImages: vi.fn(() => []),
 		consumeStagedSubmitImages: vi.fn(() => undefined),
 		loadImageAttachments: vi.fn(async () => undefined),
-		activateDeferredStartupEditor: vi.fn(),
 	};
 }
 
@@ -73,31 +70,31 @@ describe("InteractiveMode startup input", () => {
 		expect(context.editor.addToHistory).toHaveBeenCalledWith("early prompt");
 	});
 
-	it("returns a shell submission before later queued input", async () => {
+	it("returns queued startup input before installing a new input callback", async () => {
 		const context: InputContext = {
-			startupUserInputs: [Promise.resolve({ text: "shell prompt" })],
-			pendingUserInputs: [{ text: "later prompt" }],
+			pendingUserInputs: [{ text: "queued prompt" }],
 		};
 
-		await expect(interactiveModePrototype.getUserInput.call(context)).resolves.toEqual({ text: "shell prompt" });
-		expect(context.pendingUserInputs).toEqual([{ text: "later prompt" }]);
+		await expect(interactiveModePrototype.getUserInput.call(context)).resolves.toEqual({ text: "queued prompt" });
+		expect(context.onInputCallback).toBeUndefined();
+		expect(context.pendingUserInputs).toEqual([]);
 	});
 
-	it("waits for the prompt barrier before session.prompt but not getUserInput", async () => {
+	it("waits for deferred builtins before session.prompt but not getUserInput", async () => {
 		let resolveAttach: (() => void) | undefined;
-		const barrier = new Promise<void>((resolve) => {
+		const attach = new Promise<void>((resolve) => {
 			resolveAttach = resolve;
 		});
 		const prompt = vi.fn(async () => {});
 		const context = {
-			promptBarrierPromise: barrier,
+			deferredBuiltinAttachPromise: attach,
 			session: { prompt },
 			awaitDeferredBuiltinsForPrompt() {
-				return proto.waitForPromptBarrier.call(this);
+				return proto.waitForDeferredBuiltins.call(this);
 			},
 		};
 		const proto = InteractiveMode.prototype as unknown as {
-			waitForPromptBarrier(this: { promptBarrierPromise?: Promise<void> }): Promise<void>;
+			waitForDeferredBuiltins(this: { deferredBuiltinAttachPromise?: Promise<void> }): Promise<void>;
 			promptAfterDeferredBuiltins(
 				this: {
 					awaitDeferredBuiltinsForPrompt(): Promise<void>;
@@ -107,6 +104,14 @@ describe("InteractiveMode startup input", () => {
 			): Promise<void>;
 		};
 
+		const wait = proto.waitForDeferredBuiltins.call(context);
+		let waitSettled = false;
+		void wait.then(() => {
+			waitSettled = true;
+		});
+		await Promise.resolve();
+		expect(waitSettled).toBe(false);
+
 		const queued = proto.promptAfterDeferredBuiltins.call(context, "hello");
 		await Promise.resolve();
 		expect(prompt).not.toHaveBeenCalled();
@@ -114,28 +119,5 @@ describe("InteractiveMode startup input", () => {
 		resolveAttach?.();
 		await queued;
 		expect(prompt).toHaveBeenCalledWith("hello", undefined);
-	});
-
-	it("still opens the prompt barrier when deferred imports fail", async () => {
-		const showError = vi.fn();
-		const context = {
-			deferredBuiltinsAttached: false,
-			options: {
-				deferredBuiltinFactories: async () => ({
-					extensions: [],
-					failures: [{ name: "broken", error: new Error("import exploded") }],
-				}),
-			},
-			setExtensionStatus: vi.fn(),
-			showError,
-			session: { attachInlineExtensions: vi.fn() },
-		};
-		const proto = InteractiveMode.prototype as unknown as {
-			attachDeferredBuiltinExtensions(this: typeof context): Promise<void>;
-		};
-
-		await expect(proto.attachDeferredBuiltinExtensions.call(context)).resolves.toBeUndefined();
-		expect(context.deferredBuiltinsAttached).toBe(true);
-		expect(showError).toHaveBeenCalledWith("Failed to load deferred extensions: broken");
 	});
 });

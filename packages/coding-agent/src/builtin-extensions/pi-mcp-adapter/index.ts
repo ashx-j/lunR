@@ -42,6 +42,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   let lifecycleGeneration = 0;
   let sessionAbort = new AbortController();
   const initializingStates = new Set<McpExtensionState>();
+  const shutdownPromises = new WeakMap<McpExtensionState, Promise<void>>();
   let heavyModules: McpHeavyModules | null = null;
   let heavyModulesPromise: Promise<McpHeavyModules> | null = null;
   const directExecutors = new Map<string, ReturnType<McpHeavyModules["directToolExecutor"]["createDirectToolExecutor"]>>();
@@ -68,36 +69,42 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     return heavyModulesPromise;
   }
 
-  async function shutdownState(currentState: McpExtensionState | null, reason: string): Promise<void> {
-    if (!currentState) return;
+  function shutdownState(currentState: McpExtensionState | null, reason: string): Promise<void> {
+    if (!currentState) return Promise.resolve();
+    const existing = shutdownPromises.get(currentState);
+    if (existing) return existing;
 
-    if (currentState.uiServer) {
-      currentState.uiServer.close(reason);
-      currentState.uiServer = null;
-    }
-
-    let flushError: unknown;
-    try {
-      if (heavyModules) {
-        heavyModules.init.flushMetadataCache(currentState);
+    const shutdown = (async () => {
+      if (currentState.uiServer) {
+        currentState.uiServer.close(reason);
+        currentState.uiServer = null;
       }
-    } catch (error) {
-      flushError = error;
-    }
 
-    try {
-      await currentState.lifecycle.gracefulShutdown();
-    } catch (error) {
+      let flushError: unknown;
+      try {
+        if (heavyModules) {
+          heavyModules.init.flushMetadataCache(currentState);
+        }
+      } catch (error) {
+        flushError = error;
+      }
+
+      try {
+        await currentState.lifecycle.gracefulShutdown();
+      } catch (error) {
+        if (flushError) {
+          console.error("MCP: graceful shutdown failed after metadata flush error", error);
+        } else {
+          throw error;
+        }
+      }
+
       if (flushError) {
-        console.error("MCP: graceful shutdown failed after metadata flush error", error);
-      } else {
-        throw error;
+        throw flushError;
       }
-    }
-
-    if (flushError) {
-      throw flushError;
-    }
+    })();
+    shutdownPromises.set(currentState, shutdown);
+    return shutdown;
   }
 
   async function shutdownInitializingStates(): Promise<void> {
@@ -147,7 +154,10 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       throwIfAborted(signal);
       return initialized;
     } catch (error) {
-      if (partial && initializingStates.delete(partial)) await shutdownState(partial, "initialization_failed");
+      if (partial) {
+        initializingStates.delete(partial);
+        await shutdownState(partial, "initialization_failed");
+      }
       throw error;
     } finally {
       if (partial) initializingStates.delete(partial);

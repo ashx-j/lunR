@@ -11,8 +11,6 @@ const NOT_FOUND_RETRY_THRESHOLD = 3;
 const HEARTBEAT_BACKOFF_BASE_MS = 1_000;
 const HEARTBEAT_BACKOFF_MAX_MS = 30_000;
 const RADIUS_PROVIDER = "radius";
-const DEFAULT_RADIUS_REQUEST_TIMEOUT_MS = 10_000;
-const RADIUS_REQUEST_TIMEOUT_ENV = "PI_RADIUS_REQUEST_TIMEOUT_MS";
 
 interface RegisterMachineResponse extends RadiusRegistration {
 	id: string;
@@ -46,70 +44,35 @@ class RadiusHttpError extends Error {
 	}
 }
 
-function getRadiusRequestTimeoutMs(): number {
-	const configured = Number(process.env[RADIUS_REQUEST_TIMEOUT_ENV]);
-	return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_RADIUS_REQUEST_TIMEOUT_MS;
-}
-
-async function withRadiusDeadline<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
-	const timeoutMs = getRadiusRequestTimeoutMs();
-	const controller = new AbortController();
-	let timer: NodeJS.Timeout | undefined;
-	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => {
-			controller.abort();
-			reject(new Error(`Radius request timed out after ${timeoutMs}ms`));
-		}, timeoutMs);
-		timer.unref?.();
-	});
-	try {
-		return await Promise.race([operation(controller.signal), timeout]);
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
-}
-
 async function post<T>(path: string, body: unknown): Promise<T> {
-	return withRadiusDeadline(async (signal) => {
-		const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${getRadiusAccessToken()}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(body),
-			signal,
-		});
-
-		if (!response.ok) {
-			throw new RadiusHttpError(
-				response.status,
-				`Radius request failed: ${response.status} ${await response.text()}`,
-			);
-		}
-
-		return (await response.json()) as T;
+	const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${getRadiusAccessToken()}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(body),
 	});
+
+	if (!response.ok) {
+		throw new RadiusHttpError(response.status, `Radius request failed: ${response.status} ${await response.text()}`);
+	}
+
+	return (await response.json()) as T;
 }
 
 async function maybePost(path: string, body: unknown): Promise<void> {
-	await withRadiusDeadline(async (signal) => {
-		const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${getRadiusAccessToken()}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(body),
-			signal,
-		});
-		if (!response.ok) {
-			throw new RadiusHttpError(
-				response.status,
-				`Radius request failed: ${response.status} ${await response.text()}`,
-			);
-		}
+	const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${getRadiusAccessToken()}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(body),
 	});
+	if (!response.ok) {
+		throw new RadiusHttpError(response.status, `Radius request failed: ${response.status} ${await response.text()}`);
+	}
 }
 
 function isNotFoundError(error: unknown): error is RadiusHttpError {

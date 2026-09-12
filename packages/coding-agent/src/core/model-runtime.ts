@@ -185,18 +185,6 @@ export class ModelRuntime implements Models {
 	}
 
 	static async create(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {
-		return ModelRuntime.createInternal(options, true);
-	}
-
-	/** @internal Agent-session hydration registers extension providers before the first refresh. */
-	static async createForAgentSession(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {
-		return ModelRuntime.createInternal(options, false);
-	}
-
-	private static async createInternal(
-		options: CreateModelRuntimeOptions,
-		refreshOnCreate: boolean,
-	): Promise<ModelRuntime> {
 		// lunr: keep the underlying store — the SubscriptionManager mirrors rotated
 		// keys into it directly, NOT through the RuntimeCredentials overlay (a runtime
 		// --api-key override would shadow the mirror there).
@@ -243,9 +231,7 @@ export class ModelRuntime implements Models {
 		// lunr: create() must not wait on GitHub / provider /v1/models / a dead NIC.
 		// Disk cache + baked-in + bundled official overlay are enough to start;
 		// /refresh and the model picker still do a live refresh.
-		if (refreshOnCreate) {
-			await runtime.refresh({ allowNetwork: false });
-		}
+		await runtime.refresh({ allowNetwork: false });
 		return runtime;
 	}
 
@@ -515,7 +501,11 @@ export class ModelRuntime implements Models {
 		return this.credentials.hasRuntimeApiKey(providerId);
 	}
 
-	async setRuntimeApiKey(providerId: string, apiKey: string, options?: { allowNetwork?: boolean }): Promise<void> {
+	async setRuntimeApiKey(
+		providerId: string,
+		apiKey: string,
+		options?: { allowNetwork?: boolean },
+	): Promise<void> {
 		this.credentials.setRuntimeApiKey(providerId, apiKey);
 		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);

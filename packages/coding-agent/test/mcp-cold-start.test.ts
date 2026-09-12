@@ -550,6 +550,8 @@ describe("mcp cold-start dependency split", () => {
 		} finally {
 			release();
 		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(gracefulShutdown).toHaveBeenCalledOnce();
 	});
 
 	it("does not reconnect a direct tool after its OAuth wait is cancelled", async () => {

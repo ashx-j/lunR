@@ -35,7 +35,8 @@ import { beginCronFire, endCronFire } from "../core/cron/fire-guard.ts";
 import type { CronJob, CronJobOrigin } from "../core/cron/jobs.ts";
 import { setCronDeliverValidator } from "../core/cron/jobs.ts";
 import { startScheduler } from "../core/cron/scheduler.ts";
-import type { BridgeSession } from "./agent-bridge.ts";
+import { createPermissionContext, deletePermissionContext } from "../core/permissions.ts";
+import { type BridgeSession, shutdownBridgeSession } from "./agent-bridge.ts";
 import { type GatewayConfig, platformConfigFor } from "./config.ts";
 import { splitMessage } from "./text.ts";
 import type { PlatformAdapter } from "./types.ts";
@@ -121,12 +122,24 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 		model = resolved;
 	}
 	const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
-	bindRuntimeBridges({ session, services });
-	await session.bindExtensions({
-		mode: "print",
-		onError: (err) => console.error(`[gateway cron] extension error (${err.extensionPath}): ${err.error}`),
-	});
-	return session;
+	const permissionId = sessionManager.getSessionId();
+	createPermissionContext(permissionId, settingsManager.getDefaultPermissionMode(), false);
+	const dispose = session.dispose.bind(session);
+	session.dispose = () => {
+		deletePermissionContext(permissionId);
+		dispose();
+	};
+	try {
+		bindRuntimeBridges({ session, services });
+		await session.bindExtensions({
+			mode: "print",
+			onError: (err) => console.error(`[gateway cron] extension error (${err.extensionPath}): ${err.error}`),
+		});
+		return session;
+	} catch (error) {
+		await shutdownBridgeSession(session, "quit");
+		throw error;
+	}
 }
 
 /** Final assistant text, print-mode style; throws on error/aborted stop. */
@@ -368,7 +381,7 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 				} catch (err) {
 					errors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
 				} finally {
-					session?.dispose?.();
+					if (session) await shutdownBridgeSession(session, "quit");
 				}
 			}
 			throw new Error(errors.join(" | ") || "no model candidates");

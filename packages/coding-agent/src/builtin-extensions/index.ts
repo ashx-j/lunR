@@ -57,6 +57,7 @@ const DEFERRED_BUILTIN_LOADERS: Array<{
 	{ name: "pi-web-access", load: () => import("./pi-web-access/index.ts") },
 	{ name: "pi-lsp-extension", load: () => import("./pi-lsp-extension/src/index.ts") },
 	{ name: "pi-mcp-adapter", load: () => import("./pi-mcp-adapter/index.ts") },
+	{ name: "lunr-computer-use", load: () => import("./lunr-computer-use.ts") },
 ];
 
 export const DEFERRED_BUILTIN_EXTENSION_NAMES = DEFERRED_BUILTIN_LOADERS.map((entry) => entry.name);

@@ -10,14 +10,20 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 import {
-	assertNoEarendil,
+	assertPublishedEntryPointsExist,
+	assertPublishedTreeHasNoEarendil,
 	DEV_WORKSPACE_TO_NPM,
+	NPM_DEV_CLI_PACKAGE,
 	publishTagFor,
-	rewritePackageJsonForNpm,
-	rewriteWorkspaceSpecifiers,
 	WORKSPACE_TO_NPM,
+	rewritePackageJsonForNpm,
+	rewritePackageLockForNpm,
+	rewriteWorkspaceSpecifiers,
 } from "./lunr-npm-names.mjs";
+
+import { addPayloadDependencies, release as computerRelease, stagePayloadPackages } from "./computer-use-packages.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -30,7 +36,7 @@ function shouldRewriteFile(filePath) {
 	return false;
 }
 
-function rewritePublishedTree(root, packageNames) {
+function rewritePublishedTree(root) {
 	const stack = [root];
 	while (stack.length > 0) {
 		const dir = stack.pop();
@@ -56,36 +62,26 @@ const packages = [
 	{ directory: "packages/coding-agent", workspaceName: "@earendil-works/pi-coding-agent" },
 ];
 
-function parseArgs() {
-	const options = { channel: "stable", dryRun: false, version: undefined };
-	const args = process.argv.slice(2);
-	for (let index = 0; index < args.length; index++) {
-		const arg = args[index];
-		if (arg === "--dry-run") options.dryRun = true;
-		else if (arg === "--channel") {
-			const channel = args[++index];
-			if (channel !== "stable" && channel !== "dev") throw new Error("--channel must be stable or dev");
-			options.channel = channel;
-		} else if (arg === "--version") {
-			const version = args[++index];
-			if (!version) throw new Error("--version requires a value");
-			options.version = version;
-		} else {
-			throw new Error(`Unknown argument: ${arg}`);
-		}
-	}
-	if (options.channel === "stable" && options.version) {
-		throw new Error("Stable publication reads versions from package.json; do not pass --version");
-	}
-	if (options.channel === "dev" && !/^\d+\.\d+\.\d+-dev\.\d+\.\d+$/.test(options.version ?? "")) {
-		throw new Error("Dev publication requires --version <base>-dev.<run>.<attempt>");
-	}
-	return options;
+const { values: options } = parseArgs({
+	options: {
+		"dry-run": { type: "boolean", default: false },
+		"pack-dir": { type: "string" },
+		channel: { type: "string", default: "stable" },
+		version: { type: "string" },
+	},
+});
+const dryRun = options["dry-run"];
+const packDirectory = options["pack-dir"];
+if (packDirectory && (!dryRun || !existsSync(packDirectory) || !statSync(packDirectory).isDirectory())) {
+	throw new Error("--pack-dir requires --dry-run and an existing destination directory.");
 }
-
-const options = parseArgs();
-const dryRun = options.dryRun;
+if (options.channel !== "stable" && options.channel !== "dev") throw new Error("--channel must be stable or dev");
+if (options.channel === "stable" && options.version) throw new Error("Stable publication reads package versions; omit --version");
+if (options.channel === "dev" && !/^\d+\.\d+\.\d+-dev\.\d+\.\d+$/.test(options.version ?? "")) {
+	throw new Error("Dev publication requires --version <base>-dev.<run>.<attempt>");
+}
 const packageNames = options.channel === "dev" ? DEV_WORKSPACE_TO_NPM : WORKSPACE_TO_NPM;
+const rewriteOptions = { packageNames, version: options.version };
 
 function commandForPlatform(command) {
 	return process.platform === "win32" ? `${command}.cmd` : command;
@@ -118,13 +114,14 @@ function readPackageJson(directory) {
 
 function assertBuildOutputExists(directory) {
 	if (!existsSync(join(directory, "dist"))) {
-		throw new Error(`${directory}/dist does not exist. Build with tsgo before publishing.`);
+		throw new Error(`${directory}/dist does not exist. Run the package build before publishing.`);
 	}
+	assertPublishedEntryPointsExist(directory, readPackageJson(directory), directory);
 }
 
 async function isPublished(name, version) {
 	const url = `https://registry.npmjs.org/${name.replace("/", "%2f")}/${version}?cache=${Date.now()}`;
-	const res = await fetch(url, { cache: "no-store" });
+	const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15000) });
 	if (res.status === 404) return false;
 	if (!res.ok) {
 		throw new Error(`Failed to query ${name}@${version}: HTTP ${res.status}`);
@@ -133,20 +130,14 @@ async function isPublished(name, version) {
 }
 
 async function waitForPublished(name, version) {
-	let lastError;
-	for (let attempt = 1; attempt <= 60; attempt++) {
-		try {
-			if (await isPublished(name, version)) return;
-		} catch (error) {
-			lastError = error;
-		}
-		if (attempt < 60) await new Promise((resolve) => setTimeout(resolve, 5000));
+	for (let attempt = 0; attempt < 60; attempt++) {
+		if (await isPublished(name, version)) return;
+		await new Promise((resolve) => setTimeout(resolve, 5000));
 	}
-	const detail = lastError instanceof Error ? `: ${lastError.message}` : "";
-	throw new Error(`${name}@${version} was not visible on npm after publication${detail}`);
+	throw new Error(`${name}@${version} is not visible on npm after publication`);
 }
 
-function copyPackageForPublish(directory, workspaceName) {
+function copyPackageForPublish(directory) {
 	const dest = mkdtempSync(join(tmpdir(), "lunr-publish-"));
 	cpSync(directory, dest, {
 		recursive: true,
@@ -154,29 +145,37 @@ function copyPackageForPublish(directory, workspaceName) {
 			const norm = src.replaceAll("\\", "/");
 			if (norm.includes("/node_modules")) return false;
 			if (norm.includes("/binaries")) return false;
-			if (norm.endsWith("npm-shrinkwrap.json")) return false;
+			if (norm.includes("/native/computer-use/") && /\.(zip|tar\.gz|json)$/.test(norm)) return false;
 			return true;
 		},
 	});
 	const sourcePkg = readPackageJson(directory);
-	const isDevCli = options.channel === "dev" && workspaceName === "@earendil-works/pi-coding-agent";
-	if (isDevCli) cpSync(join("scripts", "lunr-dev-readme.md"), join(dest, "README.md"));
-	const rewritten = rewritePackageJsonForNpm(sourcePkg, {
-		packageNames,
-		version: options.version,
-		workspaceDependencyVersion: options.version,
-		bin: isDevCli ? { "lunr-dev": "dist/dev-cli.js" } : undefined,
-		appName: isDevCli ? "lunr-dev" : undefined,
-	});
+	const rewritten = rewritePackageJsonForNpm(sourcePkg, rewriteOptions);
+	if (rewritten.name === NPM_DEV_CLI_PACKAGE) cpSync("scripts/lunr-dev-readme.md", join(dest, "README.md"));
 	if (rewritten.repository && rewritten.repository.directory === undefined) {
 		delete rewritten.repository.directory;
 	}
 	writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`, "utf8");
-	rewritePublishedTree(dest, packageNames);
-	const stagedMain = join(dest, "dist", "main.js");
-	if (existsSync(stagedMain)) {
-		assertNoEarendil(readFileSync(stagedMain, "utf8"), `${rewritten.name} dist/main.js`);
+	rewritePublishedTree(dest);
+	if (sourcePkg.name === "@earendil-works/pi-coding-agent") {
+		const shrinkwrapPath = join(dest, "npm-shrinkwrap.json");
+		const shrinkwrap = rewritePackageLockForNpm(JSON.parse(readFileSync(shrinkwrapPath, "utf8")), rewriteOptions);
+		addPayloadDependencies(rewritten, shrinkwrap);
+		writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, "\t")}\n`);
+		writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`);
+		const installerPath = join(dest, "install-lock", "package-lock.json");
+		const installer = rewritePackageLockForNpm(JSON.parse(readFileSync(installerPath, "utf8")), rewriteOptions);
+		addPayloadDependencies({ version: rewritten.version, optionalDependencies: rewritten.optionalDependencies }, installer, `node_modules/${rewritten.name}`);
+		writeFileSync(installerPath, `${JSON.stringify(installer, null, "\t")}\n`);
+		const installerManifestPath = join(dest, "install-lock", "package.json");
+		const installerManifest = JSON.parse(readFileSync(installerManifestPath, "utf8"));
+		installerManifest.name = installer.name;
+		installerManifest.version = installer.version;
+		installerManifest.dependencies = installer.packages[""].dependencies;
+		writeFileSync(installerManifestPath, `${JSON.stringify(installerManifest, null, "\t")}\n`);
 	}
+	assertPublishedEntryPointsExist(dest, rewritten, rewritten.name);
+	assertPublishedTreeHasNoEarendil(dest, rewritten.name);
 	return { dest, publishedName: rewritten.name, version: rewritten.version };
 }
 
@@ -192,18 +191,21 @@ for (const pkg of packages) {
 	packageVersions.set(pkg.workspaceName, packageJson.version);
 }
 
-const sourceVersions = [...new Set(packageVersions.values())];
-if (sourceVersions.length !== 1) {
-	throw new Error(`Publish packages are not lockstep versioned: ${sourceVersions.join(", ")}`);
+const versions = [...new Set(packageVersions.values())];
+if (versions.length !== 1) {
+	throw new Error(`Publish packages are not lockstep versioned: ${versions.join(", ")}`);
 }
-if (options.channel === "dev" && !options.version?.startsWith(`${sourceVersions[0]}-dev.`)) {
-	throw new Error(`Dev version must use the package version as its base: ${sourceVersions[0]}-dev.<run>.<attempt>`);
-}
-const publishVersion = options.version ?? sourceVersions[0];
 
-console.log(
-	`Publishing ${options.channel} lunR packages at ${publishVersion} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`,
-);
+if (options.channel === "dev" && !options.version.startsWith(`${versions[0]}-dev.`)) {
+	throw new Error(`Dev version must start with ${versions[0]}-dev.`);
+}
+const publishVersion = options.version ?? versions[0];
+
+if (!dryRun && options.channel === "stable" && computerRelease.approval !== "production-approved") {
+	throw new Error("Computer-use runtime has development-only approval. Production publication is blocked.");
+}
+
+console.log(`Publishing ${options.channel} lunR packages at ${publishVersion} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`);
 
 const packageStates = packages.map((pkg) => ({
 	...pkg,
@@ -216,21 +218,30 @@ const packageStates = packages.map((pkg) => ({
 await (async () => {
 	const temps = [];
 	try {
+		const payloadRoot = mkdtempSync(join(tmpdir(), "lunr-payload-publish-"));
+		temps.push(payloadRoot);
+		const payloads = await stagePayloadPackages(payloadRoot, publishVersion);
+		const payloadStates = payloads.map(({ directory, manifest }) => ({
+			stageDir: directory, publishedName: manifest.name, version: manifest.version, published: false,
+			publishTag: options.channel === "dev" ? "dev" : "latest",
+		}));
 		for (const pkg of packageStates) {
 			assertBuildOutputExists(pkg.directory);
-			pkg.published = await isPublished(pkg.publishedName, pkg.version);
+			pkg.published = dryRun ? false : await isPublished(pkg.publishedName, pkg.version);
 
-			const staged = copyPackageForPublish(pkg.directory, pkg.workspaceName);
+			const staged = copyPackageForPublish(pkg.directory);
 			temps.push(staged.dest);
 			pkg.stageDir = staged.dest;
 
-			if (pkg.published) {
+			if (dryRun) {
+				console.log(`${pkg.publishedName}@${pkg.version}: validating local release copy without querying publication state.`);
+			} else if (pkg.published) {
 				console.log(`${pkg.publishedName}@${pkg.version} is already published; validating pack only.`);
 			} else {
 				console.log(`${pkg.publishedName}@${pkg.version} is not published; validating pack.`);
 			}
 
-			const result = run("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
+			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], {
 				capture: true,
 				cwd: pkg.stageDir,
 			});
@@ -240,31 +251,27 @@ await (async () => {
 			);
 		}
 
-		if (dryRun) {
-			return;
+		for (const pkg of payloadStates) {
+			pkg.published = dryRun ? false : await isPublished(pkg.publishedName, pkg.version);
+			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], { capture: true, cwd: pkg.stageDir });
+			const packed = JSON.parse(result.stdout)[0];
+			console.log(`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked`);
+		}
+		if (dryRun) return;
+		if (packageStates.find((pkg) => pkg.workspaceName === "@earendil-works/pi-coding-agent").published && payloadStates.some((pkg) => !pkg.published)) {
+			throw new Error("Use a new lunR release version before publishing new optional payload packages.");
 		}
 
 		console.log("All packages validated; starting publication.\n");
 
-		for (const pkg of packageStates) {
-			const isDevCli = options.channel === "dev" && pkg.workspaceName === "@earendil-works/pi-coding-agent";
-			if (isDevCli) {
-				const internalPackages = packageStates.filter(
-					(candidate) => candidate.workspaceName !== "@earendil-works/pi-coding-agent",
-				);
-				await Promise.all(
-					internalPackages.map((candidate) => waitForPublished(candidate.publishedName, candidate.version)),
-				);
-			}
+		for (const pkg of [...payloadStates, ...packageStates]) {
 			if (pkg.published) {
 				console.log(`Skipping ${pkg.publishedName}@${pkg.version}: already published\n`);
 				continue;
 			}
 
-			const publishArgs = ["publish", "--access", "public", "--ignore-scripts"];
-			if (pkg.publishTag) publishArgs.push("--tag", pkg.publishTag);
-			run("npm", publishArgs, { cwd: pkg.stageDir });
-			if (options.channel !== "dev" || isDevCli) await waitForPublished(pkg.publishedName, pkg.version);
+			run("npm", ["publish", "--access", "public", "--ignore-scripts", "--tag", pkg.publishTag], { cwd: pkg.stageDir });
+			await waitForPublished(pkg.publishedName, pkg.version);
 			console.log();
 		}
 	} finally {

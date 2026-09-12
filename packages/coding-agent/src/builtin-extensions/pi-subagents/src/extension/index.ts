@@ -332,9 +332,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	let generation = 0;
 	let executorPromise: Promise<ReturnType<typeof createSubagentExecutor>> | undefined;
+	const pendingLaunches = new Set<Promise<void>>();
 	const runtimeCleanup = () => {
 		generation++;
 		executorPromise = undefined;
+		pendingLaunches.clear();
 		mainWatchdog.dispose();
 		stopResultWatcher();
 		scheduledRunManager.stop();
@@ -366,27 +368,45 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	});
 	const executor: ReturnType<typeof createSubagentExecutor> = {
 		async execute(id, params, signal, onUpdate, ctx) {
-			const currentGeneration = generation;
-			signal?.throwIfAborted();
-			if (!executorPromise) {
-				const pending = import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor }) => {
-					if (generation !== currentGeneration) throw new Error("Subagent session changed before initialization");
-					return createSubagentExecutor({
-						pi, state, config, asyncByDefault,
-						waitToolEnabled: waitToolConfig.enabled,
-						handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
-						watchdog: mainWatchdog, tempArtifactsDir, getSubagentSessionRoot, expandTilde,
+			let resolveLaunchReady!: () => void;
+			let launchReady = false;
+			const launchReadyPromise = new Promise<void>((resolve) => {
+				resolveLaunchReady = resolve;
+			});
+			const markLaunchReady = () => {
+				if (launchReady) return;
+				launchReady = true;
+				pendingLaunches.delete(launchReadyPromise);
+				resolveLaunchReady();
+			};
+			pendingLaunches.add(launchReadyPromise);
+			try {
+				const currentGeneration = generation;
+				signal?.throwIfAborted();
+				if (!executorPromise) {
+					const pending = import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor }) => {
+						if (generation !== currentGeneration) throw new Error("Subagent session changed before initialization");
+						return createSubagentExecutor({
+							pi, state, config, asyncByDefault,
+							waitToolEnabled: waitToolConfig.enabled,
+							handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
+							watchdog: mainWatchdog, tempArtifactsDir, getSubagentSessionRoot, expandTilde,
+						});
 					});
-				});
-				executorPromise = pending;
-				void pending.catch(() => {
-					if (executorPromise === pending) executorPromise = undefined;
-				});
+					executorPromise = pending;
+					void pending.catch(() => {
+						if (executorPromise === pending) executorPromise = undefined;
+					});
+				}
+				const ready = await awaitWithAbort(executorPromise, signal);
+				signal?.throwIfAborted();
+				if (generation !== currentGeneration) throw new Error("Subagent session changed before execution");
+				const execution = ready.execute(id, params, signal, onUpdate, ctx);
+				markLaunchReady();
+				return await execution;
+			} finally {
+				markLaunchReady();
 			}
-			const ready = await awaitWithAbort(executorPromise, signal);
-			signal?.throwIfAborted();
-			if (generation !== currentGeneration) throw new Error("Subagent session changed before execution");
-			return ready.execute(id, params, signal, onUpdate, ctx);
 		},
 	};
 	executorExecute = executor.execute;
@@ -528,7 +548,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		pi.registerTool(tool);
 	});
 
-	registerWaitTool(pi, state, waitToolConfig.enabled);
+	registerWaitTool(pi, state, waitToolConfig.enabled, async (signal) => {
+		const launches = [...pendingLaunches];
+		if (launches.length === 0) return;
+		await awaitWithAbort(Promise.all(launches).then(() => {}), signal);
+	});
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (ctx.hasUI) return;
@@ -599,6 +623,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const resetSessionState = (ctx: ExtensionContext) => {
 		generation++;
 		executorPromise = undefined;
+		pendingLaunches.clear();
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
@@ -632,6 +657,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		generation++;
 		executorPromise = undefined;
+		pendingLaunches.clear();
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		for (const unsubscribe of eventUnsubscribes) {
 			try {

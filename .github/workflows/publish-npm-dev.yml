@@ -40,6 +40,21 @@ jobs:
           npx tsgo -p packages/ai/tsconfig.build.json
           npx tsgo -p packages/agent/tsconfig.build.json
           npm --prefix packages/coding-agent run build
+          npx tsgo -p packages/orchestrator/tsconfig.build.json
+
+      - name: Prepare pinned computer-use payloads
+        run: |
+          node scripts/download-computer-use-release.mjs "$RUNNER_TEMP/cua-release"
+          node scripts/bundle-computer-use.mjs "$RUNNER_TEMP/cua-release"
+          node scripts/generate-computer-use-manifest.mjs --check
+          node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs
+
+      - name: Validate computer use and dev channel
+        working-directory: packages/coding-agent
+        run: npx vitest --run test/computer-*.test.ts test/lunr-npm-names.test.ts test/update-check.test.ts test/lunr-tab-title.test.ts
+
+      - name: Verify first paint and first request
+        run: node scripts/check-interactive-first-paint.mjs
 
       - name: Publish dev packages
         env:

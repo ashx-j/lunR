@@ -1,4 +1,4 @@
-import { Container } from "../tui.ts";
+import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, visibleWidth } from "../utils.ts";
 
 type RenderCache = {
@@ -11,7 +11,8 @@ type RenderCache = {
 /**
  * Box component - a container that applies padding and background to all children
  */
-export class Box extends Container {
+export class Box implements Component {
+	children: Component[] = [];
 	private paddingX: number;
 	private paddingTop: number;
 	private paddingBottom: number;
@@ -21,7 +22,6 @@ export class Box extends Container {
 	private cache?: RenderCache;
 
 	constructor(paddingX = 1, paddingY = 1, bgFn?: (text: string) => string) {
-		super();
 		this.paddingX = paddingX;
 		this.paddingTop = paddingY;
 		this.paddingBottom = paddingY;
@@ -32,17 +32,35 @@ export class Box extends Container {
 		this.paddingX = paddingX;
 		this.paddingTop = paddingY;
 		this.paddingBottom = paddingY;
-		this.markDirty();
+		this.invalidateCache();
 	}
 
 	setPaddingTop(paddingTop: number): void {
 		this.paddingTop = paddingTop;
-		this.markDirty();
+		this.invalidateCache();
 	}
 
 	setPaddingBottom(paddingBottom: number): void {
 		this.paddingBottom = paddingBottom;
-		this.markDirty();
+		this.invalidateCache();
+	}
+
+	addChild(component: Component): void {
+		this.children.push(component);
+		this.invalidateCache();
+	}
+
+	removeChild(component: Component): void {
+		const index = this.children.indexOf(component);
+		if (index !== -1) {
+			this.children.splice(index, 1);
+			this.invalidateCache();
+		}
+	}
+
+	clear(): void {
+		this.children = [];
+		this.invalidateCache();
 	}
 
 	setBgFn(bgFn?: (text: string) => string): void {
@@ -50,9 +68,8 @@ export class Box extends Container {
 		// Don't invalidate here - we'll detect bgFn changes by sampling output
 	}
 
-	protected override markDirty(): void {
+	private invalidateCache(): void {
 		this.cache = undefined;
-		super.markDirty();
 	}
 
 	private matchCache(width: number, childLines: string[], bgSample: string | undefined): boolean {
@@ -64,6 +81,13 @@ export class Box extends Container {
 			cache.childLines.length === childLines.length &&
 			cache.childLines.every((line, i) => line === childLines[i])
 		);
+	}
+
+	invalidate(): void {
+		this.invalidateCache();
+		for (const child of this.children) {
+			child.invalidate?.();
+		}
 	}
 
 	render(width: number): string[] {

@@ -457,7 +457,7 @@ describe("wrapCronContent", () => {
 // ---------------------------------------------------------------------------
 
 describe("startGatewayCron", () => {
-	function stubSessionFactory(text: string, onPrompt?: () => void) {
+	function stubSessionFactory(text: string, onPrompt?: () => void, onShutdown?: (event: unknown) => void) {
 		return async () => ({
 			prompt: async () => {
 				onPrompt?.();
@@ -472,6 +472,10 @@ describe("startGatewayCron", () => {
 						stopReason: "stop",
 					},
 				],
+			},
+			extensionRunner: {
+				hasHandlers: () => true,
+				emit: async (event: unknown) => onShutdown?.(event),
 			},
 			dispose: () => {},
 		});
@@ -489,15 +493,20 @@ describe("startGatewayCron", () => {
 		});
 
 		let guardSeenDuringPrompt = false;
+		const shutdownEvents: unknown[] = [];
 		const cron = startGatewayCron({
 			adapters: new Map([["telegram", adapter]]),
 			cfg: makeConfig((c) => {
 				c.telegram.homeChannel = "123";
 			}),
 			intervalMs: 100,
-			sessionFactory: stubSessionFactory("all green", () => {
-				guardSeenDuringPrompt = isCronFire();
-			}),
+			sessionFactory: stubSessionFactory(
+				"all green",
+				() => {
+					guardSeenDuringPrompt = isCronFire();
+				},
+				(event) => shutdownEvents.push(event),
+			),
 		});
 		stoppers.push(cron.stop);
 
@@ -509,6 +518,7 @@ describe("startGatewayCron", () => {
 		expect(adapter.sent[0].chatId).toBe("123");
 		expect(adapter.sent[0].text).toBe("☾ Cron: e2ejob\n———\nall green");
 		expect(guardSeenDuringPrompt).toBe(true);
+		expect(shutdownEvents).toEqual([{ type: "session_shutdown", reason: "quit" }]);
 
 		const after = getJob(job.id);
 		expect(after.state).toBe("completed"); // one-shot fired

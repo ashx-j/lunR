@@ -298,21 +298,6 @@ function resolveProvider(
 	return provider;
 }
 
-const pendingFetches = new Map<string, AbortController>();
-let sessionActive = false;
-let sessionGeneration = 0;
-let sessionAbort = new AbortController();
-
-function assertActiveRequest(generation: number, signal?: AbortSignal): void {
-	signal?.throwIfAborted();
-	if (generation !== sessionGeneration) throw new Error("Web request cancelled: session changed");
-}
-let widgetVisible = false;
-let widgetUnsubscribe: (() => void) | null = null;
-const pendingCurates = new Map<string, PendingCurate>();
-const activeCurators = new Map<string, CuratorServerHandle>();
-const glimpseWins = new Map<string, GlimpseWindow>();
-
 interface PendingCurate {
 	phase: "searching" | "curating";
 	workflow: CuratorWorkflow;
@@ -385,40 +370,6 @@ function formatFullResults(queryData: QueryResultData): string {
 		output += `### ${r.title}\n${r.url}\n\n`;
 	}
 	return output;
-}
-
-function abortPendingFetches(): void {
-	for (const controller of pendingFetches.values()) {
-		controller.abort();
-	}
-	pendingFetches.clear();
-}
-
-function closeCurator(callId?: string): void {
-	if (callId !== undefined) {
-		const win = glimpseWins.get(callId);
-		glimpseWins.delete(callId);
-		try { win?.close(); } catch {}
-		pendingCurates.get(callId)?.cancel("stale");
-		pendingCurates.delete(callId);
-		const curator = activeCurators.get(callId);
-		activeCurators.delete(callId);
-		try { curator?.close(); } catch {}
-		return;
-	}
-
-	for (const win of glimpseWins.values()) {
-		try { win.close(); } catch {}
-	}
-	glimpseWins.clear();
-	for (const pc of pendingCurates.values()) {
-		try { pc.cancel("stale"); } catch {}
-	}
-	pendingCurates.clear();
-	for (const curator of activeCurators.values()) {
-		try { curator.close(); } catch {}
-	}
-	activeCurators.clear();
 }
 
 async function openInBrowser(pi: ExtensionAPI, url: string): Promise<void> {
@@ -514,34 +465,6 @@ function extractDomain(url: string): string {
 	catch { return url; }
 }
 
-function updateWidget(ctx: ExtensionContext): void {
-	const theme = ctx.ui.theme;
-	const entries = activityMonitor.getEntries();
-	const lines: string[] = [];
-
-	lines.push(theme.fg("accent", "─── Web Search Activity " + "─".repeat(36)));
-
-	if (entries.length === 0) {
-		lines.push(theme.fg("muted", "  No activity yet"));
-	} else {
-		for (const e of entries) {
-			lines.push("  " + formatEntryLine(e, theme));
-		}
-	}
-
-	lines.push(theme.fg("accent", "─".repeat(60)));
-
-	const rateInfo = activityMonitor.getRateLimitInfo();
-	const resetMs = rateInfo.oldestTimestamp ? Math.max(0, rateInfo.oldestTimestamp + rateInfo.windowMs - Date.now()) : 0;
-	const resetSec = Math.ceil(resetMs / 1000);
-	lines.push(
-		theme.fg("muted", `Rate: ${rateInfo.used}/${rateInfo.max}`) +
-			(resetMs > 0 ? theme.fg("dim", ` (resets in ${resetSec}s)`) : ""),
-	);
-
-	ctx.ui.setWidget("web-activity", new Text(lines.join("\n"), 0, 0));
-}
-
 function formatEntryLine(
 	entry: ActivityEntry,
 	theme: { fg: (color: string, text: string) => string },
@@ -575,32 +498,105 @@ function formatEntryLine(
 	return `${typeStr.padEnd(4)} ${target.padEnd(32)} ${statusStr.padStart(5)} ${duration.padStart(5)} ${indicator}`;
 }
 
-function handleSessionChange(ctx: ExtensionContext): void {
-	sessionGeneration++;
-	sessionAbort.abort();
-	sessionAbort = new AbortController();
-	abortPendingFetches();
-	closeCurator();
-	runSessionCleanups();
-	sessionActive = true;
-	restoreFromSession(ctx);
-	// Unsubscribe before clear() to avoid callback with stale ctx
-	widgetUnsubscribe?.();
-	widgetUnsubscribe = null;
-	activityMonitor.clear();
-	if (widgetVisible) {
-		// Re-subscribe with new ctx
-		widgetUnsubscribe = activityMonitor.onUpdate(() => updateWidget(ctx));
-		updateWidget(ctx);
-	}
-}
-
 export default function (pi: ExtensionAPI) {
 	const initConfig = loadConfigForExtensionInit();
 	const curateKey = initConfig.shortcuts?.curate || DEFAULT_SHORTCUTS.curate;
 	const activityKey = initConfig.shortcuts?.activity || DEFAULT_SHORTCUTS.activity;
+	const pendingFetches = new Map<string, AbortController>();
+	const pendingCurates = new Map<string, PendingCurate>();
+	const activeCurators = new Map<string, CuratorServerHandle>();
+	const glimpseWins = new Map<string, GlimpseWindow>();
+	let sessionActive = false;
+	let widgetVisible = false;
+	let widgetUnsubscribe: (() => void) | null = null;
+	let sessionGeneration = 0;
+	let sessionAbort = new AbortController();
+
+	function abortPendingFetches(): void {
+		for (const controller of pendingFetches.values()) controller.abort();
+		pendingFetches.clear();
+	}
+
+	function closeCurator(callId?: string): void {
+		if (callId !== undefined) {
+			const win = glimpseWins.get(callId);
+			glimpseWins.delete(callId);
+			try { win?.close(); } catch {}
+			pendingCurates.get(callId)?.cancel("stale");
+			pendingCurates.delete(callId);
+			const curator = activeCurators.get(callId);
+			activeCurators.delete(callId);
+			try { curator?.close(); } catch {}
+			return;
+		}
+
+		for (const win of glimpseWins.values()) {
+			try { win.close(); } catch {}
+		}
+		glimpseWins.clear();
+		for (const pending of pendingCurates.values()) {
+			try { pending.cancel("stale"); } catch {}
+		}
+		pendingCurates.clear();
+		for (const curator of activeCurators.values()) {
+			try { curator.close(); } catch {}
+		}
+		activeCurators.clear();
+	}
+
+	function updateWidget(ctx: ExtensionContext): void {
+		const theme = ctx.ui.theme;
+		const entries = activityMonitor.getEntries();
+		const lines: string[] = [];
+		lines.push(theme.fg("accent", "─── Web Search Activity " + "─".repeat(36)));
+
+		if (entries.length === 0) {
+			lines.push(theme.fg("muted", "  No activity yet"));
+		} else {
+			for (const entry of entries) lines.push("  " + formatEntryLine(entry, theme));
+		}
+
+		lines.push(theme.fg("accent", "─".repeat(60)));
+		const rateInfo = activityMonitor.getRateLimitInfo();
+		const resetMs = rateInfo.oldestTimestamp
+			? Math.max(0, rateInfo.oldestTimestamp + rateInfo.windowMs - Date.now())
+			: 0;
+		const resetSec = Math.ceil(resetMs / 1000);
+		lines.push(
+			theme.fg("muted", `Rate: ${rateInfo.used}/${rateInfo.max}`) +
+				(resetMs > 0 ? theme.fg("dim", ` (resets in ${resetSec}s)`) : ""),
+		);
+		ctx.ui.setWidget("web-activity", new Text(lines.join("\n"), 0, 0));
+	}
+
+	function handleSessionChange(ctx: ExtensionContext): void {
+		abortPendingFetches();
+		closeCurator();
+		runSessionCleanups();
+		sessionActive = true;
+		restoreFromSession(ctx);
+		widgetUnsubscribe?.();
+		widgetUnsubscribe = null;
+		activityMonitor.clear();
+		if (widgetVisible) {
+			widgetUnsubscribe = activityMonitor.onUpdate(() => updateWidget(ctx));
+			updateWidget(ctx);
+		}
+	}
 	/** Populated on first summary/curator use so sync curator submit/cancel can build fallbacks. */
 	let warmSummaryReview: Awaited<ReturnType<typeof loadSummaryReview>> | null = null;
+
+	function assertActiveRequest(generation: number, signal?: AbortSignal): void {
+		signal?.throwIfAborted();
+		if (generation !== sessionGeneration) throw new Error("Web request cancelled: session changed");
+	}
+
+	function startSession(ctx: ExtensionContext): void {
+		sessionGeneration++;
+		sessionAbort.abort();
+		sessionAbort = new AbortController();
+		handleSessionChange(ctx);
+	}
 
 	async function ensureSummaryReview(): Promise<Awaited<ReturnType<typeof loadSummaryReview>>> {
 		if (!warmSummaryReview) warmSummaryReview = await loadSummaryReview();
@@ -1306,8 +1302,8 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", async (_event, ctx) => handleSessionChange(ctx));
-	pi.on("session_tree", async (_event, ctx) => handleSessionChange(ctx));
+	pi.on("session_start", async (_event, ctx) => startSession(ctx));
+	pi.on("session_tree", async (_event, ctx) => startSession(ctx));
 
 	pi.on("session_shutdown", () => {
 		sessionGeneration++;

@@ -161,6 +161,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
+| `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
 | `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
 | `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
 | `/manual`, `/yolo`, `/auto` | Activate that permission mode |
@@ -209,7 +210,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
 | Shift+Tab | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
-| Ctrl+T | Collapse/expand thinking blocks |
+| Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
 
 Click a thinking or tool card to expand or collapse that item. `app.tools.expand` is unbound.

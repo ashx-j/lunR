@@ -6,7 +6,7 @@ Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`
 
 ## Permissions and plan mode
 
-Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cycles that order. Thinking cycle is unbound; use `/thinking`, `/effort`, or `/reasoning`.
+Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cycles that order. Ctrl+T (`app.thinking.cycle`) cycles thinking levels for the selected model.
 
 - **manual** — approve every tool
 - **yolo** — auto-approve ordinary tools; large subagent launches still request confirmation
@@ -78,7 +78,7 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 
 ## Thinking, usage, streaming, UI
 
-- `/thinking`, `/effort`, and `/reasoning` are full-parity aliases. `/thinking` only offers levels the session model supports (`getSupportedThinkingLevels`). `xhigh` and `max` are opt-in.
+- `/thinking`, `/effort`, and `/reasoning` are full-parity aliases. `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, and `/max` set a level when the current model supports it. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
 - `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth. There is no `/token-usage`.
 - `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.

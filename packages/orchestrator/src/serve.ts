@@ -45,12 +45,8 @@ export async function serve(): Promise<void> {
 
 		shutdownPromise = (async () => {
 			server.close();
-			const results = await Promise.allSettled([supervisor.shutdown(), radiusPresence.stop()]);
-			for (const result of results) {
-				if (result.status === "rejected") {
-					console.error(`Orchestrator shutdown cleanup was incomplete: ${String(result.reason)}`);
-				}
-			}
+			await supervisor.shutdown();
+			await radiusPresence.stop();
 			if (existsSync(socketPath)) {
 				unlinkSync(socketPath);
 			}

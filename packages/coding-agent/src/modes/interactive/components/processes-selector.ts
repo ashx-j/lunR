@@ -21,7 +21,6 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 	private confirmKill: number | null = null;
 	private done: () => void;
 	private refreshTimer: ReturnType<typeof setInterval> | undefined;
-	private requestRender: () => void;
 	private _focused = false;
 
 	get focused(): boolean {
@@ -32,15 +31,11 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 		this._focused = value;
 	}
 
-	constructor(done: () => void, requestRender: () => void = () => {}) {
+	constructor(done: () => void) {
 		super();
 		this.done = done;
-		this.requestRender = requestRender;
 		this.refresh();
-		this.refreshTimer = setInterval(() => {
-			this.refresh();
-			this.requestRender();
-		}, 2000);
+		this.refreshTimer = setInterval(() => this.refresh(), 2000);
 	}
 
 	private refresh(): void {
@@ -122,12 +117,12 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 		}
 
 		if (data === "q") {
-			this.dispose();
+			this.cleanup();
 			this.done();
 			return;
 		}
 		if (getKeybindings().matches(data, "tui.select.cancel")) {
-			this.dispose();
+			this.cleanup();
 			this.done();
 			return;
 		}
@@ -172,7 +167,7 @@ export class ProcessesSelectorComponent extends Container implements Focusable {
 		}
 	}
 
-	dispose(): void {
+	private cleanup(): void {
 		if (this.refreshTimer) {
 			clearInterval(this.refreshTimer);
 			this.refreshTimer = undefined;
