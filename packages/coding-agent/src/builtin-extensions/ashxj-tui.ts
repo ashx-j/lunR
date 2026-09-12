@@ -2,8 +2,8 @@
  * ashxj-tui — a custom slim chatbox for pi.
  *
  * Replaces pi-zentui's prompt box + statusline with:
- *   - A rounded prompt box that auto-expands as the typed message wraps.
- *     Top and bottom rules only; no side rails.
+ *   - A rounded prompt box that auto-expands as the typed message wraps to
+ *     multiple rows (the sides extend; height grows with content).
  *   - A right-aligned chip on the box's BOTTOM border:
  *       model · provider · effort     (e.g. `glm-5.2 · Ollama Cloud · xhigh`)
  *   - A slim stats line (extension statuses · context% · ↑↓; each segment
@@ -285,9 +285,9 @@ interface FooterComponentLike {
 // escape sequences (SGR color, OSC/DCS/APC/PM/SOS string sequences such as
 // pi-tui's `CURSOR_MARKER` `ESC _pi:c BEL`, and two-char escapes), count common
 // East-Asian wide ranges as 2, combining marks and variation selectors as 0.
-// Handling the string sequences as 0-width keeps body padding aligned with the
-// top/bottom rules on the focused (cursor) line. The base editor embeds the
-// marker and the TUI strips it at flush time, so we must not count it here.
+// Handling the string sequences as 0-width is what keeps the right `│` rail
+// aligned on the focused (cursor) line — the base editor embeds the marker and
+// the TUI strips it at flush time, so we must not count it here.
 // ---------------------------------------------------------------------------
 
 function skipAnsi(str: string, pos: number): number {
@@ -593,9 +593,10 @@ export class ChatboxEditor extends CustomEditor {
 			return clampLines(super.render(width), width);
 		}
 
+		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
 		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
 		const glyphW = displayWidth(glyph);
-		const innerWidth = Math.max(1, width - glyphW);
+		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
 		// The base editor appends the autocomplete menu lines (if any) to the END
@@ -633,11 +634,13 @@ export class ChatboxEditor extends CustomEditor {
 		// Top border: ╭─…─╮
 		const top = border("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
 
-		// Body: prompt glyph + padded line. No side rails. Height grows with wrap.
+		// Body: │ <padded line> │ (auto-grows with the number of wrapped lines)
+		// lunr: prefix the first body line with the theme-controlled prompt arrow.
+		// A same-width blank gutter keeps subsequent lines aligned.
 		const gutter = glyphW > 0 ? " ".repeat(glyphW) : "";
 		const bodyLines = body.map((ln: string, i: number) => {
 			const prefix = i === 0 && glyphW > 0 ? this.color("dim", glyph) : gutter;
-			return prefix + padRight(ln, innerWidth);
+			return border("\u2502 ") + prefix + padRight(ln, innerWidth) + border(" \u2502");
 		});
 
 		// Bottom border with the right-aligned chip: ╰─…─ <chip> ─╯
