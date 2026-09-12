@@ -4,8 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSubagentToolDescription } from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
 import {
 	captureModelSelection,
+	resolveExecutableChildModel,
+	resolveRequiredExplicitModel,
 	resolveRequiredTierModel,
 	resolveTierModelOverride,
+	splitThinkingSuffix,
 } from "../src/builtin-extensions/pi-subagents/src/runs/shared/model-fallback.ts";
 import {
 	getModelTiersBridge,
@@ -17,7 +20,7 @@ import {
 } from "../src/core/model-tiers.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
-const TIER_GUIDANCE_MARKER = "Every executable child requires tier";
+const TIER_GUIDANCE_MARKER = "exactly one of tier";
 
 function clearModelTiersBridge(): void {
 	const bridge = getModelTiersBridge();
@@ -276,43 +279,52 @@ describe("resolveTierModelOverride", () => {
 });
 
 describe("captureModelSelection", () => {
-	afterEach(() => {
-		clearModelTiersBridge();
+	it("captures an explicit model without requiring tiers enabled", () => {
+		expect(captureModelSelection({ model: "xai/grok-4.5" })).toEqual({ kind: "model", model: "xai/grok-4.5" });
 	});
 
-	function installBridge(opts: { enabled: boolean; models?: Record<string, string | undefined> }): void {
-		(globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] = {
-			isTierModeEnabled: () => opts.enabled,
-			getTierModel: (tier: string) => opts.models?.[tier],
-		};
-	}
-
-	it("ignores retired explicit model input and captures the required tier", () => {
-		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ model: "xai/grok-4.5", tier: "light" })).toEqual({ kind: "tier", tier: "light" });
-	});
-
-	it("captures a resolving tier", () => {
-		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
+	it("captures a tier", () => {
 		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "tier", tier: "light" });
 	});
 
-	it("captures the requested tier independently of runtime configuration", () => {
-		installBridge({ enabled: false, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ tier: "light" })).toEqual({ kind: "tier", tier: "light" });
+	it("rejects both tier and model", () => {
+		expect(() => captureModelSelection({ model: "xai/grok-4.5", tier: "light" })).toThrow(/exactly one/i);
 	});
 
-	it("captures an unconfigured tier so later resolution can fail closed", () => {
-		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ tier: "standard" })).toEqual({ kind: "tier", tier: "standard" });
+	it("rejects inherit and missing selection", () => {
+		expect(() => captureModelSelection({ model: "inherit" })).toThrow(/inherit/i);
+		expect(() => captureModelSelection({})).toThrow(/requires tier|explicit model/i);
+	});
+});
+
+describe("explicit model resolution", () => {
+	const available = [
+		{ provider: "xai", id: "grok-4", fullId: "xai/grok-4", thinkingLevelMap: { high: "high", low: "low" } },
+	];
+
+	it("resolves an available explicit model and optional thinking", () => {
+		expect(resolveRequiredExplicitModel("xai/grok-4", available, undefined, "high")).toBe("xai/grok-4:high");
+		expect(
+			resolveExecutableChildModel({
+				model: "xai/grok-4",
+				thinking: "low",
+				availableModels: available,
+			}),
+		).toBe("xai/grok-4:low");
 	});
 
-	it("rejects when tier is omitted", () => {
-		expect(() => captureModelSelection({})).toThrow(/requires tier/i);
+	it("does not silently fall back when the explicit model is missing", () => {
+		expect(() => resolveRequiredExplicitModel("xai/missing", available)).toThrow(/unavailable or unauthenticated/i);
 	});
 
-	it("does not expose the retired inherit sentinel", () => {
-		installBridge({ enabled: true, models: { light: "xai/grok-4" } });
-		expect(captureModelSelection({ model: "inherit", tier: "light" })).toEqual({ kind: "tier", tier: "light" });
+	it("keeps model ids that contain colons intact when the suffix is not a thinking level", () => {
+		expect(splitThinkingSuffix("provider/model:with:colons")).toEqual({
+			baseModel: "provider/model:with:colons",
+			thinkingSuffix: "",
+		});
+		expect(splitThinkingSuffix("xai/grok-4:high")).toEqual({
+			baseModel: "xai/grok-4",
+			thinkingSuffix: ":high",
+		});
 	});
 });

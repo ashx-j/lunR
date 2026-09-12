@@ -1,7 +1,7 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type ModelSelection, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
 import { validateChildDescription } from "../../shared/child-spec.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
 import { validateAcceptanceInput } from "../shared/acceptance.ts";
@@ -45,6 +45,7 @@ export type AsyncResumeTarget = {
 	sessionFile?: string;
 	model?: string;
 	thinking?: string;
+	modelSelection?: ModelSelection;
 	recoveryDescriptor?: SteeringRecoveryDescriptor;
 };
 
@@ -327,7 +328,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.permissions !== "full" && parsed.permissions !== "read-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': permissions must be full or read-only.`);
-	if (parsed.tier !== "light" && parsed.tier !== "standard" && parsed.tier !== "heavy") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier must be light, standard, or heavy.`);
+	if (parsed.tier !== undefined && parsed.tier !== "light" && parsed.tier !== "standard" && parsed.tier !== "heavy") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier must be light, standard, or heavy.`);
 	validateChildDescription(parsed.description, `Async recovery descriptor '${descriptorPath}' description`);
 	if (parsed.outputMode !== "inline" && parsed.outputMode !== "file-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': outputMode is invalid.`);
 	for (const field of ["share"] as const) {
@@ -342,14 +343,21 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (parsed[field] !== undefined && (typeof parsed[field] !== "string" || !(parsed[field] as string).trim())) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.modelSelection !== undefined) {
-		const selection = parsed.modelSelection as { kind?: unknown; tier?: unknown };
+		const selection = parsed.modelSelection as { kind?: unknown; tier?: unknown; model?: unknown };
 		if (!selection || typeof selection !== "object") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection must be an object.`);
-		if (selection.kind !== "tier") {
+		if (selection.kind === "tier") {
+			if (selection.tier !== "light" && selection.tier !== "standard" && selection.tier !== "heavy") {
+				throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.tier is invalid.`);
+			}
+		} else if (selection.kind === "model") {
+			if (selection.model !== undefined && (typeof selection.model !== "string" || !selection.model.trim())) {
+				throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.model must be a non-empty string.`);
+			}
+		} else {
 			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.kind is invalid.`);
 		}
-		if (selection.kind === "tier" && selection.tier !== "light" && selection.tier !== "standard" && selection.tier !== "heavy") {
-			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.tier is invalid.`);
-		}
+	} else if (parsed.tier === undefined) {
+		throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier or modelSelection is required.`);
 	}
 	if (parsed.absoluteDeadlineAt !== undefined && (!Number.isFinite(parsed.absoluteDeadlineAt) || (parsed.absoluteDeadlineAt as number) <= 0)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': absoluteDeadlineAt must be a positive timestamp.`);
 	if (parsed.initialTurnBudget !== undefined) {
@@ -452,6 +460,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 					sessionFile: selectedStep.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 					model: selectedStep.model,
 					thinking: selectedStep.thinking,
+					modelSelection: selectedStep.modelSelection,
 					...(recoveryDescriptor ? { recoveryDescriptor } : {}),
 				};
 			}
@@ -480,6 +489,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 				sessionFile: selected.step.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 				model: selected.step.model,
 				thinking: selected.step.thinking,
+				modelSelection: selected.step.modelSelection,
 				...(recoveryDescriptor ? { recoveryDescriptor } : {}),
 			};
 		}
@@ -516,6 +526,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		intercomTarget: resolveSubagentIntercomTarget(runId, childId ?? agent, index),
 		cwd: status?.cwd ?? result?.cwd,
 		...(resolvedSessionFile ? { sessionFile: resolvedSessionFile } : {}),
+		modelSelection: statusSteps[index]?.modelSelection,
 		...(stepModel ? { model: stepModel } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
 		...(recoveryDescriptor ? { recoveryDescriptor } : {}),

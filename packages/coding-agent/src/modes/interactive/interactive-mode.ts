@@ -138,6 +138,7 @@ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../cor
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
 // lunr: multi-subscription API-key pools (stage 3 UI).
 import type { SubEntry } from "../../core/subscriptions.ts";
 import { time } from "../../core/timings.ts";
@@ -472,6 +473,7 @@ export class InteractiveMode {
 
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
+	private readonly subagentEscape = new SubagentEscapeSequence();
 	private anthropicSubscriptionWarningShown = false;
 
 	// Status line tracking (for mutating immediately-sequential status updates)
@@ -2770,6 +2772,30 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
+			const sessionId = this.session.sessionId;
+			const cancellation = getSubagentCancellation(sessionId);
+			const escapeAction = this.subagentEscape.press(sessionId, cancellation?.hasActiveRuns() ?? false);
+			if (escapeAction) {
+				this.lastEscapeTime = 0;
+				if (this.session.isStreaming) this.restoreQueuedMessagesToEditor({ abort: true });
+				else if (this.session.isBashRunning) this.session.abortBash();
+				if (escapeAction === "children" && cancellation) {
+					void cancellation
+						.stop()
+						.then(({ requested, failed }) => {
+							if (this.session.sessionId !== sessionId) return;
+							if (failed)
+								this.showError(`Could not request stop for ${failed} async runs. Inspect subagent status.`);
+							else if (requested)
+								this.showStatus(`Stopping ${requested} async ${requested === 1 ? "run" : "runs"}`);
+						})
+						.catch((error: unknown) => {
+							if (this.session.sessionId === sessionId)
+								this.showError(error instanceof Error ? error.message : String(error));
+						});
+				}
+				return;
+			}
 			if (this.session.isStreaming) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.session.isBashRunning) {

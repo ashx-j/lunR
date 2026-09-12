@@ -44,6 +44,8 @@ interface InlineConfig {
 	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
 	tier?: "light" | "standard" | "heavy";
+	model?: string;
+	thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	permissions?: "full" | "read-only";
 	skill?: string[] | false;
 	progress?: boolean;
@@ -73,6 +75,8 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 			case "outputMode": if (val === "inline" || val === "file-only") config.outputMode = val; break;
 			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "tier": if (val === "light" || val === "standard" || val === "heavy") config.tier = val; break;
+			case "model": if (val) config.model = val; break;
+			case "thinking": if (["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(val)) config.thinking = val as InlineConfig["thinking"]; break;
 			case "permissions": if (val === "full" || val === "read-only") config.permissions = val; break;
 			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "progress": config.progress = val !== "false"; break;
@@ -847,12 +851,15 @@ const mapParsedTaskToStepObject = (
 	opts: { baseCwd: string; inGroup: boolean },
 ): ChainStepObject => {
 	const { name, config, task: stepTask } = step;
-	if (!config.tier) throw new SlashParseError(`Step '${name}' requires tier=light, tier=standard, or tier=heavy.`);
+	if (!config.tier && !config.model) throw new SlashParseError(`Step '${name}' requires tier=light|standard|heavy or model=provider/id.`);
+	if (config.tier && config.model) throw new SlashParseError(`Step '${name}' must choose exactly one of tier or model.`);
 	if (config.acceptance !== undefined) validateInlineAcceptanceInput(config.acceptance, name);
 	return {
 		description: name,
 		permissions: config.permissions ?? "full",
-		tier: config.tier,
+		...(config.tier ? { tier: config.tier } : {}),
+		...(config.model ? { model: config.model } : {}),
+		...(config.thinking ? { thinking: config.thinking } : {}),
 		...(stepTask ? { task: stepTask } : isFirst && fallbackTask ? { task: fallbackTask } : {}),
 		...(config.output !== undefined ? { output: config.output } : {}),
 		...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
@@ -1011,7 +1018,9 @@ export function registerSlashCommands(
 			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
 				description: name,
 				permissions: config.permissions ?? "full" as const,
-				tier: config.tier,
+				...(config.tier ? { tier: config.tier } : {}),
+				...(config.model ? { model: config.model } : {}),
+				...(config.thinking ? { thinking: config.thinking } : {}),
 				task: stepTask ?? parsed.task,
 				...(config.output !== undefined ? { output: config.output } : {}),
 				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
@@ -1019,7 +1028,8 @@ export function registerSlashCommands(
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
-			if (tasks.some((task) => !task.tier)) { ctx.ui.notify("Every parallel child requires [tier=light|standard|heavy].", "error"); return; }
+			if (tasks.some((task) => !task.tier && !task.model)) { ctx.ui.notify("Every parallel child requires [tier=light|standard|heavy] or [model=provider/id].", "error"); return; }
+			if (tasks.some((task) => task.tier && task.model)) { ctx.ui.notify("Each parallel child must choose exactly one of tier or model.", "error"); return; }
 			const params: SubagentParamsLike = { tasks, clarify: false };
 			if (bg) params.async = true;
 			await runSlashSubagent(pi, ctx, params);

@@ -21,6 +21,8 @@ Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cy
 
 Advertised subagents always start **fresh** (no forked parent context). Default parallel concurrency / max tasks / global run cap are unlimited; an explicit `concurrency` is still honored.
 
+Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
+
 A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **manual and yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
 
 `/goal` sets a session goal and **forces session auto** permission mode.
@@ -85,8 +87,8 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
 - Smooth streaming (`smoothStreaming`, default off) is **interactive TUI only** (grapheme reveal at ~30 FPS). Print, RPC, and gateway stay unsmoothed.
 - Image paste inserts `[image_n]` chips. Windows uses **Alt+V**; VS Code must forward it because it owns Ctrl+V and Alt+V. `/paste-image` bypasses terminal shortcuts.
-- Model tiers: every child launch selects `light`, `standard`, or `heavy`. Configure authenticated models for those routes in `/settings`; a missing, disabled, unauthenticated, or unavailable route fails closed. Per-tier thinking is optional; unset inherits the parent session.
-- Settings tools: `settings_load` is always available to the model. It injects four narrowly scoped tools for model tiers, model instruction subscriptions, rollback behavior, and session retention only after the model requests them.
+- Model selection: every child launch chooses exactly one of `tier: light|standard|heavy` (default) or an explicit `model: provider/id` when the user names a model. Configure tier routes in `/settings`. Optional `thinking` is only valid with an explicit model; tier launches use configured tier thinking. Direct model launches do not require tier mode. Missing, both, inherit, unavailable, or unauthenticated selections fail closed before spawn.
+- Settings changes stay on `/settings`. The agent does not get `settings_load` or other agent-managed settings tools, and direct file-tool writes to lunR `settings.json` are blocked.
 
 ## Updates, catalogs, local models
 

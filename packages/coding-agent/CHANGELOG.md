@@ -4,6 +4,17 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.19`**.
 
 ## [Unreleased]
 
+### Changed
+
+- **Child model selection.** Executable children choose exactly one of `tier: light|standard|heavy` (default) or an explicit `model: provider/id` when the user names a model. Optional `thinking` is only valid with an explicit model. Direct model launches do not require tier mode. Resume keeps user selection separate from the resolved runtime model.
+- **Settings stay user-managed.** Removed `settings_load` and the four agent-managed settings tools. `/settings` still edits configuration. Direct `edit`/`write`/`code_rewrite` of lunR `settings.json` is blocked.
+- **Watchdog configure removed.** Read-only watchdog status/check/recommend-model remain; agent `watchdog.configure` is gone.
+- **Subagent compact rows.** Foreground and async children share one collapsed line: spinner, description, selected tier or model, tokens, and elapsed time. The hang line, tool-use count, thinking, and permission suffix are gone. Completed collapsed cards keep frozen stats. Async tool headers say `subagent async`. Completed notify cards show title and status only.
+
+### Fixed
+
+- **Async widget animation.** The 80ms timer now invalidates a stable widget component. It no longer rebuilds the widget from the 250ms status poller, so the spinner actually advances.
+
 ## [0.2.19] - 2026-09-12
 
 ### Changed
