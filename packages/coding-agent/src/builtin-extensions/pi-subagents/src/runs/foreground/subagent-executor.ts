@@ -8,6 +8,7 @@ import { snapshotParentPermissionMode } from "../../../../../core/subagent-permi
 import { allocateChildId, normalizeChildSpec } from "../../shared/child-spec.ts";
 import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
+import { resolveSubagentRequestParams } from "./request-params.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import { executeChain } from "./chain-execution.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
@@ -3341,21 +3342,6 @@ function foregroundCapacityResult(params: SubagentParamsLike, inFlight: number, 
 	};
 }
 
-function omitExecutionModeActionAlias(params: SubagentParamsLike): SubagentParamsLike {
-	const action = params.action?.toLowerCase();
-	if (action === "single" && params.task !== undefined) {
-		const rest = { ...params };
-		delete rest.action;
-		return rest;
-	}
-	if ((action === "parallel" || action === "tasks") && (params.tasks?.length ?? 0) > 0) {
-		const rest = { ...params };
-		delete rest.action;
-		return rest;
-	}
-	return params;
-}
-
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
@@ -3376,7 +3362,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
-		const requestParams = omitExecutionModeActionAlias(params);
+		const requestParams = resolveSubagentRequestParams(params);
 		const requestCwd = resolveRequestedCwd(ctx.cwd, requestParams.cwd);
 		const paramsWithResolvedCwd = requestParams.cwd === undefined ? requestParams : { ...requestParams, cwd: requestCwd };
 		const action = paramsWithResolvedCwd.action;
@@ -3953,7 +3939,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
-		const requestParams = omitExecutionModeActionAlias(params);
+		const requestParams = resolveSubagentRequestParams(params);
 		if (requestParams.action) return execute(id, requestParams, signal, onUpdate, ctx);
 		const { depth } = checkSubagentDepth(deps.config.maxSubagentDepth);
 		const dispatchParams = applyForceTopLevelAsyncOverride(requestParams, depth, deps.config.forceTopLevelAsync === true);
