@@ -16,7 +16,8 @@ function pruneNestedDescriptions(value: unknown, path: string[]): unknown {
 	for (const key of Reflect.ownKeys(value)) {
 		const descriptor = Object.getOwnPropertyDescriptor(value, key);
 		if (!descriptor) continue;
-		if (key === "description" && !isTopLevelParameterDescription(path)) continue;
+		// `description` is both JSON Schema help text and the child UI-label parameter.
+		if (key === "description" && !isPropertiesMap(path) && !isTopLevelParameterHelpText(path)) continue;
 		if ("value" in descriptor) {
 			const nextPath = typeof key === "string" ? [...path, key] : path;
 			descriptor.value = pruneNestedDescriptions(descriptor.value, nextPath);
@@ -26,7 +27,11 @@ function pruneNestedDescriptions(value: unknown, path: string[]): unknown {
 	return result;
 }
 
-function isTopLevelParameterDescription(path: string[]): boolean {
+function isPropertiesMap(path: string[]): boolean {
+	return path[path.length - 1] === "properties";
+}
+
+function isTopLevelParameterHelpText(path: string[]): boolean {
 	return path.length === 2 && path[0] === "properties";
 }
 
