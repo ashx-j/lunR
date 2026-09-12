@@ -173,11 +173,11 @@ export class AssistantMessageComponent extends Container {
 
 		const sourceMessage = this.thinkingSource ?? message;
 		const sourceThinkingRuns = collectThinkingRuns(sourceMessage.content);
-		const hasVisibleContent =
-			message.content.some(
-				(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
-			) ||
-			(!this.hideThinkingBlock && sourceThinkingRuns.some((run) => run.length > 0));
+		const hasVisibleContent = message.content.some(
+			(c) =>
+				(c.type === "text" && c.text.trim()) ||
+				(!this.hideThinkingBlock && c.type === "thinking" && c.thinking.trim()),
+		);
 
 		if (hasVisibleContent) {
 			this.contentContainer.addChild(new Spacer(1));
@@ -186,7 +186,6 @@ export class AssistantMessageComponent extends Container {
 		// Render content in order
 		let isFirstTextBlock = true;
 		let thinkingRunIndex = -1;
-		let renderedThinking = false;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
@@ -219,21 +218,15 @@ export class AssistantMessageComponent extends Container {
 				}
 				i--;
 
-				const thinkingBlocks = sourceThinkingRuns[thinkingRunIndex] ?? displayBlocks;
-				if (thinkingBlocks.length === 0 || this.hideThinkingBlock) {
+				if (displayBlocks.length === 0 || this.hideThinkingBlock) {
 					continue;
 				}
 
-				renderedThinking = true;
-				this.renderThinkingRun(thinkingRunIndex, thinkingBlocks, message, i);
-			}
-		}
-
-		if (!this.hideThinkingBlock && !renderedThinking && sourceThinkingRuns.length > 0) {
-			thinkingRunIndex = 0;
-			const thinkingBlocks = sourceThinkingRuns[0] ?? [];
-			if (thinkingBlocks.length > 0) {
-				this.renderThinkingRun(thinkingRunIndex, thinkingBlocks, message, -1);
+				const sourceBlocks = sourceThinkingRuns[thinkingRunIndex] ?? [];
+				const fullyRevealed =
+					displayBlocks.length === sourceBlocks.length &&
+					displayBlocks.every((block, index) => block === sourceBlocks[index]);
+				this.renderThinkingRun(thinkingRunIndex, displayBlocks, message, i, fullyRevealed);
 			}
 		}
 
@@ -275,6 +268,7 @@ export class AssistantMessageComponent extends Container {
 		thinkingBlocks: string[],
 		displayMessage: AssistantMessage,
 		displayIndex: number,
+		fullyRevealed: boolean,
 	): void {
 		const hasVisibleContentAfter =
 			displayIndex >= 0
@@ -283,11 +277,10 @@ export class AssistantMessageComponent extends Container {
 						.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()))
 				: displayMessage.content.some((c) => c.type === "text" && c.text.trim());
 
-		const runComplete = isThinkingRunComplete(
-			false,
-			this.thinkingTimings?.[thinkingRunIndex],
-			this.thinkingTimings !== undefined,
-		);
+		// Provider completion can precede the reveal cursor; keep animating until it catches up.
+		const runComplete =
+			fullyRevealed &&
+			isThinkingRunComplete(false, this.thinkingTimings?.[thinkingRunIndex], this.thinkingTimings !== undefined);
 		const wrap = (inner: Component): void => {
 			this.contentContainer.addChild(new ThinkingRunBlock(this, thinkingRunIndex, inner));
 		};
@@ -365,7 +358,7 @@ function collectThinkingRuns(content: AssistantMessage["content"]): string[][] {
 			const thinking = thinkingContent.thinking.trim();
 			if (thinking) blocks.push(thinking);
 		}
-		if (blocks.length > 0) runs.push(blocks);
+		runs.push(blocks);
 	}
 	return runs;
 }
