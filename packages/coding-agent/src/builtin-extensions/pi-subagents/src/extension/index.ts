@@ -537,8 +537,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(tool);
 
-	// lunr: register a callback so toggling model tiers mid-session rebuilds the subagent
-	// tool description (adds/removes MODEL TIERS guidance) and refreshes the tool registry.
+	// lunr: register a callback so model-tier settings changes rebuild the subagent
+	// tool description and refresh the live registry.
 	const modelTierBridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
 		| { registerToolDescriptionRefresher?: (refresher: () => void) => void }
 		| undefined;

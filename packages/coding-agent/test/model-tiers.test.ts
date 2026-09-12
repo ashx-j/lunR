@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSubagentToolDescription } from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
+import {
+	buildSubagentToolDescription,
+	COMPACT_SUBAGENT_TOOL_DESCRIPTION,
+	FULL_SUBAGENT_TOOL_DESCRIPTION,
+	SUBAGENT_SAFETY_GUIDANCE,
+	SUBAGENT_TIER_GUIDANCE,
+} from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
 import {
 	captureModelSelection,
 	resolveRequiredTierModel,
@@ -167,6 +173,20 @@ describe("model-tiers bridge", () => {
 describe("subagent tool description tier guidance", () => {
 	afterEach(() => {
 		clearModelTiersBridge();
+	});
+
+	it("explains how to choose the lowest reliable tier in every built-in description", () => {
+		for (const description of [
+			FULL_SUBAGENT_TOOL_DESCRIPTION,
+			COMPACT_SUBAGENT_TOOL_DESCRIPTION,
+			SUBAGENT_SAFETY_GUIDANCE,
+		]) {
+			expect(description).toContain(SUBAGENT_TIER_GUIDANCE);
+			expect(description).toContain("Choose the lowest tier that can reliably complete the task.");
+			expect(description).toContain("light: Use for simple, straightforward tasks");
+			expect(description).toContain("standard: Use for moderately difficult work");
+			expect(description).toContain("heavy: Use for complex or ambiguous tasks");
+		}
 	});
 
 	it("requires tiers even when the bridge is absent", () => {
