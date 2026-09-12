@@ -13,7 +13,7 @@ import {
 	SUBAGENT_RUN_ID_ENV,
 	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
 } from "../runs/shared/pi-args.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, SUBAGENT_CONTROL_EVENT, TEMP_ROOT_DIR, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
 
 const SUPERVISOR_CHANNEL_ROOT = path.join(TEMP_ROOT_DIR, "supervisor-channels");
@@ -336,6 +336,20 @@ function parseRequestFile(file: string, channelDir: string): PendingSupervisorRe
 	}
 }
 
+export function hasPendingBlockingSupervisorRequest(runId: string, sessionId?: string | null, now = Date.now()): boolean {
+	if (!runId) return false;
+	for (const { channelDir, file } of listRequestFiles()) {
+		const request = parseRequestFile(file, channelDir);
+		if (!request?.expectsReply) continue;
+		if (request.runId !== runId) continue;
+		if (sessionId && request.orchestratorSessionId && request.orchestratorSessionId !== sessionId) continue;
+		if (fs.existsSync(replyPath(request.channelDir, request.id))) continue;
+		if (now > requestExpiresAt(request, now)) continue;
+		return true;
+	}
+	return false;
+}
+
 function listRequestFiles(): Array<{ channelDir: string; file: string }> {
 	let channelEntries: fs.Dirent[];
 	try {
@@ -648,11 +662,21 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 				},
 			});
 			if (request.expectsReply) {
-				(pi as { events?: IntercomEventBus }).events?.emit(INTERCOM_DETACH_REQUEST_EVENT, {
+				const job = state.asyncJobs.get(request.runId);
+				if (job) job.activityState = "needs_attention";
+				const events = (pi as { events?: IntercomEventBus }).events;
+				events?.emit(INTERCOM_DETACH_REQUEST_EVENT, {
 					requestId: request.id,
 					runId: request.runId,
 					agent: request.agent,
 					childIndex: request.childIndex,
+				});
+				events?.emit(SUBAGENT_CONTROL_EVENT, {
+					type: "needs_attention",
+					to: "needs_attention",
+					runId: request.runId,
+					agent: request.agent,
+					index: request.childIndex,
 				});
 			}
 		}

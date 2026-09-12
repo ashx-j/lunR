@@ -47,8 +47,10 @@ import {
 	type RegisteredBackgroundWorkItem,
 } from "../../api/background-work.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
+import { hasPendingBlockingSupervisorRequest } from "../../intercom/native-supervisor-channel.ts";
 import {
 	ASYNC_DIR,
+	INTERCOM_DETACH_REQUEST_EVENT,
 	RESULTS_DIR,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_FOREGROUND_COMPLETE_EVENT,
@@ -124,6 +126,7 @@ const WAKE_CHANNELS = [
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_RESULT_INTERCOM_EVENT,
+	INTERCOM_DETACH_REQUEST_EVENT,
 ];
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -216,8 +219,9 @@ function summarizeForegroundChildren(run: ForegroundResumeRun, indices: Set<numb
 }
 
 /** A running run that has flagged it needs the parent's attention. */
-function needsAttention(run: AsyncRunSummary): boolean {
-	return run.activityState === "needs_attention";
+function needsAttention(run: AsyncRunSummary, sessionId?: string | null): boolean {
+	return run.activityState === "needs_attention"
+		|| hasPendingBlockingSupervisorRequest(run.id, sessionId);
 }
 
 function backgroundWorkIdentity(item: RegisteredBackgroundWorkItem): string {
@@ -246,7 +250,7 @@ function activeRunsForSession(params: SubagentWaitParams, deps: SubagentWaitDeps
 
 /** Runs (from the initial set) currently flagged needs_attention, for reporting. */
 function attentionRunsForSession(params: SubagentWaitParams, deps: SubagentWaitDeps, initialIds: Set<string>): AsyncRunSummary[] {
-	return activeRunsForSession(params, deps).filter((run) => needsAttention(run) && initialIds.has(run.id));
+	return activeRunsForSession(params, deps).filter((run) => needsAttention(run, deps.state.currentSessionId) && initialIds.has(run.id));
 }
 
 /** All runs (any state) for this session, for the final summary. */
@@ -385,7 +389,7 @@ export async function waitForSubagents(
 	const initialProviderNames = new Set(providerActive.map((item) => item.provider));
 	const initialCount = initialAsyncIds.size + initialProviderIds.size;
 	const stopOnAttention = deps.stopOnAttention !== false;
-	let attention = active.filter((run) => needsAttention(run));
+	let attention = active.filter((run) => needsAttention(run, deps.state.currentSessionId));
 
 	const isDone = (): boolean => {
 		if (stopOnAttention && attention.some((run) => initialAsyncIds.has(run.id))) return true;
