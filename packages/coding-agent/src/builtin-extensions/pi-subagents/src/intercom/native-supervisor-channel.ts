@@ -750,7 +750,7 @@ function notifyQuestionTerminal(pi: ExtensionAPI, question: SupervisorQuestion, 
 			answered: state === "answered",
 			delivered: Boolean(question.deliveredAt),
 		},
-	}, { triggerTurn: true });
+	}, { triggerTurn: state === "answered" });
 }
 
 function pollSupervisorQuestions(pi: ExtensionAPI, state: SubagentState, ctx: ExtensionContext): void {

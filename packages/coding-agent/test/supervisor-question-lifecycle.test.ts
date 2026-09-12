@@ -202,6 +202,22 @@ describe("supervisor question integration", () => {
 		}
 	});
 
+	it("settles a stopped run's question without restarting the parent", () => {
+		const f = fixture();
+		const pi = mockPi();
+		const channel = createNativeSupervisorChannel(pi as unknown as ExtensionAPI, f.state);
+		try {
+			channel.settleRunQuestions(f.runId, "async run settled");
+			channel.start();
+			expect(pi.sendMessage).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({ display: false, details: expect.objectContaining({ state: "cancelled" }) }),
+				{ triggerTurn: false },
+			);
+		} finally {
+			channel.dispose();
+		}
+	});
+
 	it.each(["need_decision", "interview_request"])("preserves child-to-parent %s and replies", async (reason) => {
 		const f = fixture();
 		answerSupervisorQuestion(f.channelDir, f.question.id, "prior question answered", f.owner);

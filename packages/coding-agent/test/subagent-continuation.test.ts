@@ -471,6 +471,7 @@ describe("native supervisor channel", () => {
 	it("does not spawn the broker for contact_supervisor when supervisor env is set", async () => {
 		process.env.PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR = path.join(os.tmpdir(), "lunr-supervisor-channel");
 		process.env.PI_SUBAGENT_ORCHESTRATOR_TARGET = "parent";
+		process.env.PI_SUBAGENT_ORCHESTRATOR_SESSION_ID = "parent-session";
 		process.env.PI_SUBAGENT_RUN_ID = "run-native";
 		process.env.PI_SUBAGENT_CHILD_AGENT = "child";
 		process.env.PI_SUBAGENT_CHILD_INDEX = "0";

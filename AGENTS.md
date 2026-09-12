@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-12 (subagent model/display/cancellation stack on master `158f5ce`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-12 (v0.2.20 release preparation on `release/0.2.20`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.20 scope:** PRs #71, #72, #73, #74, #75, #76, and #79. Native computer use #77 stays open and is excluded from this release.
 - **Subagent model selection (`fix/subagent-model-selection`):** executable children choose exactly one of `tier` or `model`; optional `thinking` only with explicit model; single, parallel, and chain resume preserve selection separately from the resolved runtime model. Removed `settings_load` + four settings tools and `watchdog.configure`; `/settings` remains; direct settings.json file-tool writes are blocked.
 - **Subagent compact display (`fix/subagent-compact-display`):** foreground and async compact rows share one line: spinner, description, selected tier or explicit model, tokens, elapsed time. No hang line, tool-use count, thinking, or permission suffix. Completed collapsed cards keep frozen stats. Async widget paints at 80ms on a stable component (no per-tick `setWidget`, no fs reads on the animation timer). Call headers say `subagent async` when the launch is async. Completed notify cards are title and status only. Tests: compact-row + tool-execution-component.
 - **Async cancellation (`fix/subagent-escape-stop`):** Escape aborts the parent; a second press within 500ms stops session-owned active async runs through the existing control channel, including pending launch registration. Drafts and other sessions stay untouched. Stopped notifications do not trigger a new parent turn. Result status updates precede intercom delivery; bounded retries retain undelivered files and reuse a delivery id, with diagnostics saved to the session instead of stderr.
@@ -125,6 +126,8 @@ Last updated: 2026-09-12 (subagent model/display/cancellation stack on master `1
 
 ## Build & run
 
+- v0.2.20 preparation (2026-09-12): all five offline builds and coding-agent Node bundle pass; first-paint and subagent/MCP/LSP/fetch first-use checks pass with the combined tool-schema fingerprint. Async question wait and idle-wake CLI checks pass. Focused Vitest passes 309/309 before the review fix; the 30-test question/cancellation set passes afterward, including a new test that failed before the fix. Full coding-agent Vitest reports 2497 passed / 112 existing failures / 47 skipped. Three heavy read-only reviews found one confirmed bug: cancelled questions restarted the parent. Only answered questions now request a turn. Publish dry-run validates all four public packages. Local npm authentication returns E401; publication uses the existing tag-triggered workflow. Publication is pending.
+
 - Combined subagent stack: all five offline builds and the Node bundle pass; focused Vitest passes 225/225 across 15 suites. Changed non-vendored code passes Biome. First-paint and first-turn checks pass. An isolated local Faux CLI request exits successfully with 31 active tools and no settings tools. Local prompt/tool snapshots were regenerated for that isolated verification and remain untracked; the original workspace snapshots were not changed.
 
 - Subagent model selection: five-package offline builds and the coding-agent Node bundle pass. Focused Vitest passes 126/126 across eight suites, including parallel-child revive selection. First-paint and first-turn subagent/MCP/LSP/fetch checks pass; the deliberate tool-schema change has a refreshed payload fingerprint. `git diff --check` passes.
@@ -191,6 +194,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
 
 - Async Escape cancellation uses a session-keyed lightweight bridge; keep executor imports lazy. Stop requests are distinct from confirmed termination. Result delivery retries keep the same request id; only acknowledged or locally handled stopped results are removed. Three failed attempts retain the file until reload/restart. Stopped completions update history without waking the parent. Direct-child process cleanup remains the existing runner policy, not a general shell-grandchild sandbox.
+- Only answered supervisor questions wake the parent. Cancelled/expired records still notify active waits and enter session history, but never restart an idle parent after stop.
 - Native supervisor questions own `contact_supervisor` for children with a native channel; the broker must not replace it with its older reason-only schema. Requests and terminal outcomes use separate exclusive records. Reconcile step termination and steering failures, not only whole-run completion. Question waits advance expiry themselves, and idle answer notifications request a parent turn.
 - Async-question verification: `node scripts/check-subagent-questions.mjs` and the same command with `--idle` use an isolated local provider and leave logs under `.artifacts/`. The local, untracked `LUNR_SYSTEM_INJECTION.md` is that isolated smoke session's literal system prompt, not the user's configured prompt; `.artifacts/question-tool-inventory.json` records its tool definitions. The default first-request schema snapshot remains in `scripts/check-interactive-first-paint.mjs`.
 
@@ -249,6 +253,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-12: integrate the seven approved-scope PR heads without squashing their ancestry so GitHub can track their inclusion; exclude unfinished computer use #77 from 0.2.20.
+- 2026-09-12: gate question wakeups on answered state so cancellation cannot undo the user's double-Escape stop.
 
 - 2026-09-12: children choose exactly one of tier or model so user-named models work without tier mode, and resume keeps selection separate from the resolved runtime model.
 - 2026-09-12: remove agent settings tools and watchdog.configure so settings stay on /settings; block direct settings.json file-tool writes.

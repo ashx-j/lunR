@@ -8,6 +8,7 @@ vi.mock("../src/builtin-extensions/pi-intercom/config.ts", () => ({
 	getAskTimeoutMs: () => 60_000,
 }));
 vi.mock("../src/builtin-extensions/pi-intercom/broker/spawn.ts", () => ({
+	isNativeSupervisorChannelActive: () => false,
 	spawnBrokerIfNeeded: () => new Promise(() => {}),
 }));
 
