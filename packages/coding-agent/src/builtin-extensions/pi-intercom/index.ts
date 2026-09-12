@@ -968,6 +968,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     });
   }
   const resultDeliveries = new Map<string, Promise<boolean>>();
+  const acknowledgedResults: string[] = [];
   function relaySubagentIntercomPayload(payload: unknown, options: {
     sender: "subagent-control" | "subagent-result";
     status: string;
@@ -1007,8 +1008,12 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       if (key) {
         resultDeliveries.set(key, delivery);
         void delivery.then((delivered) => {
-          if (!delivered && resultDeliveries.get(key) === delivery) resultDeliveries.delete(key);
-          while (resultDeliveries.size > 1024) resultDeliveries.delete(resultDeliveries.keys().next().value!);
+          if (!delivered) {
+            if (resultDeliveries.get(key) === delivery) resultDeliveries.delete(key);
+            return;
+          }
+          acknowledgedResults.push(key);
+          while (acknowledgedResults.length > 1024) resultDeliveries.delete(acknowledgedResults.shift()!);
         });
       }
     }
