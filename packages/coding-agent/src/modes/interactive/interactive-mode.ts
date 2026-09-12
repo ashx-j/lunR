@@ -2223,7 +2223,13 @@ export class InteractiveMode {
 		if (leadingSpacer) {
 			container.addChild(new Spacer(1));
 		}
+		let first = true;
 		for (const component of widgets.values()) {
+			if (!first) {
+				container.addChild(new Spacer(1));
+				container.addChild(new DynamicBorder((s) => theme.fg("dim", s)));
+			}
+			first = false;
 			container.addChild(component);
 		}
 	}

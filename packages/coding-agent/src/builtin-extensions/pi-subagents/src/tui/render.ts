@@ -448,8 +448,12 @@ function widgetJobsRunningSeed(jobs: AsyncJobState[]): number | undefined {
 	return seed;
 }
 
-function widgetStatusGlyph(job: AsyncJobState, theme: Theme): string {
-	if (job.status === "running") return theme.fg("accent", runningGlyph(widgetJobRunningSeed(job)));
+function widgetAnimFrame(now = Date.now()): number {
+	return Math.floor(now / 80) % RUNNING_FRAMES.length;
+}
+
+function widgetStatusGlyph(job: AsyncJobState, theme: Theme, now = Date.now()): string {
+	if (job.status === "running") return theme.fg("accent", runningGlyph((widgetJobRunningSeed(job) ?? 0) + widgetAnimFrame(now)));
 	if (job.status === "queued") return theme.fg("muted", "◦");
 	if (job.status === "complete") return theme.fg("success", "✓");
 	if (job.status === "paused") return theme.fg("warning", "■");
@@ -979,36 +983,60 @@ function foregroundStyleWidgetDetails(job: AsyncJobState, theme: Theme, expanded
 	return lines;
 }
 
-function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number, expanded: boolean): string[] {
-	const stats = widgetStats(job, theme);
-	const count = job.mode === "chain" ? job.chainStepCount : job.stepsTotal ?? job.agents?.length ?? job.steps?.length;
-	const mode = widgetJobName(job);
-	const title = `async subagent ${mode}${count && count > 1 ? ` (${count})` : ""}`;
+function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): { toolCount: number; tokens: number; durationMs: number } {
+	const running = (step?.status ?? job.status) === "running";
+	const startedAt = step?.startedAt ?? job.startedAt;
+	const endedAt = running ? now : step?.endedAt ?? step?.lastActivityAt ?? job.updatedAt ?? now;
+	const durationMs = step?.durationMs !== undefined
+		? step.durationMs
+		: startedAt !== undefined
+			? Math.max(0, endedAt - startedAt)
+			: 0;
+	return {
+		toolCount: step?.toolCount ?? job.toolCount ?? 0,
+		tokens: step?.tokens?.total ?? job.totalTokens?.total ?? 0,
+		durationMs,
+	};
+}
+
+function compactJobLead(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number]): string {
+	return compactRowLead({
+		description: step?.description ?? step?.agent ?? job.agents?.[0],
+		task: step?.description ?? step?.agent,
+	}) || widgetJobName(job);
+}
+
+function compactJobLines(job: AsyncJobState, step: NonNullable<AsyncJobState["steps"]>[number] | undefined, theme: Theme, width: number, now = Date.now()): string[] {
+	const running = (step?.status ?? job.status) === "running";
+	const lead = compactJobLead(job, step);
+	const modelBadge = formatModelSelection(step?.modelSelection, step?.model, step?.thinking);
+	const permissionBadge = step?.permissions ? theme.fg("dim", step.permissions) : "";
+	const glyph = step
+		? widgetStepGlyph(step.status, theme, running ? (widgetStepRunningSeed(step, step.index) ?? 0) + widgetAnimFrame(now) : widgetStepRunningSeed(step, step.index))
+		: widgetStatusGlyph(job, theme, now);
+	const hang = formatCompactStatsHangLine(
+		compactJobProgress(job, step, now),
+		width,
+		(s) => theme.fg("dim", s),
+		"  ⎿  ",
+		now,
+		running,
+	);
 	return [
-		`${theme.fg("toolTitle", themeBold(theme, title))} ${theme.fg("dim", "· background")}`,
-		`${widgetStatusGlyph(job, theme)} ${themeBold(theme, mode)}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
-		...foregroundStyleWidgetDetails(job, theme, expanded, width),
-	].map((line) => truncLine(line, width));
+		truncLine(`${glyph} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}`, width),
+		hang,
+	];
+}
+
+function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number, _expanded: boolean): string[] {
+	const now = Date.now();
+	const steps = job.steps ?? [];
+	if (steps.length <= 1) return compactJobLines(job, steps[0], theme, width, now);
+	return steps.flatMap((step) => compactJobLines(job, step, theme, width, now));
 }
 
 function compactSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number): string[] {
-	const fullLines = buildSingleWidgetLines(job, theme, width, false);
-	if (fullLines.length <= 10 || !job.steps?.length || (job.mode !== "parallel" && !job.activeParallelGroup)) return fullLines;
-
-	const total = job.stepsTotal ?? job.steps.length;
-	const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
-	const lines = fullLines.slice(0, 2);
-	for (const [index, step] of job.steps.entries()) {
-		const status = widgetStepStatus(step.status, theme);
-		const activity = widgetStepActivityLine(step, width, false, job.updatedAt);
-		const stepStats = widgetStepStats(theme, step);
-		const activitySuffix = activity ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", activity)}` : "";
-		const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking, step.modelSelection);
-		lines.push(`  ${widgetStepGlyph(step.status, theme, widgetStepRunningSeed(step, index))} ${itemTitle} ${index + 1}/${total}: ${themeBold(theme, step.agent)} ${theme.fg("dim", "·")} ${status}${modelDisplay}${activitySuffix}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}`);
-		for (const nestedLine of formatNestedWidgetLines(step.children, theme, width, false, job.updatedAt)) lines.push(`    ${nestedLine}`);
-	}
-	if (job.steps.some((step) => step.status === "running")) lines.push(theme.fg("accent", `  ${liveDetailHintText()}`));
-	return lines.map((line) => truncLine(line, width));
+	return buildSingleWidgetLines(job, theme, width, false);
 }
 
 type WidgetRenderTier = "full" | "single-line" | "progressive";
@@ -1327,16 +1355,42 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	return lines;
 }
 
+let widgetPaintTimer: ReturnType<typeof setInterval> | undefined;
+let widgetPaintCtx: ExtensionContext | undefined;
+
+export function clearWidgetPaintTimer(): void {
+	if (widgetPaintTimer) {
+		clearInterval(widgetPaintTimer);
+		widgetPaintTimer = undefined;
+	}
+	widgetPaintCtx = undefined;
+}
+
+function ensureWidgetPaintTimer(ctx: ExtensionContext, running: boolean): void {
+	widgetPaintCtx = ctx;
+	if (!running || !ctx.hasUI) {
+		clearWidgetPaintTimer();
+		return;
+	}
+	if (widgetPaintTimer) return;
+	widgetPaintTimer = setInterval(() => {
+		widgetPaintCtx?.ui.requestRender?.();
+	}, 80);
+	widgetPaintTimer.unref?.();
+}
+
 /**
  * Render the async jobs widget
  */
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (jobs.length === 0) {
 		resetWidgetLayoutSession();
+		clearWidgetPaintTimer();
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 	if (!ctx.hasUI) return;
+	ensureWidgetPaintTimer(ctx, jobs.some((job) => job.status === "running"));
 	ctx.ui.setWidget(WIDGET_KEY, buildWidgetComponent(jobs, ctx.ui.getToolsExpanded?.() ?? false));
 }
 
