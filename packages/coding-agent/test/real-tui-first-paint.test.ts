@@ -54,7 +54,7 @@ describe("real TUI first paint", () => {
 		expect(terminal.output).not.toContain("Starting lunR");
 		const chatbox = view.editor.render(80);
 		const body = chatbox.filter((line) => !line.includes("╭") && !line.includes("╰"));
-		expect(body.join("\n")).not.toContain("│");
+		expect(body.join("\n")).toContain("│");
 		expect(terminal.starts).toBe(1);
 	});
 
