@@ -161,6 +161,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
+| `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
 | `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
 | `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
 | `/manual`, `/yolo`, `/auto` | Activate that permission mode |

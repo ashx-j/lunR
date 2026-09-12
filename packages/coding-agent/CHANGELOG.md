@@ -4,6 +4,24 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.17`**.
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-09-12
+
+### New Features
+
+- **Thinking-level commands.** `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, and `/max` set the session thinking level. Autocomplete only lists levels the current model supports.
+- **Injected context.** A new empty chat lists loaded AGENTS.md and CLAUDE.md files as injected context. The model still receives those files through the system prompt.
+
+### Changed
+
+- **Faster first request.** Node CLI and SDK share split bundles. Optional web, LSP, MCP, and subagent engines load on demand. Tool schemas still register before the first request.
+- **Async subagent widget.** Running background children use the same description-first compact row as foreground children, separated from todos by a divider.
+- **Quieter TUI.** Cycling models or thinking levels, and pasting images, no longer print status toasts. The chatbox keeps its top and bottom rules and thinking chip, without vertical side rails.
+
+### Fixed
+
+- Ctrl+T cycles thinking levels for the selected model. `/thinking hide`, `show`, and `toggle` still hide thinking blocks.
+- `/thinking` argument completions follow the live session model.
+
 ## [0.2.17] - 2026-09-11
 
 ### Fixed
