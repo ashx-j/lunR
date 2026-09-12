@@ -209,7 +209,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
 | Shift+Tab | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
-| Ctrl+T | Collapse/expand thinking blocks |
+| Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
 
 Click a thinking or tool card to expand or collapse that item. `app.tools.expand` is unbound.

@@ -364,8 +364,7 @@ export class InteractiveView {
 				const extension = extensionForImageMimeType(image.mimeType) ?? "png";
 				const filePath = path.join(os.tmpdir(), `lunr-clipboard-${crypto.randomUUID()}.${extension}`);
 				fs.writeFileSync(filePath, Buffer.from(image.bytes));
-				const id = this.editor.insertImageMarker({ path: filePath, mimeType: image.mimeType });
-				this.status.setText(`Pasted [image_${id}] while startup continues.`);
+				this.editor.insertImageMarker({ path: filePath, mimeType: image.mimeType });
 				this.ui.requestRender();
 				return;
 			}

@@ -2954,9 +2954,8 @@ export class InteractiveMode {
 			const image = await readClipboardImage();
 			if (image) {
 				const saved = this.writeClipboardImageFile(image);
-				const id = this.insertImageChip(saved);
+				this.insertImageChip(saved);
 				this.ui.requestRender();
-				this.showStatus(`Pasted ${formatImageMarker(id)}`);
 				return;
 			}
 
@@ -4367,7 +4366,6 @@ export class InteractiveMode {
 		} else {
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Thinking level: ${newLevel}`);
 		}
 	}
 
@@ -4384,9 +4382,6 @@ export class InteractiveMode {
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				const thinkingStr =
-					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
@@ -7731,8 +7726,7 @@ export class InteractiveMode {
 ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Expand or collapse a thinking/tool card |
-| \`${toggleThinking}\` | Toggle thinking block visibility |
-| \`${externalEditor}\` | Edit message in external editor |
+${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |\n` : ""}| \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |
 | \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |
