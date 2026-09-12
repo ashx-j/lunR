@@ -66,12 +66,24 @@ function setup(
 }
 
 describe("ashxj-thinking", () => {
-	it("registers /thinking, /effort, and /reasoning", () => {
+	it("registers /thinking, aliases, and per-level commands", () => {
 		const { commands } = setup();
-		expect([...commands.keys()]).toEqual(["thinking", "effort", "reasoning"]);
+		expect([...commands.keys()]).toEqual([
+			"thinking",
+			"effort",
+			"reasoning",
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
 		expect(commands.get("thinking")?.description).toContain("reasoning level");
 		expect(commands.get("effort")?.description).toContain("alias of /thinking");
 		expect(commands.get("reasoning")?.description).toContain("alias of /thinking");
+		expect(commands.get("xhigh")?.description).toBe("Set thinking level to xhigh");
 	});
 
 	it("completions have no token-budget copy", () => {
@@ -154,6 +166,22 @@ describe("ashxj-thinking", () => {
 		await commands.get("effort")!.handler("", ctx);
 		expect(notify).toHaveBeenCalledWith("Thinking level: medium", "info");
 		expect(select).not.toHaveBeenCalled();
+	});
+
+	it("/xhigh sets the level when the model opts in", async () => {
+		const { commands, ctx, setThinkingLevel, notify } = setup({
+			thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+		});
+		await commands.get("xhigh")!.handler("", ctx);
+		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
+		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it("/xhigh errors when the model does not opt in", async () => {
+		const { commands, ctx, setThinkingLevel, notify } = setup();
+		await commands.get("xhigh")!.handler("", ctx);
+		expect(setThinkingLevel).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining('Invalid thinking level: "xhigh"'), "error");
 	});
 
 	it("completions follow session_start when pi.getModel is missing", () => {

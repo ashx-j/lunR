@@ -386,6 +386,24 @@ export default function (pi: ExtensionAPI): void {
 		...thinkingSpec,
 		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
 	});
+
+	for (const level of ALL_LEVELS) {
+		pi.registerCommand(level, {
+			description: `Set thinking level to ${level}`,
+			handler: async (_args, ctx) => {
+				const levels = availableLevelsFor(ctx.model);
+				if (!levels.includes(level)) {
+					ctx.ui.notify(
+						`Invalid thinking level: "${level}". Valid: ${levels.join(", ")}`,
+						"error",
+					);
+					return;
+				}
+				if (pi.getThinkingLevel() === level) return;
+				pi.setThinkingLevel(level);
+			},
+		});
+	}
 }
 
 // ---------------------------------------------------------------------------

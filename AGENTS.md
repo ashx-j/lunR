@@ -71,6 +71,7 @@ Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - **Thinking level toast (`fix/hide-thinking-level-status`):** cycling or `/thinking <level>` no longer prints `Thinking level: …`. Errors and non-TUI `/thinking` with no args still report. Tests: ashxj-thinking.
 - **Thinking arg completions (`fix/thinking-arg-completions`):** `/thinking ` lists the live session model's levels. Completions cache the model from session_start / model_select because extension `pi` has no getModel. Tests: ashxj-thinking.
 - **Ctrl+T cycles thinking (`fix/ctrl-t-cycle-thinking`):** `app.thinking.cycle` is Ctrl+T. `app.thinking.toggle` is unbound; `/thinking hide|show|toggle` still hides thinking blocks. Tree-mode Ctrl+T still hides tool results.
+- **Thinking level slash commands (`feat/thinking-level-slash-commands`):** `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, and `/max` set the session thinking level. `/` autocomplete only lists levels the current model supports. Typing an unsupported level still errors. Tests: ashxj-thinking + thinking-level-slash.
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
 - **xAI grok-4.5+ Responses:** generator + `withXaiEffortMetadata` use `shouldUseXaiResponsesApi` (`parseXaiGrok4Minor >= 5`), not a frozen `grok-4.5` id. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`. Completions compat must not leak onto Responses (`supportsDeveloperRole: false` would drop the developer system role). Tests: xai-thinking + xai-responses + model-refresh-merge.
@@ -300,6 +301,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-09: thinking-level changes are silent; the chatbox chip already shows the level.
 - 2026-09-09: `/thinking ` completions follow the session model from session_start/model_select, not the generic 5-level fallback.
 - 2026-09-09: Ctrl+T cycles the selected model's thinking levels; hide-thinking stays on /thinking hide.
+- 2026-09-09: per-level slash commands (`/xhigh`, `/low`, …) appear only when the selected model supports that level.
 
 # Deferred
 

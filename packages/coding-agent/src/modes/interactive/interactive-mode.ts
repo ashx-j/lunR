@@ -230,6 +230,7 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import { wrapThinkingLevelSlashCommands } from "./thinking-level-slash.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -832,7 +833,9 @@ export class InteractiveMode {
 	}
 
 	private setupAutocompleteProvider(): void {
-		let provider = this.createBaseAutocompleteProvider();
+		let provider = wrapThinkingLevelSlashCommands(this.createBaseAutocompleteProvider(), () =>
+			this.session.getAvailableThinkingLevels(),
+		);
 		const triggerCharacters: string[] = [...(provider.triggerCharacters ?? [])];
 		for (const wrapProvider of this.autocompleteProviderWrappers) {
 			provider = wrapProvider(provider);
