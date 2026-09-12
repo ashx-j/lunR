@@ -22,8 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.16`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.17`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.17:** ships the subagent launch-schema fix so Grok can spawn children again.
+- **Subagent launch schema (`fix/subagent-launch-schema`):** the nested-help-text prune kept deleting the real `description` UI-label parameter because that key is also a JSON Schema keyword. The prune now keeps `description` when it is a `properties` field and still strips nested help text. A control `action` mixed into a launch payload is dropped so Grok filling the flat schema cannot turn a spawn into `status`. If that payload also has a non-empty `task`, dummy `tasks`/`chain` are dropped so mode inference cannot steal the single launch. Tests: prompt-driven-subagents pruned-schema + request-params coverage.
 - **v0.2.16:** ships the Codex context and compaction fixes below.
 - **Codex context + compaction:** all current baked Codex windows match their default route limits: Spark is **128000**; GPT-5.4, 5.5, 5.6 variants, and Astra are **272000**. Live discovery uses `context_window` only; `max_context_window` never becomes the default budget. Codex checks compaction after complete tool-result batches, before the next provider request. Repeated manual compaction at the same boundary is a no-op. Tests: openai-thinking + codex-catalog + compaction + agent-session-compaction.
 - **v0.2.15:** ports lunr-dev settings work onto master without #41's temporary startup shell. `/settings` gains Model instructions and Confirm large subagent launches. Global instructions move to `~/.lunr/agent/agents/AGENTS.md` with optional per-model files. `settings_load` injects four narrow settings tools. Enabled model tiers require `light`/`standard`/`heavy` on every child (no inherit, no child `model`). `/swarm` is removed. Real TUI first paint from 0.2.14 stays. PR #41 reliability (terminal sanitization, rollback symlink, orchestrator timeouts) remains unshipped.
@@ -64,6 +66,7 @@ Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - **Pinned scroll layout (`fix/pinned-chat-scroll-lag`):** wheel/page/thumb reuse cached chat lines; overflow gutter is sticky; `setChatScroll` does not sync-layout. Tests: tui-pin render-count + gutter sticky.
 - **Thinking aliases:** `/thinking` picker copy has no fake token budgets. `/effort` and `/reasoning` are full-parity aliases of `/thinking` (TUI extension + gateway). Tests: ashxj-thinking + gateway-commands.
 - **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
+- **Model switch toast (`fix/hide-model-switch-status`):** cycling models updates the footer and chatbox chip without a `Switched to …` status line. `/model` still reports `Model: id`.
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
 - **xAI grok-4.5+ Responses:** generator + `withXaiEffortMetadata` use `shouldUseXaiResponsesApi` (`parseXaiGrok4Minor >= 5`), not a frozen `grok-4.5` id. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`. Completions compat must not leak onto Responses (`supportsDeveloperRole: false` would drop the developer system role). Tests: xai-thinking + xai-responses + model-refresh-merge.
@@ -90,7 +93,7 @@ Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.16**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.17**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -104,6 +107,7 @@ Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- v0.2.17 release (2026-09-11): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 26/26. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.17.
 - v0.2.16 release (2026-09-08): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 58/58 with 7 skipped; AI passes 17/17. Touched-file Biome, relative-import, workflow-publish, browser smoke, and `git diff --check` pass; the repository-wide Biome and pinned-dependency checks retain known findings in unrelated tracked files and gitignored study trees. All four public-package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.16; print mode returned `release-0.2.16-ok` before the known timeout exit 124.
 - v0.2.14 release (2026-09-05): offline tui → ai → agent → coding-agent → orchestrator build passes at 0.2.14; focused AI catalog tests pass 42/42 and coding-agent catalog/startup/image-paste tests pass 140/140. Stalled/failed-runtime first-paint checks and all four public-package dry-run packs pass; generated shrinkwrap and installer locks are current.
 - Real TUI first paint (2026-09-05): all five offline tsgo builds pass. Focused startup/footer/input/theme/feature tests pass; the expanded run retains 14 failures reproduced against master's entrypoints and interactive module, comprising 12 Windows resource-list assertions and 2 native source-launch `.js` resolution failures. The built-CLI stalled/failing-runtime checks pass. Three isolated moon launches wrote the first content frame at 94.8–95.3ms; three warm launches at 96.6–99.1ms. Feature readiness was 2.01–2.43s. These include Node entry loading and measure content writes, without measuring terminal compositor latency or compiled Bun binaries.
@@ -114,7 +118,7 @@ Last updated: 2026-09-08 (v0.2.16 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / workspace CLI → **0.2.16**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
+- `npx lunr --version` / workspace CLI → **0.2.17**. **Rebuild tui then coding-agent `dist` after merge** or features look missing.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` uses the workspace bin (`packages/coding-agent/dist/cli.js`); rebuild coding-agent `dist` first. The startup benchmark reports first content frame separately from runtime and feature readiness.
@@ -182,6 +186,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Compact subagent rows are description-first. Do not restore model-first `compactRowLead`. Never display worker/scout/reviewer role names. When a single result is visible, its call header must not repeat the description.
 - Compact/header badges use `modelSelection` captured at spawn. Do not format them from `result.model` alone; that is the resolved runtime id. A resolving `tier` prints the tier name, not the mapped model.
 - `description` is presentation only. Persist and route intercom/resume/steer by private `childId`; dynamic fanout suffixes it per item, and appended async steps require a fresh append namespace so they cannot collide with existing children.
+- Subagent schema prune must keep properties named `description`; that key is the child UI label, not only JSON Schema help text. Assert the pruned `SubagentParams` export. Drop control `action` when `task`/`tasks`/`chain` are also present, except `schedule`/`append-step`/`resume`/`steer`. If that drop leaves a non-empty `task`, also drop mixed dummy `tasks`/`chain` so Grok's filled mega-schema cannot become a chain.
 - `lunr update` is npm global `@ashx-j/lunr` only. Workspace `PACKAGE_NAME !== NPM_CLI_PACKAGE` skips the nag and refuses to self-update.
 - Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps `wk 32%`.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
@@ -283,6 +288,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-05: v0.2.14 ships the focused catalog, first-paint, and image-paste work; keep #41's mixed reliability changes out until they are split and corrected.
 - 2026-09-05: ship model instructions, required child tiers, and settings_load on master as 0.2.15; drop /swarm instead of restoring the lunr-dev command.
 - 2026-09-08: Codex uses each route's `context_window` as its compaction budget, checks that budget between tool turns, and treats duplicate manual compaction as a no-op; maximum windows remain non-default.
+- 2026-09-09: keep `description` when it is a JSON Schema properties key so the child UI label survives nested-help-text pruning, drop a mixed control action so a filled mega-schema cannot become status, and drop dummy `tasks`/`chain` when that payload still has a real `task`.
+- 2026-09-11: ship that launch-schema fix as 0.2.17.
+- 2026-09-09: model cycling is silent; the chip and footer already show the new model.
 - 2026-09-09: image paste inserts the chip and skips the Pasted status toast.
 
 # Deferred
