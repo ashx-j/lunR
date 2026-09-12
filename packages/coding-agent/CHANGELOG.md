@@ -1,8 +1,15 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.18`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.19`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.19] - 2026-09-12
+
+### Changed
+
+- **Chatbox rails.** The prompt box draws `│` side rails again with the rounded top and bottom rules and thinking chip.
+- **Empty chats.** New sessions no longer print an injected context card. AGENTS.md and CLAUDE.md still reach the model through the system prompt.
 
 ## [0.2.18] - 2026-09-12
 
