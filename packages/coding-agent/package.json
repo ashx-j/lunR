@@ -18,7 +18,7 @@
 			"import": "./dist/node-runtime/index.js"
 		},
 		"./rpc-entry": {
-			"import": "./dist/node-runtime/rpc-entry.js"
+			"import": "./dist/rpc.js"
 		}
 	},
 	"files": [

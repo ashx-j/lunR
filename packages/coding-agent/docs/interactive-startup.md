@@ -12,7 +12,9 @@ not mean the agent can send a request yet.
 
 The Node build uses split ESM bundles in `dist/node-runtime`. CLI and SDK entry
 points share chunks so extensions see the same SDK classes as the running CLI.
-The original `dist` layout remains available for assets and native dependencies.
+The package RPC export uses a small wrapper that prefers its bundle and falls
+back to the unbundled entry after a TypeScript-only development build. The
+original `dist` layout remains available for assets and native dependencies.
 The build preserves original module URLs for asset lookup and extension aliases.
 
 Startup still registers tools, commands, permissions, and session hooks before
@@ -52,8 +54,13 @@ The check stalls or fails runtime loading and verifies the real frame, editable
 draft, and terminal cleanup. It also blocks optional implementation imports and
 checks a complete first request against the baseline tool-payload hash. Separate
 first-turn fixtures exercise subagent status, MCP status, Tree-sitter parsing,
-and local HTTP extraction. An optional CLI path checks a relocated installation
-made from the same build.
+and local HTTP extraction. The default CI run checks the workspace build on
+Ubuntu. Passing a CLI path runs the same checks against a relocated installation,
+but CI does not currently pack that installation or run this check on Windows.
+
+The publish script validates every staged compiled file after rewriting package
+names and refuses missing package entry points or leftover `@earendil-works/*`
+references.
 
 The profiler uses a local Faux provider, not a remote model. It records dispatch
 through the normal prompt path, plus first response and optional tool completion.
