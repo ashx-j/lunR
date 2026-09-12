@@ -21,6 +21,7 @@
 
 import { dirname, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { isUserInstructionsPath } from "./model-instructions.ts";
 import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
@@ -111,6 +112,7 @@ const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 const FULL_CHILD_ACTION = "subagent-full";
 
 interface PermissionContext {
+	allowApprovals?: boolean;
 	mode: PermissionMode;
 	approvals: Set<string>;
 }
@@ -129,8 +131,12 @@ function getContext(sessionId?: string): PermissionContext {
 	return contexts.get(sessionId) ?? defaultContext;
 }
 
-export function createPermissionContext(sessionId: string, mode: PermissionMode = defaultContext.mode): void {
-	contexts.set(sessionId, { mode, approvals: new Set() });
+export function createPermissionContext(
+	sessionId: string,
+	mode: PermissionMode = defaultContext.mode,
+	allowApprovals = true,
+): void {
+	contexts.set(sessionId, { mode, allowApprovals, approvals: new Set() });
 }
 
 export function deletePermissionContext(sessionId: string): void {
@@ -292,6 +298,7 @@ function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChi
 }
 
 function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
+	if (toolName.startsWith("computer_")) return toolName !== "computer_end";
 	if (isMutatingTool(toolName)) return true;
 	if (toolName === "subagent") {
 		return getRequestedChildLaunches(input).some((launch) => launch.permissions === "full");
@@ -371,7 +378,7 @@ async function gateLargeSubagentLaunch(
 		return { fullChildrenApproved: cached.fullChildrenApproved };
 	}
 
-	if (!approvalHandler) {
+	if (!approvalHandler || ctx.allowApprovals === false) {
 		return { block: true, reason: NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON };
 	}
 
@@ -442,6 +449,13 @@ export async function gateToolCall(
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
 	const ctx = getContext(sessionId);
+	if (toolName.startsWith("computer_")) {
+		try {
+			computerPolicy(toolName, input);
+		} catch (error) {
+			return { block: true, reason: String(error) };
+		}
+	}
 	const protectedWriteReason = protectedFileWriteReason(toolName, input, cwd);
 	if (protectedWriteReason) {
 		return { block: true, reason: protectedWriteReason };
@@ -468,7 +482,10 @@ export async function gateToolCall(
 	let action: string;
 	let detail: string;
 
-	if (toolName === "bash") {
+	if (toolName.startsWith("computer_")) {
+		action = toolName;
+		detail = sanitizeDetail(JSON.stringify(input));
+	} else if (toolName === "bash") {
 		action = "bash";
 		detail = sanitizeDetail(input.command);
 	} else if (toolName === "edit" || toolName === "write") {
@@ -500,9 +517,9 @@ export async function gateToolCall(
 		detail = "";
 	}
 
-	if (ctx.approvals.has(action)) return undefined;
+	if (!toolName.startsWith("computer_") && ctx.approvals.has(action)) return undefined;
 
-	if (!approvalHandler) {
+	if (!approvalHandler || ctx.allowApprovals === false) {
 		return { block: true, reason: NO_HANDLER_REASON };
 	}
 
@@ -516,7 +533,7 @@ export async function gateToolCall(
 
 	const decision = typeof resp === "string" ? resp : resp.decision;
 	if (decision === "session") {
-		ctx.approvals.add(action);
+		if (!toolName.startsWith("computer_")) ctx.approvals.add(action);
 		return undefined;
 	}
 	if (decision === "reject") {

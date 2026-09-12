@@ -15,8 +15,11 @@ import {
 	assertPublishedTreeHasNoEarendil,
 	npmNameFor,
 	rewritePackageJsonForNpm,
+	rewritePackageLockForNpm,
 	rewriteWorkspaceSpecifiers,
 } from "./lunr-npm-names.mjs";
+
+import { addPayloadDependencies, release as computerRelease, stagePayloadPackages } from "./computer-use-packages.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -56,10 +59,13 @@ const packages = [
 ];
 
 const dryRun = process.argv.includes("--dry-run");
-const unknownArgs = process.argv.slice(2).filter((arg) => arg !== "--dry-run");
+const packIndex = process.argv.indexOf("--pack-dir");
+const packDirectory = packIndex === -1 ? undefined : process.argv[packIndex + 1];
+const unknownArgs = process.argv.slice(2).filter((arg, index) => arg !== "--dry-run" && index + 2 !== packIndex && index + 2 !== packIndex + 1);
+if (packIndex !== -1 && (!dryRun || !packDirectory)) throw new Error("--pack-dir requires --dry-run and an existing destination directory.");
 
 if (unknownArgs.length > 0) {
-	console.error(`Usage: node scripts/publish.mjs [--dry-run]`);
+	console.error(`Usage: node scripts/publish.mjs [--dry-run [--pack-dir <directory>]]`);
 	process.exit(1);
 }
 
@@ -117,7 +123,7 @@ function copyPackageForPublish(directory) {
 			const norm = src.replaceAll("\\", "/");
 			if (norm.includes("/node_modules")) return false;
 			if (norm.includes("/binaries")) return false;
-			if (norm.endsWith("npm-shrinkwrap.json")) return false;
+			if (norm.includes("/native/computer-use/") && /\.(zip|tar\.gz|json)$/.test(norm)) return false;
 			return true;
 		},
 	});
@@ -128,6 +134,17 @@ function copyPackageForPublish(directory) {
 	}
 	writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`, "utf8");
 	rewritePublishedTree(dest);
+	if (rewritten.name === "@ashx-j/lunr") {
+		const shrinkwrapPath = join(dest, "npm-shrinkwrap.json");
+		const shrinkwrap = rewritePackageLockForNpm(JSON.parse(readFileSync(shrinkwrapPath, "utf8")));
+		addPayloadDependencies(rewritten, shrinkwrap);
+		writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, "\t")}\n`);
+		writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`);
+		const installerPath = join(dest, "install-lock", "package-lock.json");
+		const installer = rewritePackageLockForNpm(JSON.parse(readFileSync(installerPath, "utf8")));
+		addPayloadDependencies({ version: rewritten.version, optionalDependencies: rewritten.optionalDependencies }, installer, "node_modules/@ashx-j/lunr");
+		writeFileSync(installerPath, `${JSON.stringify(installer, null, "\t")}\n`);
+	}
 	assertPublishedTreeHasNoEarendil(dest, rewritten.name);
 	return { dest, publishedName: rewritten.name, version: rewritten.version };
 }
@@ -149,6 +166,10 @@ if (versions.length !== 1) {
 	throw new Error(`Publish packages are not lockstep versioned: ${versions.join(", ")}`);
 }
 
+if (!dryRun && computerRelease.approval !== "production-approved") {
+	throw new Error("Computer-use runtime has development-only approval. Production publication is blocked.");
+}
+
 console.log(`Publishing lunR packages at ${versions[0]} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`);
 
 const packageStates = packages.map((pkg) => ({
@@ -161,21 +182,29 @@ const packageStates = packages.map((pkg) => ({
 await (async () => {
 	const temps = [];
 	try {
+		const payloadRoot = mkdtempSync(join(tmpdir(), "lunr-payload-publish-"));
+		temps.push(payloadRoot);
+		const payloads = await stagePayloadPackages(payloadRoot, versions[0]);
+		const payloadStates = payloads.map(({ directory, manifest }) => ({
+			stageDir: directory, publishedName: manifest.name, version: manifest.version, published: false,
+		}));
 		for (const pkg of packageStates) {
 			assertBuildOutputExists(pkg.directory);
-			pkg.published = await isPublished(pkg.publishedName, pkg.version);
+			pkg.published = dryRun ? false : await isPublished(pkg.publishedName, pkg.version);
 
 			const staged = copyPackageForPublish(pkg.directory);
 			temps.push(staged.dest);
 			pkg.stageDir = staged.dest;
 
-			if (pkg.published) {
+			if (dryRun) {
+				console.log(`${pkg.publishedName}@${pkg.version}: validating local release copy without querying publication state.`);
+			} else if (pkg.published) {
 				console.log(`${pkg.publishedName}@${pkg.version} is already published; validating pack only.`);
 			} else {
 				console.log(`${pkg.publishedName}@${pkg.version} is not published; validating pack.`);
 			}
 
-			const result = run("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
+			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], {
 				capture: true,
 				cwd: pkg.stageDir,
 			});
@@ -185,13 +214,20 @@ await (async () => {
 			);
 		}
 
-		if (dryRun) {
-			return;
+		for (const pkg of payloadStates) {
+			pkg.published = dryRun ? false : await isPublished(pkg.publishedName, pkg.version);
+			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], { capture: true, cwd: pkg.stageDir });
+			const packed = JSON.parse(result.stdout)[0];
+			console.log(`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked`);
+		}
+		if (dryRun) return;
+		if (packageStates.find((pkg) => pkg.publishedName === "@ashx-j/lunr").published && payloadStates.some((pkg) => !pkg.published)) {
+			throw new Error("Use a new lunR release version before publishing new optional payload packages.");
 		}
 
 		console.log("All packages validated; starting publication.\n");
 
-		for (const pkg of packageStates) {
+		for (const pkg of [...payloadStates, ...packageStates]) {
 			if (pkg.published) {
 				console.log(`Skipping ${pkg.publishedName}@${pkg.version}: already published\n`);
 				continue;
