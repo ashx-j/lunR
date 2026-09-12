@@ -103,6 +103,8 @@ export interface SettingsConfig {
 	globalInstructionsPath: string;
 	modelInstructionsPath: string;
 	confirmLargeSubagentLaunches: boolean;
+	computerUse?: boolean;
+	computerForeground?: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
@@ -169,6 +171,8 @@ export interface SettingsCallbacks {
 	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
 	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
+	onComputerUseChange?: (enabled: boolean) => void;
+	onComputerForegroundChange?: (enabled: boolean) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
@@ -1382,6 +1386,20 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "computer-use",
+				label: "Computer use",
+				description: "Control this computer with native desktop tools",
+				currentValue: config.computerUse !== false ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "computer-foreground",
+				label: "Allow foreground control",
+				description: "Allow desktop tools to change focus when background control fails",
+				currentValue: config.computerForeground !== false ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "agent-memory",
 				label: "Agent memory",
 				description: "Durable facts the agent can manage",
@@ -1726,6 +1744,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "memory-char-cap":
 						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "computer-use":
+						callbacks.onComputerUseChange?.(newValue === "on");
+						break;
+					case "computer-foreground":
+						callbacks.onComputerForegroundChange?.(newValue === "on");
 						break;
 					case "agent-memory":
 						callbacks.onMemoryEnabledChange(newValue === "on");

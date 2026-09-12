@@ -11,10 +11,12 @@
  * Plan mode as defense in depth.
  */
 
+import { COMPUTER_TOOLS } from "../../../../../core/computer-use/policy.ts";
 import type { ChildPermission } from "../../../../../core/subagent-permission-inherit.ts";
 
 /** Parent-owned / persistent tools excluded even from full children. */
 export const PARENT_OWNED_CHILD_TOOLS = [
+	...COMPUTER_TOOLS,
 	"cron",
 	"memory_add",
 	"memory_remove",

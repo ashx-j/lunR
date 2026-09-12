@@ -51,3 +51,6 @@ plans/
 
 # Local review output (not part of the product)
 reviews/
+packages/coding-agent/native/computer-use/*.zip
+packages/coding-agent/native/computer-use/*.tar.gz
+packages/coding-agent/native/computer-use/release.json
