@@ -206,6 +206,7 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { buildInjectedContextLines } from "./injected-context.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
@@ -4025,6 +4026,7 @@ export class InteractiveMode {
 			updateFooter: true,
 			populateHistory: true,
 		});
+		this.renderInjectedContextIfNeeded();
 		this.renderProjectTrustWarningIfNeeded();
 
 		// Show compaction info if session was compacted
@@ -4073,6 +4075,34 @@ export class InteractiveMode {
 	private rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
+		this.renderInjectedContextIfNeeded();
+	}
+
+	private sessionHasConversation(): boolean {
+		return this.sessionManager.getEntries().some(
+			(entry) => entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"),
+		);
+	}
+
+	private renderInjectedContextIfNeeded(): void {
+		if (this.sessionHasConversation()) return;
+		const paths = this.session.resourceLoader
+			.getAgentsFiles()
+			.agentsFiles.map((file) => this.formatContextPath(file.path));
+		const lines = buildInjectedContextLines(paths);
+		if (lines.length === 0) return;
+		if (this.chatContainer.children.length > 0) {
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		const [title, ...files] = lines;
+		this.chatContainer.addChild(
+			new Text(
+				theme.fg("customMessageLabel", title ?? "injected context") +
+					(files.length > 0 ? `\n${theme.fg("dim", files.join("\n"))}` : ""),
+				1,
+				0,
+			),
+		);
 	}
 
 	// =========================================================================
