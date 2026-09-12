@@ -16,6 +16,7 @@ import {
 	getPermissionMode,
 	isPlanModeActive,
 	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
+	SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
 	NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON,
 	nextPermissionMode,
 	registerApprovalHandler,
@@ -44,26 +45,17 @@ describe("permissions", () => {
 		expect(result).toBeUndefined();
 	});
 
-	it("covers bootstrap and detailed settings tools with read-vs-write permission semantics", async () => {
-		setPermissionMode("manual");
-		for (const tool of [
-			"settings_load",
-			"settings_model_tiers",
-			"settings_subscriptions",
-			"settings_rollback",
-			"settings_session_retention",
-		]) {
-			expect(await gateToolCall(tool, {}, "/cwd"), `${tool} read`).toBeUndefined();
+	it("blocks direct file-tool writes to lunR settings.json in every mode", async () => {
+		const settingsPath = join(process.env.PI_CODING_AGENT_DIR!, "settings.json");
+		for (const mode of ["manual", "yolo", "plan", "auto"] as const) {
+			setPermissionMode(mode);
+			for (const tool of ["edit", "write", "code_rewrite"]) {
+				expect(await gateToolCall(tool, { path: settingsPath, dry_run: true }, "/cwd"), `${mode}/${tool}`).toEqual({
+					block: true,
+					reason: SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
+				});
+			}
 		}
-		expect(await gateToolCall("settings_model_tiers", { enabled: true }, "/cwd")).toEqual({
-			block: true,
-			reason: "Mutating tool blocked in manual mode: no approval channel available.",
-		});
-		setPermissionMode("plan");
-		expect(await gateToolCall("settings_session_retention", { days: 14 }, "/cwd")).toEqual({
-			block: true,
-			reason: PLAN_MODE_BLOCK_MESSAGE,
-		});
 	});
 
 	it("blocks mutating tools in manual mode when rejected", async () => {

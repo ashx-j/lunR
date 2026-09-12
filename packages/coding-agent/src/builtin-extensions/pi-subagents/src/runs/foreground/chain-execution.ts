@@ -66,7 +66,7 @@ import {
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
-import { captureModelSelection, resolveRequiredTierModel } from "../shared/model-fallback.ts";
+import { captureModelSelection, resolveExecutableChildModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
@@ -236,8 +236,13 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 	const failFast = input.step.failFast ?? false;
 	let aborted = false;
 	const effectiveModels = input.step.parallel.map((task) => {
-		const taskChildConfig = input.agents.find((child) => child.name === task.agent);
-		return resolveRequiredTierModel(task.tier, input.availableModels, input.ctx.model?.provider);
+		return resolveExecutableChildModel({
+			model: task.model,
+			tier: task.tier,
+			thinking: task.thinking,
+			availableModels: input.availableModels,
+			preferredProvider: input.ctx.model?.provider,
+		});
 	});
 	for (let taskIndex = 0; taskIndex < input.step.parallel.length; taskIndex++) {
 		const task = input.step.parallel[taskIndex]!;
@@ -313,9 +318,10 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				task: taskStr,
 				description: task.description,
 				permissions: task.permissions,
-				model: effectiveModel ?? task.model,
+				model: task.model,
 				tier: task.tier,
-				modelSelection: captureModelSelection({ tier: task.tier }),
+				thinking: task.thinking,
+				modelSelection: captureModelSelection({ model: task.model, tier: task.tier }),
 				skill: task.skill,
 				cwd: taskCwd,
 				output: task.output,
@@ -1137,7 +1143,13 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 
-			const effectiveModel = resolveRequiredTierModel(seqStep.tier, availableModels, ctx.model?.provider);
+			const effectiveModel = resolveExecutableChildModel({
+				model: seqStep.model,
+				tier: seqStep.tier,
+				thinking: seqStep.thinking,
+				availableModels,
+				preferredProvider: ctx.model?.provider,
+			});
 
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
@@ -1189,9 +1201,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				task: stepTask,
 				description: seqStep.description,
 				permissions: seqStep.permissions,
-				model: effectiveModel ?? seqStep.model,
+				model: seqStep.model,
 				tier: seqStep.tier,
-				modelSelection: captureModelSelection({ tier: seqStep.tier }),
+				thinking: seqStep.thinking,
+				modelSelection: captureModelSelection({ model: seqStep.model, tier: seqStep.tier }),
 				skill: seqStep.skill,
 				cwd: seqStep.cwd,
 				output: seqStep.output,

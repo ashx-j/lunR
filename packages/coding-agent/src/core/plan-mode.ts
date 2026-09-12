@@ -177,13 +177,6 @@ export function planModeBlockReason(toolName: string, input: unknown): string | 
 	if (toolName === "code_rewrite" && isCodeRewriteMutating(input)) {
 		return PLAN_MODE_BLOCK_MESSAGE;
 	}
-	if (
-		toolName.startsWith("settings_") &&
-		toolName !== "settings_load" &&
-		Object.keys((input as object | undefined) ?? {}).length > 0
-	) {
-		return PLAN_MODE_BLOCK_MESSAGE;
-	}
 	if (toolName === "bash") {
 		const command = readBashCommand(input);
 		if (command && isMutatingBashCommand(command)) {

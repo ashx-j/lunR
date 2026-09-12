@@ -34,12 +34,13 @@ export function formatModelThinking(model?: string, thinking?: string): string {
 	return [displayModel, formatThinkingLabel(model, thinking)].filter(Boolean).join(" · ");
 }
 
-/** Compact/header badge: selected tier name plus its effective thinking level. */
+/** Compact/header badge: selected tier name, or selected/resolved model id. */
 export function formatModelSelection(selection?: ModelSelection, resolvedModel?: string, thinking?: string): string {
 	if (selection?.kind === "tier" && selection.tier) {
 		return [selection.tier, formatThinkingLabel(resolvedModel, thinking)].filter(Boolean).join(" · ");
 	}
-	return formatModelThinking(resolvedModel, thinking);
+	const selectedModel = selection?.kind === "model" ? selection.model : undefined;
+	return formatModelThinking(selectedModel || resolvedModel, thinking);
 }
 
 /**

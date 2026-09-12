@@ -4,6 +4,12 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.19`**.
 
 ## [Unreleased]
 
+### Changed
+
+- **Child model selection.** Executable children choose exactly one of `tier: light|standard|heavy` (default) or an explicit `model: provider/id` when the user names a model. Optional `thinking` is only valid with an explicit model. Direct model launches do not require tier mode. Resume keeps user selection separate from the resolved runtime model.
+- **Settings stay user-managed.** Removed `settings_load` and the four agent-managed settings tools. `/settings` still edits configuration. Direct `edit`/`write`/`code_rewrite` of lunR `settings.json` is blocked.
+- **Watchdog configure removed.** Read-only watchdog status/check/recommend-model remain; agent `watchdog.configure` is gone.
+
 ## [0.2.19] - 2026-09-12
 
 ### Changed
