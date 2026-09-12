@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-12 (`fix/subagent-model-selection` on master `158f5ce`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-12 (subagent model/display/cancellation stack on master `158f5ce`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **Subagent model selection (`fix/subagent-model-selection`):** executable children choose exactly one of `tier` or `model`; optional `thinking` only with explicit model; single, parallel, and chain resume preserve selection separately from the resolved runtime model. Removed `settings_load` + four settings tools and `watchdog.configure`; `/settings` remains; direct settings.json file-tool writes are blocked.
 - **Subagent compact display (`fix/subagent-compact-display`):** foreground and async compact rows share one line: spinner, description, selected tier or explicit model, tokens, elapsed time. No hang line, tool-use count, thinking, or permission suffix. Completed collapsed cards keep frozen stats. Async widget paints at 80ms on a stable component (no per-tick `setWidget`, no fs reads on the animation timer). Call headers say `subagent async` when the launch is async. Completed notify cards are title and status only. Tests: compact-row + tool-execution-component.
@@ -121,6 +121,8 @@ Last updated: 2026-09-12 (`fix/subagent-model-selection` on master `158f5ce`). P
 
 ## Build & run
 
+- Combined subagent stack: all five offline builds and the Node bundle pass; focused Vitest passes 225/225 across 15 suites. Changed non-vendored code passes Biome. First-paint and first-turn checks pass. An isolated local Faux CLI request exits successfully with 31 active tools and no settings tools. Local prompt/tool snapshots were regenerated for that isolated verification and remain untracked; the original workspace snapshots were not changed.
+
 - Subagent model selection: five-package offline builds and the coding-agent Node bundle pass. Focused Vitest passes 126/126 across eight suites, including parallel-child revive selection. First-paint and first-turn subagent/MCP/LSP/fetch checks pass; the deliberate tool-schema change has a refreshed payload fingerprint. `git diff --check` passes.
 
 - Subagent compact display: five-package offline builds and the coding-agent Node bundle pass. Focused compact-row and tool-execution Vitest passes 84/84. First-paint and first-turn subagent/MCP/LSP/fetch checks pass. `git diff --check` passes.
@@ -176,6 +178,8 @@ Last updated: 2026-09-12 (`fix/subagent-model-selection` on master `158f5ce`). P
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
 
 - Async Escape cancellation uses a session-keyed lightweight bridge; keep executor imports lazy. Stop requests are distinct from confirmed termination. Result delivery retries keep the same request id; only acknowledged or locally handled stopped results are removed. Three failed attempts retain the file until reload/restart. Stopped completions update history without waking the parent. Direct-child process cleanup remains the existing runner policy, not a general shell-grandchild sandbox.
 
