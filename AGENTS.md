@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-12 (v0.2.19 on `release/v0.2.19`). Public npm is `@ashx-j/lunr@0.2.18` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-12 (v0.2.19 on `master`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.19:** restores chatbox `│` side rails and drops the empty-chat injected context card.
 - **v0.2.18:** ships lazy first-request loading, thinking-level slash commands, quieter TUI, injected context, and compact async subagent rows.
@@ -104,7 +104,7 @@ Last updated: 2026-09-12 (v0.2.19 on `release/v0.2.19`). Public npm is `@ashx-j/
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.18** until `v0.2.19` publishes.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.19**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
