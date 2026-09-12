@@ -1,98 +1,58 @@
-# Interactive startup
+# Interactive startup plan
 
-lunR paints the normal moon chatbox before loading the agent runtime. It keeps
-that terminal and editor through attachment. Enter holds the editable draft until
-session setup and required extension hooks finish. Escape cancels a pending
-submission. Failed initialization preserves the draft and reports the error.
+Paint the normal lunR interface before importing the agent runtime. Models,
+resources, session restoration, extensions, and maintenance may take longer;
+they must not determine when the user first sees the chatbox.
 
-First paint and first request are separate measurements. An early chatbox does
-not mean the agent can send a request yet.
+PR #41 starts a generic editor with a separate startup message, then changes the
+layout and editor after hydration. Its first-frame marker also accepts terminal
+setup writes. Keep its useful early routing and startup-dialog work, but replace
+the temporary presentation and measure actual rendered content.
 
-## First-request loading
+1. Start a persistent view using the existing themed ChatboxEditor,
+   BootScreenComponent, and stats renderer. Read only local display preferences.
+   Reuse the terminal and editor when InteractiveMode attaches. Unknown runtime
+   data fills in later; no second startup screen or editor reset.
+2. Begin runtime imports after a complete TUI frame has been written. Keep
+   session selection and trust dialogs on that terminal. Preserve drafts,
+   cursor position, and pasted images while initialization proceeds.
+3. Hold submissions until session and extension initialization completes, then
+   dispatch through the normal command/message handler. Keep failures visible
+   and allow exit while loading. Defer session retention and other maintenance.
+4. Verify real frame content without a runtime, editor identity across binding,
+   delayed/failing initialization, command routing, and noninteractive launches.
+   Benchmark first content frame separately from runtime and feature readiness,
+   using isolated settings and both cold and warm compile caches.
 
-The Node build uses split ESM bundles in `dist/node-runtime`. CLI and SDK entry
-points share chunks so extensions see the same SDK classes as the running CLI.
-The original `dist` layout remains available for assets and native dependencies.
-The build preserves original module URLs for asset lookup and extension aliases.
-
-Startup still registers tools, commands, permissions, and session hooks before
-opening the prompt barrier. It does not replace tool schemas with placeholders.
-The expensive implementations load when needed:
-
-- Web tools load providers, extraction, and browser curation separately.
-- LSP registers its tools before loading clients and Tree-sitter. Configured
-  autostart runs in the background; first use waits for the required services.
-- MCP registers the proxy and cached direct-tool definitions without loading its
-  connection engine. Configured eager servers, keep-alive, and metadata discovery
-  retain their background behavior.
-- Subagents keep restoration and watchers at startup, but load the executor on
-  first use.
-- Third-party extensions load jiti when needed. Bun's static extension host keeps
-  its embedded modules. Package-management commands and HTML export load their
-  implementations only when invoked.
-
-Session replacement invalidates pending initialization. MCP cancels initialization
-and closes partially connected state. LSP drops stale write diagnostics. Web
-requests and curator callbacks cannot publish into a replacement session.
-
-The Node bundle does not automatically enable Node's compile cache. Reusing that
-cache was slower in the measured bundle. Node's explicit compile-cache environment
-settings remain available; the unbundled launch path keeps its existing policy.
+This PR targets startup only. The permission, rollback, orchestrator, and release
+changes in #41 remain separate. Custom extension themes/editors become available
+when their resources load; the builtin moon interface is available immediately.
 
 ## Validation
 
-Run the offline build, including coding-agent's bundle step, then:
+The Node CLI keeps one terminal and one moon editor through attachment. Enter
+during loading holds the current draft. Edits continue to change that draft;
+Escape cancels the pending submission. Commands run through the normal handler
+after features are ready. A failed feature load preserves the draft and reports
+the error instead of submitting it.
+
+The shipped moon theme avoids loading the schema compiler and highlighter before
+paint. Custom theme validation and syntax highlighting use the same implementations
+on first use. Footer git discovery and diffs run asynchronously.
+
+After the offline builds, run:
 
 ```sh
 node scripts/check-interactive-first-paint.mjs
-node scripts/profile-coding-agent-node.mjs --mode tui --skip-build --runs 10
+node scripts/profile-coding-agent-node.mjs --mode tui --skip-build --isolated-agent-dir --runs 3
 ```
 
-The check stalls or fails runtime loading and verifies the real frame, editable
-draft, and terminal cleanup. It also blocks optional implementation imports and
-checks a complete first request against the baseline tool-payload hash. Separate
-first-turn fixtures exercise subagent status, MCP status, Tree-sitter parsing,
-and local HTTP extraction. An optional CLI path checks a relocated installation
-made from the same build.
+The first command exercises the built CLI with runtime loading stalled or failed.
+It verifies the real chatbox appears before hydration, accepts edits while
+waiting, and restores the terminal on exit. The Vitest integration also checks
+editor identity, cursor position, images, dialogs, and delayed command dispatch.
 
-The profiler uses a local Faux provider, not a remote model. It records dispatch
-through the normal prompt path, plus first response and optional tool completion.
-It isolates the home directory, settings, temporary files, and workspace by
-default. It reports tool names and a schema hash, not prompt contents.
-
-Use `--cli /path/to/dist/cli.js` to compare another built version. Use a dedicated
-`--agent-dir` with `--warmup 1` for repeated launches. Without `--agent-dir`, each
-run gets a fresh profile, including warmup runs. These are fresh profile and
-compile-cache measurements, not reboot-cold filesystem measurements.
-
-## Measured results
-
-Windows, Node 24.15.0, offline, empty workspace, builtin extensions, 2026-09-08.
-Baseline is `b709d12` with benchmark instrumentation only. Measurements preceded
-the rebase onto v0.2.16; build and first-turn checks were repeated afterward.
-Ten launches per cell
-alternated baseline and changed builds. Repeated launches reused each variant's
-own profile after one warmup. The last repeated baseline sample ran separately
-after the comparison runner reached its time limit.
-
-| Profile | Baseline request median / p95 | Changed request median / p95 | Median reduction |
-| --- | --- | --- | --- |
-| Fresh | 1988.8 / 2026.4 ms | 968.2 / 1007.0 ms | 51.3% |
-| Repeated | 2597.6 / 2628.6 ms | 970.6 / 993.5 ms | 62.6% |
-
-First-frame medians were 100.7 to 90.0 ms for fresh profiles and 107.2 to 90.8 ms
-for repeated launches. With ten samples, nearest-rank p95 is the maximum.
-
-First-use fixtures on Node 24 added 68 ms for subagent status, 3075 ms for MCP
-status, 143 ms for LSP parsing, and 257 ms for local HTTP extraction after request
-dispatch. These are single observations of complete tool execution, not isolated
-import costs. Later checks measured 126 to 482 ms for MCP status, so the first-use
-observations are not a stable latency bound.
-
-The packaged CLI passed the same checks on Node 22.19.0. A separately instrumented
-Node 22 run took 6 seconds to dispatch, so these medians are not a latency bound.
-Remote provider latency, terminal compositor latency, reboot-cold storage, large
-user configurations, and third-party asynchronous extension hooks were not
-measured. Bun 1.4.2 source launch completed a local request. Standalone compilation
-was blocked on both baseline and changed builds by the missing native canvas
-binary in the isolated, ignore-scripts dependency installation.
+On Windows with Node 24.15.0 and moon, three fresh compile-cache runs wrote the
+first complete frame in 94.8–95.3ms. Three warm runs measured 96.6–99.1ms. Feature
+readiness came at 2.01–2.43s. Milestones include Node entry-module loading.
+Terminal compositor latency and compiled Bun binaries were not measured.

@@ -16,27 +16,25 @@
  * accept an optional `query` parameter as an alternative to line/character,
  * resolving a symbol name to its position automatically.
  *
- * Tool schemas, commands, and hooks register immediately. Heavy managers
- * (LspManager, FileSync, Tree-sitter/WASM, WorkspaceIndex) load on first use.
- *
  * Usage:
  *   1. npm install in this directory
  *   2. Add to pi via settings.json extensions, or: pi -e ./src/index.ts
  *   3. LSP servers start lazily when you first use a tool on a file
  */
 
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { TSchema } from "typebox";
-import { awaitWithAbort } from "../../../utils/await-with-abort.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   isReadToolResult,
   isWriteToolResult,
   isEditToolResult,
-} from "../../../core/extensions/types.js";
-import { DiagnosticSeverity } from "vscode-languageserver-protocol";
+} from "@earendil-works/pi-coding-agent";
+import { DiagnosticSeverity, type Diagnostic } from "vscode-languageserver-protocol";
 
-import type { WorkspaceProvider } from "./workspace-provider.js";
-import { LspRuntimeHost, type LspRuntimeCallbacks } from "./runtime.js";
+import { LspManager, type ServerConfig, type LspManagerCallbacks } from "./lsp-manager.js";
+import { FileSync } from "./file-sync.js";
+import { TreeSitterManager } from "./tree-sitter/parser-manager.js";
+import { WorkspaceIndex } from "./tree-sitter/workspace-index.js";
+import { type WorkspaceProvider, DefaultWorkspaceProvider } from "./workspace-provider.js";
 import { createDiagnosticsTool } from "./tools/diagnostics.js";
 import { createHoverTool } from "./tools/hover.js";
 import { createDefinitionTool } from "./tools/definition.js";
@@ -51,7 +49,7 @@ import { createCodeActionsTool } from "./tools/code-actions.js";
 import { syntheticDotLocks } from "./tools/completions.js";
 import { relative } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { DIAGNOSTIC_SETTLE_DELAY_MS } from "./shared/timing.js";
 
 /**
@@ -88,14 +86,6 @@ interface ProjectLspConfig {
   autoInjectDiagnostics?: boolean | string[];
 }
 
-interface ServerConfig {
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-  initializationOptions?: Record<string, unknown>;
-  settings?: Record<string, unknown>;
-}
-
 /** Load .pi-lsp.json from a directory. Returns null if not found or invalid. */
 function loadProjectConfig(dir: string): ProjectLspConfig | null {
   const configPath = join(dir, ".pi-lsp.json");
@@ -108,36 +98,6 @@ function loadProjectConfig(dir: string): ProjectLspConfig | null {
   } catch {
     return null;
   }
-}
-
-function createServiceProxy<T extends object>(getTarget: () => T | null, label: string): T {
-  return new Proxy({} as T, {
-    get(_target, prop, receiver) {
-      const service = getTarget();
-      if (!service) {
-        throw new Error(`${label} is not initialized`);
-      }
-      const value = Reflect.get(service, prop, service);
-      if (typeof value === "function") {
-        return value.bind(service);
-      }
-      return value;
-    },
-  });
-}
-
-function registerToolWithRuntime<T extends TSchema, D>(pi: ExtensionAPI, tool: ToolDefinition<T, D>, ensure: () => Promise<unknown>, host: LspRuntimeHost) {
-  pi.registerTool({
-    ...tool,
-    async execute(id, params, signal, onUpdate, ctx) {
-      const generation = host.getGeneration();
-      signal?.throwIfAborted();
-      await awaitWithAbort(ensure(), signal);
-      signal?.throwIfAborted();
-      if (host.getGeneration() !== generation) throw new Error("LSP session changed before execution");
-      return tool.execute(id, params, signal, onUpdate, ctx);
-    },
-  });
 }
 
 export default function lspExtension(pi: ExtensionAPI) {
@@ -154,11 +114,15 @@ export default function lspExtension(pi: ExtensionAPI) {
     }
   });
 
-  const host = new LspRuntimeHost();
+  let manager: LspManager | null = null;
+  let fileSync: FileSync | null = null;
+  let treeSitter: TreeSitterManager | null = null;
+  let workspaceIndex: WorkspaceIndex | null = null;
   let pendingProvider: WorkspaceProvider | null = null;
+  // Store latest ctx for lifecycle callbacks (updated on each event)
   let latestCtx: any = null;
+  // Project config — loaded on session_start, used by auto-injection guard
   let projectConfig: ProjectLspConfig | null = null;
-  let sessionCwd = process.cwd();
 
   /**
    * Run `fn` with the currently captured ctx, swallowing stale-ctx errors.
@@ -184,10 +148,16 @@ export default function lspExtension(pi: ExtensionAPI) {
     }
   };
 
+  // Listen for external workspace providers (e.g. bemol extension).
+  // Also check if one was already registered before we loaded (load order varies).
+  // Store as pendingProvider so it's available when the manager is created later.
   const applyProvider = (data: unknown) => {
     const provider = data as WorkspaceProvider;
     pendingProvider = provider;
-    host.setPendingProvider(provider);
+    if (manager) {
+      manager.setWorkspaceProvider(provider);
+    }
+    // Update status if we have a UI context
     const statusText = provider.getStatusText();
     if (!statusText) return;
     withLatestCtx((ctx) => {
@@ -202,6 +172,7 @@ export default function lspExtension(pi: ExtensionAPI) {
   const existing = (pi.events as any)["lsp:workspace-provider"];
   if (existing) applyProvider(existing);
 
+  /** Build lifecycle callbacks that update UI status */
   const setLspStatus = (color: string, text: string) => {
     withLatestCtx((ctx) => {
       if (!ctx.ui?.theme) return;
@@ -209,7 +180,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     });
   };
 
-  const makeCallbacks = (): LspRuntimeCallbacks => ({
+  const makeCallbacks = (): LspManagerCallbacks => ({
     onWorkspaceSetupStart: () => {
       setLspStatus("warning", "LSP: workspace setup...");
     },
@@ -239,158 +210,179 @@ export default function lspExtension(pi: ExtensionAPI) {
     },
   });
 
-  const applyProjectConfigToManager = (manager: { setServerConfig: Function; setLombokJar: Function }, config: ProjectLspConfig | null) => {
-    if (!config) return;
-    if (config.servers) {
-      for (const [lang, serverConf] of Object.entries(config.servers)) {
-        manager.setServerConfig(lang, {
-          command: serverConf.command,
-          args: serverConf.args ?? [],
-          env: serverConf.env,
-          initializationOptions: serverConf.initializationOptions,
-          settings: serverConf.settings,
-        });
-      }
+  // Create manager eagerly so tools can reference it, but servers start lazily
+  const getManager = (): LspManager => {
+    if (!manager) {
+      manager = new LspManager(process.cwd(), undefined, makeCallbacks(), undefined, pendingProvider ?? undefined);
+      fileSync = new FileSync(manager);
+      fileSync.setSyntheticDotChecker((uri) => syntheticDotLocks.has(uri));
+      treeSitter = new TreeSitterManager();
+      workspaceIndex = new WorkspaceIndex(process.cwd(), treeSitter);
+      fileSync.setTreeSitter(treeSitter, workspaceIndex);
     }
-    if (config.lombokJar && config.lombokJar !== "auto") {
-      manager.setLombokJar(config.lombokJar);
-    }
+    return manager;
   };
 
-  const buildBindOptions = (cwd: string) => ({
-    cwd,
-    callbacks: makeCallbacks(),
-    pendingProvider,
-    syntheticDotChecker: (uri: string) => syntheticDotLocks.has(uri),
-    configureManager: (manager) => {
-      applyProjectConfigToManager(manager, projectConfig);
-    },
-  });
-
-  const ensureRuntime = async () => {
-    return host.ensureServices(
-      buildBindOptions(sessionCwd || process.cwd()),
-    );
+  const getFileSync = (): FileSync => {
+    if (!fileSync) {
+      getManager(); // ensures fileSync is created
+    }
+    return fileSync!;
   };
 
-  // session_start binds cwd/config only. Heavy managers load on first use,
-  // unless autoStart is configured (then ensure + startEagerly).
+  const getTreeSitter = (): TreeSitterManager => {
+    if (!treeSitter) {
+      getManager(); // ensures treeSitter is created
+    }
+    return treeSitter!;
+  };
+
+  const getWorkspaceIndex = (): WorkspaceIndex => {
+    if (!workspaceIndex) {
+      getManager(); // ensures workspaceIndex is created
+    }
+    return workspaceIndex!;
+  };
+
+  // Initialize manager (uses cwd at session start time)
   pi.on("session_start", async (_event, ctx) => {
     latestCtx = ctx;
-    sessionCwd = ctx.cwd;
 
-    projectConfig = loadProjectConfig(ctx.cwd);
-    host.bindSession(buildBindOptions(ctx.cwd));
+    // If manager was already created eagerly (e.g. by a tool before session_start),
+    // shut it down so we can re-create with the correct ctx.cwd.
+    if (manager) {
+      await manager.shutdownAll().catch(() => {});
+      if (treeSitter) treeSitter.shutdown();
+    }
 
-    const statusText = pendingProvider?.getStatusText?.() ?? "";
+    manager = new LspManager(ctx.cwd, undefined, makeCallbacks(), undefined, pendingProvider ?? undefined);
+    fileSync = new FileSync(manager);
+    fileSync.setSyntheticDotChecker((uri) => syntheticDotLocks.has(uri));
+    treeSitter = new TreeSitterManager();
+    workspaceIndex = new WorkspaceIndex(ctx.cwd, treeSitter);
+    fileSync.setTreeSitter(treeSitter, workspaceIndex);
+
+    // Initialize tree-sitter in the background (don't block session start)
+    treeSitter.init().catch((err) => {
+      console.error(`[pi-lsp-extension] tree-sitter WASM init failed: ${err?.message ?? err}`);
+    });
+
+    // Show workspace provider status
+    const wsProvider = manager.workspace;
+    const statusText = wsProvider.getStatusText();
     if (statusText) {
       ctx.ui.setStatus("lsp", ctx.ui.theme.fg("accent", `LSP: ${statusText}`));
     } else {
       ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", "LSP: idle"));
     }
 
-    if (projectConfig?.autoStart && projectConfig.autoStart.length > 0) {
-      const langs = projectConfig.autoStart;
-      const generation = host.getGeneration();
-      void ensureRuntime().then((services) => {
-        if (host.getGeneration() !== generation) return;
-        const lombokJar = services.manager.getLombokJar?.() ?? null;
-        const lombokNote = langs.includes("java") && lombokJar
-          ? ` (lombok: ${String(lombokJar).split(/[/\\]/).pop()})`
-          : "";
-        setLspStatus("warning", `LSP: auto-starting ${langs.join(", ")}${lombokNote}...`);
-        services.manager.startEagerly(langs);
-      }).catch((error) => {
-        if (host.getGeneration() === generation) setLspStatus("error", `LSP startup failed: ${String(error)}`);
-      });
-    }
-  });
-
-  const managerProxy = createServiceProxy(
-    () => host.getServicesIfReady()?.manager ?? null,
-    "LSP manager",
-  );
-  const treeSitterProxy = createServiceProxy(
-    () => host.getServicesIfReady()?.treeSitter ?? null,
-    "Tree-sitter manager",
-  );
-  const workspaceIndexProxy = createServiceProxy(
-    () => host.getServicesIfReady()?.workspaceIndex ?? null,
-    "Workspace index",
-  );
-
-  registerToolWithRuntime(pi, createDiagnosticsTool(managerProxy, treeSitterProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createHoverTool(managerProxy, treeSitterProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createDefinitionTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createReferencesTool(managerProxy, treeSitterProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createSymbolsTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createRenameTool(managerProxy, treeSitterProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createCodeActionsTool(managerProxy, treeSitterProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createCompletionsTool(
-      managerProxy,
-      {
-        getTrackedVersion: (uri) => {
-          const services = host.getServicesIfReady();
-          if (!services) return null;
-          return services.fileSync.getTrackedVersion(uri);
-        },
-        setTrackedVersion: (uri, v) => {
-          host.getServicesIfReady()?.fileSync.setTrackedVersion(uri, v);
-        },
-        isSyntheticDotActive: (uri) => syntheticDotLocks.has(uri),
-      },
-      treeSitterProxy,
-    ), ensureRuntime, host);
-  const getRootDir = () => {
-    const manager = host.getServicesIfReady()?.manager;
-    if (manager) return manager.resolvePath(".");
-    return sessionCwd || process.cwd();
-  };
-  registerToolWithRuntime(pi, createCodeOverviewTool(getRootDir, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createCodeSearchTool(getRootDir, treeSitterProxy), ensureRuntime, host);
-  registerToolWithRuntime(pi, createCodeRewriteTool(getRootDir, treeSitterProxy, {
-      onFileModified: (filePath: string) => {
-        const services = host.getServicesIfReady();
-        if (!services) return;
-        services.fileSync.handleFileWrite(filePath).catch(() => {});
-      },
-    }), ensureRuntime, host);
-
-  // File sync: track file reads/writes/edits without loading runtime on plain reads
-  // when LSP was never used. Writes may start a server (existing behavior) so they
-  // ensure runtime. After writes/edits, append file-scoped error diagnostics.
-  pi.on("tool_result", async (event) => {
-    const generation = host.getGeneration();
-    try {
-      if (isReadToolResult(event) && !event.isError) {
-        const services = host.getServicesIfReady();
-        if (services) {
-          const path = (event.input as any)?.path;
-          if (path) await services.fileSync.handleFileRead(path);
-          if (host.getGeneration() !== generation) return;
+    // Load project config and apply settings
+    projectConfig = loadProjectConfig(ctx.cwd);
+    if (projectConfig) {
+      // Apply custom server configs
+      if (projectConfig.servers) {
+        for (const [lang, serverConf] of Object.entries(projectConfig.servers)) {
+          manager.setServerConfig(lang, {
+            command: serverConf.command,
+            args: serverConf.args ?? [],
+            env: serverConf.env,
+            initializationOptions: serverConf.initializationOptions,
+            settings: serverConf.settings,
+          });
         }
       }
 
-      if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError) {
-        const path = (event.input as any)?.path;
-        if (path) {
-          const services = await ensureRuntime();
-          if (host.getGeneration() !== generation) return;
-          await services.fileSync.handleFileWrite(path);
+      // Set Lombok jar path (explicit path or "auto" for auto-detection)
+      if (projectConfig.lombokJar) {
+        if (projectConfig.lombokJar !== "auto") {
+          manager.setLombokJar(projectConfig.lombokJar);
         }
+        // "auto" is the default behavior — findLombokJar() already auto-detects.
+        // Setting it explicitly just confirms the user wants Lombok support.
+      }
+
+      // Auto-start configured languages in the background
+      if (projectConfig.autoStart && projectConfig.autoStart.length > 0) {
+        const langs = projectConfig.autoStart;
+        const lombokNote = langs.includes("java") && manager.getLombokJar()
+          ? ` (lombok: ${manager.getLombokJar()?.split("/").pop()})` : "";
+        setLspStatus("warning", `LSP: auto-starting ${langs.join(", ")}${lombokNote}...`);
+        manager.startEagerly(langs);
+      }
+    }
+  });
+
+  // Register all LSP tools
+  // Tools call getManager() lazily so they work even if session_start hasn't fired
+  const managerProxy = new Proxy({} as LspManager, {
+    get(_target, prop) {
+      return (getManager() as any)[prop];
+    },
+  });
+
+  const treeSitterProxy = new Proxy({} as TreeSitterManager, {
+    get(_target, prop) {
+      return (getTreeSitter() as any)[prop];
+    },
+  });
+
+  const workspaceIndexProxy = new Proxy({} as WorkspaceIndex, {
+    get(_target, prop) {
+      return (getWorkspaceIndex() as any)[prop];
+    },
+  });
+
+  pi.registerTool(createDiagnosticsTool(managerProxy, treeSitterProxy));
+  pi.registerTool(createHoverTool(managerProxy, treeSitterProxy));
+  pi.registerTool(createDefinitionTool(managerProxy, treeSitterProxy, workspaceIndexProxy));
+  pi.registerTool(createReferencesTool(managerProxy, treeSitterProxy));
+  pi.registerTool(createSymbolsTool(managerProxy, treeSitterProxy, workspaceIndexProxy));
+  pi.registerTool(createRenameTool(managerProxy, treeSitterProxy));
+  pi.registerTool(createCodeActionsTool(managerProxy, treeSitterProxy));
+  pi.registerTool(createCompletionsTool(managerProxy, {
+    getTrackedVersion: (uri) => getFileSync().getTrackedVersion(uri),
+    setTrackedVersion: (uri, v) => getFileSync().setTrackedVersion(uri, v),
+    isSyntheticDotActive: (uri) => syntheticDotLocks.has(uri),
+  }, treeSitterProxy));
+  const getRootDir = () => manager?.resolvePath(".") ?? process.cwd();
+  pi.registerTool(createCodeOverviewTool(getRootDir, treeSitterProxy, workspaceIndexProxy));
+  pi.registerTool(createCodeSearchTool(getRootDir, treeSitterProxy));
+  pi.registerTool(createCodeRewriteTool(getRootDir, treeSitterProxy, {
+    onFileModified: (filePath: string) => {
+      getFileSync().handleFileWrite(filePath).catch(() => {});
+    },
+  }));
+  pi.registerTool(createCodeActionsTool(managerProxy, treeSitterProxy));
+
+  // File sync: track file reads/writes/edits
+  // After writes/edits, append file-scoped error diagnostics to the tool result
+  pi.on("tool_result", async (event) => {
+    const sync = getFileSync();
+
+    try {
+      if (isReadToolResult(event) && !event.isError) {
+        const path = (event.input as any)?.path;
+        if (path) await sync.handleFileRead(path);
+      }
+
+      if (isWriteToolResult(event) && !event.isError) {
+        const path = (event.input as any)?.path;
+        if (path) await sync.handleFileWrite(path);
+      }
+
+      if (isEditToolResult(event) && !event.isError) {
+        const path = (event.input as any)?.path;
+        if (path) await sync.handleFileWrite(path);
       }
     } catch {
       // File sync errors are non-fatal
     }
 
-    if (host.getGeneration() !== generation) return;
     // Auto-append diagnostics for the changed file (write/edit only)
-    const services = host.getServicesIfReady();
-    if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError && services) {
+    if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError && manager) {
       const path = (event.input as any)?.path;
       if (!path) return;
 
-      const manager = services.manager;
       const languageId = manager.getLanguageId(path);
       if (!languageId) return;
 
@@ -404,7 +396,6 @@ export default function lspExtension(pi: ExtensionAPI) {
 
       // Wait briefly for the LSP to publish updated diagnostics
       await new Promise((r) => setTimeout(r, DIAGNOSTIC_SETTLE_DELAY_MS));
-      if (host.getGeneration() !== generation) return;
 
       const uri = manager.getFileUri(path);
       const diagnostics = client.getDiagnostics(uri);
@@ -438,9 +429,8 @@ export default function lspExtension(pi: ExtensionAPI) {
   // Update status after tool execution ends
   pi.on("tool_execution_end", async (_event, ctx) => {
     latestCtx = ctx;
-    const services = host.getServicesIfReady();
-    if (!services) return;
-    const statuses = services.manager.getStatus();
+    if (!manager) return;
+    const statuses = manager.getStatus();
     const running = statuses.filter((s) => s.running);
     if (running.length === 0) {
       ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", "LSP: idle"));
@@ -459,13 +449,12 @@ export default function lspExtension(pi: ExtensionAPI) {
   pi.registerCommand("lsp", {
     description: "Show LSP server status",
     handler: async (_args, ctx) => {
-      const services = host.getServicesIfReady();
-      if (!services) {
+      if (!manager) {
         ctx.ui.notify("LSP manager not initialized", "warning");
         return;
       }
 
-      const statuses = services.manager.getStatus();
+      const statuses = manager.getStatus();
       if (statuses.length === 0) {
         ctx.ui.notify("No LSP servers configured", "info");
         return;
@@ -487,8 +476,7 @@ export default function lspExtension(pi: ExtensionAPI) {
   pi.registerCommand("lsp-restart", {
     description: "Restart an LSP server: /lsp-restart <language> (e.g. java, typescript)",
     handler: async (args, ctx) => {
-      const services = host.getServicesIfReady();
-      if (!services) {
+      if (!manager) {
         ctx.ui.notify("LSP manager not initialized", "warning");
         return;
       }
@@ -496,7 +484,7 @@ export default function lspExtension(pi: ExtensionAPI) {
       const languageId = args?.trim().toLowerCase();
       if (!languageId) {
         // Show running servers and usage
-        const statuses = services.manager.getStatus().filter((s) => s.running);
+        const statuses = manager.getStatus().filter((s) => s.running);
         if (statuses.length === 0) {
           ctx.ui.notify("No LSP servers are running.\n\nUsage: /lsp-restart <language>", "info");
         } else {
@@ -513,8 +501,8 @@ export default function lspExtension(pi: ExtensionAPI) {
       ctx.ui.notify(`Restarting ${languageId} server (kills daemon if shared)...`, "info");
 
       try {
-        await services.manager.restartServer(languageId);
-        const lombokJar = languageId === "java" ? services.manager.getLombokJar() : null;
+        await manager.restartServer(languageId);
+        const lombokJar = languageId === "java" ? manager.getLombokJar() : null;
         const lombokNote = lombokJar ? `\nLombok: ${lombokJar}` : "";
         ctx.ui.notify(`${languageId} server restarted successfully.${lombokNote}`, "info");
         ctx.ui.setStatus("lsp", ctx.ui.theme.fg("accent", `LSP: ${languageId} ready`));
@@ -550,8 +538,7 @@ export default function lspExtension(pi: ExtensionAPI) {
       const [languageId, command, ...serverArgs] = parts;
       const config: ServerConfig = { command, args: serverArgs };
 
-      const services = await ensureRuntime();
-      services.manager.setServerConfig(languageId, config);
+      getManager().setServerConfig(languageId, config);
       ctx.ui.notify(
         `Configured LSP for ${languageId}: ${command} ${serverArgs.join(" ")}`,
         "info"
@@ -564,8 +551,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     description:
       "Set Lombok jar path for Java: /lsp-lombok <path-to-lombok.jar>",
     handler: async (args, ctx) => {
-      const services = await ensureRuntime();
-      const mgr = services.manager;
+      const mgr = getManager();
 
       if (!args?.trim()) {
         const current = mgr.getLombokJar();
@@ -584,6 +570,8 @@ export default function lspExtension(pi: ExtensionAPI) {
       }
 
       const jarPath = args.trim();
+      const { existsSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
       const resolved = resolve(ctx.cwd, jarPath);
 
       if (!existsSync(resolved)) {
@@ -600,14 +588,21 @@ export default function lspExtension(pi: ExtensionAPI) {
     },
   });
 
-  // Clean shutdown — never loads heavy modules if they were unused
+  // Clean shutdown (includes workspace provider, all LSP servers, and tree-sitter)
   pi.on("session_shutdown", async () => {
     // Drop the captured ctx immediately — once shutdown fires, any late
     // LSP manager callback that reaches setLspStatus/applyProvider would
     // otherwise hit an invalidated ctx and throw an uncaught exception.
     latestCtx = null;
-    await host.shutdown();
+    if (manager) {
+      await manager.shutdownAll();
+      manager = null;
+      fileSync = null;
+    }
+    if (treeSitter) {
+      treeSitter.shutdown();
+      treeSitter = null;
+    }
+    workspaceIndex = null;
   });
 }
-
-export { LspRuntimeHost } from "./runtime.js";

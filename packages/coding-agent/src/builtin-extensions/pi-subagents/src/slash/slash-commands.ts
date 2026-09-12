@@ -2,8 +2,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { keyText } from "../../../../modes/interactive/components/keybinding-hints.ts";
+import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import type { ChainStep } from "../shared/settings.ts";

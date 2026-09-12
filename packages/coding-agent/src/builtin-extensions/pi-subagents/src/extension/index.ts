@@ -18,9 +18,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { keyText } from "../../../../modes/interactive/components/keybinding-hints.ts";
-import { awaitWithAbort } from "../../../../utils/await-with-abort.ts";
+import { keyText, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -29,7 +27,7 @@ import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { clearLegacyResultAnimationTimer, renderSubagentResult, subagentAnimSink } from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
-import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
@@ -330,11 +328,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	startResultWatcher();
 	primeExistingResults();
 
-	let generation = 0;
-	let executorPromise: Promise<ReturnType<typeof createSubagentExecutor>> | undefined;
 	const runtimeCleanup = () => {
-		generation++;
-		executorPromise = undefined;
 		mainWatchdog.dispose();
 		stopResultWatcher();
 		scheduledRunManager.stop();
@@ -364,31 +358,18 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return executorExecute(randomUUID(), params, signal, undefined, ctx);
 		},
 	});
-	const executor: ReturnType<typeof createSubagentExecutor> = {
-		async execute(id, params, signal, onUpdate, ctx) {
-			const currentGeneration = generation;
-			signal?.throwIfAborted();
-			if (!executorPromise) {
-				const pending = import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor }) => {
-					if (generation !== currentGeneration) throw new Error("Subagent session changed before initialization");
-					return createSubagentExecutor({
-						pi, state, config, asyncByDefault,
-						waitToolEnabled: waitToolConfig.enabled,
-						handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
-						watchdog: mainWatchdog, tempArtifactsDir, getSubagentSessionRoot, expandTilde,
-					});
-				});
-				executorPromise = pending;
-				void pending.catch(() => {
-					if (executorPromise === pending) executorPromise = undefined;
-				});
-			}
-			const ready = await awaitWithAbort(executorPromise, signal);
-			signal?.throwIfAborted();
-			if (generation !== currentGeneration) throw new Error("Subagent session changed before execution");
-			return ready.execute(id, params, signal, onUpdate, ctx);
-		},
-	};
+	const executor = createSubagentExecutor({
+		pi,
+		state,
+		config,
+		asyncByDefault,
+		waitToolEnabled: waitToolConfig.enabled,
+		handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
+		watchdog: mainWatchdog,
+		tempArtifactsDir,
+		getSubagentSessionRoot,
+		expandTilde,
+	});
 	executorExecute = executor.execute;
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
@@ -597,8 +578,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	const resetSessionState = (ctx: ExtensionContext) => {
-		generation++;
-		executorPromise = undefined;
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
@@ -630,8 +609,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", () => {
-		generation++;
-		executorPromise = undefined;
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		for (const unsubscribe of eventUnsubscribes) {
 			try {

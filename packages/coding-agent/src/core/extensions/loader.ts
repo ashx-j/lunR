@@ -7,14 +7,24 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as _bundledPiAgentCore from "@earendil-works/pi-agent-core";
+import * as _bundledPiAiCompat from "@earendil-works/pi-ai/compat";
+import * as _bundledPiAiOauth from "@earendil-works/pi-ai/oauth";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isNodeBundle } from "../../config.ts";
+import * as _bundledPiTui from "@earendil-works/pi-tui";
+// Static imports of packages that extensions may use.
+// jiti/static, providers/all, and the public barrel stay off the Node first-paint
+// graph. Bun registers those via host-static.ts (imported from bun/cli.ts).
+import * as _bundledTypebox from "typebox";
+import * as _bundledTypeboxCompile from "typebox/compile";
+import * as _bundledTypeboxValue from "typebox/value";
+import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
-import { measureStartup } from "../timings.ts";
+import { time } from "../timings.ts";
 import type {
 	EntryRenderer,
 	Extension,
@@ -32,16 +42,60 @@ type CreateJiti = typeof import("jiti/static").createJiti;
 
 interface BunExtensionHost {
 	createJiti: CreateJiti;
-	virtualModules: Record<string, unknown>;
+	providersAll: unknown;
+	codingAgent: unknown;
 }
 
 let bunExtensionHost: BunExtensionHost | undefined;
 let createJitiFn: CreateJiti | undefined;
+let lazyProvidersAll: unknown;
+let lazyCodingAgent: unknown;
 
 /** Register host modules that must stay static for the Bun binary. */
 export function registerBunExtensionHost(host: BunExtensionHost): void {
 	bunExtensionHost = host;
 	createJitiFn = host.createJiti;
+	lazyProvidersAll = host.providersAll;
+	lazyCodingAgent = host.codingAgent;
+}
+
+function scopedHostKeys(earendil: string, ashxj: string, value: unknown): Record<string, unknown> {
+	return {
+		[earendil]: value,
+		[ashxj]: value,
+	};
+}
+
+function virtualModules(): Record<string, unknown> {
+	return {
+		typebox: _bundledTypebox,
+		"typebox/compile": _bundledTypeboxCompile,
+		"typebox/value": _bundledTypeboxValue,
+		"@sinclair/typebox": _bundledTypebox,
+		"@sinclair/typebox/compile": _bundledTypeboxCompile,
+		"@sinclair/typebox/value": _bundledTypeboxValue,
+		...scopedHostKeys("@earendil-works/pi-agent-core", "@ashx-j/lunr-agent", _bundledPiAgentCore),
+		...scopedHostKeys("@earendil-works/pi-tui", "@ashx-j/lunr-tui", _bundledPiTui),
+		// Extensions resolve the pi-ai root to the compat entrypoint (a strict
+		// superset of the core entrypoint): existing extensions using the old
+		// global API keep working at runtime until compat is removed.
+		...scopedHostKeys("@earendil-works/pi-ai", "@ashx-j/lunr-ai", _bundledPiAiCompat),
+		...scopedHostKeys("@earendil-works/pi-ai/compat", "@ashx-j/lunr-ai/compat", _bundledPiAiCompat),
+		...scopedHostKeys("@earendil-works/pi-ai/oauth", "@ashx-j/lunr-ai/oauth", _bundledPiAiOauth),
+		...scopedHostKeys(
+			"@earendil-works/pi-ai/providers/all",
+			"@ashx-j/lunr-ai/providers/all",
+			lazyProvidersAll,
+		),
+		...scopedHostKeys("@earendil-works/pi-coding-agent", "@ashx-j/lunr", lazyCodingAgent),
+		"@mariozechner/pi-agent-core": _bundledPiAgentCore,
+		"@mariozechner/pi-tui": _bundledPiTui,
+		"@mariozechner/pi-ai": _bundledPiAiCompat,
+		"@mariozechner/pi-ai/compat": _bundledPiAiCompat,
+		"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
+		"@mariozechner/pi-ai/providers/all": lazyProvidersAll,
+		"@mariozechner/pi-coding-agent": lazyCodingAgent,
+	};
 }
 
 const require = createRequire(import.meta.url);
@@ -56,7 +110,7 @@ function getAliases(): Record<string, string> {
 	if (_aliases) return _aliases;
 
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
-	const packageIndex = path.resolve(__dirname, "../..", isNodeBundle ? "node-runtime/index.js" : "index.js");
+	const packageIndex = path.resolve(__dirname, "../..", "index.js");
 
 	const typeboxEntry = require.resolve("typebox");
 	const typeboxCompileEntry = require.resolve("typebox/compile");
@@ -378,8 +432,14 @@ async function ensureExtensionHost(): Promise<CreateJiti> {
 	if (isBunBinary && bunExtensionHost) {
 		return bunExtensionHost.createJiti;
 	}
-	const { createJiti } = await import("jiti/static");
+	const [{ createJiti }, providersAll, codingAgent] = await Promise.all([
+		import("jiti/static"),
+		import("@earendil-works/pi-ai/providers/all"),
+		import("../../index.ts"),
+	]);
 	createJitiFn = createJiti;
+	lazyProvidersAll = providersAll;
+	lazyCodingAgent = codingAgent;
 	return createJiti;
 }
 
@@ -397,9 +457,7 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
 		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
 		// In Node.js/dev: use aliases to resolve to node_modules paths
-		...(isBunBinary
-			? { virtualModules: bunExtensionHost?.virtualModules, tryNative: false }
-			: { alias: getAliases() }),
+		...(isBunBinary ? { virtualModules: virtualModules(), tryNative: false } : { alias: getAliases() }),
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });
@@ -447,16 +505,16 @@ async function loadExtension(
 	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
 
 	try {
-		const factory = await measureStartup(`${extensionPath} module import`, () =>
-			loadExtensionModule(resolvedPath, cacheToken),
-		);
+		const factory = await loadExtensionModule(resolvedPath, cacheToken);
+		time(`${extensionPath} module import`, "extensions");
 		if (!factory) {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
 		const extension = createExtension(extensionPath, resolvedPath);
 		const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-		await measureStartup(`${extensionPath} factory`, () => factory(api));
+		await factory(api);
+		time(`${extensionPath} factory`, "extensions");
 
 		return { extension, error: null };
 	} catch (err) {
@@ -478,7 +536,8 @@ export async function loadExtensionFromFactory(
 	const extension = createExtension(extensionPath, extensionPath);
 	const resolvedCwd = resolvePath(cwd);
 	const api = createExtensionAPI(extension, runtime, resolvedCwd, eventBus);
-	await measureStartup(`${extensionPath} factory`, () => factory(api));
+	await factory(api);
+	time(`${extensionPath} factory`, "extensions");
 	return extension;
 }
 

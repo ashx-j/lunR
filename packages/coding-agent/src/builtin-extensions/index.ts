@@ -7,7 +7,6 @@
  */
 
 import type { ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
-import { measureStartup } from "../core/timings.ts";
 
 import simplePiMemory from "./simple-pi-memory.ts";
 import piTps from "./pi-tps.ts";
@@ -68,7 +67,7 @@ export const DEFERRED_BUILTIN_FLAGS = ["mcp-config"] as const;
 export async function loadDeferredBuiltinExtensions(): Promise<InlineExtension[]> {
 	const loaded = await Promise.all(
 		DEFERRED_BUILTIN_LOADERS.map(async ({ name, load }) => {
-			const module = await measureStartup(name, load, "imports");
+			const module = await load();
 			return ext(name, module.default);
 		}),
 	);

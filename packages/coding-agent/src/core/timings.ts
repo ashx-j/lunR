@@ -9,7 +9,7 @@ interface TimingNamespace {
 	lastTime: number;
 }
 
-type TimingLabel = "main" | "extensions" | "imports" | "lifecycle";
+type TimingLabel = "main" | "extensions";
 
 const timingNamespaces = new Map<TimingLabel, TimingNamespace>();
 let importMainMs: number | undefined;
@@ -38,31 +38,14 @@ export function time(label: string, namespace: TimingLabel = "main"): void {
 	timingNamespace.lastTime = now;
 }
 
-export async function measureStartup<T>(
-	label: string,
-	operation: () => T | Promise<T>,
-	namespace: TimingLabel = "extensions",
-): Promise<T> {
-	if (!ENABLED) return operation();
-	const started = performance.now();
-	try {
-		return await operation();
-	} finally {
-		if (!timingNamespaces.has(namespace)) resetTimings(namespace);
-		timingNamespaces.get(namespace)!.timings.push({ label, ms: performance.now() - started });
-	}
-}
-
 function printTimingGroup(title: string, timings: TimingNamespace["timings"]): void {
 	const printableTimings = timings.filter((timing) => timing.ms >= 0);
 	if (printableTimings.length === 0) return;
 	console.error(`\n--- ${title} ---`);
 	for (const t of printableTimings) {
-		console.error(`  ${t.label}: ${t.ms.toFixed(1)}ms`);
+		console.error(`  ${t.label}: ${t.ms}ms`);
 	}
-	if (title.endsWith("main")) {
-		console.error(`  TOTAL: ${printableTimings.reduce((a, b) => a + b.ms, 0).toFixed(1)}ms`);
-	}
+	console.error(`  TOTAL: ${printableTimings.reduce((a, b) => a + b.ms, 0)}ms`);
 	console.error(`${"-".repeat(title.length + 8)}\n`);
 }
 

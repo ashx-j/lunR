@@ -12,10 +12,12 @@ import { lightBuiltinExtensions, loadAllBuiltinExtensions } from "./builtin-exte
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
+import { handleInstallCli } from "./cli/install-cli.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
+import { handleUpdateCli } from "./cli/update-cli.ts";
 import {
 	APP_NAME,
 	appendDebugLog,
@@ -57,6 +59,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
@@ -564,23 +567,22 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (["setup", "features", "uninstall"].includes(args[0])) {
-		const { handleInstallCli } = await import("./cli/install-cli.ts");
-		if (await handleInstallCli(args)) return;
+	if (await handleInstallCli(args)) {
+		return;
 	}
 
-	if (args[0] === "update") {
-		const { handleUpdateCli } = await import("./cli/update-cli.ts");
-		if (await handleUpdateCli(args)) return;
+	if (await handleUpdateCli(args)) {
+		return;
 	}
 
-	if (["install", "remove", "uninstall", "list", "config"].includes(args[0])) {
-		const { handleConfigCommand, handlePackageCommand } = await import("./package-manager-cli.ts");
-		if (await handlePackageCommand(args, { extensionFactories: options?.extensionFactories })) {
-			process.exit(process.exitCode ?? 0);
-			return;
-		}
-		if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) return;
+	if (await handlePackageCommand(args, { extensionFactories: options?.extensionFactories })) {
+		const exitCode = process.exitCode ?? 0;
+		process.exit(exitCode);
+		return;
+	}
+
+	if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) {
+		return;
 	}
 
 	if (args[0] === "gateway") {
@@ -1012,17 +1014,13 @@ export async function main(args: string[], options?: MainOptions) {
 			onDeferredBuiltinsAttached: rememberAttachedFactories,
 		});
 		if (startupBenchmark) {
-			const { prepareBenchmarkRequest } = await import("./startup/benchmark-request.ts");
-			const request = await prepareBenchmarkRequest(session);
 			await interactiveMode.init();
 			time("interactiveMode.init");
 			await interactiveMode.waitForStartupReady();
 			time("promptBarrier");
-			await request();
 			// Consume terminal-query replies before returning control to the shell.
 			await new Promise((resolve) => setTimeout(resolve, 150));
 			interactiveMode.stop();
-			await runtime.dispose();
 			stopThemeWatcher();
 			printTimings();
 			if (process.stdout.writableLength > 0) {

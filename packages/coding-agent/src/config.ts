@@ -21,9 +21,6 @@ export const isBunBinary =
 /** Detect if Bun is the runtime (compiled binary or bun run) */
 export const isBunRuntime = !!process.versions.bun;
 
-declare const LUNR_NODE_BUNDLE: boolean;
-export const isNodeBundle = typeof LUNR_NODE_BUNDLE !== "undefined" && LUNR_NODE_BUNDLE;
-
 // =============================================================================
 // Package Asset Paths (shipped with executable)
 // =============================================================================

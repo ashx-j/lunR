@@ -2,17 +2,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
-import type { SearchResult, SearchResponse, SearchOptions } from "./perplexity.ts";
-import {
-	loadBrave,
-	loadExa,
-	loadGeminiApi,
-	loadGeminiWeb,
-	loadOpenAISearch,
-	loadParallel,
-	loadPerplexity,
-	loadTavily,
-} from "./lazy.ts";
+import { getApiKey, getVersionedApiBase, buildKeyParam, buildAuthHeaders, isGatewayConfigured, DEFAULT_MODEL } from "./gemini-api.ts";
+import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";
+import { isPerplexityAvailable, searchWithPerplexity, type SearchResult, type SearchResponse, type SearchOptions } from "./perplexity.ts";
+import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.ts";
+import { isBraveAvailable, searchWithBrave } from "./brave.ts";
+import { isOpenAISearchAvailable, searchWithOpenAI } from "./openai-search.ts";
+import { isParallelAvailable, searchWithParallel } from "./parallel.ts";
+import { isTavilyAvailable, searchWithTavily } from "./tavily.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 export type SearchProvider = "auto" | "openai" | "brave" | "parallel" | "tavily" | "perplexity" | "gemini" | "exa";
@@ -126,31 +123,26 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	const provider = options.provider ?? config.searchProvider;
 
 	if (provider === "openai") {
-		const { searchWithOpenAI } = await loadOpenAISearch();
 		const result = await searchWithOpenAI(query, options, options.extensionContext);
 		return { ...result, provider: "openai" };
 	}
 
 	if (provider === "brave") {
-		const { searchWithBrave } = await loadBrave();
 		const result = await searchWithBrave(query, options);
 		return { ...result, provider: "brave" };
 	}
 
 	if (provider === "parallel") {
-		const { searchWithParallel } = await loadParallel();
 		const result = await searchWithParallel(query, options);
 		return { ...result, provider: "parallel" };
 	}
 
 	if (provider === "tavily") {
-		const { searchWithTavily } = await loadTavily();
 		const result = await searchWithTavily(query, options);
 		return { ...result, provider: "tavily" };
 	}
 
 	if (provider === "perplexity") {
-		const { searchWithPerplexity } = await loadPerplexity();
 		const result = await searchWithPerplexity(query, options);
 		return { ...result, provider: "perplexity" };
 	}
@@ -167,10 +159,9 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	}
 
 	if (provider === "exa") {
-		const exa = await loadExa();
-		const exaApiKeyConfigured = exa.hasExaApiKey();
+		const exaApiKeyConfigured = hasExaApiKey();
 		try {
-			const result = await exa.searchWithExa(query, options);
+			const result = await searchWithExa(query, options);
 			if (result) return { ...result, provider: "exa" };
 			if (exaApiKeyConfigured) {
 				throw new Error("Exa search returned no results.");
@@ -187,9 +178,8 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 
 	if (shouldTryOpenAIInAuto(options)) {
 		try {
-			const openai = await loadOpenAISearch();
-			if (await openai.isOpenAISearchAvailable(options.extensionContext)) {
-				const result = await openai.searchWithOpenAI(query, options, options.extensionContext);
+			if (await isOpenAISearchAvailable(options.extensionContext)) {
+				const result = await searchWithOpenAI(query, options, options.extensionContext);
 				return { ...result, provider: "openai" };
 			}
 		} catch (err) {
@@ -198,68 +188,53 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		}
 	}
 
-	if (provider !== "exa") {
-		const exa = await loadExa();
-		if (exa.isExaAvailable()) {
-			try {
-				const result = await exa.searchWithExa(query, options);
-				if (result) return { ...result, provider: "exa" };
-			} catch (err) {
-				if (isAbortError(err)) throw err;
-				fallbackErrors.push(`Exa: ${errorMessage(err)}`);
-			}
+	if (provider !== "exa" && isExaAvailable()) {
+		try {
+			const result = await searchWithExa(query, options);
+			if (result) return { ...result, provider: "exa" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
 		}
 	}
 
-	{
-		const brave = await loadBrave();
-		if (brave.isBraveAvailable()) {
-			try {
-				const result = await brave.searchWithBrave(query, options);
-				return { ...result, provider: "brave" };
-			} catch (err) {
-				if (isAbortError(err)) throw err;
-				fallbackErrors.push(`Brave: ${errorMessage(err)}`);
-			}
+	if (isBraveAvailable()) {
+		try {
+			const result = await searchWithBrave(query, options);
+			return { ...result, provider: "brave" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Brave: ${errorMessage(err)}`);
 		}
 	}
 
-	{
-		const parallel = await loadParallel();
-		if (parallel.isParallelAvailable()) {
-			try {
-				const result = await parallel.searchWithParallel(query, options);
-				return { ...result, provider: "parallel" };
-			} catch (err) {
-				if (isAbortError(err)) throw err;
-				fallbackErrors.push(`Parallel: ${errorMessage(err)}`);
-			}
+	if (isParallelAvailable()) {
+		try {
+			const result = await searchWithParallel(query, options);
+			return { ...result, provider: "parallel" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Parallel: ${errorMessage(err)}`);
 		}
 	}
 
-	{
-		const tavily = await loadTavily();
-		if (tavily.isTavilyAvailable()) {
-			try {
-				const result = await tavily.searchWithTavily(query, options);
-				return { ...result, provider: "tavily" };
-			} catch (err) {
-				if (isAbortError(err)) throw err;
-				fallbackErrors.push(`Tavily: ${errorMessage(err)}`);
-			}
+	if (isTavilyAvailable()) {
+		try {
+			const result = await searchWithTavily(query, options);
+			return { ...result, provider: "tavily" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Tavily: ${errorMessage(err)}`);
 		}
 	}
 
-	{
-		const perplexity = await loadPerplexity();
-		if (perplexity.isPerplexityAvailable()) {
-			try {
-				const result = await perplexity.searchWithPerplexity(query, options);
-				return { ...result, provider: "perplexity" };
-			} catch (err) {
-				if (isAbortError(err)) throw err;
-				fallbackErrors.push(`Perplexity: ${errorMessage(err)}`);
-			}
+	if (isPerplexityAvailable()) {
+		try {
+			const result = await searchWithPerplexity(query, options);
+			return { ...result, provider: "perplexity" };
+		} catch (err) {
+			if (isAbortError(err)) throw err;
+			fallbackErrors.push(`Perplexity: ${errorMessage(err)}`);
 		}
 	}
 
@@ -286,22 +261,21 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 }
 
 async function searchWithGeminiApi(query: string, options: SearchOptions = {}): Promise<SearchResponse | null> {
-	const geminiApi = await loadGeminiApi();
-	const apiKey = geminiApi.getApiKey();
-	if (!apiKey && !geminiApi.isGatewayConfigured()) return null;
+	const apiKey = getApiKey();
+	if (!apiKey && !isGatewayConfigured()) return null;
 
 	const activityId = activityMonitor.logStart({ type: "api", query });
 
 	try {
-		const model = getSearchConfig().searchModel ?? geminiApi.DEFAULT_MODEL;
+		const model = getSearchConfig().searchModel ?? DEFAULT_MODEL;
 		const body = {
 			contents: [{ role: "user", parts: [{ text: query }] }],
 			tools: [{ google_search: {} }],
 		};
 
-		const res = await fetch(`${geminiApi.getVersionedApiBase()}/models/${model}:generateContent${geminiApi.buildKeyParam(apiKey)}`, {
+		const res = await fetch(`${getVersionedApiBase()}/models/${model}:generateContent${buildKeyParam(apiKey)}`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json", ...geminiApi.buildAuthHeaders() },
+			headers: { "Content-Type": "application/json", ...buildAuthHeaders() },
 			body: JSON.stringify(body),
 			signal: AbortSignal.any([
 				AbortSignal.timeout(60000),
@@ -337,15 +311,14 @@ async function searchWithGeminiApi(query: string, options: SearchOptions = {}): 
 }
 
 async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): Promise<SearchResponse | null> {
-	const geminiWeb = await loadGeminiWeb();
-	const cookies = await geminiWeb.isGeminiWebAvailable();
+	const cookies = await isGeminiWebAvailable();
 	if (!cookies) return null;
 
 	const prompt = buildSearchPrompt(query, options);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 
 	try {
-		const text = await geminiWeb.queryWithCookies(prompt, cookies, {
+		const text = await queryWithCookies(prompt, cookies, {
 			model: "gemini-3-flash-preview",
 			signal: options.signal,
 			timeoutMs: 60000,
