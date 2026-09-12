@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.17`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-12 (v0.2.18 on `release/v0.2.18`). Public npm is `@ashx-j/lunr@0.2.17` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.18:** ships lazy first-request loading, thinking-level slash commands, quieter TUI, injected context, and compact async subagent rows.
 - **Cold-start readiness (`fix/cold-start-readiness`):** Node CLI and SDK share split bundles. Optional web, LSP, MCP, and subagent engines load on demand; tool schemas and required session hooks still precede first request. Fresh-profile median fell from 1988.8 to 968.2 ms. For startup changes, packaging, or measurements, read `packages/coding-agent/docs/interactive-startup.md`.
 - **Cold-start lifecycle repair (`fix/restore-cold-start-readiness`):** restores the reverted PR #50 work with factory-local web request/curator state; MCP in-flight cleanup and shared connect rejection; ordered, failure-resilient LSP shutdown; a first-turn subagent launch-registration barrier; gateway and cron `session_shutdown` before disposal; and the public RPC wrapper. Publish validation now checks export targets, wildcard exports, and every compiled file under staged `dist`. PR #41 terminal sanitization remains excluded.
 - **v0.2.17:** ships the subagent launch-schema fix so Grok can spawn children again.
@@ -102,7 +103,7 @@ Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.17**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.17** until `v0.2.18` publishes.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -116,6 +117,7 @@ Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- v0.2.18 release (2026-09-12): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 172/172. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.18.
 - Cold-start lifecycle repair (2026-09-11): offline tui → ai → agent → coding-agent → orchestrator builds pass. Focused lifecycle/package Vitest passes 89/89; the real first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Full coding-agent Vitest remains at the baseline 2431 passed / 112 unrelated Windows and stale-fixture failures / 47 skipped; TUI retains four Windows symlink failures. Repository Biome retains 20 pre-existing findings, and pinned-dependency validation still scans gitignored study trees. Relative imports, shrinkwrap, installer lock, workflow publish policy, browser smoke, `git diff --check`, and all four public-package dry-run packs pass.
 - v0.2.17 release (2026-09-11): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 26/26. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.17.
 - Cold-start readiness, 2026-09-08: five-package offline build and Node bundle pass. After rebasing onto v0.2.16, full coding-agent tests pass 2405 with the same 112 failures and 47 skips as baseline `b709d12`; no new failures. AI compat/lazy/Faux tests pass 28/28. Public-name tarball installation with shrinkwrap, JS/TS extension SDK identity, SDK session creation, RPC, and Node 22.19/24 first-turn checks pass. See startup docs for measurements and limits.
@@ -129,7 +131,7 @@ Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / workspace CLI → **0.2.17**. Rebuild tui then coding-agent with its Node bundle after merge.
+- `npx lunr --version` / workspace CLI → **0.2.18**. Rebuild tui then coding-agent with its Node bundle after merge.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` uses the workspace bin (`packages/coding-agent/dist/cli.js`); rebuild coding-agent `dist` first. The startup benchmark reports first content frame separately from runtime and feature readiness.
@@ -304,6 +306,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-08: Codex uses each route's `context_window` as its compaction budget, checks that budget between tool turns, and treats duplicate manual compaction as a no-op; maximum windows remain non-default.
 - 2026-09-09: keep `description` when it is a JSON Schema properties key so the child UI label survives nested-help-text pruning, drop a mixed control action so a filled mega-schema cannot become status, and drop dummy `tasks`/`chain` when that payload still has a real `task`.
 - 2026-09-11: ship that launch-schema fix as 0.2.17.
+- 2026-09-12: ship lazy first-request loading, thinking slash commands, quieter TUI, injected context, and compact async widgets as 0.2.18.
 - 2026-09-11: restore PR #50's lazy startup with explicit per-session teardown and publish-entry validation; keep unrelated PR #41 terminal changes out.
 - 2026-09-09: model cycling is silent; the chip and footer already show the new model.
 - 2026-09-09: image paste inserts the chip and skips the Pasted status toast.
