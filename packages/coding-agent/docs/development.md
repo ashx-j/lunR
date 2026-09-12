@@ -11,7 +11,11 @@ npm install
 npm run build
 ```
 
-Compile in order: tui → ai → agent → coding-agent. From this repo, `npx lunr` is the workspace bin (`packages/coding-agent/dist/cli.js`), not a published global install. Rebuild coding-agent `dist` after changes.
+Compile in order: tui → ai → agent → coding-agent → orchestrator. The root build stays offline and does not regenerate the model catalog. From this repo, `npx lunr` uses the workspace CLI, not a published global install.
+
+After changing coding-agent, run `npm --prefix packages/coding-agent run build`. Bare `tsgo` updates individual modules but leaves the Node bundle stale. The CLI and public SDK use shared chunks in `dist/node-runtime`; keep that directory with the rest of `dist` when packaging.
+
+For startup measurements, import boundaries, and first-turn checks, read [Interactive startup](interactive-startup.md).
 
 Run from the package:
 

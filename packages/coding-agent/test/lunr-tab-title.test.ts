@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "../src");
 
 describe("lunR terminal tab title", () => {
-	it("cli.ts sets process.title and OSC 0 to lunr before importing main", () => {
-		const src = readFileSync(join(srcDir, "cli.ts"), "utf8");
+	it("CLI runtime sets process.title and OSC 0 to lunr before importing main", () => {
+		const src = readFileSync(join(srcDir, "cli-runtime.ts"), "utf8");
 		const titleIdx = src.indexOf('process.title = "lunr"');
 		const oscIdx = src.indexOf("\\x1b]0;lunr\\x07");
 		const mainIdx = src.indexOf('import("./main.ts")');
