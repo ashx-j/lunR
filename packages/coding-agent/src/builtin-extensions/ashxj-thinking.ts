@@ -76,6 +76,7 @@ interface ExtensionAPI {
 	}): void;
 	getThinkingLevel(): ThinkingLevel;
 	setThinkingLevel(level: ThinkingLevel): void;
+	on?(event: string, handler: (event: unknown, ctx: ExtensionContextLike) => void): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +259,17 @@ const THINKING_COMMAND_DESCRIPTION =
 	"View or set the reasoning level for the current model, or toggle thinking-block visibility with show/hide/toggle";
 
 export default function (pi: ExtensionAPI): void {
+	sessionModel = undefined;
+	if (typeof pi.on === "function") {
+		pi.on("session_start", (_event, ctx) => {
+			sessionModel = ctx.model;
+		});
+		pi.on("model_select", (event, ctx) => {
+			const selected = (event as { model?: ModelLike } | undefined)?.model;
+			sessionModel = ctx.model ?? selected;
+		});
+	}
+
 	const thinkingSpec = {
 		description: THINKING_COMMAND_DESCRIPTION,
 		getArgumentCompletions(prefix: string): AutocompleteItem[] {
@@ -382,18 +394,22 @@ export default function (pi: ExtensionAPI): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Read the current model from the ExtensionAPI runtime. The spec mentions
- * `pi.getModel()`; pi doesn't expose that name on the API object itself, but
- * the bound `ExtensionContextActions` (which the runtime decorates onto
- * events) does include `getModel()`. We duck-type against the loader so this
- * file stays decoupled from non-public internals. When unavailable (e.g.
- * during autocomplete, before any session has bound), returns undefined and
- * the caller falls back to the default 5-level set.
+ * Live session model for `/thinking ` completions.
+ * `getArgumentCompletions` runs on the extension `pi` object, which has no
+ * `getModel`. Cache the model from session_start / model_select, and still
+ * duck-type `getModel` when a test or future API exposes it.
  */
+let sessionModel: ModelLike | undefined;
+
 function currentModel(pi: ExtensionAPI): ModelLike | undefined {
 	const fn = (pi as unknown as { getModel?: () => unknown }).getModel;
 	if (typeof fn === "function") {
-		return fn.call(pi) as ModelLike | undefined;
+		try {
+			const model = fn.call(pi) as ModelLike | undefined;
+			if (model) return model;
+		} catch {
+			// runtime not bound yet
+		}
 	}
-	return undefined;
+	return sessionModel;
 }

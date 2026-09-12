@@ -69,6 +69,7 @@ Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - **Thinking chatbox levels (`fix/thinking-chatbox-levels`):** chip prints the effective level including `xhigh`/`max`; box border uses `this.borderColor` (thinking tokens). `/thinking` matches `getSupportedThinkingLevels` (xhigh/max opt-in). Moon `thinkingMax` is `lunrBlue` (not `brightWhite`; `accent` is already `brightWhite`). Tests: ashxj-thinking + ashxj-tui-chip + max-thinking.
 - **Model switch toast (`fix/hide-model-switch-status`):** cycling models updates the footer and chatbox chip without a `Switched to …` status line. `/model` still reports `Model: id`.
 - **Thinking level toast (`fix/hide-thinking-level-status`):** cycling or `/thinking <level>` no longer prints `Thinking level: …`. Errors and non-TUI `/thinking` with no args still report. Tests: ashxj-thinking.
+- **Thinking arg completions (`fix/thinking-arg-completions`):** `/thinking ` lists the live session model's levels. Completions cache the model from session_start / model_select because extension `pi` has no getModel. Tests: ashxj-thinking.
 - **xAI grok-4.6 xhigh (`fix/xai-grok46-xhigh-catalog`):** generator stamps `thinkingLevelMap.xhigh` on grok-4.6+ (versioned, not a frozen id). grok-4.5 stays without native xhigh. Contract tests: `xai-thinking.test.ts` (baked-in 4.5 + `catalog/providers/xai.json`).
 - **Grok 4.6 xhigh at runtime (`fix/grok46-xhigh-runtime`):** `mergeCatalogLayers` applies `withXaiEffortMetadata` so a stale cache/live template cannot hide xhigh. `/refresh` rebinds the session model; `/thinking` reads the registry row. Tests: xai-thinking + model-refresh-merge.
 - **xAI grok-4.5+ Responses:** generator + `withXaiEffortMetadata` use `shouldUseXaiResponsesApi` (`parseXaiGrok4Minor >= 5`), not a frozen `grok-4.5` id. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`. Completions compat must not leak onto Responses (`supportsDeveloperRole: false` would drop the developer system role). Tests: xai-thinking + xai-responses + model-refresh-merge.
@@ -296,6 +297,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-09: image paste inserts the chip and skips the Pasted status toast.
 - 2026-09-09: chatbox keeps top/bottom rules and the thinking chip; drop the `│` side rails so the prompt is not boxed.
 - 2026-09-09: thinking-level changes are silent; the chatbox chip already shows the level.
+- 2026-09-09: `/thinking ` completions follow the session model from session_start/model_select, not the generic 5-level fallback.
 
 # Deferred
 
