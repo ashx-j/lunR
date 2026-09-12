@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-09-12 (v0.2.19 on `master`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Subagent continuation (`fix/subagent-continuation`):** async resume restores persisted resolved acceptance without re-inferring from the revival wrapper. `explicit` is the parent-requested effective level, so parent `checked` on an async write does not fail a complete report for a missing reviewer; launch `reviewed` still does. Native supervisor channel wins over the intercom broker; compiled trees spawn `broker.js` with node. Tests: subagent-continuation.
 - **v0.2.19:** restores chatbox `│` side rails and drops the empty-chat injected context card.
 - **v0.2.18:** ships lazy first-request loading, thinking-level slash commands, quieter TUI, injected context, and compact async subagent rows.
 - **Cold-start readiness (`fix/cold-start-readiness`):** Node CLI and SDK share split bundles. Optional web, LSP, MCP, and subagent engines load on demand; tool schemas and required session hooks still precede first request. Fresh-profile median fell from 1988.8 to 968.2 ms. For startup changes, packaging, or measurements, read `packages/coding-agent/docs/interactive-startup.md`.
@@ -118,6 +119,7 @@ Last updated: 2026-09-12 (v0.2.19 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Subagent continuation (2026-09-12): tui → ai → agent → coding-agent tsgo pass. Focused Vitest `test/subagent-continuation.test.ts` 15/15 and prompt-driven-subagents + wait-startup 27/27. Touched-file Biome and `git diff --check` pass.
 - v0.2.19 release (2026-09-12): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 9/9. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.19.
 - v0.2.18 release (2026-09-12): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 172/172. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.18.
 - Cold-start lifecycle repair (2026-09-11): offline tui → ai → agent → coding-agent → orchestrator builds pass. Focused lifecycle/package Vitest passes 89/89; the real first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Full coding-agent Vitest remains at the baseline 2431 passed / 112 unrelated Windows and stale-fixture failures / 47 skipped; TUI retains four Windows symlink failures. Repository Biome retains 20 pre-existing findings, and pinned-dependency validation still scans gitignored study trees. Relative imports, shrinkwrap, installer lock, workflow publish policy, browser smoke, `git diff --check`, and all four public-package dry-run packs pass.
@@ -218,6 +220,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS` (mixed APIs; `firstBakedInModel` would stamp the wrong one).
 - Default-off watchdog startup must never fingerprint the repo; refresh effective config first and establish the repo-edit baseline only at `before_agent_start`.
 - Settings menu descriptions name the feature, not every control inside it. Keep choice-specific limits and warnings beside the relevant choice or confirmation.
+- Async recovery descriptors store resolved acceptance (`explicit`, `inferredReason`, level including `reviewed`). Read them with the persisted validator; do not run launch-input `validateAcceptanceInput` on resume. Restore that config onto the revived step; do not re-infer from the revival wrapper task.
+- `PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR` skips broker-backed child `contact_supervisor` and broker spawn. Blocking native `need_decision` / `interview_request` is `needs_attention` for `subagent_wait`.
+- Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
 
@@ -321,6 +326,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-09: async widgets match compact foreground rows and animate on an 80ms paint timer.
 - 2026-09-08: retain the required prompt barrier and shrink its import graph; shared Node chunks preserve SDK identity while lazy engines avoid loading unused implementations.
 - 2026-09-08: skip automatic compile-cache enablement for the Node bundle because reuse increased measured startup latency; retain explicit Node cache controls.
+- 2026-09-12: resume persisted resolved acceptance as already-resolved, treat explicit as the requested level, and prefer the native supervisor channel plus compiled broker.js so async children can continue.
 
 # Deferred
 
