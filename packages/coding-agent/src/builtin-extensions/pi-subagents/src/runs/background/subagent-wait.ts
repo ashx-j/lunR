@@ -47,8 +47,10 @@ import {
 	type RegisteredBackgroundWorkItem,
 } from "../../api/background-work.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
+import { hasPendingBlockingSupervisorRequest } from "../../intercom/native-supervisor-channel.ts";
 import {
 	ASYNC_DIR,
+	INTERCOM_DETACH_REQUEST_EVENT,
 	RESULTS_DIR,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_FOREGROUND_COMPLETE_EVENT,
@@ -60,6 +62,16 @@ import {
 	type SubagentState,
 } from "../../shared/types.ts";
 import { formatDuration } from "../../shared/formatters.ts";
+import { reconcileAsyncQuestion } from "../../intercom/supervisor-ask.ts";
+import {
+	claimQuestionNotification,
+	findSupervisorQuestion,
+	formatSupervisorQuestionAnswer,
+	registerQuestionWait,
+	supervisorQuestionIsTerminal,
+	supervisorQuestionPublicState,
+	SUBAGENT_QUESTION_EVENT,
+} from "../../intercom/supervisor-questions.ts";
 export { WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, type ResolvedWaitToolConfig } from "./wait-config.ts";
 
 /** States that mean a run is still in flight (not yet resolved). */
@@ -72,11 +84,13 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 export interface SubagentWaitParams {
 	/** Optional run id/prefix to wait for. When omitted, waits across every active run in this session. */
 	id?: string;
+	/** Optional supervisor question id from subagent_supervisor action='ask'. */
+	questionId?: string;
 	/**
 	 * When true, block until EVERY active run in this session (or matching `id`)
 	 * is terminal. Default false: return as soon as the first run finishes, so a
 	 * fleet manager can spawn a replacement and wait again. Ignored when `id`
-	 * targets a single run.
+	 * or `questionId` targets a single item.
 	 */
 	all?: boolean;
 	/** Give up after this many milliseconds. Defaults to 30 minutes. */
@@ -124,6 +138,8 @@ const WAKE_CHANNELS = [
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_RESULT_INTERCOM_EVENT,
+	INTERCOM_DETACH_REQUEST_EVENT,
+	SUBAGENT_QUESTION_EVENT,
 ];
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -216,8 +232,9 @@ function summarizeForegroundChildren(run: ForegroundResumeRun, indices: Set<numb
 }
 
 /** A running run that has flagged it needs the parent's attention. */
-function needsAttention(run: AsyncRunSummary): boolean {
-	return run.activityState === "needs_attention";
+function needsAttention(run: AsyncRunSummary, sessionId?: string | null): boolean {
+	return run.activityState === "needs_attention"
+		|| hasPendingBlockingSupervisorRequest(run.id, sessionId);
 }
 
 function backgroundWorkIdentity(item: RegisteredBackgroundWorkItem): string {
@@ -246,7 +263,7 @@ function activeRunsForSession(params: SubagentWaitParams, deps: SubagentWaitDeps
 
 /** Runs (from the initial set) currently flagged needs_attention, for reporting. */
 function attentionRunsForSession(params: SubagentWaitParams, deps: SubagentWaitDeps, initialIds: Set<string>): AsyncRunSummary[] {
-	return activeRunsForSession(params, deps).filter((run) => needsAttention(run) && initialIds.has(run.id));
+	return activeRunsForSession(params, deps).filter((run) => needsAttention(run, deps.state.currentSessionId) && initialIds.has(run.id));
 }
 
 /** All runs (any state) for this session, for the final summary. */
@@ -327,6 +344,63 @@ async function waitForDetachedForegroundRun(
  * the timeout elapses, or the turn is aborted. Resolves with a short
  * human-readable summary either way.
  */
+async function waitForSupervisorQuestion(
+	questionId: string,
+	signal: AbortSignal | undefined,
+	deps: SubagentWaitDeps,
+	startedAt: number,
+	now: () => number,
+	pollIntervalMs: number,
+	timeoutMs: number,
+): Promise<AgentToolResult<Details>> {
+	const sessionId = deps.state.currentSessionId;
+	if (!sessionId) return result("subagent_wait requires an active session identity to scope background work safely.", true);
+	const releaseWait = registerQuestionWait([questionId]);
+	try {
+		while (true) {
+			const found = findSupervisorQuestion(questionId);
+			if (!found) {
+				return result(`No supervisor question matched "${questionId}".`, true);
+			}
+			const { channelDir } = found;
+			let { question } = found;
+			if (question.parentSessionId !== sessionId || deps.state.currentSessionId !== sessionId) {
+				return result(`Supervisor question "${questionId}" belongs to another session.`, true);
+			}
+			if ((deps.state.sessionGeneration ?? 0) !== question.parentGeneration) {
+				return result(`Supervisor question "${questionId}" was cancelled by a session replacement.`, true);
+			}
+			question = reconcileAsyncQuestion(channelDir, question, deps.state);
+			if (supervisorQuestionIsTerminal(question)) {
+				claimQuestionNotification(channelDir, question.id);
+				const state = supervisorQuestionPublicState(question);
+				return {
+					content: [{ type: "text", text: formatSupervisorQuestionAnswer(question) }],
+					...(state === "answered" ? {} : { isError: true }),
+					details: {
+						mode: "management",
+						results: [],
+						questionId: question.id,
+						state,
+						runId: question.runId,
+						answered: state === "answered",
+						delivered: Boolean(question.deliveredAt),
+					},
+				};
+			}
+			if (signal?.aborted) {
+				return result(`Wait aborted after ${formatDuration(now() - startedAt)} for supervisor question "${questionId}".`, true);
+			}
+			if (now() - startedAt >= timeoutMs) {
+				return result(`Wait timed out after ${formatDuration(timeoutMs)} for supervisor question "${questionId}". The question remains pending until answered, expired, or cancelled.`, true);
+			}
+			await waitForWake(pollIntervalMs, signal, deps);
+		}
+	} finally {
+		releaseWait();
+	}
+}
+
 export async function waitForSubagents(
 	params: SubagentWaitParams,
 	signal: AbortSignal | undefined,
@@ -343,6 +417,9 @@ export async function waitForSubagents(
 	const pollIntervalMs = Math.max(MIN_POLL_INTERVAL_MS, deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
 	const timeoutMs = params.timeoutMs !== undefined && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_TIMEOUT_MS;
 	const startedAt = now();
+	if (params.questionId?.trim()) {
+		return waitForSupervisorQuestion(params.questionId.trim(), signal, deps, startedAt, now, pollIntervalMs, timeoutMs);
+	}
 	const waitForAll = params.id ? true : params.all === true;
 
 	let active: AsyncRunSummary[];
@@ -385,7 +462,7 @@ export async function waitForSubagents(
 	const initialProviderNames = new Set(providerActive.map((item) => item.provider));
 	const initialCount = initialAsyncIds.size + initialProviderIds.size;
 	const stopOnAttention = deps.stopOnAttention !== false;
-	let attention = active.filter((run) => needsAttention(run));
+	let attention = active.filter((run) => needsAttention(run, deps.state.currentSessionId));
 
 	const isDone = (): boolean => {
 		if (stopOnAttention && attention.some((run) => initialAsyncIds.has(run.id))) return true;

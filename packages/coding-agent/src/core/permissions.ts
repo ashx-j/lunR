@@ -20,7 +20,7 @@
  */
 
 import { dirname, join, resolve } from "node:path";
-import { getAgentDir } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { isUserInstructionsPath } from "./model-instructions.ts";
 import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
@@ -97,7 +97,6 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_code_actions",
 	"lsp_completions",
 	"memory_load",
-	"settings_load",
 ]);
 
 /** Tools that mutate state and must be gated in manual mode. */
@@ -228,6 +227,8 @@ export const GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON =
 	"The agents instruction tree is user-managed. The agent cannot change ~/.lunr/agent/agents/.";
 export const MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON =
 	"Memory is model-managed through the memory tools. Do not directly change ~/.lunr/simple-memory/memory.md.";
+export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
+	"lunR settings are user-managed through /settings. Do not directly change settings.json.";
 
 function protectedFileWriteReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
 	if (toolName !== "edit" && toolName !== "write" && toolName !== "code_rewrite") return undefined;
@@ -242,6 +243,12 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 	}
 	if (normalize(target) === normalize(join(dirname(getAgentDir()), "simple-memory", "memory.md"))) {
 		return MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON;
+	}
+	const globalSettings = normalize(join(getAgentDir(), "settings.json"));
+	const projectSettings = normalize(join(cwd, CONFIG_DIR_NAME, "settings.json"));
+	const normalizedTarget = normalize(target);
+	if (normalizedTarget === globalSettings || normalizedTarget === projectSettings) {
+		return SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON;
 	}
 	return undefined;
 }
@@ -286,7 +293,6 @@ function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChi
 
 function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
 	if (isMutatingTool(toolName)) return true;
-	if (toolName.startsWith("settings_") && toolName !== "settings_load") return Object.keys(input).length > 0;
 	if (toolName === "subagent") {
 		return getRequestedChildLaunches(input).some((launch) => launch.permissions === "full");
 	}

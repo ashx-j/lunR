@@ -25,7 +25,9 @@ export type ChildPermission = "full" | "read-only";
 export type ChildTier = "light" | "standard" | "heavy";
 
 /** How the child model was chosen. Captured from requested params before resolution. */
-export type ModelSelection = { kind: "tier"; tier: ChildTier };
+export type ModelSelection =
+	| { kind: "tier"; tier: ChildTier }
+	| { kind: "model"; model?: string };
 
 export interface ChildSpec {
 	childId: string;
@@ -33,9 +35,12 @@ export interface ChildSpec {
 	description: string;
 	requestedPermissions: ChildPermission;
 	effectivePermissions: ChildPermission;
+	/** User-requested model when modelSelection.kind is "model". Never a tier-resolved runtime id. */
 	model?: string;
-	tier: ChildTier;
+	tier?: ChildTier;
 	modelSelection?: ModelSelection;
+	/** Explicit thinking level paired with modelSelection.kind === "model". */
+	thinking?: string;
 	skill?: string | string[] | false;
 	cwd?: string;
 	output?: string | false;
@@ -360,13 +365,13 @@ export interface SteeringRecoveryDescriptor {
 	sessionFile?: string;
 	cwd: string;
 	model?: string;
-	tier: ChildTier;
+	tier?: ChildTier;
 	thinking?: string;
 	modelSelection?: ModelSelection;
 	skills?: string[];
 	outputPath?: string;
 	outputMode: "inline" | "file-only";
-	acceptance?: AcceptanceInput;
+	acceptance?: ResolvedAcceptanceConfig;
 	controlConfig?: ResolvedControlConfig;
 	absoluteDeadlineAt?: number;
 	initialTurnBudget?: ResolvedTurnBudget;
@@ -740,6 +745,10 @@ export interface Details {
 	totalChildUsage?: Usage;
 	// Aggregated cost across all agents in the run
 	totalCost?: CostSummary;
+	questionId?: string;
+	state?: string;
+	answered?: boolean;
+	delivered?: boolean;
 }
 
 // ============================================================================
@@ -1062,6 +1071,8 @@ export interface ForegroundResumeRun {
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
+	/** Bumps on session_start / session replacement so owned supervisor questions fail closed. */
+	sessionGeneration?: number;
 	/** Live foreground `subagent` tool calls. Caps same-turn overlap. */
 	foregroundSubagentInFlight?: number;
 	subagentSpawns?: { sessionId: string | null; count: number };
@@ -1352,7 +1363,7 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["status", "interrupt", "resume", "steer", "stop", "append-step", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule", "schedule-list", "schedule-status", "schedule-cancel"] as const;
+export const SUBAGENT_ACTIONS = ["status", "interrupt", "resume", "steer", "stop", "append-step", "doctor", "watchdog.status", "watchdog.check", "watchdog.recommend-model", "schedule", "schedule-list", "schedule-status", "schedule-cancel"] as const;
 export const REMOVED_SUBAGENT_ACTIONS = ["list", "get", "models", "create", "update", "delete", "eject", "disable", "enable", "reset"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =

@@ -27,7 +27,7 @@ interface ChainStepResult {
 
 export interface SubagentNotifyDetails {
 	agent: string;
-	status: "completed" | "failed" | "paused";
+	status: "completed" | "failed" | "paused" | "stopped";
 	source?: "async" | "foreground";
 	taskInfo?: string;
 	resultPreview: string;
@@ -89,7 +89,7 @@ export function formatSingleCompletion(details: SubagentNotifyDetails): string {
 
 export function parseSubagentNotifyContent(content: string): SubagentNotifyDetails | undefined {
 	const lines = content.split("\n");
-	const match = (lines[0] ?? "").match(/^(Background task|Detached foreground task) (completed|failed|paused): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/);
+	const match = (lines[0] ?? "").match(/^(Background task|Detached foreground task) (completed|failed|paused|stopped): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/);
 	if (!match) return undefined;
 	const body = lines.slice(2);
 	let sessionIndex = -1;
@@ -144,7 +144,7 @@ function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, details: Subagent
 			content,
 			display: true,
 		},
-		{ triggerTurn: true },
+		{ triggerTurn: details.some((detail) => detail.status !== "stopped") },
 	);
 }
 
@@ -163,7 +163,7 @@ export function buildCompletionDetails(result: SubagentResult): SubagentNotifyDe
 		|| result.state === "paused"
 		|| summary.startsWith("Paused after interrupt.")
 	);
-	const status = paused ? "paused" : result.success ? "completed" : "failed";
+	const status = result.state === "stopped" ? "stopped" : paused ? "paused" : result.success ? "completed" : "failed";
 
 	const taskInfo =
 		result.taskIndex !== undefined && result.totalTasks !== undefined

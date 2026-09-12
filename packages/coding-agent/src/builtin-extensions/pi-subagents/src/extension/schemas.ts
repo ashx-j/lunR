@@ -57,11 +57,23 @@ const OutputModeOverride = Type.String({
 	description: "Return saved output inline (default) or only a concise file reference. file-only requires output to be a path.",
 });
 
-// lunr: required 3-tier subagent routing, resolved through the @lunr/model-tiers bridge.
-const TierOverride = Type.String({
+const TIER_SELECTION_DESCRIPTION = "Choose the lowest model tier that can reliably complete the task: 'light' for quick checks, fact gathering, and small code inspections; 'standard' for everyday coding, clearly described bugs, and focused reviews; 'heavy' for complex implementation, difficult debugging, architectural decisions, and large or high-risk reviews.";
+
+// lunr: choose exactly one of tier or model per executable child.
+const TierOverride = Type.Optional(Type.String({
 	enum: ["light", "standard", "heavy"],
-	description: "Required model tier: 'light' for simple/fast work, 'standard' for typical coding, or 'heavy' for complex reasoning. The configured tier model must be available and authenticated.",
-});
+	description: `Required by default. ${TIER_SELECTION_DESCRIPTION} Do not combine with model. The configured tier model must be available and authenticated.`,
+}));
+
+const ModelOverride = Type.Optional(Type.String({
+	minLength: 1,
+	description: "Explicit provider/model id only when the user names a model. Do not combine with tier. Optional thinking belongs in the thinking field or as a known :level suffix.",
+}));
+
+const ThinkingOverride = Type.Optional(Type.String({
+	enum: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+	description: "Thinking level for an explicit model launch. Omit for tier launches (they use configured tier thinking).",
+}));
 
 const ReadsOverride = Type.Unsafe({
 	anyOf: [
@@ -126,6 +138,8 @@ const TaskItem = Type.Object({
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking for this task" })),
 	tier: TierOverride,
+	model: ModelOverride,
+	thinking: ThinkingOverride,
 	skill: Type.Optional(SkillOverride),
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
@@ -148,6 +162,8 @@ export const ParallelTaskSchema = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 	tier: TierOverride,
+	model: ModelOverride,
+	thinking: ThinkingOverride,
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
 });
@@ -181,6 +197,8 @@ export const DynamicParallelTemplateSchema = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 	tier: TierOverride,
+	model: ModelOverride,
+	thinking: ThinkingOverride,
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
 }, { additionalProperties: false });
@@ -208,6 +226,8 @@ export const ChainItem = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 	tier: TierOverride,
+	model: ModelOverride,
+	thinking: ThinkingOverride,
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
 	parallel: Type.Optional(Type.Unsafe({
@@ -225,7 +245,7 @@ export const ChainItem = Type.Object({
 		description: "Create isolated git worktrees for each parallel task."
 	})),
 }, {
-	description: "Chain step: use {task, description, tier, permissions?} for sequential, {parallel: [...]} for static concurrent execution, or {expand, parallel: {...}, collect} for dynamic fanout. Every executable child requires tier.",
+	description: "Chain step: use {task, description, tier|model, permissions?} for sequential, {parallel: [...]} for static concurrent execution, or {expand, parallel: {...}, collect} for dynamic fanout. Every executable child needs exactly one of tier or model.",
 	additionalProperties: false,
 });
 
@@ -268,12 +288,9 @@ const SubagentParamsSchema = Type.Object({
 	})),
 	lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "Maximum transcript lines for action='status', view='transcript'. Defaults to 80." })),
 	message: Type.Optional(Type.String({ description: "Follow-up message for action='resume' or non-terminal guidance for action='steer'. Use index to choose a child from multi-child runs." })),
-	scope: Type.Optional(Type.String({ enum: ["session", "user", "project"], description: "Scope for action='watchdog.configure'. Defaults to session to avoid persistent settings writes unless user/project is explicit." })),
-	target: Type.Optional(Type.String({ enum: ["main", "children"], description: "Target for action='watchdog.configure'. Defaults to main." })),
-	thinking: Type.Optional(Type.Unsafe({ anyOf: [{ type: "string" }, { type: "boolean", enum: [false] }], description: "Thinking level for action='watchdog.configure' (off/minimal/low/medium/high/xhigh/max, inherit, or false for off)." })),
 	schedule: Type.Optional(Type.String({ description: "Explicit one-shot schedule for action='schedule'. Only honored when scheduledRuns.enabled is true. Use '+10m' or a future ISO timestamp with timezone; scheduled runs always launch async with fresh context." })),
 	scheduleName: Type.Optional(Type.String({ description: "Optional display name for action='schedule'." })),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{task, description, tier, permissions?, count?, output?, outputMode?, reads?, progress?}, ...]" })),
+	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{task, description, tier|model, thinking?, permissions?, count?, output?, outputMode?, reads?, progress?}, ...]" })),
 	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or unlimited." })),
 	worktree: Type.Optional(Type.Boolean({
 		description: "Create isolated git worktrees for parallel tasks; requires clean git state."
@@ -310,7 +327,15 @@ const SubagentParamsSchema = Type.Object({
 	skill: Type.Optional(SkillOverride),
 	tier: Type.Optional(Type.String({
 		enum: ["light", "standard", "heavy"],
-		description: "Required for SINGLE execution. Omit for control actions; PARALLEL and CHAIN children carry their own required tier.",
+		description: `Preferred for SINGLE execution. Required by default. Omit for control actions. Do not combine with model; PARALLEL and CHAIN children carry their own tier or model. ${TIER_SELECTION_DESCRIPTION}`,
+	})),
+	model: Type.Optional(Type.String({
+		minLength: 1,
+		description: "Explicit provider/model for SINGLE execution only when the user names a model. Do not combine with tier.",
+	})),
+	thinking: Type.Optional(Type.String({
+		enum: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+		description: "Thinking level for an explicit model launch. Tier launches use configured tier thinking instead.",
 	})),
 	acceptance: Type.Optional(AcceptanceOverride),
 });
@@ -321,8 +346,11 @@ const SubagentWaitParamsSchema = Type.Object({
 	id: Type.Optional(Type.String({
 		description: "Async run or remembered detached foreground run id/prefix to wait for one specific run. Omit to wait across every active async run started in this session.",
 	})),
+	questionId: Type.Optional(Type.String({
+		description: "Wait for one supervisor question id from subagent_supervisor action='ask'. Returns when that question is answered, expired, or cancelled. Separate from final async run results.",
+	})),
 	all: Type.Optional(Type.Boolean({
-		description: "Wait for ALL active runs to finish. Default false: return as soon as the first run finishes, so a fleet manager can spawn a replacement and wait again. Ignored when id targets a single run.",
+		description: "Wait for ALL active runs to finish. Default false: return as soon as the first run finishes, so a fleet manager can spawn a replacement and wait again. Ignored when id or questionId targets one item.",
 	})),
 	timeoutMs: Type.Optional(Type.Integer({
 		minimum: 1,

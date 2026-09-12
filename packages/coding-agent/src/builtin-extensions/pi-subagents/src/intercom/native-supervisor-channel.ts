@@ -13,13 +13,37 @@ import {
 	SUBAGENT_RUN_ID_ENV,
 	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
 } from "../runs/shared/pi-args.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, SUBAGENT_CONTROL_EVENT, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
+import { askRunningAsyncChild, reconcileAsyncQuestion } from "./supervisor-ask.ts";
+import {
+	answerSupervisorQuestion,
+	cancelPendingSupervisorQuestionsForOwner,
+	cancelSupervisorQuestion,
+	claimQuestionNotification,
+	formatSupervisorQuestionAnswer,
+	hasOutstandingQuestionForChild,
+	isQuestionWaitActive,
+	listSupervisorChannelDirs,
+	listSupervisorQuestions,
+	markSupervisorQuestionDelivered,
+	outstandingQuestionsForChild,
+	pendingSupervisorQuestionsForDelivery,
+	QUESTIONS_DIR,
+	resolveSupervisorChannelDir as resolveQuestionChannelDir,
+	SUBAGENT_QUESTION_EVENT,
+	SUBAGENT_SUPERVISOR_ANSWER_TYPE,
+	SUPERVISOR_CHANNEL_ROOT,
+	supervisorQuestionIsTerminal,
+	supervisorQuestionPublicState,
+	type SupervisorQuestion,
+	type SupervisorQuestionOwner,
+} from "./supervisor-questions.ts";
 
-const SUPERVISOR_CHANNEL_ROOT = path.join(TEMP_ROOT_DIR, "supervisor-channels");
 const REQUESTS_DIR = "requests";
 const REPLIES_DIR = "replies";
 export const NATIVE_SUPERVISOR_TOOL_NAME = "subagent_supervisor";
+export const resolveSupervisorChannelDir = resolveQuestionChannelDir;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const DEFAULT_ASK_TIMEOUT_MS = 10 * 60 * 1000;
 const CHANNEL_POLL_MS = Math.min(POLL_INTERVAL_MS, 500);
@@ -58,9 +82,11 @@ interface SupervisorReply {
 }
 
 interface ContactSupervisorParams {
-	reason: SupervisorReason;
+	reason?: SupervisorReason;
 	message?: string;
 	interview?: unknown;
+	action?: "reply";
+	replyTo?: string;
 }
 
 interface IntercomParams {
@@ -68,12 +94,34 @@ interface IntercomParams {
 	to?: string;
 	message?: string;
 	replyTo?: string;
+	id?: string;
+	index?: number;
+	childId?: string;
+	reason?: string;
 }
 
+const PARENT_ASK_DESCRIPTION = [
+	"Ask a specific running async child, or reply to a child supervisor request.",
+	"Ask only when the child owns missing context, the answer changes a concrete next decision, and waiting risks a block or rework.",
+	"Use available results first, batch related questions, and keep working while awaiting the answer. Do not use ask for status checks, polling, duplicate queries, or step-by-step supervision. Follow up only when the answer leaves the original decision unresolved.",
+	"Returns a question id immediately. The child's explicit answer is delivered separately from the final run result.",
+	'Ask: { action: "ask", id: "<runId>", index?: 0, childId?: "...", reason: "<concrete decision>", message: "..." }',
+	"Use pending or list to find child requests awaiting your reply; status reports channel availability. Free-form send is unsupported. Asking never revives a child or changes its assignment.",
+	'Reply: { action: "reply", replyTo: "<requestId>", message: "..." }',
+].join(" ");
+
+const CHILD_CONTACT_DESCRIPTION = [
+	"Contact the parent/supervisor session for a blocking decision, structured interview, progress update, or reply to a parent question.",
+	"For parent questions use action='reply' with replyTo set to the question id. Answer from current findings and uncertainty; do not start extra investigation just to reply. Continue the assigned task after replying.",
+	"Do not open a blocking need_decision while a parent question is already outstanding for this child.",
+].join(" ");
+
 const ContactSupervisorParamsSchema = Type.Object({
-	reason: Type.String({ enum: ["need_decision", "interview_request", "progress_update"] }),
+	reason: Type.Optional(Type.String({ enum: ["need_decision", "interview_request", "progress_update"] })),
 	message: Type.Optional(Type.String()),
 	interview: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: true })),
+	action: Type.Optional(Type.String({ enum: ["reply"] })),
+	replyTo: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 const IntercomParamsSchema = Type.Object({
@@ -81,19 +129,25 @@ const IntercomParamsSchema = Type.Object({
 	to: Type.Optional(Type.String()),
 	message: Type.Optional(Type.String()),
 	replyTo: Type.Optional(Type.String()),
+	id: Type.Optional(Type.String({ description: "Async run id for action='ask'." })),
+	index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based child index for action='ask'. Select index or childId when more than one child is running." })),
+	childId: Type.Optional(Type.String({ description: "Private child identity for action='ask'." })),
+	reason: Type.Optional(Type.String({ description: "Concrete decision the child's answer will change. Required for action='ask'." })),
+}, { additionalProperties: false });
+
+const ParentSupervisorParamsSchema = Type.Object({
+	...IntercomParamsSchema.properties,
+	action: Type.String({ enum: ["list", "ask", "reply", "pending", "status"] }),
 }, { additionalProperties: false });
 
 function safeSegment(value: string): string {
 	return value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
 }
 
-export function resolveSupervisorChannelDir(runId: string, agent: string, childIndex: number): string {
-	return path.join(SUPERVISOR_CHANNEL_ROOT, `${safeSegment(runId)}-${safeSegment(agent)}-${childIndex}`);
-}
-
 export function ensureSupervisorChannelDir(channelDir: string): void {
 	fs.mkdirSync(path.join(channelDir, REQUESTS_DIR), { recursive: true, mode: 0o700 });
 	fs.mkdirSync(path.join(channelDir, REPLIES_DIR), { recursive: true, mode: 0o700 });
+	fs.mkdirSync(path.join(channelDir, QUESTIONS_DIR), { recursive: true, mode: 0o700 });
 }
 
 function requestPath(channelDir: string, requestId: string): string {
@@ -132,6 +186,38 @@ function readChildMetadata(): {
 		orchestratorTarget: readTextEnv(SUBAGENT_ORCHESTRATOR_TARGET_ENV),
 		orchestratorSessionId,
 		childTarget: readTextEnv("PI_SUBAGENT_INTERCOM_SESSION_NAME"),
+	};
+}
+
+function readChildQuestionOwner(metadata = readChildMetadata()): SupervisorQuestionOwner | undefined {
+	if (!metadata) return undefined;
+	const readyAt = Number(process.env.PI_SUBAGENT_STEER_READY_AT);
+	if (!Number.isFinite(readyAt) || readyAt <= 0) return undefined;
+	return {
+		runId: metadata.runId,
+		childIndex: metadata.childIndex,
+		childId: metadata.agent,
+		pid: process.pid,
+		readyAt,
+	};
+}
+
+function answerParentQuestion(params: ContactSupervisorParams): AgentToolResult<Record<string, unknown>> {
+	const metadata = readChildMetadata();
+	const owner = readChildQuestionOwner(metadata);
+	if (!metadata || !owner) throw new Error("Native supervisor channel is not available for this subagent.");
+	const replyTo = params.replyTo?.trim();
+	if (!replyTo) throw new Error("action='reply' requires replyTo with the parent question id.");
+	const message = params.message?.trim();
+	if (!message) throw new Error("message is required for supervisor question replies.");
+	const answered = answerSupervisorQuestion(metadata.channelDir, replyTo, message, owner);
+	return {
+		content: [{ type: "text", text: `Replied to parent question ${answered.id}. Continue the assigned task.` }],
+		details: {
+			replyTo: answered.id,
+			state: supervisorQuestionPublicState(answered),
+			answered: true,
+		},
 	};
 }
 
@@ -223,8 +309,15 @@ async function waitForReply(channelDir: string, requestId: string, deadline: num
 }
 
 async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: AbortSignal): Promise<AgentToolResult<Record<string, unknown>>> {
+	if (params.action === "reply" || params.replyTo?.trim()) {
+		return answerParentQuestion(params);
+	}
 	const metadata = readChildMetadata();
 	if (!metadata) throw new Error("Native supervisor channel is not available for this subagent.");
+	if (!params.reason) throw new Error("reason is required for supervisor contact.");
+	if (params.reason !== "progress_update" && hasOutstandingQuestionForChild(metadata.channelDir, metadata.childIndex, metadata.agent)) {
+		throw new Error("A parent question is already outstanding for this child. Answer it with action='reply' before opening a blocking supervisor request.");
+	}
 	if (params.reason !== "progress_update" && !params.message?.trim() && params.reason !== "interview_request") {
 		throw new Error("message is required for supervisor decisions.");
 	}
@@ -254,6 +347,11 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: A
 	const serialized = JSON.stringify(request, null, "\t");
 	if (Buffer.byteLength(serialized, "utf-8") > MAX_MESSAGE_BYTES) throw new Error("Supervisor request is too large.");
 	writeAtomicJson(requestPath(metadata.channelDir, requestId), request);
+	if (expectsReply) {
+		for (const question of outstandingQuestionsForChild(metadata.channelDir, metadata.childIndex, metadata.agent)) {
+			cancelSupervisorQuestion(metadata.channelDir, question.id, "child needs a supervisor decision; reply to its request first");
+		}
+	}
 
 	if (!expectsReply) {
 		return {
@@ -295,7 +393,7 @@ export function registerNativeSupervisorClient(pi: ExtensionAPI, options: { incl
 		const tool: ToolDefinition<typeof ContactSupervisorParamsSchema, Record<string, unknown>> = {
 			name: "contact_supervisor",
 			label: "Contact Supervisor",
-			description: "Contact the parent/supervisor session for a blocking decision, structured interview, or progress update.",
+			description: CHILD_CONTACT_DESCRIPTION,
 			parameters: ContactSupervisorParamsSchema,
 			execute(_id, params, signal) {
 				return sendSupervisorRequest(params as ContactSupervisorParams, signal);
@@ -334,6 +432,20 @@ function parseRequestFile(file: string, channelDir: string): PendingSupervisorRe
 	} catch {
 		return undefined;
 	}
+}
+
+export function hasPendingBlockingSupervisorRequest(runId: string, sessionId?: string | null, now = Date.now()): boolean {
+	if (!runId) return false;
+	for (const { channelDir, file } of listRequestFiles()) {
+		const request = parseRequestFile(file, channelDir);
+		if (!request?.expectsReply) continue;
+		if (request.runId !== runId) continue;
+		if (sessionId && request.orchestratorSessionId && request.orchestratorSessionId !== sessionId) continue;
+		if (fs.existsSync(replyPath(request.channelDir, request.id))) continue;
+		if (now > requestExpiresAt(request, now)) continue;
+		return true;
+	}
+	return false;
 }
 
 function listRequestFiles(): Array<{ channelDir: string; file: string }> {
@@ -394,10 +506,12 @@ function removeEmptyDirectory(dir: string): boolean {
 function removeStaleEmptySupervisorChannel(channelDir: string, nowMs: number): boolean {
 	const requestsDir = path.join(channelDir, REQUESTS_DIR);
 	const repliesDir = path.join(channelDir, REPLIES_DIR);
+	const questionsPath = path.join(channelDir, QUESTIONS_DIR);
 	const newestKnownMtimeMs = Math.max(
 		directoryMtimeMs(channelDir),
 		directoryMtimeMs(requestsDir),
 		directoryMtimeMs(repliesDir),
+		directoryMtimeMs(questionsPath),
 	);
 	if (nowMs - newestKnownMtimeMs < STALE_EMPTY_CHANNEL_AGE_MS) return false;
 
@@ -405,9 +519,12 @@ function removeStaleEmptySupervisorChannel(channelDir: string, nowMs: number): b
 	if (!requestEntries || requestEntries.length > 0) return false;
 	const replyEntries = readDirectoryEntries(repliesDir);
 	if (!replyEntries || replyEntries.length > 0) return false;
+	const questionEntries = readDirectoryEntries(questionsPath);
+	if (!questionEntries || questionEntries.length > 0) return false;
 
 	if (!removeEmptyDirectory(requestsDir)) return false;
 	if (!removeEmptyDirectory(repliesDir)) return false;
+	if (!removeEmptyDirectory(questionsPath)) return false;
 	if (!removeEmptyDirectory(channelDir)) return false;
 	return true;
 }
@@ -559,14 +676,12 @@ function publicPendingRequests(pending: Map<string, PendingSupervisorRequest>): 
 	}));
 }
 
-function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>, state: SubagentState, name = "intercom"): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
+function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>, state: SubagentState, name = "intercom"): ToolDefinition<typeof ParentSupervisorParamsSchema, Record<string, unknown>> {
 	return {
 		name,
 		label: name === "intercom" ? "Intercom" : "Subagent Supervisor",
-		description: name === "intercom"
-			? "Native pi-subagents supervisor channel. Use reply/pending/status to answer child subagent requests."
-			: "Native pi-subagents supervisor channel. Use reply/pending/status to answer child subagent requests without overriding pi-intercom.",
-		parameters: IntercomParamsSchema,
+		description: PARENT_ASK_DESCRIPTION,
+		parameters: ParentSupervisorParamsSchema,
 		async execute(_id, params) {
 			refreshPendingRequests(pending, state, state.lastUiContext ?? undefined);
 			const input = params as IntercomParams;
@@ -583,15 +698,78 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 				pending.delete(request.id);
 				return { content: [{ type: "text", text: `Replied to supervisor request ${request.id}.` }], details: { replyTo: request.id, runId: request.runId, agent: request.agent } };
 			}
-			if (input.action === "send" || input.action === "ask") {
-				throw new Error("Native pi-subagents intercom currently handles supervisor replies. Child agents initiate asks with contact_supervisor.");
+			if (input.action === "ask") {
+				return askRunningAsyncChild({
+					params: {
+						id: input.id,
+						index: input.index,
+						childId: input.childId,
+						reason: input.reason,
+						message: input.message,
+					},
+					state,
+					childRequests: pending.values(),
+				});
+			}
+			if (input.action === "send") {
+				throw new Error("Native pi-subagents intercom does not support free-form send. Use action='ask' for a running async child or action='reply' for a pending child request.");
 			}
 			throw new Error(`Unsupported intercom action: ${input.action}`);
 		},
 	};
 }
 
-export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState): { start: () => void; dispose: () => void; pending: Map<string, PendingSupervisorRequest> } {
+function questionMatchesParentContext(question: SupervisorQuestion, state: SubagentState, ctx: ExtensionContext): boolean {
+	const sessionId = currentContextSessionId(state, ctx);
+	if (!sessionId || question.parentSessionId !== sessionId) return false;
+	if ((state.sessionGeneration ?? 0) !== question.parentGeneration) return false;
+	return true;
+}
+
+function notifyQuestionTerminal(pi: ExtensionAPI, question: SupervisorQuestion, channelDir: string): void {
+	if (!supervisorQuestionIsTerminal(question) || question.notifiedAt) return;
+	(pi as { events?: IntercomEventBus }).events?.emit(SUBAGENT_QUESTION_EVENT, {
+		questionId: question.id,
+		state: supervisorQuestionPublicState(question),
+		runId: question.runId,
+	});
+	if (isQuestionWaitActive(question.id)) return;
+	if (!claimQuestionNotification(channelDir, question.id)) return;
+	const state = supervisorQuestionPublicState(question);
+	pi.sendMessage({
+		customType: SUBAGENT_SUPERVISOR_ANSWER_TYPE,
+		content: formatSupervisorQuestionAnswer(question),
+		display: state === "answered",
+		details: {
+			questionId: question.id,
+			state,
+			runId: question.runId,
+			childIndex: question.childIndex,
+			childId: question.childId,
+			reason: question.reason,
+			answered: state === "answered",
+			delivered: Boolean(question.deliveredAt),
+		},
+	}, { triggerTurn: state === "answered" });
+}
+
+function pollSupervisorQuestions(pi: ExtensionAPI, state: SubagentState, ctx: ExtensionContext): void {
+	for (const channelDir of listSupervisorChannelDirs()) {
+		for (const question of listSupervisorQuestions(channelDir)) {
+			if (!questionMatchesParentContext(question, state, ctx)) continue;
+			const current = reconcileAsyncQuestion(channelDir, question, state);
+			notifyQuestionTerminal(pi, current, channelDir);
+		}
+	}
+}
+
+export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState): {
+	start: () => void;
+	dispose: () => void;
+	pending: Map<string, PendingSupervisorRequest>;
+	cancelOwnedQuestions: (reason: string) => void;
+	settleRunQuestions: (runId: string, reason: string) => void;
+} {
 	const pending = new Map<string, PendingSupervisorRequest>();
 	const seenFiles = new Set<string>();
 	let poller: ReturnType<typeof setInterval> | undefined;
@@ -613,11 +791,30 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		}
 	};
 
+	const cancelOwnedQuestions = (reason: string): void => {
+		if (!state.currentSessionId) return;
+		cancelPendingSupervisorQuestionsForOwner({
+			parentSessionId: state.currentSessionId,
+			parentGeneration: state.sessionGeneration ?? 0,
+			reason,
+		});
+	};
+
+	const settleRunQuestions = (runId: string, reason: string): void => {
+		if (!state.currentSessionId) return;
+		cancelPendingSupervisorQuestionsForOwner({
+			parentSessionId: state.currentSessionId,
+			runId,
+			reason,
+		});
+	};
+
 	const poll = (): void => {
 		cleanupStaleChannelsIfDue();
 		const ctx = state.lastUiContext;
 		if (!ctx) return;
 		refreshPendingRequests(pending, state, ctx);
+		pollSupervisorQuestions(pi, state, ctx);
 		const now = Date.now();
 		for (const { channelDir, file } of listRequestFiles()) {
 			if (seenFiles.has(file)) continue;
@@ -648,11 +845,21 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 				},
 			});
 			if (request.expectsReply) {
-				(pi as { events?: IntercomEventBus }).events?.emit(INTERCOM_DETACH_REQUEST_EVENT, {
+				const job = state.asyncJobs.get(request.runId);
+				if (job) job.activityState = "needs_attention";
+				const events = (pi as { events?: IntercomEventBus }).events;
+				events?.emit(INTERCOM_DETACH_REQUEST_EVENT, {
 					requestId: request.id,
 					runId: request.runId,
 					agent: request.agent,
 					childIndex: request.childIndex,
+				});
+				events?.emit(SUBAGENT_CONTROL_EVENT, {
+					type: "needs_attention",
+					to: "needs_attention",
+					runId: request.runId,
+					agent: request.agent,
+					index: request.childIndex,
 				});
 			}
 		}
@@ -667,11 +874,36 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			poller.unref?.();
 		},
 		dispose: () => {
+			cancelOwnedQuestions("parent supervisor channel disposed");
 			if (poller) clearInterval(poller);
 			poller = undefined;
 			pending.clear();
 			seenFiles.clear();
 		},
 		pending,
+		cancelOwnedQuestions,
+		settleRunQuestions,
 	};
+}
+
+export function isPendingQuestionForCurrentChild(questionId: string): boolean {
+	const metadata = readChildMetadata();
+	const owner = readChildQuestionOwner(metadata);
+	if (!metadata || !owner) return false;
+	return pendingSupervisorQuestionsForDelivery(metadata.channelDir, owner).some((question) =>
+		question.id === questionId && question.parentSessionId === metadata.orchestratorSessionId,
+	);
+}
+
+export function markDeliveredSupervisorQuestionFromChild(message: string): void {
+	const match = message.match(/Parent question \(([^)\s]+)\)/);
+	if (!match?.[1]) return;
+	const metadata = readChildMetadata();
+	const owner = readChildQuestionOwner(metadata);
+	if (!metadata || !owner) return;
+	try {
+		markSupervisorQuestionDelivered(metadata.channelDir, match[1], owner);
+	} catch {
+		// Delivery markers are best-effort; answer ownership still enforces identity.
+	}
 }

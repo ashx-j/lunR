@@ -7,11 +7,19 @@ import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 const CUSTOM_TOOL_DESCRIPTION_FILE = "subagent-tool-description.md";
 const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 
+export const SUBAGENT_TIER_GUIDANCE = `TIER SELECTION:
+• Choose the lowest tier that can reliably complete the task.
+• light: Use for simple, straightforward tasks that require little reasoning. Good for quick checks, finding information, collecting facts for research, inspecting a small amount of code, or verifying a specific fact.
+• standard: Use for moderately difficult work and everyday coding tasks. Good for writing simple code, fixing a clearly described bug, reviewing a focused change, or completing work with clear requirements. Use heavy when the task requires deep architectural understanding or complex reasoning.
+• heavy: Use for complex or ambiguous tasks that require deep reasoning and strong code understanding. Good for implementing complex plans, debugging difficult or poorly understood problems, reviewing large or high-risk changes, and making architectural decisions.`;
+
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Prompt children directly. There is no agent roster. Every execution task needs task (the full child prompt) and description (a concise UI label).
-• Every executable child also needs tier: "light", "standard", or "heavy". Direct model overrides and parent-model inheritance are not available. A missing, disabled, unconfigured, unavailable, or unauthenticated tier fails before launch.
+• Every executable child chooses exactly one of tier: "light"|"standard"|"heavy" (default) or model: "provider/id" when the user names a model. Do not pass both, and do not use inherit. Missing, disabled, unconfigured, unavailable, or unauthenticated selections fail before launch.
+• Optional thinking (off/minimal/low/medium/high/xhigh/max) is only valid with an explicit model. Tier launches use the configured tier thinking level.
+${SUBAGENT_TIER_GUIDANCE}
 • permissions is "full" or "read-only". Omitted permissions means full. Plan-mode parents must pass permissions: "read-only"; full or omitted launches are rejected.
-• Keep execution and control separate: omit action for SINGLE/PARALLEL/CHAIN execution; use action only for status/interrupt/stop/resume/steer/append-step/doctor/watchdog.*/schedule*.
+• Keep execution and control separate: omit action for SINGLE/PARALLEL/CHAIN execution; use action only for status/interrupt/stop/resume/steer/append-step/doctor/watchdog.status|check|recommend-model/schedule*.
 • Async/background runs: launch with async:true only when work can proceed independently. Do not sleep or poll status just to wait. In an interactive session, normally return control and let lunR wake you; use subagent_wait when this request must run to completion in the current turn or skill. Headless sessions auto-drain current-session work.
 • Child-safety boundary: ordinary children are not orchestrators and must not run subagents. Only explicitly configured fanout children may use the child-safe subagent tool, still bounded by depth/session limits.
 • Writing/review safety: keep one full-access writer for the same cwd/worktree. Use fresh-context permissions: "read-only" children for independent review, then have the parent synthesize and apply fixes as the sole writer unless an isolated worktree was intentionally requested.
@@ -20,12 +28,12 @@ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to generic children by prompting them directly. There are no named agent types.
 
 EXECUTION (use exactly ONE mode):
-• SINGLE: { task, description, tier, permissions? } — one child. Multiple SINGLE calls in the same turn run concurrently; explicit concurrency/run limits still apply.
-• PARALLEL: { tasks: [{task, description, tier, permissions?, count?, output?, reads?, progress?}, ...], concurrency?: number, worktree?: true } — one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
-• CHAIN: { chain: [{task, description, tier, permissions?}, {parallel:[{task, description, tier, permissions?, count:3}]}] } — sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
+• SINGLE: { task, description, tier|model, thinking?, permissions? } — one child. Multiple SINGLE calls in the same turn run concurrently; explicit concurrency/run limits still apply.
+• PARALLEL: { tasks: [{task, description, tier|model, thinking?, permissions?, count?, output?, reads?, progress?}, ...], concurrency?: number, worktree?: true } — one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
+• CHAIN: { chain: [{task, description, tier|model, thinking?, permissions?}, {parallel:[{task, description, tier|model, thinking?, permissions?, count:3}]}] } — sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
 • description is required, single-line, max 80 characters. It is UI metadata only. task is the complete child prompt.
 • permissions: "full" (default) or "read-only". Full includes coding tools (read, search, shell, edit, write, web, LSP, MCP) and excludes parent-owned tools (cron, memory, behavior, goals, nested subagents). Plan-mode parents may launch only permissions: "read-only".
-• Every executable child requires tier: "light", "standard", or "heavy". Direct model overrides and parent-model inheritance are rejected. The configured tier model and credentials must be available.
+• Model selection: pass tier by default ("light"|"standard"|"heavy"). Pass model: "provider/id" only when the user specifies a model. Exactly one of tier or model. Optional thinking only with model; tier uses configured thinking. Direct model launches do not require tier mode to be enabled. No inherit and no silent fallback for an explicit model.
 • Children always start with a fresh session (no inherited parent transcript).
 • Optional timeout: { timeoutMs } or { maxRuntimeMs } sets a run-level max runtime for foreground and async/background runs
 
@@ -40,8 +48,7 @@ CHAIN EXAMPLES:
 • Mixed: { chain: [{task:"Research {task}", description:"Research request", tier:"standard", permissions:"read-only"}, {parallel: [{task:"Review {previous}", description:"Review findings", tier:"light", permissions:"read-only", count: 2}]}, {task:"Summarize {previous}", description:"Summarize reviews", tier:"standard"}] }
 
 CONTROL (use action field, omit task/chain/tasks):
-• { action: "watchdog.status" | "watchdog.check" | "watchdog.recommend-model" } - inspect the opt-in subagent watchdog and its strong complementary model recommendation
-• { action: "watchdog.configure", model: "recommended" | "inherit" | "provider/model[:thinking]", scope?: "session" | "user" | "project", target?: "main" | "children", thinking?: "inherit" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } - configure watchdog model selection; default scope is session, use persistent scopes only when the user asks
+• { action: "watchdog.status" | "watchdog.check" | "watchdog.recommend-model" } - inspect the opt-in subagent watchdog and its strong complementary model recommendation (read-only; there is no configure action)
 • { action: "status", id: "..." } - inspect an async/background run by id or prefix
 • { action: "status", view: "fleet" } - read-only active foreground/async fleet view with transcript commands
 • { action: "status", id: "...", view: "transcript", index?: 0, lines?: 80 } - tail a run or child output/session transcript
@@ -49,10 +56,12 @@ CONTROL (use action field, omit task/chain/tasks):
 • { action: "stop", id: "..." } - stop a current-session top-level async run; stopped runs finish with state "stopped"
 • { action: "resume", id: "...", message: "...", index?: 0 } - interrupt then follow up with a live async child, or revive a completed async/foreground child from its session
 • { action: "steer", id: "...", message: "...", index?: 0 } - await correlated child input acceptance for up to 3 seconds; returns delivered, scheduled, pending, partial, recovered, or failed with a request id. Only top-level single runs may recover after a further 15-second pause/revival bound; chain, parallel, and nested runs never auto-interrupt.
+• subagent_supervisor({ action: "ask", id, reason, message, index?, childId? }) - ask one running async child; returns question id immediately. Ask only when the child owns missing context, the answer changes a concrete next decision, and waiting risks block/rework. No broadcast, revive, task replacement, status polling, or micromanagement.
+• subagent_wait({ questionId }) - wait for that supervisor question answer/expiry/cancel. Answers stay separate from final run results.
 • { action: "append-step", id: "...", chain: [{task:"Use {previous}", description:"Follow-up step", tier:"standard"}] } - append one step to the tail of a running async chain
 
 SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
-• { action: "schedule", task, description, tier, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
+• { action: "schedule", task, description, tier|model, thinking?, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
 • { action: "schedule-list" } - list scheduled runs for this session
 • { action: "schedule-status", id: "..." } - inspect one scheduled run
 • { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires
@@ -65,14 +74,15 @@ ${SUBAGENT_SAFETY_GUIDANCE}`;
 export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = `Delegate to generic children by prompting them. Use exactly one mode per call.
 
 EXECUTE:
-• SINGLE {task, description, tier, permissions?} (same-turn singles overlap); PARALLEL {tasks:[{task,description,tier,permissions?,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{task,description,tier,permissions?},{parallel:[...]}]} for sequential work.
+• SINGLE {task, description, tier|model, thinking?, permissions?} (same-turn singles overlap); PARALLEL {tasks:[{task,description,tier|model,thinking?,permissions?,count?,output?,reads?,progress?}], concurrency?, worktree?}; CHAIN {chain:[{task,description,tier|model,thinking?,permissions?},{parallel:[...]}]} for sequential work.
 • description is required (single-line, max 80 chars, UI only). task is the full child prompt. permissions omitted = full. Plan-mode parents must pass permissions:"read-only".
-• Every executable child requires tier:"light"|"standard"|"heavy". Direct model overrides and parent-model inheritance are rejected; tier resolution fails closed. Children always start with a fresh session. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
+• Exactly one of tier:"light"|"standard"|"heavy" (default) or model:"provider/id" when the user names a model. thinking only with model. No inherit; fail closed on unavailable selections. Children always start fresh. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
+${SUBAGENT_TIER_GUIDANCE}
 • Chain templates may use {task}, {previous}, {chain_dir}, and named outputs. Parallel worktree isolation requires a clean git repo.
 • Chain example: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {parallel: [{task:"Check {previous}", description:"Check prior result", tier:"light", permissions:"read-only", count: 3}]}] }
 
 CONTROL:
-• Use action without execution fields: doctor, watchdog.status, watchdog.check, watchdog.recommend-model, watchdog.configure, status, interrupt, stop, resume, steer, append-step.
+• Use action without execution fields: doctor, watchdog.status, watchdog.check, watchdog.recommend-model, status, interrupt, stop, resume, steer, append-step.
 • Async control actions: status, interrupt, stop, resume, steer, append-step. Use stop with an id for current-session top-level async runs. Use status view:"fleet" for active-run overview, view:"transcript" to tail child output, and steer for acknowledged live guidance. Steering delivery means lunR accepted the correlated user input, not model compliance; use index for a specific child.
 • Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
 

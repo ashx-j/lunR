@@ -268,12 +268,15 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.parentSessionId) {
 		env[SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV] = input.parentSessionId;
 	}
-	if (input.orchestratorIntercomTarget && input.parentSessionId && input.runId && input.childAgentName) {
+	if (input.parentSessionId && input.runId && (input.childId || input.childAgentName)) {
 		const childIndex = input.childIndex ?? 0;
-		const channelDir = supervisorChannelDir(input.runId, input.childAgentName, childIndex);
+		const channelAgent = input.childId ?? input.childAgentName!;
+		const channelDir = supervisorChannelDir(input.runId, channelAgent, childIndex);
 		fs.mkdirSync(path.join(channelDir, "requests"), { recursive: true });
 		fs.mkdirSync(path.join(channelDir, "replies"), { recursive: true });
+		fs.mkdirSync(path.join(channelDir, "questions"), { recursive: true });
 		env[SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV] = channelDir;
+		env[SUBAGENT_CHILD_INDEX_ENV] = String(childIndex);
 	}
 	if (input.runId) {
 		env[SUBAGENT_RUN_ID_ENV] = input.runId;

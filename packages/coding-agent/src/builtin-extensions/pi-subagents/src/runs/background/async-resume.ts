@@ -1,10 +1,10 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type ModelSelection, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
 import { validateChildDescription } from "../../shared/child-spec.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
-import { validateAcceptanceInput } from "../shared/acceptance.ts";
+import { validatePersistedAcceptance } from "../shared/acceptance.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
 import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
 import { deliverInterruptRequest } from "./control-channel.ts";
@@ -45,6 +45,7 @@ export type AsyncResumeTarget = {
 	sessionFile?: string;
 	model?: string;
 	thinking?: string;
+	modelSelection?: ModelSelection;
 	recoveryDescriptor?: SteeringRecoveryDescriptor;
 };
 
@@ -108,6 +109,18 @@ export interface AsyncRunLocation {
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+const TURN_BUDGET_RUNTIME_KEYS = new Set(["outcome", "turnCount", "wrapUpRequestedAtTurn", "exceededAtTurn"]);
+
+function persistedTurnBudgetConfig(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const config: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+		if (TURN_BUDGET_RUNTIME_KEYS.has(key)) continue;
+		config[key] = value;
+	}
+	return config;
 }
 
 function ensureObject(value: unknown, source: string): Record<string, unknown> {
@@ -327,7 +340,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.permissions !== "full" && parsed.permissions !== "read-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': permissions must be full or read-only.`);
-	if (parsed.tier !== "light" && parsed.tier !== "standard" && parsed.tier !== "heavy") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier must be light, standard, or heavy.`);
+	if (parsed.tier !== undefined && parsed.tier !== "light" && parsed.tier !== "standard" && parsed.tier !== "heavy") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier must be light, standard, or heavy.`);
 	validateChildDescription(parsed.description, `Async recovery descriptor '${descriptorPath}' description`);
 	if (parsed.outputMode !== "inline" && parsed.outputMode !== "file-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': outputMode is invalid.`);
 	for (const field of ["share"] as const) {
@@ -342,19 +355,30 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (parsed[field] !== undefined && (typeof parsed[field] !== "string" || !(parsed[field] as string).trim())) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.modelSelection !== undefined) {
-		const selection = parsed.modelSelection as { kind?: unknown; tier?: unknown };
+		const selection = parsed.modelSelection as { kind?: unknown; tier?: unknown; model?: unknown };
 		if (!selection || typeof selection !== "object") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection must be an object.`);
-		if (selection.kind !== "tier") {
+		if (selection.kind === "tier") {
+			if (selection.tier !== "light" && selection.tier !== "standard" && selection.tier !== "heavy") {
+				throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.tier is invalid.`);
+			}
+		} else if (selection.kind === "model") {
+			if (selection.model !== undefined && (typeof selection.model !== "string" || !selection.model.trim())) {
+				throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.model must be a non-empty string.`);
+			}
+		} else {
 			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.kind is invalid.`);
 		}
-		if (selection.kind === "tier" && selection.tier !== "light" && selection.tier !== "standard" && selection.tier !== "heavy") {
-			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelSelection.tier is invalid.`);
-		}
+	} else if (parsed.tier === undefined) {
+		throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier or modelSelection is required.`);
 	}
 	if (parsed.absoluteDeadlineAt !== undefined && (!Number.isFinite(parsed.absoluteDeadlineAt) || (parsed.absoluteDeadlineAt as number) <= 0)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': absoluteDeadlineAt must be a positive timestamp.`);
 	if (parsed.initialTurnBudget !== undefined) {
-		const result = resolveTurnBudgetConfig(parsed.initialTurnBudget, "recoveryDescriptor.initialTurnBudget");
+		const result = resolveTurnBudgetConfig(
+			persistedTurnBudgetConfig(parsed.initialTurnBudget),
+			"recoveryDescriptor.initialTurnBudget",
+		);
 		if (result.error) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${result.error}`);
+		if (result.turnBudget) parsed.initialTurnBudget = result.turnBudget;
 	}
 	if (parsed.initialToolBudget !== undefined) {
 		const result = validateToolBudgetConfig(parsed.initialToolBudget, "recoveryDescriptor.initialToolBudget");
@@ -390,7 +414,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (!Array.isArray(control.notifyChannels) || control.notifyChannels.some((item) => item !== "event" && item !== "async" && item !== "intercom")) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': controlConfig.notifyChannels is invalid.`);
 	}
 	if (parsed.acceptance !== undefined) {
-		const errors = validateAcceptanceInput(parsed.acceptance, "recoveryDescriptor.acceptance");
+		const errors = validatePersistedAcceptance(parsed.acceptance, "recoveryDescriptor.acceptance");
 		if (errors.length) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${errors.join(" ")}`);
 	}
 	return parsed as unknown as SteeringRecoveryDescriptor;
@@ -452,6 +476,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 					sessionFile: selectedStep.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 					model: selectedStep.model,
 					thinking: selectedStep.thinking,
+					modelSelection: selectedStep.modelSelection,
 					...(recoveryDescriptor ? { recoveryDescriptor } : {}),
 				};
 			}
@@ -480,6 +505,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 				sessionFile: selected.step.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 				model: selected.step.model,
 				thinking: selected.step.thinking,
+				modelSelection: selected.step.modelSelection,
 				...(recoveryDescriptor ? { recoveryDescriptor } : {}),
 			};
 		}
@@ -516,6 +542,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		intercomTarget: resolveSubagentIntercomTarget(runId, childId ?? agent, index),
 		cwd: status?.cwd ?? result?.cwd,
 		...(resolvedSessionFile ? { sessionFile: resolvedSessionFile } : {}),
+		modelSelection: statusSteps[index]?.modelSelection,
 		...(stepModel ? { model: stepModel } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
 		...(recoveryDescriptor ? { recoveryDescriptor } : {}),

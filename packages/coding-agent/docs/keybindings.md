@@ -82,12 +82,14 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `app.interrupt` | `escape` | Cancel / abort |
+| `app.interrupt` | `escape` | Abort the parent; press twice within 500ms to also stop this session's active async subagents |
 | `app.clear` | `ctrl+c` | Clear editor |
 | `app.exit` | `ctrl+d` | Exit (when editor empty) |
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows) | Paste image from clipboard; `/paste-image` needs no shortcut |
+
+While async subagents are active, the second Escape takes priority over tree/fork navigation, even with a draft in the editor. The first Escape leaves async work running. The second requests a stop through the normal subagent control channel and waits for the runner to report its final state. Other sessions and future scheduled jobs are unaffected. Without active async work, idle double-Escape keeps the configured tree/fork behaviour.
 
 ### Sessions
 

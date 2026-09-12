@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
+import { getSupportedThinkingLevels, splitKnownThinkingSuffix, THINKING_LEVELS, type ThinkingLevel } from "../../shared/model-info.ts";
 import type { ChildTier, ModelSelection, Usage } from "../../shared/types.ts";
 import { checkModelScope, type ModelScopeConfig, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 import { applyThinkingSuffix } from "./pi-args.ts";
@@ -14,13 +15,9 @@ interface ModelAttemptSummary {
 	usage?: Usage;
 }
 
+/** Strip only a known thinking suffix so model ids that contain colons stay intact. */
 export function splitThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
-	const colonIdx = model.lastIndexOf(":");
-	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };
-	return {
-		baseModel: model.substring(0, colonIdx),
-		thinkingSuffix: model.substring(colonIdx),
-	};
+	return splitKnownThinkingSuffix(model);
 }
 
 /** Sentinel model value requesting that a subagent inherit the parent session's model. */
@@ -299,15 +296,90 @@ function requestedTier(tier: unknown): ChildTier | undefined {
 	return tier === "light" || tier === "standard" || tier === "heavy" ? tier : undefined;
 }
 
+function parseExplicitThinking(value: unknown, pathLabel = "thinking"): ThinkingLevel | undefined {
+	if (value === undefined) return undefined;
+	if (value === false || value === "off") return "off";
+	if (typeof value !== "string" || !(THINKING_LEVELS as readonly string[]).includes(value)) {
+		throw new Error(`${pathLabel} must be one of ${THINKING_LEVELS.join(", ")}.`);
+	}
+	return value as ThinkingLevel;
+}
+
 /**
  * Capture how a child model was selected from the original requested params.
  * Must run before callers replace `model` with a resolved override.
- * Explicit model wins; a tier only counts when it actually resolves.
+ * Exactly one of tier or model; inherit and both are rejected.
  */
 export function captureModelSelection(input: { model?: unknown; tier?: unknown }): ModelSelection {
+	const model = typeof input.model === "string" ? input.model.trim() : "";
+	const hasModel = Boolean(model);
 	const tier = requestedTier(input.tier);
-	if (!tier) throw new Error("Every subagent execution requires tier: \"light\", \"standard\", or \"heavy\".");
-	return { kind: "tier", tier };
+	if (hasModel && model === INHERIT_MODEL) {
+		throw new Error('model "inherit" is not supported; choose tier: "light", "standard", or "heavy", or an explicit provider/model.');
+	}
+	if (hasModel && tier) {
+		throw new Error('Choose exactly one of tier or model; do not pass both.');
+	}
+	if (hasModel) return { kind: "model", model };
+	if (tier) return { kind: "tier", tier };
+	throw new Error('Every executable child requires tier: "light", "standard", or "heavy", or an explicit model when the user names one.');
+}
+
+/** Resolve and validate an explicit provider/model (+ optional thinking) with no silent fallback. */
+export function resolveRequiredExplicitModel(
+	model: unknown,
+	availableModels: AvailableModelInfo[] | undefined,
+	preferredProvider?: string,
+	thinking?: unknown,
+): string {
+	const requested = requestedModelString(model);
+	if (!requested) {
+		throw new Error('Explicit model selection requires model as "provider/id".');
+	}
+	if (!availableModels?.length) {
+		throw new Error(`Model '${requested}' cannot launch because no authenticated models are available.`);
+	}
+	const { baseModel, thinkingSuffix } = splitThinkingSuffix(requested);
+	const resolvedBase = resolveBaseModelCandidate(baseModel, availableModels, preferredProvider);
+	if (!resolvedBase) {
+		throw new Error(
+			`Model '${baseModel}' is unavailable or unauthenticated. Choose an available provider/model or a configured tier.`,
+		);
+	}
+	const fromSuffix = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+	const fromParam = parseExplicitThinking(thinking);
+	if (fromSuffix && fromParam && fromSuffix !== fromParam) {
+		throw new Error(`Conflicting thinking levels '${fromSuffix}' and '${fromParam}' for model '${requested}'.`);
+	}
+	const level = fromParam ?? fromSuffix;
+	if (!level) return resolvedBase;
+	const info = availableModels.find((entry) => entry.fullId === resolvedBase);
+	const supported = getSupportedThinkingLevels(info);
+	if (!supported.includes(level as ThinkingLevel)) {
+		throw new Error(
+			`Thinking level '${level}' is not supported by '${resolvedBase}'. Supported: ${supported.join(", ") || "none"}.`,
+		);
+	}
+	return applyThinkingSuffix(resolvedBase, level, true) ?? resolvedBase;
+}
+
+/** Resolve the launch model from a captured selection. Tier uses configured thinking; model uses optional explicit thinking. */
+export function resolveExecutableChildModel(input: {
+	modelSelection?: ModelSelection;
+	tier?: unknown;
+	model?: unknown;
+	thinking?: unknown;
+	availableModels?: AvailableModelInfo[];
+	preferredProvider?: string;
+}): string {
+	const selection = input.modelSelection ?? captureModelSelection({ model: input.model, tier: input.tier });
+	if (selection.kind === "tier") {
+		if (input.thinking !== undefined) {
+			throw new Error('thinking is only valid with an explicit model; tier children use the configured tier thinking level.');
+		}
+		return resolveRequiredTierModel(selection.tier, input.availableModels, input.preferredProvider);
+	}
+	return resolveRequiredExplicitModel(input.model, input.availableModels, input.preferredProvider, input.thinking);
 }
 
 export interface BuildModelCandidatesOptions {
