@@ -206,6 +206,7 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { buildInjectedContextLines } from "./injected-context.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
@@ -230,6 +231,7 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import { wrapThinkingLevelSlashCommands } from "./thinking-level-slash.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -832,7 +834,9 @@ export class InteractiveMode {
 	}
 
 	private setupAutocompleteProvider(): void {
-		let provider = this.createBaseAutocompleteProvider();
+		let provider = wrapThinkingLevelSlashCommands(this.createBaseAutocompleteProvider(), () =>
+			this.session.getAvailableThinkingLevels(),
+		);
 		const triggerCharacters: string[] = [...(provider.triggerCharacters ?? [])];
 		for (const wrapProvider of this.autocompleteProviderWrappers) {
 			provider = wrapProvider(provider);
@@ -2220,7 +2224,13 @@ export class InteractiveMode {
 		if (leadingSpacer) {
 			container.addChild(new Spacer(1));
 		}
+		let first = true;
 		for (const component of widgets.values()) {
+			if (!first) {
+				container.addChild(new Spacer(1));
+				container.addChild(new DynamicBorder((s) => theme.fg("dim", s)));
+			}
+			first = false;
 			container.addChild(component);
 		}
 	}
@@ -2951,9 +2961,8 @@ export class InteractiveMode {
 			const image = await readClipboardImage();
 			if (image) {
 				const saved = this.writeClipboardImageFile(image);
-				const id = this.insertImageChip(saved);
+				this.insertImageChip(saved);
 				this.ui.requestRender();
-				this.showStatus(`Pasted ${formatImageMarker(id)}`);
 				return;
 			}
 
@@ -4017,6 +4026,7 @@ export class InteractiveMode {
 			updateFooter: true,
 			populateHistory: true,
 		});
+		this.renderInjectedContextIfNeeded();
 		this.renderProjectTrustWarningIfNeeded();
 
 		// Show compaction info if session was compacted
@@ -4065,6 +4075,34 @@ export class InteractiveMode {
 	private rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
+		this.renderInjectedContextIfNeeded();
+	}
+
+	private sessionHasConversation(): boolean {
+		return this.sessionManager.getEntries().some(
+			(entry) => entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"),
+		);
+	}
+
+	private renderInjectedContextIfNeeded(): void {
+		if (this.sessionHasConversation()) return;
+		const paths = this.session.resourceLoader
+			.getAgentsFiles()
+			.agentsFiles.map((file) => this.formatContextPath(file.path));
+		const lines = buildInjectedContextLines(paths);
+		if (lines.length === 0) return;
+		if (this.chatContainer.children.length > 0) {
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		const [title, ...files] = lines;
+		this.chatContainer.addChild(
+			new Text(
+				theme.fg("customMessageLabel", title ?? "injected context") +
+					(files.length > 0 ? `\n${theme.fg("dim", files.join("\n"))}` : ""),
+				1,
+				0,
+			),
+		);
 	}
 
 	// =========================================================================
@@ -4364,7 +4402,6 @@ export class InteractiveMode {
 		} else {
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Thinking level: ${newLevel}`);
 		}
 	}
 
@@ -4381,9 +4418,6 @@ export class InteractiveMode {
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				const thinkingStr =
-					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
@@ -7728,8 +7762,7 @@ export class InteractiveMode {
 ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Expand or collapse a thinking/tool card |
-| \`${toggleThinking}\` | Toggle thinking block visibility |
-| \`${externalEditor}\` | Edit message in external editor |
+${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |\n` : ""}| \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |
 | \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |

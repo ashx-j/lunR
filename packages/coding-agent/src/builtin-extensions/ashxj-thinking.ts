@@ -76,6 +76,7 @@ interface ExtensionAPI {
 	}): void;
 	getThinkingLevel(): ThinkingLevel;
 	setThinkingLevel(level: ThinkingLevel): void;
+	on?(event: string, handler: (event: unknown, ctx: ExtensionContextLike) => void): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +123,11 @@ function formatLevelLabel(level: ThinkingLevel): string {
 // Persisted thinking-block visibility (hideThinkingBlock)
 //
 // pi has no public extension API to toggle thinking-block visibility live.
-// The live in-session toggle is `app.thinking.toggle` (default Ctrl+T) wired to
+// The live in-session toggle is `app.thinking.toggle` (unbound by default) wired to
 // `toggleThinkingBlockVisibility()` in interactive-mode.js, which calls
 // `SettingsManager.setHideThinkingBlock()` + rebuilds the chat. That method is
 // not exposed on ExtensionContext / ExtensionCommandContext / ExtensionAPI.
+// Ctrl+T cycles thinking level (`app.thinking.cycle`).
 //
 // What extensions CAN do is persist the `hideThinkingBlock` boolean to the
 // global agent settings file (`~/.lunr/agent/settings.json`); the
@@ -138,9 +140,7 @@ function formatLevelLabel(level: ThinkingLevel): string {
 // (verified against pi 0.80.3). In non-TUI modes `ctx.reload()` is a no-op,
 // so the setting simply applies on next start.
 //
-// The instant keybinding path (Ctrl+T) still works and is the lowest-latency
-// toggle; the command is the discoverable, persistable, completions-friendly
-// equivalent.
+// `/thinking show|hide|toggle` is the discoverable, persistable path.
 // ---------------------------------------------------------------------------
 
 /** Returns the path to lunR's global agent settings file.
@@ -258,6 +258,17 @@ const THINKING_COMMAND_DESCRIPTION =
 	"View or set the reasoning level for the current model, or toggle thinking-block visibility with show/hide/toggle";
 
 export default function (pi: ExtensionAPI): void {
+	sessionModel = undefined;
+	if (typeof pi.on === "function") {
+		pi.on("session_start", (_event, ctx) => {
+			sessionModel = ctx.model;
+		});
+		pi.on("model_select", (event, ctx) => {
+			const selected = (event as { model?: ModelLike } | undefined)?.model;
+			sessionModel = ctx.model ?? selected;
+		});
+	}
+
 	const thinkingSpec = {
 		description: THINKING_COMMAND_DESCRIPTION,
 		getArgumentCompletions(prefix: string): AutocompleteItem[] {
@@ -305,7 +316,7 @@ export default function (pi: ExtensionAPI): void {
 				// this.hideThinkingBlock → rebuildChatFromMessages() rebuilds every
 				// AssistantMessageComponent with the new hide flag). In non-TUI
 				// modes ctx.reload() is a no-op; the setting then applies on next
-				// start. The instant keybinding path (Ctrl+T) also still works.
+				// start.
 				const verb = next ? "hidden" : "shown";
 				const note = result.createdFresh
 					? `Thinking blocks ${verb}. (Created ${agentSettingsPath()} with this setting.)`
@@ -348,7 +359,6 @@ export default function (pi: ExtensionAPI): void {
 				}
 				if (level === currentLevel) return; // no-op
 				pi.setThinkingLevel(level);
-				ctx.ui.notify(`Thinking level: ${pi.getThinkingLevel()}`, "info");
 				return;
 			}
 
@@ -361,12 +371,8 @@ export default function (pi: ExtensionAPI): void {
 				);
 				return;
 			}
-			if (requested === currentLevel) {
-				ctx.ui.notify(`Thinking level: ${requested} (unchanged)`, "info");
-				return;
-			}
+			if (requested === currentLevel) return;
 			pi.setThinkingLevel(requested);
-			ctx.ui.notify(`Thinking level: ${pi.getThinkingLevel()}`, "info");
 		},
 	};
 
@@ -380,6 +386,24 @@ export default function (pi: ExtensionAPI): void {
 		...thinkingSpec,
 		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
 	});
+
+	for (const level of ALL_LEVELS) {
+		pi.registerCommand(level, {
+			description: `Set thinking level to ${level}`,
+			handler: async (_args, ctx) => {
+				const levels = availableLevelsFor(ctx.model);
+				if (!levels.includes(level)) {
+					ctx.ui.notify(
+						`Invalid thinking level: "${level}". Valid: ${levels.join(", ")}`,
+						"error",
+					);
+					return;
+				}
+				if (pi.getThinkingLevel() === level) return;
+				pi.setThinkingLevel(level);
+			},
+		});
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -387,18 +411,22 @@ export default function (pi: ExtensionAPI): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Read the current model from the ExtensionAPI runtime. The spec mentions
- * `pi.getModel()`; pi doesn't expose that name on the API object itself, but
- * the bound `ExtensionContextActions` (which the runtime decorates onto
- * events) does include `getModel()`. We duck-type against the loader so this
- * file stays decoupled from non-public internals. When unavailable (e.g.
- * during autocomplete, before any session has bound), returns undefined and
- * the caller falls back to the default 5-level set.
+ * Live session model for `/thinking ` completions.
+ * `getArgumentCompletions` runs on the extension `pi` object, which has no
+ * `getModel`. Cache the model from session_start / model_select, and still
+ * duck-type `getModel` when a test or future API exposes it.
  */
+let sessionModel: ModelLike | undefined;
+
 function currentModel(pi: ExtensionAPI): ModelLike | undefined {
 	const fn = (pi as unknown as { getModel?: () => unknown }).getModel;
 	if (typeof fn === "function") {
-		return fn.call(pi) as ModelLike | undefined;
+		try {
+			const model = fn.call(pi) as ModelLike | undefined;
+			if (model) return model;
+		} catch {
+			// runtime not bound yet
+		}
 	}
-	return undefined;
+	return sessionModel;
 }
