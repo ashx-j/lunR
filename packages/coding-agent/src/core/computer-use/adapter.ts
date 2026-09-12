@@ -64,8 +64,11 @@ export class CuaAdapter implements ComputerDriver {
 		signal.throwIfAborted();
 		if (this.client.getServerVersion()?.version !== CUA_VERSION)
 			throw new Error("Computer runtime version mismatch.");
-		for (const pid of [this.transport.pid, this.mac?.processId]) {
-			if (pid) await this.processObserver?.(pid);
+		const pids = [this.transport.pid, ...(this.mac ? [this.mac.processId] : [])];
+		for (const pid of pids) {
+			if (typeof pid !== "number" || !Number.isInteger(pid) || pid < 1)
+				throw new Error("Computer runtime process identity is missing. Input refused.");
+			await this.processObserver?.(pid);
 		}
 	}
 

@@ -7,6 +7,7 @@ import { join, relative } from "node:path";
  */
 export const NPM_SCOPE = "@ashx-j";
 export const NPM_CLI_PACKAGE = "@ashx-j/lunr";
+export const NPM_DEV_CLI_PACKAGE = "@ashx-j/lunr-dev";
 
 export const WORKSPACE_TO_NPM = {
 	"@earendil-works/pi-ai": "@ashx-j/lunr-ai",
@@ -15,29 +16,49 @@ export const WORKSPACE_TO_NPM = {
 	"@earendil-works/pi-coding-agent": "@ashx-j/lunr",
 };
 
+export const DEV_WORKSPACE_TO_NPM = {
+	...WORKSPACE_TO_NPM,
+	"@earendil-works/pi-coding-agent": NPM_DEV_CLI_PACKAGE,
+};
+
+export function publishTagFor(workspaceName, channel) {
+	if (channel === "stable") return "latest";
+	if (channel !== "dev") throw new Error(`Unknown publish channel: ${channel}`);
+	return workspaceName === "@earendil-works/pi-coding-agent" ? "latest" : "dev";
+}
+
 const DEP_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"];
 
 export function npmNameFor(workspaceName) {
 	return WORKSPACE_TO_NPM[workspaceName];
 }
 
-const REPLACEMENTS = Object.entries(WORKSPACE_TO_NPM).sort((a, b) => b[0].length - a[0].length);
-
 /** Rewrite import/require specifiers in compiled JS (and similar text). */
-export function rewriteWorkspaceSpecifiers(text) {
+export function rewriteWorkspaceSpecifiers(text, packageNames = WORKSPACE_TO_NPM) {
 	let out = text;
-	for (const [from, to] of REPLACEMENTS) {
+	for (const [from, to] of Object.entries(packageNames).sort((a, b) => b[0].length - a[0].length)) {
 		out = out.split(from).join(to);
 	}
 	return out;
 }
 
-export function rewritePackageLockForNpm(lock) {
-	const rewritten = JSON.parse(rewriteWorkspaceSpecifiers(JSON.stringify(lock)));
-	const publicNames = new Set(Object.values(WORKSPACE_TO_NPM));
+export function rewritePackageLockForNpm(lock, options = {}) {
+	const packageNames = options.packageNames ?? WORKSPACE_TO_NPM;
+	const rewritten = JSON.parse(rewriteWorkspaceSpecifiers(JSON.stringify(lock), packageNames));
+	const publicNames = new Set(Object.values(packageNames));
+	if (options.version) rewritten.version = options.version;
 	for (const [path, entry] of Object.entries(rewritten.packages ?? {})) {
-		const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
-		if (!publicNames.has(name)) continue;
+		const name = path === "" ? entry.name : path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+		if (options.version) {
+			if (path === "" || publicNames.has(name)) entry.version = options.version;
+			for (const field of DEP_FIELDS) {
+				for (const dependency of Object.keys(entry[field] ?? {})) {
+					if (publicNames.has(dependency)) entry[field][dependency] = options.version;
+				}
+			}
+		}
+		if (name === NPM_DEV_CLI_PACKAGE) entry.bin = { "lunr-dev": "dist/dev-cli.js" };
+		if (path === "" || !publicNames.has(name)) continue;
 		entry.resolved = `https://registry.npmjs.org/${name}/-/${name.split("/")[1]}-${entry.version}.tgz`;
 		delete entry.integrity;
 	}
@@ -100,20 +121,26 @@ export function assertPublishedTreeHasNoEarendil(root, label = "package") {
 }
 
 /** Rewrite a package.json object for the public registry. Does not mutate the input. */
-export function rewritePackageJsonForNpm(pkg) {
+export function rewritePackageJsonForNpm(pkg, options = {}) {
+	const packageNames = options.packageNames ?? WORKSPACE_TO_NPM;
 	const out = structuredClone(pkg);
-	const mapped = WORKSPACE_TO_NPM[out.name];
+	const mapped = packageNames[out.name];
 	if (!mapped) {
 		throw new Error(`no lunR npm name for workspace package ${out.name}`);
 	}
 	out.name = mapped;
+	if (options.version) out.version = options.version;
+	if (mapped === NPM_DEV_CLI_PACKAGE) {
+		out.bin = { "lunr-dev": "dist/dev-cli.js" };
+		out.piConfig = { ...out.piConfig, name: "lunr-dev" };
+	}
 
 	for (const field of DEP_FIELDS) {
 		const deps = out[field];
 		if (!deps || typeof deps !== "object") continue;
 		const next = {};
 		for (const [dep, ver] of Object.entries(deps)) {
-			next[WORKSPACE_TO_NPM[dep] ?? dep] = ver;
+			next[packageNames[dep] ?? dep] = packageNames[dep] && options.version ? options.version : ver;
 		}
 		out[field] = next;
 	}

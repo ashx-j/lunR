@@ -23,7 +23,10 @@ for (const file of await readdir(packs)) {
 	packages.set(manifest.name, { path, file, manifest, integrity: `sha512-${createHash("sha512").update(await readFile(path)).digest("base64")}` });
 }
 assert.equal(packages.size, 7, "Pack all four public packages and three native payload packages first.");
-const cli = packages.get("@ashx-j/lunr");
+const cli = packages.get("@ashx-j/lunr") ?? packages.get("@ashx-j/lunr-dev");
+assert.ok(cli, "Missing stable or dev CLI tarball");
+const cliName = cli.manifest.name;
+const cliEntry = Object.values(cli.manifest.bin)[0];
 const downloads = [];
 const server = createServer((request, response) => {
 	const path = decodeURIComponent(new URL(request.url, "http://localhost").pathname).slice(1);
@@ -63,14 +66,14 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 try {
 	const install = join(root, "install");
 	await mkdir(install);
-	await writeFile(join(install, "package.json"), JSON.stringify({ private: true, dependencies: { "@ashx-j/lunr": cli.manifest.version } }));
+	await writeFile(join(install, "package.json"), JSON.stringify({ private: true, dependencies: { [cliName]: cli.manifest.version } }));
 	await run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund"], install);
 	const host = release.artifacts.find((artifact) => artifact.platform === process.platform && artifact.arch === process.arch);
 	assert.deepEqual([...new Set(downloads.filter((name) => name.startsWith("@ashx-j/lunr-computer-")))], host ? [host.packageName] : []);
 	assert.equal(cli.manifest.optionalDependencies[host?.packageName ?? release.artifacts[0].packageName], cli.manifest.version);
 	const relocated = join(root, "relocated");
 	await rename(install, relocated);
-	const packageRoot = join(relocated, "node_modules", "@ashx-j", "lunr");
+	const packageRoot = join(relocated, "node_modules", cliName);
 	assert.deepEqual(await readdir(join(packageRoot, "native", "computer-use")), ["LICENSE.md"]);
 	const { resolveRuntimeArchive } = await import(pathToFileURL(join(packageRoot, "dist", "core", "computer-use", "runtime.js")).href);
 	if (host) {
@@ -79,7 +82,7 @@ try {
 		await verifyComputerUseArchive(dirname(archive), host);
 	}
 	await assert.rejects(resolveRuntimeArchive(packageRoot, "linux", "x64"), /unsupported/);
-	await run(process.execPath, ["scripts/check-interactive-first-paint.mjs", join(packageRoot, "dist", "cli.js")], fileURLToPath(new URL("../", import.meta.url)));
+	await run(process.execPath, ["scripts/check-interactive-first-paint.mjs", join(packageRoot, cliEntry)], fileURLToPath(new URL("../", import.meta.url)));
 	console.log("Relocated public-name installation: ignore-scripts, host-only payload, archive hash and first requests passed.");
 
 	for (const [platform, arch] of [["win32", "x64"], ["win32", "arm64"], ["darwin", "arm64"], ["linux", "x64"]]) {
@@ -104,7 +107,7 @@ try {
 	await mkdir(installer);
 	for (const file of ["package.json", "package-lock.json"]) await copyFile(join(packageRoot, "install-lock", file), join(installer, file));
 	await run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], installer);
-	if (host) await verifyComputerUseArchive(dirname((await resolveRuntimeArchive(join(installer, "node_modules", "@ashx-j", "lunr"))).archive), host);
+	if (host) await verifyComputerUseArchive(dirname((await resolveRuntimeArchive(join(installer, "node_modules", cliName))).archive), host);
 	console.log("Staged standalone installer lock: npm ci --ignore-scripts passed with correct payload.");
 } finally {
 	await new Promise((done) => server.close(done));

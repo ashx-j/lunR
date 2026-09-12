@@ -1,6 +1,9 @@
 # Native computer use
 
-This branch is a development implementation, not a supported release. Windows
+This implementation is available through the experimental `@ashx-j/lunr-dev`
+channel, based on stable lunR 0.2.19 plus PR #77. Install with
+`npm i -g @ashx-j/lunr-dev`, then run `lunr-dev`. Stable `@ashx-j/lunr` is unchanged.
+This is not production support certification. Windows
 MCP metadata interoperability and local runtime/lifecycle tests pass. The macOS
 launch path is implemented but has not run on macOS hardware. Neither platform
 has passed live desktop acceptance. Production publication remains blocked.
@@ -52,8 +55,9 @@ Text and keys can target an accessibility element, window-image coordinates,
 or the observed focused field. Desktop keyboard input targets the observed
 focused field; changing focus needs a separate grounded click.
 
-Manual asks before every computer call, including observation. Plan permits
-relevant observation and workflow release but blocks mutation. Auto needs no
+Manual asks before every computer call except `computer_end`, which only releases
+the workflow and never needs approval. Observation still requires approval.
+Plan permits relevant observation and workflow release but blocks mutation. Auto needs no
 lunR per-call prompt for requested, implied, or necessary GUI work. In Yolo,
 ask first when an otherwise non-GUI task newly requires GUI. This intent rule
 is agent guidance, not a natural-language authorization classifier.
@@ -92,10 +96,13 @@ gate.
 An OS-account lease holds the desktop across observe/action calls. Competing
 workflows get busy rather than queueing; calls within one workflow serialize.
 The lease uses the OS account home, not the selected lunR settings profile.
-A short cross-process installation/acquisition lock protects changes to its
-owner record. A live owner is never displaced because its heartbeat is late.
+One short cross-process acquisition lock protects creating, updating, and deleting
+the owner record. Updates replace the file atomically. Runtime installation uses
+a separate lock and never replaces an existing runtime. A live owner is never displaced because its heartbeat is late.
 After MCP initialization and before any driver tool call, the adapter records
-the runtime PIDs in that lease. Failure to record ownership blocks tool dispatch.
+the transport PID and, on macOS, the daemon PID in that lease. Missing PIDs or
+failure to record ownership block tool dispatch. Driver-internal helper lifetime
+remains part of the unverified native shutdown acceptance gates.
 A crash during initialization can leave an unrecorded, idle runtime, but it has
 received no desktop action. Recovery requires both the owner and its recorded
 runtimes to have exited.
@@ -120,7 +127,7 @@ to use its live session mode.
 
 The development pin is [CuaDriver 0.28.1](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.1),
 source `d8028a7943087ee258dc1b4d19dc12a7cd27669c`. This exact prerelease and its
-three archive hashes are approved for branch development only.
+three archive hashes are approved for development-channel distribution only.
 `scripts/computer-use-release.json` is the authoritative archive inventory.
 The upstream MIT license is included under `native/computer-use`.
 
@@ -172,16 +179,20 @@ Workspace manifests and locks keep unpublished native dependencies out of
 ordinary developer installs. `scripts/publish.mjs` injects them into the staged
 CLI shrinkwrap and standalone installer lock. Public lock rewriting updates both
 package names and tarball filenames. Publication validates all seven packages,
-then publishes payloads before the CLI. A future release needs production
-approval and an unpublished CLI version. The current 0.2.19 packs are local
-validation artifacts, not newly published packages.
+then publishes payloads before the CLI. Dev staging uses exact
+`0.2.19-dev.<run>.<attempt>` versions throughout package manifests, shrinkwrap,
+and installer locks. It publishes `@ashx-j/lunr-dev` with its own `latest` tag;
+shared libraries and runtime payloads use `dev` tags. Stable tags stay unchanged.
+Production publication still requires separate approval and an unpublished
+stable CLI version.
 
 `scripts/build-binaries.sh` and `copy-binary-assets` copy only the selected opaque
 archive into `native/computer-use` beside the executable. They preserve the macOS
 archive without extracting or signing it. Routine builds stay offline. Release
 preparation may fetch only the pinned official archives, then verifies their
-sizes and hashes. Both npm and GitHub binary publication stop on the current
-development-only approval.
+sizes and hashes. Stable npm and GitHub binary publication stop on the current
+development-only approval. The `dev/tui` workflow may publish the explicitly
+requested npm dev channel.
 
 An installed payload package must match the CLI version. A CLI upgrade that keeps
 the same runtime bytes can reuse the verified cache. A changed or older cached
@@ -206,7 +217,7 @@ new GUI operation mapping, interrupted initialization, partial shutdown,
 settings/session tool rosters, real separate-process contention and death,
 orphan-runtime ownership, cache tampering, redirected paths, concurrent
 extraction, and the fresh gateway cron factory's approval/disposal lifecycle.
-The current verification passes 132 focused Vitest tests across 12 files and
+The dev review passes 167 focused Vitest tests across 14 files and
 eight archive/package tests. All five offline production builds, including the
 coding-agent Node bundle, pass. Touched native TypeScript lint and the repository's
 relative-import, workflow-publication, browser-smoke, and diff checks pass.
@@ -233,7 +244,7 @@ directory, then run:
 ```sh
 node scripts/generate-computer-use-manifest.mjs --check
 node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs
-node scripts/publish.mjs --dry-run --pack-dir /absolute/temporary/pack-directory
+node scripts/publish.mjs --channel dev --version 0.2.19-dev.0.1 --dry-run --pack-dir /absolute/temporary/pack-directory
 node scripts/check-computer-use-install.mjs /absolute/temporary/pack-directory
 ```
 

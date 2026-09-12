@@ -196,7 +196,7 @@ registerHooks({load(url, context, nextLoad) {
 		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
 		assert.equal(
 			request.toolSchemaHash,
-			computerHost ? "5f78f9c8f9d43e2b510e05553822914d8a1c3eefd5270c38e6b416a8fcfaaff5" : "4f2d0fa019699b29f632f271c69723d0a822743b84ef837582b0a9be8c941411",
+			computerHost ? "e8fd05d1588c6462af03b9ec50bd94421ba935ed68673c6a2758f49acbe169f0" : "4f2d0fa019699b29f632f271c69723d0a822743b84ef837582b0a9be8c941411",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
