@@ -6,6 +6,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { computerSettingsChanged } from "./computer-use/policy.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
 
@@ -154,6 +155,8 @@ export interface Settings {
 	modelTiers?: ModelTiersSettings;
 	modelInstructions?: ModelInstructionsSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
+	computerUse?: boolean;
+	computerForeground?: boolean;
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
 	// lunr: footer element toggles (ashxj-tui stats line)
@@ -1006,6 +1009,28 @@ export class SettingsManager {
 			return Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(value)));
 		}
 		return MEMORY_CHAR_CAP_DEFAULT;
+	}
+
+	getComputerUse(): boolean {
+		return this.globalSettings.computerUse ?? true;
+	}
+
+	setComputerUse(enabled: boolean): void {
+		this.globalSettings.computerUse = enabled;
+		this.markModified("computerUse");
+		this.save();
+		computerSettingsChanged({ enabled, foreground: this.getComputerForeground() });
+	}
+
+	getComputerForeground(): boolean {
+		return this.globalSettings.computerForeground ?? true;
+	}
+
+	setComputerForeground(enabled: boolean): void {
+		this.globalSettings.computerForeground = enabled;
+		this.markModified("computerForeground");
+		this.save();
+		computerSettingsChanged({ enabled: this.getComputerUse(), foreground: enabled });
 	}
 
 	getMemoryEnabled(): boolean {
