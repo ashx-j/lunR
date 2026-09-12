@@ -66,12 +66,24 @@ function setup(
 }
 
 describe("ashxj-thinking", () => {
-	it("registers /thinking, /effort, and /reasoning", () => {
+	it("registers /thinking, aliases, and per-level commands", () => {
 		const { commands } = setup();
-		expect([...commands.keys()]).toEqual(["thinking", "effort", "reasoning"]);
+		expect([...commands.keys()]).toEqual([
+			"thinking",
+			"effort",
+			"reasoning",
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
 		expect(commands.get("thinking")?.description).toContain("reasoning level");
 		expect(commands.get("effort")?.description).toContain("alias of /thinking");
 		expect(commands.get("reasoning")?.description).toContain("alias of /thinking");
+		expect(commands.get("xhigh")?.description).toBe("Set thinking level to xhigh");
 	});
 
 	it("completions have no token-budget copy", () => {
@@ -112,7 +124,7 @@ describe("ashxj-thinking", () => {
 		const { commands, ctx, setThinkingLevel, notify } = setup();
 		await commands.get(name)!.handler("high", ctx);
 		expect(setThinkingLevel).toHaveBeenCalledWith("high");
-		expect(notify).toHaveBeenCalledWith("Thinking level: high", "info");
+		expect(notify).not.toHaveBeenCalled();
 	});
 
 	it("rejects invalid levels", async () => {
@@ -137,7 +149,7 @@ describe("ashxj-thinking", () => {
 		});
 		await commands.get(name)!.handler("xhigh", ctx);
 		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
-		expect(notify).toHaveBeenCalledWith("Thinking level: xhigh", "info");
+		expect(notify).not.toHaveBeenCalled();
 	});
 
 	it("/thinking max sets the level when opted in", async () => {
@@ -146,7 +158,7 @@ describe("ashxj-thinking", () => {
 		});
 		await commands.get("thinking")!.handler("max", ctx);
 		expect(setThinkingLevel).toHaveBeenCalledWith("max");
-		expect(notify).toHaveBeenCalledWith("Thinking level: max", "info");
+		expect(notify).not.toHaveBeenCalled();
 	});
 
 	it("no-arg in non-TUI reports the current level", async () => {
@@ -154,5 +166,85 @@ describe("ashxj-thinking", () => {
 		await commands.get("effort")!.handler("", ctx);
 		expect(notify).toHaveBeenCalledWith("Thinking level: medium", "info");
 		expect(select).not.toHaveBeenCalled();
+	});
+
+	it("/xhigh sets the level when the model opts in", async () => {
+		const { commands, ctx, setThinkingLevel, notify } = setup({
+			thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+		});
+		await commands.get("xhigh")!.handler("", ctx);
+		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
+		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it("/xhigh errors when the model does not opt in", async () => {
+		const { commands, ctx, setThinkingLevel, notify } = setup();
+		await commands.get("xhigh")!.handler("", ctx);
+		expect(setThinkingLevel).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining('Invalid thinking level: "xhigh"'), "error");
+	});
+
+	it("completions follow session_start when pi.getModel is missing", () => {
+		const commands = new Map<string, RegisteredCommand>();
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		ashxjThinking({
+			registerCommand(name: string, spec: RegisteredCommand) {
+				commands.set(name, spec);
+			},
+			getThinkingLevel: () => "high",
+			setThinkingLevel() {},
+			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+				handlers.set(event, handler);
+			},
+		} as never);
+		const before = (commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map(
+			(item) => item.value,
+		);
+		expect(before).not.toContain("xhigh");
+		handlers.get("session_start")?.(
+			{},
+			{
+				model: {
+					id: "grok-4.6",
+					reasoning: true,
+					thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+				},
+			},
+		);
+		const after = (commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map(
+			(item) => item.value,
+		);
+		expect(after).toEqual(expect.arrayContaining(["xhigh", "max", "high"]));
+	});
+
+	it("completions follow model_select when the session model changes", () => {
+		const commands = new Map<string, RegisteredCommand>();
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		ashxjThinking({
+			registerCommand(name: string, spec: RegisteredCommand) {
+				commands.set(name, spec);
+			},
+			getThinkingLevel: () => "high",
+			setThinkingLevel() {},
+			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+				handlers.set(event, handler);
+			},
+		} as never);
+		handlers.get("session_start")?.(
+			{},
+			{
+				model: { id: "claude-opus-4", reasoning: true },
+			},
+		);
+		expect(
+			(commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map((item) => item.value),
+		).not.toContain("xhigh");
+		handlers.get("model_select")?.(
+			{ model: { id: "grok-4.6", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } } },
+			{ model: undefined },
+		);
+		expect(
+			(commands.get("thinking")!.getArgumentCompletions!("") as AutocompleteItem[]).map((item) => item.value),
+		).toContain("xhigh");
 	});
 });
