@@ -21,6 +21,8 @@ Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cy
 
 Advertised subagents always start **fresh** (no forked parent context). Default parallel concurrency / max tasks / global run cap are unlimited; an explicit `concurrency` is still honored.
 
+Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
+
 A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **manual and yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
 
 `/goal` sets a session goal and **forces session auto** permission mode.

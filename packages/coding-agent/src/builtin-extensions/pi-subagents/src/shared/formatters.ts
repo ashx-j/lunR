@@ -43,6 +43,28 @@ export function formatModelSelection(selection?: ModelSelection, resolvedModel?:
 	return formatModelThinking(selectedModel || resolvedModel, thinking);
 }
 
+export type CompactModelSelection =
+	| { kind: "tier"; tier: string }
+	| { kind: "model"; model?: string }
+	| { kind: "inherit" };
+
+function formatModelId(model?: string): string {
+	if (!model) return "";
+	let displayModel = splitKnownThinkingSuffix(model).baseModel;
+	const slashIdx = displayModel.lastIndexOf("/");
+	if (slashIdx !== -1) displayModel = displayModel.slice(slashIdx + 1);
+	return displayModel;
+}
+
+/** Compact badge: selected tier, or explicit/resolved model id. No thinking suffix. */
+export function formatCompactModelBadge(selection?: CompactModelSelection, resolvedModel?: string): string {
+	if (selection?.kind === "tier" && selection.tier) return selection.tier;
+	const explicit = selection?.kind === "model" && typeof selection.model === "string" && selection.model.trim()
+		? selection.model
+		: undefined;
+	return formatModelId(explicit ?? resolvedModel);
+}
+
 /**
  * Format usage statistics into a compact string
  */

@@ -377,8 +377,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 			}
 
-			const timerNeedsPaint = [...state.asyncJobs.values()].some((job) => job.status === "running");
-			if ((widgetChanged || timerNeedsPaint) && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+			if (widgetChanged && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};

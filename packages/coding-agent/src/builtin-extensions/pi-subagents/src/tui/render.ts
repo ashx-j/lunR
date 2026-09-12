@@ -20,7 +20,7 @@ import {
 	MAX_WIDGET_JOBS,
 	WIDGET_KEY,
 } from "../shared/types.ts";
-import { formatTokens, formatUsage, formatDuration, formatModelSelection, formatToolCall, shortenPath } from "../shared/formatters.ts";
+import { formatTokens, formatUsage, formatDuration, formatModelSelection, formatCompactModelBadge, formatToolCall, shortenPath } from "../shared/formatters.ts";
 import { childRowLabel } from "../shared/types.ts";
 import { sanitizeChildDescription } from "../shared/child-spec.ts";
 import { getDisplayItems, getSingleResultOutput } from "../shared/utils.ts";
@@ -255,6 +255,19 @@ function formatTokenStat(tokens: number): string {
 	return `${formatTokens(tokens)} token`;
 }
 
+function usageTokenTotal(usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }): number {
+	if (!usage) return 0;
+	return (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+}
+
+function compactResultTokens(result: Details["results"][number]): number {
+	const progress = result.progress || result.progressSummary;
+	if (progress && progress.tokens > 0) return progress.tokens;
+	const fromUsage = usageTokenTotal(result.usage);
+	if (fromUsage > 0) return fromUsage;
+	return progress?.tokens ?? 0;
+}
+
 function formatToolUseStat(count: number): string {
 	return `${count} tool use${count === 1 ? "" : "s"}`;
 }
@@ -274,8 +287,9 @@ function liveDurationMs(
 	now: number,
 ): number {
 	if (!progress) return 0;
-	if (!running || progress.lastActivityAt === undefined) return progress.durationMs;
-	return progress.durationMs + Math.max(0, now - progress.lastActivityAt);
+	const durationMs = progress.durationMs ?? 0;
+	if (!running || progress.lastActivityAt === undefined) return durationMs;
+	return durationMs + Math.max(0, now - progress.lastActivityAt);
 }
 
 function formatProgressStats(
@@ -347,24 +361,30 @@ function resultGlyph(result: Details["results"][number], output: string, theme: 
 	return theme.fg("success", "✓");
 }
 
-/** Compact hang row: tool count, tokens, elapsed time. */
-export function formatCompactStatsHangLine(
-	progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs" | "lastActivityAt"> | undefined,
+function formatCompactRowStats(tokens: number, durationMs: number): string {
+	return `${formatTokenStat(tokens)} · ${durationMs > 0 ? formatDuration(durationMs) : "0ms"}`;
+}
+
+/** Unified compact row: glyph description · tier|model · tokens · time. */
+export function formatCompactSubagentRow(
+	theme: Theme,
 	width: number,
-	paint: (s: string) => string = (s) => s,
-	prefix = "  ⎿  ",
-	now = Date.now(),
-	running = false,
+	parts: {
+		glyph: string;
+		description: string;
+		modelBadge?: string;
+		tokens: number;
+		durationMs: number;
+		prefix?: string;
+	},
 ): string {
-	const toolCount = progress?.toolCount ?? 0;
-	const tokens = progress?.tokens ?? 0;
-	const durationMs = liveDurationMs(progress, running, now);
+	const stats = formatCompactRowStats(parts.tokens, parts.durationMs);
 	const body = [
-		formatToolUseStat(toolCount),
-		formatTokenStat(tokens),
-		durationMs > 0 ? formatDuration(durationMs) : "0ms",
-	].join(" · ");
-	return truncLine(paint(`${prefix}${body}`), width);
+		`${parts.prefix ?? ""}${parts.glyph} ${themeBold(theme, parts.description)}`,
+		parts.modelBadge ? theme.fg("dim", parts.modelBadge) : "",
+		theme.fg("dim", stats),
+	].filter(Boolean).join(` ${theme.fg("dim", "·")} `);
+	return truncLine(body, width);
 }
 
 export function widgetRenderKey(job: AsyncJobState): string {
@@ -985,20 +1005,19 @@ function foregroundStyleWidgetDetails(job: AsyncJobState, theme: Theme, expanded
 	return lines;
 }
 
-function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): { toolCount: number; tokens: number; durationMs: number } {
+function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): { tokens: number; durationMs: number } {
 	const running = (step?.status ?? job.status) === "running";
+	const tokens = step?.tokens?.total ?? job.totalTokens?.total ?? 0;
+	if (step?.durationMs !== undefined) {
+		return {
+			tokens,
+			durationMs: liveDurationMs({ durationMs: step.durationMs, lastActivityAt: step.lastActivityAt }, running, now),
+		};
+	}
 	const startedAt = step?.startedAt ?? job.startedAt;
+	if (startedAt === undefined) return { tokens, durationMs: 0 };
 	const endedAt = running ? now : step?.endedAt ?? step?.lastActivityAt ?? job.updatedAt ?? now;
-	const durationMs = step?.durationMs !== undefined
-		? step.durationMs
-		: startedAt !== undefined
-			? Math.max(0, endedAt - startedAt)
-			: 0;
-	return {
-		toolCount: step?.toolCount ?? job.toolCount ?? 0,
-		tokens: step?.tokens?.total ?? job.totalTokens?.total ?? 0,
-		durationMs,
-	};
+	return { tokens, durationMs: Math.max(0, endedAt - startedAt) };
 }
 
 function compactJobLead(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number]): string {
@@ -1008,37 +1027,44 @@ function compactJobLead(job: AsyncJobState, step?: NonNullable<AsyncJobState["st
 	}) || widgetJobName(job);
 }
 
-function compactJobLines(job: AsyncJobState, step: NonNullable<AsyncJobState["steps"]>[number] | undefined, theme: Theme, width: number, now = Date.now()): string[] {
-	const running = (step?.status ?? job.status) === "running";
-	const lead = compactJobLead(job, step);
-	const modelBadge = formatModelSelection(step?.modelSelection, step?.model, step?.thinking);
-	const permissionBadge = step?.permissions ? theme.fg("dim", step.permissions) : "";
-	const glyph = step
-		? widgetStepGlyph(step.status, theme, running ? (widgetStepRunningSeed(step, step.index) ?? 0) + widgetAnimFrame(now) : widgetStepRunningSeed(step, step.index))
-		: widgetStatusGlyph(job, theme, now);
-	const hang = formatCompactStatsHangLine(
-		compactJobProgress(job, step, now),
-		width,
-		(s) => theme.fg("dim", s),
-		"  ⎿  ",
-		now,
-		running,
-	);
-	return [
-		truncLine(`${glyph} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}`, width),
-		hang,
-	];
+function activeJobStep(job: AsyncJobState): NonNullable<AsyncJobState["steps"]>[number] | undefined {
+	const steps = job.steps ?? [];
+	return steps.find((step) => step.status === "running")
+		?? steps.find((step) => step.status === "pending" || step.status === "queued")
+		?? steps[steps.length - 1];
 }
 
-function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number, _expanded: boolean): string[] {
-	const now = Date.now();
+function compactJobChildRows(job: AsyncJobState, theme: Theme, width: number, now = Date.now()): string[] {
 	const steps = job.steps ?? [];
 	if (steps.length <= 1) return compactJobLines(job, steps[0], theme, width, now);
 	return steps.flatMap((step) => compactJobLines(job, step, theme, width, now));
 }
 
-function compactSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number): string[] {
-	return buildSingleWidgetLines(job, theme, width, false);
+function compactJobLines(job: AsyncJobState, step: NonNullable<AsyncJobState["steps"]>[number] | undefined, theme: Theme, width: number, now = Date.now()): string[] {
+	const running = (step?.status ?? job.status) === "running";
+	const lead = compactJobLead(job, step);
+	const modelBadge = formatCompactModelBadge(step?.modelSelection, step?.model);
+	const glyph = step
+		? widgetStepGlyph(step.status, theme, running ? (widgetStepRunningSeed(step, step.index) ?? 0) + widgetAnimFrame(now) : widgetStepRunningSeed(step, step.index))
+		: widgetStatusGlyph(job, theme, now);
+	const progress = compactJobProgress(job, step, now);
+	return [formatCompactSubagentRow(theme, width, {
+		glyph,
+		description: lead,
+		modelBadge,
+		tokens: progress.tokens,
+		durationMs: progress.durationMs,
+	})];
+}
+
+function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number, _expanded: boolean, now = Date.now()): string[] {
+	const steps = job.steps ?? [];
+	if (steps.length <= 1) return compactJobLines(job, steps[0], theme, width, now);
+	return steps.flatMap((step) => compactJobLines(job, step, theme, width, now));
+}
+
+function compactSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number, now = Date.now()): string[] {
+	return buildSingleWidgetLines(job, theme, width, false, now);
 }
 
 type WidgetRenderTier = "full" | "single-line" | "progressive";
@@ -1093,7 +1119,9 @@ function widgetHeaderCounts(jobs: AsyncJobState[]): { running: AsyncJobState[]; 
 function buildSingleLineWidgetLines(jobs: AsyncJobState[], theme: Theme, width: number): string[] {
 	const counts = widgetHeaderCounts(jobs);
 	const hasActive = counts.running.length > 0 || counts.queued.length > 0;
-	const glyph = counts.running.length > 0 ? runningGlyph(widgetJobsRunningSeed(counts.running)) : hasActive ? "●" : "○";
+	const glyph = counts.running.length > 0
+		? runningGlyph((widgetJobsRunningSeed(counts.running) ?? 0) + widgetAnimFrame())
+		: hasActive ? "●" : "○";
 	const parts: string[] = [];
 	if (counts.running.length > 0) parts.push(`${counts.running.length}/${jobs.length} running`);
 	if (counts.queued.length > 0) parts.push(`${counts.queued.length} queued`);
@@ -1156,7 +1184,9 @@ function selectProgressiveJobKeys(jobs: AsyncJobState[], previousKeys: string[],
 function progressiveHeaderLine(jobs: AsyncJobState[], theme: Theme, width: number): string {
 	const counts = widgetHeaderCounts(jobs);
 	const hasActive = counts.running.length > 0 || counts.queued.length > 0;
-	const glyph = counts.running.length > 0 ? runningGlyph(widgetJobsRunningSeed(counts.running)) : hasActive ? "●" : "○";
+	const glyph = counts.running.length > 0
+		? runningGlyph((widgetJobsRunningSeed(counts.running) ?? 0) + widgetAnimFrame())
+		: hasActive ? "●" : "○";
 	const parts: string[] = [];
 	if (counts.running.length > 0) parts.push(formatAgentRunningLabel(counts.running.length));
 	if (counts.queued.length > 0) parts.push(`${counts.queued.length} queued`);
@@ -1169,17 +1199,9 @@ function progressiveHeaderLine(jobs: AsyncJobState[], theme: Theme, width: numbe
 	return truncLine(`${theme.fg(hasActive ? "accent" : "dim", glyph)} ${theme.fg(hasActive ? "accent" : "dim", "Async agents")} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(", ") || `${jobs.length} total`)}`, width);
 }
 
-function progressiveJobLine(job: AsyncJobState, theme: Theme, width: number): string {
-	const stats = widgetStats(job, theme);
-	const activity = widgetActivity(job);
-	const status = job.status === "complete" ? "done" : job.status;
-	const parts = [
-		themeBold(theme, widgetJobName(job)),
-		theme.fg("dim", status),
-		stats,
-		activity && activity.toLowerCase() !== status ? theme.fg("dim", activity) : "",
-	].filter(Boolean);
-	return truncLine(`  ${widgetStatusGlyph(job, theme)} ${parts.join(` ${theme.fg("dim", "·")} `)}`, width);
+function progressiveJobLine(job: AsyncJobState, theme: Theme, width: number, now = Date.now()): string {
+	const row = compactJobLines(job, activeJobStep(job), theme, Math.max(1, width - 2), now)[0] ?? "";
+	return row ? `  ${row}` : "";
 }
 
 function progressiveHiddenLine(hiddenJobs: AsyncJobState[], theme: Theme, width: number): string {
@@ -1273,30 +1295,18 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], lines: string[], theme: T
 	return rendered.lines;
 }
 
-function buildWidgetComponent(jobs: AsyncJobState[], expanded: boolean): (_tui: unknown, theme: Theme) => Component {
-	return (_tui, theme) => {
-		const width = getTermWidth();
-		const lines = expanded
-			? buildWidgetLines(jobs, theme, width, true)
-			: jobs.length === 1
-				? compactSingleWidgetLines(jobs[0]!, theme, width)
-				: buildWidgetLines(jobs, theme, width, false);
-		const container = new Container();
-		for (const line of fitAdaptiveWidgetLines(jobs, lines, theme, width, expanded)) container.addChild(new Text(line, 1, 0));
-		return container;
-	};
-}
-
-export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth(), expanded = false): string[] {
+export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth(), expanded = false, now = Date.now()): string[] {
 	if (jobs.length === 0) return [];
-	if (jobs.length === 1) return buildSingleWidgetLines(jobs[0]!, theme, width, expanded);
+	if (jobs.length === 1) return buildSingleWidgetLines(jobs[0]!, theme, width, expanded, now);
 	const running = jobs.filter((job) => job.status === "running");
 	const queued = jobs.filter((job) => job.status === "queued");
 	const finished = jobs.filter((job) => job.status !== "running" && job.status !== "queued");
 
 	const lines: string[] = [];
 	const hasActive = running.length > 0 || queued.length > 0;
-	const headerGlyph = running.length > 0 ? runningGlyph(widgetJobsRunningSeed(running)) : hasActive ? "●" : "○";
+	const headerGlyph = running.length > 0
+		? runningGlyph((widgetJobsRunningSeed(running) ?? 0) + widgetAnimFrame(now))
+		: hasActive ? "●" : "○";
 	lines.push(truncLine(`${theme.fg(hasActive ? "accent" : "dim", headerGlyph)} ${theme.fg(hasActive ? "accent" : "dim", "Async agents")} ${theme.fg("dim", "· background")}`, width));
 
 	const items: string[][] = [];
@@ -1307,12 +1317,8 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 
 	for (const job of running) {
 		if (slots <= 0) { hiddenRunning++; continue; }
-		const stats = widgetStats(job, theme);
-		items.push([
-			`${widgetStatusGlyph(job, theme)} ${themeBold(theme, widgetJobName(job))}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
-			`  ${theme.fg("dim", `⎿  ${widgetActivity(job)}`)}`,
-			...widgetParallelAgentDetails(job, theme, expanded, width),
-		]);
+		const row = compactJobChildRows(job, theme, Math.max(1, width - 3), now);
+		items.push(expanded ? [...row, ...widgetParallelAgentDetails(job, theme, true, width)] : row);
 		slots--;
 	}
 
@@ -1324,12 +1330,8 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 
 	for (const job of finished) {
 		if (slots <= 0) { hiddenFinished++; continue; }
-		const stats = widgetStats(job, theme);
-		items.push([
-			`${widgetStatusGlyph(job, theme)} ${themeBold(theme, widgetJobName(job))}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
-			`  ${theme.fg("dim", `⎿  ${widgetActivity(job)}`)}`,
-			...widgetParallelAgentDetails(job, theme, expanded, width),
-		]);
+		const row = compactJobChildRows(job, theme, Math.max(1, width - 3), now);
+		items.push(expanded ? [...row, ...widgetParallelAgentDetails(job, theme, true, width)] : row);
 		slots--;
 	}
 
@@ -1357,28 +1359,136 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	return lines;
 }
 
-let widgetPaintTimer: ReturnType<typeof setInterval> | undefined;
-let widgetPaintCtx: ExtensionContext | undefined;
+let activeWidget: SubagentAsyncWidget | undefined;
 
-export function clearWidgetPaintTimer(): void {
-	if (widgetPaintTimer) {
-		clearInterval(widgetPaintTimer);
-		widgetPaintTimer = undefined;
+export class SubagentAsyncWidget {
+	private jobs: AsyncJobState[];
+	private expanded: boolean;
+	private theme: Theme | undefined;
+	private requestRender: (() => void) | undefined;
+	private nowFn: () => number;
+	private timer: ReturnType<typeof setInterval> | undefined;
+	private disposed = false;
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+
+	constructor(
+		jobs: AsyncJobState[],
+		theme: Theme | undefined,
+		options?: {
+			expanded?: boolean;
+			requestRender?: () => void;
+			now?: () => number;
+		},
+	) {
+		this.jobs = jobs;
+		this.theme = theme;
+		this.expanded = options?.expanded ?? false;
+		this.requestRender = options?.requestRender;
+		this.nowFn = options?.now ?? Date.now;
+		this.syncTimer();
 	}
-	widgetPaintCtx = undefined;
+
+	setTheme(theme: Theme): void {
+		this.theme = theme;
+		this.invalidate();
+	}
+
+	setJobs(jobs: AsyncJobState[]): void {
+		this.jobs = jobs;
+		this.invalidate();
+		this.syncTimer();
+	}
+
+	setExpanded(expanded: boolean): void {
+		if (this.expanded === expanded) return;
+		this.expanded = expanded;
+		this.invalidate();
+	}
+
+	setRequestRender(requestRender: () => void): void {
+		this.requestRender = requestRender;
+	}
+
+	private hasRunning(): boolean {
+		return this.jobs.some((job) => job.status === "running");
+	}
+
+	private syncTimer(): void {
+		if (this.disposed) return;
+		if (this.hasRunning()) this.startTimer();
+		else this.stopTimer();
+	}
+
+	private startTimer(): void {
+		if (this.timer) return;
+		this.timer = setInterval(() => {
+			if (this.disposed) return;
+			this.invalidate();
+			this.requestRender?.();
+		}, 80);
+		this.timer.unref?.();
+	}
+
+	private stopTimer(): void {
+		if (!this.timer) return;
+		clearInterval(this.timer);
+		this.timer = undefined;
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		this.stopTimer();
+		if (activeWidget === this) activeWidget = undefined;
+	}
+
+	render(width: number): string[] {
+		const theme = this.theme;
+		if (!theme) return [];
+		if (this.cachedLines && this.cachedWidth === width && !this.hasRunning()) return this.cachedLines;
+		const now = this.nowFn();
+		const innerWidth = Math.max(1, width - 2);
+		const lines = this.expanded
+			? buildWidgetLines(this.jobs, theme, innerWidth, true, now)
+			: this.jobs.length === 1
+				? compactSingleWidgetLines(this.jobs[0]!, theme, innerWidth, now)
+				: buildWidgetLines(this.jobs, theme, innerWidth, false, now);
+		const fitted = fitAdaptiveWidgetLines(this.jobs, lines, theme, innerWidth, this.expanded);
+		const padded = fitted.map((line) => {
+			const withPad = ` ${line}`;
+			const vis = visibleWidth(withPad);
+			return withPad + " ".repeat(Math.max(0, width - vis));
+		});
+		this.cachedWidth = width;
+		this.cachedLines = padded;
+		return padded;
+	}
 }
 
-function ensureWidgetPaintTimer(ctx: ExtensionContext, running: boolean): void {
-	widgetPaintCtx = ctx;
-	if (!running || !ctx.hasUI) {
-		clearWidgetPaintTimer();
-		return;
-	}
-	if (widgetPaintTimer) return;
-	widgetPaintTimer = setInterval(() => {
-		widgetPaintCtx?.ui.requestRender?.();
-	}, 80);
-	widgetPaintTimer.unref?.();
+export function createSubagentWidgetComponent(
+	jobs: AsyncJobState[],
+	theme: Theme,
+	options?: {
+		expanded?: boolean;
+		requestRender?: () => void;
+		now?: () => number;
+	},
+): SubagentAsyncWidget {
+	return new SubagentAsyncWidget(jobs, theme, options);
+}
+
+export function disposeSubagentWidget(): void {
+	activeWidget?.dispose();
+	activeWidget = undefined;
+}
+
+export function clearWidgetPaintTimer(): void {
+	disposeSubagentWidget();
 }
 
 /**
@@ -1387,47 +1497,49 @@ function ensureWidgetPaintTimer(ctx: ExtensionContext, running: boolean): void {
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (jobs.length === 0) {
 		resetWidgetLayoutSession();
-		clearWidgetPaintTimer();
+		disposeSubagentWidget();
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 	if (!ctx.hasUI) return;
-	ensureWidgetPaintTimer(ctx, jobs.some((job) => job.status === "running"));
-	ctx.ui.setWidget(WIDGET_KEY, buildWidgetComponent(jobs, ctx.ui.getToolsExpanded?.() ?? false));
+	const expanded = ctx.ui.getToolsExpanded?.() ?? false;
+	const requestRender = () => ctx.ui.requestRender?.();
+	if (activeWidget) {
+		activeWidget.setJobs(jobs);
+		activeWidget.setExpanded(expanded);
+		activeWidget.setRequestRender(requestRender);
+		ctx.ui.requestRender?.();
+		return;
+	}
+	const widget = new SubagentAsyncWidget(jobs, undefined, { expanded, requestRender });
+	activeWidget = widget;
+	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
+		widget.setTheme(theme);
+		return widget;
+	});
 }
 
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme, frame?: number): Component {
 	const output = r.truncation?.text || getSingleResultOutput(r);
 	const progress = r.progress || r.progressSummary;
 	const isRunning = r.progress?.status === "running";
-	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
-	// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
 	const lead = compactRowLead({ description: r.description ?? r.agent, task: r.task });
-	const modelBadge = formatModelSelection(
+	const modelBadge = formatCompactModelBadge(
 		r.modelSelection ?? progress?.modelSelection,
 		r.model ?? progress?.model,
-		r.thinking ?? progress?.thinking,
 	);
-	const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
-	c.addChild(animatedLine((f, now) => {
-		const stats = formatProgressStats(theme, progress, true, { running: isRunning, terminal: !isRunning, now });
-		return truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, f)} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width);
-	}, frame, isRunning));
-
-	if (isRunning && r.progress) {
-		c.addChild(animatedLine((_f, now) => formatCompactStatsHangLine(r.progress, width, (s) => theme.fg("dim", s), "  ⎿  ", now, true), frame, true));
-		return c;
+	c.addChild(animatedLine((f, now) => formatCompactSubagentRow(theme, width, {
+		glyph: resultGlyph(r, output, theme, isRunning, undefined, f),
+		description: lead,
+		modelBadge,
+		tokens: compactResultTokens(r),
+		durationMs: liveDurationMs(progress, isRunning, now),
+	}), frame, isRunning));
+	if (!isRunning && (r.exitCode !== 0 || r.interrupted || r.detached || r.stopped)) {
+		c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `  ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
 	}
-
-	c.addChild(new Text(truncLine(theme.fg("dim", `  ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
-	const preview = firstOutputLine(output);
-	if (preview && r.exitCode === 0 && !hasEmptyTextOutputWithoutOutputTarget(r.task, output)) {
-		c.addChild(new Text(truncLine(theme.fg("dim", `     ${preview}`), width), 0, 0));
-	}
-	if (r.sessionFile) c.addChild(new Text(truncLine(theme.fg("dim", `  session: ${shortenPath(r.sessionFile)}`), width), 0, 0));
 	return c;
 }
 
@@ -1472,9 +1584,8 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	// lunr: header line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
-	c.addChild(animatedLine((f, now) => {
-		const stats = statJoin(theme, [multiLabel.headerLabel, formatProgressStats(theme, totalSummary, true, { running: hasRunning, terminal: !hasRunning, now }), formatTotalCostStat(d.totalCost)]);
+	c.addChild(animatedLine((f) => {
+		const stats = statJoin(theme, [multiLabel.headerLabel, formatTotalCostStat(d.totalCost)]);
 		return truncLine(`${glyph(f)} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width);
 	}, frame, hasRunning));
 
@@ -1511,31 +1622,23 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
-		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
-		// lunr: simplified collapsed row — glyph · task summary · agent type · runtime/tools/tokens stats.
-		// lunr: row line is a per-frame template so the running glyph animates in place (see subagentAnimSink).
 		const lead = compactRowLead({ description: r.description ?? agentName, task: r.task });
-		const permissionBadge = r.permissions ? theme.fg("dim", r.permissions) : "";
-		const modelBadge = formatModelSelection(
+		const modelBadge = formatCompactModelBadge(
 			r.modelSelection ?? (rProg && "modelSelection" in rProg ? rProg.modelSelection : undefined),
 			r.model ?? (rProg && "model" in rProg ? rProg.model : undefined),
-			r.thinking ?? (rProg && "thinking" in rProg ? rProg.thinking : undefined),
 		);
 		c.addChild(animatedLine((f, now) => {
-			const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
-			const stepStats = formatProgressStats(theme, rProg, true, { running: !!rRunning, terminal: !rRunning && !rPending, now });
-			return truncLine(`  ${glyph} ${themeBold(theme, lead)}${modelBadge ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", modelBadge)}` : ""}${permissionBadge ? ` ${theme.fg("dim", "·")} ${permissionBadge}` : ""}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`, width);
+			const rowGlyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), f);
+			return formatCompactSubagentRow(theme, width, {
+				glyph: rowGlyph,
+				description: lead,
+				modelBadge,
+				tokens: compactResultTokens(r),
+				durationMs: liveDurationMs(rProg, !!rRunning, now),
+				prefix: "  ",
+			});
 		}, frame, !!rRunning));
-		if (rRunning && rProg && "status" in rProg) {
-			c.addChild(animatedLine((_f, now) => formatCompactStatsHangLine(
-				rProg,
-				width,
-				(s) => theme.fg("dim", s),
-				"    ⎿  ",
-				now,
-				true,
-			), frame, true));
-		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
+		if (!rPending && !rRunning && (r.exitCode !== 0 || r.interrupted || r.detached || r.stopped)) {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
 		}
 	}
