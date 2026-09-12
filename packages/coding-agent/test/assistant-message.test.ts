@@ -264,19 +264,53 @@ describe("AssistantMessageComponent", () => {
 		expect(lines.length).toBeLessThan(THINKING_TAIL_LINES + 2);
 	});
 
-	test("smooth-sliced prefix still shows the tail of the full thinking string", () => {
+	test.each([false, true])("smooth-sliced thinking respects the reveal cursor with expanded=%s", (expanded) => {
 		initTheme("moon");
 
 		const thinking = `${"A".repeat(80)} UNIQUE_TAIL_CHUNK`;
 		const full = createAssistantMessage([{ type: "thinking", thinking }]);
-		const sliced = sliceMessageContent(full, 10, {});
 		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true);
-		component.setThinkingTimings([{ start: Date.now() }]);
-		component.updateContent(sliced, { thinkingSource: full });
-		const rendered = stripAnsi(component.render(40).join("\n"));
+		component.setThinkingTimings([{ start: 0 }]);
+		component.setExpanded(expanded);
+		component.updateContent(sliceMessageContent(full, 0), { thinkingSource: full });
+		expect(component.render(40)).toEqual([]);
 
+		for (const budget of [4, 8, 12]) {
+			component.updateContent(sliceMessageContent(full, budget), { thinkingSource: full });
+			component.invalidate();
+			const rendered = stripAnsi(component.render(40).join("\n"));
+			expect(rendered).not.toContain("✻ Thought");
+			expect(rendered).toContain("A".repeat(budget));
+			expect(rendered).not.toContain("A".repeat(budget + 1));
+			expect(rendered).not.toContain("UNIQUE_TAIL_CHUNK");
+		}
+
+		component.updateContent(sliceMessageContent(full, thinking.length), { thinkingSource: full });
+		expect(stripAnsi(component.render(40).join("\n"))).toContain("UNIQUE_TAIL_CHUNK");
+	});
+
+	test("finished thinking keeps animating until its full run is revealed", () => {
+		initTheme("moon");
+
+		const full = createAssistantMessage([
+			{ type: "thinking", thinking: "First thought." },
+			{ type: "thinking", thinking: "Second thought." },
+			{ type: "text", text: "Answer" },
+		]);
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true);
+		component.setThinkingTimings([{ start: 0, end: 1000 }]);
+		component.updateContent(sliceMessageContent(full, 17), { thinkingSource: full });
+		let rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Sec");
+		expect(rendered).not.toContain("Second thought.");
 		expect(rendered).not.toContain("✻ Thought");
-		expect(rendered).toContain("UNIQUE_TAIL_CHUNK");
+		expect(rendered).not.toContain("Answer");
+
+		component.updateContent(sliceMessageContent(full, 29), { thinkingSource: full });
+		rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("✻ Thought for 1s");
+		expect(rendered).toContain("First thought.");
+		expect(rendered).not.toContain("Answer");
 	});
 
 	test("history messages still collapse when thinkingCollapse is true", () => {
