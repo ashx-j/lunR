@@ -33,8 +33,11 @@ export function isTuiMode(ctx: Pick<ExtensionContext, "hasUI" | "mode">): boolea
 
 export async function initializeMcp(
   pi: ExtensionAPI,
-  ctx: ExtensionContext
+  ctx: ExtensionContext,
+  options: { signal?: AbortSignal; onState?: (state: McpExtensionState) => void } = {},
 ): Promise<McpExtensionState> {
+  const signal = options.signal ?? ctx.signal;
+  throwIfAborted(signal);
   const configPath = pi.getFlag("mcp-config") as string | undefined;
   const config = loadMcpConfig(configPath, ctx.cwd);
 
@@ -78,6 +81,7 @@ export async function initializeMcp(
     sendMessage: (message, options) => pi.sendMessage(message as unknown as Parameters<typeof pi.sendMessage>[0], options),
   };
 
+  options.onState?.(state);
   const serverEntries = Object.entries(config.mcpServers);
   if (serverEntries.length === 0) {
     return state;
@@ -132,7 +136,8 @@ export async function initializeMcp(
 
   const results = await parallelLimit(startupServers, 10, async ([name, definition]) => {
     try {
-      const connection = await manager.connect(name, definition, ctx.signal);
+      throwIfAborted(signal);
+      const connection = await manager.connect(name, definition, signal);
       if (connection.status === "needs-auth") {
         return { name, definition, connection: null, error: `OAuth authentication required. Run /mcp-auth ${name}.` };
       }
@@ -143,6 +148,7 @@ export async function initializeMcp(
     }
   });
 
+  throwIfAborted(signal);
   for (const { name, definition, connection, error } of results) {
     if (error || !connection) {
       if (ctx.hasUI) {
@@ -186,7 +192,8 @@ export async function initializeMcp(
         async (name) => {
           const definition = config.mcpServers[name];
           try {
-            const connection = await manager.connect(name, definition, ctx.signal);
+            throwIfAborted(signal);
+            const connection = await manager.connect(name, definition, signal);
             if (connection.status === "needs-auth") {
               return { name, ok: false };
             }
@@ -201,6 +208,7 @@ export async function initializeMcp(
           }
         },
       );
+      throwIfAborted(signal);
       const bootstrapped = bootstrapResults.filter(r => r.ok).map(r => r.name);
       if (bootstrapped.length > 0 && ctx.hasUI) {
         ctx.ui.notify(`MCP: direct tools for ${bootstrapped.join(", ")} will be available after restart`, "info");

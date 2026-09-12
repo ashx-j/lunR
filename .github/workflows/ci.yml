@@ -42,6 +42,9 @@ jobs:
           npm --prefix packages/orchestrator run build
           git diff --exit-code -- packages/ai
 
+      - name: Check first request and lazy tool imports
+        run: node scripts/check-interactive-first-paint.mjs
+
       - name: Check
         run: npm run check
 

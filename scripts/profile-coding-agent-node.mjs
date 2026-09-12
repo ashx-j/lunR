@@ -37,12 +37,14 @@ Options:
   --isolated-agent-dir   Use a fresh temporary agent dir instead of the normal one
   --no-offline           Do not force PI_OFFLINE=1 / PI_SKIP_VERSION_CHECK=1
   --skip-build           Reuse the current dist/cli.js without rebuilding first (Node only)
+  --cli <path>           Benchmark another built Node CLI without rebuilding it
   --cpu-profile          Write CPU profiles for benchmark runs
   --help                 Show this help
 
 Notes:
-  - By default the benchmark uses your normal configured agent dir, so global models/auth/settings work.
-  - TUI mode reports input armed, first frame, and prompt barrier milestones.
+  - By default the benchmark uses a fresh isolated agent dir, home, and temp directory.
+  - TUI mode reports input armed, first frame, prompt readiness, and a local provider request.
+  It changes only the selected benchmark agent directory; prefer --isolated-agent-dir.
   - RPC mode measures startup until a real get_state request receives a response, then closes stdin to exit cleanly.
   - CPU profiles are kept in the selected profile directory for later analysis.
 `);
@@ -120,7 +122,8 @@ function parseArgs(argv) {
 				arg === "--profile-dir" ||
 				arg === "--label" ||
 				arg === "--runtime" ||
-				arg === "--agent-dir") &&
+				arg === "--agent-dir" ||
+				arg === "--cli") &&
 			index + 1 >= argv.length
 		) {
 			throw new Error(`Missing value for ${arg}`);
@@ -158,6 +161,12 @@ function parseArgs(argv) {
 
 		if (arg === "--agent-dir") {
 			options.agentDir = resolve(argv[++index]);
+			continue;
+		}
+
+		if (arg === "--cli") {
+			options.cli = resolve(argv[++index]);
+			options.build = false;
 			continue;
 		}
 
@@ -212,6 +221,7 @@ function summarize(values) {
 		max: sorted[sorted.length - 1],
 		avg: total / sorted.length,
 		median,
+		p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
 	};
 }
 
@@ -290,26 +300,44 @@ async function waitForExit(child, errorPrefix) {
 }
 
 async function runBuild() {
- process.stdout.write("Building offline: tui -> ai -> agent -> coding-agent...\n");
- const startedAt = performance.now();
- const tsgo = join(repoRoot, "node_modules/@typescript/native-preview/bin/tsgo.js");
- const commands = [
-  ...["tui", "ai", "agent", "coding-agent"].map((pkg) => ({ executable: process.execPath, args: [tsgo, "-p", `packages/${pkg}/tsconfig.build.json`], shell: false })),
-  { executable: "npm", args: ["run", "copy-assets", "--workspace", "packages/coding-agent"], shell: process.platform === "win32" },
- ];
- for (const command of commands) {
-  const child = spawn(command.executable, command.args, { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], shell: command.shell });
-  let output = "";
-  child.stdout.on("data", (chunk) => { output += chunk; });
-  child.stderr.on("data", (chunk) => { output += chunk; });
-  const exitCode = await waitForExit(child, "Build");
-  if (exitCode !== 0) throw new Error(`Build failed with exit code ${exitCode}\n${output}`);
- }
- process.stdout.write(`Build completed in ${formatMs(performance.now() - startedAt)}\n`);
+	process.stdout.write("Building offline: tui -> ai -> agent -> coding-agent...\n");
+	const startedAt = performance.now();
+	const tsgo = join(repoRoot, "node_modules/@typescript/native-preview/bin/tsgo.js");
+	const commands = [
+		...["tui", "ai", "agent", "coding-agent"].map((pkg) => ({
+			executable: process.execPath,
+			args: [tsgo, "-p", `packages/${pkg}/tsconfig.build.json`],
+			shell: false,
+		})),
+		{
+			executable: "npm",
+			args: ["run", "copy-assets", "--workspace", "packages/coding-agent"],
+			shell: process.platform === "win32",
+		},
+		{ executable: process.execPath, args: [join(repoRoot, "scripts/build-node-runtime.mjs")], shell: false },
+	];
+	for (const command of commands) {
+		const child = spawn(command.executable, command.args, {
+			cwd: repoRoot,
+			env: process.env,
+			stdio: ["ignore", "pipe", "pipe"],
+			shell: command.shell,
+		});
+		let output = "";
+		child.stdout.on("data", (chunk) => {
+			output += chunk;
+		});
+		child.stderr.on("data", (chunk) => {
+			output += chunk;
+		});
+		const exitCode = await waitForExit(child, "Build");
+		if (exitCode !== 0) throw new Error(`Build failed with exit code ${exitCode}\n${output}`);
+	}
+	process.stdout.write(`Build completed in ${formatMs(performance.now() - startedAt)}\n`);
 }
 
-function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
-	const benchmarkArgs = ["--no-session"];
+function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile, cli = distCliPath) {
+	const benchmarkArgs = ["--no-session", "--no-approve"];
 	if (mode === "rpc") {
 		benchmarkArgs.push("--mode", "rpc");
 	}
@@ -330,7 +358,7 @@ function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
 	if (cpuProfile) {
 		args.push("--cpu-prof", `--cpu-prof-dir=${profileDir}`, `--cpu-prof-name=${profileName}`);
 	}
-	args.push(distCliPath, ...benchmarkArgs);
+	args.push(cli, ...benchmarkArgs);
 	return {
 		executable: process.execPath,
 		args,
@@ -339,6 +367,22 @@ function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
 
 function createBenchmarkEnv(options, isolatedAgentDir) {
 	const env = { ...process.env };
+	const sandbox = isolatedAgentDir ?? options.agentDir;
+	if (sandbox) {
+		const home = join(sandbox, "home");
+		const temp = join(sandbox, "tmp");
+		mkdirSync(join(home, "workspace"), { recursive: true });
+		mkdirSync(temp, { recursive: true });
+		Object.assign(env, {
+			HOME: home,
+			USERPROFILE: home,
+			APPDATA: home,
+			LOCALAPPDATA: home,
+			TMP: temp,
+			TEMP: temp,
+			TMPDIR: temp,
+		});
+	}
 	if (options.agentDir) {
 		env[agentDirEnvName] = options.agentDir;
 	} else if (isolatedAgentDir) {
@@ -363,10 +407,13 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 		mkdirSync(isolatedAgentDir, { recursive: true });
 	}
 
-	const command = getRuntimeCommand(runtime, "tui", profileDir, profileName, options.cpuProfile);
+	const command = getRuntimeCommand(runtime, "tui", profileDir, profileName, options.cpuProfile, options.cli);
 	const child = spawn(command.executable, command.args, {
-		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
+		cwd:
+			isolatedAgentDir || options.agentDir
+				? join(isolatedAgentDir ?? options.agentDir, "home/workspace")
+				: packageDir,
 		stdio: [process.stdin.isTTY ? "inherit" : "ignore", "ignore", "pipe"],
 		shell: process.platform === "win32" && runtime === "bun",
 	});
@@ -378,7 +425,10 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 	});
 
 	const startedAt = performance.now();
-	const exitCode = await waitForExit(child, `Benchmark ${measuredIndex === undefined ? `warmup ${runNumber}` : `run ${measuredIndex}`}`);
+	const exitCode = await waitForExit(
+		child,
+		`Benchmark ${measuredIndex === undefined ? `warmup ${runNumber}` : `run ${measuredIndex}`}`,
+	);
 	const elapsedMs = performance.now() - startedAt;
 
 	try {
@@ -392,8 +442,11 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 		}
 
 		const milestones = parseStartupMilestones(stderr);
+		const requestLine = stderr.split(/\r?\n/).find((line) => line.startsWith("LUNR_STARTUP_REQUEST "));
+		const request = requestLine ? JSON.parse(requestLine.slice("LUNR_STARTUP_REQUEST ".length)) : undefined;
 		return {
-			elapsedMs: milestones.get("prompt_barrier_open") ?? elapsedMs,
+			request,
+			elapsedMs: milestones.get("first_request_dispatched") ?? milestones.get("prompt_barrier_open") ?? elapsedMs,
 			wallElapsedMs: elapsedMs,
 			profilePath,
 			timings: parseStartupTimings(stderr),
@@ -429,10 +482,13 @@ async function runRpcBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 		mkdirSync(isolatedAgentDir, { recursive: true });
 	}
 
-	const command = getRuntimeCommand(runtime, "rpc", profileDir, profileName, options.cpuProfile);
+	const command = getRuntimeCommand(runtime, "rpc", profileDir, profileName, options.cpuProfile, options.cli);
 	const child = spawn(command.executable, command.args, {
-		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
+		cwd:
+			isolatedAgentDir || options.agentDir
+				? join(isolatedAgentDir ?? options.agentDir, "home/workspace")
+				: packageDir,
 		stdio: ["pipe", "pipe", "pipe"],
 		shell: process.platform === "win32" && runtime === "bun",
 	});
@@ -482,7 +538,10 @@ async function runRpcBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 	child.stdin.setDefaultEncoding("utf8");
 	child.stdin.write(`${JSON.stringify({ id: requestId, type: "get_state" })}\n`);
 
-	const exitCode = await waitForExit(child, `Benchmark ${measuredIndex === undefined ? `warmup ${runNumber}` : `run ${measuredIndex}`}`);
+	const exitCode = await waitForExit(
+		child,
+		`Benchmark ${measuredIndex === undefined ? `warmup ${runNumber}` : `run ${measuredIndex}`}`,
+	);
 
 	try {
 		if (responseError) {
@@ -532,6 +591,7 @@ async function main() {
 		throw new Error("--agent-dir and --isolated-agent-dir cannot be combined");
 	}
 
+	if (!options.agentDir) options.isolatedAgentDir = true;
 	const runtime = resolveRuntime(options.runtime);
 	options.label = resolveLabel(options.mode, options.label);
 	const profileDir = resolveProfileDir(runtime, options.profileDir);
@@ -545,7 +605,7 @@ async function main() {
 		);
 	}
 
-	const entryPath = runtime === "bun" ? srcCliPath : distCliPath;
+	const entryPath = runtime === "bun" ? srcCliPath : (options.cli ?? distCliPath);
 	if (!existsSync(entryPath)) {
 		throw new Error(`CLI entrypoint not found: ${entryPath}`);
 	}
@@ -564,11 +624,9 @@ async function main() {
 			profileDir,
 		});
 
-		const milestoneText = [...result.milestones.entries()]
-			.map(([name, ms]) => `${name}=${formatMs(ms)}`)
-			.join(" ");
+		const milestoneText = [...result.milestones.entries()].map(([name, ms]) => `${name}=${formatMs(ms)}`).join(" ");
 		process.stdout.write(
-			`[${measuredIndex === undefined ? `warmup ${runIndex + 1}` : `run ${measuredIndex}`}] elapsed=${formatMs(result.elapsedMs)}${milestoneText ? ` ${milestoneText}` : ""}\n`,
+			`[${measuredIndex === undefined ? `warmup ${runIndex + 1}` : `run ${measuredIndex}`}] elapsed=${formatMs(result.elapsedMs)}${milestoneText ? ` ${milestoneText}` : ""}${result.request ? ` tools=${result.request.tools.length} schema=${result.request.toolSchemaHash}` : ""}\n`,
 		);
 
 		if (measuredIndex !== undefined) {
@@ -610,6 +668,7 @@ async function main() {
 	process.stdout.write(`  elapsed median:   ${formatMs(elapsedSummary.median)}\n`);
 	process.stdout.write(`  elapsed avg:      ${formatMs(elapsedSummary.avg)}\n`);
 	process.stdout.write(`  elapsed max:      ${formatMs(elapsedSummary.max)}\n`);
+	process.stdout.write(`  elapsed p95:      ${formatMs(elapsedSummary.p95)}\n`);
 	for (const [label, summary] of timingSummaries.entries()) {
 		process.stdout.write(`  ${label} median: ${formatMs(summary.median)}\n`);
 	}
