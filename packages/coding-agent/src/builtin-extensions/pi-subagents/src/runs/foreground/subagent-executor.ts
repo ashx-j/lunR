@@ -39,7 +39,7 @@ import { buildAsyncRunnerSteps, executeAsyncChain, executeAsyncSingle, formatAsy
 import type { ScheduledRunAction } from "../background/scheduled-runs.ts";
 import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOutputNames } from "../background/chain-append.ts";
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
-import { validateExecutionAcceptance } from "../shared/acceptance.ts";
+import { restorePersistedAcceptance, validateExecutionAcceptance } from "../shared/acceptance.ts";
 import { createForkContextResolver, forkedChildRequiresThinkingOff } from "../../shared/fork-context.ts";
 import { lunrContextPolicy } from "../../shared/lunr-child-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
@@ -1236,6 +1236,14 @@ async function resumeAsyncRun(input: {
 	const artifactConfig: ArtifactConfig = recoveryDescriptor?.artifactConfig ?? { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false };
 	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile, effectiveCwd);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
+	let restoredAcceptance: ReturnType<typeof restorePersistedAcceptance> | undefined;
+	if (recoveryDescriptor?.acceptance !== undefined && input.params.acceptance === undefined) {
+		try {
+			restoredAcceptance = restorePersistedAcceptance(recoveryDescriptor.acceptance, "recoveryDescriptor.acceptance");
+		} catch (error) {
+			return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "management", results: [] } };
+		}
+	}
 	let recoverySpec: ChildSpec;
 	try {
 		const recoverySelection = recoveryDescriptor?.modelSelection ?? target.modelSelection;
@@ -1256,7 +1264,7 @@ async function resumeAsyncRun(input: {
 			cwd: effectiveCwd,
 			output: recoveryDescriptor?.outputPath,
 			outputMode: recoveryDescriptor?.outputMode,
-			acceptance: input.params.acceptance ?? recoveryDescriptor?.acceptance,
+			acceptance: input.params.acceptance,
 			toolBudget: recoveryDescriptor?.initialToolBudget,
 		}, {
 			parentMode: snapshotParentPermissionMode(input.deps.state.currentSessionId),
@@ -1309,7 +1317,7 @@ async function resumeAsyncRun(input: {
 		output: recoveryDescriptor?.outputPath,
 		outputMode: recoveryDescriptor?.outputMode,
 		...(recoveryDescriptor?.skills ? { skills: [...recoveryDescriptor.skills] } : {}),
-		...(recoveryDescriptor?.acceptance !== undefined && input.params.acceptance === undefined ? { acceptance: recoveryDescriptor.acceptance } : {}),
+		...(restoredAcceptance ? { restoredAcceptance } : {}),
 		...(input.params.timeoutMs !== undefined ? { timeoutMs: input.params.timeoutMs } : {}),
 		...(input.absoluteDeadlineAt !== undefined ? { absoluteDeadlineAt: input.absoluteDeadlineAt } : {}),
 		...(input.params.turnBudget !== undefined ? { turnBudget: input.params.turnBudget } : {}),

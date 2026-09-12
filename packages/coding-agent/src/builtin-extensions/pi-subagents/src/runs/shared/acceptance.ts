@@ -44,10 +44,12 @@ const VALID_EVIDENCE = new Set<AcceptanceEvidenceKind>([
 	"manual-notes",
 ]);
 const ACCEPTANCE_CONFIG_KEYS = new Set(["level", "criteria", "evidence", "verify", "review", "stopRules", "reason"]);
+const PERSISTED_ACCEPTANCE_KEYS = new Set([...ACCEPTANCE_CONFIG_KEYS, "explicit", "inferredReason"]);
 const ACCEPTANCE_GATE_KEYS = new Set(["id", "must", "evidence", "severity"]);
 const ACCEPTANCE_VERIFY_KEYS = new Set(["id", "command", "timeoutMs", "cwd", "env", "allowFailure"]);
 const ACCEPTANCE_REVIEW_KEYS = new Set(["agent", "focus", "required"]);
 const EXPLICIT_REVIEWED_UNAVAILABLE = "cannot be requested explicitly because this run cannot supply an independent reviewer result; use checked/verified and orchestrate the reviewer separately, or omit acceptance for read-only review tasks.";
+const RESOLVED_LEVELS = new Set<Exclude<AcceptanceLevel, "auto">>(["none", "attested", "checked", "verified", "reviewed"]);
 
 function normalizeLevel(level: AcceptanceLevel | undefined): Exclude<AcceptanceLevel, "auto"> | "auto" {
 	return level ?? "auto";
@@ -148,31 +150,55 @@ function explicitAcceptanceCanDisable(explicit: AcceptanceConfig): boolean {
 	return explicit.level === "none" && typeof explicit.reason === "string" && explicit.reason.trim().length > 0;
 }
 
-export function validateAcceptanceInput(input: unknown, pathLabel = "acceptance"): string[] {
+type AcceptanceValidationMode = "launch" | "persisted";
+
+function validateAcceptanceValue(input: unknown, pathLabel: string, mode: AcceptanceValidationMode): string[] {
 	const errors: string[] = [];
 	if (input === undefined) return errors;
-	if (input === false) return errors;
-	if (typeof input === "string") {
-		if (!VALID_LEVELS.has(input as AcceptanceLevel)) errors.push(`${pathLabel} has invalid level '${input}'.`);
-		else if (input === "none") errors.push(`${pathLabel} level "none" requires a reason; use { level: "none", reason: "..." }.`);
-		else if (input === "reviewed") errors.push(`${pathLabel} ${EXPLICIT_REVIEWED_UNAVAILABLE}`);
-		return errors;
-	}
-	if (!input || typeof input !== "object" || Array.isArray(input)) {
-		errors.push(`${pathLabel} must be a string level, false, or an object.`);
-		return errors;
+	if (mode === "persisted") {
+		if (!input || typeof input !== "object" || Array.isArray(input)) {
+			errors.push(`${pathLabel} must be a resolved acceptance object.`);
+			return errors;
+		}
+	} else {
+		if (input === false) return errors;
+		if (typeof input === "string") {
+			if (!VALID_LEVELS.has(input as AcceptanceLevel)) errors.push(`${pathLabel} has invalid level '${input}'.`);
+			else if (input === "none") errors.push(`${pathLabel} level "none" requires a reason; use { level: "none", reason: "..." }.`);
+			else if (input === "reviewed") errors.push(`${pathLabel} ${EXPLICIT_REVIEWED_UNAVAILABLE}`);
+			return errors;
+		}
+		if (!input || typeof input !== "object" || Array.isArray(input)) {
+			errors.push(`${pathLabel} must be a string level, false, or an object.`);
+			return errors;
+		}
 	}
 	const value = input as Record<string, unknown>;
+	const allowedKeys = mode === "persisted" ? PERSISTED_ACCEPTANCE_KEYS : ACCEPTANCE_CONFIG_KEYS;
 	for (const key of Object.keys(value)) {
-		if (!ACCEPTANCE_CONFIG_KEYS.has(key)) errors.push(`${pathLabel}.${key} is not supported.`);
+		if (!allowedKeys.has(key)) errors.push(`${pathLabel}.${key} is not supported.`);
 	}
-	if (value.level !== undefined && (typeof value.level !== "string" || !VALID_LEVELS.has(value.level as AcceptanceLevel))) {
+	if (mode === "persisted") {
+		if (typeof value.level !== "string" || !RESOLVED_LEVELS.has(value.level as Exclude<AcceptanceLevel, "auto">)) {
+			errors.push(`${pathLabel}.level must be one of none, attested, checked, verified, reviewed.`);
+		}
+	} else if (value.level !== undefined && (typeof value.level !== "string" || !VALID_LEVELS.has(value.level as AcceptanceLevel))) {
 		errors.push(`${pathLabel}.level must be one of auto, none, attested, checked, verified, reviewed.`);
 	}
 	if (value.level === "none" && (typeof value.reason !== "string" || !value.reason.trim())) {
 		errors.push(`${pathLabel}.reason is required when level is none.`);
 	}
-	if (value.level === "reviewed") errors.push(`${pathLabel}.level ${EXPLICIT_REVIEWED_UNAVAILABLE}`);
+	if (mode === "launch" && value.level === "reviewed") errors.push(`${pathLabel}.level ${EXPLICIT_REVIEWED_UNAVAILABLE}`);
+	if (mode === "persisted") {
+		if (value.explicit !== undefined && typeof value.explicit !== "boolean") {
+			errors.push(`${pathLabel}.explicit must be a boolean.`);
+		}
+		if (value.inferredReason !== undefined) {
+			if (!Array.isArray(value.inferredReason) || value.inferredReason.some((item) => typeof item !== "string")) {
+				errors.push(`${pathLabel}.inferredReason must be an array of strings.`);
+			}
+		}
+	}
 	if (value.reason !== undefined && typeof value.reason !== "string") errors.push(`${pathLabel}.reason must be a string.`);
 	if (value.criteria !== undefined && !Array.isArray(value.criteria)) errors.push(`${pathLabel}.criteria must be an array.`);
 	if (Array.isArray(value.criteria)) {
@@ -271,6 +297,41 @@ export function validateAcceptanceInput(input: unknown, pathLabel = "acceptance"
 	return errors;
 }
 
+export function validateAcceptanceInput(input: unknown, pathLabel = "acceptance"): string[] {
+	return validateAcceptanceValue(input, pathLabel, "launch");
+}
+
+export function validatePersistedAcceptance(input: unknown, pathLabel = "acceptance"): string[] {
+	return validateAcceptanceValue(input, pathLabel, "persisted");
+}
+
+export function restorePersistedAcceptance(input: unknown, pathLabel = "acceptance"): ResolvedAcceptanceConfig {
+	const errors = validatePersistedAcceptance(input, pathLabel);
+	if (errors.length > 0) throw new Error(errors.join(" "));
+	const value = input as Record<string, unknown>;
+	const evidence = Array.isArray(value.evidence)
+		? unique((value.evidence as string[]).filter((item): item is AcceptanceEvidenceKind => VALID_EVIDENCE.has(item as AcceptanceEvidenceKind)))
+		: [];
+	return {
+		level: value.level as Exclude<AcceptanceLevel, "auto">,
+		explicit: value.explicit === true,
+		inferredReason: Array.isArray(value.inferredReason)
+			? (value.inferredReason as unknown[]).filter((item): item is string => typeof item === "string")
+			: [],
+		criteria: normalizeCriteria(
+			value.criteria as Array<string | { id?: string; must?: string; evidence?: AcceptanceEvidenceKind[]; severity?: "required" | "recommended" }> | undefined,
+			evidence,
+		),
+		evidence,
+		verify: Array.isArray(value.verify) ? value.verify as AcceptanceVerifyCommand[] : [],
+		review: value.review as ResolvedAcceptanceConfig["review"],
+		stopRules: Array.isArray(value.stopRules)
+			? (value.stopRules as unknown[]).filter((item): item is string => typeof item === "string")
+			: [],
+		...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+	};
+}
+
 export function validateExecutionAcceptance(input: {
 	acceptance?: unknown;
 	tasks?: Array<{ acceptance?: unknown }>;
@@ -338,9 +399,10 @@ export function resolveEffectiveAcceptance(input: {
 	if (level === "reviewed" && input.explicit !== undefined && explicitLevel !== "reviewed" && explicit.review === undefined && review && review !== false) {
 		review = { ...review, required: false };
 	}
+	const parentRequestedLevel = input.explicit === undefined || explicitLevel === "auto" ? undefined : explicitLevel;
 	return {
 		level,
-		explicit: input.explicit !== undefined,
+		explicit: parentRequestedLevel === level,
 		inferredReason: inferred.reasons,
 		criteria,
 		evidence,

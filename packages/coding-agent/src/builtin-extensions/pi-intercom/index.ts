@@ -5,7 +5,7 @@ import { randomUUID } from "crypto";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { IntercomClient } from "./broker/client.ts";
-import { spawnBrokerIfNeeded } from "./broker/spawn.ts";
+import { isNativeSupervisorChannelActive, spawnBrokerIfNeeded } from "./broker/spawn.ts";
 import { SessionListOverlay } from "./ui/session-list.ts";
 import { ComposeOverlay, type ComposeResult } from "./ui/compose.ts";
 import { InlineMessageComponent } from "./ui/inline-message.ts";
@@ -944,6 +944,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     agentRunning = false;
     activeTools.clear();
     startNamePoll();
+    if (isNativeSupervisorChannelActive()) {
+      return;
+    }
     const startupGeneration = runtimeGeneration;
     startupConnectTimer = setTimeout(() => {
       startupConnectTimer = null;
@@ -1164,7 +1167,8 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   });
 
   const childOrchestratorMetadata = readChildOrchestratorMetadata();
-  if (childOrchestratorMetadata) {
+  const nativeSupervisorChannel = isNativeSupervisorChannelActive();
+  if (childOrchestratorMetadata && !nativeSupervisorChannel) {
     pi.registerTool({
       name: "contact_supervisor",
       label: "Contact Supervisor",
@@ -1426,7 +1430,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     } as any);
   }
 
-  pi.registerTool({
+  if (!nativeSupervisorChannel) pi.registerTool({
     name: "intercom",
     label: "Intercom",
     description: `Send a message to another pi session running on this machine.
