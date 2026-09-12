@@ -37,6 +37,7 @@ Last updated: 2026-09-11 (v0.2.17 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 - **Autonomous catalog (`fix/autonomous-model-catalog-master`):** port of #43 from `dev/tui`, without unrelated development changes. Codex uses public upstream metadata and authenticated version-gated discovery; idle refresh and checksummed hourly snapshots need no agent runs. Provider capabilities beat stale metadata; explicit overrides and account-scoped last-good caches remain. Read `packages/coding-agent/docs/model-catalog.md` when changing discovery or handling publication failures. CLI release remains separate from the master merge.
 - **TUI cleanup + Linux first paint (`fix/tui-cleanup-and-linux-first-paint`):** visible single-subagent results no longer repeat their description in the call header. Background fd/rg installs stay silent after the TUI starts and refresh autocomplete when fd arrives. The chatbox prompt is the theme-controlled `>` only; the turn gutter rail and its toggle are removed. Customize footer labels no longer repeat `Footer:`. Global migration deletes retired `gutterRail`/`promptSymbol`; project settings remain untouched. Tests: tool-execution-component + interactive-mode-status + ashxj-tui-chip + messages + migrations.
+- **Chatbox side rails (`fix/chatbox-side-rails`):** ChatboxEditor keeps the rounded top/bottom rules and thinking chip and no longer draws `│` side rails. First-paint test asserts the editor body has no box-drawing verticals.
 - **Subagent selection indicator (`feat/subagent-selection-indicator`):** compact and expanded subagent rows, plus async widget / fleet / status, show the **selected** tier or model. A resolving `tier` prints `light`/`standard`/`heavy`; an explicit `model` prints the model id; inherit still prints the resolved model. Thinking stays a suffix. Compact multi rows get the same badge. Tests: compact-row + model-tiers.
 - **Settings menu copy (`fix/settings-menu-copy`):** `/settings` and its submenus use short feature summaries instead of implementation inventories. Details that affect a choice stay beside that choice or confirmation. The Rollback row is `Rollback behavior options`.
 - **Skill tag character (`feat/skill-tag-character`):** `/settings` Skill tag sits next to Skill commands and is `+`, `~`, or `$` (default `+`). After a space or at the start of a line that character lists loaded skills like `/` at the start of the TUI. Completing inserts `{char}{name}`; send does not expand SKILL.md. `xyz+` does not open the picker; `~/` stays path completion when the tag is `~`. Independent of `enableSkillCommands`. Tests: skill-tag-autocomplete + settings-manager + interactive-mode-status trigger merge.
@@ -158,7 +159,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - Codex discovery visibility is client-version-gated: a frozen older version can return HTTP 200 while omitting new models. Keep release-version resolution separate from lunR's package version; fetch metadata only. The live smoke uses an unexpired credential in an in-memory store so it cannot rotate or overwrite the user's saved session.
 
-- Theme: `moon.json` is the builtin; `default.json` untracked/unwired. The chatbox uses `promptArrow`; legacy `promptMoon` input remains accepted but is ignored.
+- Theme: `moon.json` is the builtin; `default.json` untracked/unwired. The chatbox uses `promptArrow`; legacy `promptMoon` input remains accepted but is ignored. Body lines have no `│` rails; keep the rounded top/bottom rules and thinking chip.
 - Mouse tracking is on while the chat dock is pinned. Left-drag does nothing; click expands/collapses a thinking run or tool card; Shift+drag is native terminal selection; wheel without Shift scrolls the session. Scrollbar last-column press/motion drags the thumb.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
 - Win32: Ctrl+V is the terminal’s; image paste is `Alt+V`. VS Code must forward that key; `/paste-image` bypasses terminal key ownership. Paste inserts `[image_n]` chips, not a temp path. Do not expand those chips back to paths on submit.
@@ -292,6 +293,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - 2026-09-11: ship that launch-schema fix as 0.2.17.
 - 2026-09-09: model cycling is silent; the chip and footer already show the new model.
 - 2026-09-09: image paste inserts the chip and skips the Pasted status toast.
+- 2026-09-09: chatbox keeps top/bottom rules and the thinking chip; drop the `│` side rails so the prompt is not boxed.
 
 # Deferred
 
