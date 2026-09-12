@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerNativeSupervisorClient } from "../../intercom/native-supervisor-channel.ts";
+import { isPendingQuestionForCurrentChild, markDeliveredSupervisorQuestionFromChild, registerNativeSupervisorClient } from "../../intercom/native-supervisor-channel.ts";
 import { consumeSteerRequestsFromDir, steerAckPathFromDir, writeSteerAckAt, writeSteerCapabilityAt, writeSteerRequestToDir, type SteerRequest } from "../background/control-channel.ts";
 import { SUBAGENT_CHILD_AGENT_ENV, SUBAGENT_CHILD_INDEX_ENV, SUBAGENT_FANOUT_CHILD_ENV, SUBAGENT_STEER_ACK_DIR_ENV, SUBAGENT_STEER_CAPABILITY_ENV, SUBAGENT_STEER_INBOX_ENV } from "./pi-args.ts";
 import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "./structured-output.ts";
@@ -244,9 +244,14 @@ export function registerSteeringInbox(
 			message,
 		});
 	};
+	let readyAt = Number(process.env.PI_SUBAGENT_STEER_READY_AT);
+	if (!Number.isFinite(readyAt) || readyAt <= 0) {
+		readyAt = Date.now();
+		process.env.PI_SUBAGENT_STEER_READY_AT = String(readyAt);
+	}
 	const publishCapability = (): void => {
 		if (!capabilityPath || !Number.isInteger(childIndex) || childIndex < 0) return;
-		writeSteerCapabilityAt(capabilityPath, { index: childIndex, pid: process.pid, readyAt: Date.now(), supported: canSteer });
+		writeSteerCapabilityAt(capabilityPath, { index: childIndex, pid: process.pid, readyAt, supported: canSteer });
 	};
 	const flush = (): void => {
 		if (disposed || flushing) return;
@@ -259,7 +264,11 @@ export function registerSteeringInbox(
 					acknowledge(request, "failed", "Child Pi session does not support sendUserMessage steering.");
 					continue;
 				}
-				const formatted = formatSteerMessage(request);
+				if (request.source === "supervisor-question" && !isPendingQuestionForCurrentChild(request.id)) {
+					acknowledge(request, "failed", "Question is no longer pending for this child.");
+					continue;
+				}
+				const formatted = request.source === "supervisor-question" ? request.message : formatSteerMessage(request);
 				const ids = pending.get(formatted) ?? [];
 				ids.push(request.id);
 				pending.set(formatted, ids);
@@ -288,6 +297,7 @@ export function registerSteeringInbox(
 		if (!requestId) return undefined;
 		if (ids?.length === 0) pending.delete(text);
 		acknowledge({ type: "steer", id: requestId, ts: Date.now(), message: text }, "delivered", "Pi accepted the correlated steering input.");
+		markDeliveredSupervisorQuestionFromChild(text);
 		return undefined;
 	};
 	const start = (): void => {

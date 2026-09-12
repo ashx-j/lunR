@@ -299,6 +299,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const state: SubagentState = {
 		baseCwd: "",
 		currentSessionId: null,
+		sessionGeneration: 0,
 		foregroundSubagentInFlight: 0,
 		subagentSpawns: { sessionId: null, count: 0 },
 		asyncJobs: new Map(),
@@ -335,6 +336,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const pendingLaunches = new Set<Promise<void>>();
 	const runtimeCleanup = () => {
 		generation++;
+		supervisorChannel.cancelOwnedQuestions("parent runtime replaced");
+		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
 		mainWatchdog.dispose();
@@ -349,9 +352,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
-	const { ensurePoller, refreshWidget, handleStarted, handleComplete, resetJobs, restoreActiveJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR, {
+	const { ensurePoller, refreshWidget, handleStarted, handleComplete: trackComplete, resetJobs, restoreActiveJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR, {
 		widgetEnabled: config.asyncWidget !== false,
 	});
+	const handleComplete = (data: unknown) => {
+		trackComplete(data);
+		const result = data as { id?: string; sessionId?: string };
+		if (typeof state.currentSessionId === "string" && result.sessionId !== state.currentSessionId) return;
+		if (typeof result.id === "string" && result.id.trim()) {
+			supervisorChannel.settleRunQuestions(result.id, "async run settled");
+		}
+	};
 	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	const scheduledRunManager = createScheduledRunManager({
 		config,
@@ -622,6 +633,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const resetSessionState = (ctx: ExtensionContext) => {
 		generation++;
+		supervisorChannel.cancelOwnedQuestions("parent session replaced");
+		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
 		state.baseCwd = ctx.cwd;
@@ -656,6 +669,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", () => {
 		generation++;
+		supervisorChannel.cancelOwnedQuestions("parent session shutdown");
+		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];

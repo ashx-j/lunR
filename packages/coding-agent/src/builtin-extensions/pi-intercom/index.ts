@@ -1169,7 +1169,8 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   });
 
   const childOrchestratorMetadata = readChildOrchestratorMetadata();
-  if (childOrchestratorMetadata) {
+  // Native children register the question-aware contact tool in their prompt runtime.
+  if (childOrchestratorMetadata && !process.env.PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR?.trim()) {
     pi.registerTool({
       name: "contact_supervisor",
       label: "Contact Supervisor",

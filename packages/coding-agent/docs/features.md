@@ -25,6 +25,18 @@ A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ sam
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 
+### Questions to async children
+
+The parent can use `subagent_supervisor` with `action: "ask"` to ask a running async child for information it needs before the final report. The request names the run, selects one child, and includes a `reason` explaining which decision needs the answer.
+
+Asking returns a question ID without waiting. The child receives the question at a safe turn boundary, replies from its current findings, and continues its assigned task. Answers arrive separately from the run's final result and wake an idle parent. A delivery receipt is not an answer. Questions do not change the assignment, broadcast to other children, or restart finished children.
+
+The parent calls `subagent_supervisor({ action: "ask", id, index, reason, message })`. It must select an `index` or private `childId` when several children are running. The child answers with `contact_supervisor({ action: "reply", replyTo: questionId, message })`. If the parent's next decision must wait, `subagent_wait({ questionId })` returns the answer instead of sending a second notification. Read-only children can reply without receiving editing tools.
+
+A child must have an active question-capable input channel. Only one question may be outstanding per child. Questions expire after ten minutes by default, and child termination, failed delivery, process replacement, or parent session replacement cancels pending questions. A wait timeout ends the wait, not the question. Existing blocking child-to-parent requests take priority to avoid mutual waiting.
+
+The agent must ask only when the child has missing context, the answer changes a concrete next decision, and waiting for completion would block progress or risk rework. It must use available results first and batch related questions. Routine progress checks, duplicate questions, polling, and step-by-step supervision are prohibited. A follow-up is appropriate only when the answer leaves the original decision unresolved.
+
 ## Todos, memory, and global instructions
 
 - **Todos** — lunr-todos is a full-replace list. Completed todos prune on the next user turn (no leftover `✓ N done` footer).
@@ -83,7 +95,7 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 - `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
-- Smooth streaming (`smoothStreaming`, default off) is **interactive TUI only** (grapheme reveal at ~30 FPS). Print, RPC, and gateway stay unsmoothed.
+- Smooth streaming (`smoothStreaming`, default off) reveals assistant text and thinking in small character batches at about 30 FPS in the interactive TUI. The thinking preview shows the last four revealed lines. Completed thinking collapses after its reveal catches up. Message completion flushes any remaining text immediately. Print, RPC, and gateway stay unsmoothed.
 - Image paste inserts `[image_n]` chips. Windows uses **Alt+V**; VS Code must forward it because it owns Ctrl+V and Alt+V. `/paste-image` bypasses terminal shortcuts.
 - Model tiers: every child launch selects `light`, `standard`, or `heavy`. Configure authenticated models for those routes in `/settings`; a missing, disabled, unauthenticated, or unavailable route fails closed. Per-tier thinking is optional; unset inherits the parent session.
 - Settings tools: `settings_load` is always available to the model. It injects four narrowly scoped tools for model tiers, model instruction subscriptions, rollback behavior, and session retention only after the model requests them.

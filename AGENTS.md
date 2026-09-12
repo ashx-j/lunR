@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-09-12 (v0.2.19 on `master`). Public npm is `@ashx-j/lunr@0.2.19`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Async child questions (`feat/async-subagent-questions`):** extends the native supervisor channel with parent-initiated questions to running async children. Requests require a decision-specific reason and return immediately; correlated answers arrive separately from final run results. Scope is one owned child, with no broadcast, revival, or assignment change. See `packages/coding-agent/docs/features.md` for usage rules.
 - **v0.2.19:** restores chatbox `│` side rails and drops the empty-chat injected context card.
 - **v0.2.18:** ships lazy first-request loading, thinking-level slash commands, quieter TUI, injected context, and compact async subagent rows.
 - **Cold-start readiness (`fix/cold-start-readiness`):** Node CLI and SDK share split bundles. Optional web, LSP, MCP, and subagent engines load on demand; tool schemas and required session hooks still precede first request. Fresh-profile median fell from 1988.8 to 968.2 ms. For startup changes, packaging, or measurements, read `packages/coding-agent/docs/interactive-startup.md`.
@@ -118,6 +119,8 @@ Last updated: 2026-09-12 (v0.2.19 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Async child questions (2026-09-12): offline five-package builds and coding-agent Node bundle pass. Focused Vitest passes 111/111 across nine files; changed tests pass Biome. `scripts/check-subagent-questions.mjs` passes with a real async read-only child using both question-wait and `--idle` parent-wake paths against a local scripted provider. First-paint checks pass with the updated tool-schema hash. Workspace CLI reports 0.2.19; the installed CLI is unchanged.
+
 - v0.2.19 release (2026-09-12): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 9/9. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.19.
 - v0.2.18 release (2026-09-12): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused coding-agent Vitest passes 172/172. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt `npx lunr --version` reports 0.2.18.
 - Cold-start lifecycle repair (2026-09-11): offline tui → ai → agent → coding-agent → orchestrator builds pass. Focused lifecycle/package Vitest passes 89/89; the real first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths. Full coding-agent Vitest remains at the baseline 2431 passed / 112 unrelated Windows and stale-fixture failures / 47 skipped; TUI retains four Windows symlink failures. Repository Biome retains 20 pre-existing findings, and pinned-dependency validation still scans gitignored study trees. Relative imports, shrinkwrap, installer lock, workflow publish policy, browser smoke, `git diff --check`, and all four public-package dry-run packs pass.
@@ -168,6 +171,9 @@ Last updated: 2026-09-12 (v0.2.19 on `master`). Public npm is `@ashx-j/lunr@0.2.
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Native supervisor questions own `contact_supervisor` for children with a native channel; the broker must not replace it with its older reason-only schema. Requests and terminal outcomes use separate exclusive records. Reconcile step termination and steering failures, not only whole-run completion. Question waits advance expiry themselves, and idle answer notifications request a parent turn.
+- Async-question verification: `node scripts/check-subagent-questions.mjs` and the same command with `--idle` use an isolated local provider and leave logs under `.artifacts/`. The local, untracked `LUNR_SYSTEM_INJECTION.md` is that isolated smoke session's literal system prompt, not the user's configured prompt; `.artifacts/question-tool-inventory.json` records its tool definitions. The default first-request schema snapshot remains in `scripts/check-interactive-first-paint.mjs`.
 
 - Node bundle: bare `tsgo` leaves `dist/node-runtime` stale. After dependency builds, use `npm --prefix packages/coding-agent run build`. CLI and SDK exports must share chunks for class identity; preserve original module URLs and external native packages. Startup checks compare the complete default tool payload with the baseline hash, so deliberate schema changes require updating that fixture.
 - Lazy extension lifecycle: session replacement must invalidate pending work before new work binds. Await extension `session_shutdown` before gateway/cron disposal. Web factories own request and curator maps; MCP closes partial connections and shares one shutdown promise per state; LSP serializes shutdown and bind; `subagent_wait` waits only for pending launch registration so foreground siblings can still overlap.
@@ -220,6 +226,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Settings menu descriptions name the feature, not every control inside it. Keep choice-specific limits and warnings beside the relevant choice or confirmation.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-12: parent questions reuse the native supervisor channel and require a concrete decision reason so children can share partial findings without routine progress chatter or task reassignment.
 
 - 2026-08-28: watchdog repo-edit fingerprints are lazy and effective-enable gated so an optional default-off reviewer cannot block prompt readiness.
 - 2026-07-18: `.lunr/` split; keep `pi-*` scopes + `PI_CODING_AGENT_*`.

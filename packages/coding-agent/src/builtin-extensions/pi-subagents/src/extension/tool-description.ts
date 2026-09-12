@@ -49,6 +49,8 @@ CONTROL (use action field, omit task/chain/tasks):
 • { action: "stop", id: "..." } - stop a current-session top-level async run; stopped runs finish with state "stopped"
 • { action: "resume", id: "...", message: "...", index?: 0 } - interrupt then follow up with a live async child, or revive a completed async/foreground child from its session
 • { action: "steer", id: "...", message: "...", index?: 0 } - await correlated child input acceptance for up to 3 seconds; returns delivered, scheduled, pending, partial, recovered, or failed with a request id. Only top-level single runs may recover after a further 15-second pause/revival bound; chain, parallel, and nested runs never auto-interrupt.
+• subagent_supervisor({ action: "ask", id, reason, message, index?, childId? }) - ask one running async child; returns question id immediately. Ask only when the child owns missing context, the answer changes a concrete next decision, and waiting risks block/rework. No broadcast, revive, task replacement, status polling, or micromanagement.
+• subagent_wait({ questionId }) - wait for that supervisor question answer/expiry/cancel. Answers stay separate from final run results.
 • { action: "append-step", id: "...", chain: [{task:"Use {previous}", description:"Follow-up step", tier:"standard"}] } - append one step to the tail of a running async chain
 
 SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):

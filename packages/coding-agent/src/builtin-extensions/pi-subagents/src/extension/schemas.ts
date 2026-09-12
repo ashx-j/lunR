@@ -321,8 +321,11 @@ const SubagentWaitParamsSchema = Type.Object({
 	id: Type.Optional(Type.String({
 		description: "Async run or remembered detached foreground run id/prefix to wait for one specific run. Omit to wait across every active async run started in this session.",
 	})),
+	questionId: Type.Optional(Type.String({
+		description: "Wait for one supervisor question id from subagent_supervisor action='ask'. Returns when that question is answered, expired, or cancelled. Separate from final async run results.",
+	})),
 	all: Type.Optional(Type.Boolean({
-		description: "Wait for ALL active runs to finish. Default false: return as soon as the first run finishes, so a fleet manager can spawn a replacement and wait again. Ignored when id targets a single run.",
+		description: "Wait for ALL active runs to finish. Default false: return as soon as the first run finishes, so a fleet manager can spawn a replacement and wait again. Ignored when id or questionId targets one item.",
 	})),
 	timeoutMs: Type.Optional(Type.Integer({
 		minimum: 1,

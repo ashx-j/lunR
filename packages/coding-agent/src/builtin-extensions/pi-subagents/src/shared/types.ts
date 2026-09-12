@@ -740,6 +740,10 @@ export interface Details {
 	totalChildUsage?: Usage;
 	// Aggregated cost across all agents in the run
 	totalCost?: CostSummary;
+	questionId?: string;
+	state?: string;
+	answered?: boolean;
+	delivered?: boolean;
 }
 
 // ============================================================================
@@ -1062,6 +1066,8 @@ export interface ForegroundResumeRun {
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
+	/** Bumps on session_start / session replacement so owned supervisor questions fail closed. */
+	sessionGeneration?: number;
 	/** Live foreground `subagent` tool calls. Caps same-turn overlap. */
 	foregroundSubagentInFlight?: number;
 	subagentSpawns?: { sessionId: string | null; count: number };
