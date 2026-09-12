@@ -2951,9 +2951,8 @@ export class InteractiveMode {
 			const image = await readClipboardImage();
 			if (image) {
 				const saved = this.writeClipboardImageFile(image);
-				const id = this.insertImageChip(saved);
+				this.insertImageChip(saved);
 				this.ui.requestRender();
-				this.showStatus(`Pasted ${formatImageMarker(id)}`);
 				return;
 			}
 
@@ -4381,9 +4380,6 @@ export class InteractiveMode {
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				const thinkingStr =
-					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
