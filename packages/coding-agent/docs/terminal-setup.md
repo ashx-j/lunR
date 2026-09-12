@@ -108,7 +108,7 @@ On Windows, VS Code owns `Ctrl+V` and uses `Alt+V` as the View menu mnemonic. Fo
 }
 ```
 
-A successful paste toasts `Pasted [image_1]` and inserts that chip in the editor. If VS Code still owns the key, `/paste-image` invokes the same operation without depending on any terminal shortcut. Submit keeps the label in the chat card and attaches the image to the model. `Clipboard contains no image` means the command arrived but the OS clipboard had no image.
+A successful paste inserts `[image_1]` in the editor. If VS Code still owns the key, `/paste-image` invokes the same operation without depending on any terminal shortcut. Submit keeps the label in the chat card and attaches the image to the model. `Clipboard contains no image` means the command arrived but the OS clipboard had no image.
 
 ## Windows Terminal
 
