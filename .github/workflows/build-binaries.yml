@@ -50,6 +50,14 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Check computer-use production approval
+        run: node scripts/check-computer-use-release.mjs --production
+
+      - name: Prepare pinned computer-use payloads
+        run: |
+          node scripts/download-computer-use-release.mjs "$RUNNER_TEMP/cua-release"
+          node scripts/bundle-computer-use.mjs "$RUNNER_TEMP/cua-release"
+
       - name: Build binaries
         run: ./scripts/build-binaries.sh
 

@@ -1,3 +1,5 @@
+import { computerPolicy } from "./computer-use/policy.ts";
+
 /**
  * lunr: plan permission mode — read-only tool-gating heuristics + system-prompt addendum.
  *
@@ -171,6 +173,13 @@ export function isCodeRewriteMutating(input: unknown): boolean {
  * Returns the block reason when plan mode should block this tool call, else undefined.
  */
 export function planModeBlockReason(toolName: string, input: unknown): string | undefined {
+	if (toolName.startsWith("computer_")) {
+		try {
+			return computerPolicy(toolName, {})?.observation ? undefined : PLAN_MODE_BLOCK_MESSAGE;
+		} catch {
+			return PLAN_MODE_BLOCK_MESSAGE;
+		}
+	}
 	if (BLOCKED_TOOLS.has(toolName)) {
 		return PLAN_MODE_BLOCK_MESSAGE;
 	}

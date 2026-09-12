@@ -12,6 +12,7 @@ import { parseStartupMilestones } from "./profile-coding-agent-node.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = process.argv[2] ? resolve(process.argv[2]) : join(root, "packages/coding-agent/dist/cli.js");
 const dist = dirname(cli);
+const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("PI_SUBAGENT")));
 
 async function check(fail) {
 	const agentDir = mkdtempSync(join(tmpdir(), "lunr-paint-check-"));
@@ -27,7 +28,7 @@ registerHooks({ load(url, context, nextLoad) {
 	const child = spawn(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, cli], {
 		cwd: agentDir,
 		env: {
-			...process.env,
+			...environment,
 			PI_CODING_AGENT_DIR: agentDir,
 			PI_STARTUP_BENCHMARK: "1",
 			PI_TIMING: "1",
@@ -141,7 +142,7 @@ registerHooks({load(url, context, nextLoad) {
 		{
 			cwd: workspace,
 			env: {
-				...process.env,
+				...environment,
 				HOME: home,
 				USERPROFILE: home,
 				APPDATA: home,
@@ -190,9 +191,12 @@ registerHooks({load(url, context, nextLoad) {
 		]) {
 			assert(request.tools.includes(name), `First request is missing ${name}`);
 		}
+		const computerHost = (process.platform === "win32" && ["x64", "arm64"].includes(process.arch)) || (process.platform === "darwin" && process.arch === "arm64");
+		assert.equal(request.tools.includes("computer_load"), computerHost);
+		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
 		assert.equal(
 			request.toolSchemaHash,
-			"4f2d0fa019699b29f632f271c69723d0a822743b84ef837582b0a9be8c941411",
+			computerHost ? "5f78f9c8f9d43e2b510e05553822914d8a1c3eefd5270c38e6b416a8fcfaaff5" : "4f2d0fa019699b29f632f271c69723d0a822743b84ef837582b0a9be8c941411",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
