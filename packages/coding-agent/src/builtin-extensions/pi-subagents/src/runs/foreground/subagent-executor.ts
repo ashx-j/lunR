@@ -69,7 +69,7 @@ import { attachRootChildrenToSteps, createNestedRoute, readNestedControlResults,
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
-import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
+import { subagentLaunchRunsAsync } from "../background/top-level-async.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -189,7 +189,6 @@ interface ExecutorDeps {
 	pi: ExtensionAPI;
 	state: SubagentState;
 	config: ExtensionConfig;
-	asyncByDefault: boolean;
 	waitToolEnabled?: boolean;
 	handleScheduledRunAction?: (params: SubagentParamsLike, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>;
 	watchdog?: MainWatchdogRuntime;
@@ -3380,7 +3379,7 @@ function foregroundCapacityResult(params: SubagentParamsLike, inFlight: number, 
 	return {
 		content: [{
 			type: "text",
-			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, use ONE subagent call with tasks: [{task, description}, …], or set async: true.`,
+			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, combine work in ONE tasks call, or launch without async:false or clarify:true when foreground execution is unnecessary.`,
 		}],
 		isError: true,
 		details: { mode: inferExecutionMode(params), results: [] },
@@ -3646,11 +3645,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (normalized.error) return normalized.error;
 		const normalizedParams = normalized.params!;
 
-		let effectiveParams = applyForceTopLevelAsyncOverride(
-			normalizedParams,
-			depth,
-			deps.config.forceTopLevelAsync === true,
-		);
+		let effectiveParams = normalizedParams;
 		const runToolBudget = resolveToolBudget(effectiveParams.toolBudget, "toolBudget");
 		if (runToolBudget.error) return buildRequestedModeError(effectiveParams, runToolBudget.error);
 		const configToolBudget = resolveToolBudget(deps.config.toolBudget, "config.toolBudget");
@@ -3746,9 +3741,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
 		}
-		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
-		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
-		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
+		const backgroundRequestedWhileClarifying = (hasChain || hasTasks)
+			&& effectiveParams.async === true
+			&& effectiveParams.clarify === true;
+		const effectiveAsync = subagentLaunchRunsAsync(effectiveParams);
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 
 		const artifactConfig: ArtifactConfig = {
@@ -3986,9 +3982,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	): Promise<AgentToolResult<Details>> => {
 		const requestParams = resolveSubagentRequestParams(params);
 		if (requestParams.action) return execute(id, requestParams, signal, onUpdate, ctx);
-		const { depth } = checkSubagentDepth(deps.config.maxSubagentDepth);
-		const dispatchParams = applyForceTopLevelAsyncOverride(requestParams, depth, deps.config.forceTopLevelAsync === true);
-		const runsForeground = dispatchParams.clarify === true || (dispatchParams.async ?? deps.asyncByDefault) !== true;
+		const runsForeground = !subagentLaunchRunsAsync(requestParams);
 		if (!runsForeground) return execute(id, requestParams, signal, onUpdate, ctx);
 		const limit = resolveTopLevelParallelConcurrency(undefined, deps.config.parallel?.concurrency);
 		const inFlight = deps.state.foregroundSubagentInFlight ?? 0;

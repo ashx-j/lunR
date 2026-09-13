@@ -1245,11 +1245,13 @@ export interface ScheduledRunsConfig {
 }
 
 export interface ExtensionConfig {
+	/** @deprecated Launches now default to async regardless of this legacy value. */
 	asyncByDefault?: boolean;
 	/** Show the above-editor async runs widget. Defaults to true. */
 	asyncWidget?: boolean;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
 	toolDescriptionMode?: ToolDescriptionMode;
+	/** @deprecated Omitted async already means async; explicit async:false and clarify:true stay foreground. */
 	forceTopLevelAsync?: boolean;
 	waitTool?: WaitToolConfig;
 	defaultSessionDir?: string;

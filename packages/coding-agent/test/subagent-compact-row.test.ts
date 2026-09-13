@@ -786,19 +786,13 @@ describe("subagent call headers", () => {
 		).toContain("subagent async parallel (2)");
 	});
 
-	it("honors asyncByDefault when async is omitted", () => {
+	it("defaults omitted async to background and honors explicit foreground", () => {
 		expect(
-			stripAnsi(
-				renderSubagentCall({ description: "Inspect auth" }, stubTheme, {}, { asyncByDefault: true })
-					.render(80)
-					.join("\n"),
-			),
+			stripAnsi(renderSubagentCall({ description: "Inspect auth" }, stubTheme, {}).render(80).join("\n")),
 		).toContain("subagent async");
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: false, description: "Inspect auth" }, stubTheme, {}, { asyncByDefault: true })
-					.render(80)
-					.join("\n"),
+				renderSubagentCall({ async: false, description: "Inspect auth" }, stubTheme, {}).render(80).join("\n"),
 			),
 		).not.toContain("async");
 	});

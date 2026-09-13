@@ -2,15 +2,14 @@
 /**
  * Subagent Tool
  *
- * Full-featured subagent with sync and async modes.
- * - Sync (default): Streams output, renders markdown, tracks usage
- * - Async: Background execution, emits events when done
+ * Full-featured subagent with foreground and async modes.
+ * - Async (default): Background execution, emits events when done
+ * - Foreground (async:false or clarify:true): Streams output, renders markdown, tracks usage
  *
  * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
- * Toggle: async parameter (default: false, configurable via config.json)
  *
  * Config file: ~/.lunr/agent/extensions/subagent/config.json
- *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
+ *   { "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,9 +29,11 @@ import { clearLegacyResultAnimationTimer, disposeSubagentWidget, renderSubagentR
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { resolveSubagentRequestParams } from "../runs/foreground/request-params.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
+import { isAsyncSubagentExecution, normalizeAsyncLaunchConfig, subagentLaunchRunsAsync } from "../runs/background/top-level-async.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "../slash/prompt-template-bridge.ts";
 import { registerMainWatchdog } from "../watchdog/register-main.ts";
@@ -144,14 +145,8 @@ function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefine
 	}, 0);
 }
 
-function callIsAsync(args, asyncByDefault) {
-	if (args?.clarify === true) return false;
-	if (args?.async === true) return true;
-	if (args?.async === false) return false;
-	return asyncByDefault === true;
-}
-
-export function renderSubagentCall(args, theme, context, options) {
+export function renderSubagentCall(rawArgs, theme, context) {
+	const args = resolveSubagentRequestParams(rawArgs);
 	if (args.action) {
 		const target = args.id || args.runId || "";
 		return new Text(
@@ -162,7 +157,7 @@ export function renderSubagentCall(args, theme, context, options) {
 	}
 	const isParallel = (args.tasks?.length ?? 0) > 0;
 	const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
-	const asyncMark = callIsAsync(args, options?.asyncByDefault) ? `${theme.fg("warning", "async")} ` : "";
+	const asyncMark = subagentLaunchRunsAsync(args) ? `${theme.fg("warning", "async")} ` : "";
 	if (args.chain?.length) {
 		return new Text(
 			`${theme.fg("toolTitle", theme.bold("subagent "))}${asyncMark}chain (${args.chain.length})`,
@@ -306,9 +301,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
-	const config = loadConfig();
+	const config = normalizeAsyncLaunchConfig(loadConfig());
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
-	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 
@@ -413,10 +407,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				resolveLaunchReady();
 			};
 			pendingLaunches.add(launchReadyPromise);
-			if ((params.task || params.tasks || params.chain) && !params.clarify &&
-				(params.async === true || (params.async === undefined && asyncByDefault) || config.forceTopLevelAsync === true)) {
-				pendingAsyncLaunches.add(launchReadyPromise);
-			}
+			if (isAsyncSubagentExecution(resolveSubagentRequestParams(params))) pendingAsyncLaunches.add(launchReadyPromise);
 			try {
 				const currentGeneration = generation;
 				signal?.throwIfAborted();
@@ -424,7 +415,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					const pending = import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor }) => {
 						if (generation !== currentGeneration) throw new Error("Subagent session changed before initialization");
 						return createSubagentExecutor({
-							pi, state, config, asyncByDefault,
+							pi, state, config,
 							waitToolEnabled: waitToolConfig.enabled,
 							handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
 							watchdog: mainWatchdog, tempArtifactsDir, getSubagentSessionRoot, expandTilde,
@@ -524,7 +515,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return executeSubagentCollapsed(id, params, signal, onUpdate, ctx);
 		},
 
-		renderCall: (args, theme, context) => renderSubagentCall(args, theme, context, { asyncByDefault }),
+		renderCall: (args, theme, context) => renderSubagentCall(args, theme, context),
 
 		renderResult(result, options, theme, context) {
 			if (subagentResultIsRunning(result)) {

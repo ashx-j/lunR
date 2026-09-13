@@ -1,6 +1,7 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { SUBAGENT_ASYNC_GUIDANCE } from "../shared/async-guidance.ts";
 import type { ExtensionConfig, ToolDescriptionMode } from "../shared/types.ts";
 import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 
@@ -20,7 +21,7 @@ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 ${SUBAGENT_TIER_GUIDANCE}
 • permissions is "full" or "read-only". Omitted permissions means full. Plan-mode parents must pass permissions: "read-only"; full or omitted launches are rejected.
 • Keep execution and control separate: omit action for SINGLE/PARALLEL/CHAIN execution; use action only for status/interrupt/stop/resume/steer/append-step/doctor/watchdog.status|check|recommend-model/schedule*.
-• Async/background runs: launch with async:true only when work can proceed independently. Do not sleep or poll status just to wait. In an interactive session, normally return control and let lunR wake you; use subagent_wait when this request must run to completion in the current turn or skill. Headless sessions auto-drain current-session work.
+• ${SUBAGENT_ASYNC_GUIDANCE}
 • Child-safety boundary: ordinary children are not orchestrators and must not run subagents. Only explicitly configured fanout children may use the child-safe subagent tool, still bounded by depth/session limits.
 • Writing/review safety: keep one full-access writer for the same cwd/worktree. Use fresh-context permissions: "read-only" children for independent review, then have the parent synthesize and apply fixes as the sole writer unless an isolated worktree was intentionally requested.
 • Artifacts/status essentials: chain outputs live under {chain_dir}; async runs expose asyncId/asyncDir with status.json, events.jsonl, output logs, and status via { action: "status", id }. Include output paths and residual risks when reporting results.`;
@@ -87,7 +88,7 @@ CONTROL:
 • Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
 
 ASYNC / WAIT:
-• async:true detaches background work. Do not sleep or poll just to wait. Interactive sessions normally yield for completion notifications; use subagent_wait for run-to-completion turns or skills. Headless sessions auto-drain current-session work.
+• ${SUBAGENT_ASYNC_GUIDANCE}
 • Status and artifacts live under asyncId/asyncDir with status.json, events.jsonl, output logs, session files, and { action:"status", id:"..." }.
 
 SAFETY:

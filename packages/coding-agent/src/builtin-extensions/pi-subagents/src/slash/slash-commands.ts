@@ -99,20 +99,18 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
 };
 
-const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean } => {
+export const extractExecutionFlags = (rawArgs: string): { args: string; async?: boolean } => {
 	let args = rawArgs.trim();
-	let bg = false;
+	let async: boolean | undefined;
 
 	while (true) {
-		if (args.endsWith(" --bg") || args === "--bg") {
-			bg = true;
-			args = args === "--bg" ? "" : args.slice(0, -5).trim();
-			continue;
-		}
-		break;
+		const match = args.match(/(?:^|\s)(--bg|--async|--fg|--foreground)$/);
+		if (!match) break;
+		async ??= match[1] === "--bg" || match[1] === "--async";
+		args = args.slice(0, match.index).trim();
 	}
 
-	return { args, bg };
+	return { args, async };
 };
 
 function sendSlashText(pi: ExtensionAPI, text: string): void {
@@ -974,15 +972,15 @@ export function registerSlashCommands(
 	};
 
 	pi.registerCommand("run", {
-		description: "Run a prompt-defined child: /run description[tier=standard] task [--bg]",
+		description: "Run an async prompt-defined child; add --foreground to wait inline",
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
+			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--bg]", "error"); return; }
+			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--foreground]", "error"); return; }
 			const { name: description, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
-			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--bg]", "error"); return; }
+			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--foreground]", "error"); return; }
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
@@ -992,27 +990,27 @@ export function registerSlashCommands(
 			if (inline.output !== undefined) params.output = inline.output;
 			if (inline.outputMode !== undefined) params.outputMode = inline.outputMode;
 			if (inline.skill !== undefined) params.skill = inline.skill;
-			if (bg) params.async = true;
+			if (async !== undefined) params.async = async;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run prompt-defined children in sequence: /chain inspect \"task\" -> implement [--bg]",
+		description: "Run prompt-defined children as an async sequence; add --foreground to wait inline",
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
+			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const built = buildChainExpressionSteps(state, cleanedArgs, ctx);
 			if (!built) return;
 			const params: SubagentParamsLike = { chain: built.chain, task: built.task, clarify: false };
-			if (bg) params.async = true;
+			if (async !== undefined) params.async = async;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run prompt-defined children in parallel: /parallel inspect \"task1\" -> review \"task2\" [--bg]",
+		description: "Run prompt-defined children async in parallel; add --foreground to wait inline",
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
+			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
 			if (!parsed) return;
 			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
@@ -1031,7 +1029,7 @@ export function registerSlashCommands(
 			if (tasks.some((task) => !task.tier && !task.model)) { ctx.ui.notify("Every parallel child requires [tier=light|standard|heavy] or [model=provider/id].", "error"); return; }
 			if (tasks.some((task) => task.tier && task.model)) { ctx.ui.notify("Each parallel child must choose exactly one of tier or model.", "error"); return; }
 			const params: SubagentParamsLike = { tasks, clarify: false };
-			if (bg) params.async = true;
+			if (async !== undefined) params.async = async;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});

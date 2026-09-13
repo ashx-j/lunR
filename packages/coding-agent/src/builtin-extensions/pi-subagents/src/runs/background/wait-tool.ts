@@ -15,7 +15,7 @@ export function registerWaitTool(
 		label: "Subagent Wait",
 		description: `Block until background work owned by this session changes, then return.
 
-In an interactive chat, do not call this merely to wait: return control to the user and let Pi wake the session on completion. Call it when the current request must run to completion in this turn, when a skill cannot return before its work finishes, or in a non-interactive run where there is no next turn.
+Call this when the current turn or skill must finish after its children. For normal interactive completion, yield and let lunR wake the session. Headless sessions auto-drain current-session work after the agent turn.
 
 • { } — return when the first initially active async run or registered provider item finishes, or when a subagent needs attention.
 • { all: true } — wait for every async run and provider item that was active when the call began.

@@ -164,12 +164,12 @@ function substituteArgs(template: string, args: string[]): string {
 		.replace(/\$(\d+)/g, (_match, index: string) => args[Number(index) - 1] ?? "");
 }
 
-function parseRuntimeOptions(words: string[]): { args: string[]; descriptionOverride?: string; permissions?: "full" | "read-only"; worktree?: boolean; bg?: boolean } {
+export function parseRuntimeOptions(words: string[]): { args: string[]; descriptionOverride?: string; permissions?: "full" | "read-only"; worktree?: boolean; async?: boolean } {
 	const args: string[] = [];
 	let descriptionOverride: string | undefined;
 	let permissions: "full" | "read-only" | undefined;
 	let worktree = false;
-	let bg = false;
+	let async: boolean | undefined;
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i]!;
 		if (word === "--read-only") {
@@ -185,7 +185,11 @@ function parseRuntimeOptions(words: string[]): { args: string[]; descriptionOver
 			continue;
 		}
 		if (word === "--bg" || word === "--async") {
-			bg = true;
+			async = true;
+			continue;
+		}
+		if (word === "--fg" || word === "--foreground") {
+			async = false;
 			continue;
 		}
 		if (word === "--description") {
@@ -199,7 +203,7 @@ function parseRuntimeOptions(words: string[]): { args: string[]; descriptionOver
 		}
 		args.push(word);
 	}
-	return { args, descriptionOverride, permissions, worktree, bg };
+	return { args, descriptionOverride, permissions, worktree, async };
 }
 
 function splitChainDeclaration(input: string): { declaration: string; argsText: string } {
@@ -223,7 +227,7 @@ function workflowParams(workflow: PromptWorkflow, args: string[], runtime: Retur
 		...(workflow.skill !== undefined ? { skill: workflow.skill } : {}),
 		...(workflow.cwd ? { cwd: workflow.cwd } : {}),
 		...(runtime.worktree || workflow.worktree ? { worktree: true } : {}),
-		...(runtime.bg ? { async: true } : {}),
+		...(runtime.async !== undefined ? { async: runtime.async } : {}),
 	};
 }
 
@@ -281,7 +285,7 @@ export function registerPromptWorkflowCommands(input: {
 						if (!step) throw new Error(`Unknown prompt workflow in chain '${workflow.name}': ${stepName}`);
 						return workflowChainStep(step, runtime.args, runtime);
 					});
-					await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.bg ? { async: true } : {}) }, ctx);
+					await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.async !== undefined ? { async: runtime.async } : {}) }, ctx);
 					return;
 				}
 				await run(workflowParams(workflow, runtime.args, runtime), ctx);
@@ -312,7 +316,7 @@ export function registerPromptWorkflowCommands(input: {
 					if (!workflow) throw new Error(`Unknown prompt workflow: ${name}`);
 					return workflowChainStep(workflow, runtime.args, runtime);
 				});
-				await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.bg ? { async: true } : {}) }, ctx);
+				await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.async !== undefined ? { async: runtime.async } : {}) }, ctx);
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
