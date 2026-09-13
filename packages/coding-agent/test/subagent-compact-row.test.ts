@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	renderSubagentCall,
 	renderSubagentNotify,
+	resolveSubagentActionDisplayTitle,
 } from "../src/builtin-extensions/pi-subagents/src/extension/index.ts";
 import { formatAsyncRunList } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-status.ts";
 import {
@@ -167,7 +168,7 @@ describe("async widget, fleet, and status timing", () => {
 		expect(rendered).not.toContain("Press");
 	});
 
-	it("keeps the older multi-job tree and uses compact rows as leaves", () => {
+	it("renders mixed async jobs as flat compact rows without an aggregate tree", () => {
 		const jobs = [
 			{
 				asyncId: "one",
@@ -208,15 +209,18 @@ describe("async widget, fleet, and status timing", () => {
 			},
 		];
 		const rendered = buildWidgetLines(jobs as never, stubTheme as never, 120).join("\n");
-		expect(rendered).toContain("Async agents");
-		expect(rendered).toContain("├─");
-		expect(rendered).toContain("└─");
-		expect(rendered).toContain("First child");
-		expect(rendered).toContain("Second child");
+		const lines = rendered.split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("First child");
+		expect(lines[1]).toContain("Second child");
+		expect(rendered).not.toContain("Async agents");
+		expect(rendered).not.toContain("background");
+		expect(rendered).not.toContain("├─");
+		expect(rendered).not.toContain("└─");
 		expect(rendered).not.toContain("⎿");
 	});
 
-	it("shows every chain and parallel step in a multi-job tree, not only steps[0]", () => {
+	it("shows every chain and parallel child as a flat row, not only steps[0]", () => {
 		const jobs = [
 			{
 				asyncId: "chain-run",
@@ -275,6 +279,43 @@ describe("async widget, fleet, and status timing", () => {
 		expect(rendered).toContain("Running chain step");
 		expect(rendered).toContain("Parallel sibling A");
 		expect(rendered).toContain("Parallel sibling B");
+	});
+
+	it("keeps failed and stopped children to one clear row, with diagnostics only when expanded", () => {
+		const jobs = [
+			{
+				asyncId: "mixed-run",
+				asyncDir: "Z:/missing/mixed-run",
+				status: "failed",
+				mode: "parallel",
+				agents: ["Live", "Failed", "Stopped"],
+				steps: [
+					{ agent: "Live", description: "Live child", status: "running", tokens: { total: 10 } },
+					{
+						agent: "Failed",
+						description: "Failed child",
+						status: "failed",
+						error: "child crashed",
+						tokens: { total: 20 },
+					},
+					{ agent: "Stopped", description: "Stopped child", status: "stopped", tokens: { total: 30 } },
+				],
+			},
+		];
+		const collapsed = buildWidgetLines(jobs as never, stubTheme as never, 48, false, 0);
+		expect(collapsed).toHaveLength(3);
+		expect(collapsed[1]).toContain("Failed child");
+		expect(collapsed[1]).toContain("failed");
+		expect(collapsed[2]).toContain("Stopped child");
+		expect(collapsed[2]).toContain("stopped");
+		expect(collapsed.join("\n")).not.toContain("Agent 1");
+		expect(collapsed.join("\n")).not.toContain("child crashed");
+		for (const line of collapsed) expect(visibleWidth(line)).toBeLessThanOrEqual(48);
+
+		const expanded = buildWidgetLines(jobs as never, stubTheme as never, 80, true, 0).join("\n");
+		expect(expanded).toContain("run mixed-run:1 · failed");
+		expect(expanded).toContain("child crashed");
+		expect(expanded.match(/Failed child/g)).toHaveLength(1);
 	});
 
 	it("uses ran for in terminal status and fleet rows", () => {
@@ -721,6 +762,52 @@ describe("renderMultiCompact selection badge", () => {
 		expect(lines.some((line) => line.includes("thinking high"))).toBe(false);
 		expect(lines.some((line) => line.includes("tool use"))).toBe(false);
 	});
+
+	it("renders mixed foreground children as flat rows with terminal state inline", () => {
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "mixed" }],
+				details: {
+					mode: "parallel",
+					results: [
+						{
+							description: "Completed child",
+							task: "complete",
+							exitCode: 0,
+							usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+							progressSummary: { status: "completed", tokens: 20, durationMs: 1000 },
+						},
+						{
+							description: "Running child",
+							task: "run",
+							exitCode: 0,
+							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+							progress: { index: 1, status: "running", tokens: 30, durationMs: 2000 },
+						},
+						{
+							description: "Failed child",
+							task: "fail",
+							exitCode: 1,
+							error: "private diagnostic",
+							usage: { input: 20, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+							progressSummary: { status: "failed", tokens: 40, durationMs: 3000 },
+						},
+					],
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+			0,
+		);
+		const lines = result.render(120).map((line) => stripAnsi(line));
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toContain("Completed child");
+		expect(lines[1]).toContain("Running child");
+		expect(lines[2]).toContain("Failed child");
+		expect(lines[2]).toContain("failed");
+		expect(lines.join("\n")).not.toContain("parallel");
+		expect(lines.join("\n")).not.toContain("private diagnostic");
+	});
 });
 
 describe("management control results", () => {
@@ -760,6 +847,87 @@ describe("management control results", () => {
 		expect(text).not.toContain("token");
 		expect(text).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
 		expect(text).not.toContain("⎿");
+	});
+});
+
+describe("subagent steering call headers", () => {
+	const state = {
+		asyncJobs: new Map([
+			[
+				"parallel-123",
+				{
+					asyncId: "parallel-123",
+					asyncDir: "Z:/missing/parallel-123",
+					status: "running",
+					mode: "parallel",
+					steps: [
+						{ index: 0, agent: "internal-a", description: "Inspect runtime and native tools", status: "running" },
+						{ index: 1, agent: "internal-b", description: "Review tests", status: "running" },
+					],
+				},
+			],
+			[
+				"chain-456",
+				{
+					asyncId: "chain-456",
+					asyncDir: "Z:/missing/chain-456",
+					status: "running",
+					mode: "chain",
+					steps: [
+						{ index: 0, agent: "internal-c", description: "Collect evidence", status: "complete" },
+						{ index: 1, agent: "internal-d", description: "Write focused fix", status: "running" },
+					],
+				},
+			],
+		]),
+		fleetJobs: new Map(),
+	} as never;
+
+	it("resolves indexed children and labels a whole multi-child run honestly", () => {
+		expect(resolveSubagentActionDisplayTitle({ id: "parallel", index: 0 }, state)).toBe(
+			"Inspect runtime and native tools",
+		);
+		expect(resolveSubagentActionDisplayTitle({ id: "parallel-123" }, state)).toBe("parallel run");
+		expect(resolveSubagentActionDisplayTitle({ id: "chain-456", index: 1 }, state)).toBe("Write focused fix");
+		expect(resolveSubagentActionDisplayTitle({ id: "chain-456" }, state)).toBe("chain run");
+	});
+
+	it("uses the resolved child title live and preserves result metadata for history", () => {
+		const live = stripAnsi(
+			renderSubagentCall(
+				{ action: "steer", id: "parallel-123", index: 0 },
+				stubTheme,
+				{},
+				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+			)
+				.render(120)
+				.join("\n"),
+		).trimEnd();
+		expect(live).toBe("subagent steer Inspect runtime and native tools");
+		expect(live).not.toContain("parallel-123");
+
+		const history = stripAnsi(
+			renderSubagentCall({ action: "steer", id: "parallel-123", index: 0 }, stubTheme, {
+				result: { details: { displayTitle: "Inspect runtime and native tools" } },
+			})
+				.render(120)
+				.join("\n"),
+		).trimEnd();
+		expect(history).toBe("subagent steer Inspect runtime and native tools");
+	});
+
+	it("falls back to the id only when no title can be resolved", () => {
+		const rendered = stripAnsi(
+			renderSubagentCall(
+				{ action: "steer", id: "missing-run" },
+				stubTheme,
+				{},
+				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+			)
+				.render(120)
+				.join("\n"),
+		).trimEnd();
+		expect(rendered).toBe("subagent steer missing-run");
 	});
 });
 

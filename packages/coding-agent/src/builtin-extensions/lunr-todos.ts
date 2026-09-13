@@ -11,8 +11,9 @@
  *    cron tool's minimal footprint.
  *  - After every state change the list is mirrored into a `todos` widget above
  *    the editor (component factory, so MAX_WIDGET_LINES string truncation does
- *    not apply). Collapsed: up to 3 active rows (in-progress first, then
- *    pending). Completed items never appear collapsed. `+N more` still
+ *    not apply). Collapsed: four active items fit in full; lists of five or
+ *    more show three rows (in-progress first, then pending). Completed items
+ *    never appear collapsed. `+N more` still
  *    applies to hidden active rows. Expanded: every row, completed included
  *    until the next user turn prunes them.
  *  - Click the widget to expand/collapse.
@@ -47,7 +48,7 @@ export interface TodoWidgetLine {
 	text: string;
 }
 
-/** Collapsed widget shows at most this many active (non-completed) rows. */
+/** Collapsed widgets with five or more active items show this many rows. */
 export const TODO_WIDGET_COLLAPSED_ROWS = 3;
 
 const STATUS_GLYPHS: Record<TodoStatus, string> = {
@@ -71,8 +72,8 @@ export function summarizeTodos(todos: TodoItem[]): string {
 }
 
 /**
- * Widget lines for the current list. Collapsed mode shows up to
- * TODO_WIDGET_COLLAPSED_ROWS active rows (in-progress first, then pending)
+ * Widget lines for the current list. Collapsed mode shows all four active rows,
+ * or TODO_WIDGET_COLLAPSED_ROWS when there are five or more (in-progress first, then pending),
  * and never emits a `✓ N done` summary. A `+N more (<expandKey> to expand)`
  * hint is appended when active rows are hidden. Expanded mode shows every
  * row, completed included. Empty list / all-completed collapsed → no lines.
@@ -92,8 +93,9 @@ export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expan
 	if (expanded) {
 		return [...active.map(row), ...done.map(row)];
 	}
-	const lines: TodoWidgetLine[] = active.slice(0, TODO_WIDGET_COLLAPSED_ROWS).map(row);
-	const hidden = active.length - TODO_WIDGET_COLLAPSED_ROWS;
+	const visibleRows = active.length === 4 ? 4 : TODO_WIDGET_COLLAPSED_ROWS;
+	const lines: TodoWidgetLine[] = active.slice(0, visibleRows).map(row);
+	const hidden = active.length - visibleRows;
 	if (hidden > 0) {
 		lines.push({ kind: "hint", text: `+${hidden} more` });
 	}

@@ -399,6 +399,7 @@ describe("ToolExecutionComponent parity", () => {
 		["live partial", "partial", false],
 		["expanded finished", "success", true],
 		["errored", "error", false],
+		["expanded error", "error", true],
 		["collapsed success", "success", false],
 	] as const)("keeps one subagent description on %s cards", (_label, state, expanded) => {
 		const component = subagentCard(state);
@@ -417,7 +418,11 @@ describe("ToolExecutionComponent parity", () => {
 			expect(rendered).toContain("1.2k token");
 			expect(rendered).toContain("2s");
 		}
-		if (state === "error") expect(rendered).toContain("Child failed");
+		if (state === "error") {
+			expect(rendered).toContain("failed");
+			if (expanded) expect(rendered).toContain("Child failed");
+			else expect(rendered).not.toContain("Child failed");
+		}
 		if (expanded) expect(rendered).toContain("grok-4.5");
 	});
 
