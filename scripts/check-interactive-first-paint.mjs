@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -213,7 +214,15 @@ registerHooks({load(url, context, nextLoad) {
 		);
 	} finally {
 		clearTimeout(timer);
-		rmSync(agentDir, { recursive: true, force: true });
+		const brokerPidFile = join(agentDir, "intercom", "broker.pid");
+		try {
+			const brokerPid = Number(readFileSync(brokerPidFile, "utf8").trim());
+			assert(Number.isSafeInteger(brokerPid) && brokerPid > 0, "Invalid isolated broker pid");
+			process.kill(brokerPid);
+		} catch (error) {
+			if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+		}
+		await rm(agentDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 }
 
