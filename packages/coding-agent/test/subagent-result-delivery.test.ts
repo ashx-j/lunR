@@ -23,18 +23,16 @@ function fixture(status = "complete") {
 	vi.useFakeTimers();
 	const dir = mkdtempSync(join(tmpdir(), "lunr-result-delivery-"));
 	const file = join(dir, "result.json");
-	writeFileSync(
-		file,
-		JSON.stringify({
-			id: "run",
-			sessionId: "session",
-			state: status,
-			success: status === "complete",
-			summary: "Finished",
-			nestedChildren: [],
-			intercomTarget: "parent",
-		}),
-	);
+	const result = {
+		id: "run",
+		sessionId: "session",
+		state: status,
+		success: status === "complete",
+		summary: "Finished",
+		nestedChildren: [],
+		intercomTarget: "parent",
+	};
+	writeFileSync(file, JSON.stringify(result));
 	const emitter = new EventEmitter();
 	const events = {
 		on(name: string, listener: (data: unknown) => void) {
@@ -54,7 +52,7 @@ function fixture(status = "complete") {
 		watcher.stopResultWatcher();
 		rmSync(dir, { recursive: true, force: true });
 	});
-	return { file, state, events, watcher, appendEntry };
+	return { file, state, events, watcher, appendEntry, result };
 }
 
 describe("async result delivery", () => {
@@ -72,6 +70,74 @@ describe("async result delivery", () => {
 		);
 		expect(relay).not.toHaveBeenCalled();
 		expect(existsSync(file)).toBe(false);
+	});
+
+	it("delivers failure evidence to the owner even when the external relay never acknowledges", async () => {
+		const { watcher, events, state, file, result } = fixture("failed");
+		const results = [
+			{
+				agent: "Inspect lock",
+				success: false,
+				error: "Missing required verification.",
+				output: "Report: the lock is process-local.",
+				acceptance: {
+					childReport: {
+						reviewFindings: ["Use a cross-process lock."],
+						residualRisks: ["Concurrent writes remain possible."],
+					},
+				},
+			},
+		];
+		writeFileSync(file, JSON.stringify({ ...result, id: "failed-evidence", results }));
+		const sendMessage = vi.fn();
+		const relay = vi.fn();
+		events.on(SUBAGENT_RESULT_INTERCOM_EVENT, relay);
+		registerSubagentNotify({ events, sendMessage } as never, state);
+		watcher.primeExistingResults();
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				content: expect.stringContaining(
+					"Missing required verification.\n\nOutput:\nReport: the lock is process-local.",
+				),
+			}),
+			{ triggerTurn: true },
+		);
+		expect(sendMessage.mock.calls[0]?.[0].content).toContain("```acceptance-report");
+		expect(sendMessage.mock.calls[0]?.[0].content).toContain("Concurrent writes remain possible.");
+		expect(relay).toHaveBeenCalledTimes(3);
+		expect(relay.mock.calls[0]?.[0]).toMatchObject({ ownerNotificationSessionId: "session", to: "parent" });
+		expect(existsSync(file)).toBe(true);
+	});
+
+	it("keeps each child's recovery details in the sole owner notification", async () => {
+		const { watcher, events, state, file, result } = fixture("failed");
+		const results = ["first", "second"].map((name, index) => {
+			const sessionFile = join(file, "..", `${name}-session.jsonl`);
+			const outputPath = join(file, "..", `${name}-output.md`);
+			writeFileSync(sessionFile, "");
+			return {
+				agent: `Inspect ${name}`,
+				success: index === 0,
+				output: `${name} findings`,
+				sessionFile,
+				artifactPaths: { outputPath },
+			};
+		});
+		writeFileSync(file, JSON.stringify({ ...result, id: "parallel-recovery", mode: "parallel", results }));
+		const sendMessage = vi.fn();
+		registerSubagentNotify({ events, sendMessage } as never, state);
+		watcher.primeExistingResults();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(sendMessage).toHaveBeenCalledOnce();
+		const content = sendMessage.mock.calls[0]?.[0].content;
+		expect(content).toContain("Run: parallel-recovery");
+		for (const [index, child] of results.entries()) {
+			expect(content).toContain(`${index + 1}. ${child.agent} [${child.success ? "completed" : "failed"}]`);
+			expect(content).toContain(child.sessionFile);
+			expect(content).toContain(child.artifactPaths.outputPath);
+			expect(content).toContain(`id: "parallel-recovery", index: ${index}`);
+		}
 	});
 
 	it("updates terminal state immediately and retains unacknowledged output without writing over the TUI", async () => {

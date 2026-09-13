@@ -17,11 +17,15 @@ import {
 	createCompletionBatcher,
 	resolveCompletionBatchConfig,
 } from "./completion-batcher.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type SubagentState } from "../../shared/types.ts";
+import { formatNestedResultLines, resolveSubagentResultStatus } from "../../intercom/result-intercom.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type AcceptanceLedger, type SubagentResultIntercomChild, type SubagentState } from "../../shared/types.ts";
 
-interface ChainStepResult {
+interface ChainStepResult extends Partial<SubagentResultIntercomChild> {
 	agent: string;
 	output: string;
+	summary?: string;
+	error?: string;
+	acceptance?: AcceptanceLedger;
 	success: boolean;
 }
 
@@ -47,6 +51,7 @@ interface SubagentResult {
 	timestamp: number;
 	durationMs?: number;
 	cwd?: string;
+	asyncDir?: string;
 	sessionFile?: string;
 	shareUrl?: string;
 	gistUrl?: string;
@@ -184,7 +189,28 @@ export function buildCompletionDetails(result: SubagentResult): SubagentNotifyDe
 		status,
 		...(result.source ? { source: result.source } : {}),
 		...(taskInfo ? { taskInfo } : {}),
-		resultPreview: summary,
+		resultPreview: [
+			result.id ? `Run: ${result.id}` : undefined,
+			result.asyncDir ? `Async dir: ${result.asyncDir}` : undefined,
+			result.results?.length
+				? result.results.map((child, index) => {
+					const output = child.summary ?? (child.error ? `${child.error}\n\nOutput:\n${child.output}` : child.output);
+					const report = child.acceptance?.childReport;
+					const childIndex = child.index ?? index;
+					return [
+						`${childIndex + 1}. ${child.agent} [${child.status ?? resolveSubagentResultStatus({ success: child.success, state: result.state })}]`,
+						child.artifactPath ? `Output artifact: ${child.artifactPath}` : undefined,
+						child.sessionPath ? `Session: ${child.sessionPath}` : undefined,
+						child.sessionPath && result.id && result.source !== "foreground"
+							? `Revive: subagent({ action: "resume", id: ${JSON.stringify(result.id)}, index: ${childIndex}, message: "..." })`
+							: undefined,
+						...formatNestedResultLines(child.children),
+						output,
+						report ? `\`\`\`acceptance-report\n${JSON.stringify(report, null, 2)}\n\`\`\`` : undefined,
+					].filter((line) => line !== undefined).join("\n");
+				}).join("\n\n")
+				: summary,
+		].filter((line) => line !== undefined).join("\n\n"),
 		...(typeof result.durationMs === "number" ? { durationMs: result.durationMs } : {}),
 		...(session ? { sessionLabel: session.label, sessionValue: session.value } : {}),
 	};

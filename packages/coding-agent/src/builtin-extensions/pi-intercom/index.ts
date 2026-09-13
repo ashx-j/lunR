@@ -366,7 +366,7 @@ function duplicateSessionNames(sessions: SessionInfo[]): Set<string> {
 function shortSessionId(sessionId: string): string {
   return sessionId.slice(0, 8);
 }
-function parseSubagentIntercomPayload(payload: unknown): { to: string; message: string; requestId?: string } | null {
+function parseSubagentIntercomPayload(payload: unknown): { to: string; message: string; requestId?: string; ownerNotificationSessionId?: string } | null {
   if (typeof payload !== "object" || payload === null) {
     return null;
   }
@@ -375,7 +375,8 @@ function parseSubagentIntercomPayload(payload: unknown): { to: string; message: 
     return null;
   }
   const requestId = typeof record.requestId === "string" ? record.requestId : undefined;
-  return { to: record.to, message: record.message, ...(requestId ? { requestId } : {}) };
+  const ownerNotificationSessionId = typeof record.ownerNotificationSessionId === "string" ? record.ownerNotificationSessionId : undefined;
+  return { to: record.to, message: record.message, ...(requestId ? { requestId } : {}), ...(ownerNotificationSessionId ? { ownerNotificationSessionId } : {}) };
 }
 function resolveIntercomPresenceName(sessionName: string | undefined, sessionId: string): string {
   const trimmedName = sessionName?.trim();
@@ -982,6 +983,13 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     if (!parsed) return;
 
     const relayGeneration = runtimeGeneration;
+    const deliverLocal = () => {
+      const ctx = getLiveContext(runtimeContext, relayGeneration);
+      const ownerSessionId = ctx?.sessionManager.getSessionFile?.() ?? ctx?.sessionManager.getSessionId();
+      // The owner already receives subagent-notify; keep the relay ACK without another model message.
+      if (options.sender === "subagent-result" && ownerSessionId && parsed.ownerNotificationSessionId === ownerSessionId) return;
+      deliverLocalSubagentRelayMessage(options.sender, options.status, parsed.message);
+    };
     const key = options.acknowledge && parsed.requestId ? `${relayGeneration}:${parsed.requestId}` : undefined;
     let delivery = key ? resultDeliveries.get(key) : undefined;
     if (!delivery) {
@@ -990,14 +998,14 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
         try {
           if (!relayStillLive()) return false;
           if (currentSessionTargetMatches(parsed.to)) {
-            deliverLocalSubagentRelayMessage(options.sender, options.status, parsed.message);
+            deliverLocal();
             return true;
           }
           const activeClient = await ensureConnected("background");
           const target = await resolveSessionTarget(activeClient, parsed.to) ?? parsed.to;
           if (!relayStillLive()) return false;
           if (currentSessionTargetMatches(parsed.to, target, activeClient)) {
-            deliverLocalSubagentRelayMessage(options.sender, options.status, parsed.message);
+            deliverLocal();
             return true;
           }
           const result = await activeClient.send(target, { text: parsed.message });

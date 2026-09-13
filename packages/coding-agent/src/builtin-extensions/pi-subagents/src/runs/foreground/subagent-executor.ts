@@ -1278,6 +1278,7 @@ async function resumeAsyncRun(input: {
 	}
 	const result = executeAsyncSingle(runId, {
 		spec: recoverySpec,
+		completionTask: followUp,
 		goal: followUp,
 		ctx: {
 			pi: input.deps.pi,

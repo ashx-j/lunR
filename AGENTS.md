@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-12 (v0.2.20 on `master`). Public npm is `@ashx-j/lunr@0.2.20`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-13 (v0.2.20 baseline). Public npm is `@ashx-j/lunr@0.2.20`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Subagent orchestration repair (`fix/subagent-question-resume-delivery`):** file-backed supervisor questions and blocking requests preserve ownership through spawn, inbox, reply, wait, and reconciliation. Resumed completion guards use effective permissions and the current follow-up. Terminal notifications include failure details and the child report without duplicate owner relays.
 - **v0.2.20 scope:** PRs #71, #72, #73, #74, #75, #76, and #79. Native computer use #77 stays open and is excluded from this release.
 - **Subagent model selection (`fix/subagent-model-selection`):** executable children choose exactly one of `tier` or `model`; optional `thinking` only with explicit model; single, parallel, and chain resume preserve selection separately from the resolved runtime model. Removed `settings_load` + four settings tools and `watchdog.configure`; `/settings` remains; direct settings.json file-tool writes are blocked.
 - **Subagent compact display (`fix/subagent-compact-display`):** foreground and async compact rows share one line: spinner, description, selected tier or explicit model, tokens, elapsed time. No hang line, tool-use count, thinking, or permission suffix. Completed collapsed cards keep frozen stats. Async widget paints at 80ms on a stable component (no per-tick `setWidget`, no fs reads on the animation timer). Call headers say `subagent async` when the launch is async. Completed notify cards are title and status only. Tests: compact-row + tool-execution-component.
@@ -126,6 +127,8 @@ Last updated: 2026-09-12 (v0.2.20 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Subagent orchestration repair: source Vitest passes 144/144 across 13 focused suites, with red-before-green coverage for question ownership, resumed no-edit completion, duplicate delivery, and per-child recovery details. Coding-agent `tsgo --noEmit`, touched-test Biome, and `git diff --check` pass. Independent read-only review has no remaining confirmed findings. No CLI builds, installed-CLI changes, or live-provider verification.
+
 - v0.2.20 release (2026-09-12): all five offline builds and coding-agent Node bundle pass; first-paint and subagent/MCP/LSP/fetch first-use checks pass with the combined tool-schema fingerprint. Async question wait and idle-wake CLI checks pass. Focused Vitest passes 309/309 before the review fix; the 30-test question/cancellation set passes afterward, including a new test that failed before the fix. Full coding-agent Vitest reports 2497 passed / 112 existing failures / 47 skipped. Three heavy read-only reviews found one confirmed bug: cancelled questions restarted the parent. Only answered questions now request a turn. Publish dry-run validates all four public packages. GitHub CI has exactly the same 96 distinct failed-test headers as master, with build/first-request/Check stages green. Publication workflow `34713848363` succeeded from tag `v0.2.20` at `c395c79`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.20 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed.
 
 - Combined subagent stack: all five offline builds and the Node bundle pass; focused Vitest passes 225/225 across 15 suites. Changed non-vendored code passes Biome. First-paint and first-turn checks pass. An isolated local Faux CLI request exits successfully with 31 active tools and no settings tools. Local prompt/tool snapshots were regenerated for that isolated verification and remain untracked; the original workspace snapshots were not changed.
@@ -194,6 +197,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
 
 - Async Escape cancellation uses a session-keyed lightweight bridge; keep executor imports lazy. Stop requests are distinct from confirmed termination. Result delivery retries keep the same request id; only acknowledged or locally handled stopped results are removed. Three failed attempts retain the file until reload/restart. Stopped completions update history without waking the parent. Direct-child process cleanup remains the existing runner policy, not a general shell-grandchild sandbox.
+- Parent question ownership uses `PI_SUBAGENT_SUPERVISOR_SESSION_ID`, the run's session-file identity or in-memory UUID. Permission forwarding and intercom keep `PI_SUBAGENT_ORCHESTRATOR_SESSION_ID` as the routing UUID. Compare each identity exactly; never accept arbitrary path/UUID alternatives.
+- Async resume passes the current follow-up separately as `completionTask`; revival metadata is not a mutation request. Persisted acceptance remains independent of the mutation guard.
+- The owner notifier handles terminal results, including per-child status, artifacts, session paths, and resume guidance. Result relays retain ACK/retry behavior but skip local model delivery when `ownerNotificationSessionId` matches. Completion-guard control events remain diagnostic, not mid-run attention requests.
 - Only answered supervisor questions wake the parent. Cancelled/expired records still notify active waits and enter session history, but never restart an idle parent after stop.
 - Native supervisor questions own `contact_supervisor` for children with a native channel; the broker must not replace it with its older reason-only schema. Requests and terminal outcomes use separate exclusive records. Reconcile step termination and steering failures, not only whole-run completion. Question waits advance expiry themselves, and idle answer notifications request a parent turn.
 - Async-question verification: `node scripts/check-subagent-questions.mjs` and the same command with `--idle` use an isolated local provider and leave logs under `.artifacts/`. The local, untracked `LUNR_SYSTEM_INJECTION.md` is that isolated smoke session's literal system prompt, not the user's configured prompt; `.artifacts/question-tool-inventory.json` records its tool definitions. The default first-request schema snapshot remains in `scripts/check-interactive-first-paint.mjs`.
@@ -253,6 +259,10 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-13: separate supervisor ownership from routing UUIDs so file-backed questions pass the same strict ownership checks as in-memory questions.
+- 2026-09-13: classify resumed completion from effective permissions and the current follow-up, not display labels or revival metadata, while retaining acceptance gates.
+- 2026-09-13: make the owner notifier the terminal delivery path so failure details and reports arrive once without removing external relay ACKs or retries.
 
 - 2026-09-12: integrate the seven approved-scope PR heads without squashing their ancestry so GitHub can track their inclusion; exclude unfinished computer use #77 from 0.2.20.
 - 2026-09-12: gate question wakeups on answered state so cancellation cannot undo the user's double-Escape stop.

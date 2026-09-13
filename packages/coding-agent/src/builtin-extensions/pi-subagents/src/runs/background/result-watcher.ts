@@ -209,6 +209,7 @@ export function createResultWatcher(
 					asyncDir: data.asyncDir,
 				});
 				payload.requestId = `async-result:${sessionId}:${completionKey}`;
+				payload.ownerNotificationSessionId = sessionId;
 				attempts.set(file, (attempts.get(file) ?? 0) + 1);
 				const delivered = await deliverSubagentResultIntercomEvent(pi.events, payload);
 				if (!isCurrent()) return;

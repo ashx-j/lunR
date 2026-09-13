@@ -149,7 +149,7 @@ export function attachNestedChildrenToResultChildren(
 	});
 }
 
-function formatNestedResultLines(children: PublicNestedRunSummary[] | undefined): string[] {
+export function formatNestedResultLines(children: PublicNestedRunSummary[] | undefined): string[] {
 	if (!children?.length) return [];
 	const lines = ["Nested subagents:"];
 	let remaining = 10;

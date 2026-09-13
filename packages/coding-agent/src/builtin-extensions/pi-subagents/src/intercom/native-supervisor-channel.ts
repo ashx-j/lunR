@@ -12,6 +12,7 @@ import {
 	SUBAGENT_ORCHESTRATOR_TARGET_ENV,
 	SUBAGENT_RUN_ID_ENV,
 	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
+	SUBAGENT_SUPERVISOR_SESSION_ID_ENV,
 } from "../runs/shared/pi-args.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, SUBAGENT_CONTROL_EVENT, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
@@ -30,6 +31,7 @@ import {
 	outstandingQuestionsForChild,
 	pendingSupervisorQuestionsForDelivery,
 	QUESTIONS_DIR,
+	readSupervisorQuestion,
 	resolveSupervisorChannelDir as resolveQuestionChannelDir,
 	SUBAGENT_QUESTION_EVENT,
 	SUBAGENT_SUPERVISOR_ANSWER_TYPE,
@@ -62,6 +64,7 @@ interface SupervisorRequest {
 	expectsReply: boolean;
 	orchestratorTarget?: string;
 	orchestratorSessionId?: string;
+	supervisorSessionId?: string;
 	runId: string;
 	agent: string;
 	childIndex: number;
@@ -171,6 +174,7 @@ function readChildMetadata(): {
 	orchestratorTarget?: string;
 	orchestratorSessionId?: string;
 	childTarget?: string;
+	supervisorSessionId?: string;
 } | undefined {
 	const channelDir = readTextEnv(SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV);
 	const runId = readTextEnv(SUBAGENT_RUN_ID_ENV);
@@ -185,6 +189,7 @@ function readChildMetadata(): {
 		childIndex: Number(rawIndex),
 		orchestratorTarget: readTextEnv(SUBAGENT_ORCHESTRATOR_TARGET_ENV),
 		orchestratorSessionId,
+		supervisorSessionId: readTextEnv(SUBAGENT_SUPERVISOR_SESSION_ID_ENV),
 		childTarget: readTextEnv("PI_SUBAGENT_INTERCOM_SESSION_NAME"),
 	};
 }
@@ -210,6 +215,8 @@ function answerParentQuestion(params: ContactSupervisorParams): AgentToolResult<
 	if (!replyTo) throw new Error("action='reply' requires replyTo with the parent question id.");
 	const message = params.message?.trim();
 	if (!message) throw new Error("message is required for supervisor question replies.");
+	const question = readSupervisorQuestion(metadata.channelDir, replyTo);
+	if (question?.parentSessionId !== (metadata.supervisorSessionId ?? metadata.orchestratorSessionId)) throw new Error("Question belongs to a different supervisor session.");
 	const answered = answerSupervisorQuestion(metadata.channelDir, replyTo, message, owner);
 	return {
 		content: [{ type: "text", text: `Replied to parent question ${answered.id}. Continue the assigned task.` }],
@@ -338,6 +345,7 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: A
 		expectsReply,
 		...(metadata.orchestratorTarget ? { orchestratorTarget: metadata.orchestratorTarget } : {}),
 		...(metadata.orchestratorSessionId ? { orchestratorSessionId: metadata.orchestratorSessionId } : {}),
+		...(metadata.supervisorSessionId ? { supervisorSessionId: metadata.supervisorSessionId } : {}),
 		runId: metadata.runId,
 		agent: metadata.agent,
 		childIndex: metadata.childIndex,
@@ -424,6 +432,7 @@ function parseRequestFile(file: string, channelDir: string): PendingSupervisorRe
 	try {
 		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<SupervisorRequest>;
 		if (parsed.type !== "subagent.supervisor.request") return undefined;
+		if (parsed.supervisorSessionId !== undefined && (typeof parsed.supervisorSessionId !== "string" || !parsed.supervisorSessionId.trim())) return undefined;
 		if (typeof parsed.id !== "string" || !parsed.id) return undefined;
 		if (parsed.reason !== "need_decision" && parsed.reason !== "interview_request" && parsed.reason !== "progress_update") return undefined;
 		if (typeof parsed.message !== "string" || !parsed.message) return undefined;
@@ -440,7 +449,7 @@ export function hasPendingBlockingSupervisorRequest(runId: string, sessionId?: s
 		const request = parseRequestFile(file, channelDir);
 		if (!request?.expectsReply) continue;
 		if (request.runId !== runId) continue;
-		if (sessionId && request.orchestratorSessionId && request.orchestratorSessionId !== sessionId) continue;
+		if (sessionId && (request.supervisorSessionId ?? request.orchestratorSessionId) !== sessionId) continue;
 		if (fs.existsSync(replyPath(request.channelDir, request.id))) continue;
 		if (now > requestExpiresAt(request, now)) continue;
 		return true;
@@ -560,9 +569,19 @@ function currentContextSessionId(state: Pick<SubagentState, "currentSessionId">,
 	return state.currentSessionId ?? undefined;
 }
 
+function currentSupervisorSessionId(state: Pick<SubagentState, "currentSessionId">, ctx: ExtensionContext): string | undefined {
+	try {
+		return ctx.sessionManager.getSessionFile?.() ?? currentContextSessionId(state, ctx);
+	} catch {
+		return state.currentSessionId ?? undefined;
+	}
+}
+
 function requestMatchesContext(request: SupervisorRequest, state: Pick<SubagentState, "currentSessionId">, ctx: ExtensionContext): boolean {
-	const currentSessionId = currentContextSessionId(state, ctx);
-	return Boolean(currentSessionId && request.orchestratorSessionId === currentSessionId);
+	const currentSessionId = request.supervisorSessionId !== undefined
+		? currentSupervisorSessionId(state, ctx)
+		: currentContextSessionId(state, ctx);
+	return Boolean(currentSessionId && (request.supervisorSessionId ?? request.orchestratorSessionId) === currentSessionId);
 }
 
 function removeRequestFile(file: string): void {
@@ -720,7 +739,7 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 }
 
 function questionMatchesParentContext(question: SupervisorQuestion, state: SubagentState, ctx: ExtensionContext): boolean {
-	const sessionId = currentContextSessionId(state, ctx);
+	const sessionId = currentSupervisorSessionId(state, ctx);
 	if (!sessionId || question.parentSessionId !== sessionId) return false;
 	if ((state.sessionGeneration ?? 0) !== question.parentGeneration) return false;
 	return true;
@@ -891,7 +910,7 @@ export function isPendingQuestionForCurrentChild(questionId: string): boolean {
 	const owner = readChildQuestionOwner(metadata);
 	if (!metadata || !owner) return false;
 	return pendingSupervisorQuestionsForDelivery(metadata.channelDir, owner).some((question) =>
-		question.id === questionId && question.parentSessionId === metadata.orchestratorSessionId,
+		question.id === questionId && question.parentSessionId === (metadata.supervisorSessionId ?? metadata.orchestratorSessionId),
 	);
 }
 
@@ -901,6 +920,7 @@ export function markDeliveredSupervisorQuestionFromChild(message: string): void 
 	const metadata = readChildMetadata();
 	const owner = readChildQuestionOwner(metadata);
 	if (!metadata || !owner) return;
+	if (!isPendingQuestionForCurrentChild(match[1])) return;
 	try {
 		markSupervisorQuestionDelivered(metadata.channelDir, match[1], owner);
 	} catch {

@@ -18,7 +18,7 @@ const READ_ONLY_BUILTIN_TOOLS = new Set([
 ]);
 
 interface CompletionMutationGuardInput {
-	agent: string;
+	permissions: "full" | "read-only";
 	task: string;
 	messages: Message[];
 	tools?: string[];
@@ -54,7 +54,7 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {
 	const expectedMutation = hasMutationToolCapability(input.tools, input.mcpDirectTools)
-		? expectsImplementationMutation(input.agent, input.task)
+		? expectsImplementationMutation(input.permissions, input.task)
 		: false;
 	const attemptedMutation = hasMutationToolCall(input.messages);
 	return {
