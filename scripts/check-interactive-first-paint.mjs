@@ -14,6 +14,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = process.argv[2] ? resolve(process.argv[2]) : join(root, "packages/coding-agent/dist/cli.js");
 const dist = dirname(cli);
 
+function isolatedStartupEnv(overrides = {}) {
+	const env = { ...process.env };
+	for (const key of Object.keys(env)) {
+		if (/^PI_(?:SUBAGENTS?|INTERCOM)_/.test(key)) delete env[key];
+	}
+	return { ...env, ...overrides };
+}
+
 async function check(fail) {
 	const agentDir = mkdtempSync(join(tmpdir(), "lunr-paint-check-"));
 	const fixture = `export async function main() {
@@ -27,13 +35,12 @@ registerHooks({ load(url, context, nextLoad) {
 }});`;
 	const child = spawn(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, cli], {
 		cwd: agentDir,
-		env: {
-			...process.env,
+		env: isolatedStartupEnv({
 			PI_CODING_AGENT_DIR: agentDir,
 			PI_STARTUP_BENCHMARK: "1",
 			PI_TIMING: "1",
 			PI_OFFLINE: "1",
-		},
+		}),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	let stdout = "";
@@ -141,8 +148,7 @@ registerHooks({load(url, context, nextLoad) {
 		],
 		{
 			cwd: workspace,
-			env: {
-				...process.env,
+			env: isolatedStartupEnv({
 				HOME: home,
 				USERPROFILE: home,
 				APPDATA: home,
@@ -157,7 +163,7 @@ registerHooks({load(url, context, nextLoad) {
 				PI_SKIP_VERSION_CHECK: "1",
 				PI_STARTUP_BENCHMARK_TOOL_URL: toolUrl ?? "",
 				PI_STARTUP_BENCHMARK_TOOL: toolKind ?? "",
-			},
+			}),
 			stdio: ["ignore", "ignore", "pipe"],
 		},
 	);
@@ -193,7 +199,7 @@ registerHooks({load(url, context, nextLoad) {
 		}
 		assert.equal(
 			request.toolSchemaHash,
-			"7f9d98f9f173bef104f28000b65a45c500ba2e9955805b693c02bcc317eae31a",
+			"5325fdc0cf75a1998cb0a1d8ab184bf34342c4eac71add793bcf106c6f2c9da4",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);

@@ -301,7 +301,7 @@ const SubagentParamsSchema = Type.Object({
 		description: "Children always start with a fresh session. Fork context is not available.",
 	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent chain artifact directory; defaults to user-scoped temp storage." })),
-	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
+	async: Type.Optional(Type.Boolean({ description: "Run async in the background. Defaults to true when omitted; set false for immediate foreground results." })),
 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Optional run-level timeout in ms for foreground and async/background runs. Alias of maxRuntimeMs." })),
 	maxRuntimeMs: Type.Optional(Type.Integer({ minimum: 1, description: "Alias of timeoutMs for optional run-level timeout in foreground and async/background runs." })),
 	turnBudget: Type.Optional(TurnBudgetOverride),
@@ -314,7 +314,7 @@ const SubagentParamsSchema = Type.Object({
 		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
 	),
 	// Clarification TUI
-	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution. Explicit clarify: true keeps the run foreground for the clarify UI; omitted clarify can still run in the background when async: true is set." })),
+	clarify: Type.Optional(Type.Boolean({ description: "Show the interactive TUI preview/editor before execution. clarify:true keeps the run foreground even when async is omitted or true." })),
 	control: Type.Optional(ControlOverrides),
 	output: Type.Optional(Type.Unsafe({
 		anyOf: [

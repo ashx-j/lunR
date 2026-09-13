@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeChildSpec } from "../../shared/child-spec.ts";
+import { SUBAGENT_ASYNC_GUIDANCE } from "../../shared/async-guidance.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
@@ -240,9 +241,8 @@ export function formatAsyncStartedMessage(headline: string): string {
 	return [
 		headline,
 		"",
-		"The async run is detached. Do not run sleep timers or polling loops just to wait for it.",
-		"If you have independent work, continue that work. When you have nothing left to do until the async result arrives, call subagent_wait() — it blocks until the run finishes and delivers the completion here. Only if you are certain you will get another turn (an interactive session where the user will prompt you again) can you instead stop and let Pi wake you; inside a skill that must run to completion, or in a non-interactive run, there is no next turn, so use subagent_wait().",
-		"Use subagent({ action: \"status\", id: \"...\" }) when you need a one-shot status/result or to inspect a blocked/stale run. To block until completion, prefer subagent_wait(). Do not poll in a loop just to wait.",
+		SUBAGENT_ASYNC_GUIDANCE,
+		"For one-time inspection or recovery of a blocked or stale run, use subagent({ action: \"status\", id: \"...\" }).",
 	].join("\n");
 }
 
