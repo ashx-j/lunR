@@ -417,6 +417,7 @@ export interface SubagentResultIntercomChild {
 }
 
 export interface SubagentResultIntercomPayload {
+	ownerNotificationSessionId?: string;
 	to: string;
 	message: string;
 	requestId?: string;

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	getBrokerLaunchSpec,
 	isNativeSupervisorChannelActive,
@@ -21,7 +21,9 @@ import {
 	buildRevivedAsyncTask,
 	readAsyncRecoveryDescriptor,
 } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-resume.ts";
+import { runSingleStep } from "../src/builtin-extensions/pi-subagents/src/runs/background/subagent-runner.ts";
 import { waitForSubagents } from "../src/builtin-extensions/pi-subagents/src/runs/background/subagent-wait.ts";
+import { runSync } from "../src/builtin-extensions/pi-subagents/src/runs/foreground/execution.ts";
 import {
 	evaluateAcceptance,
 	resolveEffectiveAcceptance,
@@ -29,6 +31,12 @@ import {
 	validateAcceptanceInput,
 	validatePersistedAcceptance,
 } from "../src/builtin-extensions/pi-subagents/src/runs/shared/acceptance.ts";
+import * as piSpawn from "../src/builtin-extensions/pi-subagents/src/runs/shared/pi-spawn.ts";
+import {
+	classifyTaskMutationIntent,
+	taskMayMutate,
+} from "../src/builtin-extensions/pi-subagents/src/runs/shared/task-intent.ts";
+import { normalizeChildSpec } from "../src/builtin-extensions/pi-subagents/src/shared/child-spec.ts";
 import type {
 	AcceptanceReport,
 	ResolvedAcceptanceConfig,
@@ -106,6 +114,7 @@ const originalEnv: Record<string, string | undefined> = {};
 for (const key of envKeys) originalEnv[key] = process.env[key];
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	for (const key of envKeys) {
 		if (originalEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = originalEnv[key];
@@ -399,6 +408,130 @@ describe("evaluateAcceptance continuation gates", () => {
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("background completion after revival", () => {
+	it.each([
+		{ permissions: "read-only", followUp: "Recommend how to add a lock. Do not implement.", expected: 0 },
+		{ permissions: "read-only", followUp: "Recommend how to add a lock.", expected: 0 },
+		{ permissions: "full", followUp: "Do not implement. Recommend how to add a lock.", expected: 0 },
+		{ permissions: "full", followUp: "Implement the lock.", expected: 1 },
+		{ permissions: "full", followUp: "Research the lock and return findings.", expected: 0 },
+	] as const)(
+		"uses $permissions and the current follow-up: $followUp",
+		async ({ permissions, followUp, expected }) => {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-revived-guard-"));
+			try {
+				const acceptance = resolveEffectiveAcceptance({
+					explicit: "attested",
+					permissions: "read-only",
+					task: "Inspect the lock",
+					async: true,
+				});
+				writeDescriptor(
+					dir,
+					{
+						sourceRunId: "previous-run",
+						childId: "child-1",
+						description: "Implement the original lock",
+						agent: "Implement the original lock",
+						permissions,
+					},
+					acceptance,
+				);
+				const descriptor = readAsyncRecoveryDescriptor(dir)!;
+				const output = reportOutput(
+					completeReport({
+						changedFiles: [],
+						testsAddedOrUpdated: [],
+						reviewFindings: ["Add a lock in a later implementation."],
+						residualRisks: ["No code changed."],
+					}),
+				);
+				fs.writeFileSync(
+					path.join(dir, "package.json"),
+					JSON.stringify({ name: "@earendil-works/pi-coding-agent", bin: "child.cjs" }),
+				);
+				fs.writeFileSync(
+					path.join(dir, "child.cjs"),
+					`require('node:fs').writeFileSync(${JSON.stringify(path.join(dir, "spawn.json"))}, JSON.stringify({ parent: process.env.PI_SUBAGENT_ORCHESTRATOR_SESSION_ID, supervisor: process.env.PI_SUBAGENT_SUPERVISOR_SESSION_ID, permission: process.env.PI_SUBAGENT_CHILD_PERMISSION })); console.log(${JSON.stringify(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: output }], stopReason: "stop" } }))});`,
+				);
+				const result = await runSingleStep(
+					{
+						agent: descriptor.agent,
+						permissions: descriptor.permissions,
+						parentSessionId: "parent-uuid",
+						inheritProjectContext: true,
+						inheritSkills: false,
+						completionTask: followUp,
+						task: buildRevivedAsyncTask(
+							{
+								kind: "revive",
+								runId: "previous-run",
+								state: "failed",
+								agent: descriptor.agent,
+								index: 1,
+								intercomTarget: "child",
+							},
+							followUp,
+						),
+						sessionFile: descriptor.sessionFile,
+						effectiveAcceptance: restorePersistedAcceptance(descriptor.acceptance),
+					},
+					{
+						supervisorSessionId: path.join(dir, "parent.jsonl"),
+						previousOutput: "",
+						placeholder: "{previous}",
+						cwd: dir,
+						sessionEnabled: false,
+						id: path.basename(dir),
+						flatIndex: 0,
+						flatStepCount: 1,
+						outputFile: path.join(dir, "output.log"),
+						piPackageRoot: dir,
+						piArgv1: path.join(dir, "child.cjs"),
+					},
+				);
+				expect(result.exitCode).toBe(expected);
+				expect(result.acceptance?.childReport?.reviewFindings).toEqual(["Add a lock in a later implementation."]);
+				if (expected === 0) expect(result.acceptance?.status).not.toBe("rejected");
+				else expect(result.error).toContain("without making edits");
+				expect(JSON.parse(fs.readFileSync(path.join(dir, "spawn.json"), "utf-8"))).toEqual({
+					parent: "parent-uuid",
+					supervisor: path.join(dir, "parent.jsonl"),
+					permission: permissions,
+				});
+				vi.spyOn(piSpawn, "getPiSpawnCommand").mockImplementation((args) => ({
+					command: process.execPath,
+					args: [path.join(dir, "child.cjs"), ...args],
+				}));
+				const foreground = await runSync(
+					dir,
+					normalizeChildSpec(
+						{ task: followUp, description: "Inspect lock", permissions, model: "test/model" },
+						{ parentMode: "auto", runId: path.basename(dir), index: 0 },
+					),
+					{ runId: path.basename(dir), acceptance: "attested" },
+				);
+				expect(foreground.exitCode).toBe(expected);
+			} finally {
+				fs.rmSync(resolveSupervisorChannelDir(path.basename(dir), "Implement the original lock", 0), {
+					recursive: true,
+					force: true,
+				});
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it.each([
+		["Do not implement. Recommend how to add a lock.", "read-only", false],
+		["Do not implement tests; implement the fix.", "implementation", true],
+		["Implement the fix; do not modify unrelated files.", "implementation", true],
+	] as const)("classifies negation: %s", (task, kind, mayMutate) => {
+		expect(classifyTaskMutationIntent("full", task).kind).toBe(kind);
+		expect(taskMayMutate(task)).toBe(mayMutate);
 	});
 });
 

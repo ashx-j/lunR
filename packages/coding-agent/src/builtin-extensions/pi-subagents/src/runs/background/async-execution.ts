@@ -156,6 +156,8 @@ interface AsyncChainParams {
 
 interface AsyncSingleParams {
 	spec: ChildSpec;
+	/** Current follow-up without revival metadata, used only by the mutation guard. */
+	completionTask?: string;
 	/** Raw caller-facing goal used only by the started event. */
 	goal?: string;
 	ctx: AsyncExecutionContext;
@@ -1187,6 +1189,7 @@ export function executeAsyncSingle(
 						permissions: spec.effectivePermissions,
 						agent,
 						task: taskWithOutputInstruction,
+						completionTask: params.completionTask ?? task,
 						cwd: runnerCwd,
 						model,
 						thinking: resolveEffectiveThinking(model, effectiveThinking),
