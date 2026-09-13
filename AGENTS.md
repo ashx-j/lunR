@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-13 (v0.2.21 on `release/v0.2.21`). Public npm is `@ashx-j/lunr@0.2.20` until this tag publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.21:** ships #82 Windows intercom startup, #83 subagent UI polish, #84 question/resume delivery, and #85 async-by-default. The combined call renderer keeps #83 title lookup and persisted `displayTitle` with #85 argument normalization and omitted-async default. Native computer use #77 stays open.
 - **Intercom Windows startup (`fix/intercom-windows-startup`):** the hidden launcher owns stderr redirection without a competing parent file handle. Each launch resets its diagnostic log; early exits report their code and failures include the log path. The launcher exits once startup settles, while the broker remains independent. Broker reuse, native supervisor bypass, and subagent delivery are unchanged. Tests: intercom-startup + continuation/delivery/question/cancellation suites.
@@ -118,7 +118,7 @@ Last updated: 2026-09-13 (v0.2.21 on `release/v0.2.21`). Public npm is `@ashx-j/
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.20** until `v0.2.21` publishes.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.21**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -132,7 +132,7 @@ Last updated: 2026-09-13 (v0.2.21 on `release/v0.2.21`). Public npm is `@ashx-j/
 
 ## Build & run
 
-- v0.2.21 release (2026-09-13): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 185/185 across 11 suites. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with hash `5325fdc0…`. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt CLI `--version` reports 0.2.21. Native computer use #77 stays open.
+- v0.2.21 release (2026-09-13): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 185/185 across 11 suites. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with hash `5325fdc0…`. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt CLI `--version` reports 0.2.21. Publication workflow `34766302131` succeeded from tag `v0.2.21` at `833b964`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.21 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed. Native computer use #77 stays open.
 - Combined #82/#83/#84/#85 merge (2026-09-13): focused Vitest passes 185/185 across 11 suites covering intercom startup, question/resume delivery, compact UI, spinner/widget order, and async-by-default. #83 title lookup and #85 async default both remain on `renderSubagentCall`. First-paint keeps Windows broker cleanup plus isolated `PI_*` scrubbing and hash `5325fdc0…`. Native computer use #77 stays open. No release or installed CLI update.
 - Intercom Windows startup (2026-09-13): five offline package builds and the coding-agent Node bundle pass. Focused Vitest passes 52/52 across nine suites. The compiled broker integration reproduced the original timeout before the fix, then passed launch/reuse, launcher cleanup, two-client question/reply, early-exit, and health-timeout checks. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with the unchanged tool-schema fingerprint. Two isolated interactive CLI processes with simulated terminal streams exchanged a question/reply through the real intercom tool using a local scripted provider. Async question-wait and idle-parent-wake CLI checks pass. The installed CLI and original workspace build remain unchanged.
 - Subagent orchestration repair: source Vitest passes 144/144 across 13 focused suites, with red-before-green coverage for question ownership, resumed no-edit completion, duplicate delivery, and per-child recovery details. Coding-agent `tsgo --noEmit`, touched-test Biome, and `git diff --check` pass. Independent read-only review has no remaining confirmed findings. No CLI builds, installed-CLI changes, or live-provider verification.
