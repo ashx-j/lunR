@@ -2,8 +2,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildWidgetLines, renderSubagentResult } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	buildWidgetLines,
+	renderSubagentResult,
+	subagentAnimSink,
+} from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
 import { getCustomizeBridge, registerCustomizeBridge } from "../src/core/customize.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { getSubagentSpinnerDefinition, SUBAGENT_SPINNER_NAMES } from "../src/core/subagent-spinner.ts";
@@ -17,6 +21,8 @@ const roots: string[] = [];
 
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+	subagentAnimSink.current = null;
+	vi.useRealTimers();
 });
 
 describe("subagent spinner setting", () => {
@@ -88,5 +94,46 @@ describe("subagent spinner setting", () => {
 			0,
 		);
 		expect(foreground.render(80)[0]).toContain(getSubagentSpinnerDefinition("snake").frames[0]);
+	});
+
+	it("animates parallel rows past ten ticks and applies live selection changes", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const manager = SettingsManager.inMemory({ subagentSpinner: "snake" });
+		registerCustomizeBridge(manager);
+		subagentAnimSink.current = [];
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "running" }],
+				details: {
+					mode: "parallel",
+					results: [0, 1].map((index) => ({
+						agent: `Child ${index + 1}`,
+						description: `Child ${index + 1}`,
+						task: "inspect",
+						exitCode: 0,
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+						progress: { index, status: "running", tokens: 0, durationMs: 0 },
+					})),
+				},
+			} as never,
+			{ expanded: false },
+			theme as never,
+			0,
+		);
+		expect(subagentAnimSink.current).toHaveLength(2);
+		const snake = getSubagentSpinnerDefinition("snake").frames;
+		expect(result.render(100)[0]).toContain(snake[0]);
+		expect(result.render(100)[1]).toContain(snake[1]);
+
+		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(11, Date.now()));
+		expect(result.render(100)[0]).toContain(snake[11]);
+		expect(result.render(100)[1]).toContain(snake[12]);
+
+		manager.setSubagentSpinner("sparkle");
+		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(12, Date.now()));
+		const sparkle = getSubagentSpinnerDefinition("sparkle").frames;
+		expect(result.render(100)[0]).toContain(sparkle[0]);
+		expect(result.render(100)[1]).toContain(sparkle[1]);
 	});
 });

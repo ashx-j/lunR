@@ -516,8 +516,14 @@ describe("renderSingleCompact thinking line", () => {
 		subagentAnimSink.current = [];
 		const live = renderSubagentResult(makeResult("running") as never, { expanded: false }, stubTheme, 0);
 		expect(subagentAnimSink.current).toHaveLength(1);
-		vi.advanceTimersByTime(1_000);
+		const initialGlyph = live.render(120).join("\n").trim().split(" ")[0];
+		vi.advanceTimersByTime(80);
 		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(1, Date.now()));
+		expect(live.render(120).join("\n").trim().split(" ")[0]).not.toBe(initialGlyph);
+		const secondGlyph = live.render(120).join("\n").trim().split(" ")[0];
+		vi.advanceTimersByTime(920);
+		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(12, Date.now()));
+		expect(live.render(120).join("\n").trim().split(" ")[0]).not.toBe(secondGlyph);
 		expect(live.render(120).join("\n")).toContain("3s");
 		expect(live.render(120).join("\n")).not.toContain("tool use");
 
@@ -807,6 +813,215 @@ describe("renderMultiCompact selection badge", () => {
 		expect(lines[2]).toContain("failed");
 		expect(lines.join("\n")).not.toContain("parallel");
 		expect(lines.join("\n")).not.toContain("private diagnostic");
+	});
+
+	it("maps mixed chain fanout rows by workflow flat index and preserves workflow-only status", () => {
+		const details = {
+			mode: "chain",
+			results: [
+				{
+					agent: "source-child",
+					description: "Collect source items",
+					task: "collect",
+					exitCode: 0,
+					usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+					progressSummary: { index: 0, status: "completed", toolCount: 0, tokens: 20, durationMs: 1000 },
+				},
+			],
+			progress: [
+				{
+					index: 1,
+					description: "Review alpha",
+					status: "running",
+					toolCount: 0,
+					tokens: 30,
+					durationMs: 2000,
+				},
+			],
+			totalSteps: 3,
+			currentStepIndex: 1,
+			workflowGraph: {
+				runId: "dynamic-chain",
+				mode: "chain",
+				phases: [],
+				nodes: [
+					{
+						id: "step-0",
+						kind: "step",
+						label: "Collect source items",
+						status: "completed",
+						flatIndex: 0,
+						stepIndex: 0,
+					},
+					{
+						id: "step-1",
+						kind: "dynamic-parallel-group",
+						label: "Review collected items",
+						status: "running",
+						stepIndex: 1,
+						children: [
+							{
+								id: "alpha",
+								kind: "agent",
+								label: "Review alpha",
+								status: "running",
+								flatIndex: 1,
+								stepIndex: 1,
+							},
+							{
+								id: "beta",
+								kind: "agent",
+								label: "Review beta",
+								status: "failed",
+								flatIndex: 2,
+								stepIndex: 1,
+								error: "beta failed",
+							},
+						],
+					},
+					{
+						id: "step-2",
+						kind: "step",
+						label: "Summarize reviews",
+						status: "pending",
+						flatIndex: 3,
+						stepIndex: 2,
+					},
+				],
+			},
+		};
+
+		const collapsed = renderSubagentResult(
+			{ content: [{ type: "text", text: "running" }], details } as never,
+			{ expanded: false },
+			stubTheme,
+			0,
+		)
+			.render(140)
+			.map((line) => stripAnsi(line));
+		expect(collapsed).toHaveLength(4);
+		expect(collapsed[0]).toContain("Collect source items");
+		expect(collapsed[1]).toContain("Review alpha");
+		expect(collapsed[2]).toContain("Review beta");
+		expect(collapsed[2]).toContain("failed");
+		expect(collapsed[3]).toContain("Summarize reviews");
+		expect(collapsed[3]?.trim().startsWith("◦")).toBe(true);
+		expect(collapsed.join("\n")).not.toContain("Review collected items");
+		expect(collapsed.join("\n")).not.toContain("beta failed");
+
+		const expanded = stripAnsi(
+			renderSubagentResult(
+				{
+					content: [{ type: "text", text: "running" }],
+					details: { ...details, currentStepIndex: undefined, progress: [] },
+				} as never,
+				{ expanded: true },
+				stubTheme,
+				0,
+			)
+				.render(140)
+				.join("\n"),
+		);
+		expect(expanded).toContain("Review beta");
+		expect(expanded).toContain("status: failed");
+		expect(expanded).toContain("error: beta failed");
+		expect(expanded).toContain("Summarize reviews");
+		expect(expanded).toContain("status: pending");
+	});
+
+	it("uses persisted flat indexes when dynamic results arrive out of array order", () => {
+		const childResult = (index: number, description: string) => ({
+			agent: description,
+			description,
+			task: description,
+			exitCode: 0,
+			usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+			progressSummary: { index, status: "completed", toolCount: 0, tokens: 10, durationMs: 1000 },
+		});
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {
+					mode: "chain",
+					results: [childResult(1, "Second dynamic child"), childResult(0, "First dynamic child")],
+					workflowGraph: {
+						runId: "reordered-dynamic",
+						mode: "chain",
+						phases: [],
+						nodes: [
+							{
+								id: "step-0",
+								kind: "dynamic-parallel-group",
+								label: "Dynamic group",
+								status: "completed",
+								stepIndex: 0,
+								children: [
+									{
+										id: "first",
+										kind: "agent",
+										label: "First",
+										status: "completed",
+										flatIndex: 0,
+										stepIndex: 0,
+									},
+									{
+										id: "second",
+										kind: "agent",
+										label: "Second",
+										status: "completed",
+										flatIndex: 1,
+										stepIndex: 0,
+									},
+								],
+							},
+						],
+					},
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+		)
+			.render(120)
+			.map((line) => stripAnsi(line));
+		expect(result[0]).toContain("First dynamic child");
+		expect(result[1]).toContain("Second dynamic child");
+	});
+
+	it("renders a failed unmaterialized dynamic group without result entries", () => {
+		const details = {
+			mode: "chain",
+			results: [],
+			totalSteps: 1,
+			workflowGraph: {
+				runId: "empty-dynamic-chain",
+				mode: "chain",
+				phases: [],
+				nodes: [
+					{
+						id: "step-0",
+						kind: "dynamic-parallel-group",
+						label: "Expand review targets",
+						status: "failed",
+						stepIndex: 0,
+						error: "source output was invalid",
+						children: [],
+					},
+				],
+			},
+		};
+		const collapsed = stripAnsi(
+			renderSubagentResult(
+				{ content: [{ type: "text", text: "fallback result text" }], details } as never,
+				{ expanded: false },
+				stubTheme,
+			)
+				.render(120)
+				.join("\n"),
+		);
+		expect(collapsed).toContain("Expand review targets");
+		expect(collapsed).toContain("failed");
+		expect(collapsed).not.toContain("fallback result text");
+		expect(collapsed).not.toContain("source output was invalid");
 	});
 });
 

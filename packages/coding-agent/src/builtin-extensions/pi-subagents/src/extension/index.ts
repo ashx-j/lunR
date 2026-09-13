@@ -26,7 +26,13 @@ import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWi
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
-import { clearLegacyResultAnimationTimer, disposeSubagentWidget, renderSubagentResult, subagentAnimSink } from "../tui/render.ts";
+import {
+	clearLegacyResultAnimationTimer,
+	disposeSubagentWidget,
+	renderSubagentResult,
+	SUBAGENT_PAINT_INTERVAL_MS,
+	subagentAnimSink,
+} from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -236,7 +242,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 	if (typeof context.invalidate !== "function") return;
 	if (state.frame === undefined) state.frame = 0;
 	state.subagentResultAnimationTimer = setInterval(() => {
-		state.frame = ((state.frame ?? 0) + 1) % 10;
+		state.frame = (state.frame ?? 0) + 1;
 		try {
 			const entries = state.animEntries;
 			if (entries?.length && typeof context.requestRender === "function") {
@@ -247,7 +253,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 				context.invalidate();
 			}
 		} catch {}
-	}, 80);
+	}, SUBAGENT_PAINT_INTERVAL_MS);
 }
 
 function isSlashResultError(result: { details?: Details }): boolean {
