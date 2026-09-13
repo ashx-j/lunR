@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { spawn } from "child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -39,10 +40,6 @@ type BrokerLaunchSpec =
     launcherPath: string;
     launcherCommandLine: string;
   };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 export function getTsxCliPath(extensionDir: string = EXTENSION_DIR): string {
   // Resolve tsx via Node's module resolution so it works regardless of whether
@@ -126,8 +123,9 @@ export function getWindowsBrokerCommandLine(
 export function getWindowsHiddenLauncherScript(commandLine: string): string {
   return [
     'Set WshShell = CreateObject("WScript.Shell")',
-    `WshShell.Run "${commandLine.replace(/"/g, '""')}", 0, False`,
+    `exitCode = WshShell.Run("${commandLine.replace(/"/g, '""')}", 0, True)`,
     'Set WshShell = Nothing',
+    'WScript.Quit exitCode',
     '',
   ].join("\r\n");
 }
@@ -171,7 +169,7 @@ export function getBrokerLaunchSpec(
     return {
       kind: "windows-launcher",
       command: "wscript.exe",
-      args: [launcherPath],
+      args: ["//B", "//NoLogo", launcherPath],
       launcherPath,
       launcherCommandLine: getWindowsBrokerCommandLine(
         brokerPath,
@@ -228,12 +226,11 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
   }
 
   const ownsLock = acquireSpawnLock();
-  if (!ownsLock) {
-    await waitForBroker();
-    return;
-  }
-
   try {
+    if (!ownsLock) {
+      await waitForBroker();
+      return;
+    }
     if (await isBrokerRunning()) {
       return;
     }
@@ -253,19 +250,26 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
       writeWindowsHiddenLauncher(launch.launcherCommandLine, launch.launcherPath);
     }
     let stderrFd: number | undefined;
-    try {
-      stderrFd = openSync(BROKER_STDERR, "a");
-    } catch {
-      stderrFd = undefined;
+    if (launch.kind === "windows-launcher") {
+      // cmd.exe cannot redirect into a log held open by the parent on Windows.
+      writeFileSync(BROKER_STDERR, "", { mode: INTERCOM_RUNTIME_FILE_MODE });
+    } else {
+      stderrFd = openSync(BROKER_STDERR, "w", INTERCOM_RUNTIME_FILE_MODE);
     }
     try {
-      const child = spawn(launch.command, launch.args, getBrokerSpawnOptions(EXTENSION_DIR, process.env, launch.kind === "windows-launcher" ? undefined : stderrFd));
+      const child = spawn(launch.command, launch.args, getBrokerSpawnOptions(EXTENSION_DIR, process.env, stderrFd));
       child.unref();
 
       await new Promise<void>((resolve, reject) => {
+        const healthCheck = new AbortController();
         const cleanup = () => {
+          healthCheck.abort();
           child.off("error", onError);
           child.off("exit", onExit);
+          // The hidden launcher monitors startup only; its broker runs independently.
+          if (launch.kind === "windows-launcher" && child.pid && child.exitCode === null && child.signalCode === null) {
+            child.kill();
+          }
         };
 
         const onError = (error: Error) => {
@@ -274,9 +278,6 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
         };
 
         const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-          if (launch.kind === "windows-launcher" && code === 0 && signal === null) {
-            return;
-          }
           cleanup();
           if (signal) {
             reject(new Error(`Intercom broker exited before startup with signal ${signal}`));
@@ -287,7 +288,7 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
 
         child.once("error", onError);
         child.once("exit", onExit);
-        waitForBroker().then(() => {
+        waitForBroker(5000, healthCheck.signal).then(() => {
           cleanup();
           resolve();
         }, (error) => {
@@ -304,8 +305,11 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
         }
       }
     }
+  } catch (error) {
+    const cause = toError(error);
+    throw new Error(`${cause.message}\nStartup log: ${BROKER_STDERR}`, { cause });
   } finally {
-    releaseSpawnLock();
+    if (ownsLock) releaseSpawnLock();
   }
 }
 
@@ -444,13 +448,14 @@ function releaseSpawnLock(): void {
   }
 }
 
-async function waitForBroker(timeoutMs = 5000): Promise<void> {
+async function waitForBroker(timeoutMs = 5000, signal?: AbortSignal): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    signal?.throwIfAborted();
     if (await checkSocketConnectable()) {
       return;
     }
-    await sleep(100);
+    await sleep(100, undefined, { signal });
   }
   throw new Error("Broker failed to start within timeout");
 }

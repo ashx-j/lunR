@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-12 (v0.2.20 on `master`). Public npm is `@ashx-j/lunr@0.2.20`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-13 (v0.2.20 on `master`). Public npm is `@ashx-j/lunr@0.2.20`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Intercom Windows startup (`fix/intercom-windows-startup`):** the hidden launcher owns stderr redirection without a competing parent file handle. Each launch resets its diagnostic log; early exits report their code and failures include the log path. The launcher exits once startup settles, while the broker remains independent. Broker reuse, native supervisor bypass, and subagent delivery are unchanged. Tests: intercom-startup + continuation/delivery/question/cancellation suites.
 
 - **v0.2.20 scope:** PRs #71, #72, #73, #74, #75, #76, and #79. Native computer use #77 stays open and is excluded from this release.
 - **Subagent model selection (`fix/subagent-model-selection`):** executable children choose exactly one of `tier` or `model`; optional `thinking` only with explicit model; single, parallel, and chain resume preserve selection separately from the resolved runtime model. Removed `settings_load` + four settings tools and `watchdog.configure`; `/settings` remains; direct settings.json file-tool writes are blocked.
@@ -126,6 +128,8 @@ Last updated: 2026-09-12 (v0.2.20 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Intercom Windows startup (2026-09-13): five offline package builds and the coding-agent Node bundle pass. Focused Vitest passes 52/52 across nine suites. The compiled broker integration reproduced the original timeout before the fix, then passed launch/reuse, launcher cleanup, two-client question/reply, early-exit, and health-timeout checks. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with the unchanged tool-schema fingerprint. Two isolated interactive CLI processes with simulated terminal streams exchanged a question/reply through the real intercom tool using a local scripted provider. Async question-wait and idle-parent-wake CLI checks pass. The installed CLI and original workspace build remain unchanged.
+
 - v0.2.20 release (2026-09-12): all five offline builds and coding-agent Node bundle pass; first-paint and subagent/MCP/LSP/fetch first-use checks pass with the combined tool-schema fingerprint. Async question wait and idle-wake CLI checks pass. Focused Vitest passes 309/309 before the review fix; the 30-test question/cancellation set passes afterward, including a new test that failed before the fix. Full coding-agent Vitest reports 2497 passed / 112 existing failures / 47 skipped. Three heavy read-only reviews found one confirmed bug: cancelled questions restarted the parent. Only answered questions now request a turn. Publish dry-run validates all four public packages. GitHub CI has exactly the same 96 distinct failed-test headers as master, with build/first-request/Check stages green. Publication workflow `34713848363` succeeded from tag `v0.2.20` at `c395c79`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.20 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed.
 
 - Combined subagent stack: all five offline builds and the Node bundle pass; focused Vitest passes 225/225 across 15 suites. Changed non-vendored code passes Biome. First-paint and first-turn checks pass. An isolated local Faux CLI request exits successfully with 31 active tools and no settings tools. Local prompt/tool snapshots were regenerated for that isolated verification and remain untracked; the original workspace snapshots were not changed.
@@ -191,6 +195,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Windows intercom: `cmd.exe` cannot redirect into `broker.stderr.log` while the parent holds it open. Keep Windows redirection and direct-launch fd inheritance separate. The hidden launcher waits for an exit code during startup only; release it when the health check settles. Startup fixtures must stop their isolated broker before removing its profile because a healthy broker outlives the CLI.
+
 - Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
 
 - Async Escape cancellation uses a session-keyed lightweight bridge; keep executor imports lazy. Stop requests are distinct from confirmed termination. Result delivery retries keep the same request id; only acknowledged or locally handled stopped results are removed. Three failed attempts retain the file until reload/restart. Stopped completions update history without waking the parent. Direct-child process cleanup remains the existing runner policy, not a general shell-grandchild sandbox.
@@ -253,6 +259,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-13: keep intercom and its subagent relay intact; fix Windows stderr ownership and expose startup exit codes instead of replacing the communication system.
 
 - 2026-09-12: integrate the seven approved-scope PR heads without squashing their ancestry so GitHub can track their inclusion; exclude unfinished computer use #77 from 0.2.20.
 - 2026-09-12: gate question wakeups on answered state so cancellation cannot undo the user's double-Escape stop.
