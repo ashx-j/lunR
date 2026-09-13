@@ -1,8 +1,20 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.20`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.21`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.21] - 2026-09-13
+
+### Changed
+
+- **Async subagents by default.** Single, parallel, and chain launches run in the background when `async` is omitted. Use `async:false` for an immediate result, or `clarify:true` for the interactive preview. `/run`, `/chain`, and `/parallel` accept `--foreground`.
+- **Subagent compact UI.** Mixed runs stay one flat row per child. Todos sit directly above async rows. Four todos show all four. Customize picks one spinner for foreground and async children. Steering headers use the child description.
+
+### Fixed
+
+- Intercom starts on Windows by letting the hidden launcher own stderr redirection.
+- Async questions and results no longer fail while the child is still running, and read-only resume no longer fails for making no edits. The owner gets one terminal notification with failure details and recovery paths.
 
 ## [0.2.20] - 2026-09-12
 
