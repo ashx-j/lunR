@@ -207,6 +207,11 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import {
+	orderedExtensionWidgets,
+	replaceExtensionWidget,
+	widgetSeparatorNeedsSpacer,
+} from "./extension-widget-order.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
@@ -2113,24 +2118,9 @@ export class InteractiveMode {
 		options?: ExtensionWidgetOptions,
 	): void {
 		const placement = options?.placement ?? "aboveEditor";
-		const removeExisting = (map: Map<string, Component & { dispose?(): void }>) => {
-			const existing = map.get(key);
-			if (existing?.dispose) existing.dispose();
-			map.delete(key);
-		};
-
-		removeExisting(this.extensionWidgetsAbove);
-		removeExisting(this.extensionWidgetsBelow);
-
-		if (content === undefined) {
-			this.renderWidgets();
-			return;
-		}
-
-		let component: Component & { dispose?(): void };
+		let component: (Component & { dispose?(): void }) | undefined;
 
 		if (Array.isArray(content)) {
-			// Wrap string array in a Container with Text components
 			const container = new Container();
 			for (const line of content.slice(0, InteractiveMode.MAX_WIDGET_LINES)) {
 				container.addChild(new Text(line, 1, 0));
@@ -2139,13 +2129,11 @@ export class InteractiveMode {
 				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
 			}
 			component = container;
-		} else {
-			// Factory function - create component
+		} else if (content) {
 			component = content(this.ui, theme);
 		}
 
-		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;
-		targetMap.set(key, component);
+		replaceExtensionWidget(this.extensionWidgetsAbove, this.extensionWidgetsBelow, key, component, placement);
 		this.renderWidgets();
 	}
 
@@ -2225,13 +2213,13 @@ export class InteractiveMode {
 		if (leadingSpacer) {
 			container.addChild(new Spacer(1));
 		}
-		let first = true;
-		for (const component of widgets.values()) {
-			if (!first) {
-				container.addChild(new Spacer(1));
+		let previousKey: string | undefined;
+		for (const [key, component] of orderedExtensionWidgets(widgets)) {
+			if (previousKey !== undefined) {
+				if (widgetSeparatorNeedsSpacer(previousKey, key)) container.addChild(new Spacer(1));
 				container.addChild(new DynamicBorder((s) => theme.fg("dim", s)));
 			}
-			first = false;
+			previousKey = key;
 			container.addChild(component);
 		}
 	}
@@ -4808,6 +4796,7 @@ export class InteractiveMode {
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
 					smoothStreaming: this.settingsManager.getSmoothStreaming(),
+					subagentSpinner: this.settingsManager.getSubagentSpinner(),
 					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
@@ -4937,6 +4926,10 @@ export class InteractiveMode {
 					},
 					onSmoothStreamingChange: (enabled) => {
 						this.applySmoothStreamingSettingChange(enabled);
+					},
+					onSubagentSpinnerChange: (spinner) => {
+						this.settingsManager.setSubagentSpinner(spinner);
+						this.ui.requestRender();
 					},
 					onSessionRetentionDaysChange: (days) => {
 						this.settingsManager.setSessionRetentionDays(days);
@@ -5100,6 +5093,7 @@ export class InteractiveMode {
 						autoManage: () => this.settingsManager.getAutoManageSubscriptions(),
 						requestRender: () => this.ui.requestRender(),
 					},
+					requestRender: () => this.ui.requestRender(),
 					createModelTierPicker: (_tier, currentModelRef, done) => {
 						const selector = new ModelSelectorComponent(
 							this.ui,

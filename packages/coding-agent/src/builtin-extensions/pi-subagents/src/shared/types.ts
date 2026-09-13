@@ -748,6 +748,8 @@ export interface Details {
 	totalCost?: CostSummary;
 	questionId?: string;
 	state?: string;
+	/** Resolved UI label for management actions, persisted with the tool result. */
+	displayTitle?: string;
 	answered?: boolean;
 	delivered?: boolean;
 }

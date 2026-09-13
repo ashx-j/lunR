@@ -8,6 +8,11 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+import {
+	DEFAULT_SUBAGENT_SPINNER,
+	isSubagentSpinnerName,
+	type SubagentSpinnerName,
+} from "./subagent-spinner-setting.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -128,6 +133,7 @@ export interface Settings {
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
 	quietStartup?: boolean;
 	smoothStreaming?: boolean; // default: false - reveal streamed responses grapheme by grapheme (~30 FPS)
+	subagentSpinner?: SubagentSpinnerName; // default: "braille" - running child indicator
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
@@ -983,6 +989,18 @@ export class SettingsManager {
 	setSmoothStreaming(enabled: boolean): void {
 		this.globalSettings.smoothStreaming = enabled;
 		this.markModified("smoothStreaming");
+		this.save();
+	}
+
+	getSubagentSpinner(): SubagentSpinnerName {
+		return isSubagentSpinnerName(this.settings.subagentSpinner)
+			? this.settings.subagentSpinner
+			: DEFAULT_SUBAGENT_SPINNER;
+	}
+
+	setSubagentSpinner(spinner: SubagentSpinnerName): void {
+		this.globalSettings.subagentSpinner = spinner;
+		this.markModified("subagentSpinner");
 		this.save();
 	}
 

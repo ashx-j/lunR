@@ -26,7 +26,13 @@ import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWi
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
-import { clearLegacyResultAnimationTimer, disposeSubagentWidget, renderSubagentResult, subagentAnimSink } from "../tui/render.ts";
+import {
+	clearLegacyResultAnimationTimer,
+	disposeSubagentWidget,
+	renderSubagentResult,
+	SUBAGENT_PAINT_INTERVAL_MS,
+	subagentAnimSink,
+} from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -51,9 +57,11 @@ import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/
 import { loadConfig } from "./config.ts";
 import { buildSubagentToolDescription } from "./tool-description.ts";
 import {
+	type AsyncJobState,
 	type Details,
 	type SubagentState,
 	ASYNC_DIR,
+	childRowLabel,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
@@ -151,9 +159,38 @@ function callIsAsync(args, asyncByDefault) {
 	return asyncByDefault === true;
 }
 
+function matchingActionJobs(state: SubagentState, requestedId: string): AsyncJobState[] {
+	const jobs = new Map<string, AsyncJobState>();
+	for (const job of state.asyncJobs.values()) jobs.set(job.asyncId, job);
+	for (const job of state.fleetJobs?.values() ?? []) jobs.set(job.asyncId, job);
+	const exact = jobs.get(requestedId);
+	if (exact) return [exact];
+	return [...jobs.values()].filter((job) => job.asyncId.startsWith(requestedId));
+}
+
+export function resolveSubagentActionDisplayTitle(args, state: SubagentState): string | undefined {
+	const requestedId = (args.id || args.runId || "").trim();
+	if (!requestedId) return undefined;
+	const matches = matchingActionJobs(state, requestedId);
+	if (matches.length !== 1) return undefined;
+	const job = matches[0]!;
+	const steps = job.steps ?? [];
+	if (Number.isInteger(args.index)) {
+		const step = steps.find((candidate) => candidate.index === args.index) ?? steps[args.index];
+		return step ? childRowLabel(step) : undefined;
+	}
+	if (steps.length === 1) return childRowLabel(steps[0]!);
+	if (steps.length > 1) return `${job.mode ?? "subagent"} run`;
+	if (job.agents?.length === 1) return job.agents[0];
+	if (job.agents?.length) return `${job.mode ?? "subagent"} run`;
+	return undefined;
+}
+
 export function renderSubagentCall(args, theme, context, options) {
 	if (args.action) {
-		const target = args.id || args.runId || "";
+		const resultTitle = context?.result?.details?.displayTitle;
+		const resolvedTitle = resultTitle || options?.resolveActionTitle?.(args);
+		const target = resolvedTitle || args.id || args.runId || "";
 		return new Text(
 			`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 			0,
@@ -205,7 +242,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 	if (typeof context.invalidate !== "function") return;
 	if (state.frame === undefined) state.frame = 0;
 	state.subagentResultAnimationTimer = setInterval(() => {
-		state.frame = ((state.frame ?? 0) + 1) % 10;
+		state.frame = (state.frame ?? 0) + 1;
 		try {
 			const entries = state.animEntries;
 			if (entries?.length && typeof context.requestRender === "function") {
@@ -216,7 +253,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 				context.invalidate();
 			}
 		} catch {}
-	}, 80);
+	}, SUBAGENT_PAINT_INTERVAL_MS);
 }
 
 function isSlashResultError(result: { details?: Details }): boolean {
@@ -479,9 +516,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, () => undefined);
 
-	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+	const executeSubagentCollapsed = async (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-		return executor.execute(id, params, signal, onUpdate, ctx);
+		const displayTitle = params.action === "steer"
+			? resolveSubagentActionDisplayTitle(params, state)
+			: undefined;
+		const result = await executor.execute(id, params, signal, onUpdate, ctx);
+		if (displayTitle && result.details) result.details.displayTitle = displayTitle;
+		return result;
 	};
 
 	const slashBridge = registerSlashSubagentBridge({
@@ -524,7 +566,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return executeSubagentCollapsed(id, params, signal, onUpdate, ctx);
 		},
 
-		renderCall: (args, theme, context) => renderSubagentCall(args, theme, context, { asyncByDefault }),
+		renderCall: (args, theme, context) => renderSubagentCall(args, theme, context, {
+			asyncByDefault,
+			resolveActionTitle: (params) => resolveSubagentActionDisplayTitle(params, state),
+		}),
 
 		renderResult(result, options, theme, context) {
 			if (subagentResultIsRunning(result)) {

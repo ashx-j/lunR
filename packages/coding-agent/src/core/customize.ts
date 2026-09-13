@@ -1,4 +1,5 @@
 import type { SettingsManager } from "./settings-manager.ts";
+import type { SubagentSpinnerName } from "./subagent-spinner-setting.ts";
 
 /**
  * lunR TUI customize bridge.
@@ -23,6 +24,7 @@ export interface CustomizeBridge {
 	getFooterGit(): boolean;
 	getFooterPlan(): boolean;
 	getFooterPlanBar(): boolean;
+	getSubagentSpinner(): SubagentSpinnerName;
 	getHideThinkingBlock(): boolean;
 	setHideThinkingBlock(hide: boolean): void;
 }
@@ -62,6 +64,9 @@ const bridge: CustomizeBridge = {
 	},
 	getFooterPlanBar(): boolean {
 		return activeSettingsManager?.getFooterPlanBar() ?? true;
+	},
+	getSubagentSpinner(): SubagentSpinnerName {
+		return activeSettingsManager?.getSubagentSpinner() ?? "braille";
 	},
 	getHideThinkingBlock(): boolean {
 		return activeSettingsManager?.getHideThinkingBlock() ?? false;

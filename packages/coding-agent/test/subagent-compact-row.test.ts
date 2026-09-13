@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	renderSubagentCall,
 	renderSubagentNotify,
+	resolveSubagentActionDisplayTitle,
 } from "../src/builtin-extensions/pi-subagents/src/extension/index.ts";
 import { formatAsyncRunList } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-status.ts";
 import {
@@ -167,7 +168,7 @@ describe("async widget, fleet, and status timing", () => {
 		expect(rendered).not.toContain("Press");
 	});
 
-	it("keeps the older multi-job tree and uses compact rows as leaves", () => {
+	it("renders mixed async jobs as flat compact rows without an aggregate tree", () => {
 		const jobs = [
 			{
 				asyncId: "one",
@@ -208,15 +209,18 @@ describe("async widget, fleet, and status timing", () => {
 			},
 		];
 		const rendered = buildWidgetLines(jobs as never, stubTheme as never, 120).join("\n");
-		expect(rendered).toContain("Async agents");
-		expect(rendered).toContain("├─");
-		expect(rendered).toContain("└─");
-		expect(rendered).toContain("First child");
-		expect(rendered).toContain("Second child");
+		const lines = rendered.split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("First child");
+		expect(lines[1]).toContain("Second child");
+		expect(rendered).not.toContain("Async agents");
+		expect(rendered).not.toContain("background");
+		expect(rendered).not.toContain("├─");
+		expect(rendered).not.toContain("└─");
 		expect(rendered).not.toContain("⎿");
 	});
 
-	it("shows every chain and parallel step in a multi-job tree, not only steps[0]", () => {
+	it("shows every chain and parallel child as a flat row, not only steps[0]", () => {
 		const jobs = [
 			{
 				asyncId: "chain-run",
@@ -275,6 +279,43 @@ describe("async widget, fleet, and status timing", () => {
 		expect(rendered).toContain("Running chain step");
 		expect(rendered).toContain("Parallel sibling A");
 		expect(rendered).toContain("Parallel sibling B");
+	});
+
+	it("keeps failed and stopped children to one clear row, with diagnostics only when expanded", () => {
+		const jobs = [
+			{
+				asyncId: "mixed-run",
+				asyncDir: "Z:/missing/mixed-run",
+				status: "failed",
+				mode: "parallel",
+				agents: ["Live", "Failed", "Stopped"],
+				steps: [
+					{ agent: "Live", description: "Live child", status: "running", tokens: { total: 10 } },
+					{
+						agent: "Failed",
+						description: "Failed child",
+						status: "failed",
+						error: "child crashed",
+						tokens: { total: 20 },
+					},
+					{ agent: "Stopped", description: "Stopped child", status: "stopped", tokens: { total: 30 } },
+				],
+			},
+		];
+		const collapsed = buildWidgetLines(jobs as never, stubTheme as never, 48, false, 0);
+		expect(collapsed).toHaveLength(3);
+		expect(collapsed[1]).toContain("Failed child");
+		expect(collapsed[1]).toContain("failed");
+		expect(collapsed[2]).toContain("Stopped child");
+		expect(collapsed[2]).toContain("stopped");
+		expect(collapsed.join("\n")).not.toContain("Agent 1");
+		expect(collapsed.join("\n")).not.toContain("child crashed");
+		for (const line of collapsed) expect(visibleWidth(line)).toBeLessThanOrEqual(48);
+
+		const expanded = buildWidgetLines(jobs as never, stubTheme as never, 80, true, 0).join("\n");
+		expect(expanded).toContain("run mixed-run:1 · failed");
+		expect(expanded).toContain("child crashed");
+		expect(expanded.match(/Failed child/g)).toHaveLength(1);
 	});
 
 	it("uses ran for in terminal status and fleet rows", () => {
@@ -475,8 +516,14 @@ describe("renderSingleCompact thinking line", () => {
 		subagentAnimSink.current = [];
 		const live = renderSubagentResult(makeResult("running") as never, { expanded: false }, stubTheme, 0);
 		expect(subagentAnimSink.current).toHaveLength(1);
-		vi.advanceTimersByTime(1_000);
+		const initialGlyph = live.render(120).join("\n").trim().split(" ")[0];
+		vi.advanceTimersByTime(80);
 		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(1, Date.now()));
+		expect(live.render(120).join("\n").trim().split(" ")[0]).not.toBe(initialGlyph);
+		const secondGlyph = live.render(120).join("\n").trim().split(" ")[0];
+		vi.advanceTimersByTime(920);
+		for (const entry of subagentAnimSink.current ?? []) entry.text.setText(entry.line(12, Date.now()));
+		expect(live.render(120).join("\n").trim().split(" ")[0]).not.toBe(secondGlyph);
 		expect(live.render(120).join("\n")).toContain("3s");
 		expect(live.render(120).join("\n")).not.toContain("tool use");
 
@@ -721,6 +768,261 @@ describe("renderMultiCompact selection badge", () => {
 		expect(lines.some((line) => line.includes("thinking high"))).toBe(false);
 		expect(lines.some((line) => line.includes("tool use"))).toBe(false);
 	});
+
+	it("renders mixed foreground children as flat rows with terminal state inline", () => {
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "mixed" }],
+				details: {
+					mode: "parallel",
+					results: [
+						{
+							description: "Completed child",
+							task: "complete",
+							exitCode: 0,
+							usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+							progressSummary: { status: "completed", tokens: 20, durationMs: 1000 },
+						},
+						{
+							description: "Running child",
+							task: "run",
+							exitCode: 0,
+							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+							progress: { index: 1, status: "running", tokens: 30, durationMs: 2000 },
+						},
+						{
+							description: "Failed child",
+							task: "fail",
+							exitCode: 1,
+							error: "private diagnostic",
+							usage: { input: 20, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+							progressSummary: { status: "failed", tokens: 40, durationMs: 3000 },
+						},
+					],
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+			0,
+		);
+		const lines = result.render(120).map((line) => stripAnsi(line));
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toContain("Completed child");
+		expect(lines[1]).toContain("Running child");
+		expect(lines[2]).toContain("Failed child");
+		expect(lines[2]).toContain("failed");
+		expect(lines.join("\n")).not.toContain("parallel");
+		expect(lines.join("\n")).not.toContain("private diagnostic");
+	});
+
+	it("maps mixed chain fanout rows by workflow flat index and preserves workflow-only status", () => {
+		const details = {
+			mode: "chain",
+			results: [
+				{
+					agent: "source-child",
+					description: "Collect source items",
+					task: "collect",
+					exitCode: 0,
+					usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+					progressSummary: { index: 0, status: "completed", toolCount: 0, tokens: 20, durationMs: 1000 },
+				},
+			],
+			progress: [
+				{
+					index: 1,
+					description: "Review alpha",
+					status: "running",
+					toolCount: 0,
+					tokens: 30,
+					durationMs: 2000,
+				},
+			],
+			totalSteps: 3,
+			currentStepIndex: 1,
+			workflowGraph: {
+				runId: "dynamic-chain",
+				mode: "chain",
+				phases: [],
+				nodes: [
+					{
+						id: "step-0",
+						kind: "step",
+						label: "Collect source items",
+						status: "completed",
+						flatIndex: 0,
+						stepIndex: 0,
+					},
+					{
+						id: "step-1",
+						kind: "dynamic-parallel-group",
+						label: "Review collected items",
+						status: "running",
+						stepIndex: 1,
+						children: [
+							{
+								id: "alpha",
+								kind: "agent",
+								label: "Review alpha",
+								status: "running",
+								flatIndex: 1,
+								stepIndex: 1,
+							},
+							{
+								id: "beta",
+								kind: "agent",
+								label: "Review beta",
+								status: "failed",
+								flatIndex: 2,
+								stepIndex: 1,
+								error: "beta failed",
+							},
+						],
+					},
+					{
+						id: "step-2",
+						kind: "step",
+						label: "Summarize reviews",
+						status: "pending",
+						flatIndex: 3,
+						stepIndex: 2,
+					},
+				],
+			},
+		};
+
+		const collapsed = renderSubagentResult(
+			{ content: [{ type: "text", text: "running" }], details } as never,
+			{ expanded: false },
+			stubTheme,
+			0,
+		)
+			.render(140)
+			.map((line) => stripAnsi(line));
+		expect(collapsed).toHaveLength(4);
+		expect(collapsed[0]).toContain("Collect source items");
+		expect(collapsed[1]).toContain("Review alpha");
+		expect(collapsed[2]).toContain("Review beta");
+		expect(collapsed[2]).toContain("failed");
+		expect(collapsed[3]).toContain("Summarize reviews");
+		expect(collapsed[3]?.trim().startsWith("◦")).toBe(true);
+		expect(collapsed.join("\n")).not.toContain("Review collected items");
+		expect(collapsed.join("\n")).not.toContain("beta failed");
+
+		const expanded = stripAnsi(
+			renderSubagentResult(
+				{
+					content: [{ type: "text", text: "running" }],
+					details: { ...details, currentStepIndex: undefined, progress: [] },
+				} as never,
+				{ expanded: true },
+				stubTheme,
+				0,
+			)
+				.render(140)
+				.join("\n"),
+		);
+		expect(expanded).toContain("Review beta");
+		expect(expanded).toContain("status: failed");
+		expect(expanded).toContain("error: beta failed");
+		expect(expanded).toContain("Summarize reviews");
+		expect(expanded).toContain("status: pending");
+	});
+
+	it("uses persisted flat indexes when dynamic results arrive out of array order", () => {
+		const childResult = (index: number, description: string) => ({
+			agent: description,
+			description,
+			task: description,
+			exitCode: 0,
+			usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+			progressSummary: { index, status: "completed", toolCount: 0, tokens: 10, durationMs: 1000 },
+		});
+		const result = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {
+					mode: "chain",
+					results: [childResult(1, "Second dynamic child"), childResult(0, "First dynamic child")],
+					workflowGraph: {
+						runId: "reordered-dynamic",
+						mode: "chain",
+						phases: [],
+						nodes: [
+							{
+								id: "step-0",
+								kind: "dynamic-parallel-group",
+								label: "Dynamic group",
+								status: "completed",
+								stepIndex: 0,
+								children: [
+									{
+										id: "first",
+										kind: "agent",
+										label: "First",
+										status: "completed",
+										flatIndex: 0,
+										stepIndex: 0,
+									},
+									{
+										id: "second",
+										kind: "agent",
+										label: "Second",
+										status: "completed",
+										flatIndex: 1,
+										stepIndex: 0,
+									},
+								],
+							},
+						],
+					},
+				},
+			} as never,
+			{ expanded: false },
+			stubTheme,
+		)
+			.render(120)
+			.map((line) => stripAnsi(line));
+		expect(result[0]).toContain("First dynamic child");
+		expect(result[1]).toContain("Second dynamic child");
+	});
+
+	it("renders a failed unmaterialized dynamic group without result entries", () => {
+		const details = {
+			mode: "chain",
+			results: [],
+			totalSteps: 1,
+			workflowGraph: {
+				runId: "empty-dynamic-chain",
+				mode: "chain",
+				phases: [],
+				nodes: [
+					{
+						id: "step-0",
+						kind: "dynamic-parallel-group",
+						label: "Expand review targets",
+						status: "failed",
+						stepIndex: 0,
+						error: "source output was invalid",
+						children: [],
+					},
+				],
+			},
+		};
+		const collapsed = stripAnsi(
+			renderSubagentResult(
+				{ content: [{ type: "text", text: "fallback result text" }], details } as never,
+				{ expanded: false },
+				stubTheme,
+			)
+				.render(120)
+				.join("\n"),
+		);
+		expect(collapsed).toContain("Expand review targets");
+		expect(collapsed).toContain("failed");
+		expect(collapsed).not.toContain("fallback result text");
+		expect(collapsed).not.toContain("source output was invalid");
+	});
 });
 
 describe("management control results", () => {
@@ -760,6 +1062,87 @@ describe("management control results", () => {
 		expect(text).not.toContain("token");
 		expect(text).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
 		expect(text).not.toContain("⎿");
+	});
+});
+
+describe("subagent steering call headers", () => {
+	const state = {
+		asyncJobs: new Map([
+			[
+				"parallel-123",
+				{
+					asyncId: "parallel-123",
+					asyncDir: "Z:/missing/parallel-123",
+					status: "running",
+					mode: "parallel",
+					steps: [
+						{ index: 0, agent: "internal-a", description: "Inspect runtime and native tools", status: "running" },
+						{ index: 1, agent: "internal-b", description: "Review tests", status: "running" },
+					],
+				},
+			],
+			[
+				"chain-456",
+				{
+					asyncId: "chain-456",
+					asyncDir: "Z:/missing/chain-456",
+					status: "running",
+					mode: "chain",
+					steps: [
+						{ index: 0, agent: "internal-c", description: "Collect evidence", status: "complete" },
+						{ index: 1, agent: "internal-d", description: "Write focused fix", status: "running" },
+					],
+				},
+			],
+		]),
+		fleetJobs: new Map(),
+	} as never;
+
+	it("resolves indexed children and labels a whole multi-child run honestly", () => {
+		expect(resolveSubagentActionDisplayTitle({ id: "parallel", index: 0 }, state)).toBe(
+			"Inspect runtime and native tools",
+		);
+		expect(resolveSubagentActionDisplayTitle({ id: "parallel-123" }, state)).toBe("parallel run");
+		expect(resolveSubagentActionDisplayTitle({ id: "chain-456", index: 1 }, state)).toBe("Write focused fix");
+		expect(resolveSubagentActionDisplayTitle({ id: "chain-456" }, state)).toBe("chain run");
+	});
+
+	it("uses the resolved child title live and preserves result metadata for history", () => {
+		const live = stripAnsi(
+			renderSubagentCall(
+				{ action: "steer", id: "parallel-123", index: 0 },
+				stubTheme,
+				{},
+				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+			)
+				.render(120)
+				.join("\n"),
+		).trimEnd();
+		expect(live).toBe("subagent steer Inspect runtime and native tools");
+		expect(live).not.toContain("parallel-123");
+
+		const history = stripAnsi(
+			renderSubagentCall({ action: "steer", id: "parallel-123", index: 0 }, stubTheme, {
+				result: { details: { displayTitle: "Inspect runtime and native tools" } },
+			})
+				.render(120)
+				.join("\n"),
+		).trimEnd();
+		expect(history).toBe("subagent steer Inspect runtime and native tools");
+	});
+
+	it("falls back to the id only when no title can be resolved", () => {
+		const rendered = stripAnsi(
+			renderSubagentCall(
+				{ action: "steer", id: "missing-run" },
+				stubTheme,
+				{},
+				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+			)
+				.render(120)
+				.join("\n"),
+		).trimEnd();
+		expect(rendered).toBe("subagent steer missing-run");
 	});
 });
 
