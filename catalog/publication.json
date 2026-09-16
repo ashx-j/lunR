@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-2a9e94f9c876f216ca1d966baf0b80ce07985fb9f41596fd15e93032fe529cb2",
+  "revision": "sha256-55d3fbfe4d00c00313c5d4189f028f023ebf72f8c5cf71c957d3a6ef32bf3fad",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -66,15 +66,15 @@
     "nvidia": "0d65579558a8bb473bce446d7a5516df9a805b8253b05ef4f7cc4ffc42396e30",
     "openai": "43b40fc0d8136483cbc96c0bf2959e640ae4e685fc34afe86fd98f2f4deb5445",
     "openai-codex": "a97ae19a8eaced0862ca6de59361560c31fecb0a933b0d3d54f0723d76ceafc0",
-    "opencode": "f3d17fdac9b2b3a144b252f15bda9e8934152090aeb5bd8773cf776187717e9b",
-    "opencode-go": "cc7bf17eaebc7b7b50b6ba4ed48a9bd3175670b3e89dbadc052d35c369a8a0c0",
-    "openrouter": "f78e94340051dcdb0b17c1d2b5dcea08772cc7c019fd1a9e9f74ff4c76549b09",
+    "opencode": "ee64464569a97fad8c86ed8e676b7b98dc7b9e4ef602e9ab7ddd0fe4a10ad639",
+    "opencode-go": "31fc55b31c6d4ad39c0c63e000480a6e4d50123fbcd40efd7ec41e40a3965f1e",
+    "openrouter": "efdf06a355c825ad7abae592ec8121ffd6ab121e59987b7c19d29064d3461b1c",
     "qwen-cloud": "fe88d6387ffab4a09d18eb0189a054526036a5003029f9a5ac42b5926880395d",
     "qwen-cloud-cn": "3a3ece652c9b3f7baad1320155587945e5b95efee86bff3b439d580198a329a1",
     "qwen-token-plan": "c6bc53c40ab2e9fcb84b2ad5dff28ee78dbf586e57ee9a94481998a72ebccffc",
     "qwen-token-plan-cn": "aeb61deb931c9adbfca9884207e900bedf57965bc029b5f65a646ee1ba68e183",
     "together": "af2fa47920f07f3927f2413335ee23408cb9b7ab08c580facc192ea9ee18ec66",
-    "vercel-ai-gateway": "5334829bf848e65af32c9b205ffc7776bed85a2e963158ada5206371ba040e08",
+    "vercel-ai-gateway": "17bd3e785679c69ed1d5944d7c288691d223e690ebcaa66d5a894b317edecdd5",
     "xai": "26945e08d10e7daadf3deae2feecfd67a75767aa16e7a86bf1061024cf293044",
     "xiaomi": "9fee25834768f63373eb99f7140a3c45a37abfaa7122effaf3bbf457863936a6",
     "xiaomi-token-plan-ams": "5673c0507d4066b5f5185a506f812cd84faf8bd9b0201ec825a369127084a13f",
@@ -87,13 +87,13 @@
     {
       "url": "https://ai-gateway.vercel.sh/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-16T11:41:21.281Z",
-      "digest": "2f01ff3c466bd3df36008de8c1db326db4829e33b08c8b4e54b18d663c732465"
+      "fetchedAt": "2026-09-16T17:01:54.682Z",
+      "digest": "8ac9c6ccd1dd3018231a08a0cae205978db5234f1732e7a6f5b40e8df3c5c335"
     },
     {
       "url": "https://integrate.api.nvidia.com/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-16T11:41:22.506Z",
+      "fetchedAt": "2026-09-16T17:01:56.297Z",
       "digest": "38ea19e0ec8b1faf8a78922ba339c02bdf7bda147fd8cbfc31015f6a684f3ee1"
     },
     {
@@ -106,30 +106,30 @@
     {
       "url": "https://opencode.ai/zen/go/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-16T11:41:22.574Z",
-      "digest": "50ae92b1f429eb32013402fb832bbc343bf3494d18eb4f812222a28b1bcce6b2"
+      "fetchedAt": "2026-09-16T17:01:56.401Z",
+      "digest": "4d1786e49720965d5ee8c23150192a8f8f7776bd2593b261874be16011e3ce7f"
     },
     {
       "url": "https://opencode.ai/zen/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-16T11:41:22.570Z",
-      "digest": "61cd22f3ae908e99ffe87e59ec7f4e4efebcd0b4587cf696cf06bcc1a916bd8e"
+      "fetchedAt": "2026-09-16T17:01:56.433Z",
+      "digest": "4d85afbfc6bdb53416e6862478f452beb0f58a0c2632607771210b7f52a06e2f"
     },
     {
       "url": "https://openrouter.ai/api/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-16T11:41:21.187Z",
-      "digest": "9e3fdb73f01283c8c093662fe48185bb8507b831cdc0f3ad58483199d7b0ab27"
+      "fetchedAt": "2026-09-16T17:01:54.582Z",
+      "digest": "42ebb9d4b828cb1223b8660b757eea0bcfd4d2d93d07ddfddd1fc19678778bc7"
     },
     {
       "url": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "status": "fresh",
-      "fetchedAt": "2026-09-16T11:41:21.234Z",
+      "fetchedAt": "2026-09-16T17:01:54.707Z",
       "digest": "6d6ba039aea25be3483bce8104796e1841bb6f5bb9ec97c23b96df50e3702440"
     }
   ],
-  "generatedAt": "2026-09-16T11:41:36.140Z",
+  "generatedAt": "2026-09-16T17:02:10.468Z",
   "sourceCommit": "92caf64f28bf9514545f85869984375de063cc0b",
   "providerCount": 39,
-  "modelCount": 1464
+  "modelCount": 1462
 }
