@@ -17,6 +17,7 @@ Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt 
 - [Providers & Models](#providers--models)
 - [Interactive Mode](#interactive-mode)
   - [Editor](#editor)
+  - [Copyable response blocks](#copyable-response-blocks)
   - [Commands](#commands)
   - [Keyboard Shortcuts](#keyboard-shortcuts)
   - [Message Queue](#message-queue)
@@ -147,6 +148,20 @@ The editor can be temporarily replaced by other UI, like built-in `/settings` or
 | Bash commands | `!command` runs and sends output to LLM, `!!command` runs without sending |
 
 Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.md](docs/keybindings.md).
+
+### Copyable response blocks
+
+Assistant responses can place a Copy button under a selected reusable excerpt, prompt, or code fragment. Clicking it copies only that block. Success or failure appears beside the button.
+
+The source format is a fenced Markdown block with the exact info string `lunr-copy`:
+
+````markdown
+```lunr-copy
+npm test
+```
+````
+
+The payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR copies it without trimming whitespace and excludes both fence lines. A longer backtick or tilde fence can contain shorter fenced code. Incomplete streamed blocks show their received text but no Copy button. Print, JSON, RPC, and gateway output keep the raw fences and never write to the clipboard.
 
 ### Commands
 

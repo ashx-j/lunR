@@ -19,6 +19,8 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain("Current working directory: ''C:/work/project''");
 		expect(prompt).toContain("Behavior guidelines:");
 		expect(prompt).toContain("Memory stores established, durable facts and stable preferences.");
+		expect(prompt).toContain("fenced Markdown block with the info string `lunr-copy`");
+		expect(prompt).toContain("Use a longer backtick or tilde fence when the payload contains fenced code.");
 		expect(prompt).toContain("Never modify this tree, including through shell commands.");
 		expect(prompt).not.toContain("behavior.md");
 		expect(prompt).toContain("Guidelines:");
@@ -66,5 +68,6 @@ describe("buildSystemPrompt", () => {
 
 		expect(prompt).toBe("Custom prompt\n\nAppended instructions\nCurrent working directory: C:/custom/cwd");
 		expect(prompt).not.toContain("test/model");
+		expect(prompt).not.toContain("lunr-copy");
 	});
 });

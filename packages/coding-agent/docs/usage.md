@@ -30,6 +30,22 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 
 See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`manual` → `yolo` → `plan` → `auto`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
 
+### Copyable response blocks
+
+An assistant response can put a Copy button under a selected reusable excerpt, prompt, or code fragment. The button copies that block rather than the whole response. Each block has its own success or failure feedback.
+
+The assistant marks a block with the exact fenced Markdown info string `lunr-copy`:
+
+````markdown
+```lunr-copy
+Run the focused tests, then summarize failures.
+```
+````
+
+The copied payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR preserves its indentation, whitespace, and internal newlines without trimming, and does not copy either fence line. Use a longer backtick or tilde fence when the payload contains shorter fenced code.
+
+A streamed block stays readable while incomplete, but its Copy button appears only after the closing fence is received and revealed. Reopened sessions reconstruct buttons from the saved assistant message. Print, JSON, RPC, and gateway modes leave the fences readable and never perform clipboard writes.
+
 ## Slash Commands
 
 Type `/` in the editor to open command completion. Extensions can register custom commands, skills are available as `/skill:name`, and prompt templates expand via `/templatename`.
