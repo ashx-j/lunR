@@ -42,9 +42,11 @@ recording, or permission tool is exposed.
 ## Observe, act, inspect
 
 1. Use `computer_apps` for app identities or windows for a PID. Results allowlist
-   at most 50 rows and truncate titles to 240 characters. PID zero identifies an
-   installed app that is not running. Window `bounds` are native geometry, not
-   screenshot coordinates.
+   at most 50 rows and truncate titles to 240 characters. Pass `next_offset` as
+   `offset` with the same PID selection to retrieve more apps or windows. Lists
+   refresh per call, so changing native order can shift page boundaries. PID zero
+   identifies an installed app that is not running. Window `bounds` are native
+   geometry, not screenshot coordinates.
 2. Use `computer_observe` with an exact `pid` and `window_id`, or `desktop=true`.
    The result contains one image and a short coordinate/token record.
 3. Choose one action from that image. Pass its `observation` token and coordinates
@@ -75,8 +77,17 @@ effect. Results preserve partial/unverifiable outcomes and bounded refusal codes
 When input returns but its post-image fails, the tool reports possible effects
 and stops the workflow. Capture again before deciding; never repeat input blindly.
 After an unchanged post-image, the same action against identical captured pixels
-is refused. Three consecutive unchanged full observations stop polling in that
-workflow. Crops are explicit requests, not an automatic retry loop.
+is refused. Click signatures normalize omitted left-button/single-click/empty
+modifier defaults and modifier order. Three consecutive unchanged full observations
+stop polling in that workflow. Crops are explicit requests, not an automatic retry loop.
+
+Partial typing retains validated `requested_chars`, `delivered_chars`, `retryable`,
+and `retry_from_character` when supplied by the driver. Counts must be safe integers
+within the submitted text's Unicode code-point length, capped at 20000; the retry
+index must equal the delivered count. The index is zero-based in Unicode code
+points, not UTF-16 units. Verify the field in a fresh image before considering a
+remaining suffix. `retryable` is driver advice, not permission or proof that
+repeating input is safe. The workflow never retries typing automatically.
 
 ## Image contract and cost limits
 
@@ -190,7 +201,9 @@ new CLI version. Dev-channel update/publication changes were not ported here.
 
 Source tests cover image-only capture flags, metadata allowlists, image/crop
 mapping, fresh tokens, single-action post-images, bounded unchanged behavior,
-uncertain outcomes, permissions, and ownership. They have been written, not run.
+uncertain outcomes, permissions, and ownership. Source-review fixes add equivalent
+click defaults, app/window pagination, and Unicode partial-typing recovery coverage.
+All tests remain written but unexecuted; review fixes are not runtime verification.
 The supported-host first-request schema fingerprint and effective prompt/tool
 inventory must be regenerated after verification is approved. Do not treat the
 inherited PR #77 fingerprint as current.

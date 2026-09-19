@@ -45,7 +45,22 @@ function select(data: Record<string, unknown>, keys: readonly string[]): Record<
 	return result;
 }
 
-function outcome(reply: DriverReply) {
+function typingRecovery(data: Record<string, unknown>, text: unknown) {
+	if (typeof text !== "string") return {};
+	const requested = data.requested_chars;
+	const delivered = data.delivered_chars;
+	if (typeof requested !== "number" || !Number.isSafeInteger(requested) || requested < 0 ||
+		requested > 20000 || requested !== Array.from(text).length) return {};
+	const validDelivered = typeof delivered === "number" && Number.isSafeInteger(delivered) && delivered >= 0 && delivered <= requested;
+	return {
+		requested_chars: requested,
+		delivered_chars: validDelivered ? delivered : undefined,
+		retryable: typeof data.retryable === "boolean" ? data.retryable : undefined,
+		retry_from_character: validDelivered && data.retry_from_character === delivered ? delivered : undefined,
+	};
+}
+
+function outcome(reply: DriverReply, text?: unknown) {
 	const data = driverData(reply);
 	const message = Array.isArray(reply.content) ? reply.content.find((item) => item.type === "text" && typeof item.text === "string") : undefined;
 	return {
@@ -56,6 +71,7 @@ function outcome(reply: DriverReply) {
 		escalation: record(data.escalation).recommended === "foreground" ? "foreground" : undefined,
 		input: driverRefused(reply) ? "refused_or_failed" : "dispatched",
 		applicationEffect: "unverified",
+		...typingRecovery(data, text),
 	};
 }
 
@@ -229,18 +245,24 @@ export class ComputerWorkflow {
 				this.observation = undefined;
 				if (name === "computer_apps" || name === "computer_launch") {
 					const operation = name === "computer_launch" ? "launch_app" : input.pid === undefined ? "list_apps" : "list_windows";
-					const reply = await abortable(this.driver.call(operation, { ...input }, combined), combined);
+					const offset = input.offset ?? 0;
+					if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0)
+						throw new Error("Discovery offset must be a nonnegative safe integer.");
+					const args = name === "computer_launch" ? { name: input.name } : input.pid === undefined ? {} : { pid: input.pid };
+					const reply = await abortable(this.driver.call(operation, args, combined), combined);
 					const data = driverData(reply);
 					const rows = data.apps ?? data.windows;
-					const metadata = Array.isArray(rows) ? rows.slice(0, 50).map((row) => {
+					const metadata = Array.isArray(rows) ? rows.slice(offset, offset + 50).map((row) => {
 						const item = record(row);
 						return { ...select(item, ["pid", "window_id", "name", "app_name", "title", "active", "running", "is_on_screen", "minimized"]),
 							bounds: item.bounds ? select(record(item.bounds), ["x", "y", "width", "height"]) : undefined };
 					}) : undefined;
+					const remaining = Array.isArray(rows) ? Math.max(0, rows.length - offset - (metadata?.length ?? 0)) : 0;
 					return { content: [{ type: "text", text: JSON.stringify({
 						...outcome(reply), ...select(data, ["pid", "window_id", "name", "title"]),
-						items: metadata, omitted: Array.isArray(rows) && rows.length > 50 ? rows.length - 50 : undefined,
-						guidance: name === "computer_launch" ? "Capture the exact target before input." : undefined,
+						items: metadata, offset, total: Array.isArray(rows) ? rows.length : undefined,
+						omitted: remaining || undefined, next_offset: remaining ? offset + 50 : undefined,
+						guidance: name === "computer_launch" ? "Capture the exact target before input." : remaining ? "Pass next_offset as offset with the same pid selection. Lists refresh per call." : undefined,
 					}) }], details: {}, isError: driverRefused(reply) };
 				}
 				const target = targetFrom(input);
@@ -257,23 +279,31 @@ export class ComputerWorkflow {
 				}
 				const grounded = this.fresh(input, previous);
 				const { operation, args } = this.action(name, input, grounded);
-				const signature = JSON.stringify({ operation, args });
+				const { button = "left", count = 1, modifier = [], ...clickArgs } = args;
+				const signature = JSON.stringify({ operation, args: operation === "click"
+					? { ...clickArgs, button, count, modifier: Array.isArray(modifier) ? [...new Set(modifier)].sort() : modifier }
+					: args });
 				if (this.lastAction?.unchanged && this.lastAction.signature === signature && this.lastAction.fingerprint === grounded.fingerprint)
 					throw new Error("The identical action had no visible change. Choose a different grounded action; never retry blindly.");
 				const reply = await abortable(this.driver.call(operation, args, combined), combined);
 				combined.throwIfAborted();
-				if (driverRefused(reply)) return { content: [{ type: "text", text: JSON.stringify({ ...outcome(reply), guidance: "Capture again before deciding; never retry input blindly." }) }], details: {}, isError: true };
+				const actionOutcome = outcome(reply, name === "computer_text" ? input.text : undefined);
+				const recoveryGuidance = "retry_from_character" in actionOutcome && actionOutcome.retry_from_character !== undefined
+					? "Verify the field in a fresh image before considering any remaining suffix. retry_from_character is a zero-based Unicode code-point offset, not UTF-16. retryable is driver advice, not authorization to retry."
+					: undefined;
+				if (driverRefused(reply)) return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome,
+					guidance: recoveryGuidance ?? "Capture again before deciding; never retry input blindly." }) }], details: {}, isError: true };
 				try {
 					const after = await this.capture(target, combined);
 					const unchanged = after.fingerprint === grounded.fingerprint;
 					this.lastAction = { signature, fingerprint: after.fingerprint, unchanged };
 					this.lastCapture = { fingerprint: after.fingerprint, target, repeats: 0 };
-					return this.imageResult(after, { ...outcome(reply), unchanged,
-						guidance: unchanged ? "No visible change; this does not prove failure. Do not repeat input blindly." : "Inspect the post-action image to verify the intended effect." });
+					return this.imageResult(after, { ...actionOutcome, unchanged,
+						guidance: recoveryGuidance ?? (unchanged ? "No visible change; this does not prove failure. Do not repeat input blindly." : "Inspect the post-action image to verify the intended effect.") });
 				} catch (error) {
 					combined.throwIfAborted();
-					return { content: [{ type: "text", text: JSON.stringify({ ...outcome(reply),
-						observation: "unavailable", guidance: "Input may have taken effect. Capture again before deciding; never repeat blindly.",
+					return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome,
+						observation: "unavailable", guidance: recoveryGuidance ?? "Input may have taken effect. Capture again before deciding; never repeat blindly.",
 						error: error instanceof Error ? error.message.slice(0, 300) : "Post-action capture failed.",
 					}) }], details: {}, isError: true };
 				}

@@ -19,7 +19,10 @@ const pixels = { x: coordinate, y: coordinate };
 const optionalPixels = { x: Type.Optional(coordinate), y: Type.Optional(coordinate) };
 export const computerSchemas = {
 	computer_load: Type.Object({}, { additionalProperties: false }),
-	computer_apps: Type.Object({ pid: Type.Optional(target.pid) }, { additionalProperties: false }),
+	computer_apps: Type.Object({
+		pid: Type.Optional(target.pid),
+		offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Zero-based row offset, default 0. Pass the result's next_offset to retrieve the next 50 apps or windows." })),
+	}, { additionalProperties: false }),
 	computer_observe: Type.Object(
 		{
 			pid: Type.Optional(target.pid),

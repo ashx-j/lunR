@@ -80,6 +80,7 @@ describe("computer policy and discovery", () => {
 			expect(computerSchemas[name].properties).not.toHaveProperty("element_index");
 			expect(computerSchemas[name].properties).not.toHaveProperty("snapshot_id");
 		}
+		expect(computerSchemas.computer_apps.properties.offset).toMatchObject({ type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 		expect(computerSchemas.computer_observe.properties).not.toHaveProperty("screenshot");
 		expect(computerSchemas.computer_click.required).toEqual(expect.arrayContaining(["x", "y", "observation"]));
 		expect(computerSchemas.computer_window.properties).not.toHaveProperty("foreground");
@@ -214,6 +215,20 @@ describe("image-only workflow", () => {
 		expect(action.call).toHaveBeenCalledTimes(3);
 	});
 	it.each([
+		[{}, { button: "left" }],
+		[{}, { count: 1 }],
+		[{}, { button: "left", count: 1, modifier: [] }],
+		[{ button: "left", count: 1, modifier: [] }, {}],
+		[{ modifier: ["shift", "ctrl"] }, { count: 1, modifier: ["ctrl", "shift"], button: "left" }],
+	])("normalizes equivalent unchanged clicks before checking repetition: %j -> %j", async (first, repeated) => {
+		const { workflow, call } = await fixture();
+		call.mockResolvedValue(screenshot());
+		const before = await workflow.execute("computer_observe", target);
+		const after = await workflow.execute("computer_click", { ...target, observation: before.details.observation, x: 1, y: 1, ...first });
+		await expect(workflow.execute("computer_click", { ...target, observation: after.details.observation, x: 1, y: 1, ...repeated })).rejects.toThrow("identical action");
+		expect(call).toHaveBeenCalledTimes(3);
+	});
+	it.each([
 		["computer_drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, "drag"],
 		["computer_key", { keys: ["ctrl", "c"] }, "hotkey"],
 		["computer_key", { key: "Enter" }, "press_key"],
@@ -227,6 +242,70 @@ describe("image-only workflow", () => {
 		await workflow.execute(name, { ...target, observation: observed.details.observation, ...input });
 		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", operation, "get_window_state"]);
 		await workflow.close();
+	});
+	it.each(["apps", "windows"] as const)("retrieves omitted %s through bounded local pagination", async (kind) => {
+		const { workflow, call } = await fixture();
+		const rows = Array.from({ length: 101 }, (_, i) => ({ pid: i + 1, window_id: i + 1, name: `row-${i}`, secret: "SECRET" }));
+		call.mockResolvedValue({ content: [], structuredContent: { [kind]: rows } });
+		const selection = kind === "windows" ? { pid: 1 } : {};
+		const first = await workflow.execute("computer_apps", selection);
+		const readPage = (result: typeof first) => JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		const page1 = readPage(first);
+		const page2 = readPage(await workflow.execute("computer_apps", { ...selection, offset: page1.next_offset }));
+		const page3 = readPage(await workflow.execute("computer_apps", { ...selection, offset: page2.next_offset }));
+		expect([page1.items.length, page2.items.length, page3.items.length]).toEqual([50, 50, 1]);
+		expect([page1.next_offset, page2.next_offset, page3.next_offset]).toEqual([50, 100, undefined]);
+		expect([...page1.items, ...page2.items, ...page3.items].map((row: { name: string }) => row.name)).toEqual(rows.map((row) => row.name));
+		expect(page3.total).toBe(101);
+		expect(JSON.stringify([page1, page2, page3])).not.toContain("SECRET");
+		for (const [name, args] of call.mock.calls) {
+			expect(name).toBe(kind === "windows" ? "list_windows" : "list_apps");
+			expect(args).toEqual(selection);
+		}
+		expect(readPage(await workflow.execute("computer_apps", { ...selection, offset: 500 })).items).toEqual([]);
+		await workflow.close();
+	});
+	it("preserves validated Unicode typing recovery without retrying or trusting completion", async () => {
+		const { workflow, call } = await fixture();
+		call.mockResolvedValueOnce(screenshot()).mockResolvedValueOnce({
+			isError: true, content: [{ type: "text", text: "RAW SECRET" }], structuredContent: {
+				code: "type_text_incomplete", effect: "partial", path: "cgevent", requested_chars: 3,
+				delivered_chars: 2, retryable: true, retry_from_character: 2, secret: "SECRET",
+			},
+		});
+		const observed = await workflow.execute("computer_observe", target);
+		const result = await workflow.execute("computer_text", { ...target, observation: observed.details.observation, text: "A😀B" });
+		const data = JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		expect(data).toMatchObject({ effect: "partial", requested_chars: 3, delivered_chars: 2, retryable: true, retry_from_character: 2, applicationEffect: "unverified" });
+		expect(data.guidance).toContain("Verify the field");
+		expect(data.guidance).toContain("Unicode code-point");
+		expect(JSON.stringify(result)).not.toContain("SECRET");
+		expect(result.isError).toBe(true);
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text"]);
+	});
+	it.each([
+		{ requested_chars: 4 },
+		{ requested_chars: -1 },
+		{ requested_chars: 20001 },
+		{ delivered_chars: -1 },
+		{ delivered_chars: 4 },
+		{ delivered_chars: 1.5 },
+		{ delivered_chars: "2" },
+		{ retry_from_character: 1 },
+		{ retry_from_character: "2" },
+	])("drops invalid typing recovery counts or offsets: %j", async (invalid) => {
+		const { workflow, call } = await fixture();
+		call.mockResolvedValueOnce(screenshot()).mockResolvedValueOnce({ isError: true, content: [], structuredContent: {
+			code: "type_text_incomplete", effect: "partial", requested_chars: 3, delivered_chars: 2,
+			retry_from_character: 2, retryable: "true", ...invalid,
+		} });
+		const observed = await workflow.execute("computer_observe", target);
+		const result = await workflow.execute("computer_text", { ...target, observation: observed.details.observation, text: "A😀B" });
+		const data = JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		expect(data).not.toHaveProperty("retry_from_character");
+		expect(data).not.toHaveProperty("retryable");
+		expect(data.applicationEffect).toBe("unverified");
+		expect(call).toHaveBeenCalledTimes(2);
 	});
 	it("returns capped allowlisted app/window metadata and bounded nested refusal codes", async () => {
 		const { workflow, call } = await fixture();
