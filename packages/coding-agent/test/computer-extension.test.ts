@@ -71,7 +71,12 @@ describe("computer extension lifecycle", () => {
 		expect(f.tools.get("computer_load")?.description).toContain(
 			"computer_end releases the workflow without a prompt",
 		);
-		expect(f.tools.get("computer_key")?.description).toContain("fresh accessibility element, screenshot coordinates");
+		expect(f.tools.get("computer_key")?.description).toContain("post-action image");
+		expect(f.tools.get("computer_observe")?.description).toContain("crop");
+		for (const tool of f.tools.values()) {
+			expect(tool.description).not.toContain("accessibility element");
+			expect(tool.parameters.properties).not.toHaveProperty("element_index");
+		}
 		await f.handlers.get("session_start")?.({}, f.ctx);
 		await f.handlers.get("before_agent_start")?.({}, f.ctx);
 		expect(f.active()).toEqual(["read", "computer_load"]);
@@ -91,6 +96,14 @@ describe("computer extension lifecycle", () => {
 		computerSettingsChanged({ enabled: false, foreground: false });
 		await expect(pending).rejects.toThrow("session replaced");
 		expect(f.active()).toEqual(["read"]);
+		await f.handlers.get("session_shutdown")?.();
+	});
+	it("throws a tool error for a non-image model without initializing the desktop", async () => {
+		const f = fixture();
+		const ctx = { ...f.ctx, model: { ...f.ctx.model, input: ["text"] } } as ExtensionContext;
+		await expect(f.tools.get("computer_load")?.execute("load", {}, undefined, undefined, ctx)).rejects.toThrow("image-capable");
+		expect(setup.install).not.toHaveBeenCalled();
+		await expect(f.tools.get("computer_end")?.execute("end", {}, undefined, undefined, ctx)).resolves.toMatchObject({ content: [{ text: "Desktop workflow released." }] });
 		await f.handlers.get("session_shutdown")?.();
 	});
 	it("never reactivates discovery on an unsupported platform", async () => {

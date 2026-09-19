@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Image-only computer use baseline (`feat/image-only-computer-use`):** PR #77 native runtime ported onto current master for development. Read `packages/coding-agent/docs/computer-use.md` before changing native operations, ownership, packaging, or acceptance. Image-only workflow and local cursor work are pending. Production publication remains blocked.
+- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 plus ownership fixes ported onto current master. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Production publication remains blocked.
 
 Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
@@ -134,7 +134,7 @@ Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- Image-only computer-use branch: baseline integration only. Verification pending user permission. No tests, builds, smoke runs, desktop operations, provider inference, publication, or PR have run. Supported-host first-request schema fingerprint must be regenerated after tools are finalized and verification is approved.
+- Image-only computer-use branch: workflow/image/schema/policy/extension source changes and focused tests are written, not executed. Verification pending user permission. No tests, builds, smoke runs, desktop operations, provider inference, publication, or PR have run. Supported-host first-request schema fingerprint and effective prompt/tool inventory remain pending approved regeneration.
 
 - v0.2.21 release (2026-09-13): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 185/185 across 11 suites. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with hash `5325fdc0…`. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt CLI `--version` reports 0.2.21. Publication workflow `34766302131` succeeded from tag `v0.2.21` at `833b964`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.21 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed. Native computer use #77 stays open.
 - Combined #82/#83/#84/#85 merge (2026-09-13): focused Vitest passes 185/185 across 11 suites covering intercom startup, question/resume delivery, compact UI, spinner/widget order, and async-by-default. #83 title lookup and #85 async default both remain on `renderSubagentCall`. First-paint keeps Windows broker cleanup plus isolated `PI_*` scrubbing and hash `5325fdc0…`. Native computer use #77 stays open. No release or installed CLI update.
@@ -208,6 +208,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Image-only means no application accessibility tree in model observations, not zero native accessibility calls for targeting/safety. Map returned image coordinates through the crop/resize exactly once to driver-image pixels. Keep screenshots in sessions; provider history still accumulates until normal compaction, because rolling pruning changes prompt-cache prefixes and has no measured cost evidence yet.
 - Computer runtime payload dependencies are release-staged, not workspace dependencies. `scripts/computer-use-release.json` owns the pin; regenerate `release.generated.ts` after changing it. CuaDriver 0.28.1 is approved for branch development only. Production requires separate approval and a new CLI version.
 
 - Windows intercom: `cmd.exe` cannot redirect into `broker.stderr.log` while the parent holds it open. Keep Windows redirection and direct-launch fd inheritance separate. The hidden launcher waits for an exit code during startup only; release it when the health check settles. Startup fixtures must stop their isolated broker before removing its profile because a healthy broker outlives the CLI.
@@ -283,6 +284,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 # Decisions (keep; why in one line)
 
 - 2026-09-13: port native computer use onto current master without dev-channel publication changes; retain local setup, OS-account leases, recorded runtime PIDs, and isolated cron permissions while replacing observations with images.
+- 2026-09-13: bound new screenshot payloads and combine one action with its post-image; preserve session/provider history until targeted retention can be measured against prompt-cache disruption. Keep cursor animation local and separate from image-only observations.
 
 - 2026-09-13: ship #82, #83, #84, and #85 as 0.2.21; keep native computer use #77 open.
 - 2026-09-13: merge #82, #83, #84, and #85 onto master without squashing; keep #83 title lookup with #85 async default; leave native computer use #77 open.
