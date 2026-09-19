@@ -130,7 +130,7 @@ async function isPublished(name, version) {
 }
 
 async function waitForPublished(name, version) {
-	for (let attempt = 0; attempt < 60; attempt++) {
+	for (let attempt = 0; attempt < 180; attempt++) {
 		if (await isPublished(name, version)) return;
 		await new Promise((resolve) => setTimeout(resolve, 5000));
 	}
