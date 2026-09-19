@@ -1,7 +1,9 @@
 # Native computer use
 
-This branch is a development implementation, not a supported release. Windows
-MCP metadata interoperability and local runtime/lifecycle tests pass. The macOS
+This branch is a development implementation, not a supported release. Current
+integration verification is pending user permission. The verification results
+below describe the original PR #77 baseline, not this branch. On that baseline,
+Windows MCP metadata interoperability and local runtime/lifecycle tests passed. The macOS
 launch path is implemented but has not run on macOS hardware. Neither platform
 has passed live desktop acceptance. Production publication remains blocked.
 
@@ -52,7 +54,8 @@ Text and keys can target an accessibility element, window-image coordinates,
 or the observed focused field. Desktop keyboard input targets the observed
 focused field; changing focus needs a separate grounded click.
 
-Manual asks before every computer call, including observation. Plan permits
+Manual asks before every computer call except `computer_end`, which releases
+the workflow without approval. Observation still requires approval. Plan permits
 relevant observation and workflow release but blocks mutation. Auto needs no
 lunR per-call prompt for requested, implied, or necessary GUI work. In Yolo,
 ask first when an otherwise non-GUI task newly requires GUI. This intent rule
@@ -92,10 +95,13 @@ gate.
 An OS-account lease holds the desktop across observe/action calls. Competing
 workflows get busy rather than queueing; calls within one workflow serialize.
 The lease uses the OS account home, not the selected lunR settings profile.
-A short cross-process installation/acquisition lock protects changes to its
-owner record. A live owner is never displaced because its heartbeat is late.
+One cross-process acquisition lock protects creating, updating, and deleting
+the owner record. Updates replace the file atomically. Runtime installation uses
+a separate lock. A live owner is never displaced because its heartbeat is late.
 After MCP initialization and before any driver tool call, the adapter records
-the runtime PIDs in that lease. Failure to record ownership blocks tool dispatch.
+the transport PID and, on macOS, the daemon PID in that lease. Missing PIDs or
+failure to record ownership block tool dispatch. Driver-internal helper shutdown
+remains an unverified native acceptance gate.
 A crash during initialization can leave an unrecorded, idle runtime, but it has
 received no desktop action. Recovery requires both the owner and its recorded
 runtimes to have exited.

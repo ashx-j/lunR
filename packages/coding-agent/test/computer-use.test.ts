@@ -1,6 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveChildExcludeTools } from "../src/builtin-extensions/pi-subagents/src/runs/shared/child-tools.ts";
 import { DesktopLease } from "../src/core/computer-use/lease.ts";
@@ -58,6 +59,7 @@ describe("computer policy", () => {
 	it("gates observations in manual, permits them in Plan, rejects all unknown computer operations", async () => {
 		resetPermissions("manual");
 		expect(await gateToolCall("computer_observe", { pid: 1, window_id: 2 }, ".")).toMatchObject({ block: true });
+		expect(await gateToolCall("computer_end", {}, ".")).toBeUndefined();
 		resetPermissions("plan");
 		expect(await gateToolCall("computer_observe", {}, ".")).toBeUndefined();
 		expect(await gateToolCall("computer_click", {}, ".")).toMatchObject({ block: true });
@@ -221,6 +223,24 @@ describe("desktop workflow", () => {
 		}
 		await workflow.close();
 	});
+	it("locks runtime ownership updates and preserves the previous record on contention", async () => {
+		const path = await directory();
+		const lease = new DesktopLease(path);
+		await lease.run(async () => undefined);
+		const record = join(path, "workflow-owner.json");
+		const before = await readFile(record, "utf8");
+		const unlock = await lockfile.lock(path, { lockfilePath: join(path, "workflow-acquire.lock") });
+		try {
+			await expect(lease.trackProcess(4242)).rejects.toMatchObject({ code: "ELOCKED" });
+			expect(await readFile(record, "utf8")).toBe(before);
+		} finally {
+			await unlock();
+		}
+		await lease.trackProcess(4242);
+		expect(JSON.parse(await readFile(record, "utf8")).processes).toEqual([4242]);
+		await lease.close();
+	});
+
 	it("cancels a lost owner before admitting its next operation", async () => {
 		const path = await directory();
 		const lease = new DesktopLease(path);
@@ -311,7 +331,7 @@ describe("desktop workflow", () => {
 		bytes.writeUInt32BE(50, 20);
 		const call = vi.fn(async () => ({
 			content: [{ type: "image" as const, data: bytes.toString("base64"), mimeType: "image/png" }],
-			structuredContent: { snapshot_id: "s12345678" },
+			structuredContent: { snapshot_id: "s12345678", screenshot_width: 100, screenshot_height: 50 },
 		}));
 		const workflow = new ComputerWorkflow(
 			{ call, close: async () => undefined },

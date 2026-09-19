@@ -68,6 +68,10 @@ describe("computer extension lifecycle", () => {
 	it("exposes discovery before the first request and disables active tools synchronously", async () => {
 		const f = fixture();
 		expect([...f.tools.keys()]).toEqual([...COMPUTER_TOOLS]);
+		expect(f.tools.get("computer_load")?.description).toContain(
+			"computer_end releases the workflow without a prompt",
+		);
+		expect(f.tools.get("computer_key")?.description).toContain("fresh accessibility element, screenshot coordinates");
 		await f.handlers.get("session_start")?.({}, f.ctx);
 		await f.handlers.get("before_agent_start")?.({}, f.ctx);
 		expect(f.active()).toEqual(["read", "computer_load"]);

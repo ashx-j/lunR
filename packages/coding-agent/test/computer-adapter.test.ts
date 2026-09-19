@@ -45,6 +45,13 @@ afterEach(() => {
 });
 
 describe("computer adapter lifecycle", () => {
+	it("refuses dispatch when initialization omits the runtime PID", async () => {
+		mocks.install.mockResolvedValue({ command: "fixture.exe" });
+		const adapter = new CuaAdapter();
+		await expect(adapter.call("click", {})).rejects.toThrow("process identity is missing");
+		expect(mocks.call).not.toHaveBeenCalled();
+		expect(mocks.closeTransport).toHaveBeenCalled();
+	});
 	it("refuses all driver operations when runtime ownership cannot be recorded", async () => {
 		mocks.install.mockResolvedValue({ command: "fixture.exe" });
 		mocks.pid = 4242;
@@ -101,6 +108,10 @@ describe("computer adapter lifecycle", () => {
 	it("shares initialization and sanitizes runtime state into an isolated profile", async () => {
 		mocks.install.mockResolvedValue({ command: "fixture.exe" });
 		mocks.call.mockResolvedValue({ content: [] });
+		mocks.pid = 4242;
+		vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+		});
 		const adapter = new CuaAdapter();
 		await Promise.all([adapter.call("list_apps", {}), adapter.call("list_apps", {})]);
 		expect(mocks.install).toHaveBeenCalledTimes(1);
