@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeChildSpec } from "../../shared/child-spec.ts";
+import { SUBAGENT_ASYNC_GUIDANCE } from "../../shared/async-guidance.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
@@ -20,7 +21,7 @@ import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveRequiredTierModel, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, resolveEffectiveSubagentModel, resolveExecutableChildModel, resolveModelCandidate, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
@@ -30,6 +31,7 @@ import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { resolveEffectiveAcceptance } from "../shared/acceptance.ts";
 import {
 	type AcceptanceInput,
+	type ResolvedAcceptanceConfig,
 	type ArtifactConfig,
 	type ChildSpec,
 	type Details,
@@ -155,6 +157,8 @@ interface AsyncChainParams {
 
 interface AsyncSingleParams {
 	spec: ChildSpec;
+	/** Current follow-up without revival metadata, used only by the mutation guard. */
+	completionTask?: string;
 	/** Raw caller-facing goal used only by the started event. */
 	goal?: string;
 	ctx: AsyncExecutionContext;
@@ -184,6 +188,7 @@ interface AsyncSingleParams {
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	nestedRoute?: NestedRouteInfo;
 	acceptance?: AcceptanceInput;
+	restoredAcceptance?: ResolvedAcceptanceConfig;
 	timeoutMs?: number;
 	absoluteDeadlineAt?: number;
 	turnBudget?: ResolvedTurnBudget;
@@ -236,9 +241,8 @@ export function formatAsyncStartedMessage(headline: string): string {
 	return [
 		headline,
 		"",
-		"The async run is detached. Do not run sleep timers or polling loops just to wait for it.",
-		"If you have independent work, continue that work. When you have nothing left to do until the async result arrives, call subagent_wait() — it blocks until the run finishes and delivers the completion here. Only if you are certain you will get another turn (an interactive session where the user will prompt you again) can you instead stop and let Pi wake you; inside a skill that must run to completion, or in a non-interactive run, there is no next turn, so use subagent_wait().",
-		"Use subagent({ action: \"status\", id: \"...\" }) when you need a one-shot status/result or to inspect a blocked/stale run. To block until completion, prefer subagent_wait(). Do not poll in a loop just to wait.",
+		SUBAGENT_ASYNC_GUIDANCE,
+		"For one-time inspection or recovery of a blocked or stale run, use subagent({ action: \"status\", id: \"...\" }).",
 	].join("\n");
 }
 
@@ -604,7 +608,14 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
 		});
 
-		const primaryModel = resolveRequiredTierModel(spec.tier, availableModels, ctx.currentModelProvider);
+		const primaryModel = resolveExecutableChildModel({
+			modelSelection: spec.modelSelection,
+			model: spec.model,
+			tier: spec.tier,
+			thinking: spec.thinking,
+			availableModels,
+			preferredProvider: ctx.currentModelProvider,
+		});
 		const thinkingOverride = flatIndex === undefined ? undefined : thinkingOverridesByFlatIndex?.[flatIndex];
 		const effectiveThinking = thinkingOverride;
 		const model = applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
@@ -1017,6 +1028,24 @@ export function executeAsyncChain(
 	};
 }
 
+export function resolveAsyncSingleAcceptance(input: {
+	restoredAcceptance?: ResolvedAcceptanceConfig;
+	launchAcceptance?: AcceptanceInput;
+	agentName?: string;
+	permissions?: "full" | "read-only";
+	task: string;
+}): ResolvedAcceptanceConfig {
+	if (input.restoredAcceptance) return input.restoredAcceptance;
+	return resolveEffectiveAcceptance({
+		explicit: input.launchAcceptance,
+		agentName: input.agentName,
+		permissions: input.permissions,
+		task: input.task,
+		mode: "single",
+		async: true,
+	});
+}
+
 /**
  * Execute a single agent asynchronously
  */
@@ -1085,7 +1114,14 @@ export function executeAsyncSingle(
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, childToolShape);
-	const primaryModel = resolveRequiredTierModel(spec.tier, availableModels, ctx.currentModelProvider);
+	const primaryModel = resolveExecutableChildModel({
+		modelSelection: spec.modelSelection,
+		model: spec.model,
+		tier: spec.tier,
+		thinking: spec.thinking,
+		availableModels,
+		preferredProvider: ctx.currentModelProvider,
+	});
 	const effectiveThinking = params.thinkingOverride;
 	const model = applyThinkingSuffix(primaryModel, effectiveThinking, params.thinkingOverride !== undefined);
 	const toolBudgetInput = params.toolBudget ?? spec.toolBudget ?? params.configToolBudget;
@@ -1098,13 +1134,12 @@ export function executeAsyncSingle(
 	if (timeoutMs !== undefined && timeoutMs <= 0) return formatAsyncStartError("single", "The source run's absolute deadline expired before recovery could launch.");
 	const initialTurnBudget = params.turnBudget ? initialTurnBudgetState(params.turnBudget) : undefined;
 	const resolvedSessionDir = params.sessionDir ?? (sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined);
-	const resolvedAcceptance = resolveEffectiveAcceptance({
-		explicit: params.acceptance ?? spec.acceptance,
+	const resolvedAcceptance = resolveAsyncSingleAcceptance({
+		restoredAcceptance: params.restoredAcceptance,
+		launchAcceptance: params.acceptance ?? spec.acceptance,
 		agentName: agent,
 		permissions: spec.effectivePermissions,
 		task,
-		mode: "single",
-		async: true,
 	});
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
 		version: 4,
@@ -1117,8 +1152,8 @@ export function executeAsyncSingle(
 		...(sessionFile ? { sessionFile } : {}),
 		cwd: runnerCwd,
 		...(model ? { model } : {}),
-		tier: spec.tier,
-		...(effectiveThinking ? { thinking: resolveEffectiveThinking(model, effectiveThinking) } : {}),
+		...(spec.tier ? { tier: spec.tier } : {}),
+		...(effectiveThinking || spec.thinking ? { thinking: resolveEffectiveThinking(model, effectiveThinking ?? spec.thinking) } : {}),
 		...(spec.modelSelection ? { modelSelection: spec.modelSelection } : {}),
 		...(resolvedSkills.length ? { skills: resolvedSkills.map((skill) => skill.name) } : {}),
 		...(outputPath ? { outputPath } : {}),
@@ -1154,6 +1189,7 @@ export function executeAsyncSingle(
 						permissions: spec.effectivePermissions,
 						agent,
 						task: taskWithOutputInstruction,
+						completionTask: params.completionTask ?? task,
 						cwd: runnerCwd,
 						model,
 						thinking: resolveEffectiveThinking(model, effectiveThinking),

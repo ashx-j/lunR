@@ -1,8 +1,43 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.19`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.21`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.21] - 2026-09-13
+
+### Changed
+
+- **Async subagents by default.** Single, parallel, and chain launches run in the background when `async` is omitted. Use `async:false` for an immediate result, or `clarify:true` for the interactive preview. `/run`, `/chain`, and `/parallel` accept `--foreground`.
+- **Subagent compact UI.** Mixed runs stay one flat row per child. Todos sit directly above async rows. Four todos show all four. Customize picks one spinner for foreground and async children. Steering headers use the child description.
+
+### Fixed
+
+- Intercom starts on Windows by letting the hidden launcher own stderr redirection.
+- Async questions and results no longer fail while the child is still running, and read-only resume no longer fails for making no edits. The owner gets one terminal notification with failure details and recovery paths.
+
+## [0.2.20] - 2026-09-12
+
+### Added
+
+- Parent agents can ask a running async child a decision-specific question without stopping its assignment. Answers can wake the parent or return through `subagent_wait`.
+
+### Changed
+
+- **Child model selection.** Executable children choose exactly one of `tier: light|standard|heavy` (default) or an explicit `model: provider/id` when the user names a model. Optional `thinking` is only valid with an explicit model. Direct model launches do not require tier mode. Resume keeps user selection separate from the resolved runtime model.
+- **Settings stay user-managed.** Removed `settings_load` and the four agent-managed settings tools. `/settings` still edits configuration. Direct `edit`/`write`/`code_rewrite` of lunR `settings.json` is blocked.
+- **Watchdog configure removed.** Read-only watchdog status/check/recommend-model remain; agent `watchdog.configure` is gone.
+- **Subagent compact rows.** Foreground and async children share one collapsed line: spinner, description, selected tier or model, tokens, and elapsed time. The hang line, tool-use count, thinking, and permission suffix are gone. Completed collapsed cards keep frozen stats. Async tool headers say `subagent async`. Completed notify cards show title and status only.
+
+- Tier guidance recommends the lowest tier that can reliably finish the task, with examples for each tier.
+
+### Fixed
+
+- Smooth streaming reveals thinking text incrementally instead of showing the full incoming chunk.
+- Resuming async children restores their saved acceptance and model selection. Compiled installs use the JavaScript intercom broker, while native child channels skip it.
+- Escape stops the parent. A second press within 500ms also stops its async children without clearing drafts or restarting the parent on stopped results.
+- Async result delivery retries preserve undelivered files and avoid duplicate messages or errors printed over the TUI.
+- **Async widget animation.** The 80ms timer now invalidates a stable widget component. It no longer rebuilds the widget from the 250ms status poller, so the spinner actually advances.
 
 ## [0.2.19] - 2026-09-12
 

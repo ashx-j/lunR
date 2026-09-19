@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
@@ -913,6 +913,7 @@ function writeRunLog(
 
 /** Context for running a single step */
 interface SingleStepContext {
+	supervisorSessionId?: string;
 	previousOutput: string;
 	outputs?: ChainOutputMap;
 	placeholder: string;
@@ -950,7 +951,7 @@ interface SingleStepContext {
 }
 
 /** Run a single pi agent step, returning output and metadata */
-async function runSingleStep(
+export async function runSingleStep(
 	step: SubagentStep,
 	ctx: SingleStepContext,
 ): Promise<{
@@ -1054,7 +1055,7 @@ async function runSingleStep(
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	let task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
 	if (ctx.outputs) task = resolveOutputReferences(task, ctx.outputs);
-	const taskForCompletionGuard = task;
+	const taskForCompletionGuard = step.completionTask ?? task;
 	if (step.effectiveAcceptance) {
 		const acceptancePrompt = formatAcceptancePrompt(step.effectiveAcceptance);
 		if (acceptancePrompt) task = `${task}\n${acceptancePrompt}`;
@@ -1129,6 +1130,7 @@ async function runSingleStep(
 		});
 		const { args, env, tempDir, toolDiagnosticPath } = buildPiArgs({
 			parentSessionId: step.parentSessionId,
+			supervisorSessionId: ctx.supervisorSessionId,
 			baseArgs: ["--mode", "json", "-p"],
 			task,
 			sessionEnabled,
@@ -1223,7 +1225,7 @@ async function runSingleStep(
 		}
 		const completionGuard = run.exitCode === 0 && !run.error && !toolAvailabilityError && !hiddenError?.hasError && !emptyOutputError && step.completionGuard !== false
 			? evaluateCompletionMutationGuard({
-				agent: step.agent,
+				permissions: childPermission,
 				task: taskForCompletionGuard,
 				messages: run.messages,
 				tools: step.tools,
@@ -1997,6 +1999,10 @@ async function runSubagent(
 	const pendingToolResults: Array<{ tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined> = initialStatusSteps.map(() => undefined);
 	const mutatingFailureWindowMs = 5 * 60_000;
 	const appendControlEvent = (event: ReturnType<typeof buildControlEvent>) => {
+		if (event.reason === "completion_guard") {
+			appendJsonl(eventsPath, JSON.stringify({ type: "subagent.control", event, channels: [] }));
+			return;
+		}
 		if (!controlConfig.enabled) return;
 		const childIntercomTarget = config.childIntercomTargets?.[event.index ?? statusPayload.currentStep];
 		const channels = event.type === "active_long_running"
@@ -2096,6 +2102,8 @@ async function runSubagent(
 		return updated;
 	};
 	const emitTerminalSteeringNotice = (requestId: string, failureMessage: string): void => {
+		// Question outcomes are reconciled by the supervisor channel, not actionable steering notices.
+		if (steeringStatus(statusPayload).recent.find((request) => request.id === requestId)?.source === "supervisor-question") return;
 		const state = terminalSteeringNoticeState(steeringStatus(statusPayload), requestId);
 		if (state === "partial") emitSteeringNotice(requestId, "partial", `Steering partially delivered for run ${id}.`);
 		else if (state === "failed") emitSteeringNotice(requestId, "failed", failureMessage);
@@ -2811,6 +2819,7 @@ async function runSubagent(
 				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent }));
 				flushPendingStepSteers(fi);
 				const singleResult = await runSingleStep(task, {
+					supervisorSessionId: config.sessionId ?? undefined,
 					previousOutput, placeholder, cwd, sessionEnabled,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
@@ -3114,6 +3123,7 @@ async function runSubagent(
 						flushPendingStepSteers(fi);
 
 						const singleResult = await runSingleStep(taskForRun, {
+							supervisorSessionId: config.sessionId ?? undefined,
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
 							outputs,
 							sessionDir: taskSessionDir,
@@ -3323,6 +3333,7 @@ async function runSubagent(
 
 			flushPendingStepSteers(flatIndex);
 			const singleResult = await runSingleStep(seqStep, {
+				supervisorSessionId: config.sessionId ?? undefined,
 				previousOutput, placeholder, cwd, sessionEnabled,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,
@@ -3786,34 +3797,38 @@ function startConfiguredSubagent(config: SubagentRunConfig): void {
 	});
 }
 
-const configArg = process.argv[2];
-if (configArg) {
-	try {
-		const configJson = fs.readFileSync(configArg, "utf-8");
-		const config = JSON.parse(configJson) as SubagentRunConfig;
+function main(): void {
+	const configArg = process.argv[2];
+	if (configArg) {
 		try {
-			fs.unlinkSync(configArg);
-		} catch {
-			// Temp config cleanup is best effort.
-		}
-		startConfiguredSubagent(config);
-	} catch (err) {
-		console.error("Subagent runner error:", err);
-		process.exit(1);
-	}
-} else {
-	let input = "";
-	process.stdin.setEncoding("utf-8");
-	process.stdin.on("data", (chunk) => {
-		input += chunk;
-	});
-	process.stdin.on("end", () => {
-		try {
-			const config = JSON.parse(input) as SubagentRunConfig;
+			const configJson = fs.readFileSync(configArg, "utf-8");
+			const config = JSON.parse(configJson) as SubagentRunConfig;
+			try {
+				fs.unlinkSync(configArg);
+			} catch {
+				// Temp config cleanup is best effort.
+			}
 			startConfiguredSubagent(config);
 		} catch (err) {
 			console.error("Subagent runner error:", err);
 			process.exit(1);
 		}
-	});
+	} else {
+		let input = "";
+		process.stdin.setEncoding("utf-8");
+		process.stdin.on("data", (chunk) => {
+			input += chunk;
+		});
+		process.stdin.on("end", () => {
+			try {
+				const config = JSON.parse(input) as SubagentRunConfig;
+				startConfiguredSubagent(config);
+			} catch (err) {
+				console.error("Subagent runner error:", err);
+				process.exit(1);
+			}
+		});
+	}
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

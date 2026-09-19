@@ -155,13 +155,21 @@ describe("prompt-driven subagent schema", () => {
 		).toBe("append-step");
 	});
 
-	it("requires tier on executable task schemas and exposes no direct model override", () => {
+	it("exposes optional tier or model selection on executable task schemas", () => {
 		for (const schema of [SubagentParams, ParallelTaskSchema, DynamicParallelTemplateSchema, ChainItem]) {
-			expect(schemaProperties(schema)).not.toContain("model");
+			expect(schemaProperties(schema)).toContain("model");
+			expect(schemaProperties(schema)).toContain("tier");
+			expect(schemaProperties(schema)).toContain("thinking");
 		}
-		expect((ParallelTaskSchema as { required?: string[] }).required).toContain("tier");
-		expect((DynamicParallelTemplateSchema as { required?: string[] }).required).toContain("tier");
-		expect(schemaProperties(SubagentParams)).toContain("tier");
+		expect((ParallelTaskSchema as { required?: string[] }).required ?? []).not.toContain("tier");
+		expect((DynamicParallelTemplateSchema as { required?: string[] }).required ?? []).not.toContain("tier");
+		for (const schema of [SubagentParams, ParallelTaskSchema]) {
+			const description = nestedSchema(schema, ["properties", "tier"]).description as string;
+			expect(description).toContain("Choose the lowest model tier that can reliably complete the task");
+			expect(description).toContain("'light' for quick checks");
+			expect(description).toContain("'standard' for everyday coding");
+			expect(description).toContain("'heavy' for complex implementation");
+		}
 	});
 
 	it("removes agent-definition management actions", () => {
@@ -204,19 +212,66 @@ describe("child description validation", () => {
 		expect(spec.modelSelection).toEqual({ kind: "tier", tier: "light" });
 	});
 
-	it("rejects missing tiers and retired direct model overrides", () => {
+	it("rejects missing selection, both tier and model, and inherit", () => {
 		expect(() =>
 			normalizeChildSpec(
 				{ task: "Inspect auth.", description: "Search auth flow" },
 				{ parentMode: "auto", runId: "run", index: 0 },
 			),
-		).toThrow(/tier is required/i);
+		).toThrow(/requires tier|explicit model/i);
 		expect(() =>
 			normalizeChildSpec(
 				{ task: "Inspect auth.", description: "Search auth flow", tier: "light", model: "xai/grok-4" },
 				{ parentMode: "auto", runId: "run", index: 0 },
 			),
-		).toThrow(/model is not supported/i);
+		).toThrow(/exactly one/i);
+		expect(() =>
+			normalizeChildSpec(
+				{ task: "Inspect auth.", description: "Search auth flow", model: "inherit" },
+				{ parentMode: "auto", runId: "run", index: 0 },
+			),
+		).toThrow(/inherit/i);
+	});
+
+	it("accepts an explicit model selection with optional thinking", () => {
+		const spec = normalizeChildSpec(
+			{ task: "Inspect auth.", description: "Search auth flow", model: "xai/grok-4", thinking: "high" },
+			{ parentMode: "auto", runId: "run", index: 0 },
+		);
+		expect(spec.modelSelection).toEqual({ kind: "model", model: "xai/grok-4" });
+		expect(spec.model).toBe("xai/grok-4");
+		expect(spec.thinking).toBe("high");
+		expect(spec.tier).toBeUndefined();
+	});
+
+	it("reconstructs resume inputs without treating a resolved runtime model as a fresh user selection", () => {
+		const tierResume = normalizeChildSpec(
+			{
+				task: "Continue",
+				description: "Resume tier child",
+				model: "xai/grok-4:high",
+				tier: "light",
+				modelSelection: { kind: "tier", tier: "light" },
+			},
+			{ parentMode: "auto", runId: "run", index: 0, resolvedModelIsRuntime: true },
+		);
+		expect(tierResume.modelSelection).toEqual({ kind: "tier", tier: "light" });
+		expect(tierResume.tier).toBe("light");
+		expect(tierResume.model).toBeUndefined();
+
+		const modelResume = normalizeChildSpec(
+			{
+				task: "Continue",
+				description: "Resume model child",
+				model: "xai/grok-4:high",
+				thinking: "high",
+				modelSelection: { kind: "model", model: "xai/grok-4" },
+			},
+			{ parentMode: "auto", runId: "run", index: 1 },
+		);
+		expect(modelResume.modelSelection).toEqual({ kind: "model", model: "xai/grok-4" });
+		expect(modelResume.model).toBe("xai/grok-4:high");
+		expect(modelResume.thinking).toBe("high");
 	});
 
 	it("rejects full and omitted permissions from plan parents", () => {
@@ -449,6 +504,62 @@ describe("prompt-driven execution paths", () => {
 		}
 	});
 
+	it.each([
+		{ kind: "tier", tier: "light" },
+		{ kind: "model", model: "xai/grok-4" },
+	])("preserves $kind selection when reviving a parallel child without a single-run descriptor", (selection) => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-parallel-revive-"));
+		const asyncRoot = path.join(root, "async");
+		const runDir = path.join(asyncRoot, "revive-run");
+		fs.mkdirSync(runDir, { recursive: true });
+		try {
+			fs.writeFileSync(
+				path.join(runDir, "status.json"),
+				JSON.stringify({
+					runId: "revive-run",
+					mode: "parallel",
+					state: "failed",
+					startedAt: Date.now(),
+					lastUpdate: Date.now(),
+					steps: [
+						{
+							childId: "child-0",
+							agent: "Review auth",
+							description: "Review auth",
+							permissions: "read-only",
+							status: "failed",
+							model: "xai/grok-4:high",
+							thinking: "high",
+							modelSelection: selection,
+						},
+						{ childId: "child-1", agent: "Review UI", status: "complete" },
+					],
+				}),
+			);
+			const target = resolveAsyncResumeTarget(
+				{ id: "revive-run", index: 0 },
+				{ asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") },
+				{ requireSessionFile: false },
+			);
+			expect(target.modelSelection).toEqual(selection);
+			expect(target.recoveryDescriptor).toBeUndefined();
+			const spec = normalizeChildSpec(
+				{
+					task: "Continue",
+					description: target.description,
+					permissions: target.permissions,
+					modelSelection: target.modelSelection,
+					model: target.model,
+					thinking: selection.kind === "model" ? target.thinking : undefined,
+				},
+				{ parentMode: "auto", runId: "new-run", index: 0 },
+			);
+			expect(spec.modelSelection).toEqual(selection);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("maps slash chain labels to generic descriptions and permissions", () => {
 		const notifications: string[] = [];
 		const built = buildChainExpressionSteps(
@@ -504,6 +615,8 @@ describe("async recovery artifacts", () => {
 					description: "Audit recovery path",
 					permissions: "read-only",
 					tier: "light",
+					modelSelection: { kind: "tier", tier: "light" },
+					model: "xai/grok-4:high",
 					agent: "Audit recovery path",
 					cwd: process.cwd(),
 					outputMode: "inline",
@@ -511,12 +624,79 @@ describe("async recovery artifacts", () => {
 					share: false,
 				}),
 			);
-			expect(readAsyncRecoveryDescriptor(dir)).toMatchObject({
+			const descriptor = readAsyncRecoveryDescriptor(dir);
+			expect(descriptor).toMatchObject({
 				version: 4,
 				childId: "run-1-0",
 				description: "Audit recovery path",
 				permissions: "read-only",
+				modelSelection: { kind: "tier", tier: "light" },
+				model: "xai/grok-4:high",
 			});
+			const reconstructed = normalizeChildSpec(
+				{
+					task: "Continue the audit",
+					description: descriptor!.description,
+					permissions: descriptor!.permissions,
+					model: descriptor!.model,
+					tier: descriptor!.tier,
+					modelSelection: descriptor!.modelSelection,
+				},
+				{
+					parentMode: "auto",
+					runId: "resume",
+					index: 0,
+					childId: descriptor!.childId,
+					resolvedModelIsRuntime: true,
+				},
+			);
+			expect(reconstructed.modelSelection).toEqual({ kind: "tier", tier: "light" });
+			expect(reconstructed.model).toBeUndefined();
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reads explicit-model recovery descriptors and reconstructs model selection", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-recovery-model-"));
+		try {
+			fs.writeFileSync(
+				path.join(dir, "recovery-descriptor.json"),
+				JSON.stringify({
+					version: 4,
+					lifecycleArtifactVersion: 4,
+					sourceRunId: "run-2",
+					childId: "run-2-0",
+					description: "Model child",
+					permissions: "full",
+					model: "xai/grok-4:high",
+					thinking: "high",
+					modelSelection: { kind: "model", model: "xai/grok-4" },
+					agent: "Model child",
+					cwd: process.cwd(),
+					outputMode: "inline",
+					maxSubagentDepth: 1,
+					share: false,
+				}),
+			);
+			const descriptor = readAsyncRecoveryDescriptor(dir);
+			expect(descriptor?.modelSelection).toEqual({ kind: "model", model: "xai/grok-4" });
+			const reconstructed = normalizeChildSpec(
+				{
+					task: "Continue",
+					description: descriptor!.description,
+					permissions: descriptor!.permissions,
+					model:
+						descriptor!.modelSelection?.kind === "model"
+							? (descriptor!.modelSelection.model ?? descriptor!.model)
+							: undefined,
+					thinking: descriptor!.thinking,
+					modelSelection: descriptor!.modelSelection,
+				},
+				{ parentMode: "auto", runId: "resume", index: 0, childId: descriptor!.childId },
+			);
+			expect(reconstructed.modelSelection).toEqual({ kind: "model", model: "xai/grok-4" });
+			expect(reconstructed.model).toBe("xai/grok-4");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

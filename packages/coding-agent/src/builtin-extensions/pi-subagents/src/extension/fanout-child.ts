@@ -7,6 +7,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import { getArtifactsDir } from "../shared/artifacts.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveWaitToolConfig } from "../runs/background/wait-config.ts";
+import { normalizeAsyncLaunchConfig } from "../runs/background/top-level-async.ts";
 import { SUBAGENT_CHILD_ENV, SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import { readNestedControlRequests, resolveNestedRouteFromEnv, writeNestedControlResult } from "../runs/shared/nested-events.ts";
 import { deliverSubagentIntercomMessageEvent } from "../intercom/result-intercom.ts";
@@ -142,13 +143,12 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI): 
 	if (registeredApis.has(pi)) return;
 	registeredApis.add(pi);
 
-	const config = loadConfig();
+	const config = normalizeAsyncLaunchConfig(loadConfig());
 	const state = createChildSafeState();
 	const executor = createSubagentExecutor({
 		pi,
 		state,
 		config,
-		asyncByDefault: config.asyncByDefault === true,
 		waitToolEnabled: resolveWaitToolConfig(config.waitTool).enabled,
 		tempArtifactsDir: getArtifactsDir(null),
 		getSubagentSessionRoot,

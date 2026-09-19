@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -12,7 +13,14 @@ import { parseStartupMilestones } from "./profile-coding-agent-node.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = process.argv[2] ? resolve(process.argv[2]) : join(root, "packages/coding-agent/dist/cli.js");
 const dist = dirname(cli);
-const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("PI_SUBAGENT")));
+
+function isolatedStartupEnv(overrides = {}) {
+	const env = { ...process.env };
+	for (const key of Object.keys(env)) {
+		if (/^PI_(?:SUBAGENTS?|INTERCOM)_/.test(key)) delete env[key];
+	}
+	return { ...env, ...overrides };
+}
 
 async function check(fail) {
 	const agentDir = mkdtempSync(join(tmpdir(), "lunr-paint-check-"));
@@ -27,13 +35,12 @@ registerHooks({ load(url, context, nextLoad) {
 }});`;
 	const child = spawn(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, cli], {
 		cwd: agentDir,
-		env: {
-			...environment,
+		env: isolatedStartupEnv({
 			PI_CODING_AGENT_DIR: agentDir,
 			PI_STARTUP_BENCHMARK: "1",
 			PI_TIMING: "1",
 			PI_OFFLINE: "1",
-		},
+		}),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	let stdout = "";
@@ -141,8 +148,7 @@ registerHooks({load(url, context, nextLoad) {
 		],
 		{
 			cwd: workspace,
-			env: {
-				...environment,
+			env: isolatedStartupEnv({
 				HOME: home,
 				USERPROFILE: home,
 				APPDATA: home,
@@ -157,7 +163,7 @@ registerHooks({load(url, context, nextLoad) {
 				PI_SKIP_VERSION_CHECK: "1",
 				PI_STARTUP_BENCHMARK_TOOL_URL: toolUrl ?? "",
 				PI_STARTUP_BENCHMARK_TOOL: toolKind ?? "",
-			},
+			}),
 			stdio: ["ignore", "ignore", "pipe"],
 		},
 	);
@@ -196,7 +202,7 @@ registerHooks({load(url, context, nextLoad) {
 		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
 		assert.equal(
 			request.toolSchemaHash,
-			computerHost ? "e8fd05d1588c6462af03b9ec50bd94421ba935ed68673c6a2758f49acbe169f0" : "4f2d0fa019699b29f632f271c69723d0a822743b84ef837582b0a9be8c941411",
+			computerHost ? "83860ad17c8c081d0e0ac67861644940f6110ebd207f102711a37969e4952b7a" : "5325fdc0cf75a1998cb0a1d8ab184bf34342c4eac71add793bcf106c6f2c9da4",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
@@ -217,7 +223,15 @@ registerHooks({load(url, context, nextLoad) {
 		);
 	} finally {
 		clearTimeout(timer);
-		rmSync(agentDir, { recursive: true, force: true });
+		const brokerPidFile = join(agentDir, "intercom", "broker.pid");
+		try {
+			const brokerPid = Number(readFileSync(brokerPidFile, "utf8").trim());
+			assert(Number.isSafeInteger(brokerPid) && brokerPid > 0, "Invalid isolated broker pid");
+			process.kill(brokerPid);
+		} catch (error) {
+			if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+		}
+		await rm(agentDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 }
 

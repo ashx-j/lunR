@@ -1,0 +1,2 @@
+// @ts-nocheck
+export const SUBAGENT_ASYNC_GUIDANCE = "Subagents run async by default. Set async:false when you need the result immediately and have no independent work to do, or need an interactive preview. Otherwise continue independent work or yield for normal interactive completion. Use subagent_wait for same-turn or skill completion. Headless sessions auto-drain current-session work. Use status for one-time inspection. Do not poll or sleep to wait.";

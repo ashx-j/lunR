@@ -2,37 +2,44 @@
 /**
  * Subagent Tool
  *
- * Full-featured subagent with sync and async modes.
- * - Sync (default): Streams output, renders markdown, tracks usage
- * - Async: Background execution, emits events when done
+ * Full-featured subagent with foreground and async modes.
+ * - Async (default): Background execution, emits events when done
+ * - Foreground (async:false or clarify:true): Streams output, renders markdown, tracks usage
  *
  * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
- * Toggle: async parameter (default: false, configurable via config.json)
  *
  * Config file: ~/.lunr/agent/extensions/subagent/config.json
- *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
+ *   { "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
  */
 
 import { randomUUID } from "node:crypto";
+import { createSubagentCancellation, registerSubagentCancellation } from "../../../../core/subagent-cancellation.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { keyText } from "../../../../modes/interactive/components/keybinding-hints.ts";
 import { awaitWithAbort } from "../../../../utils/await-with-abort.ts";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
-import { clearLegacyResultAnimationTimer, renderSubagentResult, subagentAnimSink } from "../tui/render.ts";
+import {
+	clearLegacyResultAnimationTimer,
+	disposeSubagentWidget,
+	renderSubagentResult,
+	SUBAGENT_PAINT_INTERVAL_MS,
+	subagentAnimSink,
+} from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { resolveSubagentRequestParams } from "../runs/foreground/request-params.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
+import { isAsyncSubagentExecution, normalizeAsyncLaunchConfig, subagentLaunchRunsAsync } from "../runs/background/top-level-async.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "../slash/prompt-template-bridge.ts";
 import { registerMainWatchdog } from "../watchdog/register-main.ts";
@@ -47,13 +54,15 @@ import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
 import { formatSteeringNotice, handleSubagentSteeringNotice, SUBAGENT_STEERING_MESSAGE_TYPE, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
 import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
-import { formatDuration, shortenPath } from "../shared/formatters.ts";
+
 import { loadConfig } from "./config.ts";
 import { buildSubagentToolDescription } from "./tool-description.ts";
 import {
+	type AsyncJobState,
 	type Details,
 	type SubagentState,
 	ASYNC_DIR,
+	childRowLabel,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
@@ -144,9 +153,39 @@ function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefine
 	}, 0);
 }
 
-export function renderSubagentCall(args, theme, context): Text {
+function matchingActionJobs(state: SubagentState, requestedId: string): AsyncJobState[] {
+	const jobs = new Map<string, AsyncJobState>();
+	for (const job of state.asyncJobs.values()) jobs.set(job.asyncId, job);
+	for (const job of state.fleetJobs?.values() ?? []) jobs.set(job.asyncId, job);
+	const exact = jobs.get(requestedId);
+	if (exact) return [exact];
+	return [...jobs.values()].filter((job) => job.asyncId.startsWith(requestedId));
+}
+
+export function resolveSubagentActionDisplayTitle(args, state: SubagentState): string | undefined {
+	const requestedId = (args.id || args.runId || "").trim();
+	if (!requestedId) return undefined;
+	const matches = matchingActionJobs(state, requestedId);
+	if (matches.length !== 1) return undefined;
+	const job = matches[0]!;
+	const steps = job.steps ?? [];
+	if (Number.isInteger(args.index)) {
+		const step = steps.find((candidate) => candidate.index === args.index) ?? steps[args.index];
+		return step ? childRowLabel(step) : undefined;
+	}
+	if (steps.length === 1) return childRowLabel(steps[0]!);
+	if (steps.length > 1) return `${job.mode ?? "subagent"} run`;
+	if (job.agents?.length === 1) return job.agents[0];
+	if (job.agents?.length) return `${job.mode ?? "subagent"} run`;
+	return undefined;
+}
+
+export function renderSubagentCall(rawArgs, theme, context, options) {
+	const args = resolveSubagentRequestParams(rawArgs);
 	if (args.action) {
-		const target = args.id || args.runId || "";
+		const resultTitle = context?.result?.details?.displayTitle;
+		const resolvedTitle = resultTitle || options?.resolveActionTitle?.(args);
+		const target = resolvedTitle || args.id || args.runId || "";
 		return new Text(
 			`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 			0,
@@ -155,28 +194,37 @@ export function renderSubagentCall(args, theme, context): Text {
 	}
 	const isParallel = (args.tasks?.length ?? 0) > 0;
 	const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
-	const asyncLabel = args.async === true && args.clarify !== true ? theme.fg("warning", " [async]") : "";
+	const asyncMark = subagentLaunchRunsAsync(args) ? `${theme.fg("warning", "async")} ` : "";
 	if (args.chain?.length) {
 		return new Text(
-			`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
+			`${theme.fg("toolTitle", theme.bold("subagent "))}${asyncMark}chain (${args.chain.length})`,
 			0,
 			0,
 		);
 	}
 	if (isParallel) {
 		return new Text(
-			`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})${asyncLabel}`,
+			`${theme.fg("toolTitle", theme.bold("subagent "))}${asyncMark}parallel (${parallelCount})`,
 			0,
 			0,
 		);
 	}
-	const showDescription = !context?.isPartial && !context?.expanded && !context?.isError;
+	const showDescription = !context?.result && !context?.isPartial && !context?.expanded && !context?.isError;
 	const description = showDescription ? theme.fg("accent", args.description || args.task || "?") : "";
-	return new Text(
-		`${theme.fg("toolTitle", theme.bold(description ? "subagent " : "subagent"))}${description}${asyncLabel}`,
-		0,
-		0,
-	);
+	const title = theme.fg("toolTitle", theme.bold("subagent"));
+	const rest = [asyncMark.trim() ? theme.fg("warning", "async") : "", description].filter(Boolean).join(" ");
+	return new Text(rest ? `${title} ${rest}` : title, 0, 0);
+}
+
+export function renderSubagentNotify(details, theme) {
+	const status = typeof details?.status === "string" ? details.status : "";
+	const icon = status === "completed"
+		? theme.fg("success", "✓")
+		: status === "failed"
+			? theme.fg("error", "✗")
+			: theme.fg("warning", "■");
+	const title = details?.agent || "child";
+	return new Text(`${icon} ${theme.bold(title)} ${theme.fg("dim", status)}`, 0, 0);
 }
 
 function ensureSubagentResultAnimation(context: { state: Record<string, unknown>; invalidate?: () => void; requestRender?: () => void }): void {
@@ -189,7 +237,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 	if (typeof context.invalidate !== "function") return;
 	if (state.frame === undefined) state.frame = 0;
 	state.subagentResultAnimationTimer = setInterval(() => {
-		state.frame = ((state.frame ?? 0) + 1) % 10;
+		state.frame = (state.frame ?? 0) + 1;
 		try {
 			const entries = state.animEntries;
 			if (entries?.length && typeof context.requestRender === "function") {
@@ -200,7 +248,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 				context.invalidate();
 			}
 		} catch {}
-	}, 80);
+	}, SUBAGENT_PAINT_INTERVAL_MS);
 }
 
 function isSlashResultError(result: { details?: Details }): boolean {
@@ -290,15 +338,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
-	const config = loadConfig();
+	const config = normalizeAsyncLaunchConfig(loadConfig());
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
-	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 
 	const state: SubagentState = {
 		baseCwd: "",
 		currentSessionId: null,
+		sessionGeneration: 0,
 		foregroundSubagentInFlight: 0,
 		subagentSpawns: { sessionId: null, count: 0 },
 		asyncJobs: new Map(),
@@ -333,15 +381,22 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let generation = 0;
 	let executorPromise: Promise<ReturnType<typeof createSubagentExecutor>> | undefined;
 	const pendingLaunches = new Set<Promise<void>>();
+	const pendingAsyncLaunches = new Set<Promise<void>>();
+	let unregisterCancellation: (() => void) | undefined;
 	const runtimeCleanup = () => {
 		generation++;
+		supervisorChannel.cancelOwnedQuestions("parent runtime replaced");
+		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
+		pendingAsyncLaunches.clear();
+		unregisterCancellation?.();
 		mainWatchdog.dispose();
 		stopResultWatcher();
 		scheduledRunManager.stop();
 		supervisorChannel.dispose();
 		clearPendingForegroundControlNotices(state);
+		disposeSubagentWidget();
 		if (state.poller) {
 			clearInterval(state.poller);
 			state.poller = null;
@@ -349,9 +404,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
-	const { ensurePoller, refreshWidget, handleStarted, handleComplete, resetJobs, restoreActiveJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR, {
+	const { ensurePoller, refreshWidget, handleStarted, handleComplete: trackComplete, resetJobs, restoreActiveJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR, {
 		widgetEnabled: config.asyncWidget !== false,
 	});
+	const handleComplete = (data: unknown) => {
+		trackComplete(data);
+		const result = data as { id?: string; sessionId?: string };
+		if (typeof state.currentSessionId === "string" && result.sessionId !== state.currentSessionId) return;
+		if (typeof result.id === "string" && result.id.trim()) {
+			supervisorChannel.settleRunQuestions(result.id, "async run settled");
+		}
+	};
 	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	const scheduledRunManager = createScheduledRunManager({
 		config,
@@ -377,9 +440,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				if (launchReady) return;
 				launchReady = true;
 				pendingLaunches.delete(launchReadyPromise);
+				pendingAsyncLaunches.delete(launchReadyPromise);
 				resolveLaunchReady();
 			};
 			pendingLaunches.add(launchReadyPromise);
+			if (isAsyncSubagentExecution(resolveSubagentRequestParams(params))) pendingAsyncLaunches.add(launchReadyPromise);
 			try {
 				const currentGeneration = generation;
 				signal?.throwIfAborted();
@@ -387,7 +452,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					const pending = import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor }) => {
 						if (generation !== currentGeneration) throw new Error("Subagent session changed before initialization");
 						return createSubagentExecutor({
-							pi, state, config, asyncByDefault,
+							pi, state, config,
 							waitToolEnabled: waitToolConfig.enabled,
 							handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
 							watchdog: mainWatchdog, tempArtifactsDir, getSubagentSessionRoot, expandTilde,
@@ -427,36 +492,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return new Text(content, 0, 0);
 	});
 
-	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
+	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : "";
 		const details = (message.details as SubagentNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
 		if (!details) return new Text(content, 0, 0);
-		const icon = details.status === "completed"
-			? theme.fg("success", "✓")
-			: details.status === "paused"
-				? theme.fg("warning", "■")
-				: theme.fg("error", "✗");
-		const parts: string[] = [];
-		if (details.taskInfo) parts.push(details.taskInfo);
-		if (details.durationMs !== undefined) parts.push(formatDuration(details.durationMs));
-		const notifyLabel = details.taskInfo || details.agent || "child";
-		let text = `${icon} ${theme.bold(notifyLabel)} ${theme.fg("dim", details.status)}`;
-		if (parts.length > 0) text += ` ${theme.fg("dim", "·")} ${parts.map((part) => theme.fg("dim", part)).join(` ${theme.fg("dim", "·")} `)}`;
-		const trimmedPreview = details.resultPreview.trim();
-		const previewLines = options.expanded
-			? trimmedPreview.split("\n").filter((line) => line.trim())
-			: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
-		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
-			text += `\n  ${theme.fg("dim", `⎿  ${line}`)}`;
-		}
-		if (!options.expanded && trimmedPreview.includes("\n")) {
-			const expandKey = keyText("app.tools.expand");
-			text += `\n  ${theme.fg("dim", `${expandKey} full notification`)}`;
-		}
-		if (details.sessionLabel && details.sessionValue) {
-			text += `\n  ${theme.fg("muted", `${details.sessionLabel}: ${shortenPath(details.sessionValue)}`)}`;
-		}
-		return new Text(text, 0, 0);
+		return renderSubagentNotify(details, theme);
 	});
 
 	pi.registerMessageRenderer<SubagentSteeringMessageDetails>(SUBAGENT_STEERING_MESSAGE_TYPE, (message, _options, theme) => {
@@ -467,9 +507,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, () => undefined);
 
-	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+	const executeSubagentCollapsed = async (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-		return executor.execute(id, params, signal, onUpdate, ctx);
+		const displayTitle = params.action === "steer"
+			? resolveSubagentActionDisplayTitle(params, state)
+			: undefined;
+		const result = await executor.execute(id, params, signal, onUpdate, ctx);
+		if (displayTitle && result.details) result.details.displayTitle = displayTitle;
+		return result;
 	};
 
 	const slashBridge = registerSlashSubagentBridge({
@@ -512,7 +557,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return executeSubagentCollapsed(id, params, signal, onUpdate, ctx);
 		},
 
-		renderCall: renderSubagentCall,
+		renderCall: (args, theme, context) => renderSubagentCall(args, theme, context, {
+			resolveActionTitle: (params) => resolveSubagentActionDisplayTitle(params, state),
+		}),
 
 		renderResult(result, options, theme, context) {
 			if (subagentResultIsRunning(result)) {
@@ -537,8 +584,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(tool);
 
-	// lunr: register a callback so toggling model tiers mid-session rebuilds the subagent
-	// tool description (adds/removes MODEL TIERS guidance) and refreshes the tool registry.
+	// lunr: register a callback so model-tier settings changes rebuild the subagent
+	// tool description and refresh the live registry.
 	const modelTierBridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
 		| { registerToolDescriptionRefresher?: (refresher: () => void) => void }
 		| undefined;
@@ -622,8 +669,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const resetSessionState = (ctx: ExtensionContext) => {
 		generation++;
+		supervisorChannel.cancelOwnedQuestions("parent session replaced");
+		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
+		pendingAsyncLaunches.clear();
+		unregisterCancellation?.();
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
@@ -643,6 +694,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		clearPendingForegroundControlNotices(state);
 		resetJobs(ctx);
 		restoreActiveJobs(ctx);
+		const sessionId = state.currentSessionId;
+		const sessionGeneration = generation;
+		if (sessionId) unregisterCancellation = registerSubagentCancellation(sessionId, createSubagentCancellation({
+			pendingLaunches: pendingAsyncLaunches,
+			isCurrent: () => generation === sessionGeneration && state.currentSessionId === sessionId,
+			getActiveRunIds: () => [...state.asyncJobs.values()]
+				.filter((job) => job.sessionId === sessionId && (job.status === "queued" || job.status === "running"))
+				.map((job) => job.asyncId),
+			async stopRun(id) {
+				const result = await executor.execute(randomUUID(), { action: "stop", id }, new AbortController().signal, undefined, ctx);
+				return !result.isError;
+			},
+		}));
 		scheduledRunManager.bindSession(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
 		primeExistingResults();
@@ -656,8 +720,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", () => {
 		generation++;
+		supervisorChannel.cancelOwnedQuestions("parent session shutdown");
+		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
+		pendingAsyncLaunches.clear();
+		unregisterCancellation?.();
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
@@ -688,6 +756,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
 			delete globalStore[runtimeCleanupStoreKey];
 		}
+		disposeSubagentWidget();
 		try {
 			if (state.lastUiContext?.hasUI) {
 				state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);

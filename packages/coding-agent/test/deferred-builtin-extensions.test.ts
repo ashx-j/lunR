@@ -2,16 +2,16 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuthStorage } from "../src/core/auth-storage.ts";
-import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
-import { ModelRuntime } from "../src/core/model-runtime.ts";
-import { SessionManager } from "../src/core/session-manager.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
 import {
 	DEFERRED_BUILTIN_EXTENSION_NAMES,
 	lightBuiltinExtensions,
 	loadAllBuiltinExtensions,
 } from "../src/builtin-extensions/index.ts";
+import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
 
 describe("deferred builtin extensions", () => {
 	const dirs: string[] = [];
@@ -28,7 +28,6 @@ describe("deferred builtin extensions", () => {
 		expect(lightNames).toContain("ashxj-tui");
 		expect(lightNames).toContain("lunr-local-providers");
 		expect(lightNames).toContain("simple-pi-memory");
-		expect(lightNames).toContain("lunr-settings-tools");
 		expect(lightNames).not.toContain("lunr-behavior");
 		for (const name of DEFERRED_BUILTIN_EXTENSION_NAMES) {
 			expect(lightNames).not.toContain(name);

@@ -116,6 +116,8 @@ export interface PromptTemplateBridgeResult {
 	};
 }
 
+// Delegation bridges return correlated child output to an awaiting caller, so
+// these protocol-owned executions remain foreground regardless of tool defaults.
 export interface DelegatedSubagentExecutionParams {
 	agent?: string;
 	task?: string;

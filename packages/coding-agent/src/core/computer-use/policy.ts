@@ -64,14 +64,8 @@ export function computerRefusal(
 	if (policy.child) return "Computer tools are available only to main agents.";
 	if (!policy.enabled) return "Computer use is disabled in settings.";
 	if (operation.foreground && !policy.foreground) return "Foreground control is disabled. Use background operations.";
-	if (
-		!policy.vision &&
-		((name !== "computer_window" && (input.x !== undefined || input.y !== undefined)) ||
-			name === "computer_drag" ||
-			input.screenshot === true ||
-			input.desktop === true)
-	) {
-		return "This model cannot receive images. Use accessibility elements or select an image-capable model.";
+	if (!policy.vision && name !== "computer_end") {
+		return "Image-only computer use requires an image-capable model. Select one before loading computer tools.";
 	}
 	return undefined;
 }

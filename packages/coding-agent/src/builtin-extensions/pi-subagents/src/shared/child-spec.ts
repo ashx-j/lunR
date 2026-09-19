@@ -10,8 +10,9 @@ import {
 	type ChildPermission,
 } from "../../../../core/subagent-permission-inherit.ts";
 import { resolveChildExcludeTools } from "../runs/shared/child-tools.ts";
-import { captureModelSelection } from "../runs/shared/model-fallback.ts";
+import { captureModelSelection, INHERIT_MODEL } from "../runs/shared/model-fallback.ts";
 import type { AcceptanceInput, ChildSpec, ChildTier, JsonSchemaObject, ModelSelection, ToolBudgetConfig } from "./types.ts";
+import { THINKING_LEVELS } from "./model-info.ts";
 
 export type { ChildSpec, ChildTier, ModelSelection } from "./types.ts";
 
@@ -23,6 +24,7 @@ export interface DelegatedTaskInput {
 	permissions?: unknown;
 	model?: unknown;
 	tier?: unknown;
+	thinking?: unknown;
 	modelSelection?: unknown;
 	skill?: unknown;
 	cwd?: unknown;
@@ -47,6 +49,8 @@ export interface NormalizeChildSpecOptions {
 	defaultTask?: string;
 	fanoutAuthorized?: boolean;
 	pathLabel?: string;
+	/** When true, `model` is a previously resolved runtime id and must not be treated as a fresh user selection. */
+	resolvedModelIsRuntime?: boolean;
 }
 
 export function allocateChildId(runId: string, index: number): string {
@@ -113,11 +117,19 @@ function optionalCount(value: unknown): number | undefined {
 function isModelSelection(value: unknown): value is ModelSelection {
 	if (!value || typeof value !== "object") return false;
 	const kind = (value as { kind?: unknown }).kind;
+	if (kind === "model") return true;
 	if (kind === "tier") {
 		const tier = (value as { tier?: unknown }).tier;
 		return tier === "light" || tier === "standard" || tier === "heavy";
 	}
 	return false;
+}
+
+function parseThinking(value: unknown, pathLabel: string): string | undefined {
+	if (value === undefined) return undefined;
+	if (value === false) return "off";
+	if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) return value;
+	throw new Error(`${pathLabel}.thinking must be one of ${THINKING_LEVELS.join(", ")}.`);
 }
 
 export function normalizeChildSpec(input: DelegatedTaskInput, options: NormalizeChildSpecOptions): ChildSpec {
@@ -134,27 +146,70 @@ export function normalizeChildSpec(input: DelegatedTaskInput, options: Normalize
 	if (!resolved.ok) {
 		throw new Error(resolved.error || PLAN_MODE_WRITE_SPAWN_ERROR);
 	}
-	if (input.model !== undefined && !isModelSelection(input.modelSelection)) {
-		throw new Error(`${pathLabel}.model is not supported for executable children; choose tier: "light", "standard", or "heavy".`);
+
+	const preservedSelection = isModelSelection(input.modelSelection) ? input.modelSelection : undefined;
+	const rawModel = optionalString(input.model);
+	if (rawModel === INHERIT_MODEL) {
+		throw new Error(`${pathLabel}.model "inherit" is not supported; choose tier or an explicit provider/model.`);
 	}
-	const selectedTier = isModelSelection(input.modelSelection) ? input.modelSelection.tier : input.tier;
-	if (selectedTier !== "light" && selectedTier !== "standard" && selectedTier !== "heavy") {
-		throw new Error(`${pathLabel}.tier is required and must be "light", "standard", or "heavy".`);
+
+	let modelSelection: ModelSelection;
+	let tier: ChildTier | undefined;
+	let model: string | undefined;
+	let thinking: string | undefined;
+
+	if (preservedSelection) {
+		modelSelection = preservedSelection;
+		if (modelSelection.kind === "tier") {
+			tier = modelSelection.tier;
+			// Runtime-resolved models from recovery must not become a fresh user model selection.
+			model = undefined;
+			if (input.thinking !== undefined) {
+				throw new Error(`${pathLabel}.thinking is only valid with an explicit model selection.`);
+			}
+		} else {
+			model = rawModel ?? optionalString(modelSelection.model);
+			if (!model) {
+				throw new Error(`${pathLabel}.model is required when modelSelection.kind is "model".`);
+			}
+			if (!modelSelection.model) modelSelection = { kind: "model", model };
+			thinking = parseThinking(input.thinking, pathLabel);
+		}
+	} else if (options.resolvedModelIsRuntime) {
+		// Resume/recovery without a stored selection: keep tier routing, ignore resolved model as selection.
+		const selectedTier = input.tier === "light" || input.tier === "standard" || input.tier === "heavy" ? input.tier : undefined;
+		if (!selectedTier) {
+			throw new Error(`${pathLabel}.tier is required to resume a child without a stored modelSelection.`);
+		}
+		modelSelection = { kind: "tier", tier: selectedTier };
+		tier = selectedTier;
+		model = undefined;
+	} else {
+		modelSelection = captureModelSelection({ model: input.model, tier: input.tier });
+		if (modelSelection.kind === "tier") {
+			tier = modelSelection.tier;
+			model = undefined;
+			if (input.thinking !== undefined) {
+				throw new Error(`${pathLabel}.thinking is only valid with an explicit model selection.`);
+			}
+		} else {
+			model = rawModel;
+			if (!modelSelection.model && model) modelSelection = { kind: "model", model };
+			thinking = parseThinking(input.thinking, pathLabel);
+		}
 	}
-	const tier = selectedTier;
+
 	const outputMode = input.outputMode === "inline" || input.outputMode === "file-only" ? input.outputMode : undefined;
-	const modelSelection = isModelSelection(input.modelSelection)
-		? input.modelSelection
-		: captureModelSelection({ tier });
 	return {
 		childId: options.childId ?? allocateChildId(options.runId, options.index),
 		task,
 		description,
 		requestedPermissions: resolved.requested,
 		effectivePermissions: resolved.effective,
-		model: optionalString(input.model),
+		model,
 		tier,
 		modelSelection,
+		thinking,
 		skill: optionalSkill(input.skill),
 		cwd: optionalString(input.cwd),
 		output: optionalOutput(input.output),

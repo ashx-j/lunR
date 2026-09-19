@@ -69,11 +69,9 @@ describe("owned runtime", () => {
 		const module = new URL("../src/core/computer-use/lease.ts", import.meta.url).href;
 		const runtime = spawn(process.execPath, ["--eval", "setInterval(()=>{},1000)"], { stdio: "ignore" });
 		const script = `import { DesktopLease } from ${JSON.stringify(module)}; const lease = new DesktopLease(${JSON.stringify(path)}); await lease.run(async()=>{}); await lease.trackProcess(${runtime.pid}); console.log('owned'); setInterval(()=>{},1000);`;
-		const child = spawn(
-			process.execPath,
-			["--experimental-transform-types", "--input-type=module", "--eval", script],
-			{ stdio: ["ignore", "pipe", "pipe"] },
-		);
+		const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 		let errors = "";
 		child.stderr.on("data", (chunk) => {
 			errors += chunk;

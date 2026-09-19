@@ -30,6 +30,12 @@ import {
 	type SkillTagCharacter,
 } from "../../../core/settings-manager.ts";
 import {
+	getSubagentSpinnerDefinition,
+	SUBAGENT_SPINNER_LABELS,
+	SUBAGENT_SPINNER_NAMES,
+	type SubagentSpinnerName,
+} from "../../../core/subagent-spinner.ts";
+import {
 	getSelectListTheme,
 	getSettingsListTheme,
 	parseAutoThemeSetting,
@@ -94,6 +100,7 @@ export interface SettingsConfig {
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
 	smoothStreaming: boolean;
+	subagentSpinner: SubagentSpinnerName;
 	sessionRetentionDays: number;
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
@@ -160,6 +167,7 @@ export interface SettingsCallbacks {
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
 	onSmoothStreamingChange: (enabled: boolean) => void;
+	onSubagentSpinnerChange: (spinner: SubagentSpinnerName) => void;
 	onSessionRetentionDaysChange: (days: number) => void;
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
@@ -200,6 +208,7 @@ export interface SettingsCallbacks {
 	onAutoManageSubscriptionsChange: (enabled: boolean) => void;
 	/** lunr: live pool accessors; when absent the Subscriptions row is hidden. */
 	subscriptions?: SubscriptionCallbacks;
+	requestRender: () => void;
 	/** Open the model picker for a tier; done() receives the selected "provider/model" string, or no value on cancel. */
 	createModelTierPicker: (
 		tier: ModelTierName,
@@ -455,17 +464,99 @@ class MemoryCharCapSubmenu extends Container {
 
 const SEARCH_CURATOR_VALUES: SearchCuratorSetting[] = ["off", "on", "auto-summary"];
 
+function subagentSpinnerItems(): SelectItem[] {
+	return SUBAGENT_SPINNER_NAMES.map((name) => ({
+		value: name,
+		label: SUBAGENT_SPINNER_LABELS[name],
+		description: getSubagentSpinnerDefinition(name).frames.slice(0, 4).join(" "),
+	}));
+}
+
+class SubagentSpinnerSubmenu extends Container {
+	private readonly preview: Text;
+	private readonly selectList: SelectList;
+	private selected: SubagentSpinnerName;
+	private timer: ReturnType<typeof setInterval> | undefined;
+
+	constructor(current: SubagentSpinnerName, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+		super();
+		this.selected = current;
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Subagent spinner")), 0, 0));
+		this.addChild(new Spacer(1));
+		this.preview = new Text("", 0, 0);
+		this.addChild(this.preview);
+		this.addChild(new Spacer(1));
+		const options = subagentSpinnerItems();
+		this.selectList = new SelectList(
+			options,
+			options.length,
+			getSelectListTheme(),
+			SETTINGS_SUBMENU_SELECT_LIST_LAYOUT,
+		);
+		this.selectList.setSelectedIndex(Math.max(0, SUBAGENT_SPINNER_NAMES.indexOf(current)));
+		this.selectList.onSelectionChange = (item) => {
+			this.selected = item.value as SubagentSpinnerName;
+			this.updatePreview();
+			callbacks.requestRender();
+		};
+		this.selectList.onSelect = (item) => {
+			this.dispose();
+			const selected = item.value as SubagentSpinnerName;
+			callbacks.onSubagentSpinnerChange(selected);
+			done(SUBAGENT_SPINNER_LABELS[selected]);
+		};
+		this.selectList.onCancel = () => {
+			this.dispose();
+			done();
+		};
+		this.addChild(this.selectList);
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("dim", "  Enter to select · Esc to go back"), 0, 0));
+		this.updatePreview();
+		this.timer = setInterval(() => {
+			this.updatePreview();
+			callbacks.requestRender();
+		}, 80);
+		this.timer.unref?.();
+	}
+
+	private updatePreview(): void {
+		const definition = getSubagentSpinnerDefinition(this.selected);
+		const frame = definition.frames[Math.floor(Date.now() / definition.interval) % definition.frames.length]!;
+		this.preview.setText(`${theme.fg("muted", "Preview")}  ${theme.fg("accent", frame)}`);
+	}
+
+	dispose(): void {
+		if (!this.timer) return;
+		clearInterval(this.timer);
+		this.timer = undefined;
+	}
+
+	handleInput(data: string): void {
+		this.selectList.handleInput(data);
+	}
+}
+
 // lunr: Customize submenu — toggles for the lunR TUI customize settings.
 class CustomizeSubmenu extends Container {
 	private settingsList: SettingsList;
 
-	constructor(_config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
+	constructor(config: SettingsConfig, callbacks: SettingsCallbacks, done: (selectedValue?: string) => void) {
 		super();
 
 		// Read live values from the customize bridge so re-entering the submenu within
 		// one /settings session reflects toggles made earlier in that session.
 		const bridge = getCustomizeBridge();
+		const currentSpinner = bridge?.getSubagentSpinner() ?? config.subagentSpinner;
 		const items: SettingItem[] = [
+			{
+				id: "subagent-spinner",
+				label: "Subagent spinner",
+				description: "Running child indicator",
+				currentValue: SUBAGENT_SPINNER_LABELS[currentSpinner],
+				submenu: (_currentValue, submenuDone) =>
+					new SubagentSpinnerSubmenu(bridge?.getSubagentSpinner() ?? currentSpinner, callbacks, submenuDone),
+			},
 			{
 				id: "footer-mcp",
 				label: "MCP status",
