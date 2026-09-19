@@ -2,7 +2,7 @@
 
 This package contains development builds from lunR's `dev/tui` branch. This integration combines stable lunR 0.2.21 with image-only computer use from PR #77's continuation.
 
-Computer use is experimental. Observations use bounded screenshots instead of accessibility trees, with crop mapping and one action plus a post-action image. Source-review fixes cover equivalent clicks, discovery pagination, and partial typing recovery. These changes and this integration have not been tested or built. Smooth cursor animation is not included; live desktop and macOS hardware acceptance remain pending. Stable `@ashx-j/lunr` is unchanged.
+Computer use is experimental. Observations use bounded screenshots instead of accessibility trees, with crop mapping and one action plus a post-action image. Source-review fixes cover equivalent clicks, discovery pagination, and partial typing recovery. Offline builds, 265 focused tests, local scripted-provider startup checks, and isolated package installation pass. No native runtime launch, live desktop capture/input, or remote inference ran. Smooth cursor animation is not included; live desktop and macOS hardware acceptance remain pending. Stable `@ashx-j/lunr` is unchanged.
 
 Install it once:
 

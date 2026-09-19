@@ -202,8 +202,7 @@ registerHooks({load(url, context, nextLoad) {
 		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
 		assert.equal(
 			request.toolSchemaHash,
-			// Refresh the supported-host fingerprint after image-only tools are finalized and verification is approved.
-			computerHost ? "5f78f9c8f9d43e2b510e05553822914d8a1c3eefd5270c38e6b416a8fcfaaff5" : "5325fdc0cf75a1998cb0a1d8ab184bf34342c4eac71add793bcf106c6f2c9da4",
+			computerHost ? "83860ad17c8c081d0e0ac67861644940f6110ebd207f102711a37969e4952b7a" : "5325fdc0cf75a1998cb0a1d8ab184bf34342c4eac71add793bcf106c6f2c9da4",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);

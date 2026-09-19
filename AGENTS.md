@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Dev integration (`integrate/image-only-lunr-dev`):** merges stable 0.2.21 plus image-only tip `c5a9327` into `origin/dev/tui` at `db25cb2`. Retains `lunr-dev` naming, update routing, dev publication tags, and native ownership fixes. Source only, untested; smooth cursor animation is absent. Publication and PC installation remain pending parent-controlled verification gates. Last confirmed published versions are stable `0.2.21` and dev `0.2.19-dev.10.1`.
+- **Dev integration (`integrate/image-only-lunr-dev`):** merges stable 0.2.21 plus image-only tip `c5a9327` into `origin/dev/tui` at `db25cb2`. Retains `lunr-dev` naming, update routing, dev publication tags, and native ownership fixes. Offline builds, 265 focused tests, clean-parent startup fixtures, and isolated seven-package installation pass. Smooth cursor animation is absent. Publication and PC installation remain parent-controlled distribution steps; live desktop acceptance has not run. Last confirmed published versions are stable `0.2.21` and dev `0.2.19-dev.10.1`.
 
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 plus ownership fixes ported onto current master. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Production publication remains blocked.
 
@@ -136,7 +136,7 @@ Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- Dev integration: merge conflicts resolved by source inspection only. The three image-only P2 repairs remain present. No tests, builds, typechecks, scripts, runtime/desktop operations, push, PR, publication, or installation ran for this integration. The inherited supported-host tool fingerprint and effective inventory still require approved regeneration. Original image-only branch and daily-driver checkout remain untouched.
+- Dev integration verification (2026-09-19): isolated `npm ci --ignore-scripts`, five offline tsgo builds plus coding-agent Node bundle, 265 tests across 23 focused suites, and eight archive/package tests pass. Real Photon crop checks output pixels and mapping. Fixed the workflow's non-erasable constructor parameters and a fixture's removed Node transform flag. First-paint and first-turn subagent/MCP/LSP/local-fetch checks pass. Clean-parent inventory has 32 tools; removing only `computer_load` reproduces the unsupported-host hash `5325fdc0…`, which remains unchanged. Supported-host hash is `83860ad1…`; private prompt/inventory stay untracked. Seven dev tarballs pass relocated ignore-scripts installation, OS/CPU payload selection, omitted optional dependencies, and standalone installer npm ci. npm 12 pack JSON uses a name-keyed object; publisher accepts it and older arrays. No native runtime launch, desktop operations, remote inference, push, PR, publication, or global installation ran. Original image-only branch and daily-driver checkout remain untouched.
 
 - Image-only computer-use branch: workflow/image/schema/policy/extension source changes and focused tests are written, not executed. Verification pending user permission. No tests, builds, smoke runs, desktop operations, provider inference, publication, or PR have run. The three P2 source-review fixes and focused coverage are also unexecuted. Supported-host first-request schema fingerprint and effective prompt/tool inventory remain pending approved regeneration. Ancestry merge `3bb9839` is retained for an eventual fast-forward update of PR #77, not a second overlapping PR.
 
@@ -212,6 +212,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Run validation children with inherited `PI_SUBAGENT_*`, `PI_SUBAGENTS_*`, and `PI_INTERCOM_*` removed. A supervisor fixture can otherwise deliver a test question into the real parent session. Keep the active agent's own environment unchanged.
+
 - Image-only means no application accessibility tree in model observations, not zero native accessibility calls for targeting/safety. Map returned image coordinates through the crop/resize exactly once to driver-image pixels. Keep screenshots in sessions; provider history still accumulates until normal compaction, because rolling pruning changes prompt-cache prefixes and has no measured cost evidence yet.
 - Computer runtime payload dependencies are release-staged, not workspace dependencies. `scripts/computer-use-release.json` owns the pin; regenerate `release.generated.ts` after changing it. CuaDriver 0.28.1 is approved for branch development only. Production requires separate approval and a new CLI version.
 
@@ -286,6 +288,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-19: validate the dev integration with isolated builds, real image fixtures, clean-parent tool capture, and package relocation; retain live desktop and cursor work as separate native acceptance.
 
 - 2026-09-19: merge current stable plus image-only work into the existing dev channel while retaining its package names, update routing, and publication isolation; keep native cursor work outside this integration.
 

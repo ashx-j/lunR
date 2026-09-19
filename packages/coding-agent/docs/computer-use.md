@@ -1,10 +1,10 @@
 # Image-only computer use
 
 This dev-channel integration combines stable lunR 0.2.21 with image-only computer
-use. Verification is pending user permission. No tests, builds, runtime probes,
-desktop actions, provider requests, publication, or installation have run for this
-integration. Production publication remains blocked. Smooth cursor animation is
-not included.
+use. Offline builds, focused automated tests, local scripted-provider startup
+checks, and isolated package installation pass. No live desktop capture or input,
+native runtime launch, or remote inference ran. Stable production publication
+remains blocked. Smooth cursor animation is not included.
 
 The dev package is `@ashx-j/lunr-dev`, with command `lunr-dev` and update command
 `lunr-dev update`. Stable `@ashx-j/lunr` and `lunr` remain separate. Both commands
@@ -205,7 +205,8 @@ new CLI version. This integration retains dev-channel CLI naming, update routing
 and exact-version package/lock rewriting. Dev publication uses `latest` only for
 `@ashx-j/lunr-dev`; shared libraries and payload packages use the `dev` tag. Stable
 tags remain unchanged. The user requested a dev-channel update and installation,
-but verification, publication, and installation are still pending.
+with automated release checks complete. Publication and global installation remain
+separate distribution steps.
 
 ## Pending acceptance
 
@@ -213,14 +214,21 @@ Source tests cover image-only capture flags, metadata allowlists, image/crop
 mapping, fresh tokens, single-action post-images, bounded unchanged behavior,
 uncertain outcomes, permissions, and ownership. Source-review fixes add equivalent
 click defaults, app/window pagination, and Unicode partial-typing recovery coverage.
-All tests remain written but unexecuted; review fixes are not runtime verification.
-The supported-host first-request schema fingerprint and effective prompt/tool
-inventory must be regenerated after verification is approved. Do not treat the
-inherited PR #77 fingerprint as current.
+The focused 23-suite run passes 265 tests, including a real Photon PNG crop
+fixture that checks output pixels and coordinate mapping. All five offline package
+builds and the Node bundle pass. Clean-parent first-request capture confirms that
+`computer_load` is the only addition to the unsupported-host tool inventory; the
+supported-host fingerprint is current. Private prompt and tool snapshots remain
+local validation artifacts.
 
-Required later checks include focused source tests, offline package builds,
-first-request inventory, isolated packaging, and explicit authorized fixture
-desktop acceptance. Native gates include Windows locked/UAC/integrity states,
+Seven dev package tarballs pass isolated installation and relocation checks,
+host-only payload selection, archive verification, omitted-optional handling, and
+the standalone installer lock. First-paint and first-turn subagent, MCP, LSP, and
+local HTTP fixtures pass without remote inference. These checks do not launch the
+native driver or prove application effects.
+
+Explicitly authorized desktop acceptance remains required. Native gates include
+Windows locked/UAC/integrity states,
 Electron/native apps, display scaling and moved/resized windows, Unicode,
 held-input cancellation, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
 Cursor/runtime changes need a separate scoped decision before implementation.
