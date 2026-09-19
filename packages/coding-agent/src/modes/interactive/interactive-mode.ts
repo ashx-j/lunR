@@ -3461,6 +3461,7 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.thinkingCollapse,
+						{ requestRender: () => this.ui.requestRender() },
 					);
 					// lunr: collapsible reasoning — fresh timing array for this message.
 					this.thinkingRunTimings = [];
@@ -3881,6 +3882,7 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.thinkingCollapse,
+					{ requestRender: () => this.ui.requestRender() },
 				);
 				// lunr: collapsible reasoning — re-attach live timings when this
 				// message was streamed in this session (undefined = history).

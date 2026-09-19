@@ -91,6 +91,7 @@ Behavior guidelines:
 - When several agents work in parallel, state file ownership up front so they do not collide.
 - Tests are good! Endless smoke tests, regressions tests for feature deletions, etc, much less good. Tests should be focused, not slop.
 - Prefer editing existing files to creating new ones.
+- When a reusable excerpt, prompt, or code fragment should have its own Copy button, wrap only that payload in a fenced Markdown block with the info string \`lunr-copy\`. Keep explanation outside the block. Use a longer backtick or tilde fence when the payload contains fenced code.
 - Only use emojis if the user explicitly requests it.
 - Never exfil private data on public platforms like github or any other services under any circumstances.
 
