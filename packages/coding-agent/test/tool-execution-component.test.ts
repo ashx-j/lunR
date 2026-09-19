@@ -399,6 +399,7 @@ describe("ToolExecutionComponent parity", () => {
 		["live partial", "partial", false],
 		["expanded finished", "success", true],
 		["errored", "error", false],
+		["expanded error", "error", true],
 		["collapsed success", "success", false],
 	] as const)("keeps one subagent description on %s cards", (_label, state, expanded) => {
 		const component = subagentCard(state);
@@ -408,11 +409,83 @@ describe("ToolExecutionComponent parity", () => {
 		expect(descriptionCount(component)).toBe(1);
 		expect(rendered).toContain("subagent");
 		if (state === "partial") {
-			expect(rendered).toContain("read-only");
-			expect(rendered).toContain("3 tool uses");
+			expect(rendered).toContain("1.2k token");
+			expect(rendered).toContain("2s");
+			expect(rendered).not.toContain("read-only");
+			expect(rendered).not.toContain("tool use");
 		}
-		if (state === "error") expect(rendered).toContain("Child failed");
+		if (state === "success" && !expanded) {
+			expect(rendered).toContain("1.2k token");
+			expect(rendered).toContain("2s");
+		}
+		if (state === "error") {
+			expect(rendered).toContain("failed");
+			if (expanded) expect(rendered).toContain("Child failed");
+			else expect(rendered).not.toContain("Child failed");
+		}
 		if (expanded) expect(rendered).toContain("grok-4.5");
+	});
+
+	test("collapsed async launch receipts stay header-only", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition("subagent"),
+			renderCall: renderSubagentCall,
+			renderResult: renderSubagentResult,
+		};
+		const component = new ToolExecutionComponent(
+			"subagent",
+			"subagent-async-receipt",
+			{ task: "Inspect the authentication implementation", description: "Inspect auth flow", async: true },
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "Async single: Inspect auth flow [abc]\n\nThe async run is detached. Do not run sleep timers or polling loops just to wait for it.",
+					},
+				],
+				details: { mode: "single", results: [], asyncId: "abc", asyncDir: "Z:/missing/abc" },
+				isError: false,
+			},
+			false,
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("subagent");
+		expect(rendered).not.toContain("Do not run sleep timers");
+		expect(rendered).not.toContain("subagent_wait");
+	});
+
+	test("collapsed management stop results still render the text", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition("subagent"),
+			renderCall: renderSubagentCall,
+			renderResult: renderSubagentResult,
+		};
+		const component = new ToolExecutionComponent(
+			"subagent",
+			"subagent-stop",
+			{ action: "stop" },
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Stopped 1 running child." }],
+				details: { mode: "management", results: [] },
+				isError: false,
+			},
+			false,
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("Stopped 1 running child.");
+		expect(rendered).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {

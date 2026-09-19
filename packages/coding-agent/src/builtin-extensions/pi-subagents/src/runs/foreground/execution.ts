@@ -1130,7 +1130,7 @@ async function runSingleAttempt(
 	}
 	const completionGuard = result.exitCode === 0 && !result.error
 		? evaluateCompletionMutationGuard({
-			agent: spec.effectivePermissions,
+			permissions: spec.effectivePermissions,
 			task: shared.originalTask ?? task,
 			messages: result.messages,
 			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,

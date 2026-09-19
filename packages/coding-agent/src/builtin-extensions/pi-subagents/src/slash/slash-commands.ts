@@ -44,6 +44,8 @@ interface InlineConfig {
 	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
 	tier?: "light" | "standard" | "heavy";
+	model?: string;
+	thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	permissions?: "full" | "read-only";
 	skill?: string[] | false;
 	progress?: boolean;
@@ -73,6 +75,8 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 			case "outputMode": if (val === "inline" || val === "file-only") config.outputMode = val; break;
 			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "tier": if (val === "light" || val === "standard" || val === "heavy") config.tier = val; break;
+			case "model": if (val) config.model = val; break;
+			case "thinking": if (["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(val)) config.thinking = val as InlineConfig["thinking"]; break;
 			case "permissions": if (val === "full" || val === "read-only") config.permissions = val; break;
 			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "progress": config.progress = val !== "false"; break;
@@ -95,20 +99,18 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
 };
 
-const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean } => {
+export const extractExecutionFlags = (rawArgs: string): { args: string; async?: boolean } => {
 	let args = rawArgs.trim();
-	let bg = false;
+	let async: boolean | undefined;
 
 	while (true) {
-		if (args.endsWith(" --bg") || args === "--bg") {
-			bg = true;
-			args = args === "--bg" ? "" : args.slice(0, -5).trim();
-			continue;
-		}
-		break;
+		const match = args.match(/(?:^|\s)(--bg|--async|--fg|--foreground)$/);
+		if (!match) break;
+		async ??= match[1] === "--bg" || match[1] === "--async";
+		args = args.slice(0, match.index).trim();
 	}
 
-	return { args, bg };
+	return { args, async };
 };
 
 function sendSlashText(pi: ExtensionAPI, text: string): void {
@@ -847,12 +849,15 @@ const mapParsedTaskToStepObject = (
 	opts: { baseCwd: string; inGroup: boolean },
 ): ChainStepObject => {
 	const { name, config, task: stepTask } = step;
-	if (!config.tier) throw new SlashParseError(`Step '${name}' requires tier=light, tier=standard, or tier=heavy.`);
+	if (!config.tier && !config.model) throw new SlashParseError(`Step '${name}' requires tier=light|standard|heavy or model=provider/id.`);
+	if (config.tier && config.model) throw new SlashParseError(`Step '${name}' must choose exactly one of tier or model.`);
 	if (config.acceptance !== undefined) validateInlineAcceptanceInput(config.acceptance, name);
 	return {
 		description: name,
 		permissions: config.permissions ?? "full",
-		tier: config.tier,
+		...(config.tier ? { tier: config.tier } : {}),
+		...(config.model ? { model: config.model } : {}),
+		...(config.thinking ? { thinking: config.thinking } : {}),
 		...(stepTask ? { task: stepTask } : isFirst && fallbackTask ? { task: fallbackTask } : {}),
 		...(config.output !== undefined ? { output: config.output } : {}),
 		...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
@@ -967,15 +972,15 @@ export function registerSlashCommands(
 	};
 
 	pi.registerCommand("run", {
-		description: "Run a prompt-defined child: /run description[tier=standard] task [--bg]",
+		description: "Run an async prompt-defined child; add --foreground to wait inline",
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
+			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--bg]", "error"); return; }
+			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--foreground]", "error"); return; }
 			const { name: description, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
-			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--bg]", "error"); return; }
+			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--foreground]", "error"); return; }
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
@@ -985,33 +990,35 @@ export function registerSlashCommands(
 			if (inline.output !== undefined) params.output = inline.output;
 			if (inline.outputMode !== undefined) params.outputMode = inline.outputMode;
 			if (inline.skill !== undefined) params.skill = inline.skill;
-			if (bg) params.async = true;
+			if (async !== undefined) params.async = async;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run prompt-defined children in sequence: /chain inspect \"task\" -> implement [--bg]",
+		description: "Run prompt-defined children as an async sequence; add --foreground to wait inline",
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
+			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const built = buildChainExpressionSteps(state, cleanedArgs, ctx);
 			if (!built) return;
 			const params: SubagentParamsLike = { chain: built.chain, task: built.task, clarify: false };
-			if (bg) params.async = true;
+			if (async !== undefined) params.async = async;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run prompt-defined children in parallel: /parallel inspect \"task1\" -> review \"task2\" [--bg]",
+		description: "Run prompt-defined children async in parallel; add --foreground to wait inline",
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
+			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
 			if (!parsed) return;
 			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
 				description: name,
 				permissions: config.permissions ?? "full" as const,
-				tier: config.tier,
+				...(config.tier ? { tier: config.tier } : {}),
+				...(config.model ? { model: config.model } : {}),
+				...(config.thinking ? { thinking: config.thinking } : {}),
 				task: stepTask ?? parsed.task,
 				...(config.output !== undefined ? { output: config.output } : {}),
 				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
@@ -1019,9 +1026,10 @@ export function registerSlashCommands(
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
-			if (tasks.some((task) => !task.tier)) { ctx.ui.notify("Every parallel child requires [tier=light|standard|heavy].", "error"); return; }
+			if (tasks.some((task) => !task.tier && !task.model)) { ctx.ui.notify("Every parallel child requires [tier=light|standard|heavy] or [model=provider/id].", "error"); return; }
+			if (tasks.some((task) => task.tier && task.model)) { ctx.ui.notify("Each parallel child must choose exactly one of tier or model.", "error"); return; }
 			const params: SubagentParamsLike = { tasks, clarify: false };
-			if (bg) params.async = true;
+			if (async !== undefined) params.async = async;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});

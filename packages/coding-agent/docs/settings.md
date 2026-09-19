@@ -55,6 +55,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `externalEditor` | string | `$VISUAL`, then `$EDITOR`, then Notepad on Windows or `nano` elsewhere | Command for Ctrl+G external editor; takes precedence over environment variables |
 | `quietStartup` | boolean | `false` | Hide startup header |
 | `smoothStreaming` | boolean | `false` | Reveal streamed responses grapheme by grapheme (~30 FPS). Interactive TUI only |
+| `subagentSpinner` | string | `"braille"` | Foreground and async running child indicator: `"braille"`, `"orbit"`, `"snake"`, or `"sparkle"` |
 | `thinkingCollapse` | boolean | `true` | Collapse completed thinking blocks to a short label plus the first sentence |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
@@ -68,7 +69,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `confirmLargeSubagentLaunches` | boolean | `true` | Ask once before aggregate launches of three or more children outside Auto mode |
 | `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |
 | `trackingId` | string | - | Analytics tracking identifier, generated when `enableAnalytics` is turned on |
-| `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
+| `doubleEscapeAction` | string | `"tree"` | Idle action for double-escape: `"tree"`, `"fork"`, or `"none"`. Active async subagents take priority: double-Escape requests their stop |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
 | `outputPad` | number | `1` | Horizontal padding for user messages, assistant messages, and thinking (0 or 1) |
@@ -238,7 +239,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerPlanBar` | boolean | `true` | Show the █░ fill; off keeps the percent only |
 | `planUsageWindow` | string | `"5h"` | Preferred plan window: `"5h"` or `"weekly"`. Missing 5h falls back to weekly |
 
-Customize these from `/settings` → Customize as well.
+Customize these from `/settings` → Customize as well. The same menu controls `subagentSpinner` with an animated preview.
 
 ### Cron, rollback, subscriptions
 

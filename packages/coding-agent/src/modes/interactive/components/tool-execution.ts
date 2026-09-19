@@ -309,6 +309,15 @@ export class ToolExecutionComponent extends Container {
 		if (this.result === undefined || this.isPartial || this.expanded) {
 			return false;
 		}
+		// lunr: collapsed finished subagent cards still show the compact row when a child
+		// result exists. Async launch receipts (empty results) stay header-only.
+		if (this.toolName === "subagent") {
+			const details = this.result.details as { mode?: string; results?: unknown[] } | undefined;
+			if (this.result.isError) return false;
+			if (Array.isArray(details?.results) && details.results.length > 0) return false;
+			if (details?.mode === "management") return false;
+			return true;
+		}
 		// lunr: collapsed mid-group errors stay header-only so the same-name
 		// tree is not split; the last card hoists those bodies underneath.
 		if (this.result.isError) {

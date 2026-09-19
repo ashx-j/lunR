@@ -183,6 +183,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				if ((parsed as { type?: unknown }).type !== "subagent.control") return;
 				const record = parsed as { event?: ControlEvent; channels?: string[]; childIntercomTarget?: string; noticeText?: string; intercom?: { to?: string; message?: string } };
 				if (!record.event || !Array.isArray(record.channels)) return;
+				if (record.event.reason === "completion_guard") return;
 				const payload = {
 					event: record.event,
 					source: "async" as const,
@@ -377,8 +378,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 			}
 
-			const timerNeedsPaint = [...state.asyncJobs.values()].some((job) => job.status === "running");
-			if ((widgetChanged || timerNeedsPaint) && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+			if (widgetChanged && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};

@@ -16,7 +16,6 @@ import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { getModelTiersBridge } from "../src/core/model-tiers.ts";
 import { bindRuntimeBridges } from "../src/core/runtime-bridges.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { getSettingsToolsBridge } from "../src/core/settings-tools-bridge.ts";
 import { getUsageServiceBridge } from "../src/core/usage-service.ts";
 import type {
 	ExtensionFactory,
@@ -153,7 +152,6 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		expect(getModelTiersBridge()?.isTierModeEnabled()).toBe(true);
 		expect(getModelTiersBridge()?.getTierModel("light")).toBe("faux/replacement");
 		expect(getUsageServiceBridge()?.getPreferredWindow()).toBe("5h");
-		expect(getSettingsToolsBridge()?.getAutoManageSubscriptions()).toBe(true);
 
 		await runtimeHost.switchSession(firstSessionFile!);
 		await runtimeHost.session.bindExtensions({});

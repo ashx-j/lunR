@@ -5,7 +5,7 @@ import { randomUUID } from "crypto";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { IntercomClient } from "./broker/client.ts";
-import { spawnBrokerIfNeeded } from "./broker/spawn.ts";
+import { isNativeSupervisorChannelActive, spawnBrokerIfNeeded } from "./broker/spawn.ts";
 import { SessionListOverlay } from "./ui/session-list.ts";
 import { ComposeOverlay, type ComposeResult } from "./ui/compose.ts";
 import { InlineMessageComponent } from "./ui/inline-message.ts";
@@ -366,7 +366,7 @@ function duplicateSessionNames(sessions: SessionInfo[]): Set<string> {
 function shortSessionId(sessionId: string): string {
   return sessionId.slice(0, 8);
 }
-function parseSubagentIntercomPayload(payload: unknown): { to: string; message: string; requestId?: string } | null {
+function parseSubagentIntercomPayload(payload: unknown): { to: string; message: string; requestId?: string; ownerNotificationSessionId?: string } | null {
   if (typeof payload !== "object" || payload === null) {
     return null;
   }
@@ -375,7 +375,8 @@ function parseSubagentIntercomPayload(payload: unknown): { to: string; message: 
     return null;
   }
   const requestId = typeof record.requestId === "string" ? record.requestId : undefined;
-  return { to: record.to, message: record.message, ...(requestId ? { requestId } : {}) };
+  const ownerNotificationSessionId = typeof record.ownerNotificationSessionId === "string" ? record.ownerNotificationSessionId : undefined;
+  return { to: record.to, message: record.message, ...(requestId ? { requestId } : {}), ...(ownerNotificationSessionId ? { ownerNotificationSessionId } : {}) };
 }
 function resolveIntercomPresenceName(sessionName: string | undefined, sessionId: string): string {
   const trimmedName = sessionName?.trim();
@@ -944,6 +945,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     agentRunning = false;
     activeTools.clear();
     startNamePoll();
+    if (isNativeSupervisorChannelActive()) {
+      return;
+    }
     const startupGeneration = runtimeGeneration;
     startupConnectTimer = setTimeout(() => {
       startupConnectTimer = null;
@@ -967,6 +971,8 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       ...(error ? { error: getErrorMessage(error) } : {}),
     });
   }
+  const resultDeliveries = new Map<string, Promise<boolean>>();
+  const acknowledgedResults: string[] = [];
   function relaySubagentIntercomPayload(payload: unknown, options: {
     sender: "subagent-control" | "subagent-result";
     status: string;
@@ -977,54 +983,54 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     if (!parsed) return;
 
     const relayGeneration = runtimeGeneration;
-    void (async () => {
-      const relayStillLive = () => !runtimeStarted || Boolean(getLiveContext(runtimeContext, relayGeneration));
-      if (!relayStillLive()) {
-        return;
-      }
-      if (currentSessionTargetMatches(parsed.to)) {
-        deliverLocalSubagentRelayMessage(options.sender, options.status, parsed.message);
-        if (options.acknowledge) emitResultDelivery(parsed.requestId, true);
-        return;
-      }
-
-      let activeClient: IntercomClient;
-      let target: string;
-      try {
-        activeClient = await ensureConnected("background");
-        target = await resolveSessionTarget(activeClient, parsed.to) ?? parsed.to;
-      } catch (error) {
-        if (!relayStillLive()) return;
-        recordSubagentDeliveryError(options.errorEntryType, parsed.to, parsed.message, error);
-        if (options.acknowledge) emitResultDelivery(parsed.requestId, false, error);
-        return;
-      }
-
-      if (!relayStillLive()) {
-        return;
-      }
-      if (currentSessionTargetMatches(parsed.to, target, activeClient)) {
-        deliverLocalSubagentRelayMessage(options.sender, options.status, parsed.message);
-        if (options.acknowledge) emitResultDelivery(parsed.requestId, true);
-        return;
-      }
-
-      try {
-        const result = await activeClient.send(target, { text: parsed.message });
-        if (!relayStillLive()) return;
-        if (!result.delivered) {
-          const error = new Error(result.reason ?? "Session may not exist or has disconnected.");
-          recordSubagentDeliveryError(options.errorEntryType, parsed.to, parsed.message, error);
-          if (options.acknowledge) emitResultDelivery(parsed.requestId, false, error);
-          return;
+    const deliverLocal = () => {
+      const ctx = getLiveContext(runtimeContext, relayGeneration);
+      const ownerSessionId = ctx?.sessionManager.getSessionFile?.() ?? ctx?.sessionManager.getSessionId();
+      // The owner already receives subagent-notify; keep the relay ACK without another model message.
+      if (options.sender === "subagent-result" && ownerSessionId && parsed.ownerNotificationSessionId === ownerSessionId) return;
+      deliverLocalSubagentRelayMessage(options.sender, options.status, parsed.message);
+    };
+    const key = options.acknowledge && parsed.requestId ? `${relayGeneration}:${parsed.requestId}` : undefined;
+    let delivery = key ? resultDeliveries.get(key) : undefined;
+    if (!delivery) {
+      delivery = (async () => {
+        const relayStillLive = () => !runtimeStarted || Boolean(getLiveContext(runtimeContext, relayGeneration));
+        try {
+          if (!relayStillLive()) return false;
+          if (currentSessionTargetMatches(parsed.to)) {
+            deliverLocal();
+            return true;
+          }
+          const activeClient = await ensureConnected("background");
+          const target = await resolveSessionTarget(activeClient, parsed.to) ?? parsed.to;
+          if (!relayStillLive()) return false;
+          if (currentSessionTargetMatches(parsed.to, target, activeClient)) {
+            deliverLocal();
+            return true;
+          }
+          const result = await activeClient.send(target, { text: parsed.message });
+          if (!result.delivered) throw new Error(result.reason ?? "Session may not exist or has disconnected.");
+          return true;
+        } catch (error) {
+          if (relayStillLive()) recordSubagentDeliveryError(options.errorEntryType, parsed.to, parsed.message, error);
+          return false;
         }
-        if (options.acknowledge) emitResultDelivery(parsed.requestId, true);
-      } catch (error) {
-        if (!relayStillLive()) return;
-        recordSubagentDeliveryError(options.errorEntryType, parsed.to, parsed.message, error);
-        if (options.acknowledge) emitResultDelivery(parsed.requestId, false, error);
+      })();
+      if (key) {
+        resultDeliveries.set(key, delivery);
+        void delivery.then((delivered) => {
+          if (!delivered) {
+            if (resultDeliveries.get(key) === delivery) resultDeliveries.delete(key);
+            return;
+          }
+          acknowledgedResults.push(key);
+          while (acknowledgedResults.length > 1024) resultDeliveries.delete(acknowledgedResults.shift()!);
+        });
       }
-    })();
+    }
+    void delivery.then((delivered) => {
+      if (options.acknowledge) emitResultDelivery(parsed.requestId, delivered);
+    });
   }
   const unsubscribeSubagentControlIntercom = pi.events.on(SUBAGENT_CONTROL_INTERCOM_EVENT, (payload) => {
     relaySubagentIntercomPayload(payload, {
@@ -1169,7 +1175,8 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   });
 
   const childOrchestratorMetadata = readChildOrchestratorMetadata();
-  if (childOrchestratorMetadata) {
+  const nativeSupervisorChannel = isNativeSupervisorChannelActive();
+  if (childOrchestratorMetadata && !nativeSupervisorChannel) {
     pi.registerTool({
       name: "contact_supervisor",
       label: "Contact Supervisor",
@@ -1431,7 +1438,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     } as any);
   }
 
-  pi.registerTool({
+  if (!nativeSupervisorChannel) pi.registerTool({
     name: "intercom",
     label: "Intercom",
     description: `Send a message to another pi session running on this machine.

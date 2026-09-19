@@ -1,277 +1,234 @@
-# Native computer use
+# Image-only computer use
 
-This implementation is available through the experimental `@ashx-j/lunr-dev`
-channel, based on stable lunR 0.2.19 plus PR #77. Install with
-`npm i -g @ashx-j/lunr-dev`, then run `lunr-dev`. Stable `@ashx-j/lunr` is unchanged.
-This is not production support certification. Windows
-MCP metadata interoperability and local runtime/lifecycle tests pass. The macOS
-launch path is implemented but has not run on macOS hardware. Neither platform
-has passed live desktop acceptance. Production publication remains blocked.
+This dev-channel integration combines stable lunR 0.2.21 with image-only computer
+use. Verification is pending user permission. No tests, builds, runtime probes,
+desktop actions, provider requests, publication, or installation have run for this
+integration. Production publication remains blocked. Smooth cursor animation is
+not included.
 
-## Local setup
+The dev package is `@ashx-j/lunr-dev`, with command `lunr-dev` and update command
+`lunr-dev update`. Stable `@ashx-j/lunr` and `lunr` remain separate. Both commands
+share `~/.lunr/agent` credentials, settings, and sessions.
 
-Run `/computer setup` in the local lunR terminal. It verifies and installs the
+## Setup and permissions
+
+Run `/computer setup` in the local lunR terminal. Setup verifies and installs the
 bundled runtime without downloading code, capturing the screen, or operating an
-application. Setup is user-invoked and unavailable from gateway or headless
-sessions.
+application. It is unavailable in headless and gateway sessions.
 
-On Windows, keep the desktop logged in and unlocked. On macOS, setup prints the
-exact installed `CuaDriver.app` path. Add that app under System Settings > Privacy
-& Security to both Accessibility and Screen & System Audio Recording, named
-Screen Recording on older macOS versions. Enable both grants, then restart lunR.
-These OS grants require the user; Auto mode cannot supply them. Setup never
-selects or changes an existing `/Applications/CuaDriver.app` installation.
-
-Complete setup before assigning GUI tasks through cron or the gateway. A setup
-success verifies the runtime files, not permission grants or desktop behavior.
-
-## Tools and permissions
+Windows needs an active, unlocked desktop. On Apple Silicon macOS, setup prints
+the exact installed `CuaDriver.app` path. Add that app to Accessibility and
+Screen & System Audio Recording in System Settings > Privacy & Security, then
+restart lunR. Older macOS versions call the second grant Screen Recording.
+Only the user can grant these permissions. Setup leaves an existing
+`/Applications/CuaDriver.app` alone.
 
 Computer use and Allow foreground control default to on. Windows x64/arm64 and
-Apple Silicon macOS expose `computer_load` before the first model request.
-The runtime loads only when a desktop operation needs it. Linux and Intel macOS
-have no default discovery tool.
+Apple Silicon expose `computer_load`; detailed tools load on demand. Linux and
+Intel macOS have no native discovery tool. All computer tools except release
+require an image-capable model. There is no text-only accessibility fallback.
+Gateway sessions operate the gateway host, not the chat client's device.
 
-Loading activates app/window discovery, accessibility and image observation,
-single/right/double clicks, complete drags, scrolling, keys and modifier
-shortcuts, Unicode text, app launch, window management, and workflow release.
-Use these tools on the computer running lunR. Gateway sessions control the
-gateway host, not the Telegram or Discord client's machine.
+Manual approves observation and input. `computer_end` releases without approval.
+Plan allows relevant observation and release, but blocks mutation. Auto allows
+requested, implied, or necessary GUI work without lunR per-call prompts. In
+Yolo, ask before introducing GUI work into an otherwise non-GUI task. These
+intent rules are agent guidance, not a natural-language authorization classifier.
 
-Prefer accessibility and background window input. Request window foreground
-input only after a background failure and a fresh observation. Primary-desktop
-input has no background route and requires `desktop=true` and `foreground=true`.
-Foreground off blocks desktop input, explicit foreground window input, app
-launches, and every window-management operation. Background delivery cannot
-prevent an application from changing its own focus.
+Prefer background window input. Foreground window input requires a verified
+background failure and a fresh image. Desktop input requires `desktop=true` and
+`foreground=true`. Disabling foreground control blocks desktop input, foreground
+window input, launch, and window management. An application can still change its
+own focus after background input.
 
-`computer_window` requires an exact window target and has no per-call foreground
-or desktop option. It moves/resizes with `action=frame`, or activates the exact
-window with `action=focus`. Minimize/restore invokes the supplied, freshly
-observed accessibility window-control element. The pinned driver has no portable
-minimize/restore RPC. If the control or minimized window cannot be observed, use
-freshly observed desktop controls rather than guessing a shortcut or window id.
-Text and keys can target an accessibility element, window-image coordinates,
-or the observed focused field. Desktop keyboard input targets the observed
-focused field; changing focus needs a separate grounded click.
+Native tools are excluded from children and refuse child execution. Children
+with shell access are not OS-sandboxed. No raw driver administration, update,
+recording, or permission tool is exposed.
 
-Manual asks before every computer call except `computer_end`, which only releases
-the workflow and never needs approval. Observation still requires approval.
-Plan permits relevant observation and workflow release but blocks mutation. Auto needs no
-lunR per-call prompt for requested, implied, or necessary GUI work. In Yolo,
-ask first when an otherwise non-GUI task newly requires GUI. This intent rule
-is agent guidance, not a natural-language authorization classifier.
+## Observe, act, inspect
 
-Native tools are excluded from children and also refuse child execution.
-Shell-capable children are not OS-sandboxed. No generic MCP registration or
-raw driver policy, update, recording, or administrative tool is exposed.
+1. Use `computer_apps` for app identities or windows for a PID. Results allowlist
+   at most 50 rows and truncate titles to 240 characters. Pass `next_offset` as
+   `offset` with the same PID selection to retrieve more apps or windows. Lists
+   refresh per call, so changing native order can shift page boundaries. PID zero
+   identifies an installed app that is not running. Window `bounds` are native
+   geometry, not screenshot coordinates.
+2. Use `computer_observe` with an exact `pid` and `window_id`, or `desktop=true`.
+   The result contains one image and a short coordinate/token record.
+3. Choose one action from that image. Pass its `observation` token and coordinates
+   in the returned image. The workflow applies the mapping; do not scale twice.
+4. Inspect the post-action image before continuing. The tool executes one action
+   and captures the same target once. It never polls or retries input internally.
+5. Call `computer_end` when finished.
 
-## Grounding and outcomes
+The token lasts 30 seconds, belongs to one exact target, and permits one action.
+Every new observation invalidates the previous token before capture. Failed,
+cancelled, or malformed captures issue no token. Old tokens cannot be replayed,
+including after a successful action returns a new image.
 
-Each observation invalidates the previous token before contacting the driver.
-A token identifies one exact window or the primary desktop, expires after thirty
-seconds, and permits one action. Accessibility input includes the driver's
-snapshot id. Structured refusals count as refusals even without MCP `isError`.
-Partial and unverifiable outcomes remain visible; transport success is not
-proof of an application change.
+Supported input is single, double, and right click with modifiers, a complete
+press-drag-release gesture, scrolling at image coordinates, Unicode text, and
+keys or modifier shortcuts. Window text/keys can use image coordinates or the
+observed focused field. Desktop text/keys use the observed focused field only;
+change focus with a separate grounded click.
 
-Window PNGs are capped by the driver at 1024 pixels on their long edge.
-Window coordinates use that returned image, without another resize. Both pinned
-platform implementations retain the capture resize ratio for later pixel input.
-The adapter checks PNG dimensions and refuses inconsistent pixel grounding. Desktop
-images are resized to at most 1024 pixels locally. Their token records separate
-x/y ratios back to the driver's native desktop image. Coordinates outside the
-returned image are rejected. Pixel and desktop operations require an
-image-capable current model; accessibility-only observation remains available.
+`computer_window` supports `frame` in native window-bounds units and `focus` on
+an exact observed window. Minimize/restore uses a grounded image click on a
+visible control. The pinned driver has no portable minimize/restore RPC.
+`computer_launch` returns bounded app metadata, not an inferred input target;
+capture an exact window before acting.
 
-Observe after every action. A timeout or cancelled call may already have
-changed the application. Never retry input blindly. Cancelling the MCP request
-does not retract input already delivered to the OS. Normal shutdown asks the
-owned runtime to drain and exit; forced process termination cannot prove that
-all held input was released. Live gesture cancellation remains an acceptance
-gate.
+A successful transport or a changed image does not prove the intended application
+effect. Results preserve partial/unverifiable outcomes and bounded refusal codes.
+When input returns but its post-image fails, the tool reports possible effects
+and stops the workflow. Capture again before deciding; never repeat input blindly.
+After an unchanged post-image, the same action against identical captured pixels
+is refused. Click signatures normalize omitted left-button/single-click/empty
+modifier defaults and modifier order. Three consecutive unchanged full observations
+stop polling in that workflow. Crops are explicit requests, not an automatic retry loop.
 
-## Ownership and lifecycle
+Partial typing retains validated `requested_chars`, `delivered_chars`, `retryable`,
+and `retry_from_character` when supplied by the driver. Counts must be safe integers
+within the submitted text's Unicode code-point length, capped at 20000; the retry
+index must equal the delivered count. The index is zero-based in Unicode code
+points, not UTF-16 units. Verify the field in a fresh image before considering a
+remaining suffix. `retryable` is driver advice, not permission or proof that
+repeating input is safe. The workflow never retries typing automatically.
 
-An OS-account lease holds the desktop across observe/action calls. Competing
-workflows get busy rather than queueing; calls within one workflow serialize.
-The lease uses the OS account home, not the selected lunR settings profile.
-One short cross-process acquisition lock protects creating, updating, and deleting
-the owner record. Updates replace the file atomically. Runtime installation uses
-a separate lock and never replaces an existing runtime. A live owner is never displaced because its heartbeat is late.
-After MCP initialization and before any driver tool call, the adapter records
-the transport PID and, on macOS, the daemon PID in that lease. Missing PIDs or
-failure to record ownership block tool dispatch. Driver-internal helper lifetime
-remains part of the unverified native shutdown acceptance gates.
-A crash during initialization can leave an unrecorded, idle runtime, but it has
-received no desktop action. Recovery requires both the owner and its recorded
-runtimes to have exited.
-PID reuse can conservatively leave the desktop busy rather than kill another
-process. A malformed owner record also fails closed.
+## Image contract and cost limits
 
-`computer_end`, cancellation, agent end, settings changes, and session shutdown
-close the owned runtime before releasing its lease. Queued operations cannot
-survive cancellation. Settings disable removes active tools immediately;
-session replacement discards loaded tools and grounding. The first-request
-hook also reapplies the loaded roster after extension registration refreshes it.
-If shutdown cannot be confirmed, the lease stays held. Confirm that the owned
-runtime has stopped before restarting the owning lunR process.
+Window capture requests `include_accessibility_tree:false` and
+`include_screenshot:true`. Neither native accessibility trees nor duplicate raw
+JSON reach the model. The macOS driver still reads minimal native accessibility
+facts for window identity and background-input safety. Windows window discovery
+can use UIA as a fallback. Image-only describes application observation sent to
+the model, not the removal of every native accessibility API call.
 
-Fresh gateway cron sessions get explicit permission contexts from the configured
-default mode. They inherit neither gateway approvals nor its interactive
-approval handler. Missing approval reports blocked. Session shutdown runs before
-context disposal, including partial extension-bind failure. TUI cron continues
-to use its live session mode.
+Window capture requests a 2560-pixel maximum. The runtime can impose a lower
+configured ceiling, so this is not a promised capture resolution. The workflow
+checks actual PNG dimensions against native screenshot metadata and rejects
+invalid frames. Primary-desktop capture is tree-free and uses the native PNG.
+Desktop coordinates map back to that PNG once; macOS `scale_factor` is not an
+additional multiplier.
 
-## Runtime and packaging
+Returned images have a maximum 1280-pixel edge, one million pixels, and 1.5 MiB
+of base64 payload. The existing image processor bounds dimensions and encoding
+size. The workflow refuses images it cannot decode or map. Source PNGs also have
+allocation limits. These are engineering bounds, not measured token savings.
+
+For small text or controls, request `crop:{x,y,width,height}` with the latest
+observation token. The rectangle uses that returned image's pixels. The workflow
+captures fresh pixels, maps the rectangle into the full capture, and sends only
+the crop. Its record gives the source dimensions, crop offset, and separate x/y
+ratios. Changed source dimensions or reported window bounds reject the crop;
+request a full image again. Cropping cannot recover detail absent from the native
+capture. Post-action captures return the full target so dialogs outside a crop
+remain visible.
+
+Saved sessions retain the returned screenshots. Provider-facing screenshot
+history also accumulates until normal compaction. This change does not prune
+user images, rewrite saved sessions, or implement a generic rolling history
+filter. A targeted `context` hook could remove old computer screenshots while
+leaving sessions intact, but a rolling cutoff changes an earlier prompt prefix
+and can invalidate cached input. That tradeoff needs approved provider measurements
+before adopting a retention policy. Image-only is not automatically cheaper than
+text. Current cost controls bound each new payload, remove tree/JSON duplication,
+and combine one action with its post-image.
+
+## Cursor status
+
+Cursor animation remains a separate native-runtime decision. The inherited
+runtime launch still uses `--no-overlay`. Upstream Windows drag animation uses a
+timer separate from actual input, and desktop pointer movement can teleport.
+This branch does not claim smooth actual-cursor motion or synchronized drag
+feedback. Any eventual animation must stay local, preserve full gestures and
+cancellation, and send zero intermediate frames to the model.
+
+## Ownership and cancellation
+
+An OS-account lease spans observations and actions, independent of settings
+profiles. Competing workflows receive busy rather than queueing. Calls within a
+workflow serialize. One cross-process lock covers creation, atomic replacement,
+and deletion of the owner record. A separate lock protects runtime installation.
+A live owner is not displaced because its heartbeat is late.
+
+After MCP initialization and before any driver tool dispatch, the adapter records
+the transport PID and, on macOS, daemon PID. Missing identities or failed lease
+updates refuse dispatch. Recovery requires both owner and recorded runtimes to
+have exited. PID reuse and malformed owner records fail closed. A crash during
+initialization can leave an unrecorded idle runtime that received no input.
+
+Release, cancellation, agent end, settings changes, and session shutdown close
+the owned runtime before releasing the lease. Queued work cannot survive
+cancellation. Unconfirmed shutdown retains ownership. Cancellation cannot retract
+already delivered input, and forced termination does not prove held input was
+released. Driver-internal helper lifetime and held-input cancellation still need
+native acceptance.
+
+Gateway cron creates fresh permission contexts with the configured default mode,
+without gateway approvals or its approval handler. Missing approval blocks calls.
+Session shutdown precedes disposal, even after partial extension binding failure.
+TUI cron continues to use its live permission context.
+
+## Runtime and distribution
 
 The development pin is [CuaDriver 0.28.1](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.1),
-source `d8028a7943087ee258dc1b4d19dc12a7cd27669c`. This exact prerelease and its
-three archive hashes are approved for development-channel distribution only.
-`scripts/computer-use-release.json` is the authoritative archive inventory.
-The upstream MIT license is included under `native/computer-use`.
+source `d8028a7943087ee258dc1b4d19dc12a7cd27669c`. Archive identities and approval
+are in `scripts/computer-use-release.json`; `release.generated.ts` derives from
+it. The upstream MIT license is under `native/computer-use`. No runtime pin or
+native binary changed in the image-only workflow work.
 
-The runtime never downloads an executable. It resolves the host's optional
-payload package, or the matching archive beside a standalone binary. It verifies that archive,
-extracts a fresh reference tree, and checks every cached file and helper against
-that tree before execution. Redirected install paths and escaping symlinks are
-rejected. Concurrent installers do not overwrite each other. A modified or
-older cache is refused rather than overwritten. After confirming no runtime is
-active, remove the inactive lunR runtime directory to reinstall it.
+The runtime resolves the host's optional payload package or matching archive
+beside a standalone executable. It verifies the archive, extracts a fresh
+reference tree, and checks cached files/helpers against it. Redirected paths and
+escaping symlinks are refused. Installers do not overwrite an existing runtime.
+After confirming all owned processes stopped, an inactive cache can be removed
+for reinstallation. Runtime code is never downloaded at first use.
 
-Windows uses the system `tar.exe`, not a `PATH`-selected extractor, and launches
-`mcp --direct --embedded --no-overlay`. A bounded, hidden system PowerShell
-helper checks WTS session activity and the input desktop name before admission.
-It refuses session zero, disconnected sessions, and a non-Default or inaccessible
-input desktop. It reads metadata only and never switches desktops. The isolated
-runtime profile avoids the user's Cua config. Both platforms remove inherited `CUA_*` settings and explicitly
-set standard permission mode, disable unrestricted mode, and set
-`CUA_DRIVER_RS_TELEMETRY_ENABLED=false` and `CUA_DRIVER_RS_UPDATE_CHECK=false`.
+Windows uses system `tar.exe` and an isolated `mcp --direct --embedded
+--no-overlay` process. A hidden system PowerShell metadata probe refuses session
+zero, disconnected sessions, and inaccessible/non-Default input desktops. It
+never switches desktops. Both platforms isolate profiles, strip inherited
+`CUA_*`, set standard permission mode, and disable telemetry/update checks.
 
-macOS preserves the signed `CuaDriver.app` at the stable lunR-owned path
-`~/.lunr/desktop/runtime-darwin-arm64/CuaDriver.app` and verifies its signature
-with `codesign --verify --deep --strict`. It never re-signs the bundle.
-LaunchServices selects that exact app path with `open -n -g -W -a`, not its
-shared bundle id or the user's `/Applications` installation. Explicit `--env`
-arguments pass telemetry/update/permission settings and a private HOME to the
-daemon. The private HOME also isolates the upstream default PID/config files.
-A private Unix socket carries the MCP proxy connection. A private stdin FIFO
-and the pinned `--parent-liveness-stdio` option tie daemon lifetime to lunR.
-Shutdown uses the private endpoint's PID-bound request and waits for the owned
-app to exit. Startup and shutdown have time limits. These construction and
-cleanup paths have local tests, not macOS execution evidence.
+macOS preserves the unchanged signed app at its stable lunR-owned path, verifies
+its signature with `codesign --verify --deep --strict`, and launches that exact
+path through `open -n -g -W -a`. A private HOME, socket, stdin FIFO, and
+`--parent-liveness-stdio` isolate daemon state and lifetime. Shutdown uses the
+private PID-bound endpoint and waits for the app to exit. No re-signing occurs.
 
-Release staging creates `@ashx-j/lunr-computer-win32-x64`,
-`@ashx-j/lunr-computer-win32-arm64`, and
-`@ashx-j/lunr-computer-darwin-arm64`. Each package contains one unchanged archive,
-the MIT license, and a manifest with `os` and `cpu`. There are no install scripts.
-The payload packages follow the CLI release version, independently of the upstream
-runtime version. The staged CLI declares exact optional versions. npm installs
-only the matching payload; `--ignore-scripts` works. Missing optional dependencies
-leave the CLI usable and produce a reinstall instruction when computer use needs
-the runtime. Unsupported hosts have no native discovery tool.
+Release staging creates exact-version host-specific optional payload packages.
+They contain unchanged archives and no install scripts. Workspace manifests keep
+unpublished payload dependencies out. Standalone asset copying selects one
+opaque archive. Stable publication remains gated on production approval and a
+new CLI version. This integration retains dev-channel CLI naming, update routing,
+and exact-version package/lock rewriting. Dev publication uses `latest` only for
+`@ashx-j/lunr-dev`; shared libraries and payload packages use the `dev` tag. Stable
+tags remain unchanged. The user requested a dev-channel update and installation,
+but verification, publication, and installation are still pending.
 
-The CLI tarball is about 10.7 MB, without runtime archives. Packed payload sizes
-are about 28.8 MB for Windows x64, 27.2 MB for Windows arm64, and 69.8 MB for
-Apple Silicon. These are decimal sizes, not extracted runtime sizes.
+## Pending acceptance
 
-Workspace manifests and locks keep unpublished native dependencies out of
-ordinary developer installs. `scripts/publish.mjs` injects them into the staged
-CLI shrinkwrap and standalone installer lock. Public lock rewriting updates both
-package names and tarball filenames. Publication validates all seven packages,
-then publishes payloads before the CLI. Dev staging uses exact
-`0.2.19-dev.<run>.<attempt>` versions throughout package manifests, shrinkwrap,
-and installer locks. It publishes `@ashx-j/lunr-dev` with its own `latest` tag;
-shared libraries and runtime payloads use `dev` tags. Stable tags stay unchanged.
-Production publication still requires separate approval and an unpublished
-stable CLI version.
+Source tests cover image-only capture flags, metadata allowlists, image/crop
+mapping, fresh tokens, single-action post-images, bounded unchanged behavior,
+uncertain outcomes, permissions, and ownership. Source-review fixes add equivalent
+click defaults, app/window pagination, and Unicode partial-typing recovery coverage.
+All tests remain written but unexecuted; review fixes are not runtime verification.
+The supported-host first-request schema fingerprint and effective prompt/tool
+inventory must be regenerated after verification is approved. Do not treat the
+inherited PR #77 fingerprint as current.
 
-`scripts/build-binaries.sh` and `copy-binary-assets` copy only the selected opaque
-archive into `native/computer-use` beside the executable. They preserve the macOS
-archive without extracting or signing it. Routine builds stay offline. Release
-preparation may fetch only the pinned official archives, then verifies their
-sizes and hashes. Stable npm and GitHub binary publication stop on the current
-development-only approval. The `dev/tui` workflow may publish the explicitly
-requested npm dev channel.
+Required later checks include focused source tests, offline package builds,
+first-request inventory, isolated packaging, and explicit authorized fixture
+desktop acceptance. Native gates include Windows locked/UAC/integrity states,
+Electron/native apps, display scaling and moved/resized windows, Unicode,
+held-input cancellation, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
+Cursor/runtime changes need a separate scoped decision before implementation.
 
-An installed payload package must match the CLI version. A CLI upgrade that keeps
-the same runtime bytes can reuse the verified cache. A changed or older cached
-runtime fails closed rather than replacing a possibly running app. After all
-owned processes stop, removing the inactive lunR runtime directory allows a fresh
-extraction at the same stable macOS path.
+## Privacy
 
-## Verification and remaining gates
-
-Local verification includes actual Windows initialize/tools/list and a
-metadata-only `health_report`, with capture and accessibility checks excluded.
-The binary reported 0.28.1 and 57 tools. Health results include human-readable
-text and `structuredContent`. Its `session_active` check reports MCP activity,
-not an unlocked or input-ready desktop. A separate real Windows metadata probe
-confirmed an active session and Default input desktop without screen, AX, or
-input calls. Snapshot identity and operation mapping
-were checked against the exact released tool schemas and source; no live
-snapshot was taken.
-
-Focused tests cover policy, result interpretation, image coordinate mapping,
-new GUI operation mapping, interrupted initialization, partial shutdown,
-settings/session tool rosters, real separate-process contention and death,
-orphan-runtime ownership, cache tampering, redirected paths, concurrent
-extraction, and the fresh gateway cron factory's approval/disposal lifecycle.
-The dev review passes 167 focused Vitest tests across 14 files and
-eight archive/package tests. All five offline production builds, including the
-coding-agent Node bundle, pass. Touched native TypeScript lint and the repository's
-relative-import, workflow-publication, browser-smoke, and diff checks pass.
-
-A loopback fixture registry served all seven public-name tarballs without changing
-their bytes. A fresh Windows install used `--ignore-scripts`, fetched only the host
-payload, then passed archive validation and first-paint/first-request fixtures
-after relocation. Separate npm installs selected the correct package for each
-supported OS/CPU combination and no package for Linux. An omitted-optional install
-returned the expected missing-payload error. The shipped installer lock passed
-`npm ci --ignore-scripts`. Standalone asset tests copied and rechecked all three
-opaque archives. No installed app or desktop operation ran in these packaging
-tests. Cross-platform npm selection on Windows is not macOS runtime acceptance.
-
-The first-request fixture strips inherited subagent environment state before
-checking the default tool inventory. The supported-host inventory includes only
-`computer_load`; detailed computer tools remain lazy. The unsupported-host
-baseline is unchanged.
-
-To repeat local distribution checks after the offline build, prepare the pinned
-archives with `scripts/bundle-computer-use.mjs`, create an empty temporary pack
-directory, then run:
-
-```sh
-node scripts/generate-computer-use-manifest.mjs --check
-node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs
-node scripts/publish.mjs --channel dev --version 0.2.19-dev.0.1 --dry-run --pack-dir /absolute/temporary/pack-directory
-node scripts/check-computer-use-install.mjs /absolute/temporary/pack-directory
-```
-
-The install checker uses a loopback registry for the local public packages and
-npm's public registry for external dependencies. It isolates npm configuration,
-cache, and install directories and removes them afterward. It does not publish.
-These checks do not certify desktop behavior.
-
-External acceptance gates remain:
-
-- Windows locked, disconnected, UAC, and integrity-state acceptance for the
-  metadata admission check and the actual driver.
-- Authorized native and Electron fixture desktops, Unicode, moved/resized
-  windows, display scaling, stale accessibility handles, application exit,
-  outcome verification, and cancellation during held input.
-- Real macOS signature/notarization, TCC, LaunchServices/FIFO environment,
-  coexistence, upgrade, and shutdown acceptance.
-- Real macOS and Windows arm64 runtime installation and launch. Their npm
-  selection and unchanged archive copying pass locally, but their hardware
-  execution and upgrades remain unverified.
-- Full standalone executable acceptance. Payload asset copying passes; this
-  verification did not compile and exercise every Bun target.
-
-## Privacy and rollback
-
-GUI actions are outside lunR's filesystem rollback. Images, accessibility text,
-and typed text can enter selected-provider requests and saved sessions.
-Disabling driver telemetry does not disable lunR session storage. Application
-content is untrusted task data, never authorization. OS permissions, locked
-desktops, UAC, and integrity restrictions still apply.
+Images, window titles, and typed text can enter selected-provider requests and
+saved sessions. Disabling driver telemetry does not disable lunR session storage.
+GUI changes are outside filesystem rollback. Application content is untrusted
+task data, never authorization. OS permissions, locked desktops, UAC, and
+integrity restrictions still apply.

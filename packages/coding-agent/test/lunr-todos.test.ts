@@ -45,29 +45,34 @@ describe("buildTodoWidgetLines", () => {
 		expect(lines.map((l) => l.text)).toEqual(["● now", "○ later"]);
 	});
 
-	test("collapsed: caps active rows and appends a hint line", () => {
-		const todos = [
-			todo("1", "a", "in_progress"),
-			todo("2", "b", "pending"),
-			todo("3", "c", "pending"),
-			todo("4", "d", "pending"),
-			todo("5", "e", "pending"),
-			todo("6", "done", "completed"),
-			todo("7", "done2", "completed"),
-		];
-		const lines = buildTodoWidgetLines(todos, false, "ctrl+o");
-		const rows = lines.filter((l) => l.kind === "todo");
-		expect(rows).toHaveLength(TODO_WIDGET_COLLAPSED_ROWS);
-		expect(rows.map((l) => l.text)).toEqual(["● a", "○ b", "○ c"]);
-		expect(lines.some((l) => l.kind === "summary")).toBe(false);
-		expect(lines.some((l) => l.kind === "hint" && l.text === "+2 more")).toBe(true);
+	test("collapsed: shows three active rows without a hint", () => {
+		const lines = buildTodoWidgetLines([todo("1", "a", "in_progress"), todo("2", "b"), todo("3", "c")], false);
+		expect(lines.map((line) => line.text)).toEqual(["● a", "○ b", "○ c"]);
 	});
 
-	test("collapsed: no hint when active rows fit", () => {
-		const todos = [todo("1", "a", "pending"), todo("2", "b", "pending")];
-		const lines = buildTodoWidgetLines(todos, false);
-		expect(lines.some((l) => l.kind === "hint")).toBe(false);
-		expect(lines.some((l) => l.kind === "summary")).toBe(false);
+	test("collapsed: shows all four active rows without a hint", () => {
+		const lines = buildTodoWidgetLines(
+			[todo("1", "a", "in_progress"), todo("2", "b"), todo("3", "c"), todo("4", "d")],
+			false,
+		);
+		expect(lines.map((line) => line.text)).toEqual(["● a", "○ b", "○ c", "○ d"]);
+	});
+
+	test("collapsed: five active items show three rows and +2 more", () => {
+		const todos = [
+			todo("1", "a", "in_progress"),
+			todo("2", "b"),
+			todo("3", "c"),
+			todo("4", "d"),
+			todo("5", "e"),
+			todo("6", "done", "completed"),
+		];
+		const lines = buildTodoWidgetLines(todos, false, "ctrl+o");
+		const rows = lines.filter((line) => line.kind === "todo");
+		expect(rows).toHaveLength(TODO_WIDGET_COLLAPSED_ROWS);
+		expect(rows.map((line) => line.text)).toEqual(["● a", "○ b", "○ c"]);
+		expect(lines.some((line) => line.kind === "summary")).toBe(false);
+		expect(lines.some((line) => line.kind === "hint" && line.text === "+2 more")).toBe(true);
 	});
 
 	test("collapsed: only completed items hide the widget", () => {
@@ -203,15 +208,15 @@ describe("lunr-todos extension", () => {
 		];
 		await h.toolDef().execute("c1", { todos }, null, null, h.ctx);
 		const collapsed = h.widgetLines();
-		expect(collapsed.filter((l) => l.startsWith("●") || l.startsWith("○"))).toHaveLength(3);
+		expect(collapsed.filter((l) => l.startsWith("●") || l.startsWith("○"))).toHaveLength(4);
 		expect(collapsed.some((l) => l === "✓ 1 done")).toBe(false);
-		expect(collapsed.some((l) => l.startsWith("+1 more"))).toBe(true);
+		expect(collapsed.some((l) => l.startsWith("+"))).toBe(false);
 
 		(globalThis as any)[BRIDGE]?.(true);
 		expect(h.widgetLines()).toEqual(["● a", "○ b", "○ c", "○ d", "✓ e"]);
 
 		(globalThis as any)[BRIDGE]?.(false);
-		expect(h.widgetLines().some((l) => l.startsWith("+1 more"))).toBe(true);
+		expect(h.widgetLines().some((l) => l.startsWith("+"))).toBe(false);
 	});
 
 	test("user message_start prunes completed items from the expanded widget", async () => {

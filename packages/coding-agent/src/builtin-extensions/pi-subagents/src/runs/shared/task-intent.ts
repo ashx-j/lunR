@@ -37,7 +37,7 @@ const REVIEWER_REQUIRED_EDIT_PATTERNS = [
 // The prohibition's object ends at punctuation or at a coordinating word
 // (but/and/then), so a follow-on clause like "but implement the fix" stays in
 // the text for write-intent testing instead of being swallowed as the object.
-const NO_EDIT_PROHIBITION_PATTERN = /\b(?:do not|don't|must not)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b((?:(?!\b(?:but|and|then)\b)[^.;,:!?\n–—-])*)/gi;
+const NO_EDIT_PROHIBITION_PATTERN = /\b(?:do not|don't|must not)\s+(?:implement|edit|modify|write(?:\s+to)?|touch|change)\b((?:(?!\b(?:but|and|then)\b)[^.;,:!?\n–—-])*)/gi;
 
 /** Objects of a no-edit prohibition that mean "the codebase in general" rather than a named scope. */
 const GENERIC_PROHIBITION_OBJECT = /^\s*(?:(?:any|all|the|these|those|your|our|existing|project|source|sources|repo|repository)[\s/,-]*)*(?:files?|code|codebase|sources?|anything|repo(?:sitory)?)?\s*$/i;
@@ -140,12 +140,8 @@ function hasImplementationIntent(taskText: string): boolean {
 		|| REVIEWER_REQUIRED_EDIT_PATTERNS.some((pattern) => pattern.test(taskText));
 }
 
-function isReadOnlyPermission(permissionsOrLegacyName: string | undefined): boolean {
-	return permissionsOrLegacyName === "read-only";
-}
-
-export function classifyTaskMutationIntent(permissionsOrLegacyName: string, task: string): TaskMutationIntent {
-	if (isReadOnlyPermission(permissionsOrLegacyName)) return { kind: "read-only" };
+export function classifyTaskMutationIntent(permissions: "full" | "read-only", task: string): TaskMutationIntent {
+	if (permissions === "read-only") return { kind: "read-only" };
 	const taskText = stripFrameworkInstructions(task);
 	const taskTextWithoutScopedConstraints = stripPatterns(taskText, SCOPED_NO_EDIT_CONSTRAINT_PATTERNS);
 	const prohibitions = analyzeNoEditProhibitions(taskTextWithoutScopedConstraints);
@@ -161,9 +157,8 @@ export function classifyTaskMutationIntent(permissionsOrLegacyName: string, task
 	return taskHasReadOnlyDeliverable(taskTextWithoutScopedConstraints) ? { kind: "read-only" } : { kind: "unknown" };
 }
 
-export function expectsImplementationMutation(permissionsOrLegacyName: string, task: string): boolean {
-	if (isReadOnlyPermission(permissionsOrLegacyName)) return false;
-	return classifyTaskMutationIntent(permissionsOrLegacyName, task).kind === "implementation";
+export function expectsImplementationMutation(permissions: "full" | "read-only", task: string): boolean {
+	return classifyTaskMutationIntent(permissions, task).kind === "implementation";
 }
 
 /** Bare write verbs that make a task write-capable for acceptance inference. */

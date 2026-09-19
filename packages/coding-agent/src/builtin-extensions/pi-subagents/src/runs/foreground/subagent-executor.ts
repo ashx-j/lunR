@@ -16,7 +16,7 @@ import { clearPendingForegroundControlNotices } from "../../extension/control-no
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
-import { buildModelCandidates, captureModelSelection, resolveEffectiveSubagentModel, resolveModelCandidate, resolveRequiredTierModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, captureModelSelection, resolveEffectiveSubagentModel, resolveExecutableChildModel, resolveModelCandidate } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
 import { recordRun } from "../shared/run-history.ts";
@@ -39,7 +39,7 @@ import { buildAsyncRunnerSteps, executeAsyncChain, executeAsyncSingle, formatAsy
 import type { ScheduledRunAction } from "../background/scheduled-runs.ts";
 import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOutputNames } from "../background/chain-append.ts";
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
-import { validateExecutionAcceptance } from "../shared/acceptance.ts";
+import { restorePersistedAcceptance, validateExecutionAcceptance } from "../shared/acceptance.ts";
 import { createForkContextResolver, forkedChildRequiresThinkingOff } from "../../shared/fork-context.ts";
 import { lunrContextPolicy } from "../../shared/lunr-child-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
@@ -69,7 +69,7 @@ import { attachRootChildrenToSteps, createNestedRoute, readNestedControlResults,
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
-import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
+import { subagentLaunchRunsAsync } from "../background/top-level-async.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -120,7 +120,7 @@ import {
 	wrapForkTask,
 } from "../../shared/types.ts";
 
-const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset", "watchdog.configure"]);
+const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset"]);
 interface TaskParam {
 	agent?: string;
 	task: string;
@@ -189,7 +189,6 @@ interface ExecutorDeps {
 	pi: ExtensionAPI;
 	state: SubagentState;
 	config: ExtensionConfig;
-	asyncByDefault: boolean;
 	waitToolEnabled?: boolean;
 	handleScheduledRunAction?: (params: SubagentParamsLike, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>;
 	watchdog?: MainWatchdogRuntime;
@@ -1236,32 +1235,49 @@ async function resumeAsyncRun(input: {
 	const artifactConfig: ArtifactConfig = recoveryDescriptor?.artifactConfig ?? { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false };
 	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile, effectiveCwd);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
+	let restoredAcceptance: ReturnType<typeof restorePersistedAcceptance> | undefined;
+	if (recoveryDescriptor?.acceptance !== undefined && input.params.acceptance === undefined) {
+		try {
+			restoredAcceptance = restorePersistedAcceptance(recoveryDescriptor.acceptance, "recoveryDescriptor.acceptance");
+		} catch (error) {
+			return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "management", results: [] } };
+		}
+	}
 	let recoverySpec: ChildSpec;
 	try {
+		const recoverySelection = recoveryDescriptor?.modelSelection ?? target.modelSelection;
+		const recoveryIsExplicitModel = recoverySelection?.kind === "model";
 		recoverySpec = normalizeChildSpec({
 			task: buildRevivedAsyncTask(target, followUp),
 			description: recoveryDescriptor?.description ?? target.description ?? target.agent,
 			permissions: recoveryDescriptor?.permissions ?? target.permissions ?? "read-only",
-			model: recoveryDescriptor?.model ?? target.model,
-			tier: input.params.tier ?? recoveryDescriptor?.tier ?? recoveryDescriptor?.modelSelection?.tier,
-			modelSelection: recoveryDescriptor?.modelSelection,
+			model: recoveryIsExplicitModel
+				? (recoverySelection.model ?? recoveryDescriptor?.model ?? target.model)
+				: undefined,
+			tier: recoveryIsExplicitModel
+				? undefined
+				: (input.params.tier ?? recoverySelection?.tier ?? recoveryDescriptor?.tier),
+			thinking: recoveryIsExplicitModel ? (recoveryDescriptor?.thinking ?? target.thinking) : undefined,
+			modelSelection: recoverySelection,
 			skill: recoveryDescriptor?.skills,
 			cwd: effectiveCwd,
 			output: recoveryDescriptor?.outputPath,
 			outputMode: recoveryDescriptor?.outputMode,
-			acceptance: input.params.acceptance ?? recoveryDescriptor?.acceptance,
+			acceptance: input.params.acceptance,
 			toolBudget: recoveryDescriptor?.initialToolBudget,
 		}, {
 			parentMode: snapshotParentPermissionMode(input.deps.state.currentSessionId),
 			runId,
 			index: 0,
 			childId: recoveryDescriptor?.childId ?? target.childId ?? `${runId}-0`,
+			resolvedModelIsRuntime: !recoveryIsExplicitModel && Boolean(recoveryDescriptor?.model ?? target.model),
 		});
 	} catch (error) {
 		return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "management", results: [] } };
 	}
 	const result = executeAsyncSingle(runId, {
 		spec: recoverySpec,
+		completionTask: followUp,
 		goal: followUp,
 		ctx: {
 			pi: input.deps.pi,
@@ -1301,7 +1317,7 @@ async function resumeAsyncRun(input: {
 		output: recoveryDescriptor?.outputPath,
 		outputMode: recoveryDescriptor?.outputMode,
 		...(recoveryDescriptor?.skills ? { skills: [...recoveryDescriptor.skills] } : {}),
-		...(recoveryDescriptor?.acceptance !== undefined && input.params.acceptance === undefined ? { acceptance: recoveryDescriptor.acceptance } : {}),
+		...(restoredAcceptance ? { restoredAcceptance } : {}),
 		...(input.params.timeoutMs !== undefined ? { timeoutMs: input.params.timeoutMs } : {}),
 		...(input.absoluteDeadlineAt !== undefined ? { absoluteDeadlineAt: input.absoluteDeadlineAt } : {}),
 		...(input.params.turnBudget !== undefined ? { turnBudget: input.params.turnBudget } : {}),
@@ -1657,6 +1673,7 @@ function internalizePromptDrivenChildren(
 		cwd: params.cwd,
 		model: params.model,
 		tier: params.tier,
+		thinking: params.thinking,
 		skill: params.skill,
 		output: params.output,
 		outputMode: params.outputMode,
@@ -2129,14 +2146,23 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
-		const modelOverride = resolveRequiredTierModel(params.tier, availableModels, currentProvider);
+		const modelSelection = captureModelSelection({ model: params.model, tier: params.tier });
+		const modelOverride = resolveExecutableChildModel({
+			modelSelection,
+			model: params.model,
+			tier: params.tier,
+			thinking: params.thinking,
+			availableModels,
+			preferredProvider: currentProvider,
+		});
 		const spec = normalizeChildSpec({
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			description: params.description,
 			permissions: params.permissions,
-			model: modelOverride,
+			model: params.model,
 			tier: params.tier,
-			modelSelection: captureModelSelection({ tier: params.tier }),
+			thinking: params.thinking,
+			modelSelection,
 			skill: params.skill,
 			cwd: effectiveCwd,
 			output: effectiveOutput,
@@ -2531,13 +2557,15 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				return true;
 			};
 		}
+		const modelSelection = input.modelSelections[index] ?? captureModelSelection({ model: task.model, tier: task.tier });
 		return runSync(input.ctx.cwd, normalizeChildSpec({
 			task: taskText,
 			description: task.description,
 			permissions: task.permissions,
-			model: input.modelOverrides[index] ?? task.model,
+			model: task.model,
 			tier: task.tier,
-			modelSelection: input.modelSelections[index] ?? captureModelSelection({ tier: task.tier }),
+			thinking: task.thinking,
+			modelSelection,
 			skill: task.skill,
 			cwd: taskCwd,
 			output: task.output,
@@ -2703,10 +2731,17 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		...(task.progress !== undefined ? { progress: task.progress } : {}),
 		...(skillOverrides[index] !== undefined ? { skills: skillOverrides[index] } : {}),
 	}));
-	const modelOverrides: (string | undefined)[] = tasks.map((task, i) =>
-		resolveRequiredTierModel(task.tier, availableModels, currentProvider),
+	const modelSelections = tasks.map((task) => captureModelSelection({ model: task.model, tier: task.tier }));
+	const modelOverrides: (string | undefined)[] = tasks.map((task, index) =>
+		resolveExecutableChildModel({
+			modelSelection: modelSelections[index],
+			model: task.model,
+			tier: task.tier,
+			thinking: task.thinking,
+			availableModels,
+			preferredProvider: currentProvider,
+		}),
 	);
-	const modelSelections = tasks.map((task) => captureModelSelection({ tier: task.tier }));
 
 	if (params.clarify === true && ctx.hasUI) {
 		const behaviors = agentConfigs.map((_c, i) =>
@@ -3013,7 +3048,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			task: params.task,
 			description: params.description,
 			permissions: params.permissions,
+			model: params.model,
 			tier: params.tier,
+			thinking: params.thinking,
 			skill: params.skill,
 			cwd: effectiveCwd,
 			output: params.output,
@@ -3049,7 +3086,15 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const currentProvider = ctx.model?.provider;
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let task = params.task ?? "";
-	let modelOverride: string | undefined = resolveRequiredTierModel(params.tier, availableModels, currentProvider);
+	const modelSelection = captureModelSelection({ model: params.model, tier: params.tier });
+	let modelOverride: string | undefined = resolveExecutableChildModel({
+		modelSelection,
+		model: params.model,
+		tier: params.tier,
+		thinking: params.thinking,
+		availableModels,
+		preferredProvider: currentProvider,
+	});
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 	let effectiveOutput = normalizeSingleOutputOverride(rawOutput, agentConfig.output);
@@ -3335,7 +3380,7 @@ function foregroundCapacityResult(params: SubagentParamsLike, inFlight: number, 
 	return {
 		content: [{
 			type: "text",
-			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, use ONE subagent call with tasks: [{task, description}, …], or set async: true.`,
+			text: `Foreground subagent capacity reached (${inFlight}/${limit} running). Wait for a child to finish, combine work in ONE tasks call, or launch without async:false or clarify:true when foreground execution is unnecessary.`,
 		}],
 		isError: true,
 		details: { mode: inferExecutionMode(params), results: [] },
@@ -3601,11 +3646,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (normalized.error) return normalized.error;
 		const normalizedParams = normalized.params!;
 
-		let effectiveParams = applyForceTopLevelAsyncOverride(
-			normalizedParams,
-			depth,
-			deps.config.forceTopLevelAsync === true,
-		);
+		let effectiveParams = normalizedParams;
 		const runToolBudget = resolveToolBudget(effectiveParams.toolBudget, "toolBudget");
 		if (runToolBudget.error) return buildRequestedModeError(effectiveParams, runToolBudget.error);
 		const configToolBudget = resolveToolBudget(deps.config.toolBudget, "config.toolBudget");
@@ -3701,9 +3742,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
 		}
-		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
-		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
-		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
+		const backgroundRequestedWhileClarifying = (hasChain || hasTasks)
+			&& effectiveParams.async === true
+			&& effectiveParams.clarify === true;
+		const effectiveAsync = subagentLaunchRunsAsync(effectiveParams);
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 
 		const artifactConfig: ArtifactConfig = {
@@ -3941,9 +3983,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	): Promise<AgentToolResult<Details>> => {
 		const requestParams = resolveSubagentRequestParams(params);
 		if (requestParams.action) return execute(id, requestParams, signal, onUpdate, ctx);
-		const { depth } = checkSubagentDepth(deps.config.maxSubagentDepth);
-		const dispatchParams = applyForceTopLevelAsyncOverride(requestParams, depth, deps.config.forceTopLevelAsync === true);
-		const runsForeground = dispatchParams.clarify === true || (dispatchParams.async ?? deps.asyncByDefault) !== true;
+		const runsForeground = !subagentLaunchRunsAsync(requestParams);
 		if (!runsForeground) return execute(id, requestParams, signal, onUpdate, ctx);
 		const limit = resolveTopLevelParallelConcurrency(undefined, deps.config.parallel?.concurrency);
 		const inFlight = deps.state.foregroundSubagentInFlight ?? 0;
