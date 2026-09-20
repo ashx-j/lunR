@@ -234,6 +234,24 @@ it.each([undefined, "another-owner"])(
 			).toBe(true);
 			await vi.advanceTimersByTimeAsync(300);
 			expect(sendMessage).toHaveBeenCalledOnce();
+			sendMessage.mockClear();
+			for (const reason of ["idle", "time_threshold", "turn_threshold", "token_threshold", "completion_guard"]) {
+				events.emit("subagent:control-intercom", {
+					to: "parent",
+					message: "Diagnostic only",
+					event: { type: "needs_attention", reason },
+				});
+			}
+			await vi.advanceTimersByTimeAsync(300);
+			expect(sendMessage).not.toHaveBeenCalled();
+			events.emit("subagent:control-intercom", {
+				to: "parent",
+				message: "Repeated tool failures",
+				event: { type: "needs_attention", reason: "tool_failures" },
+			});
+			await vi.advanceTimersByTimeAsync(300);
+			expect(sendMessage).toHaveBeenCalledOnce();
+			expect(sendMessage.mock.calls[0]?.[0].content).toContain("Repeated tool failures");
 		} finally {
 			await handlers.get("session_shutdown")!();
 		}

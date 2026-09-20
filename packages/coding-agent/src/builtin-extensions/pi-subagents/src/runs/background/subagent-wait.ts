@@ -115,6 +115,7 @@ export interface SubagentWaitDeps {
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/** Internal auto-drain mode waits through needs-attention states. */
 	stopOnAttention?: boolean;
+	shouldYield?: () => boolean;
 	/** Internal auto-drain mode surfaces failed terminal subagent runs as errors. */
 	failOnFailedRuns?: boolean;
 	/** Injectable provider protocol surfaces for deterministic tests. */
@@ -486,6 +487,7 @@ export async function waitForSubagents(
 		if (signal?.aborted) {
 			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Still active: ${stillActive}.`, true);
 		}
+		if (deps.shouldYield?.()) return result("Wait yielded for pending session messages; background work remains active.");
 		if (now() - startedAt >= timeoutMs) {
 			return result(
 				`Wait timed out after ${formatDuration(timeoutMs)} with ${activeInitialRuns.length} async run(s) and ${activeInitialProviderItems.length} provider item(s) still active: ${stillActive}. The work keeps going; call subagent_wait again or inspect subagent status.`,

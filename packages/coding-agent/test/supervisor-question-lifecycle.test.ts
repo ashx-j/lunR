@@ -5,6 +5,11 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import piIntercomExtension from "../src/builtin-extensions/pi-intercom/index.ts";
 import {
+	CHILD_DESCRIPTION_ENV,
+	SUPERVISOR_PROGRESS_TYPE,
+	SUPERVISOR_PROTOCOL_ENV,
+} from "../src/builtin-extensions/pi-subagents/src/intercom/communication.ts";
+import {
 	createNativeSupervisorChannel,
 	hasPendingBlockingSupervisorRequest,
 	registerNativeSupervisorClient,
@@ -12,6 +17,7 @@ import {
 import { askRunningAsyncChild } from "../src/builtin-extensions/pi-subagents/src/intercom/supervisor-ask.ts";
 import {
 	answerSupervisorQuestion,
+	claimQuestionNotification,
 	createSupervisorQuestion,
 	formatParentQuestionForChild,
 	readSupervisorQuestion,
@@ -19,9 +25,11 @@ import {
 	resetSupervisorQuestionTestState,
 	resolveSupervisorChannelDir,
 } from "../src/builtin-extensions/pi-subagents/src/intercom/supervisor-questions.ts";
+import { drainOutstandingWork } from "../src/builtin-extensions/pi-subagents/src/runs/background/auto-drain.ts";
 import {
 	consumeSteerAcks,
 	steerAcksDir,
+	stopRequestPath,
 	writeSteerCapability,
 	writeSteerRequestToDir,
 } from "../src/builtin-extensions/pi-subagents/src/runs/background/control-channel.ts";
@@ -40,9 +48,31 @@ import {
 	type SubagentState,
 } from "../src/builtin-extensions/pi-subagents/src/shared/types.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
+import { convertToLlm } from "../src/core/messages.ts";
 import { createHarnessWithExtensions } from "./test-harness.ts";
 
 const temps: string[] = [];
+
+it("yields headless auto-drain when communication queues a parent turn", async () => {
+	const f = fixture();
+	let pending = false;
+	const timer = setTimeout(() => {
+		pending = true;
+	}, 20);
+	try {
+		await drainOutstandingWork({
+			state: f.state,
+			timeoutMs: 500,
+			hasWork: () => true,
+			hasPendingMessages: () => pending,
+			wait: (params, signal, deps) => waitForSubagents(params, signal, { ...deps, pollIntervalMs: 5 }),
+		});
+		expect(pending).toBe(true);
+		expect(JSON.parse(fs.readFileSync(path.join(f.asyncDir, "status.json"), "utf8")).state).toBe("running");
+	} finally {
+		clearTimeout(timer);
+	}
+});
 
 function fixture(fileBacked = false) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "supervisor-lifecycle-"));
@@ -87,19 +117,26 @@ function fixture(fileBacked = false) {
 function mockPi() {
 	type RegisteredTool = {
 		name: string;
+		description: string;
 		parameters: unknown;
-		execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }>;
+		execute: (
+			id: string,
+			params: Record<string, unknown>,
+			signal?: AbortSignal,
+		) => Promise<{ content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
 	};
 	const tools: RegisteredTool[] = [];
 	const sendMessage = vi.fn();
 	return {
 		tools,
 		sendMessage,
+		appendEntry: vi.fn(),
 		events: { on: vi.fn(() => vi.fn()), emit: vi.fn() },
 		getAllTools: () => tools,
 		registerTool: (tool: RegisteredTool) => tools.push(tool),
 		on: vi.fn(),
 		registerMessageRenderer: vi.fn(),
+		registerEntryRenderer: vi.fn(),
 		registerCommand: vi.fn(),
 		registerShortcut: vi.fn(),
 	};
@@ -131,6 +168,7 @@ describe("supervisor question integration", () => {
 			});
 			for (const [key, value] of Object.entries(spawn.env)) vi.stubEnv(key, value);
 			expect(spawn.env.PI_SUBAGENT_ORCHESTRATOR_SESSION_ID).toBe(f.runId);
+			expect(spawn.env[SUPERVISOR_PROTOCOL_ENV]).toBe("2");
 			vi.stubEnv("PI_SUBAGENT_STEER_INBOX", inbox);
 			vi.stubEnv("PI_SUBAGENT_STEER_CAPABILITY", path.join(f.root, "capability.json"));
 			vi.stubEnv("PI_SUBAGENT_STEER_ACK_DIR", path.join(f.root, "acks"));
@@ -425,6 +463,244 @@ describe("supervisor question integration", () => {
 			expect(pendingForOwner).toBe(true);
 		} finally {
 			channel.dispose();
+		}
+	});
+
+	it.each(["2", ""])("separates new progress from legacy model messages, protocol=%s", async (protocol) => {
+		const f = fixture(true);
+		answerSupervisorQuestion(f.channelDir, f.question.id, "prior answer", f.owner);
+		claimQuestionNotification(f.channelDir, f.question.id);
+		const spawn = buildPiArgs({
+			baseArgs: [],
+			task: "Inspect lock",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			parentSessionId: f.runId,
+			supervisorSessionId: f.state.currentSessionId!,
+			runId: f.runId,
+			childId: "child",
+			childDescription: "Inspect lock",
+			childIndex: 0,
+		});
+		for (const [key, value] of Object.entries(spawn.env)) vi.stubEnv(key, value);
+		vi.stubEnv(SUPERVISOR_PROTOCOL_ENV, protocol);
+		expect(spawn.env[CHILD_DESCRIPTION_ENV]).toBe("Inspect lock");
+		const child = mockPi();
+		registerNativeSupervisorClient(child as unknown as ExtensionAPI);
+		const contact = child.tools.find((tool) => tool.name === "contact_supervisor")!;
+		expect(contact.description).toContain(protocol ? "UI-only" : "legacy supervisor");
+		expect(contact.parameters).toMatchObject({
+			properties: {
+				reason: {
+					enum: protocol
+						? ["need_decision", "interview_request", "progress_update", "handoff"]
+						: ["need_decision", "interview_request", "progress_update"],
+				},
+			},
+		});
+		if (!protocol)
+			await expect(
+				contact.execute("unsupported", { reason: "handoff", message: "Dependency ready" }),
+			).rejects.toThrow("legacy protocol");
+		await contact.execute("progress", { reason: "progress_update", message: "routine-only-marker" });
+		const parent = mockPi();
+		const channel = createNativeSupervisorChannel(parent as unknown as ExtensionAPI, f.state);
+		try {
+			channel.start();
+			if (protocol) {
+				expect(parent.sendMessage).not.toHaveBeenCalled();
+				expect(parent.appendEntry).toHaveBeenCalledExactlyOnceWith(
+					SUPERVISOR_PROGRESS_TYPE,
+					expect.objectContaining({
+						communication: {
+							direction: "from",
+							peer: "Inspect lock",
+							kind: "progress",
+							message: "routine-only-marker",
+						},
+					}),
+				);
+			} else {
+				expect(parent.appendEntry).not.toHaveBeenCalled();
+				expect(parent.sendMessage).toHaveBeenCalledExactlyOnceWith(
+					expect.objectContaining({ content: "From: Inspect lock\n\nroutine-only-marker" }),
+					{ triggerTurn: false },
+				);
+			}
+			expect(channel.pending.size).toBe(0);
+			expect(parent.events.emit).not.toHaveBeenCalled();
+		} finally {
+			channel.dispose();
+		}
+	});
+
+	it("delivers a dependency handoff without blocking the child or cancelling an outstanding parent question", async () => {
+		const f = fixture();
+		for (const [key, value] of Object.entries(
+			buildPiArgs({
+				baseArgs: [],
+				task: "Inspect lock",
+				sessionEnabled: false,
+				inheritProjectContext: false,
+				inheritSkills: false,
+				parentSessionId: f.runId,
+				runId: f.runId,
+				childId: "child",
+				childDescription: "Inspect lock",
+				childIndex: 0,
+			}).env,
+		))
+			vi.stubEnv(key, value);
+		const child = mockPi();
+		registerNativeSupervisorClient(child as unknown as ExtensionAPI);
+		const result = await child.tools
+			.find((tool) => tool.name === "contact_supervisor")!
+			.execute("handoff", { reason: "handoff", message: "Capture contract is ready; implementation can proceed." });
+		expect(result.content[0]?.text).toContain("Continue independent work");
+		const parent = mockPi();
+		const channel = createNativeSupervisorChannel(parent as unknown as ExtensionAPI, f.state);
+		try {
+			channel.start();
+			expect(parent.sendMessage).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({ details: expect.objectContaining({ reason: "handoff", expectsReply: false }) }),
+				{ triggerTurn: true },
+			);
+			expect(channel.pending.size).toBe(0);
+			expect(readSupervisorQuestion(f.channelDir, f.question.id)?.cancelledAt).toBeUndefined();
+		} finally {
+			channel.dispose();
+		}
+	});
+
+	it.each(["stopped", "stop-requested", "expired", "wrong-owner"])(
+		"does not wake for a %s blocking request",
+		(condition) => {
+			const f = fixture(true);
+			const requestFile = path.join(f.channelDir, "requests", "blocked.json");
+			writeAtomicJson(requestFile, {
+				type: "subagent.supervisor.request",
+				protocolVersion: 2,
+				id: "blocked",
+				createdAt: Date.now(),
+				expiresAt: condition === "expired" ? 1 : Date.now() + 60_000,
+				reason: "need_decision",
+				message: "Need approval",
+				expectsReply: true,
+				runId: f.runId,
+				agent: "child",
+				childIndex: 0,
+				supervisorSessionId: condition === "wrong-owner" ? "other-session" : f.state.currentSessionId,
+			});
+			if (condition === "stopped")
+				writeAtomicJson(path.join(f.asyncDir, "status.json"), { ...f.status, state: "stopped" });
+			if (condition === "stop-requested")
+				writeAtomicJson(stopRequestPath(f.asyncDir), { type: "stop", ts: Date.now() });
+			const parent = mockPi();
+			const channel = createNativeSupervisorChannel(parent as unknown as ExtensionAPI, f.state);
+			try {
+				channel.start();
+				expect(parent.sendMessage.mock.calls.some(([, options]) => options?.triggerTurn)).toBe(false);
+				expect(channel.pending.size).toBe(0);
+			} finally {
+				channel.dispose();
+			}
+		},
+	);
+
+	it("restores a delivered blocking request after reload without waking twice", () => {
+		const f = fixture(true);
+		writeAtomicJson(path.join(f.channelDir, "requests", "blocked.json"), {
+			type: "subagent.supervisor.request",
+			protocolVersion: 2,
+			id: "blocked",
+			createdAt: Date.now(),
+			expiresAt: Date.now() + 60_000,
+			reason: "need_decision",
+			message: "Need approval",
+			expectsReply: true,
+			runId: f.runId,
+			agent: "child",
+			childIndex: 0,
+			supervisorSessionId: f.state.currentSessionId,
+		});
+		const parent = mockPi();
+		Object.assign(f.state.lastUiContext!.sessionManager, {
+			getBranch: () => parent.sendMessage.mock.calls.map(([message]) => ({ type: "custom_message", ...message })),
+		});
+		const channel = createNativeSupervisorChannel(parent as unknown as ExtensionAPI, f.state);
+		try {
+			channel.start();
+			expect(parent.sendMessage).toHaveBeenCalledWith(
+				expect.objectContaining({ details: expect.objectContaining({ id: "blocked" }) }),
+				{ triggerTurn: true },
+			);
+			channel.dispose();
+			parent.sendMessage.mockClear();
+			Object.assign(f.state.lastUiContext!.sessionManager, {
+				getBranch: () => [
+					{ type: "custom_message", customType: "subagent_supervisor_request", details: { id: "blocked" } },
+				],
+			});
+			channel.start();
+			expect(channel.pending.has("blocked")).toBe(true);
+			expect(
+				parent.sendMessage.mock.calls.some(([message]) => message.customType === "subagent_supervisor_request"),
+			).toBe(false);
+		} finally {
+			channel.dispose();
+		}
+	});
+
+	it("keeps UI progress out of provider and compaction input during an active turn and after context rebuild", async () => {
+		const f = fixture(true);
+		let channel: ReturnType<typeof createNativeSupervisorChannel> | undefined;
+		const harness = await createHarnessWithExtensions({
+			responses: [{ toolCalls: [{ name: "probe", args: {} }] }, "finished"],
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool({
+						name: "probe",
+						label: "Probe",
+						description: "Perform independent work",
+						parameters: Type.Object({}),
+						async execute(_id, _args, _signal, _update, ctx) {
+							f.state.currentSessionId =
+								ctx.sessionManager.getSessionFile() ?? ctx.sessionManager.getSessionId();
+							f.state.lastUiContext = ctx;
+							writeAtomicJson(path.join(f.channelDir, "requests", "progress.json"), {
+								type: "subagent.supervisor.request",
+								protocolVersion: 2,
+								id: "progress",
+								createdAt: Date.now(),
+								reason: "progress_update",
+								message: "ui-only-provider-marker",
+								expectsReply: false,
+								runId: f.runId,
+								agent: "child",
+								childIndex: 0,
+								supervisorSessionId: f.state.currentSessionId,
+							});
+							channel = createNativeSupervisorChannel(pi, f.state);
+							channel.start();
+							return { content: [{ type: "text", text: "work done" }], details: {} };
+						},
+					});
+				},
+			],
+		});
+		try {
+			await harness.session.bindExtensions({});
+			await harness.session.prompt("Perform independent work.");
+			expect(harness.faux.callCount).toBe(2);
+			expect(JSON.stringify(harness.faux.contexts)).not.toContain("ui-only-provider-marker");
+			expect(JSON.stringify(harness.session.sessionManager.getEntries())).toContain("ui-only-provider-marker");
+			expect(
+				JSON.stringify(convertToLlm(harness.session.sessionManager.buildSessionContext().messages)),
+			).not.toContain("ui-only-provider-marker");
+		} finally {
+			channel?.dispose();
+			harness.cleanup();
 		}
 	});
 

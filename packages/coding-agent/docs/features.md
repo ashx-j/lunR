@@ -31,6 +31,24 @@ A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ sam
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 
+### Child communication
+
+Children own reversible implementation choices within their assigned scope. Define file ownership and required outputs at launch. Establish a shared contract before dependent parallel work, then pass it through chain outputs or an artifact. Native child intercom reaches the supervisor only; it cannot discover or message siblings.
+
+`contact_supervisor` separates delivery by purpose:
+
+- `progress_update` records a UI-only entry. It never enters parent model context or starts a parent turn. Existing activity indicators usually make an explicit progress call unnecessary.
+- `handoff` delivers actionable dependency findings or corrections without waiting for a reply. State what another task can now do, consolidate related findings, and reference one artifact for supporting detail. Continue independent work.
+- `need_decision` and `interview_request` wait for a supervisor reply. Use them for decisions outside the child's authority, permission or safety concerns, and blockers. Include the blocked decision, evidence, and recommended choice.
+
+Blocking requests and handoffs wake an idle parent. Headless waits yield to queued messages so a child can receive a decision before it finishes. Expired requests, stopped runs, and requests owned by another session cannot wake it. Legacy children retain model-facing progress delivery; UI-only progress requires the new protocol advertised by the spawning parent.
+
+Inactivity and threshold notices stay in diagnostic entries rather than parent context or intercom relays. Repeated tool failures remain model-facing. Completion-guard diagnostics do not duplicate the normal terminal failure report.
+
+Return one self-contained final report with outcomes, verification, blockers, and artifact paths. The runtime delivers it. A final report that only says findings were sent earlier is insufficient.
+
+Communication cards are collapsed tool-style rows. Click to show `From` or `To`, the child's description, and the message. Routing IDs stay in structured diagnostics. Outgoing steering also shows its delivery state when expanded; delivery acknowledgement is not a model answer.
+
 ### Questions to async children
 
 The parent can use `subagent_supervisor` with `action: "ask"` to ask a running async child for information it needs before the final report. The request names the run, selects one child, and includes a `reason` explaining which decision needs the answer.
@@ -42,6 +60,10 @@ The parent calls `subagent_supervisor({ action: "ask", id, index, reason, messag
 A child must have an active question-capable input channel. Only one question may be outstanding per child. Questions expire after ten minutes by default, and child termination, failed delivery, process replacement, or parent session replacement cancels pending questions. A wait timeout ends the wait, not the question. Existing blocking child-to-parent requests take priority to avoid mutual waiting.
 
 The agent must ask only when the child has missing context, the answer changes a concrete next decision, and waiting for completion would block progress or risk rework. It must use available results first and batch related questions. Routine progress checks, duplicate questions, polling, and step-by-step supervision are prohibited. A follow-up is appropriate only when the answer leaves the original decision unresolved.
+
+### Measuring communication cost
+
+Compare the same task, models, thinking levels, and starting checkout before and after a communication change. Count parent wakeups by their triggering event, provider calls in both parent and child sessions, duplicate deliveries, input/output tokens, cache reads/writes, elapsed time, and blocked time. Check task correctness and delivery of required escalations before comparing cost. Cached input is separate from uncached input; fewer messages or a quieter UI alone do not establish savings. Keep transcript evidence local.
 
 ## Todos, memory, and global instructions
 

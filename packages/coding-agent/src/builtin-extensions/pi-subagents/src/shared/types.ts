@@ -750,6 +750,7 @@ export interface Details {
 	state?: string;
 	/** Resolved UI label for management actions, persisted with the tool result. */
 	displayTitle?: string;
+	communication?: import("../intercom/communication.ts").SubagentCommunication;
 	answered?: boolean;
 	delivered?: boolean;
 }

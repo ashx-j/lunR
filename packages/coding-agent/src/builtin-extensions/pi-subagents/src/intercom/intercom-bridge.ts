@@ -18,17 +18,10 @@ function defaultSubagentConfigDir(agentDir = defaultAgentDir()): string {
 
 const DEFAULT_INTERCOM_TARGET_PREFIX = "subagent-chat";
 export const INTERCOM_BRIDGE_MARKER = "Intercom orchestration channel:";
-const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `The inherited thread is reference-only. Do not continue that conversation or send questions, status updates, or completion handoffs to the supervisor in normal assistant text.
-
-Use contact_supervisor first. It resolves the supervisor session "{orchestratorTarget}" and run metadata automatically.
-- Need a decision, blocked, approval, or product/API/scope ambiguity: contact_supervisor({ reason: "need_decision", message: "<question>" })
-- Need structured supervisor input rather than a freeform reply: contact_supervisor({ reason: "interview_request", message: "<what input is needed>", interview: { title: "...", questions: [] } })
-- After contact_supervisor with reason "need_decision" or "interview_request", stay alive and continue only after the reply arrives. Do not finish your final response with a choose-one question.
-- Do not ask for clarification when the only conflict is review-only/no-edit versus progress-writing or artifact-writing instructions. If an output path is configured but no write-capable tool is available, return the complete artifact in your final response; the runtime will persist it. Do not contact the supervisor merely because you cannot write that output path directly.
-- Meaningful progress or unexpected discoveries that change the plan: contact_supervisor({ reason: "progress_update", message: "UPDATE: <summary>" })
-- Generic intercom is lower-level plumbing/fallback only: intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })
-
-Do not use contact_supervisor or intercom for routine completion handoffs. If no coordination is needed, return a focused task result.`;
+const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `You own reversible implementation decisions within your assigned scope. Use contact_supervisor for coordination with "{orchestratorTarget}"; its tool description defines delivery and reply behavior.
+Consolidate dependency findings into one handoff when another task needs them before completion. Escalate permission, safety, scope changes, or a blocked decision with evidence and your recommended choice. Continue independent work before opening a blocking request.
+Native intercom reaches only the supervisor, not siblings. Use the supplied contracts and artifacts instead of discovering sibling sessions.
+Return one self-contained final result; the runtime delivers it. If you cannot write a configured output artifact with your available tools, return its complete contents for the runtime to persist.`;
 
 export interface IntercomBridgeState {
 	active: boolean;

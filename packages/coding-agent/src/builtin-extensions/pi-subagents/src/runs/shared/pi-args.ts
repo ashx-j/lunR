@@ -12,6 +12,7 @@ import { TOOL_BUDGET_ENV, encodeToolBudgetEnv } from "./tool-budget.ts";
 import { CHILD_TOOL_DIAGNOSTIC_PATH_ENV, REQUIRED_CHILD_TOOLS_ENV } from "./tool-availability.ts";
 import { CHILD_WATCHDOG_CONFIG_ENV, encodeChildWatchdogConfig, type ChildWatchdogConfig } from "../../watchdog/child-status.ts";
 import { WAIT_TOOL_ENABLED_ENV } from "../background/wait-config.ts";
+import { CHILD_DESCRIPTION_ENV, SUPERVISOR_PROTOCOL_ENV, SUPERVISOR_PROTOCOL_VERSION } from "../../intercom/communication.ts";
 
 const TASK_ARG_LIMIT = 8000;
 // lunr: the bake-in compiles extensions to dist/*.js only; upstream dev mode ships .ts.
@@ -272,6 +273,8 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		env[SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV] = input.parentSessionId;
 	}
 	env[SUBAGENT_SUPERVISOR_SESSION_ID_ENV] = input.supervisorSessionId ?? "";
+	env[SUPERVISOR_PROTOCOL_ENV] = String(SUPERVISOR_PROTOCOL_VERSION);
+	env[CHILD_DESCRIPTION_ENV] = input.childDescription ?? input.childAgentName ?? "";
 	if (input.parentSessionId && input.runId && (input.childId || input.childAgentName)) {
 		const childIndex = input.childIndex ?? 0;
 		const channelAgent = input.childId ?? input.childAgentName!;

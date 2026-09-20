@@ -32,6 +32,13 @@ export class CustomEntryComponent extends Container {
 		}
 	}
 
+	override handleClick(localY: number, width: number): boolean {
+		if (super.handleClick(localY, width)) return true;
+		if (!this.customComponent || localY < 1) return false;
+		this.setExpanded(!this._expanded);
+		return true;
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.rebuild();
