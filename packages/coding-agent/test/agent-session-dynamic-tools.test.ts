@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import browserExtension from "../src/builtin-extensions/lunr-browser.ts";
 import simpleMemory from "../src/builtin-extensions/simple-pi-memory.ts";
 import { MEMORY_CAP_BRIDGE_SYMBOL, registerMemoryCapBridge } from "../src/core/memory-cap.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
@@ -51,6 +52,36 @@ describe("AgentSession dynamic tool registration", () => {
 				.map((tool) => tool.name)
 				.filter((name) => name.startsWith("settings_")),
 		).toEqual([]);
+		session.dispose();
+	});
+
+	it("exposes browser by default and removes/restores it through settings", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [browserExtension],
+		});
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			resourceLoader,
+			sessionManager: SessionManager.inMemory(),
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+		});
+		await session.bindExtensions({});
+		expect(session.getActiveToolNames()).toContain("browser");
+		settingsManager.setBrowserEnabled(false);
+		session.refreshToolRegistry();
+		expect(session.getActiveToolNames()).not.toContain("browser");
+		expect(session.getAllTools().map((tool) => tool.name)).not.toContain("browser");
+		settingsManager.setBrowserEnabled(true);
+		session.refreshToolRegistry();
+		expect(session.getActiveToolNames()).toContain("browser");
+		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
 	});
 

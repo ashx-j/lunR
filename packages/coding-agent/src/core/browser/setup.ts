@@ -1,21 +1,14 @@
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-export async function installBrowser(): Promise<void> {
-	const require = createRequire(import.meta.url);
-	const cli = join(dirname(require.resolve("playwright-core/package.json")), "cli.js");
+export async function installBrowser(explicit = true): Promise<void> {
+	const script = fileURLToPath(new URL("../../../scripts/install-browser.mjs", import.meta.url));
 	await new Promise<void>((resolve, reject) => {
-		const child = spawn(process.execPath, [cli, "install", "chromium"], { stdio: "inherit", windowsHide: true });
+		const child = spawn(process.execPath, [script, ...(explicit ? ["--explicit"] : [])], { stdio: "inherit", windowsHide: true });
 		child.once("error", reject);
 		child.once("exit", (code) => {
 			if (code === 0) resolve();
-			else
-				reject(
-					new Error(
-						`Chromium setup failed (${code}). Browser was not enabled; retry lunr features enable browser.`,
-					),
-				);
+			else reject(new Error(`Chromium setup failed (${code}). Retry lunr browser install when online.`));
 		});
 	});
 }

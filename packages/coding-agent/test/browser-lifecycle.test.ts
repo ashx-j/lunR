@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 
-const mocks = vi.hoisted(() => ({ launch: vi.fn(), enabled: false }));
+const mocks = vi.hoisted(() => ({ launch: vi.fn(), enabled: true, changed: (_enabled: boolean) => {} }));
 vi.mock("playwright-core", () => ({ chromium: { launch: mocks.launch } }));
-vi.mock("../src/core/install-features.ts", () => ({
-	isFeatureEnabled: () => mocks.enabled,
-	getFeatureOption: () => false,
+vi.mock("../src/core/browser/settings.ts", () => ({
+	readBrowserSettings: () => ({ enabled: mocks.enabled, allowPrivate: false }),
+	onBrowserEnabledChange: (listener: (enabled: boolean) => void) => {
+		mocks.changed = listener;
+		return () => {};
+	},
 }));
 
 import browserExtension from "../src/builtin-extensions/lunr-browser.ts";
@@ -13,17 +16,14 @@ import { BrowserSession } from "../src/core/browser/runtime.ts";
 
 afterEach(() => {
 	vi.clearAllMocks();
-	mocks.enabled = false;
+	mocks.enabled = true;
 });
 
 describe("browser lifecycle", () => {
-	it("registers only when explicitly enabled and never launches during registration", () => {
+	it("registers lazily by default and never launches during registration", () => {
 		const registerTool = vi.fn();
 		const on = vi.fn();
 		const api = { registerTool, on } as unknown as ExtensionAPI;
-		browserExtension(api);
-		expect(registerTool).not.toHaveBeenCalled();
-		mocks.enabled = true;
 		browserExtension(api);
 		expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "browser" }));
 		expect(on.mock.calls.map(([event]) => event)).toEqual(["session_shutdown", "session_start", "agent_end"]);
@@ -37,7 +37,7 @@ describe("browser lifecycle", () => {
 				"Nothing was installed",
 			);
 			await expect(session.run({ action: "navigate", url: "http://127.0.0.1" })).rejects.toThrow(
-				"lunr features enable browser",
+				"lunr browser install",
 			);
 			expect(mocks.launch).toHaveBeenCalledTimes(2);
 		} finally {
@@ -72,6 +72,47 @@ describe("browser lifecycle", () => {
 		await assertion;
 		await session.close();
 		expect(close).toHaveBeenCalledOnce();
+	});
+	it("disabling Browser closes an active browser", async () => {
+		let opened = (_page: unknown) => {};
+		const page = { on() {}, url: () => "about:blank" };
+		const close = vi.fn(async () => {});
+		mocks.launch.mockResolvedValue({
+			close,
+			newContext: async () => ({
+				setDefaultTimeout() {},
+				setDefaultNavigationTimeout() {},
+				route: async () => {},
+				routeWebSocket: async () => {},
+				on: (_event: string, listener: typeof opened) => {
+					opened = listener;
+				},
+				newPage: async () => {
+					opened(page);
+					return page;
+				},
+			}),
+		});
+		const registerTool = vi.fn();
+		const on = vi.fn();
+		browserExtension({ registerTool, on } as unknown as ExtensionAPI);
+		await on.mock.calls.find(([event]) => event === "session_start")?.[1]();
+		await registerTool.mock.calls[0][0].execute("call", { action: "tabs", operation: "create" });
+		mocks.changed(false);
+		await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+		await on.mock.calls.find(([event]) => event === "session_shutdown")?.[1]();
+	});
+	it("disabling Browser invalidates initialization and blocks further calls", async () => {
+		const registerTool = vi.fn();
+		const on = vi.fn();
+		browserExtension({ registerTool, on } as unknown as ExtensionAPI);
+		await on.mock.calls.find(([event]) => event === "session_start")?.[1]();
+		const tool = registerTool.mock.calls[0][0];
+		const running = tool.execute("call", { action: "navigate", url: "http://127.0.0.1" });
+		mocks.changed(false);
+		await expect(running).rejects.toThrow("cancelled");
+		await expect(tool.execute("call2", { action: "inspect" })).rejects.toThrow("disabled");
+		expect(mocks.launch).not.toHaveBeenCalled();
 	});
 	it("shutdown invalidates deferred extension initialization", async () => {
 		mocks.enabled = true;

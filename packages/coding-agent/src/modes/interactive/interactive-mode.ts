@@ -4808,6 +4808,7 @@ export class InteractiveMode {
 						this.session.model?.id ?? "no-model-selected",
 					),
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
+					browserEnabled: this.settingsManager.getBrowserEnabled(),
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					searchCurator: getSearchCuratorSetting(),
@@ -5016,6 +5017,10 @@ export class InteractiveMode {
 					},
 					onMemoryCharCapChange: (cap) => {
 						this.settingsManager.setMemoryCharCap(cap);
+					},
+					onBrowserEnabledChange: (enabled) => {
+						this.settingsManager.setBrowserEnabled(enabled);
+						this.session.refreshToolRegistry();
 					},
 					onMemoryEnabledChange: (enabled) => {
 						this.settingsManager.setMemoryEnabled(enabled);

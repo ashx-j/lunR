@@ -22,7 +22,7 @@ opening the prompt barrier. It does not replace tool schemas with placeholders.
 The expensive implementations load when needed:
 
 - Web tools load providers, extraction, and browser curation separately.
-- The optional headless browser registers its schema only when configured. Its runtime and Playwright load on first browser use. See [Headless browser](browser.md) for explicit setup and network limits.
+- The built-in headless browser is enabled by default and can be hidden in `/settings`. Its runtime and Playwright load on first browser use. Installation, not startup, installs Chromium. See [Headless browser](browser.md) for recovery and network limits.
 - LSP registers its tools before loading clients and Tree-sitter. Configured
   autostart runs in the background; first use waits for the required services.
 - MCP registers the proxy and cached direct-tool definitions without loading its

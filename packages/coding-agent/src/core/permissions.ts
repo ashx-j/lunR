@@ -248,7 +248,7 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 	const projectSettings = normalize(join(cwd, CONFIG_DIR_NAME, "settings.json"));
 	const normalizedTarget = normalize(target);
 	if (normalizedTarget === normalize(join(getAgentDir(), "install-features.json"))) {
-		return "Optional features and browser network access are user-managed. Ask the user to run lunr features; do not change install-features.json directly.";
+		return "Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.";
 	}
 	if (normalizedTarget === globalSettings || normalizedTarget === projectSettings) {
 		return SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON;

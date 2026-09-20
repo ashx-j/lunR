@@ -110,6 +110,7 @@ export interface SettingsConfig {
 	globalInstructionsPath: string;
 	modelInstructionsPath: string;
 	confirmLargeSubagentLaunches: boolean;
+	browserEnabled: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
@@ -177,6 +178,7 @@ export interface SettingsCallbacks {
 	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
 	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
+	onBrowserEnabledChange: (enabled: boolean) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
@@ -1473,6 +1475,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "browser-enabled",
+				label: "Browser",
+				description:
+					"Browse JavaScript pages and interact with websites. Off closes the browser and hides its tool.",
+				currentValue: config.browserEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "agent-memory",
 				label: "Agent memory",
 				description: "Durable facts the agent can manage",
@@ -1817,6 +1827,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "memory-char-cap":
 						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "browser-enabled":
+						callbacks.onBrowserEnabledChange(newValue === "on");
 						break;
 					case "agent-memory":
 						callbacks.onMemoryEnabledChange(newValue === "on");

@@ -110,7 +110,7 @@ const optionalModules = [
 	"pi-mcp-adapter/direct-tool-executor.js",
 ];
 
-async function checkRequest(toolUrl, toolKind, browserEnabled = false) {
+async function checkRequest(toolUrl, toolKind, browserEnabled = true) {
 	const agentDir = mkdtempSync(join(tmpdir(), "lunr-request-check-"));
 	const home = join(agentDir, "home");
 	const workspace = join(home, "workspace");
@@ -119,9 +119,7 @@ async function checkRequest(toolUrl, toolKind, browserEnabled = false) {
 	mkdirSync(temp);
 	writeFileSync(join(workspace, "index.ts"), "export function increment(value: number) { return value + 1; }\n");
 	writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ ssrf: { allowRanges: ["127.0.0.1/32"] } }));
-	if (browserEnabled) {
-		writeFileSync(join(agentDir, "install-features.json"), JSON.stringify({ schemaVersion: 1, features: { browser: { enabled: true, options: {} } } }));
-	}
+	if (!browserEnabled) writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ browserEnabled: false }));
 	const blocked = optionalModules.map((name) => pathToFileURL(join(dist, "builtin-extensions", name)).href);
 	blocked.push(pathToFileURL(join(dist, "core/browser/runtime.js")).href);
 	if (existsSync(join(dist, "node-runtime/cli-runtime.js"))) {
@@ -204,7 +202,7 @@ registerHooks({load(url, context, nextLoad) {
 		assert.equal(request.tools.includes("browser"), browserEnabled);
 		assert.equal(
 			request.toolSchemaHash,
-			browserEnabled ? "c78ad2f6114dfdbc636418dd6d72370110db6484d5f5912e328d60df5d89f5ee" : "a0fa9dfe58e4a0d8f266ea1959bc3c7c125c7fd780c83d50fb71c2cde45a04a9",
+			browserEnabled ? "51122f78b814c19aa5ade8d5cf7d1a89c3cc1c9be65d3c77851572983bf18abf" : "190c33422c7a3f73863da90f7190d03262f276b8bd4f244c4fe1ca5d6d0684cb",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
@@ -240,7 +238,7 @@ registerHooks({load(url, context, nextLoad) {
 await check(false);
 await check(true);
 await checkRequest();
-await checkRequest(undefined, undefined, true);
+await checkRequest(undefined, undefined, false);
 for (const tool of ["subagent", "mcp", "lsp"]) await checkRequest(undefined, tool);
 const server = createServer((_request, response) => {
 	response.writeHead(200, { "Content-Type": "text/html" });

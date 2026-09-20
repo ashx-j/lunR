@@ -2741,7 +2741,8 @@ export class AgentSession {
 		const isAllowedTool = (name: string): boolean =>
 			(!allowedToolNames || allowedToolNames.has(name)) &&
 			!excludedToolNames?.has(name) &&
-			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name));
+			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name)) &&
+			(name !== "browser" || this.settingsManager.getBrowserEnabled());
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [

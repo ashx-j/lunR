@@ -75,19 +75,6 @@ describe("parseSetAssignment / coerceBooleanSetValue", () => {
 });
 
 describe("applyFeatureFlags", () => {
-	it("keeps browser off by default and requires explicit private-network opt-in", () => {
-		expect(isFeatureEnabled("browser")).toBe(false);
-		const defaults = parseFeatureFlags(["--feature", "browser"]);
-		if (!defaults.ok) throw new Error(defaults.error);
-		const defaultState = applyFeatureFlags(loadInstallFeatures(), defaults);
-		if (!defaultState.ok) throw new Error(defaultState.error);
-		expect(defaultState.next.features.browser).toEqual({ enabled: true, options: {} });
-		const configured = parseFeatureFlags(["--feature", "browser", "--set", "browser.allow-private-network=true"]);
-		if (!configured.ok) throw new Error(configured.error);
-		const state = applyFeatureFlags(loadInstallFeatures(), configured);
-		if (!state.ok) throw new Error(state.error);
-		expect(state.next.features.browser.options["allow-private-network"]).toBe(true);
-	});
 	it("rejects --set on a secret option", () => {
 		const empty = loadInstallFeatures();
 		const flags = parseFeatureFlags(["--feature", "chat-platforms", "--set", "chat-platforms.telegram-token=abc"]);

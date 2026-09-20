@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { appendDebugLog, getAgentDir, VERSION } from "../config.ts";
 import { loadGatewayConfig, saveGatewayConfig } from "../gateway/config.ts";
 
-export type FeatureId = "chat-platforms" | "browser";
+export type FeatureId = "chat-platforms";
 
 export interface FeatureOptionSpec {
 	id: string;
@@ -27,21 +27,6 @@ export interface FeatureSpec {
 }
 
 export const FEATURE_CATALOG: FeatureSpec[] = [
-	{
-		id: "browser",
-		title: "Headless browser",
-		summary: "Isolated Playwright browser for JavaScript pages and interactions. Setup downloads matching Chromium.",
-		defaultEnabled: false,
-		options: [
-			{
-				id: "allow-private-network",
-				type: "boolean",
-				prompt:
-					"Allow browser pages to access localhost and private networks? This also allows public pages to contact them.",
-				default: false,
-			},
-		],
-	},
 	{
 		id: "chat-platforms",
 		title: "Chat platforms",
@@ -450,13 +435,6 @@ export const chatPlatformsHandler: FeatureHandler = {
 };
 
 export const FEATURE_HANDLERS: Record<FeatureId, FeatureHandler> = {
-	browser: {
-		async apply() {
-			const { installBrowser } = await import("./browser/setup.ts");
-			await installBrowser();
-		},
-		async disable() {},
-	},
 	"chat-platforms": chatPlatformsHandler,
 };
 

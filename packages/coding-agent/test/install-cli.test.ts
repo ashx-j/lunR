@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleInstallCli } from "../src/cli/install-cli.ts";
 import { ENV_AGENT_DIR } from "../src/config.ts";
+import { installBrowser } from "../src/core/browser/setup.ts";
+
+vi.mock("../src/core/browser/setup.ts", () => ({ installBrowser: vi.fn(async () => {}) }));
+
 import { isFeatureEnabled, loadInstallFeatures } from "../src/core/install-features.ts";
 import { saveInstallLayout } from "../src/core/install-layout.ts";
 import { loadGatewayConfig } from "../src/gateway/config.ts";
@@ -15,6 +19,7 @@ let prevAgentDir: string | undefined;
 let prevExitCode: typeof process.exitCode;
 
 beforeEach(() => {
+	vi.mocked(installBrowser).mockClear();
 	dir = mkdtempSync(join(tmpdir(), "lunr-install-cli-"));
 	prevAgentDir = process.env[ENV_AGENT_DIR];
 	prevExitCode = process.exitCode;
@@ -30,6 +35,10 @@ afterEach(() => {
 });
 
 describe("handleInstallCli dispatch", () => {
+	it("dispatches explicit browser repair without optional-feature enablement", async () => {
+		expect(await handleInstallCli(["browser", "install"])).toBe(true);
+		expect(installBrowser).toHaveBeenCalledOnce();
+	});
 	it("does not claim uninstall <source>", async () => {
 		expect(await handleInstallCli(["uninstall", "npm:@x"])).toBe(false);
 	});
@@ -56,6 +65,7 @@ describe("handleInstallCli dispatch", () => {
 
 	it("setup --yes defaults chat-platforms off", async () => {
 		expect(await handleInstallCli(["setup", "--yes"])).toBe(true);
+		expect(installBrowser).toHaveBeenCalledWith(false);
 		expect(process.exitCode ?? 0).toBe(0);
 		expect(isFeatureEnabled("chat-platforms")).toBe(false);
 		expect(existsSync(join(dir, "install-features.json"))).toBe(true);

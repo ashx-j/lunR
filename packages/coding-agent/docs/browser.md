@@ -1,25 +1,20 @@
 # Headless browser
 
-The optional `browser` tool runs Chromium through Playwright. Use it for pages that need JavaScript and for explicit website interactions. `web_search` still handles discovery; `fetch_content` still reads URLs. Neither tool automatically opens this browser. An interaction task can start with `browser` without fetching the page first.
+The built-in `browser` tool runs Chromium through Playwright. Use it for pages that need JavaScript and for explicit website interactions. `web_search` still handles discovery; `fetch_content` still reads URLs. Neither tool automatically opens this browser. An interaction task can start with `browser` without fetching the page first.
 
-## Setup
+## Installation and settings
 
-Run this yourself in a terminal, then restart lunR:
+Browser is on by default. Normal npm installation and updates automatically install the Chromium revision required by the pinned `playwright-core` dependency, including Playwright's supporting binaries. The same lifecycle works in source workspaces and published packages. Existing matching binaries are reused from Playwright's OS cache. Ordinary builds and CLI startup never download or launch a browser; Playwright loads on first browser use.
 
-```sh
-lunr features enable browser
-```
+Use **Browser** in `/settings` to turn it off or on. Turning it off immediately hides the tool and closes the session's browser, including pending initialization. It does not delete cached binaries. Turning it on makes the tool available without launching Chromium. The global `browserEnabled` setting defaults to true for new and existing users. A legacy explicit `features.browser.enabled: false` in `install-features.json` remains off until the user changes the new setting. An explicit `browserEnabled` value takes precedence; no legacy file is rewritten.
 
-`lunr setup` also offers this feature. It is off by default. Enabling it explicitly downloads the Chromium revision required by the pinned `playwright-core` dependency, plus Playwright's supporting binaries. Regular npm installation, startup, and browser tool calls never download a browser. After a lunR upgrade changes Playwright, rerun the enable command to install its matching revision. Failed initial setup does not enable the feature.
-
-Chromium uses Playwright's normal OS cache. `PLAYWRIGHT_BROWSERS_PATH` can select another cache for both setup and execution. Linux may require Chromium system libraries; install those through your OS administrator. lunR does not install OS packages or disable Chromium's sandbox to work around missing support. Node installations are supported; standalone compiled Bun browser setup has not been validated.
+`npm install --ignore-scripts`, `npm --offline`, `PI_OFFLINE=1`, and `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` skip automatic Chromium installation. A failed download warns without making the rest of lunR unusable. Browser calls diagnose missing binaries and never install them silently. When online, run:
 
 ```sh
-lunr features list
-lunr features disable browser
+lunr browser install
 ```
 
-Disabling prevents new calls. Restart lunR to immediately discard any already-open browser. Disabling does not delete the shared Chromium cache.
+`lunr setup` also installs matching Chromium automatically, including for Node-based standalone layouts. `PLAYWRIGHT_BROWSERS_PATH` selects an alternate cache and must be consistent between installation and execution. Linux may require Chromium system libraries; install those through your OS administrator. lunR does not install OS packages or disable Chromium's sandbox. Standalone compiled Bun browser installation has not been validated.
 
 ## Actions
 
@@ -62,14 +57,14 @@ Browser HTTP requests and HTTPS tunnels pass through a session-owned loopback pr
 
 For a local development server, explicitly opt in yourself:
 
-```sh
-lunr features enable browser --set browser.allow-private-network=true
+```json
+{"browserAllowPrivateNetwork": true}
 ```
 
-Restart after changing this option. This grants access to **all local and private destinations**, including requests initiated by public pages. It is not a per-site allowlist. To return to the public-only policy:
+Set `browserAllowPrivateNetwork` in global `settings.json` yourself and restart after changing it. This grants access to **all local and private destinations**, including requests initiated by public pages. It is not a per-site allowlist. To return to the public-only policy:
 
-```sh
-lunr features enable browser --set browser.allow-private-network=false
+```json
+{"browserAllowPrivateNetwork": false}
 ```
 
 These checks are defense in depth, not an OS network sandbox. The proxy classifies destination IPs, not ownership of globally routed addresses. It cannot identify a public address routed internally by a VPN, or stop a public server from relaying requests elsewhere. Chromium vulnerabilities and other local processes are outside this policy. The loopback proxy is temporary and is not an authenticated multi-user service. Use an OS/container network boundary when hostile sites require stronger isolation.
@@ -84,7 +79,7 @@ Operations have a 30-second deadline, with shorter launch, navigation, and inter
 
 ## Development validation
 
-Install Chromium into an isolated cache explicitly, then use that same `PLAYWRIGHT_BROWSERS_PATH` for tests. `test/browser.test.ts` runs policy tests without Chromium and enables its actual-browser cases only when this variable is set. `test/browser-lifecycle.test.ts` covers missing binaries, deferred registration, and cancellation during launch.
+Install Chromium into an isolated cache explicitly, then use that same `PLAYWRIGHT_BROWSERS_PATH` for tests. `test/browser.test.ts` runs policy tests without Chromium and enables its actual-browser cases only when this variable is set. `test/browser-lifecycle.test.ts` covers missing binaries, deferred loading, settings-driven cleanup, and cancellation during launch. Browser settings and install tests cover default-on behavior, legacy explicit disable, npm lifecycle execution, offline installs, and ignored scripts.
 
 After the offline package builds and coding-agent Node bundle, run `node scripts/check-browser.mjs`. It uses a local scripted provider and fixture website, with the normal child permission environment for auto and read-only CLI sessions. A third session verifies missing-Chromium recovery. The checker terminates completed print processes after the final answer because of the existing headless exit behavior. It saves sanitized fixture results, tool inventories, and isolated prompts under `.artifacts/browser-smoke/`; nothing is sent to an external model.
 

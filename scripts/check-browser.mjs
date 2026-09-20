@@ -56,7 +56,7 @@ async function check(mode) {
 			if (mode === "missing") {
 				if (index++ === 0) return respond(response, { action: "navigate", url });
 				assert(last.includes("Nothing was installed"));
-				assert(last.includes("lunr features enable browser"));
+				assert(last.includes("lunr browser install"));
 				checks.push("missing Chromium returns explicit setup guidance");
 				return respond(response, undefined, "browser-check-ok");
 			}
@@ -89,8 +89,7 @@ async function check(mode) {
 	const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
 	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { api: "openai-completions", apiKey: "local-placeholder", baseUrl, models: [{ id: "fixture", contextWindow: 272000, maxTokens: 4096 }] } } }));
 	writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ fixture: { type: "api_key", key: "local-placeholder" } }));
-	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultPermissionMode: mode === "plan" ? "plan" : "auto", defaultThinkingLevel: "off", memoryEnabled: false, retry: { enabled: false }, compaction: { enabled: false } }));
-	writeFileSync(join(agentDir, "install-features.json"), JSON.stringify({ schemaVersion: 1, features: { browser: { enabled: true, options: { "allow-private-network": true } } } }));
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ browserAllowPrivateNetwork: true, defaultPermissionMode: mode === "plan" ? "plan" : "auto", defaultThinkingLevel: "off", memoryEnabled: false, retry: { enabled: false }, compaction: { enabled: false } }));
 	const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PLAYWRIGHT_BROWSERS_PATH: mode === "missing" ? join(profile, "missing-browsers") : browsers };
 	for (const key of Object.keys(env)) if (/^PI_(?:SUBAGENTS?|INTERCOM|STARTUP_BENCHMARK)/.test(key)) delete env[key];
 	env.PI_SUBAGENT_CHILD = "1";

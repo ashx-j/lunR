@@ -213,7 +213,7 @@ export class BrowserSession {
 			await proxy.close();
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(
-				`Browser launch failed. Ask the user to run lunr features enable browser to install matching Chromium, then restart. Nothing was installed by this call. ${message}`,
+				`Browser launch failed. Matching Chromium may be missing after --ignore-scripts or offline installation. Ask the user to run lunr browser install when online. Nothing was installed by this call. ${message}`,
 			);
 		}
 	}

@@ -45,7 +45,7 @@ Requires **Node.js ≥ 22.19**.
 npm i -g @ashx-j/lunr
 ```
 
-`--ignore-scripts` is optional; lunR does not require install scripts for a normal npm install.
+Normal installation also installs matching Chromium for the built-in [browser](docs/browser.md). Turn Browser off in `/settings` if you do not want its tool. `--ignore-scripts` and offline installs skip Chromium; the rest of lunR remains usable, and `lunr browser install` repairs missing binaries later.
 
 Then run it in a project directory:
 
@@ -68,12 +68,11 @@ lunr
 /login  # Then select provider
 ```
 
-First-run optional features include the Telegram/Discord gateway and the [headless browser](docs/browser.md):
+First-run setup installs Chromium and offers the optional Telegram/Discord gateway:
 
 ```bash
 lunr setup
 lunr features list
-lunr features enable browser  # Explicitly download matching Chromium, then restart
 ```
 
 To remove the CLI, keep `~/.lunr/agent` unless you pass `--purge`:
@@ -491,7 +490,8 @@ lunr [options] [@files...] [messages...]
 ### Product Commands
 
 ```bash
-lunr setup                         # First-run / reconfigure optional features
+lunr setup                         # Install Chromium and configure optional features
+lunr browser install               # Repair missing Chromium after a skipped/failed install
 lunr features [list|enable|disable]
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Remove this lunR install (keeps ~/.lunr/agent unless --purge)
