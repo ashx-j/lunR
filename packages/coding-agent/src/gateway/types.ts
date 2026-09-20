@@ -20,7 +20,7 @@ export interface SessionSource {
 	roleAuthorized?: boolean;
 }
 
-/** An inbound image attachment (v1: images only). */
+/** An inbound attachment. Images are inline; documents are saved in the selected project. */
 export interface InboundAttachment {
 	/** base64-encoded image bytes. */
 	data: string;
@@ -35,7 +35,7 @@ export interface MessageEvent {
 	messageId: string;
 	/** Text of the message this one replies to, when the platform exposes it. */
 	replyToText?: string;
-	/** Inbound image attachments (v1: images only). */
+	/** Inbound images or documents. */
 	attachments?: InboundAttachment[];
 	/**
 	 * Adapter-supplied extras. Reserved keys:
@@ -89,6 +89,7 @@ export interface PlatformAdapter {
 	connect(): Promise<boolean>;
 	disconnect(): Promise<void>;
 	send(chatId: string, text: string, opts?: SendOptions): Promise<SendResult>;
+	sendFile?(chatId: string, file: string, opts?: SendOptions): Promise<SendResult>;
 	sendButtons(chatId: string, text: string, rows: ButtonSpec[][], opts?: SendOptions): Promise<SendResult>;
 	editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult>;
 	sendTyping(chatId: string, threadId?: string): Promise<void>;

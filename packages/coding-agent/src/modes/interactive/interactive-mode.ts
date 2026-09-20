@@ -5061,6 +5061,39 @@ export class InteractiveMode {
 					onPlanUsageWindowChange: (window) => {
 						this.settingsManager.setPlanUsageWindow(window);
 					},
+					onGatewayAction: (action) => {
+						void (async () => {
+							if (this.session.isStreaming) {
+								this.showStatus("Wait for the current turn before managing the gateway.");
+								return;
+							}
+							if (action === "status") {
+								this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
+								return;
+							}
+							this.ui.stop();
+							try {
+								await new Promise<void>((resolve, reject) => {
+									const child = spawn(process.execPath, [process.argv[1], "gateway", ...action.split(" ")], {
+										stdio: "inherit",
+										env: process.env,
+									});
+									child.once("error", reject);
+									child.once("exit", (code) =>
+										code === 0
+											? resolve()
+											: reject(
+													new Error(`Gateway command exited with code ${code}. Run lunr gateway doctor.`),
+												),
+									);
+								});
+							} finally {
+								this.ui.start();
+								this.ui.requestRender(true);
+							}
+							this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
+						})().catch((error) => this.showStatus(error instanceof Error ? error.message : String(error)));
+					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);
 					},

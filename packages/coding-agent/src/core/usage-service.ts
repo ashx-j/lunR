@@ -14,6 +14,7 @@
  */
 
 import type { ModelRuntime } from "./model-runtime.ts";
+import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import { fetchKimiPlanUsage } from "./usage-adapters/kimi-coding.ts";
 import { fetchCodexPlanUsage } from "./usage-adapters/openai-codex.ts";
@@ -207,7 +208,7 @@ let activeUsageSettings: SettingsManager | undefined;
 let onUsageUpdate: (() => void) | undefined;
 
 function preferredWindow(): PlanUsageWindowPreference {
-	return activeUsageSettings?.getPlanUsageWindow() ?? "weekly";
+	return (runtimeScope.getStore()?.settingsManager ?? activeUsageSettings)?.getPlanUsageWindow() ?? "weekly";
 }
 
 const usageBridge: UsageServiceBridge = {
@@ -215,8 +216,9 @@ const usageBridge: UsageServiceBridge = {
 		return peekPlanUsage(providerId);
 	},
 	prefetch(providerId: string): void {
-		if (!activeRuntime || !hasPlanUsageAdapter(providerId)) return;
-		void getPlanUsage(providerId, activeRuntime).then(() => onUsageUpdate?.());
+		const runtime = runtimeScope.getStore()?.modelRuntime ?? activeRuntime;
+		if (!runtime || !hasPlanUsageAdapter(providerId)) return;
+		void getPlanUsage(providerId, runtime).then(() => onUsageUpdate?.());
 	},
 	setOnUpdate(fn: (() => void) | undefined): void {
 		onUsageUpdate = fn;

@@ -21,10 +21,12 @@ import { existsSync } from "node:fs";
 
 import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
 import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
-import { isAuthorized } from "./authz.ts";
+import { isAuthorized, requireGatewayOwner } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
+import { bindConversation, conversationBinding } from "./conversations.ts";
 import type { PairingStore } from "./pairing.ts";
+import { acceptGatewayInput } from "./presenter.ts";
 import { buildSessionKey } from "./session-keys.ts";
 import { applySilenceFilter, StreamConsumer } from "./stream.ts";
 import { splitMessage } from "./text.ts";
@@ -49,6 +51,7 @@ export interface RouterDeps {
 	bridge: BridgeLike;
 	/** Reload gateway.json on every inbound event so CLI config edits (e.g. pair approve) are picked up by the running daemon. */
 	reloadConfig?: boolean;
+	remoteControls?: boolean;
 }
 
 export interface Router {
@@ -137,9 +140,17 @@ export function createRouter(deps: RouterDeps): Router {
 		const firstToken = text.split(/\s+/, 1)[0].toLowerCase();
 		const commandWord = firstToken.split("@")[0].slice(1);
 		const args = text.slice(firstToken.length).trim();
+		if (deps.remoteControls) {
+			const { handleMobileCommand, cancelMobileTransfer } = await import("./mobile-commands.ts");
+			if (["stop", "stopall", "new", "cancel"].includes(commandWord)) cancelMobileTransfer(key);
+			const consumed = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
+				handleMobileCommand({ key, event, adapter, bridge, cfg: freshCfg() }, commandWord, args),
+			);
+			if (consumed) return true;
+			if (!event.text.startsWith("/")) return false;
+		}
 		const cmd = CHAT_COMMANDS.find((c) => c.name === commandWord || c.aliases?.includes(commandWord));
 		if (!cmd) {
-			// Unknown slash command: DM → normal text, group → ignore.
 			return event.source.chatType !== "dm";
 		}
 		const ctx = {
@@ -150,7 +161,7 @@ export function createRouter(deps: RouterDeps): Router {
 			args,
 			reply: (message: string) => sendCommandReply(adapter, event, message),
 		};
-		return runChatCommand(cmd, ctx);
+		return runWithApprovalContext({ key, adapter, source: event.source }, () => runChatCommand(cmd, ctx));
 	}
 
 	/** Step 4 delivery: silence filter → split → sequential send.
@@ -248,6 +259,16 @@ export function createRouter(deps: RouterDeps): Router {
 				if (isGroupGated(event, cfg)) return;
 				if (await isDenied(adapter, event, cfg)) return;
 				const key = buildSessionKey(event.source, { groupSessionsPerUser: cfg.groupSessionsPerUser });
+				if (deps.remoteControls) {
+					const binding = conversationBinding(key);
+					if (binding?.owner) {
+						requireGatewayOwner(event.source, cfg);
+						if (binding.owner !== event.source.userId)
+							throw new Error("This session belongs to a different owner.");
+					}
+					bindConversation(key, event.source);
+					if (acceptGatewayInput(key, event)) return;
+				}
 				if (await handleSlash(adapter, event, key)) return;
 				await adapter.sendTyping(event.source.chatId, event.source.threadId).catch(() => {});
 				await runTurn(adapter, event, key, cfg);

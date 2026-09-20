@@ -16,6 +16,8 @@ import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
 import { createPicker, type PickerItem } from "./buttons.ts";
+import { FORWARDED_COMMANDS, MOBILE_COMMANDS } from "./mobile-commands.ts";
+import { conversationBinding } from "./conversations.ts";
 import type { BridgeLike } from "./router.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
@@ -259,7 +261,7 @@ const statusCommand: ChatCommand = {
 			? `${Math.max(0, Math.round((Date.now() - Date.parse(status.createdAt)) / 1000))}s`
 			: "no session yet";
 		await ctx.reply(
-			`${ctx.event.source.platform} · session age ${age} · ${status.busy ? "busy" : "idle"} · queue ${status.queueDepth}`,
+			`${ctx.event.source.platform} · session age ${age} · ${status.busy ? "busy" : "idle"} · queue ${status.queueDepth}\nProject: ${conversationBinding(ctx.key)?.cwd ?? "not selected"}`,
 		);
 	},
 };
@@ -677,7 +679,14 @@ export const CHAT_COMMANDS: ChatCommand[] = [
 
 /** Platform menu specs (e.g. Telegram setMyCommands): canonical names only, aliases skipped. */
 export function botCommandSpecs(): { name: string; description: string }[] {
-	return CHAT_COMMANDS.map((c) => ({ name: c.name, description: c.description }));
+	return [
+		...new Map(
+			[...CHAT_COMMANDS, ...MOBILE_COMMANDS, ...FORWARDED_COMMANDS].map((c) => [
+				c.name,
+				{ name: c.name, description: c.description },
+			]),
+		).values(),
+	];
 }
 
 export function formatHelpText(): string {
@@ -685,6 +694,9 @@ export function formatHelpText(): string {
 	for (const cmd of CHAT_COMMANDS) {
 		const names = [cmd.name, ...(cmd.aliases ?? [])].map((a) => `/${a}`).join(" | ");
 		lines.push(`${names} — ${cmd.description}`);
+	}
+	for (const cmd of botCommandSpecs()) {
+		if (!CHAT_COMMANDS.some((c) => c.name === cmd.name)) lines.push(`/${cmd.name} · ${cmd.description}`);
 	}
 	lines.push("");
 	lines.push("Tap to pick: /model, /thinking, /sessions (run without args to see buttons).");

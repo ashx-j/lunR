@@ -412,17 +412,18 @@ export const chatPlatformsHandler: FeatureHandler = {
 		if (cfg.telegram.token) cfg.telegram.enabled = true;
 		if (cfg.discord.token) cfg.discord.enabled = true;
 		saveGatewayConfig(cfg);
-		// Autostart OS units land in a follow-up PR. The option is persisted.
 		if (ctx.next.options.autostart === true) {
-			const hasFileToken = Boolean(cfg.telegram.token || cfg.discord.token);
-			if (!hasFileToken) {
-				console.error("chat-platforms: autostart requested but no file token in gateway.json — unit not enabled.");
-			} else {
-				console.error("chat-platforms: autostart recorded; login item install is not in this build yet.");
-			}
+			if (!cfg.telegram.token && !cfg.discord.token)
+				throw new Error("Configure a bot token with lunr gateway setup before enabling automatic startup.");
+			await (await import("../gateway/service.ts")).configureStartup("login");
+		} else if (ctx.previous?.options.autostart === true) {
+			await (await import("../gateway/service.ts")).configureStartup("off");
 		}
 	},
 	async disable(opts) {
+		const service = await import("../gateway/service.ts");
+		if (service.loadServiceSettings().startup !== "off") await service.configureStartup("off");
+		await service.stopGatewayService();
 		const cfg = loadGatewayConfig();
 		cfg.telegram.enabled = false;
 		cfg.discord.enabled = false;

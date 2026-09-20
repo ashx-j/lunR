@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { runtimeScope } from "./runtime-scope.ts";
 import type { ModelTierName, SettingsManager } from "./settings-manager.ts";
 
 /**
@@ -40,21 +41,23 @@ let parentThinkingProvider: (() => ThinkingLevel | undefined) | undefined;
 
 const bridge: ModelTiersBridge = {
 	getTierModel(tier: string): string | undefined {
-		if (!activeSettingsManager || !isModelTierName(tier)) return undefined;
-		return activeSettingsManager.getTierModel(tier);
+		const settings = runtimeScope.getStore()?.settingsManager ?? activeSettingsManager;
+		if (!settings || !isModelTierName(tier)) return undefined;
+		return settings.getTierModel(tier);
 	},
 	getTierThinking(tier: string): ThinkingLevel | undefined {
-		if (!activeSettingsManager || !isModelTierName(tier)) return undefined;
-		return activeSettingsManager.getTierThinking(tier);
+		const settings = runtimeScope.getStore()?.settingsManager ?? activeSettingsManager;
+		if (!settings || !isModelTierName(tier)) return undefined;
+		return settings.getTierThinking(tier);
 	},
 	getParentThinking(): ThinkingLevel | undefined {
-		return parentThinkingProvider?.();
+		return runtimeScope.getStore()?.thinking?.() ?? parentThinkingProvider?.();
 	},
 	setParentThinkingProvider(provider: (() => ThinkingLevel | undefined) | undefined): void {
 		parentThinkingProvider = provider;
 	},
 	isTierModeEnabled(): boolean {
-		return activeSettingsManager?.getModelTiersEnabled() ?? false;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getModelTiersEnabled() ?? false;
 	},
 	refreshToolDescription(): void {
 		if (!toolDescriptionRefresher) return;
