@@ -135,6 +135,13 @@ import {
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+import {
+	cancelSessionHandoff,
+	markSessionHandoff,
+	recordTuiActivity,
+	registerTransferHandler,
+	requestSessionTransfer,
+} from "../../core/session-handoff.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -625,7 +632,9 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
-			this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
+			const mode = this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode();
+			resetPermissions(mode);
+			this.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
 		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
@@ -637,8 +646,7 @@ export class InteractiveMode {
 			enterGoalAuto: () => this.enterGoalAuto(),
 			leaveGoalAuto: () => this.leaveGoalAuto(),
 		});
-		// lunr: reset permission mode to configured default on startup.
-		resetPermissions(this.settingsManager.getDefaultPermissionMode());
+		resetPermissions(this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode());
 		this.headerContainer = new Container();
 		if (options.startupView) {
 			this.headerContainer.addChild(new Spacer(1));
@@ -940,7 +948,9 @@ export class InteractiveMode {
 		// lunr: initialize rollback service for this session.
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
-		this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
+		this.syncPermissionModeEffects(
+			this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode(),
+		);
 
 		await this.themeController.applyFromSettings();
 
@@ -1933,8 +1943,26 @@ export class InteractiveMode {
 		return bootRows;
 	}
 
+	private unregisterSessionTransfer?: () => void;
+	private transferInProgress = false;
+	private detachedDraft = "";
+
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		await this.waitForDeferredBuiltins();
+		this.unregisterSessionTransfer?.();
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
+		this.unregisterSessionTransfer = registerTransferHandler(this.sessionManager, async ({ stop, signal }) => {
+			this.transferInProgress = true;
+			try {
+				this.detachedDraft = this.editor.getText();
+				await this.runtimeHost.releaseForTransfer({ stop, signal });
+				this.editor.setText(this.detachedDraft);
+				this.unregisterSessionTransfer?.();
+				this.showStatus("Session released for remote continuation. Draft retained. Use /reclaim to continue here.");
+			} finally {
+				this.transferInProgress = false;
+			}
+		});
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -2999,6 +3027,55 @@ export class InteractiveMode {
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
+			if (text === "/reclaim" || text === "/reclaim stop") {
+				const file = this.sessionManager.getSessionFile();
+				try {
+					if (!file) throw new Error("This session is not saved.");
+					if (!this.runtimeHost.isDetached) {
+						this.showStatus("This terminal already owns the session.");
+						return;
+					}
+					const draft = this.editor.getText();
+					await requestSessionTransfer(file, { stop: text === "/reclaim stop" });
+					await this.runtimeHost.switchSession(file);
+					this.editor.setText(draft === text ? this.detachedDraft : draft);
+					this.showStatus("Session reclaimed.");
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			if ((this.runtimeHost.isDetached || this.transferInProgress) && !["/quit", "/exit"].includes(text)) {
+				this.showError(
+					"Session is detached or transferring. Draft retained. Use /reclaim, /reclaim stop, or /quit.",
+				);
+				return;
+			}
+			if (text === "/handoff" || text === "/handoff cancel") {
+				try {
+					if (text === "/handoff cancel")
+						cancelSessionHandoff(this.sessionManager, this.runtimeHost.services.agentDir);
+					else markSessionHandoff(this.sessionManager, this.runtimeHost.services.agentDir);
+					this.showStatus(
+						text === "/handoff cancel"
+							? "Handoff mark cancelled."
+							: "Marked for phone continuation for 8 hours. Busy work must finish or be explicitly stopped before transfer.",
+					);
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			if (
+				text &&
+				!this.runtimeHost.isDetached &&
+				(!text.startsWith("/") ||
+					/^\/(?:model|thinking|effort|reasoning|off|minimal|low|medium|high|xhigh|max|mode|plan|manual|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+						text,
+					))
+			) {
+				recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
+			}
 			if (!text) {
 				this.takeSubmittedImages(text);
 				return;
@@ -4118,6 +4195,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.unregisterSessionTransfer?.();
 		this.stopSmoothStreaming();
 		if (this.planUsageTimer) {
 			clearInterval(this.planUsageTimer);
@@ -4325,6 +4403,10 @@ export class InteractiveMode {
 	}
 
 	private async handleFollowUp(): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) {
+			this.showError("Use /reclaim before sending more work. Draft retained.");
+			return;
+		}
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
 
@@ -4380,6 +4462,8 @@ export class InteractiveMode {
 	}
 
 	private cycleThinkingLevel(): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const newLevel = this.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
 			this.showStatus("Current model does not support thinking");
@@ -4394,6 +4478,8 @@ export class InteractiveMode {
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		try {
 			const result = await this.session.cycleModel(direction);
 			if (result === undefined) {
@@ -5357,6 +5443,7 @@ export class InteractiveMode {
 	}
 
 	private async showModelSelector(initialSearchInput?: string): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		// lunr: prefetch active subscription names so row rendering stays synchronous.
 		const subscriptionNames = await this.getActiveSubscriptionNames();
 		this.showSelector((done) => {
@@ -5575,6 +5662,7 @@ export class InteractiveMode {
 	}
 
 	private showUserMessageSelector(): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		const userMessages = this.session.getUserMessagesForForking();
 
 		if (userMessages.length === 0) {
@@ -5634,6 +5722,7 @@ export class InteractiveMode {
 	}
 
 	private showTreeSelector(initialSelectedId?: string): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		const tree = this.sessionManager.getTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
@@ -5793,8 +5882,16 @@ export class InteractiveMode {
 					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
 						const next = (nextName ?? "").trim();
 						if (!next) return;
+						if (sessionFilePath === this.sessionManager.getSessionFile() && !this.runtimeHost.isDetached) {
+							this.sessionManager.appendSessionInfo(next);
+							return;
+						}
 						const mgr = SessionManager.open(sessionFilePath);
-						mgr.appendSessionInfo(next);
+						try {
+							mgr.appendSessionInfo(next);
+						} finally {
+							mgr.dispose();
+						}
 					},
 					showRenameHint: true,
 					keybindings: this.keybindings,
@@ -7422,6 +7519,8 @@ export class InteractiveMode {
 
 	/** Apply addendum + auto-rollback for a mode without a status toast. */
 	private syncPermissionModeEffects(mode: PermissionMode): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		this.sessionManager.setPermissionMode(mode);
 		if (mode === "plan") {
 			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
 		} else if (mode === "auto") {
@@ -7450,6 +7549,9 @@ export class InteractiveMode {
 	}
 
 	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean }): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		this.sessionManager.setPermissionMode(mode);
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const prev = getPermissionMode();
 		if (mode === "plan" && prev !== "plan") {
 			this.previousPermissionMode = prev;
@@ -7822,6 +7924,10 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 	}
 
 	private async handleClearCommand(): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) {
+			this.showError("Use /reclaim first, or /quit to leave this terminal.");
+			return;
+		}
 		this.clearStatusIndicator();
 		this.ui.setChatScroll(0);
 		// Deferred factories must be on builtinRoster before /new rebuilds the runtime.

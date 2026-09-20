@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as registry from "../src/core/process-registry.ts";
 import { isWindows } from "../src/core/process-registry.ts";
 
@@ -19,6 +19,18 @@ describe("process-registry", () => {
 
 	afterEach(() => {
 		registry.clearRegistry();
+	});
+
+	it("retains processes whose liveness probe is inconclusive", () => {
+		registry.register(process.pid, "protected child", process.cwd(), "handoff-session");
+		const probe = vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("Denied"), { code: "EPERM" });
+		});
+		try {
+			expect(registry.list("handoff-session")[0]?.status).toBe("running");
+		} finally {
+			probe.mockRestore();
+		}
 	});
 
 	it("starts empty", () => {

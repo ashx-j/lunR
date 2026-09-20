@@ -62,6 +62,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "new", description: "Start a new session" },
 	{ name: "init", description: "Generate a starter AGENTS.md for this project" },
 	{ name: "compact", description: "Manually compact the session context" },
+	{ name: "handoff", description: "Mark this saved session for phone continuation for 8 hours, or cancel" },
+	{ name: "reclaim", description: "Reclaim this session after its remote owner releases it" },
 	{ name: "resume", description: "Resume a different session" },
 	{ name: "sessions", description: "Browse and resume sessions" },
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, themes, and context files" },

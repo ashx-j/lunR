@@ -213,6 +213,19 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export {
+	cancelSessionHandoff,
+	HANDOFF_DURATION_MS,
+	type HandoffCandidate,
+	latestTuiSession,
+	listHandoffCandidates,
+	listRegisteredSessionPaths,
+	markSessionHandoff,
+	recordTuiActivity,
+	registerTransferHandler,
+	requestSessionTransfer,
+	SessionTransferError,
+} from "./core/session-handoff.ts";
+export {
 	type BranchSummaryEntry,
 	buildContextEntries,
 	buildSessionContext,
@@ -238,6 +251,7 @@ export {
 	sessionEntryToContextMessages,
 	type ThinkingLevelChangeEntry,
 } from "./core/session-manager.ts";
+export { SessionOwnershipError } from "./core/session-ownership.ts";
 export {
 	type CompactionSettings,
 	type DefaultProjectTrust,
