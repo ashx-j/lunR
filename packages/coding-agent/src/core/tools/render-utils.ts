@@ -2,7 +2,15 @@ import * as os from "node:os";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
+import {
+	getCapabilities,
+	getImageDimensions,
+	hyperlink,
+	imageFallback,
+	Text,
+	truncateToWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
@@ -116,24 +124,58 @@ export function toolGroupTree(context: { expanded?: boolean; isError?: boolean }
 	return !context.expanded;
 }
 
-export function formatGroupedCall(opts: {
+interface GroupedCallOptions {
 	role: ToolGroupRole;
 	compact?: boolean;
 	tree?: boolean;
 	dot: string;
 	title: string;
 	detail?: string;
-}): string {
+}
+
+export class GroupedCallText extends Text {
+	private call?: GroupedCallOptions;
+	private formattedWidth?: number;
+
+	setCall(call: GroupedCallOptions): void {
+		this.setText(formatGroupedCall(call));
+		this.call = call;
+	}
+
+	override setText(text: string): void {
+		this.call = undefined;
+		this.formattedWidth = undefined;
+		super.setText(text);
+	}
+
+	override render(width: number): string[] {
+		if (this.call && this.formattedWidth !== width) {
+			super.setText(formatGroupedCall(this.call, width));
+			this.formattedWidth = width;
+		}
+		return super.render(width);
+	}
+}
+
+export function formatGroupedCall(opts: GroupedCallOptions, width?: number): string {
 	const detail = opts.detail?.trim() ? opts.detail : "";
 	const useTree = (opts.tree ?? opts.compact === true) && opts.role !== "singleton" && detail.length > 0;
 	if (!useTree) {
 		return detail ? `${opts.dot} ${opts.title} ${detail}` : `${opts.dot} ${opts.title}`;
 	}
 	const branch = opts.role === "last" ? "└─" : "├─";
+	const prefix = `  ${branch} `;
+	const continuation = opts.role === "last" ? "     " : "  │  ";
+	const leaf =
+		width === undefined
+			? `${prefix}${detail}`
+			: wrapTextWithAnsi(replaceTabs(detail), Math.max(1, width - prefix.length))
+					.map((line, index) => truncateToWidth(`${index === 0 ? prefix : continuation}${line}`, width, ""))
+					.join("\n");
 	if (opts.role === "first") {
-		return `${opts.dot} ${opts.title}\n  ${branch} ${detail}`;
+		return `${opts.dot} ${opts.title}\n${leaf}`;
 	}
-	return `  ${branch} ${detail}`;
+	return leaf;
 }
 
 /**

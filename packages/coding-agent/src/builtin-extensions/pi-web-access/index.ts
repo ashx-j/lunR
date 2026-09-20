@@ -58,7 +58,7 @@ import {
 	formatSearchChrome,
 	formatSearchDetail,
 } from "./render-search-chrome.ts";
-import { formatGroupedCall, toolGroupTree, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
+import { GroupedCallText, toolGroupTree, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
 import { loadEnabledModelPatterns, modelMatchesEnabledPatterns } from "./summary-model-scope.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
@@ -1633,18 +1633,16 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
 			}
 			const detail = formatSearchDetail(queryList, compact ? context?.result?.details : undefined);
-			return new Text(
-				formatGroupedCall({
-					role: context?.groupRole ?? "singleton",
-					compact,
-					tree: context ? toolGroupTree(context) : false,
-					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
-					title: theme.fg("toolTitle", theme.bold("search")),
-					detail: theme.fg("accent", detail),
-				}),
-				0,
-				0,
-			);
+			const header = new GroupedCallText("", 0, 0);
+			header.setCall({
+				role: context?.groupRole ?? "singleton",
+				compact,
+				tree: context ? toolGroupTree(context) : false,
+				dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
+				title: theme.fg("toolTitle", theme.bold("search")),
+				detail: theme.fg("accent", detail),
+			});
+			return header;
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {
@@ -1898,18 +1896,16 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
 			}
 			const detail = formatFetchDetail(urlList, compact ? context?.result?.details : undefined);
-			return new Text(
-				formatGroupedCall({
-					role: context?.groupRole ?? "singleton",
-					compact,
-					tree: context ? toolGroupTree(context) : false,
-					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
-					title: theme.fg("toolTitle", theme.bold("fetch")),
-					detail: theme.fg("accent", detail),
-				}),
-				0,
-				0,
-			);
+			const header = new GroupedCallText("", 0, 0);
+			header.setCall({
+				role: context?.groupRole ?? "singleton",
+				compact,
+				tree: context ? toolGroupTree(context) : false,
+				dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
+				title: theme.fg("toolTitle", theme.bold("fetch")),
+				detail: theme.fg("accent", detail),
+			});
+			return header;
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {

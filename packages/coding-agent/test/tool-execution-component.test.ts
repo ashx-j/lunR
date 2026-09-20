@@ -1241,6 +1241,54 @@ describe("ToolExecutionComponent density", () => {
 		assertTreeGroup(lines, "$", ["echo one", "echo two"]);
 	});
 
+	test("wrapped bash headers keep text out of the tree gutter", () => {
+		const tools = [
+			compactBash(
+				"wrap-first",
+				'cd ../lunR-todo-toggle/packages/coding-agent && npx vitest --run test/settings-manager.test.ts -t "enabled"',
+			),
+			compactBash(
+				"wrap-last",
+				"cd ../lunR-todo-toggle/packages/coding-agent && npx vitest --run test/system-prompt.test.ts",
+			),
+		];
+		applySameToolGrouping(tools[0], tools[1]);
+		for (const width of [40, 80, 105]) {
+			for (const [index, tool] of tools.entries()) {
+				const lines = tool
+					.render(width)
+					.map((line) => stripAnsi(line).trimEnd())
+					.filter((line) => line.trim());
+				const leaf = lines.findIndex((line) => /[├└]─/.test(line));
+				expect(leaf).toBeGreaterThanOrEqual(0);
+				expect(lines.length).toBeGreaterThan(leaf + 1);
+				for (const line of lines.slice(leaf + 1)) {
+					expect(line.startsWith(index === 0 ? "   │  " : "      "), JSON.stringify(lines)).toBe(true);
+				}
+			}
+		}
+	});
+
+	test("long file and pattern headers preserve the tree gutter", () => {
+		const detail = "a-very-long-filename-or-search-pattern-that-wraps-across-several-lines.ts";
+		for (const create of [compactRead, compactWrite, compactEdit, compactGrep, compactFind, compactLs]) {
+			const first = create("wrap-first", detail);
+			const last = create("wrap-last", detail);
+			applySameToolGrouping(first, last);
+			const lines = first
+				.render(30)
+				.map((line) => stripAnsi(line).trimEnd())
+				.filter((line) => line.trim());
+			const leaf = lines.findIndex((line) => line.includes("├─"));
+			expect(leaf).toBeGreaterThanOrEqual(0);
+			expect(lines.length).toBeGreaterThan(leaf + 1);
+			expect(
+				lines.slice(leaf + 1).every((line) => line.startsWith("   │  ")),
+				JSON.stringify(lines),
+			).toBe(true);
+		}
+	});
+
 	test("consecutive compact writes print write once and hang files off a tree", () => {
 		const lines = renderGroupedTools(compactWrite("tool-write-a", "a.ts"), compactWrite("tool-write-b", "b.ts"));
 		assertTreeGroup(lines, "write", ["a.ts", "b.ts"]);

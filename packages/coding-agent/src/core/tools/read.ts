@@ -14,7 +14,7 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
 import {
-	formatGroupedCall,
+	GroupedCallText,
 	getTextOutput,
 	renderToolFileName,
 	replaceTabs,
@@ -79,12 +79,7 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 	return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 
-function formatReadDetail(
-	args: ReadRenderArgs | undefined,
-	theme: Theme,
-	cwd: string,
-	expanded = false,
-): string {
+function formatReadDetail(args: ReadRenderArgs | undefined, theme: Theme, cwd: string, expanded = false): string {
 	const pathDisplay = renderToolFileName(str(args?.file_path ?? args?.path), theme, cwd);
 	const range = expanded ? formatReadLineRange(args, theme) : "";
 	return `${pathDisplay}${range}`;
@@ -317,7 +312,7 @@ export function createReadToolDefinition(
 			);
 		},
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as GroupedCallText | undefined) ?? new GroupedCallText("", 0, 0);
 			const compact = !context.isPartial && !context.expanded && !context.isError;
 			const classification = !context.expanded ? getCompactReadClassification(args, context.cwd) : undefined;
 			let title = theme.fg("toolTitle", theme.bold("read"));
@@ -331,16 +326,14 @@ export function createReadToolDefinition(
 			} else {
 				detail = formatReadDetail(args, theme, context.cwd, context.expanded);
 			}
-			text.setText(
-				formatGroupedCall({
-					role: context.groupRole ?? "singleton",
-					compact,
-					tree: toolGroupTree(context),
-					dot: toolStatusDotFromContext(context, theme),
-					title,
-					detail,
-				}),
-			);
+			text.setCall({
+				role: context.groupRole ?? "singleton",
+				compact,
+				tree: toolGroupTree(context),
+				dot: toolStatusDotFromContext(context, theme),
+				title,
+				detail,
+			});
 			return text;
 		},
 		renderResult(result, options, theme, context) {
