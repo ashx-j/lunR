@@ -27,7 +27,7 @@ const BOT: BotInfo = { botId: 777, botUsername: "lunrbot" };
 const TG_CFG: PlatformConfig = {
 	enabled: true,
 	token: "test-token",
-	allowedUsers: [],
+	allowedUsers: ["42"],
 	allowedChats: [],
 	requireMention: false,
 	freeResponseChats: [],
@@ -36,7 +36,7 @@ const TG_CFG: PlatformConfig = {
 const DISCORD_CFG: DiscordConfig = {
 	enabled: true,
 	token: "test-token",
-	allowedUsers: [],
+	allowedUsers: ["42"],
 	allowedChats: [],
 	requireMention: false,
 	freeResponseChats: [],

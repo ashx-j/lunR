@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
 import { noOpUIContext } from "../core/extensions/runner.ts";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../core/extensions/types.ts";
+import { runWithApprovalContext } from "./approval.ts";
 import { isAuthorized, isGatewayOwner } from "./authz.ts";
 import { createPicker } from "./buttons.ts";
 import { loadGatewayConfig } from "./config.ts";
@@ -42,6 +43,11 @@ export function gatewayDestination(key: string): { adapter: PlatformAdapter; sou
 	if (!binding || !adapter || !canDeliver(key))
 		throw new Error("This chat is no longer authorized or its platform is disconnected.");
 	return { adapter, source: binding.source };
+}
+
+export function withGatewayPresentation<T>(key: string, run: () => Promise<T>): Promise<T> {
+	const { adapter, source } = gatewayDestination(key);
+	return runWithApprovalContext({ adapter, source, key }, run);
 }
 
 export function startGatewayPresenter(connected: Map<string, PlatformAdapter>): void {
@@ -130,15 +136,17 @@ function dialog(
 	const epoch = epochs.get(key) ?? 0;
 	return new Promise((resolve, reject) => {
 		let settled = false;
-		const done = (value: string | undefined) => {
+		const finish = (value: string | undefined, error?: unknown) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timeout);
 			opts?.signal?.removeEventListener("abort", cancel);
 			inputs.delete(key);
 			dialogs.get(key)?.delete(cancel);
-			resolve(value);
+			if (error !== undefined) reject(error);
+			else resolve(value);
 		};
+		const done = (value: string | undefined) => finish(value);
 		const cancel = () => done(undefined);
 		const timeout = setTimeout(cancel, opts?.timeout ?? 300_000);
 		const set = dialogs.get(key) ?? new Set();
@@ -150,8 +158,7 @@ function dialog(
 			return;
 		}
 		void show(done, () => !settled && (epochs.get(key) ?? 0) === epoch && canDeliver(key)).catch((error) => {
-			cancel();
-			reject(error);
+			finish(undefined, error);
 		});
 	});
 }

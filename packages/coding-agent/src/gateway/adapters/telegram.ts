@@ -34,7 +34,10 @@
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import type { PlatformConfig } from "../config.ts";
+import { isAuthorized } from "../authz.ts";
+import { loadGatewayConfig, type PlatformConfig } from "../config.ts";
+import { downloadAttachment } from "../download.ts";
+import { createPairingStore } from "../pairing.ts";
 import type {
 	ButtonSpec,
 	CallbackEvent,
@@ -208,9 +211,7 @@ async function defaultCallApi(
 
 /** lunr: download an inbound file by its file_path from the Telegram file API. */
 async function defaultDownloadFile(token: string, filePath: string): Promise<Uint8Array> {
-	const res = await fetch(`${API_BASE}/file/bot${token}/${filePath}`);
-	if (!res.ok) throw new TelegramApiError(res.status, `file download HTTP ${res.status}`);
-	return new Uint8Array(await res.arrayBuffer());
+	return downloadAttachment(`${API_BASE}/file/bot${token}/${filePath}`);
 }
 
 function errMessage(err: unknown): string {
@@ -524,7 +525,10 @@ export class TelegramAdapter implements PlatformAdapter {
 		if (!event) return;
 		// lunr: download inbound image media before dispatch so the bridge can attach
 		// images to the turn. Failures drop the media but keep the text turn going.
-		if (update.message) {
+		if (
+			update.message &&
+			isAuthorized(event.source, { ...loadGatewayConfig(), telegram: this.cfg }, createPairingStore())
+		) {
 			const attachments = await this.downloadMedia(update.message);
 			if (attachments.length > 0) event.attachments = attachments;
 		}

@@ -114,7 +114,18 @@ async function createApprovalPrompt(
 			}
 		}, timeoutMs);
 
-		const entry: PendingApproval = { key, source, plan: req.kind === "plan", resolve, reject, timeout, adapter, chatId: source.chatId, threadId: source.threadId, userId: source.userId };
+		const entry: PendingApproval = {
+			key,
+			source,
+			plan: req.kind === "plan",
+			resolve,
+			reject,
+			timeout,
+			adapter,
+			chatId: source.chatId,
+			threadId: source.threadId,
+			userId: source.userId,
+		};
 		pending.set(id, entry);
 		void (async () => {
 			try {
@@ -122,7 +133,9 @@ async function createApprovalPrompt(
 				if (!result.success || !result.messageId) throw new Error(result.error ?? "Failed to send approval prompt");
 				messageId = result.messageId;
 				if (pending.get(id) !== entry) {
-					await adapter.editMessage(source.chatId, messageId, "Approval cancelled or expired.", []).catch(() => {});
+					await adapter
+						.editMessage(source.chatId, messageId, "Approval cancelled or expired.", [])
+						.catch(() => {});
 					return;
 				}
 				entry.messageId = messageId;

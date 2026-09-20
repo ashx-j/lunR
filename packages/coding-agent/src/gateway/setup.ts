@@ -5,7 +5,7 @@ import { readSecret } from "../cli/read-secret.ts";
 import { loadInstallFeatures, saveInstallFeatures } from "../core/install-features.ts";
 import { loadGatewayConfig, saveGatewayConfig } from "./config.ts";
 import { createPairingStore } from "./pairing.ts";
-import { configureStartup, type StartupMode, startGatewayService } from "./service.ts";
+import { configureStartup, loadServiceSettings, type StartupMode, startGatewayService } from "./service.ts";
 
 export async function validateBotToken(platform: "telegram" | "discord", token: string): Promise<string> {
 	const url =
@@ -35,7 +35,7 @@ export async function setupGateway(): Promise<void> {
 		throw new Error(
 			"Run lunr gateway setup in a terminal. Bot tokens are entered privately, not as command arguments.",
 		);
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	let rl = createInterface({ input: process.stdin, output: process.stdout });
 	const ask = async (question: string, fallback = "") =>
 		(await rl.question(`${question}${fallback ? ` [${fallback}]` : ""}: `)).trim() || fallback;
 	const cfg = loadGatewayConfig();
@@ -59,11 +59,11 @@ export async function setupGateway(): Promise<void> {
 			);
 			let token = cfg[platform].token;
 			if (!token || (await ask("Replace the saved token? yes/no", "no")) === "yes") {
-				rl.pause();
+				rl.close();
 				try {
 					token = (await readSecret(`${platform} bot token`))?.trim();
 				} finally {
-					rl.resume();
+					rl = createInterface({ input: process.stdin, output: process.stdout });
 				}
 			}
 			if (!token) throw new Error("No token entered. Existing configuration was not changed.");
@@ -94,21 +94,50 @@ export async function setupGateway(): Promise<void> {
 			console.log(
 				"Boot startup may require administrator permission or OS-managed account credentials. lunR does not save your account password.",
 			);
-		console.log(
-			"Gateway uses your saved lunR model and credentials. Configure them locally with /login and /model if needed.",
+		const [{ ModelRuntime }, { SettingsManager }] = await Promise.all([
+			import("../core/model-runtime.ts"),
+			import("../core/settings-manager.ts"),
+		]);
+		const runtime = await ModelRuntime.create({ allowModelNetwork: false });
+		const models = await runtime.getAvailable();
+		if (!models.length)
+			throw new Error(
+				"No saved model credentials found. Open lunr locally and use /login, then rerun gateway setup. Nothing saved.",
+			);
+		const settings = SettingsManager.create(process.cwd());
+		const providers = [...new Set(models.map((model) => model.provider))];
+		console.log(`Saved providers: ${providers.join(", ")}`);
+		const provider = await ask("Model provider", settings.getDefaultProvider() ?? providers[0]);
+		const choices = models.filter((model) => model.provider === provider);
+		if (!choices.length) throw new Error("Choose one of the saved providers. Nothing saved.");
+		console.log(choices.map((model, index) => `${index + 1}. ${model.id}`).join("\n"));
+		const selected = await ask(
+			"Model number or ID",
+			choices.find((model) => model.id === settings.getDefaultModel())?.id ?? choices[0].id,
 		);
+		const model = choices.find((model) => model.id === selected) ?? choices[Number(selected) - 1];
+		if (!model) throw new Error("Choose a model from the list. Nothing saved.");
 		if ((await ask("Save these settings? yes/no", "yes")) !== "yes") {
 			console.log("Cancelled. Nothing saved.");
 			return;
 		}
 		saveGatewayConfig(cfg);
+		settings.setDefaultModelAndProvider(model.provider, model.id);
 		const features = loadInstallFeatures();
 		features.features["chat-platforms"] = {
 			enabled: true,
-			options: { ...features.features["chat-platforms"]?.options, autostart: startup !== "off" },
+			options: {
+				...features.features["chat-platforms"]?.options,
+				autostart: loadServiceSettings().startup !== "off",
+			},
 		};
 		saveInstallFeatures(features);
-		await configureStartup(startup as StartupMode);
+		try {
+			await configureStartup(startup as StartupMode);
+		} finally {
+			features.features["chat-platforms"].options.autostart = loadServiceSettings().startup !== "off";
+			saveInstallFeatures(features);
+		}
 		if ((await ask("Start the gateway now? yes/no", "yes")) === "yes") console.log(await startGatewayService());
 		console.log(
 			"\nSend /whoami to your bot. To approve your own pairing code with access to projects and TUI sessions, run:\nlunr gateway pair approve <telegram|discord> <code> --owner\nThen use /project, /sessions, or /continue on your phone.",

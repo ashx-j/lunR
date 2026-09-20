@@ -79,11 +79,13 @@ interface MobileContext {
 	cfg: GatewayConfig;
 }
 
-async function browseProject(ctx: MobileContext): Promise<void> {
+async function browseProject(ctx: MobileContext, initialPath?: string): Promise<void> {
 	const { key, event, adapter, bridge } = ctx;
 	const roots = ctx.cfg.projectRoots ?? [];
 	if (!roots.length) throw new Error("Add approved project folders with lunr gateway setup first.");
-	let current: string | undefined;
+	let current: string | undefined = initialPath
+		? resolveWithinRoots(initialPath, ctx.cfg.projectRoots ?? [])
+		: undefined;
 	const view = (): { title: string; items: PickerItem[] } => {
 		if (!current)
 			return {
@@ -153,14 +155,19 @@ async function browseProject(ctx: MobileContext): Promise<void> {
 }
 
 const transfers = new Map<string, AbortController>();
-export function cancelMobileTransfer(key: string): void { transfers.get(key)?.abort(); }
+export function cancelMobileTransfer(key: string): void {
+	transfers.get(key)?.abort();
+}
 
 async function continueSession(ctx: MobileContext, file: string): Promise<void> {
 	if (transfers.has(ctx.key)) throw new Error("A session transfer is already pending. Use /stop to cancel it.");
 	const controller = new AbortController();
 	transfers.set(ctx.key, controller);
-	try { await performContinue(ctx, file, controller.signal); }
-	finally { transfers.delete(ctx.key); }
+	try {
+		await performContinue(ctx, file, controller.signal);
+	} finally {
+		transfers.delete(ctx.key);
+	}
 }
 
 async function performContinue(ctx: MobileContext, file: string, signal: AbortSignal): Promise<void> {
@@ -190,9 +197,16 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 			for (;;) {
 				signal.throwIfAborted();
 				requireGatewayOwner(ctx.event.source);
-				try { await requestSessionTransfer(file, { timeoutMs: 3000, signal }); break; }
-				catch (retryError) {
-					if (!(retryError instanceof SessionTransferError) || retryError.code !== "busy" || Date.now() >= deadline) throw retryError;
+				try {
+					await requestSessionTransfer(file, { timeoutMs: 3000, signal });
+					break;
+				} catch (retryError) {
+					if (
+						!(retryError instanceof SessionTransferError) ||
+						retryError.code !== "busy" ||
+						Date.now() >= deadline
+					)
+						throw retryError;
 				}
 				await new Promise((resolve) => setTimeout(resolve, 500));
 			}
@@ -208,14 +222,17 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 	if (id && ["auto", "yolo"].includes(getPermissionMode(id))) {
 		const requested = getPermissionMode(id);
 		setPermissionMode("manual", id);
+		session?.sessionManager?.setPermissionMode?.("manual");
 		if (
 			(await gatewaySelect(
 				key,
 				`Continue with ${requested} permissions? Tools can change files and run commands without individual approval.`,
 				["Keep manual", `Use ${requested}`],
 			)) === `Use ${requested}`
-		)
+		) {
 			setPermissionMode(requested, id);
+			session?.sessionManager?.setPermissionMode?.(requested);
+		}
 	}
 	await ctx.adapter.send(
 		ctx.event.source.chatId,
@@ -302,7 +319,7 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	requireGatewayOwner(ctx.event.source, ctx.cfg);
 	bindConversation(ctx.key, ctx.event.source, { owner: ctx.event.source.userId });
 	if (command === "project") {
-		await browseProject(ctx);
+		await browseProject(ctx, args.trim() || undefined);
 		return true;
 	}
 	if (command === "sessions" || command === "resume" || command === "continue") {
@@ -356,9 +373,12 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	if (command === "stopall") {
 		await ctx.bridge.abort(ctx.key);
 		const result = id ? await getSubagentCancellation(id)?.stop() : undefined;
+		const processes = await import("../core/process-registry.ts");
+		const count = id ? processes.list(id).filter((p) => p.status !== "exited").length : 0;
+		if (id) processes.killAll(id);
 		await ctx.adapter.send(
 			ctx.event.source.chatId,
-			`Stopped the current turn. Requested stop for ${result?.requested ?? 0} background runs${result?.failed ? `; ${result.failed} requests failed` : ""}.`,
+			`Stopped the current turn. Requested stop for ${result?.requested ?? 0} background runs and ${count} tracked processes${result?.failed ? `; ${result.failed} requests failed` : ""}. Wait for them to exit before transferring.`,
 		);
 		return true;
 	}
@@ -432,6 +452,7 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	if (!PERMISSION_MODES.includes(requested as (typeof PERMISSION_MODES)[number]))
 		throw new Error("Choose manual, yolo, plan, or auto.");
 	setPermissionMode(requested as (typeof PERMISSION_MODES)[number], id);
+	session.sessionManager?.setPermissionMode?.(requested as (typeof PERMISSION_MODES)[number]);
 	await ctx.adapter.send(ctx.event.source.chatId, `Permission mode: ${requested}`);
 	if (command === "plan" && args) {
 		ctx.event.text = args;

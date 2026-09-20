@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-20 (gateway remote-work branch; published release remains v0.2.21). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Gateway remote work (`feat/gateway-remote-work`):** interactive setup and saved-model selection, verified native login/boot startup definitions, lifecycle CLI and Gateway settings, Telegram menus and Discord native commands, owner-DM project/session browsing, chat approvals and file exchange, persistent background notices. Core session ownership protects every persistent writer. TUI `/handoff` marks last eight hours without consumption; mobile `/continue` prefers marks then TUI activity; `/reclaim` opens fresh state. Read `packages/coding-agent/docs/features.md` before changing setup, access rules, startup, or transfer behavior. No release or installed-service change.
 - **v0.2.21:** ships #82 Windows intercom startup, #83 subagent UI polish, #84 question/resume delivery, and #85 async-by-default. The combined call renderer keeps #83 title lookup and persisted `displayTitle` with #85 argument normalization and omitted-async default. Native computer use #77 stays open.
 - **Intercom Windows startup (`fix/intercom-windows-startup`):** the hidden launcher owns stderr redirection without a competing parent file handle. Each launch resets its diagnostic log; early exits report their code and failures include the log path. The launcher exits once startup settles, while the broker remains independent. Broker reuse, native supervisor bypass, and subagent delivery are unchanged. Tests: intercom-startup + continuation/delivery/question/cancellation suites.
 
@@ -132,6 +133,7 @@ Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Gateway remote work (2026-09-20): 398 tests pass across 30 gateway/session/lifecycle suites. Installer checks pass 28/29; the expired pre-0.2.0 inference assertion also fails against unchanged master files. All five offline package builds and the coding-agent Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with the unchanged tool payload. `scripts/check-gateway-remote.mjs` verifies the compiled gateway against a local provider: desktop continuation, original cwd, a real write-tool approval through chat, file download, and desktop reclaim. Changed TypeScript passes Biome and `git diff --check`; rebuilt CLI reports 0.2.21. No live bot credentials, native service installation, reboot verification, release, or installed CLI update.
 - v0.2.21 release (2026-09-13): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 185/185 across 11 suites. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with hash `5325fdc0…`. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt CLI `--version` reports 0.2.21. Publication workflow `34766302131` succeeded from tag `v0.2.21` at `833b964`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.21 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed. Native computer use #77 stays open.
 - Combined #82/#83/#84/#85 merge (2026-09-13): focused Vitest passes 185/185 across 11 suites covering intercom startup, question/resume delivery, compact UI, spinner/widget order, and async-by-default. #83 title lookup and #85 async default both remain on `renderSubagentCall`. First-paint keeps Windows broker cleanup plus isolated `PI_*` scrubbing and hash `5325fdc0…`. Native computer use #77 stays open. No release or installed CLI update.
 - Intercom Windows startup (2026-09-13): five offline package builds and the coding-agent Node bundle pass. Focused Vitest passes 52/52 across nine suites. The compiled broker integration reproduced the original timeout before the fix, then passed launch/reuse, launcher cleanup, two-client question/reply, early-exit, and health-timeout checks. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with the unchanged tool-schema fingerprint. Two isolated interactive CLI processes with simulated terminal streams exchanged a question/reply through the real intercom tool using a local scripted provider. Async question-wait and idle-parent-wake CLI checks pass. The installed CLI and original workspace build remain unchanged.
@@ -204,6 +206,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Gateway project/session/file controls require an explicit owner in a private DM; ordinary pairing and role/group access are insufficient. Project roots bound the browser, not shell tools. Revalidate callbacks and keep session settings in `runtime-scope.ts` across asynchronous work.
+- Transfer handlers check cancellation before quiescence and immediately before shutdown, then complete release once shutdown starts. Active children and tracked processes block transfer. A stop request is not proof of process death; keep process records until liveness confirms exit. Session-manager ownership is required before mutable loading; read-only inspection uses `openReadOnly` and old binaries cannot honor the new locks.
+- Gateway verification uses isolated profiles and a local scripted model, with `.artifacts/gateway-local-output.json` as evidence. The untracked `LUNR_SYSTEM_INJECTION.md` and `.artifacts/gateway-tool-inventory.json` contain that fixture's prompt and tool definitions, not the user's configured prompt. Native service specifications are tested without installing services; Linux/macOS/Windows boot and real bot UX still need host verification.
 - Windows intercom: `cmd.exe` cannot redirect into `broker.stderr.log` while the parent holds it open. Keep Windows redirection and direct-launch fd inheritance separate. The hidden launcher waits for an exit code during startup only; release it when the health check settles. Startup fixtures must stop their isolated broker before removing its profile because a healthy broker outlives the CLI.
 
 - Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
@@ -276,6 +281,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-20: use one persistent writer and cooperative release/reopen for desktop-phone continuity; manual marks rank sessions without expiring or consuming the sessions themselves.
+- 2026-09-20: reserve cross-project access for owner DMs and verify native startup separately from stored preferences; keep project selection explicitly outside any shell-sandbox claim.
 - 2026-09-13: ship #82, #83, #84, and #85 as 0.2.21; keep native computer use #77 open.
 - 2026-09-13: merge #82, #83, #84, and #85 onto master without squashing; keep #83 title lookup with #85 async default; leave native computer use #77 open.
 - 2026-09-13: keep intercom and its subagent relay intact; fix Windows stderr ownership and expose startup exit codes instead of replacing the communication system.
@@ -402,7 +409,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Deferred
 
-- Gateway cold first slash after daemon start can hang minutes.
+- Gateway live cold-start, real Telegram/Discord UX, and native startup installation/reboot checks on Linux, macOS, and Windows remain unverified; isolated first-turn and transfer checks pass.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Scope rename; `PI_CODING_AGENT*` rename; `/share` still pi.dev.
 - **`~/.pi` leakage (vendored copies only):** mcp-adapter, intercom broker, web-access keys/settings, pi-goal-state, simple-pi-memory (+ rollback snapshots that path), TUI crash log `~/.pi/agent/pi-crash.log`. Fix: route through `getAgentDir()` / set `PI_CODING_AGENT_DIR` at startup + migrate. Catalog no longer hits pi.dev.

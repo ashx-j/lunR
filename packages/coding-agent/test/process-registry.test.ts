@@ -60,8 +60,9 @@ describe("process-registry", () => {
 		expect(tracked?.status).toBe("running");
 
 		registry.kill(child.pid);
-		// After explicit kill, the entry is removed (user action, not retained).
-		expect(registry.list().find((p) => p.pid === child.pid)).toBeUndefined();
+		await vi.waitFor(() =>
+			expect(registry.list().some((p) => p.pid === child.pid && p.status !== "exited")).toBe(false),
+		);
 	});
 
 	it("killAll kills all tracked processes", async () => {
@@ -80,7 +81,7 @@ describe("process-registry", () => {
 
 		expect(registry.list().length).toBeGreaterThanOrEqual(2);
 		registry.killAll();
-		expect(registry.list().length).toBe(0);
+		await vi.waitFor(() => expect(registry.list().some((p) => p.status !== "exited")).toBe(false));
 	});
 
 	it("clearRegistry removes all entries", async () => {

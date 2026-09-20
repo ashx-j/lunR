@@ -113,7 +113,7 @@ function isAlive(pid: number): boolean {
 export function kill(pid: number): void {
 	if (!processes.has(pid)) return;
 	killProcessTree(pid);
-	processes.delete(pid);
+	if (!isAlive(pid)) markExited(pid, null);
 }
 
 export function killAll(sessionId?: string): void {
@@ -124,7 +124,7 @@ export function killAll(sessionId?: string): void {
 		} catch {
 			// ignore
 		}
-		processes.delete(pid);
+		if (!isAlive(pid)) markExited(pid, null);
 	}
 }
 

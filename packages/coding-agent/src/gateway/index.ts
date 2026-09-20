@@ -34,6 +34,7 @@ import { createPairingStore } from "./pairing.ts";
 import { startGatewayPresenter, stopGatewayPresenter } from "./presenter.ts";
 import { createRouter } from "./router.ts";
 import { claimGateway } from "./service.ts";
+import { buildSessionKey } from "./session-keys.ts";
 import { listSessions } from "./store.ts";
 import type { PlatformAdapter } from "./types.ts";
 
@@ -177,6 +178,15 @@ async function runDaemon(): Promise<number> {
 
 	const pairing = createPairingStore();
 	const bridge = new AgentBridge();
+	for (const adapter of adapters.values())
+		adapter.setCommandSuggestions?.(async (source, command) => {
+			const session = bridge.peekSession(buildSessionKey(source, loadGatewayConfig()));
+			if (!session) return [];
+			if (command === "thinking") return session.getAvailableThinkingLevels();
+			if (command === "model")
+				return (await session.modelRuntime.getAvailable()).map((model) => `${model.provider}/${model.id}`);
+			return [];
+		});
 	const router = createRouter({ adapters, cfg, pairing, bridge, reloadConfig: true, remoteControls: true });
 
 	let finish!: () => void;
@@ -204,8 +214,12 @@ async function runDaemon(): Promise<number> {
 			finish();
 		})().catch((error) => {
 			console.error("Gateway shutdown failed:", error instanceof Error ? error.message : String(error));
-			process.exitCode = 1;
-			finish();
+			stopping = false;
+			owner.update(platformStatus, "ready");
+			startButtonSweeper();
+			cron = startGatewayCron({ adapters, cfg });
+			for (const [platform, adapter] of adapters)
+				if (platformStatus[platform] !== "connected") void connect(platform, adapter);
 		});
 	};
 	const owner = claimGateway(shutdown);

@@ -93,6 +93,7 @@ export interface PlatformAdapter {
 	sendButtons(chatId: string, text: string, rows: ButtonSpec[][], opts?: SendOptions): Promise<SendResult>;
 	editMessage(chatId: string, messageId: string, text: string, buttons?: ButtonSpec[][]): Promise<SendResult>;
 	sendTyping(chatId: string, threadId?: string): Promise<void>;
+	setCommandSuggestions?(handler: (source: SessionSource, command: string) => Promise<readonly string[]>): void;
 	onMessage(handler: (event: MessageEvent) => void): void;
 	onCallback(handler: (event: CallbackEvent) => void | Promise<void>): void;
 	answerCallback(id: string, text?: string): Promise<void>;

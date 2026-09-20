@@ -26,7 +26,7 @@ import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
 import type { PairingStore } from "./pairing.ts";
-import { acceptGatewayInput } from "./presenter.ts";
+import { acceptGatewayInput, invalidateGatewayDialogs } from "./presenter.ts";
 import { buildSessionKey } from "./session-keys.ts";
 import { applySilenceFilter, StreamConsumer } from "./stream.ts";
 import { splitMessage } from "./text.ts";
@@ -143,6 +143,13 @@ export function createRouter(deps: RouterDeps): Router {
 		if (deps.remoteControls) {
 			const { handleMobileCommand, cancelMobileTransfer } = await import("./mobile-commands.ts");
 			if (["stop", "stopall", "new", "cancel"].includes(commandWord)) cancelMobileTransfer(key);
+			if (commandWord === "cancel") {
+				invalidateGatewayDialogs(key);
+				await adapter.send(event.source.chatId, "Cancelled the pending selection or transfer.", {
+					threadId: event.source.threadId,
+				});
+				return true;
+			}
 			const consumed = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
 				handleMobileCommand({ key, event, adapter, bridge, cfg: freshCfg() }, commandWord, args),
 			);

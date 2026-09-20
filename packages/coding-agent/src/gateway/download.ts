@@ -13,12 +13,20 @@ export async function downloadAttachment(url: string, limit = 8 * 1024 * 1024): 
 			const part = await reader.read();
 			if (part.done) break;
 			size += part.value.byteLength;
-			if (size > limit) { await reader.cancel(); throw new Error("Attachment exceeds the 8 MB limit."); }
+			if (size > limit) {
+				await reader.cancel();
+				throw new Error("Attachment exceeds the 8 MB limit.");
+			}
 			parts.push(part.value);
 		}
-	} finally { reader.releaseLock(); }
+	} finally {
+		reader.releaseLock();
+	}
 	const bytes = new Uint8Array(size);
 	let offset = 0;
-	for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+	for (const part of parts) {
+		bytes.set(part, offset);
+		offset += part.byteLength;
+	}
 	return bytes;
 }

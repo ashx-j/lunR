@@ -261,6 +261,8 @@ export function startupSpec(
 	options: { home: string; agentDir: string; node: string; cli: string; username: string; uid: number },
 ): StartupSpec {
 	const { home, agentDir, node, cli, username, uid } = options;
+	if ([home, agentDir, node, cli, username].some((value) => /[\r\n\0]/.test(value)))
+		throw new Error("Startup paths and account names must not contain control characters.");
 	const suffix = createHash("sha256").update(resolve(agentDir)).digest("hex").slice(0, 10);
 	const serviceName = `${servicePrefix}-${suffix}`;
 	const log = join(agentDir, "gateway-service", "gateway.log");
@@ -268,7 +270,7 @@ export function startupSpec(
 		const path = join(home, ".config", "systemd", "user", `${serviceName}.service`);
 		return {
 			path,
-			content: `[Unit]\nDescription=lunR chat gateway\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${systemdArg(node)} ${systemdArg(cli)} gateway run\nWorkingDirectory=${systemdArg(home)}\nEnvironment=${systemdArg(`PI_CODING_AGENT_DIR=${agentDir}`)}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`,
+			content: `[Unit]\nDescription=lunR chat gateway\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${systemdArg(node)} ${systemdArg(cli)} gateway run\nWorkingDirectory=${systemdArg(home)}\nEnvironment=${systemdArg(`PI_CODING_AGENT_DIR=${agentDir}`)}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nStandardOutput=append:${log.replaceAll("%", "%%")}\nStandardError=append:${log.replaceAll("%", "%%")}\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`,
 			install: [
 				...(mode === "boot" ? [["loginctl", "enable-linger", username]] : []),
 				["systemctl", "--user", "daemon-reload"],
@@ -380,13 +382,34 @@ export async function configureStartup(mode: StartupMode): Promise<void> {
 	atomicJson(settingsPath(), { startup: mode });
 }
 
+function startupVerification(): string {
+	const mode = loadServiceSettings().startup;
+	if (mode === "off") return "";
+	try {
+		const user = userInfo();
+		const spec = startupSpec(process.platform, mode, {
+			home: homedir(),
+			agentDir: getAgentDir(),
+			node: process.execPath,
+			cli: cliPath(),
+			username: user.username,
+			uid: user.uid,
+		});
+		const [command, ...args] = spec.verify[0] === "sudo" ? spec.verify.slice(1) : spec.verify;
+		const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 5000 });
+		return result.status === 0 ? " (native service verified)" : " (native service missing or unavailable)";
+	} catch {
+		return " (native service could not be checked)";
+	}
+}
+
 export function serviceStatusText(): string {
 	const status = readGatewayStatus();
 	const alive = !!status && processExists(status.pid);
 	const fresh = !!status && Date.now() - Date.parse(status.updatedAt) < 5000;
 	return [
 		`Gateway: ${alive ? `${status.state}${fresh ? "" : " (not responding)"}` : "stopped"}`,
-		`Automatic startup: ${loadServiceSettings().startup}`,
+		`Automatic startup: ${loadServiceSettings().startup}${startupVerification()}`,
 		...(alive
 			? [`PID: ${status.pid}`, ...Object.entries(status.platforms).map(([name, state]) => `${name}: ${state}`)]
 			: []),
