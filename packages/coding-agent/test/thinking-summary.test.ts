@@ -13,13 +13,13 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 
 function createAssistantMessage(
 	content: AssistantMessage["content"],
-	overrides: Partial<Pick<AssistantMessage, "stopReason">> = {},
+	overrides: Partial<Pick<AssistantMessage, "provider" | "stopReason">> = {},
 ): AssistantMessage {
 	return {
 		role: "assistant",
 		content,
 		api: "openai-responses",
-		provider: "openai",
+		provider: overrides.provider ?? "openai",
 		model: "gpt-4o-mini",
 		usage: {
 			input: 0,
@@ -179,6 +179,28 @@ describe("AssistantMessageComponent collapsed thinking", () => {
 		expect(rendered).toContain("I need to check the fork path.");
 		expect(rendered).not.toContain("Then I edit it.");
 		expect(rendered).toContain("answer");
+	});
+
+	test("removes Codex bold delimiters from collapsed snippets", () => {
+		initTheme("moon");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "**Verifying cross-platform security**" }], {
+				provider: "openai-codex",
+			}),
+			false,
+			undefined,
+			"Thinking...",
+			1,
+			true,
+		);
+		component.setThinkingTimings([{ start: 0, end: 3000 }]);
+		component.setThinkingCollapse(true);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("✻ Thought for 3s");
+		expect(rendered).toContain("Verifying cross-platform security");
+		expect(rendered).not.toContain("**");
 	});
 
 	test("renders a bare label for history messages without timings", () => {

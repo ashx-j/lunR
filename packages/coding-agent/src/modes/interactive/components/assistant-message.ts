@@ -292,7 +292,10 @@ export class AssistantMessageComponent extends Container {
 					: "✻ Thought";
 			const block = new Container();
 			block.addChild(new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0));
-			const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
+			const joinedThinking = thinkingBlocks.join("\n\n");
+			const snippet = thinkingSnippet(
+				displayMessage.provider === "openai-codex" ? joinedThinking.replaceAll("**", "") : joinedThinking,
+			);
 			if (snippet) {
 				block.addChild(new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0));
 			}
