@@ -116,6 +116,14 @@ Without runnable adapters (enabled platform + resolvable token), `lunr gateway` 
 - **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
 - **Web search** — `/websearch` (and related search commands). Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
 
+## Headless browser
+
+The first-party `browser` tool is on by default. Normal installation and updates install matching Chromium automatically. Browser in `/settings` turns the tool off and closes active contexts immediately; cached binaries remain. Offline or ignored-script installs can recover later with `lunr browser install`. Startup and tool execution never install Chromium. The browser handles JavaScript-rendered pages and accessible website interactions, while `web_search` remains discovery and `fetch_content` remains URL reading. There is no automatic browser fallback.
+
+The browser uses ephemeral session-owned contexts. Plan/read-only blocks interactions, and manual mode approves them through the existing permission gate. Public HTTP(S) is the default; local/private access requires explicit user configuration. Website effects cannot be reversed by `/undo`.
+
+See [Headless browser](browser.md) for action parameters, installation exceptions, legacy setting precedence, private-network risks, lifecycle limits, and validation.
+
 ## Thinking, usage, streaming, UI
 
 - `/thinking`, `/effort`, and `/reasoning` are full-parity aliases. `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, and `/max` set a level when the current model supports it. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.

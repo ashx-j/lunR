@@ -11,6 +11,7 @@ const rootLockfilePath = join(repoRoot, "package-lock.json");
 const shrinkwrapPath = join(codingAgentDir, "npm-shrinkwrap.json");
 const internalPackagePrefix = "@earendil-works/pi-";
 const allowedInstallScriptPackages = new Map([
+	[`@earendil-works/pi-coding-agent@${JSON.parse(readFileSync(join(codingAgentDir, "package.json"), "utf8")).version}`, "postinstall installs matching Chromium; offline and skip-download modes remain supported"],
 	["@google/genai@1.52.0", "preinstall is a no-op in the published package"],
 	["protobufjs@7.6.5", "postinstall only warns about protobufjs version scheme mismatches"],
 	["unicode-animations@1.0.3", "postinstall is a TTY spinner demo; exits immediately in CI and non-TTY"],
@@ -108,6 +109,7 @@ function copyPackageJsonEntry(packageJson, options) {
 		}
 	}
 
+	if (["preinstall", "install", "postinstall"].some((name) => packageJson.scripts?.[name])) entry.hasInstallScript = true;
 	return sortedPackageEntry(entry);
 }
 
@@ -229,7 +231,7 @@ function validateShrinkwrap(shrinkwrap, internalNames) {
 	const seenAllowedInstallScriptPackages = new Set();
 
 	for (const [lockPath, entry] of Object.entries(shrinkwrap.packages)) {
-		const packageName = packageNameFromLockPath(lockPath);
+		const packageName = lockPath ? packageNameFromLockPath(lockPath) : entry.name;
 		if (packageName) {
 			includedPackageNames.add(packageName);
 		}

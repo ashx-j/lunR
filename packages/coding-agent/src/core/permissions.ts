@@ -247,6 +247,9 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 	const globalSettings = normalize(join(getAgentDir(), "settings.json"));
 	const projectSettings = normalize(join(cwd, CONFIG_DIR_NAME, "settings.json"));
 	const normalizedTarget = normalize(target);
+	if (normalizedTarget === normalize(join(getAgentDir(), "install-features.json"))) {
+		return "Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.";
+	}
 	if (normalizedTarget === globalSettings || normalizedTarget === projectSettings) {
 		return SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON;
 	}
@@ -292,6 +295,7 @@ function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChi
 }
 
 function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
+	if (toolName === "browser") return input.action === "act";
 	if (isMutatingTool(toolName)) return true;
 	if (toolName === "subagent") {
 		return getRequestedChildLaunches(input).some((launch) => launch.permissions === "full");
@@ -490,6 +494,11 @@ export async function gateToolCall(
 		const launches = getRequestedChildLaunches(input).filter((launch) => launch.permissions === "full");
 		detail = sanitizeDetail(
 			launches.map((launch) => `${launch.description}\npermissions: ${launch.permissions}`).join("\n"),
+		);
+	} else if (toolName === "browser") {
+		action = "browser";
+		detail = sanitizeDetail(
+			`${input.interaction ?? ""} ${input.role ?? ""} ${input.name ?? input.label ?? ""}. Website effects cannot be undone.`,
 		);
 	} else if (toolName === "code_rewrite") {
 		action = "code_rewrite";

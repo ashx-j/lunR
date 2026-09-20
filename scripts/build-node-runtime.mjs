@@ -37,6 +37,7 @@ const result = await build({
 		"open",
 		"unpdf",
 		"discord.js",
+		"playwright-core",
 	],
 	banner: {
 		js: 'import { createRequire as __lunrRequire } from "node:module"; const require = __lunrRequire(import.meta.url);',

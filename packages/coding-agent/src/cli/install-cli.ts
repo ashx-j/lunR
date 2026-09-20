@@ -166,6 +166,8 @@ async function runSetup(argv: string[]): Promise<number> {
 		};
 	}
 
+	const { installBrowser } = await import("../core/browser/setup.ts");
+	await installBrowser(false);
 	saveInstallFeatures(next);
 	appendInstallLog(`setup installerVersion=${VERSION}`);
 	console.log(`Writing ${getAgentDir()}/install-features.json`);
@@ -352,6 +354,16 @@ async function runProductUninstall(argv: string[]): Promise<number> {
  */
 export async function handleInstallCli(args: string[]): Promise<boolean> {
 	const [verb, ...rest] = args;
+	if (verb === "browser") {
+		if (rest.length !== 1 || rest[0] !== "install") {
+			console.error("Usage: lunr browser install. Browser on/off is in /settings.");
+			process.exitCode = 2;
+		} else {
+			const { installBrowser } = await import("../core/browser/setup.ts");
+			await installBrowser();
+		}
+		return true;
+	}
 	if (verb === "setup") {
 		process.exitCode = await runSetup(rest);
 		return true;

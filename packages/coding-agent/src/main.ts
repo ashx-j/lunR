@@ -564,7 +564,7 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (["setup", "features", "uninstall"].includes(args[0])) {
+	if (["setup", "features", "uninstall", "browser"].includes(args[0])) {
 		const { handleInstallCli } = await import("./cli/install-cli.ts");
 		if (await handleInstallCli(args)) return;
 	}

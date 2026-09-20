@@ -6,6 +6,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { browserEnabledDefault, notifyBrowserEnabledChange } from "./browser/settings.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
 import {
@@ -160,6 +161,8 @@ export interface Settings {
 	modelTiers?: ModelTiersSettings;
 	modelInstructions?: ModelInstructionsSettings;
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
+	browserEnabled?: boolean;
+	browserAllowPrivateNetwork?: boolean;
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
 	todosEnabled?: boolean; // default: true - expose the todo tool and its prompt guidance
@@ -1025,6 +1028,17 @@ export class SettingsManager {
 			return Math.min(MEMORY_CHAR_CAP_MAX, Math.max(MEMORY_CHAR_CAP_MIN, Math.floor(value)));
 		}
 		return MEMORY_CHAR_CAP_DEFAULT;
+	}
+
+	getBrowserEnabled(): boolean {
+		return this.globalSettings.browserEnabled ?? browserEnabledDefault();
+	}
+
+	setBrowserEnabled(enabled: boolean): void {
+		this.globalSettings.browserEnabled = enabled;
+		this.markModified("browserEnabled");
+		this.save();
+		notifyBrowserEnabledChange(enabled);
 	}
 
 	getMemoryEnabled(): boolean {

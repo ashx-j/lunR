@@ -2743,7 +2743,8 @@ export class AgentSession {
 			(!allowedToolNames || allowedToolNames.has(name)) &&
 			!excludedToolNames?.has(name) &&
 			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name)) &&
-			(this.settingsManager.getTodosEnabled() || !TODO_TOOL_NAMES.has(name));
+			(this.settingsManager.getTodosEnabled() || !TODO_TOOL_NAMES.has(name)) &&
+			(name !== "browser" || this.settingsManager.getBrowserEnabled());
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [

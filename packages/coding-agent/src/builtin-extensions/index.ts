@@ -53,6 +53,7 @@ const DEFERRED_BUILTIN_LOADERS: Array<{
 	{ name: "pi-prompt-template-model", load: () => import("./pi-prompt-template-model/index.ts") },
 	{ name: "pi-subagents", load: () => import("./pi-subagents/index.ts") },
 	{ name: "pi-web-access", load: () => import("./pi-web-access/index.ts") },
+	{ name: "lunr-browser", load: () => import("./lunr-browser.ts") },
 	{ name: "pi-lsp-extension", load: () => import("./pi-lsp-extension/src/index.ts") },
 	{ name: "pi-mcp-adapter", load: () => import("./pi-mcp-adapter/index.ts") },
 ];
