@@ -14,7 +14,13 @@ import {
 	type ApprovalResponse,
 	NO_HANDLER_REASON,
 	registerApprovalHandler,
+	setPermissionMode,
 } from "../core/permissions.ts";
+import { isAuthorized, isGatewayOwner } from "./authz.ts";
+import { loadGatewayConfig } from "./config.ts";
+import { conversationBinding } from "./conversations.ts";
+import { createPairingStore } from "./pairing.ts";
+import { getSession } from "./store.ts";
 import type { ButtonSpec, CallbackEvent, PlatformAdapter, SessionSource } from "./types.ts";
 
 const CALLBACK_PREFIX = "ap:";
@@ -30,6 +36,9 @@ interface ApprovalContext {
 }
 
 interface PendingApproval {
+	key?: string;
+	source: SessionSource;
+	plan: boolean;
 	resolve: (value: ApprovalResponse) => void;
 	reject: (reason?: unknown) => void;
 	timeout: ReturnType<typeof setTimeout>;
@@ -79,6 +88,7 @@ async function createApprovalPrompt(
 	source: SessionSource,
 	req: ApprovalRequest,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
+	key?: string,
 ): Promise<ApprovalResponse> {
 	const id = generateId();
 	// Large child launches get a dedicated title; inline buttons cannot capture feedback.
@@ -104,27 +114,34 @@ async function createApprovalPrompt(
 			}
 		}, timeoutMs);
 
+		const entry: PendingApproval = {
+			key,
+			source,
+			plan: req.kind === "plan",
+			resolve,
+			reject,
+			timeout,
+			adapter,
+			chatId: source.chatId,
+			threadId: source.threadId,
+			userId: source.userId,
+		};
+		pending.set(id, entry);
 		void (async () => {
 			try {
 				const result = await adapter.sendButtons(source.chatId, title, rows, { threadId: source.threadId });
-				if (!result.success || !result.messageId) {
-					clearTimeout(timeout);
-					reject(new Error(result.error ?? "Failed to send approval prompt"));
+				if (!result.success || !result.messageId) throw new Error(result.error ?? "Failed to send approval prompt");
+				messageId = result.messageId;
+				if (pending.get(id) !== entry) {
+					await adapter
+						.editMessage(source.chatId, messageId, "Approval cancelled or expired.", [])
+						.catch(() => {});
 					return;
 				}
-				messageId = result.messageId;
-				pending.set(id, {
-					resolve,
-					reject,
-					timeout,
-					messageId,
-					adapter,
-					chatId: source.chatId,
-					threadId: source.threadId,
-					userId: source.userId,
-				});
+				entry.messageId = messageId;
 			} catch (err) {
 				clearTimeout(timeout);
+				pending.delete(id);
 				reject(err);
 			}
 		})();
@@ -137,7 +154,7 @@ export async function createGatewayApprovalRequest(req: ApprovalRequest): Promis
 	if (!ctx) {
 		throw new Error(NO_HANDLER_REASON);
 	}
-	return createApprovalPrompt(ctx.adapter, ctx.source, req, ctx.timeoutMs);
+	return createApprovalPrompt(ctx.adapter, ctx.source, req, ctx.timeoutMs, ctx.key);
 }
 
 /** Register the gateway approval handler with the core permission gate. */
@@ -161,7 +178,12 @@ export async function handleApprovalCallback(event: CallbackEvent, adapter?: Pla
 		return true;
 	}
 
-	if (event.userId !== entry.userId) {
+	if (
+		event.userId !== entry.userId ||
+		event.chatId !== entry.chatId ||
+		event.threadId !== entry.threadId ||
+		(adapter && adapter.platform !== entry.adapter.platform)
+	) {
 		await entry.adapter.answerCallback(event.id, "⛔ Not your approval.").catch(() => {});
 		return true;
 	}
@@ -171,6 +193,20 @@ export async function handleApprovalCallback(event: CallbackEvent, adapter?: Pla
 
 	const response: ApprovalResponse =
 		parsed.action === "reject" || parsed.action === "cancel" ? "reject" : parsed.action;
+	const binding = entry.key ? conversationBinding(entry.key) : undefined;
+	if (binding?.owner && (!isGatewayOwner(entry.source, loadGatewayConfig()) || binding.owner !== event.userId)) {
+		entry.resolve("reject");
+		await entry.adapter.answerCallback(event.id, "Owner access was removed.").catch(() => {});
+		return true;
+	}
+	if (binding && !isAuthorized(entry.source, loadGatewayConfig(), createPairingStore())) {
+		entry.resolve("reject");
+		return true;
+	}
+	if (entry.plan && response !== "reject" && entry.key) {
+		const sessionId = getSession(entry.key)?.sessionId;
+		if (sessionId) setPermissionMode("manual", sessionId);
+	}
 	entry.resolve(response);
 
 	const label =
@@ -181,6 +217,17 @@ export async function handleApprovalCallback(event: CallbackEvent, adapter?: Pla
 }
 
 /** Test hook: clear all pending approvals and stop their timeouts. */
+export function cancelGatewayApprovals(key: string): void {
+	for (const [id, entry] of pending) {
+		if (entry.key !== key) continue;
+		clearTimeout(entry.timeout);
+		pending.delete(id);
+		entry.resolve("reject");
+		if (entry.messageId)
+			void entry.adapter.editMessage(entry.chatId, entry.messageId, "Approval cancelled.", []).catch(() => {});
+	}
+}
+
 export function resetApprovalRegistry(): void {
 	for (const entry of pending.values()) {
 		clearTimeout(entry.timeout);

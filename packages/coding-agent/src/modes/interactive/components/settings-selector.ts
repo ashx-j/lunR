@@ -198,6 +198,7 @@ export interface SettingsCallbacks {
 	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
+	onGatewayAction?: (action: string) => void;
 	// lunr: rollback callbacks
 	onRollbackEnabledChange: (enabled: boolean) => void;
 	onRollbackTurnsChange: (turns: number) => void;
@@ -1527,6 +1528,32 @@ export class SettingsSelectorComponent extends Container {
 				description: "Trust choice when a project has no saved decision",
 				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
 				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
+			},
+			{
+				id: "gateway",
+				label: "Gateway",
+				description: "Phone access and automatic startup",
+				currentValue: "manage",
+				submenu: (_value, done) =>
+					new SelectSubmenu(
+						"Gateway",
+						"Boot startup may require administrator permission. Setup manages bot accounts and approved folders.",
+						[
+							{ value: "setup", label: "Set up Telegram or Discord" },
+							{ value: "status", label: "Show gateway status" },
+							{ value: "start", label: "Start gateway" },
+							{ value: "stop", label: "Stop gateway" },
+							{ value: "autostart login", label: "Start automatically at login" },
+							{ value: "autostart boot", label: "Start automatically at boot" },
+							{ value: "autostart off", label: "Disable automatic startup" },
+						],
+						"",
+						(action) => {
+							done();
+							callbacks.onGatewayAction?.(action);
+						},
+						() => done(),
+					),
 			},
 			{
 				id: "default-permission-mode",

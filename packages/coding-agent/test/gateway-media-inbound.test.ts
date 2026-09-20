@@ -27,7 +27,7 @@ const BOT: BotInfo = { botId: 777, botUsername: "lunrbot" };
 const TG_CFG: PlatformConfig = {
 	enabled: true,
 	token: "test-token",
-	allowedUsers: [],
+	allowedUsers: ["42"],
 	allowedChats: [],
 	requireMention: false,
 	freeResponseChats: [],
@@ -36,7 +36,7 @@ const TG_CFG: PlatformConfig = {
 const DISCORD_CFG: DiscordConfig = {
 	enabled: true,
 	token: "test-token",
-	allowedUsers: [],
+	allowedUsers: ["42"],
 	allowedChats: [],
 	requireMention: false,
 	freeResponseChats: [],
@@ -61,7 +61,7 @@ function tgUpdate(message: TelegramMessage): TelegramUpdate {
 }
 
 describe("telegram media inbound", () => {
-	it("collectTelegramMedia picks the largest photo and image documents only", () => {
+	it("collectTelegramMedia picks the largest photo and accepts documents", () => {
 		const photo: TelegramPhotoSize[] = [
 			{ file_id: "p1", file_unique_id: "u1", width: 10, height: 10 },
 			{ file_id: "p2", file_unique_id: "u2", width: 20, height: 20, file_size: 2000 },
@@ -72,7 +72,9 @@ describe("telegram media inbound", () => {
 		expect(collectTelegramMedia(makeMessage({ document: doc })).map((m) => m.fileId)).toEqual(["d1"]);
 
 		const nonImage = { file_id: "d2", file_unique_id: "u4", mime_type: "application/pdf", file_name: "x.pdf" };
-		expect(collectTelegramMedia(makeMessage({ document: nonImage }))).toEqual([]);
+		expect(collectTelegramMedia(makeMessage({ document: nonImage }))).toEqual([
+			{ fileId: "d2", mimeType: "application/pdf", filename: "x.pdf" },
+		]);
 	});
 
 	it("updateToEvent keeps photo-only messages (no caption) with empty text", () => {
@@ -196,14 +198,14 @@ describe("discord media inbound", () => {
 		expect(event?.text).toBe("");
 	});
 
-	it("messageToEvent drops messages with no text and no image attachments", () => {
+	it("messageToEvent accepts document-only messages", () => {
 		const message = {
 			id: "m3",
 			author: { id: "42", username: "alice" },
 			channel: dmChannel(),
 			attachments: [{ id: "a1", url: "https://cdn/a1.pdf", contentType: "application/pdf" }],
 		} as unknown as DiscordMessageLike;
-		expect(messageToEvent(message, { id: "777" })).toBeNull();
+		expect(messageToEvent(message, { id: "777" })).toMatchObject({ text: "", messageId: "m3" });
 	});
 });
 

@@ -37,6 +37,8 @@ export interface StreamingConfig {
 }
 
 export interface GatewayConfig {
+	owners?: { telegram: string[]; discord: string[] };
+	projectRoots?: string[];
 	telegram: PlatformConfig;
 	discord: DiscordConfig;
 	/** Group/channel chats get one session per user when true. */
@@ -62,6 +64,8 @@ function defaultPlatformConfig(requireMention: boolean): PlatformConfig {
 
 export function defaultGatewayConfig(): GatewayConfig {
 	return {
+		owners: { telegram: [], discord: [] },
+		projectRoots: [],
 		telegram: defaultPlatformConfig(false),
 		discord: { ...defaultPlatformConfig(true), ignoredChannels: [], autoThread: true },
 		groupSessionsPerUser: true,
@@ -115,7 +119,10 @@ function sanitizeConfig(raw: unknown): GatewayConfig {
 		r.streaming != null && typeof r.streaming === "object" && !Array.isArray(r.streaming)
 			? (r.streaming as Record<string, unknown>)
 			: {};
+	const owners = r.owners && typeof r.owners === "object" ? (r.owners as Record<string, unknown>) : {};
 	return {
+		owners: { telegram: asStringArray(owners.telegram) ?? [], discord: asStringArray(owners.discord) ?? [] },
+		projectRoots: asStringArray(r.projectRoots) ?? [],
 		telegram: sanitizePlatform(r.telegram, base.telegram),
 		discord: sanitizeDiscord(r.discord, base.discord),
 		groupSessionsPerUser: asBoolean(r.groupSessionsPerUser) ?? base.groupSessionsPerUser,

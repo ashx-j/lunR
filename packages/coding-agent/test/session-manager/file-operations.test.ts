@@ -217,6 +217,7 @@ describe("SessionManager custom flat session directory", () => {
 		if (!sessionFile) {
 			throw new Error("Expected persisted session file");
 		}
+		session.dispose();
 		return sessionFile;
 	}
 
@@ -307,6 +308,7 @@ describe("SessionManager.setSessionFile with corrupted files", () => {
 
 		const sm1 = SessionManager.open(emptyFile, tempDir);
 		const sessionId = sm1.getSessionId();
+		sm1.dispose();
 
 		const sm2 = SessionManager.open(emptyFile, tempDir);
 		expect(sm2.getSessionId()).toBe(sessionId);

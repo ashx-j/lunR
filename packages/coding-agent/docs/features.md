@@ -82,33 +82,81 @@ Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). Interactive TUI cron runs i
 
 Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30m`), an ISO timestamp, or a 5-field cron expression.
 
-## Gateway (Telegram / Discord)
+## Gateway for Telegram and Discord
 
-Enable the chat-platforms feature, then run the daemon:
+Run `lunr gateway setup` in your terminal. It explains bot creation and permissions, masks token entry, validates the bot identity, and asks for your user ID, project roots, saved model, and startup preference. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
 
-```bash
-lunr setup
-lunr features enable chat-platforms
-lunr gateway
-```
+Telegram uses BotFather and long polling. Discord needs the bot and `applications.commands` installation scopes. Enable Message Content Intent for ordinary text messages. GuildMembers intent is not required. Discord registers native slash commands; Telegram registers a command menu. Both platforms use buttons for selections and approvals.
 
-Config: `~/.lunr/agent/gateway.json` (chmod 0600; may hold bot tokens). Secrets do not go in `install-features.json`.
+Your computer must stay awake and online. Startup cannot make a sleeping or disconnected computer available.
 
-Token resolution: `LUNR_<PLATFORM>_BOT_TOKEN` env → `<PLATFORM>_BOT_TOKEN` env → file token.
+### Service controls
 
 ```bash
-lunr gateway                     # run the daemon
-lunr gateway pair approve <platform> <code>
-lunr gateway pair list
+lunr gateway setup
+lunr gateway start
+lunr gateway stop
+lunr gateway restart
 lunr gateway status
+lunr gateway logs
+lunr gateway doctor
+lunr gateway run
+lunr gateway autostart login
+lunr gateway autostart boot
+lunr gateway autostart off
 ```
 
-- Telegram: long-poll bot. Talk to @BotFather, put the token in `gateway.json` or `LUNR_TELEGRAM_BOT_TOKEN`, set `telegram.enabled = true`.
-- Discord: mention-gated by default (`requireMention: true`). Enable the Message Content intent. No GuildMembers intent. Put the token in `gateway.json` or `LUNR_DISCORD_BOT_TOKEN`.
-- Authz is fail-closed. Unauthorized DMs pair (`unauthorizedDmBehavior: "pair"`) unless you set `ignore`.
-- Gateway `/new` while a session is busy aborts the live turn and drops the queue.
+Bare `lunr gateway` also runs in the foreground. The terminal's `/settings` Gateway menu opens setup, service controls, logs, and diagnostics.
 
-Without runnable adapters (enabled platform + resolvable token), `lunr gateway` prints setup instructions and exits 1.
+Login startup runs after you sign in. Boot startup runs before login and may require administrator approval or OS-managed account credentials. Linux uses a systemd user service, with lingering for boot startup. macOS uses a LaunchAgent for login or a LaunchDaemon running as your user for boot. Windows uses Scheduled Tasks; its boot option asks Windows to obtain the account credentials rather than saving the password in lunR. lunR checks the native installation command before recording a successful startup change. Changing or disabling startup removes the previous lunR service, not other applications' services.
+
+Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile. Native startup specifications have automated tests; installing and rebooting services on all three operating systems still requires host verification.
+
+### Owner access
+
+Configuration lives in `~/.lunr/agent/gateway.json` and may contain bot tokens. It is written with mode 0600 where supported; Windows security follows the profile directory's ACL. Tokens are not stored in `install-features.json` or startup command arguments. Environment tokens override file tokens in this order: `LUNR_<PLATFORM>_BOT_TOKEN`, then `<PLATFORM>_BOT_TOKEN`.
+
+If you skipped your user ID during setup, message the bot privately and approve its pairing code locally:
+
+```bash
+lunr gateway pair approve telegram <code> --owner
+lunr gateway pair approve discord <code> --owner
+lunr gateway pair list
+```
+
+Owner access includes local projects and saved TUI conversation history. Ordinary pairing, group access, and Discord roles do not grant it. Project browsing, cross-project sessions, permission changes, and file downloads require an explicitly configured owner in a private DM. Removing owner access invalidates later owner actions and approvals.
+
+### Projects and mobile controls
+
+Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
+
+**The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
+
+- `/model`, `/thinking`, `/settings`, and `/mode` control the active session. `/fast` controls Codex fast mode.
+- `/plan <task>` starts planning. The plan appears in chat with approval buttons. Approval returns the session to manual mode.
+- `/goal`, `/cron`, `/run`, `/chain`, and `/parallel` use the same built-in extensions as the terminal. Pass arguments when an extension's interactive editor requires the terminal.
+- `/skill` selects a loaded skill and asks for a task. `/mcp` and `/lsp` expose their text status commands; the agent retains the configured coding tools.
+- `/usage` reports session tokens and provider-plan usage. `/status` includes the selected project.
+- `/stop` aborts the current turn and pending transfer. `/stopall` also requests cancellation of background subagents and tracked shell processes. `/processes` lists this session's processes; `/processes stop <pid>` requests a stop.
+- `/cancel` cancels a pending selection or transfer. `/new` aborts the current turn and drops queued input, but refuses to discard a session that still has attached background work.
+
+Upload images or documents in chat. Images reach the model as images; documents are saved under the project's `.lunr/uploads/` directory and passed to the model as paths. `/download <project-relative path>` sends a file back. Files are limited to 8 MB; common credential filenames are blocked from download. This filename check is not a content-based secret scanner. Only send files you intend to share with the chat platform.
+
+Extension notices and background results reach the originating conversation even after the foreground answer. Undelivered notices persist for retry. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
+
+### Continue between desktop and phone
+
+In the terminal, `/handoff` marks the current saved session for eight hours. Repeat it to refresh the mark; `/handoff cancel` removes it. Unsaved sessions must be persisted first.
+
+On your phone, `/continue` opens the only marked session, or offers a picker if several are marked. Without an active mark, it selects the latest TUI activity. TUI activation, user prompts, and state-changing user commands count as activity. Background results and file timestamps do not. Closed TUI sessions remain eligible.
+
+`/sessions [filter]` browses saved sessions across projects, including locally registered custom session paths. It works before you have sent the bot its first task. Continuation preserves the session file, selected conversation branch, original project directory, and permission checkpoint. Resuming `auto` or `yolo` asks for confirmation on the phone and defaults to manual if declined.
+
+Only one updated lunR process may write a persistent session at a time. A running owner must release it cooperatively. If it is busy, choose Wait, Stop and continue, or Cancel. Wait retries busy requests for up to two minutes. Stop and continue aborts the foreground turn; it does not migrate children or shell processes. Those must finish or actually stop before transfer. Cancellation stops pending acquisition, but cannot undo extension shutdown once release has begun.
+
+A detached terminal keeps its draft and can use `/reclaim` to reopen fresh state after the phone releases ownership. It does not append from its old in-memory conversation. Marks remain until expiry or cancellation, even after a successful continuation. Expiry only removes the preference; it neither deletes the conversation nor disconnects it.
+
+All concurrent writers must use a lunR version with session ownership support. Old versions and external file editors cannot honor these locks. Recovery only clears an owner after verified local process death. Uncertain, foreign-host, or incomplete ownership records fail closed; inspect them rather than deleting a live lock.
 
 ## MCP, LSP, web search
 

@@ -8,7 +8,9 @@ import {
 	messageToEvent,
 	resetSeenMessageIds,
 } from "../src/gateway/adapters/discord.ts";
+import { botCommandSpecs } from "../src/gateway/commands.ts";
 import type { DiscordConfig } from "../src/gateway/config.ts";
+import * as gatewayConfig from "../src/gateway/config.ts";
 import type { MessageEvent } from "../src/gateway/types.ts";
 
 const BOT_ID = "777";
@@ -16,7 +18,7 @@ const BOT_ID = "777";
 const CFG: DiscordConfig = {
 	enabled: true,
 	token: "test-token",
-	allowedUsers: [],
+	allowedUsers: ["42"],
 	allowedChats: [],
 	requireMention: true,
 	freeResponseChats: [],
@@ -33,6 +35,7 @@ function apiError(code: number, message: string): Error {
 // ---------------------------------------------------------------------------
 
 class MockClient implements DiscordClientLike {
+	application?: DiscordClientLike["application"];
 	user: { id: string } | null = null;
 	loginTokens: string[] = [];
 	loginError?: Error;
@@ -364,6 +367,75 @@ describe("DiscordAdapter", () => {
 		expect(client.loginTokens).toEqual(["test-token"]);
 		await adapter.disconnect();
 		expect(client.destroyed).toBe(true);
+	});
+
+	it("registers native commands and routes thread interactions without fake reply IDs", async () => {
+		const client = new MockClient();
+		const set = vi.fn().mockResolvedValue(undefined);
+		client.application = { commands: { set } } as unknown as DiscordClientLike["application"];
+		vi.spyOn(gatewayConfig, "loadGatewayConfig").mockReturnValue({
+			...gatewayConfig.defaultGatewayConfig(),
+			discord: CFG,
+		});
+		const { adapter, events } = await connectAdapter(client);
+		await adapter.registerCommands(botCommandSpecs());
+		expect(set).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				expect.objectContaining({ name: "project" }),
+				expect.objectContaining({ name: "continue" }),
+			]),
+		);
+		const reply = vi.fn().mockResolvedValue(undefined);
+		client.emit(Events.InteractionCreate, {
+			isButton: () => false,
+			isChatInputCommand: () => true,
+			isAutocomplete: () => false,
+			channelId: "thread",
+			channel: { isThread: () => true, id: "thread", parentId: "parent" },
+			user: { id: "42", username: "alice" },
+			inGuild: () => true,
+			commandName: "status",
+			options: { getString: () => null },
+			id: "interaction-id",
+			reply,
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(reply).toHaveBeenCalled();
+		expect(events).toEqual([
+			expect.objectContaining({
+				messageId: "",
+				text: "/status",
+				source: expect.objectContaining({ chatId: "parent", threadId: "thread", chatType: "thread" }),
+			}),
+		]);
+		await adapter.disconnect();
+	});
+
+	it("uses session model suggestions only for an authorized owner DM", async () => {
+		const client = new MockClient();
+		vi.spyOn(gatewayConfig, "loadGatewayConfig").mockReturnValue({
+			...gatewayConfig.defaultGatewayConfig(),
+			discord: CFG,
+			owners: { telegram: [], discord: ["42"] },
+		});
+		const { adapter } = await connectAdapter(client);
+		const suggestions = vi.fn().mockResolvedValue(["provider/model-a", "provider/model-b"]);
+		adapter.setCommandSuggestions(suggestions);
+		const respond = vi.fn().mockResolvedValue(undefined);
+		client.emit(Events.InteractionCreate, {
+			isButton: () => false,
+			isChatInputCommand: () => false,
+			isAutocomplete: () => true,
+			channelId: "dm",
+			user: { id: "42", username: "alice" },
+			inGuild: () => false,
+			commandName: "model",
+			options: { getFocused: () => "model-b" },
+			respond,
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(respond).toHaveBeenCalledWith([{ name: "provider/model-b", value: "provider/model-b" }]);
+		await adapter.disconnect();
 	});
 
 	it("connect resolves false when login fails", async () => {

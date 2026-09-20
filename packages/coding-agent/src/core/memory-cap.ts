@@ -1,3 +1,4 @@
+import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 /** Memory settings shared with the baked-in simple-memory extension. */
@@ -21,13 +22,16 @@ let activeSettingsManager: SettingsManager | undefined;
 
 const bridge: MemoryCapBridge = {
 	isEnabled(): boolean {
-		return activeSettingsManager?.getMemoryEnabled() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getMemoryEnabled() ?? true;
 	},
 	getCharCap(): number {
-		return activeSettingsManager?.getMemoryCharCap() ?? MEMORY_CHAR_CAP_DEFAULT;
+		return (
+			(runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getMemoryCharCap() ??
+			MEMORY_CHAR_CAP_DEFAULT
+		);
 	},
 	setCharCap(cap: number): void {
-		activeSettingsManager?.setMemoryCharCap(cap);
+		(runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.setMemoryCharCap(cap);
 	},
 };
 

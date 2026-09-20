@@ -67,14 +67,19 @@
 
 import {
 	ActionRowBuilder,
+	ApplicationCommandOptionType,
 	ButtonBuilder,
 	ButtonStyle,
 	ChannelType,
 	Client,
 	Events,
 	GatewayIntentBits,
+	type Interaction,
 } from "discord.js";
-import type { DiscordConfig } from "../config.ts";
+import { isAuthorized, isGatewayOwner } from "../authz.ts";
+import { type DiscordConfig, loadGatewayConfig } from "../config.ts";
+import { downloadAttachment } from "../download.ts";
+import { createPairingStore } from "../pairing.ts";
 import type {
 	ButtonSpec,
 	CallbackEvent,
@@ -125,6 +130,7 @@ export interface DiscordChannelLike {
 	parentId?: string | null;
 	send?(payload: {
 		content: string;
+		files?: string[];
 		reply?: { messageReference: string };
 		components?: unknown[];
 	}): Promise<DiscordSentMessageLike>;
@@ -172,6 +178,7 @@ export interface DiscordMessageLike {
 
 /** Minimal Client surface; the real discord.js Client satisfies this. */
 export interface DiscordClientLike {
+	application?: Pick<NonNullable<Client["application"]>, "commands"> | null;
 	user: { id: string } | null;
 	login(token: string): Promise<unknown>;
 	on(event: string, listener: (arg: unknown) => void): unknown;
@@ -191,12 +198,6 @@ function errMessage(err: unknown): string {
 }
 
 /** lunr: download an inbound Discord attachment from its CDN URL. */
-async function defaultDownloadAttachment(url: string): Promise<Uint8Array> {
-	const res = await fetch(url);
-	if (!res.ok) throw new Error(`attachment download HTTP ${res.status}`);
-	return new Uint8Array(await res.arrayBuffer());
-}
-
 /** Discord REST error code (DiscordAPIError.code) when present. */
 function discordErrorCode(err: unknown): number | undefined {
 	const code = (err as { code?: unknown } | null)?.code;
@@ -216,7 +217,9 @@ function isImageContentType(contentType: string | undefined): boolean {
 
 /** lunr: collect inbound image attachments (contentType image/*) from a Discord message. */
 export function collectDiscordImageAttachments(message: DiscordMessageLike): DiscordAttachmentLike[] {
-	return (message.attachments ?? []).filter((attachment) => isImageContentType(attachment.contentType));
+	return Array.from(message.attachments?.values() ?? []).filter((attachment) =>
+		isImageContentType(attachment.contentType),
+	);
 }
 
 /**
@@ -237,7 +240,8 @@ export function messageToEvent(
 	if (message.system) return null;
 	const content = (message.content ?? "").trim();
 	const imageAttachments = collectDiscordImageAttachments(message);
-	if (content === "" && imageAttachments.length === 0) return null; // no text and no image attachments
+	if (content === "" && imageAttachments.length === 0 && !Array.from(message.attachments?.values() ?? []).length)
+		return null;
 
 	const channel = message.channel;
 	const ignored = options.ignoredChannels ?? [];
@@ -437,6 +441,7 @@ export class DiscordAdapter implements PlatformAdapter {
 	private client?: DiscordClientLike;
 	private botUserId?: string;
 	private handler?: (event: MessageEvent) => void;
+	private commandSuggestions?: Parameters<NonNullable<PlatformAdapter["setCommandSuggestions"]>>[0];
 	private callbackHandler?: (event: CallbackEvent) => void;
 	private readonly pending = new Map<string, PendingEntry>();
 	private readonly typing = new Map<string, TypingEntry>();
@@ -461,8 +466,14 @@ export class DiscordAdapter implements PlatformAdapter {
 			}
 			this.clientFactory = defaultClientFactory;
 		}
-		this.downloadAttachment = options.downloadAttachment ?? defaultDownloadAttachment;
+		this.downloadAttachment = options.downloadAttachment ?? downloadAttachment;
 		this.maxMediaBytes = options.maxMediaBytes ?? 10 * 1024 * 1024;
+	}
+
+	setCommandSuggestions(
+		handler: (source: MessageEvent["source"], command: string) => Promise<readonly string[]>,
+	): void {
+		this.commandSuggestions = handler;
 	}
 
 	onMessage(handler: (event: MessageEvent) => void): void {
@@ -485,7 +496,11 @@ export class DiscordAdapter implements PlatformAdapter {
 			});
 		});
 		client.on(Events.InteractionCreate, (interaction) => {
-			void this.handleInteraction(interaction as DiscordButtonInteractionLike).catch((err) => {
+			const event = interaction as Interaction;
+			const handling = event.isButton()
+				? this.handleInteraction(interaction as DiscordButtonInteractionLike)
+				: this.handleNativeCommand(event);
+			void handling.catch((err) => {
 				console.error(`[gateway] discord interaction handling error: ${errMessage(err)}`);
 			});
 		});
@@ -530,17 +545,19 @@ export class DiscordAdapter implements PlatformAdapter {
 			},
 		);
 		if (!event) return;
+		if (!isAuthorized(event.source, { ...loadGatewayConfig(), discord: this.cfg }, createPairingStore())) {
+			this.dispatchEvent(event);
+			return;
+		}
 		await this.resolveReplyToText(message, event);
 		await this.maybeAutoThread(message, event);
-		// lunr: download inbound image attachments before dispatch so the bridge
-		// can attach images to the turn. Failures drop the media but keep the turn.
 		await this.downloadAttachments(message, event);
 		this.dispatchEvent(event);
 	}
 
-	/** lunr: download + base64-encode inbound image attachments for one Discord message. */
+	/** Download and encode attachments after authorization. */
 	private async downloadAttachments(message: DiscordMessageLike, event: MessageEvent): Promise<void> {
-		const imageAttachments = collectDiscordImageAttachments(message);
+		const imageAttachments = Array.from(message.attachments?.values() ?? []);
 		if (imageAttachments.length === 0) return;
 		const attachments: InboundAttachment[] = [];
 		for (const attachment of imageAttachments) {
@@ -550,7 +567,7 @@ export class DiscordAdapter implements PlatformAdapter {
 				if (bytes.byteLength > this.maxMediaBytes) continue;
 				attachments.push({
 					data: Buffer.from(bytes).toString("base64"),
-					mimeType: attachment.contentType ?? "image/png",
+					mimeType: attachment.contentType ?? "application/octet-stream",
 					...(attachment.name ? { filename: attachment.name } : {}),
 				});
 			} catch {
@@ -558,6 +575,95 @@ export class DiscordAdapter implements PlatformAdapter {
 			}
 		}
 		if (attachments.length > 0) event.attachments = attachments;
+	}
+
+	async registerCommands(commands: { name: string; description: string }[]): Promise<void> {
+		if (!this.client?.application) return;
+		await this.client.application.commands.set(
+			commands.slice(0, 95).map((command) => ({
+				name: command.name,
+				description: command.description.slice(0, 100),
+				options: [
+					{
+						name: "args",
+						description: "Command arguments or search",
+						type: ApplicationCommandOptionType.String,
+						required: false,
+						autocomplete: ["mode", "thinking", "project", "sessions"].includes(command.name),
+					},
+				],
+			})),
+		);
+	}
+
+	private async handleNativeCommand(interaction: Interaction): Promise<boolean> {
+		if (!interaction.isChatInputCommand?.() && !interaction.isAutocomplete?.()) return false;
+		if (!interaction.isChatInputCommand() && !interaction.isAutocomplete()) return false;
+		const thread = interaction.channel?.isThread() ? interaction.channel : undefined;
+		const source = {
+			platform: "discord",
+			chatId: thread?.parentId ?? interaction.channelId ?? interaction.user.id,
+			threadId: thread?.id,
+			chatType: thread ? ("thread" as const) : interaction.inGuild() ? ("channel" as const) : ("dm" as const),
+			userId: interaction.user.id,
+			userName: interaction.user.username,
+		};
+		const cfg = loadGatewayConfig();
+		const authorized = isAuthorized(source, cfg, createPairingStore());
+		if (interaction.isAutocomplete()) {
+			if (!authorized || !isGatewayOwner(source, cfg)) {
+				await interaction.respond([]);
+				return true;
+			}
+			const query = String(interaction.options.getFocused()).toLowerCase();
+			let values: string[] = [];
+			if (interaction.commandName === "mode") values = ["manual", "yolo", "plan", "auto"];
+			if (this.commandSuggestions && ["thinking", "model"].includes(interaction.commandName)) {
+				values = [...(await this.commandSuggestions(source, interaction.commandName))];
+			}
+			if (interaction.commandName === "project") values = cfg.projectRoots ?? [];
+			if (interaction.commandName === "sessions") {
+				const { SessionManager } = await import("../../core/session-manager.ts");
+				values = (
+					await Promise.race([
+						SessionManager.listAll(),
+						new Promise<[]>((resolve) => setTimeout(() => resolve([]), 1500)),
+					])
+				).map((s) => s.name || s.id);
+			}
+			await interaction.respond(
+				values
+					.filter((s) => s.toLowerCase().includes(query))
+					.slice(0, 25)
+					.map((value) => ({ name: value.slice(0, 100), value: value.slice(0, 100) })),
+			);
+			return true;
+		}
+		await interaction.reply({
+			content: authorized
+				? "Command received."
+				: "Pair your account before using this command. Send the bot a private message for a pairing code.",
+			ephemeral: true,
+		});
+		if (authorized)
+			this.handler?.({
+				text: `/${interaction.commandName}${interaction.options.getString("args") ? ` ${interaction.options.getString("args")}` : ""}`,
+				source,
+				messageId: "",
+				metadata: { mentionedBot: true, nativeCommand: true },
+			});
+		return true;
+	}
+
+	async sendFile(chatId: string, file: string, opts?: SendOptions): Promise<SendResult> {
+		const channel = await this.fetchChannel(opts?.threadId ?? chatId);
+		if (!channel?.send) return { success: false, error: "Channel is unavailable." };
+		try {
+			const message = await channel.send({ content: "", files: [file] });
+			return { success: true, messageId: message.id };
+		} catch (error) {
+			return { success: false, error: errMessage(error) };
+		}
 	}
 
 	private async handleInteraction(interaction: DiscordButtonInteractionLike): Promise<void> {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as registry from "../src/core/process-registry.ts";
 import { isWindows } from "../src/core/process-registry.ts";
 
@@ -19,6 +19,18 @@ describe("process-registry", () => {
 
 	afterEach(() => {
 		registry.clearRegistry();
+	});
+
+	it("retains processes whose liveness probe is inconclusive", () => {
+		registry.register(process.pid, "protected child", process.cwd(), "handoff-session");
+		const probe = vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("Denied"), { code: "EPERM" });
+		});
+		try {
+			expect(registry.list("handoff-session")[0]?.status).toBe("running");
+		} finally {
+			probe.mockRestore();
+		}
 	});
 
 	it("starts empty", () => {
@@ -48,8 +60,9 @@ describe("process-registry", () => {
 		expect(tracked?.status).toBe("running");
 
 		registry.kill(child.pid);
-		// After explicit kill, the entry is removed (user action, not retained).
-		expect(registry.list().find((p) => p.pid === child.pid)).toBeUndefined();
+		await vi.waitFor(() =>
+			expect(registry.list().some((p) => p.pid === child.pid && p.status !== "exited")).toBe(false),
+		);
 	});
 
 	it("killAll kills all tracked processes", async () => {
@@ -68,7 +81,7 @@ describe("process-registry", () => {
 
 		expect(registry.list().length).toBeGreaterThanOrEqual(2);
 		registry.killAll();
-		expect(registry.list().length).toBe(0);
+		await vi.waitFor(() => expect(registry.list().some((p) => p.status !== "exited")).toBe(false));
 	});
 
 	it("clearRegistry removes all entries", async () => {

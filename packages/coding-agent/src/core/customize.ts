@@ -1,3 +1,4 @@
+import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SubagentSpinnerName } from "./subagent-spinner-setting.ts";
 
@@ -33,46 +34,46 @@ let activeSettingsManager: SettingsManager | undefined;
 
 const bridge: CustomizeBridge = {
 	getOpenAIFastMode(): boolean {
-		return activeSettingsManager?.getOpenAIFastMode() ?? false;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getOpenAIFastMode() ?? false;
 	},
 	getFooterMcp(): boolean {
-		return activeSettingsManager?.getFooterMcp() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterMcp() ?? true;
 	},
 	getFooterLsp(): boolean {
-		return activeSettingsManager?.getFooterLsp() ?? false;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterLsp() ?? false;
 	},
 	getFooterContext(): boolean {
-		return activeSettingsManager?.getFooterContext() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterContext() ?? true;
 	},
 	getFooterTokens(): boolean {
-		return activeSettingsManager?.getFooterTokens() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterTokens() ?? true;
 	},
 	getFooterCacheHitRate(): boolean {
-		return activeSettingsManager?.getFooterCacheHitRate() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterCacheHitRate() ?? true;
 	},
 	getFooterTps(): boolean {
-		return activeSettingsManager?.getFooterTps() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterTps() ?? true;
 	},
 	getFooterStatuses(): boolean {
-		return activeSettingsManager?.getFooterStatuses() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterStatuses() ?? true;
 	},
 	getFooterGit(): boolean {
-		return activeSettingsManager?.getFooterGit() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterGit() ?? true;
 	},
 	getFooterPlan(): boolean {
-		return activeSettingsManager?.getFooterPlan() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterPlan() ?? true;
 	},
 	getFooterPlanBar(): boolean {
-		return activeSettingsManager?.getFooterPlanBar() ?? true;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getFooterPlanBar() ?? true;
 	},
 	getSubagentSpinner(): SubagentSpinnerName {
-		return activeSettingsManager?.getSubagentSpinner() ?? "braille";
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getSubagentSpinner() ?? "braille";
 	},
 	getHideThinkingBlock(): boolean {
-		return activeSettingsManager?.getHideThinkingBlock() ?? false;
+		return (runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.getHideThinkingBlock() ?? false;
 	},
 	setHideThinkingBlock(hide: boolean): void {
-		activeSettingsManager?.setHideThinkingBlock(hide);
+		(runtimeScope.getStore()?.settingsManager ?? activeSettingsManager)?.setHideThinkingBlock(hide);
 	},
 };
 
