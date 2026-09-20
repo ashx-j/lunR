@@ -9,7 +9,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
-	formatGroupedCall,
+	GroupedCallText,
 	normalizeDisplayText,
 	renderToolFileName,
 	renderToolPath,
@@ -56,7 +56,7 @@ type WriteHighlightCache = {
 	highlightedLines: string[];
 };
 
-class WriteCallRenderComponent extends Text {
+class WriteCallRenderComponent extends GroupedCallText {
 	cache?: WriteHighlightCache;
 
 	constructor() {
@@ -257,16 +257,14 @@ export function createWriteToolDefinition(
 				if (fileContent === null) {
 					detail += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
 				}
-				component.setText(
-					formatGroupedCall({
-						role: context.groupRole ?? "singleton",
-						compact,
-						tree,
-						dot: toolStatusDotFromContext(context, theme),
-						title: theme.fg("toolTitle", theme.bold("write")),
-						detail,
-					}),
-				);
+				component.setCall({
+					role: context.groupRole ?? "singleton",
+					compact,
+					tree,
+					dot: toolStatusDotFromContext(context, theme),
+					title: theme.fg("toolTitle", theme.bold("write")),
+					detail,
+				});
 			} else {
 				component.setText(
 					`${toolStatusDotFromContext(context, theme)} ${formatWriteCall(
