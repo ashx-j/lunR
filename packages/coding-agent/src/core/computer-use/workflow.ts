@@ -119,7 +119,11 @@ export class ComputerWorkflow {
 	private lastAction?: { signature: string; fingerprint: string; unchanged: boolean };
 	private readonly abort = new AbortController();
 	private closing?: Promise<void>;
-	constructor(private readonly driver: ComputerDriver, private readonly lease = new DesktopLease()) {
+	private readonly driver: ComputerDriver;
+	private readonly lease: DesktopLease;
+	constructor(driver: ComputerDriver, lease = new DesktopLease()) {
+		this.driver = driver;
+		this.lease = lease;
 		this.driver.setProcessObserver?.((pid) => this.lease.trackProcess(pid));
 	}
 

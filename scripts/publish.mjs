@@ -208,7 +208,7 @@ await (async () => {
 				capture: true,
 				cwd: pkg.stageDir,
 			});
-			const packed = JSON.parse(result.stdout)[0];
+			const packed = Object.values(JSON.parse(result.stdout))[0];
 			console.log(
 				`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked\n`,
 			);
@@ -217,7 +217,7 @@ await (async () => {
 		for (const pkg of payloadStates) {
 			pkg.published = dryRun ? false : await isPublished(pkg.publishedName, pkg.version);
 			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], { capture: true, cwd: pkg.stageDir });
-			const packed = JSON.parse(result.stdout)[0];
+			const packed = Object.values(JSON.parse(result.stdout))[0];
 			console.log(`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked`);
 		}
 		if (dryRun) return;

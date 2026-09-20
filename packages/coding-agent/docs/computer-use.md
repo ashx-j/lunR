@@ -1,8 +1,10 @@
 # Image-only computer use
 
-Development branch only. Verification is pending user permission. No tests,
-builds, runtime probes, desktop actions, provider requests, publication, or PR
-have run for the image-only changes. Production publication remains blocked.
+The image-only implementation shipped on `lunr-dev` as `0.2.21-dev.12.1`
+and received user testing. Automated validation passed on the dev integration.
+This PR carries the same computer-use implementation without dev-channel naming
+or update changes. Smooth cursor animation is not implemented. Production
+publication remains blocked pending the native runtime's separate approval.
 
 ## Setup and permissions
 
@@ -197,23 +199,24 @@ unpublished payload dependencies out. Standalone asset copying selects one
 opaque archive. Stable publication remains gated on production approval and a
 new CLI version. Dev-channel update/publication changes were not ported here.
 
-## Pending acceptance
+## Verification and remaining acceptance
 
-Source tests cover image-only capture flags, metadata allowlists, image/crop
-mapping, fresh tokens, single-action post-images, bounded unchanged behavior,
-uncertain outcomes, permissions, and ownership. Source-review fixes add equivalent
-click defaults, app/window pagination, and Unicode partial-typing recovery coverage.
-All tests remain written but unexecuted; review fixes are not runtime verification.
-The supported-host first-request schema fingerprint and effective prompt/tool
-inventory must be regenerated after verification is approved. Do not treat the
-inherited PR #77 fingerprint as current.
+The dev integration passed all five offline package builds, the Node bundle,
+265 focused tests across 23 suites, and eight archive/package tests. A real
+Photon fixture checks cropped pixels and coordinate mapping. First-paint and
+first-request checks passed with the regenerated supported-host fingerprint;
+removing only `computer_load` reproduced the unchanged unsupported-host baseline.
+Seven local dev tarballs passed relocated installation, OS/CPU payload selection,
+omitted-optional handling, and installer-lock checks. The dev publication workflow
+also passed. These results describe the dev integration, not a separate full
+verification of this master-targeted PR's stable packaging.
 
-Required later checks include focused source tests, offline package builds,
-first-request inventory, isolated packaging, and explicit authorized fixture
-desktop acceptance. Native gates include Windows locked/UAC/integrity states,
-Electron/native apps, display scaling and moved/resized windows, Unicode,
-held-input cancellation, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
-Cursor/runtime changes need a separate scoped decision before implementation.
+The user reported testing the published dev build; specific applications and
+scenarios were not supplied. This does not establish full platform acceptance.
+Native gates remain Windows locked/UAC/integrity states, Electron/native apps,
+display scaling and moved/resized windows, Unicode, held-input cancellation, and
+macOS TCC/LaunchServices/FIFO/shutdown on hardware. Cursor/runtime changes need
+a separate scoped decision before implementation. Token savings remain unmeasured.
 
 ## Privacy
 
