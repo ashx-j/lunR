@@ -8,6 +8,7 @@ import { once } from 'node:events';
 
 const root = path.resolve(import.meta.dirname, '..');
 const idleParent = process.argv.includes('--idle');
+const communicationMode = process.argv.includes('--communication');
 fs.mkdirSync(path.join(root, '.artifacts'), { recursive: true });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'lunr-question-smoke-'));
 const home = path.join(profile, 'home');
@@ -21,6 +22,9 @@ let childReadyResolve, questionQueuedResolve;
 const childReady = new Promise(r => { childReadyResolve = r; });
 const questionQueued = new Promise(r => { questionQueuedResolve = r; });
 let parentTurn = 0, childTurn = 0, runId, questionId, continuation = false, answerSeen = false, childFinished = false;
+let handoffObservedResolve;
+const handoffObserved = new Promise(r => { handoffObservedResolve = r; });
+let handoffSeen = false, decisionSeen = false;
 let failure;
 const observations = [];
 const textOf = body => JSON.stringify(body.messages);
@@ -41,6 +45,53 @@ const server = http.createServer(async (req, res) => {
     const body = JSON.parse(data);
     observations.push({ model: body.model, messages: body.messages, tools: body.tools });
     const all = textOf(body);
+    if (body.model === 'parent' && parentTurn === 0) {
+      fs.writeFileSync(path.join(root, 'LUNR_SYSTEM_INJECTION.md'), body.messages.filter(m => m.role === 'system' || m.role === 'developer').map(m => m.content).join('\n\n'));
+      fs.writeFileSync(path.join(root, '.artifacts', 'question-tool-inventory.json'), JSON.stringify(body.tools, null, 2));
+    }
+    if (communicationMode) {
+      if (body.model === 'child') {
+        if (childTurn++ === 0) {
+          const contact = body.tools.find(t => t.function.name === 'contact_supervisor');
+          assert(contact?.function.parameters.properties.reason.enum.includes('handoff'), 'Child lacks v2 handoff');
+          childReadyResolve();
+          return tool(res, 'contact_supervisor', { reason: 'progress_update', message: 'routine-progress-must-not-reach-parent' });
+        }
+        if (childTurn === 2) return tool(res, 'contact_supervisor', { reason: 'handoff', message: 'dependency-handoff-smoke-ok: use returned image pixels.' });
+        if (childTurn === 3) {
+          await handoffObserved;
+          return tool(res, 'contact_supervisor', { reason: 'need_decision', message: 'blocked-decision-smoke-ok: native driver changes are outside my scope. Approve the scope change?' });
+        }
+        assert(all.includes('approved-decision-smoke-ok'), 'Child did not receive the decision reply');
+        childFinished = true;
+        return respond(res, { role: 'assistant', content: 'child-communication-completed: use returned image pixels; scope decision received.' });
+      }
+      assert(!all.includes('routine-progress-must-not-reach-parent'), 'UI-only progress leaked into parent context');
+      if (parentTurn++ === 0) return tool(res, 'subagent', { task: 'Report progress, hand off the dependency contract, then request a scope decision and return a self-contained final report.', description: 'Communication smoke child', tier: 'light', permissions: 'read-only' });
+      if (parentTurn === 2) {
+        runId = uuid(JSON.stringify(body.messages.filter(m => m.role === 'tool').at(-1)));
+        assert(runId, 'Missing async run id');
+        await childReady;
+        return respond(res, { role: 'assistant', content: 'Parent idle until actionable communication.' });
+      }
+      if (parentTurn === 3) {
+        assert.equal(all.match(/dependency-handoff-smoke-ok/g)?.length, 1, 'Idle parent must receive exactly one handoff');
+        handoffSeen = true;
+        handoffObservedResolve();
+        return respond(res, { role: 'assistant', content: 'Dependency received. Parent idle until decision request.' });
+      }
+      if (parentTurn === 4) {
+        assert(all.includes('blocked-decision-smoke-ok'), 'Idle parent did not receive the blocking request');
+        const request = body.messages.findLast(m => JSON.stringify(m.content).includes('blocked-decision-smoke-ok'));
+        const requestId = uuid(JSON.stringify(request));
+        assert(requestId, 'Decision request omitted reply id');
+        decisionSeen = true;
+        return tool(res, 'subagent_supervisor', { action: 'reply', replyTo: requestId, message: 'approved-decision-smoke-ok' });
+      }
+      if (parentTurn === 5) return tool(res, 'subagent_wait', { id: runId, timeoutMs: 20000 });
+      assert(childFinished, 'Child did not receive the decision and finish');
+      return respond(res, { role: 'assistant', content: 'parent-question-smoke-ok' });
+    }
     if (body.model === 'child') {
       console.log(`child request ${childTurn}`);
       if (childTurn++ === 0) {
@@ -120,15 +171,27 @@ const deadline = setTimeout(() => { console.error('Smoke deadline reached'); chi
 try {
   await once(child, 'exit');
   if (failure) throw failure;
-  assert(answerSeen, 'No explicit answer observed');
-  assert(continuation, 'Child did not continue original task');
+  if (communicationMode) {
+    assert(handoffSeen && decisionSeen && childFinished, 'Communication did not complete');
+  } else {
+    assert(answerSeen, 'No explicit answer observed');
+    assert(continuation, 'Child did not continue original task');
+  }
   assert(stdout.includes('parent-question-smoke-ok'), 'Parent did not complete');
-  console.log(`PASS: real CLI, async read-only child, ${idleParent ? 'idle parent wake' : 'question wait'}, explicit reply, original task continued.`);
+  console.log(communicationMode ? 'PASS: UI-only progress excluded from every parent request; handoff and blocking decision woke idle parent; child received reply and finished.' : `PASS: real CLI, async read-only child, ${idleParent ? 'idle parent wake' : 'question wait'}, explicit reply, original task continued.`);
 } finally {
   clearTimeout(deadline);
-  fs.writeFileSync(path.join(root,'.artifacts','question-smoke-observations.json'), JSON.stringify(observations,null,2));
-  fs.writeFileSync(path.join(root,'.artifacts','question-smoke-stdout.log'),stdout);
-  fs.writeFileSync(path.join(root,'.artifacts','question-smoke-stderr.log'),stderr);
+  const prefix = communicationMode ? 'communication-smoke' : idleParent ? 'question-idle-smoke' : 'question-smoke';
+  fs.writeFileSync(path.join(root,'.artifacts',`${prefix}-observations.json`), JSON.stringify(observations,null,2));
+  fs.writeFileSync(path.join(root,'.artifacts',`${prefix}-stdout.log`),stdout);
+  fs.writeFileSync(path.join(root,'.artifacts',`${prefix}-stderr.log`),stderr);
   console.log(`Isolated profile: ${profile}`);
   server.closeAllConnections(); server.close();
+  try {
+    const brokerPid = Number(fs.readFileSync(path.join(agentDir, 'intercom', 'broker.pid'), 'utf8').trim());
+    assert(Number.isSafeInteger(brokerPid) && brokerPid > 0, 'Invalid isolated broker pid');
+    process.kill(brokerPid);
+  } catch (error) {
+    if (error.code !== 'ENOENT' && error.code !== 'ESRCH') throw error;
+  }
 }

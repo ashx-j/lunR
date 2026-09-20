@@ -12,6 +12,8 @@ import {
 import {
 	COMPACT_SUBAGENT_TOOL_DESCRIPTION,
 	FULL_SUBAGENT_TOOL_DESCRIPTION,
+	SUBAGENT_COORDINATION_GUIDANCE,
+	SUBAGENT_SAFETY_GUIDANCE,
 } from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
 import { buildAsyncRunnerSteps } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-execution.ts";
 import {
@@ -61,6 +63,17 @@ function nestedSchema(
 }
 
 describe("prompt-driven subagent schema", () => {
+	it("keeps contract-first coordination guidance in full, compact, and mandatory custom descriptions", () => {
+		for (const description of [
+			FULL_SUBAGENT_TOOL_DESCRIPTION,
+			COMPACT_SUBAGENT_TOOL_DESCRIPTION,
+			SUBAGENT_SAFETY_GUIDANCE,
+		]) {
+			expect(description).toContain(SUBAGENT_COORDINATION_GUIDANCE);
+			expect(description).toContain("Native child intercom reaches the supervisor only, not siblings");
+		}
+	});
+
 	it("does not require or expose agent on execution shapes", () => {
 		for (const schema of [SubagentParams, ParallelTaskSchema, DynamicParallelTemplateSchema, ChainItem]) {
 			expect(schemaProperties(schema)).not.toContain("agent");

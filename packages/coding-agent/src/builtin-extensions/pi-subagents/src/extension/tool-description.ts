@@ -14,6 +14,8 @@ export const SUBAGENT_TIER_GUIDANCE = `TIER SELECTION:
 • standard: Use for moderately difficult work and everyday coding tasks. Good for writing simple code, fixing a clearly described bug, reviewing a focused change, or completing work with clear requirements. Use heavy when the task requires deep architectural understanding or complex reasoning.
 • heavy: Use for complex or ambiguous tasks that require deep reasoning and strong code understanding. Good for implementing complex plans, debugging difficult or poorly understood problems, reviewing large or high-risk changes, and making architectural decisions.`;
 
+export const SUBAGENT_COORDINATION_GUIDANCE = "Define file ownership, local decision authority, and required outputs at launch. Establish shared contracts before dependent parallel work; use chains and artifacts to pass results. Native child intercom reaches the supervisor only, not siblings. Reserve parent relays for actionable exceptions, not routine progress or implementation approvals.";
+
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Prompt children directly. There is no agent roster. Every execution task needs task (the full child prompt) and description (a concise UI label).
 • Every executable child chooses exactly one of tier: "light"|"standard"|"heavy" (default) or model: "provider/id" when the user names a model. Do not pass both, and do not use inherit. Missing, disabled, unconfigured, unavailable, or unauthenticated selections fail before launch.
@@ -24,6 +26,7 @@ ${SUBAGENT_TIER_GUIDANCE}
 • ${SUBAGENT_ASYNC_GUIDANCE}
 • Child-safety boundary: ordinary children are not orchestrators and must not run subagents. Only explicitly configured fanout children may use the child-safe subagent tool, still bounded by depth/session limits.
 • Writing/review safety: keep one full-access writer for the same cwd/worktree. Use fresh-context permissions: "read-only" children for independent review, then have the parent synthesize and apply fixes as the sole writer unless an isolated worktree was intentionally requested.
+• ${SUBAGENT_COORDINATION_GUIDANCE}
 • Artifacts/status essentials: chain outputs live under {chain_dir}; async runs expose asyncId/asyncDir with status.json, events.jsonl, output logs, and status via { action: "status", id }. Include output paths and residual risks when reporting results.`;
 
 export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to generic children by prompting them directly. There are no named agent types.
@@ -79,6 +82,7 @@ EXECUTE:
 • description is required (single-line, max 80 chars, UI only). task is the full child prompt. permissions omitted = full. Plan-mode parents must pass permissions:"read-only".
 • Exactly one of tier:"light"|"standard"|"heavy" (default) or model:"provider/id" when the user names a model. thinking only with model. No inherit; fail closed on unavailable selections. Children always start fresh. timeoutMs/maxRuntimeMs apply to foreground and async/background runs.
 ${SUBAGENT_TIER_GUIDANCE}
+• ${SUBAGENT_COORDINATION_GUIDANCE}
 • Chain templates may use {task}, {previous}, {chain_dir}, and named outputs. Parallel worktree isolation requires a clean git repo.
 • Chain example: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {parallel: [{task:"Check {previous}", description:"Check prior result", tier:"light", permissions:"read-only", count: 3}]}] }
 

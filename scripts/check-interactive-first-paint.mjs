@@ -199,7 +199,7 @@ registerHooks({load(url, context, nextLoad) {
 		}
 		assert.equal(
 			request.toolSchemaHash,
-			"5325fdc0cf75a1998cb0a1d8ab184bf34342c4eac71add793bcf106c6f2c9da4",
+			"7892256d5052aaecf59f08450ee31e25153c40d6b280c7134a6f4d77b0374e99",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);

@@ -2737,6 +2737,8 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 
 ### Message and Entry Rendering
 
+Clicking a custom message or entry toggles the renderer's `expanded` option. Child components that handle a click themselves take priority. Expansion survives theme invalidation; new or restored cards use the current tool-expansion setting.
+
 Register a custom renderer for messages with your `customType`. Use message renderers for content that should participate in LLM context:
 
 ```typescript

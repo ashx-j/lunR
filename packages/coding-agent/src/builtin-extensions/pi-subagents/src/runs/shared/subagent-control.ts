@@ -138,6 +138,10 @@ export function shouldNotifyControlEvent(config: ResolvedControlConfig, event: C
 	return config.enabled && config.notifyOn.includes(event.type);
 }
 
+export function isDiagnosticControlEvent(event: Partial<ControlEvent> | undefined): boolean {
+	return event?.type === "active_long_running" || ["idle", "active_long_running", "time_threshold", "turn_threshold", "token_threshold", "completion_guard"].includes(event?.reason ?? "");
+}
+
 export function controlNotificationKey(event: ControlEvent, childIntercomTarget?: string): string {
 	const childKey = childIntercomTarget ?? (event.index !== undefined ? `${event.runId}:${event.index}` : event.runId);
 	return `${childKey}:${event.type}:${event.reason ?? "idle"}`;

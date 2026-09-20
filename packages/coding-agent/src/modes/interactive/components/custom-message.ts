@@ -42,6 +42,13 @@ export class CustomMessageComponent extends Container {
 		}
 	}
 
+	override handleClick(localY: number, width: number): boolean {
+		if (super.handleClick(localY, width)) return true;
+		if (!this.customRenderer || !this.customComponent || localY < 1) return false;
+		this.setExpanded(!this._expanded);
+		return true;
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.rebuild();

@@ -44,7 +44,8 @@ import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "../slash/prompt-template-bridge.ts";
 import { registerMainWatchdog } from "../watchdog/register-main.ts";
 import { registerSlashSubagentBridge } from "../slash/slash-bridge.ts";
-import { createNativeSupervisorChannel } from "../intercom/native-supervisor-channel.ts";
+import { createNativeSupervisorChannel, registerSupervisorRenderers } from "../intercom/native-supervisor-channel.ts";
+import { renderCommunicationCall, renderCommunicationResult } from "../tui/communication.ts";
 import { registerSubagentRpcBridge } from "./rpc.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
 import { inspectSubagentStatus } from "../runs/background/run-status.ts";
@@ -186,6 +187,9 @@ export function renderSubagentCall(rawArgs, theme, context, options) {
 		const resultTitle = context?.result?.details?.displayTitle;
 		const resolvedTitle = resultTitle || options?.resolveActionTitle?.(args);
 		const target = resolvedTitle || args.id || args.runId || "";
+		if ((args.action === "steer" || args.action === "resume") && args.message) {
+			return renderCommunicationCall("subagent", args, theme, context, { direction: "to", peer: resolvedTitle || "Subagent", kind: "steer", message: args.message });
+		}
 		return new Text(
 			`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 			0,
@@ -476,6 +480,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	executorExecute = executor.execute;
 
+	registerSupervisorRenderers(pi, state);
+
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
@@ -509,11 +515,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const executeSubagentCollapsed = async (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-		const displayTitle = params.action === "steer"
-			? resolveSubagentActionDisplayTitle(params, state)
-			: undefined;
+		const isCommunication = (params.action === "steer" || params.action === "resume") && typeof params.message === "string";
+		const displayTitle = isCommunication ? resolveSubagentActionDisplayTitle(params, state) : undefined;
+		const jobs = isCommunication ? matchingActionJobs(state, (params.id || params.runId || "").trim()) : [];
+		const targetNames = new Map(jobs.length === 1 ? jobs[0]!.steps?.map((step, index) => [step.index ?? index, childRowLabel(step)]) : []);
 		const result = await executor.execute(id, params, signal, onUpdate, ctx);
 		if (displayTitle && result.details) result.details.displayTitle = displayTitle;
+		if (isCommunication && result.details) {
+			const targets = result.details.steering?.targets.map((target) => targetNames.get(target.index) ?? `Subagent ${target.index + 1}`);
+			const peer = targets?.length ? targets.join(", ") : displayTitle || "Subagent";
+			result.details.communication = { direction: "to", peer, kind: "steer", message: params.message };
+		}
 		return result;
 	};
 
@@ -562,6 +574,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}),
 
 		renderResult(result, options, theme, context) {
+			if (result.details?.communication) return renderCommunicationResult(result.content, result.details, options.expanded, context.isError, theme);
 			if (subagentResultIsRunning(result)) {
 				ensureSubagentResultAnimation(context);
 			} else {
@@ -603,7 +616,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (ctx.hasUI) return;
-		await drainOutstandingWork({ state, events: pi.events });
+		await drainOutstandingWork({ state, events: pi.events, hasPendingMessages: () => ctx.hasPendingMessages() });
 	});
 
 	registerSlashCommands(pi, state);

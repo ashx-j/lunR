@@ -380,7 +380,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
 		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) return;
-		await drainOutstandingWork({ state: waitState, events: pi.events });
+		await drainOutstandingWork({ state: waitState, events: pi.events, hasPendingMessages: () => ctx.hasPendingMessages() });
 	});
 	const structuredOutputPath = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
 	const structuredSchemaPath = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
