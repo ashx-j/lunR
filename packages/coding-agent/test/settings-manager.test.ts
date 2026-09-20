@@ -25,6 +25,14 @@ describe("SettingsManager", () => {
 		}
 	});
 
+	it("defaults todos on and persists the toggle", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getTodosEnabled()).toBe(true);
+		manager.setTodosEnabled(false);
+		await manager.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getTodosEnabled()).toBe(false);
+	});
+
 	it("persists OpenAI Codex Fast mode", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getOpenAIFastMode()).toBe(false);

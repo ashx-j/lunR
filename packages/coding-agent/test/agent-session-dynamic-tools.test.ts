@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import lunrTodos from "../src/builtin-extensions/lunr-todos.ts";
 import simpleMemory from "../src/builtin-extensions/simple-pi-memory.ts";
 import { MEMORY_CAP_BRIDGE_SYMBOL, registerMemoryCapBridge } from "../src/core/memory-cap.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
@@ -86,6 +87,42 @@ describe("AgentSession dynamic tool registration", () => {
 		settingsManager.setMemoryEnabled(true);
 		session.refreshToolRegistry();
 		expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(memoryTools));
+		session.dispose();
+	});
+
+	it("removes todo guidance and the todo tool when todos are toggled off", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [lunrTodos],
+		});
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			settingsManager,
+			sessionManager: SessionManager.inMemory(),
+			resourceLoader,
+		});
+		await session.bindExtensions({});
+
+		expect(session.getActiveToolNames()).toContain("todo");
+		expect(session.getAllTools().map((tool) => tool.name)).toContain("todo");
+		expect(session.systemPrompt).toContain("Use todo for meaningful multi-step work.");
+
+		settingsManager.setTodosEnabled(false);
+		session.refreshToolRegistry();
+		expect(session.getActiveToolNames()).not.toContain("todo");
+		expect(session.getAllTools().map((tool) => tool.name)).not.toContain("todo");
+		expect(session.systemPrompt).not.toContain("Use todo for meaningful multi-step work.");
+
+		settingsManager.setTodosEnabled(true);
+		session.refreshToolRegistry();
+		expect(session.getActiveToolNames()).toContain("todo");
+		expect(session.systemPrompt).toContain("Use todo for meaningful multi-step work.");
 		session.dispose();
 	});
 

@@ -112,6 +112,7 @@ export interface SettingsConfig {
 	confirmLargeSubagentLaunches: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
+	todosEnabled: boolean;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
@@ -179,6 +180,7 @@ export interface SettingsCallbacks {
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
+	onTodosEnabledChange: (enabled: boolean) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
 	onFooterMcpChange: (enabled: boolean) => void;
@@ -1480,6 +1482,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "todos",
+				label: "Todos",
+				description: "Agent task list and todo tool",
+				currentValue: config.todosEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "memory-char-cap",
 				label: "Memory character cap",
 				description: "Maximum agent memory size",
@@ -1820,6 +1829,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "agent-memory":
 						callbacks.onMemoryEnabledChange(newValue === "on");
+						break;
+					case "todos":
+						callbacks.onTodosEnabledChange(newValue === "on");
 						break;
 					case "search-curator":
 						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);

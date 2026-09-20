@@ -30,6 +30,24 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain(`- Examples: ${getExamplesPath()}`);
 	});
 
+	test("includes todo guidance only while the todo tool is active", () => {
+		const withTodos = buildSystemPrompt({
+			selectedTools: ["read", "todo"],
+			contextFiles: [],
+			skills: [],
+			cwd: process.cwd(),
+		});
+		const withoutTodos = buildSystemPrompt({
+			selectedTools: ["read"],
+			contextFiles: [],
+			skills: [],
+			cwd: process.cwd(),
+		});
+
+		expect(withTodos).toContain("Use todo for meaningful multi-step work.");
+		expect(withoutTodos).not.toContain("Use todo for meaningful multi-step work.");
+	});
+
 	test("does not duplicate API tool definitions or tool prompt metadata", () => {
 		const prompt = buildSystemPrompt({
 			modelSlug: "test/model",
