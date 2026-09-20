@@ -68,11 +68,12 @@ lunr
 /login  # Then select provider
 ```
 
-First-run optional features (Telegram/Discord gateway):
+First-run optional features include the Telegram/Discord gateway and the [headless browser](docs/browser.md):
 
 ```bash
 lunr setup
 lunr features list
+lunr features enable browser  # Explicitly download matching Chromium, then restart
 ```
 
 To remove the CLI, keep `~/.lunr/agent` unless you pass `--purge`:

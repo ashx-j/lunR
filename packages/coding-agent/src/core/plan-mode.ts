@@ -171,6 +171,9 @@ export function isCodeRewriteMutating(input: unknown): boolean {
  * Returns the block reason when plan mode should block this tool call, else undefined.
  */
 export function planModeBlockReason(toolName: string, input: unknown): string | undefined {
+	if (toolName === "browser" && (input as { action?: unknown } | undefined)?.action === "act") {
+		return `${PLAN_MODE_BLOCK_MESSAGE} Browser interactions require a non-plan session; observation remains available.`;
+	}
 	if (BLOCKED_TOOLS.has(toolName)) {
 		return PLAN_MODE_BLOCK_MESSAGE;
 	}

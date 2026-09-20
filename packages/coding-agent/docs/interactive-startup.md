@@ -22,6 +22,7 @@ opening the prompt barrier. It does not replace tool schemas with placeholders.
 The expensive implementations load when needed:
 
 - Web tools load providers, extraction, and browser curation separately.
+- The optional headless browser registers its schema only when configured. Its runtime and Playwright load on first browser use. See [Headless browser](browser.md) for explicit setup and network limits.
 - LSP registers its tools before loading clients and Tree-sitter. Configured
   autostart runs in the background; first use waits for the required services.
 - MCP registers the proxy and cached direct-tool definitions without loading its
@@ -54,7 +55,7 @@ The check stalls or fails runtime loading and verifies the real frame, editable
 draft, and terminal cleanup. It also blocks optional implementation imports and
 checks a complete first request against the baseline tool-payload hash. Separate
 first-turn fixtures exercise subagent status, MCP status, Tree-sitter parsing,
-and local HTTP extraction. The default CI run checks the workspace build on
+and local HTTP extraction. Disabled and enabled headless-browser fixtures verify conditional tool registration while browser runtime imports are stalled. The default CI run checks the workspace build on
 Ubuntu. Passing a CLI path runs the same checks against a relocated installation,
 but CI does not currently pack that installation or run this check on Windows.
 
