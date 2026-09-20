@@ -471,7 +471,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 - **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
 - **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
 - **Plan mode** — `/plan` plus the `present_plan` tool
-- **Todos** — lunr-todos (full-replace)
+- **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)
 - **Gateway** — `lunr gateway` for Telegram and Discord

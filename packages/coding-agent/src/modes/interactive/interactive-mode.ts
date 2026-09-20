@@ -142,6 +142,7 @@ import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/suba
 // lunr: multi-subscription API-key pools (stage 3 UI).
 import type { SubEntry } from "../../core/subscriptions.ts";
 import { time } from "../../core/timings.ts";
+import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
@@ -4810,6 +4811,7 @@ export class InteractiveMode {
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
+					todosEnabled: this.settingsManager.getTodosEnabled(),
 					searchCurator: getSearchCuratorSetting(),
 					// lunr: TUI customize settings
 					footerMcp: this.settingsManager.getFooterMcp(),
@@ -5021,6 +5023,11 @@ export class InteractiveMode {
 						this.settingsManager.setMemoryEnabled(enabled);
 						this.session.refreshToolRegistry();
 						this.showStatus(`Agent memory: ${enabled ? "on" : "off"}`);
+					},
+					onTodosEnabledChange: (enabled) => {
+						this.settingsManager.setTodosEnabled(enabled);
+						notifyTodosEnabledChanged(enabled);
+						this.session.refreshToolRegistry();
 					},
 					onSearchCuratorChange: (setting) => {
 						if (!setSearchCuratorSetting(setting)) {

@@ -162,6 +162,7 @@ export interface Settings {
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
+	todosEnabled?: boolean; // default: true - expose the todo tool and its prompt guidance
 	// lunr: footer element toggles (ashxj-tui stats line)
 	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
@@ -1033,6 +1034,16 @@ export class SettingsManager {
 	setMemoryEnabled(enabled: boolean): void {
 		this.globalSettings.memoryEnabled = enabled;
 		this.markModified("memoryEnabled");
+		this.save();
+	}
+
+	getTodosEnabled(): boolean {
+		return this.globalSettings.todosEnabled ?? true;
+	}
+
+	setTodosEnabled(enabled: boolean): void {
+		this.globalSettings.todosEnabled = enabled;
+		this.markModified("todosEnabled");
 		this.save();
 	}
 

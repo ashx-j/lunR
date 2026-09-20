@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-20 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Todo setting (`feat/toggle-todos`):** `/settings` → Todos persists the global `todosEnabled` toggle. Off removes the todo guideline and tool from the active registry, then clears the editor widget. On restores the tool without a reload. Defaults remain on.
 - **v0.2.21:** ships #82 Windows intercom startup, #83 subagent UI polish, #84 question/resume delivery, and #85 async-by-default. The combined call renderer keeps #83 title lookup and persisted `displayTitle` with #85 argument normalization and omitted-async default. Native computer use #77 stays open.
 - **Intercom Windows startup (`fix/intercom-windows-startup`):** the hidden launcher owns stderr redirection without a competing parent file handle. Each launch resets its diagnostic log; early exits report their code and failures include the log path. The launcher exits once startup settles, while the broker remains independent. Broker reuse, native supervisor bypass, and subagent delivery are unchanged. Tests: intercom-startup + continuation/delivery/question/cancellation suites.
 
@@ -132,6 +133,7 @@ Last updated: 2026-09-13 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Todo setting (2026-09-20): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 30/30 for prompt, registry, widget, and persistence coverage. Changed non-vendored code passes Biome; `git diff --check` passes. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with the unchanged default tool inventory.
 - v0.2.21 release (2026-09-13): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 185/185 across 11 suites. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with hash `5325fdc0…`. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt CLI `--version` reports 0.2.21. Publication workflow `34766302131` succeeded from tag `v0.2.21` at `833b964`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.21 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed. Native computer use #77 stays open.
 - Combined #82/#83/#84/#85 merge (2026-09-13): focused Vitest passes 185/185 across 11 suites covering intercom startup, question/resume delivery, compact UI, spinner/widget order, and async-by-default. #83 title lookup and #85 async default both remain on `renderSubagentCall`. First-paint keeps Windows broker cleanup plus isolated `PI_*` scrubbing and hash `5325fdc0…`. Native computer use #77 stays open. No release or installed CLI update.
 - Intercom Windows startup (2026-09-13): five offline package builds and the coding-agent Node bundle pass. Focused Vitest passes 52/52 across nine suites. The compiled broker integration reproduced the original timeout before the fix, then passed launch/reuse, launcher cleanup, two-client question/reply, early-exit, and health-timeout checks. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with the unchanged tool-schema fingerprint. Two isolated interactive CLI processes with simulated terminal streams exchanged a question/reply through the real intercom tool using a local scripted provider. Async question-wait and idle-parent-wake CLI checks pass. The installed CLI and original workspace build remain unchanged.
@@ -204,6 +206,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- `todosEnabled` is global-only. Filter `todo` in `AgentSession` so disabled sessions omit both the callable definition and its base-prompt guidance; the TUI notification bridge only clears the live widget.
 - Windows intercom: `cmd.exe` cannot redirect into `broker.stderr.log` while the parent holds it open. Keep Windows redirection and direct-launch fd inheritance separate. The hidden launcher waits for an exit code during startup only; release it when the health check settles. Startup fixtures must stop their isolated broker before removing its profile because a healthy broker outlives the CLI.
 
 - Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
@@ -276,6 +279,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-20: make todos a default-on global setting and filter the tool in `AgentSession` so every run mode removes the schema and prompt guidance consistently.
 - 2026-09-13: ship #82, #83, #84, and #85 as 0.2.21; keep native computer use #77 open.
 - 2026-09-13: merge #82, #83, #84, and #85 onto master without squashing; keep #83 title lookup with #85 async default; leave native computer use #77 open.
 - 2026-09-13: keep intercom and its subagent relay intact; fix Windows stderr ownership and expose startup exit codes instead of replacing the communication system.

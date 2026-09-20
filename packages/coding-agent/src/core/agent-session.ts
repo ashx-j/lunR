@@ -107,6 +107,7 @@ import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { measureStartup } from "./timings.ts";
+import { TODO_TOOL_NAMES } from "./todo-settings.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -2741,7 +2742,8 @@ export class AgentSession {
 		const isAllowedTool = (name: string): boolean =>
 			(!allowedToolNames || allowedToolNames.has(name)) &&
 			!excludedToolNames?.has(name) &&
-			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name));
+			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name)) &&
+			(this.settingsManager.getTodosEnabled() || !TODO_TOOL_NAMES.has(name));
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [
