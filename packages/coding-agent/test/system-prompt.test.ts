@@ -19,8 +19,18 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain("Current working directory: ''C:/work/project''");
 		expect(prompt).toContain("Behavior guidelines:");
 		expect(prompt).toContain("Memory stores established, durable facts and stable preferences.");
+		expect(prompt).toContain("should be click-to-copy");
 		expect(prompt).toContain("fenced Markdown block with the info string `lunr-copy`");
 		expect(prompt).toContain("Use a longer backtick or tilde fence when the payload contains fenced code.");
+		expect(prompt).toContain(
+			"Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up.",
+		);
+		expect(prompt).toContain("inspect with `lunr gateway status` or `lunr gateway doctor`");
+		expect(prompt).toContain("configure with `lunr gateway setup`");
+		expect(prompt).toContain("send `/whoami` or a normal message to the bot");
+		expect(prompt).toContain("there is no arbitrary outbound send command");
+		expect(prompt).toContain("Keep bot tokens out of commands and output.");
+		expect(prompt).toContain(`${getDocsPath()}/features.md`);
 		expect(prompt).toContain("Never modify this tree, including through shell commands.");
 		expect(prompt).not.toContain("behavior.md");
 		expect(prompt).toContain("Guidelines:");

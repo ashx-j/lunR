@@ -151,7 +151,7 @@ Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.m
 
 ### Copyable response blocks
 
-Assistant responses can place a Copy button under a selected reusable excerpt, prompt, or code fragment. Clicking it copies only that block. Success or failure appears beside the button.
+Assistant responses can mark a reusable excerpt, prompt, or code fragment as click-to-copy. The marked section appears in a plain background box. Click anywhere in that box to copy only its contents.
 
 The source format is a fenced Markdown block with the exact info string `lunr-copy`:
 
@@ -161,7 +161,7 @@ npm test
 ```
 ````
 
-The payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR copies it without trimming whitespace and excludes both fence lines. A longer backtick or tilde fence can contain shorter fenced code. Incomplete streamed blocks show their received text but no Copy button. Print, JSON, RPC, and gateway output keep the raw fences and never write to the clipboard.
+The payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR copies it without trimming whitespace and excludes both fence lines. A longer backtick or tilde fence can contain shorter fenced code. Incomplete streamed blocks remain readable but become clickable only after the closing fence arrives. Print, JSON, RPC, and gateway output keep the raw fences and never write to the clipboard.
 
 ### Commands
 

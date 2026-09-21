@@ -226,13 +226,8 @@ export class AssistantMessageComponent extends Container {
 					const status = copyState?.payload === segment.payload ? copyState.status : "idle";
 					if (copyState && copyState.payload !== segment.payload) this.copyStates.delete(key);
 					this.contentContainer.addChild(
-						new CopyableTextBlockComponent(
-							segment.payload,
-							segment.complete,
-							this.outputPad,
-							this.markdownTheme,
-							status,
-							() => this.copyPayload(key, segment.payload),
+						new CopyableTextBlockComponent(segment.payload, segment.complete, this.outputPad, status, () =>
+							this.copyPayload(key, segment.payload),
 						),
 					);
 				}

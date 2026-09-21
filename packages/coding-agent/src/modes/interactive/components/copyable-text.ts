@@ -1,5 +1,4 @@
-import type { MarkdownTheme } from "@earendil-works/pi-tui";
-import { type Component, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 export type CopyableTextSegment =
@@ -122,79 +121,54 @@ export function parseCopyableTextSegments(source: string): CopyableTextSegment[]
 export type CopyableTextStatus = "idle" | "copying" | "copied" | { error: string };
 
 export class CopyableTextBlockComponent implements Component {
-	private buttonRow = -1;
-	private buttonStart = -1;
-	private buttonEnd = -1;
+	private renderedRows = 0;
 	private readonly payload: string;
 	private readonly complete: boolean;
 	private readonly outputPad: number;
-	private readonly markdownTheme: MarkdownTheme;
 	private readonly status: CopyableTextStatus;
 	private readonly onCopy: () => void;
 
-	constructor(
-		payload: string,
-		complete: boolean,
-		outputPad: number,
-		markdownTheme: MarkdownTheme,
-		status: CopyableTextStatus,
-		onCopy: () => void,
-	) {
+	constructor(payload: string, complete: boolean, outputPad: number, status: CopyableTextStatus, onCopy: () => void) {
 		this.payload = payload;
 		this.complete = complete;
 		this.outputPad = outputPad;
-		this.markdownTheme = markdownTheme;
 		this.status = status;
 		this.onCopy = onCopy;
 	}
 
 	invalidate(): void {
-		this.buttonRow = -1;
-		this.buttonStart = -1;
-		this.buttonEnd = -1;
+		this.renderedRows = 0;
 	}
 
 	render(width: number): string[] {
-		const pad = " ".repeat(this.outputPad);
-		const contentWidth = Math.max(1, width - this.outputPad - 2);
-		const lines = [truncateToWidth(`${pad}${this.markdownTheme.codeBlockBorder("╭─ lunr-copy")}`, width, "")];
+		if (width <= 0) {
+			this.renderedRows = 0;
+			return [];
+		}
+
+		const horizontalPad = Math.min(this.outputPad, Math.max(0, width - 1));
+		const pad = " ".repeat(horizontalPad);
+		const contentWidth = Math.max(1, width - horizontalPad * 2);
+		const paint = (content: string): string => {
+			const line = truncateToWidth(`${pad}${content}`, width, "");
+			return theme.bg("userMessageBg", `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`);
+		};
+		const lines = [paint("")];
 		const payloadLines = this.payload.replace(/\t/g, "   ").split("\n");
 
 		for (const payloadLine of payloadLines) {
 			for (const wrappedLine of wrapTextWithAnsi(payloadLine, contentWidth)) {
-				lines.push(
-					truncateToWidth(
-						`${pad}${this.markdownTheme.codeBlockBorder("│ ")}${this.markdownTheme.codeBlock(wrappedLine)}`,
-						width,
-						"",
-					),
-				);
+				lines.push(paint(theme.fg("userMessageText", wrappedLine)));
 			}
 		}
 
-		lines.push(
-			truncateToWidth(
-				`${pad}${this.markdownTheme.codeBlockBorder(this.complete ? "╰─" : "╰─ receiving")}`,
-				width,
-				"",
-			),
-		);
-
-		this.buttonRow = -1;
-		this.buttonStart = -1;
-		this.buttonEnd = -1;
-		if (this.complete) {
-			const button = "[ Copy ]";
-			let feedback = "";
-			if (this.status === "copying") feedback = theme.fg("dim", "  Copying...");
-			else if (this.status === "copied") feedback = theme.fg("success", "  Copied");
-			else if (typeof this.status === "object") feedback = theme.fg("error", `  Copy failed: ${this.status.error}`);
-			this.buttonRow = lines.length;
-			this.buttonStart = this.outputPad;
-			this.buttonEnd = Math.min(width, this.buttonStart + button.length);
-			lines.push(truncateToWidth(`${pad}${theme.fg("accent", button)}${feedback}`, width, ""));
+		if (typeof this.status === "object") {
+			for (const wrappedLine of wrapTextWithAnsi(`Copy failed: ${this.status.error}`, contentWidth)) {
+				lines.push(paint(theme.fg("error", wrappedLine)));
+			}
 		}
-
+		lines.push(paint(""));
+		this.renderedRows = lines.length;
 		return lines;
 	}
 
@@ -203,10 +177,9 @@ export class CopyableTextBlockComponent implements Component {
 		if (
 			!this.complete ||
 			this.status === "copying" ||
-			localX === undefined ||
-			localY !== this.buttonRow ||
-			localX < this.buttonStart ||
-			localX >= this.buttonEnd
+			localY < 0 ||
+			localY >= this.renderedRows ||
+			(localX !== undefined && (localX < 0 || localX >= width))
 		) {
 			return false;
 		}
