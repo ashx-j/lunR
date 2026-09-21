@@ -32,7 +32,7 @@ See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab
 
 ### Copyable response blocks
 
-An assistant response can put a Copy button under a selected reusable excerpt, prompt, or code fragment. The button copies that block rather than the whole response. Each block has its own success or failure feedback.
+An assistant response can mark a reusable excerpt, prompt, or code fragment as click-to-copy. The marked section appears in a plain background box. Click anywhere in that box to copy it instead of the whole response.
 
 The assistant marks a block with the exact fenced Markdown info string `lunr-copy`:
 
@@ -44,7 +44,7 @@ Run the focused tests, then summarize failures.
 
 The copied payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR preserves its indentation, whitespace, and internal newlines without trimming, and does not copy either fence line. Use a longer backtick or tilde fence when the payload contains shorter fenced code.
 
-A streamed block stays readable while incomplete, but its Copy button appears only after the closing fence is received and revealed. Reopened sessions reconstruct buttons from the saved assistant message. Print, JSON, RPC, and gateway modes leave the fences readable and never perform clipboard writes.
+A streamed block stays readable while incomplete, but becomes clickable only after the closing fence is received and revealed. Reopened sessions reconstruct clickable sections from the saved assistant message. Print, JSON, RPC, and gateway modes leave the fences readable and never perform clipboard writes.
 
 ## Slash Commands
 

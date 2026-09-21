@@ -1,9 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
-import { parseCopyableTextSegments } from "../src/modes/interactive/components/copyable-text.ts";
+import {
+	CopyableTextBlockComponent,
+	parseCopyableTextSegments,
+} from "../src/modes/interactive/components/copyable-text.ts";
 import { sliceMessageContent } from "../src/modes/interactive/smooth-streaming.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 function createAssistantMessage(text: string): AssistantMessage {
@@ -30,12 +33,15 @@ function fence(marker: string, info: string, payload: string): string {
 	return `${marker}${info}\n${payload}\n${marker}`;
 }
 
-function buttonPosition(component: AssistantMessageComponent, width: number, occurrence = 0): { x: number; y: number } {
+function payloadPosition(
+	component: AssistantMessageComponent,
+	width: number,
+	payload: string,
+): { x: number; y: number } {
 	const lines = component.render(width).map((line) => stripAnsi(line));
-	const matches = lines.map((line, y) => ({ x: line.indexOf("[ Copy ]"), y })).filter(({ x }) => x >= 0);
-	const position = matches[occurrence];
-	if (!position) throw new Error(`Copy button ${occurrence} was not rendered`);
-	return position;
+	const y = lines.findIndex((line) => line.includes(payload));
+	if (y < 0) throw new Error(`Payload "${payload}" was not rendered`);
+	return { x: lines[y].indexOf(payload), y };
 }
 
 async function settleCopy(): Promise<void> {
@@ -78,8 +84,21 @@ describe("lunr-copy parsing", () => {
 	});
 });
 
+describe("CopyableTextBlockComponent", () => {
+	test("renders a plain background box with one blank row above and below", () => {
+		initTheme("moon");
+		const component = new CopyableTextBlockComponent("plain text", true, 1, "idle", () => {});
+		const lines = component.render(30);
+
+		expect(lines[0]).toBe(theme.bg("userMessageBg", " ".repeat(30)));
+		expect(lines.at(-1)).toBe(theme.bg("userMessageBg", " ".repeat(30)));
+		expect(stripAnsi(lines.join("\n"))).toContain(" plain text");
+		expect(stripAnsi(lines.join("\n"))).not.toMatch(/lunr-copy|\[ Copy \]|[╭╰│]/);
+	});
+});
+
 describe("AssistantMessageComponent lunr-copy blocks", () => {
-	test("copies exact payloads from independent buttons", async () => {
+	test("copies exact payloads by clicking anywhere in each section", async () => {
 		initTheme("moon");
 		const copied: string[] = [];
 		const source = [
@@ -105,19 +124,19 @@ describe("AssistantMessageComponent lunr-copy blocks", () => {
 		);
 
 		expect(copied).toEqual([]);
-		const first = buttonPosition(component, 60, 0);
-		expect(component.handleClick(first.y, 60, first.x)).toBe(true);
+		const first = payloadPosition(component, 60, "first");
+		expect(component.handleClick(first.y, 60, 59)).toBe(true);
 		await settleCopy();
 		expect(copied).toEqual(["  first  \n"]);
-		expect(stripAnsi(component.render(60).join("\n"))).toContain("Copied");
+		expect(stripAnsi(component.render(60).join("\n"))).not.toContain("Copied");
 
-		const second = buttonPosition(component, 60, 1);
-		expect(component.handleClick(second.y, 60, second.x)).toBe(true);
+		const second = payloadPosition(component, 60, "second   value");
+		expect(component.handleClick(second.y, 60, 0)).toBe(true);
 		await settleCopy();
 		expect(copied).toEqual(["  first  \n", "second\tvalue"]);
 	});
 
-	test("requires a click inside the button and recalculates hit rows after resize", async () => {
+	test("recalculates the full-section hit area after wrapping and resize", async () => {
 		initTheme("moon");
 		const copyText = vi.fn(async () => {});
 		const source = fence("```", "lunr-copy", "a long payload that wraps at a narrow width");
@@ -131,41 +150,49 @@ describe("AssistantMessageComponent lunr-copy blocks", () => {
 			{ copyText },
 		);
 
-		const wide = buttonPosition(component, 70);
-		expect(component.handleClick(wide.y, 70, wide.x - 1)).toBe(false);
-		expect(component.handleClick(wide.y, 70, wide.x + "[ Copy ]".length)).toBe(false);
-
-		const narrow = buttonPosition(component, 24);
-		expect(narrow.y).toBeGreaterThan(wide.y);
-		expect(component.handleClick(narrow.y, 24, narrow.x)).toBe(true);
+		const wideBottom = component.render(70).length - 1;
+		const narrowBottom = component.render(24).length - 1;
+		expect(narrowBottom).toBeGreaterThan(wideBottom);
+		expect(component.handleClick(narrowBottom, 24, 23)).toBe(true);
 		await settleCopy();
 		expect(copyText).toHaveBeenCalledWith("a long payload that wraps at a narrow width");
+		expect(component.handleClick(narrowBottom, 24, 24)).toBe(false);
+		expect(component.handleClick(narrowBottom + 1, 24, 0)).toBe(false);
 	});
 
-	test("reconstructs buttons from saved message text", () => {
+	test("reconstructs clickable sections from saved message text", async () => {
 		initTheme("moon");
+		const copyText = vi.fn(async () => {});
 		const message = createAssistantMessage(fence("```", "lunr-copy", "saved payload"));
-		const firstRender = new AssistantMessageComponent(message);
-		const historyRender = new AssistantMessageComponent(message);
-		expect(buttonPosition(firstRender, 50)).toEqual(buttonPosition(historyRender, 50));
+		const historyRender = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, false, {
+			copyText,
+		});
+		const position = payloadPosition(historyRender, 50, "saved payload");
+		expect(historyRender.handleClick(position.y, 50, position.x)).toBe(true);
+		await settleCopy();
+		expect(copyText).toHaveBeenCalledWith("saved payload");
 	});
 
-	test("shows incomplete streamed payloads without a button until the closing fence is revealed", () => {
+	test("shows incomplete streamed payloads but enables copying only after the closing fence is revealed", async () => {
 		initTheme("moon");
+		const copyText = vi.fn(async () => {});
 		const source = fence("```", "lunr-copy", "streamed payload");
 		const full = createAssistantMessage(source);
-		const component = new AssistantMessageComponent();
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, false, {
+			copyText,
+		});
 		component.updateContent(sliceMessageContent(full, source.length - 2), { thinkingSource: full });
-		let rendered = stripAnsi(component.render(60).join("\n"));
-		expect(rendered).toContain("streamed payload");
-		expect(rendered).not.toContain("[ Copy ]");
+		let position = payloadPosition(component, 60, "streamed payload");
+		expect(component.handleClick(position.y, 60, position.x)).toBe(false);
 
 		component.updateContent(sliceMessageContent(full, source.length), { thinkingSource: full });
-		rendered = stripAnsi(component.render(60).join("\n"));
-		expect(rendered).toContain("[ Copy ]");
+		position = payloadPosition(component, 60, "streamed payload");
+		expect(component.handleClick(position.y, 60, position.x)).toBe(true);
+		await settleCopy();
+		expect(copyText).toHaveBeenCalledWith("streamed payload");
 	});
 
-	test("reports clipboard failure without showing success", async () => {
+	test("reports clipboard failure inside the section without button clutter", async () => {
 		initTheme("moon");
 		const requestRender = vi.fn();
 		const component = new AssistantMessageComponent(
@@ -182,13 +209,13 @@ describe("AssistantMessageComponent lunr-copy blocks", () => {
 				requestRender,
 			},
 		);
-		const button = buttonPosition(component, 60);
-		expect(component.handleClick(button.y, 60, button.x)).toBe(true);
+		const position = payloadPosition(component, 60, "cannot copy");
+		expect(component.handleClick(position.y, 60, position.x)).toBe(true);
 		await settleCopy();
 
 		const rendered = stripAnsi(component.render(60).join("\n"));
 		expect(rendered).toContain("Copy failed: clipboard unavailable");
-		expect(rendered).not.toContain("  Copied");
+		expect(rendered).not.toMatch(/\[ Copy \]|Copied/);
 		expect(requestRender).toHaveBeenCalledTimes(2);
 	});
 });
