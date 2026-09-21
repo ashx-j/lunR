@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Parallel explicit models (`fix/parallel-explicit-model-validation`):** async parallel adapters preserve each child's `model` and `thinking`, including clarify-to-background. No schema or prompt changes.
+
 Last updated: 2026-09-20 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.22`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.22:** ships approved PRs #88 and #91 through #96. Native computer use #77 remains open and is excluded. The release adds copyable response blocks, quieter subagent communication, Codex thought cleanup, the default-on browser with a settings toggle, optional todos, fixed tool-tree wrapping, and gateway remote-work/session handoff.
@@ -136,6 +138,8 @@ Last updated: 2026-09-20 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Parallel model validation: exact missing-selection error reproduced through the executor before the fix. Focused Vitest passes 108/108 across six suites, including 15 new launch-validation cases. All five offline builds, Node bundle, first-paint/first-turn checks, test Biome, and diff checks pass. No live provider launches or installed CLI changes.
+
 - v0.2.22 release (2026-09-20): all five offline package builds and the coding-agent Node bundle pass. Focused validation passes 455 tests across 28 coding-agent suites plus 15 TUI mouse tests; five existing Windows `.pi` settings-manager fixture failures remain. First-paint and first-turn checks pass with browser-enabled and disabled schema fixtures. The compiled gateway remote-work check passes desktop continuation, project preservation, local model use, phone approval, file download, and reclaim. Shrinkwrap, installer lock, relative-import, workflow, and browser smoke checks pass. Publication workflow `35522831619` succeeded from tag `v0.2.22` at `0d22fd0`; all four public packages resolve as npm latest. A fresh isolated install reports 0.2.22 for the CLI and all public packages. Local npm blocked lifecycle scripts under its install-script policy, so the fresh install did not exercise automatic Chromium setup.
 - Codex thought formatting (2026-09-20): tui → ai → agent → coding-agent → orchestrator offline builds pass. Focused assistant-message, thinking-summary, smooth-streaming, and thinking-tail Vitest passes 56/56. Touched source and test files pass Biome.
 - Copyable response blocks (2026-09-19): offline tui → ai → agent → coding-agent → orchestrator builds and the coding-agent Node bundle pass. Focused coding-agent Vitest passes 41/41 across copyable-text, assistant-message, smooth-streaming, and system-prompt; focused TUI mouse tests pass 15/15. The first-paint checker passes stalled/failing hydration plus first-turn subagent, MCP, LSP, and fetch paths with the unchanged tool-schema fingerprint. Touched code passes Biome; `git diff --check` passes; the isolated built CLI reports 0.2.21. No live auth, installed CLI, original checkout, or private prompt artifact changes.
@@ -212,6 +216,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Async parallel launch converts `tasks` into `chain.parallel`; both the direct and clarify-to-background adapters must forward `model` and `thinking` alongside `tier`. Runner-only tests miss fields dropped by that conversion.
+
 - Combined first-request fixtures have separate browser-enabled and browser-disabled hashes. Refresh both after any agent-facing tool schema change.
 - Collapsed Codex thought snippets render as plain text after summary extraction. Remove `**` at that display boundary only; keep stored reasoning and Markdown views unchanged.
 - Copyable assistant text is parsed before the normal assistant-body trim. The payload is source text after the opening fence newline and before the newline that introduces the closing fence; never derive clipboard text from rendered lines. Smooth streaming enables the button only when the displayed slice contains the full close. Keep `Component.handleClick` X optional and propagate it as a zero-based coordinate so existing row-only thinking and tool handlers remain compatible.
@@ -287,6 +293,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-20: forward explicit selection through both parallel-to-async adapters rather than weakening the runner's exactly-one-selection validation.
 
 - 2026-09-20: ship approved PRs #88 and #91 through #96 together as v0.2.22; keep native computer use #77 open and out of the release.
 - 2026-09-20: publish v0.2.22 from the release merge commit after live npm propagation confirms all four lockstep packages.
