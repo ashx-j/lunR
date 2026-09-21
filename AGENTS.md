@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-21 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.22`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-21 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.23`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.23:** ships PRs #99 through #103. Native computer use #77 remains open and is excluded. The release adds quieter copyable blocks, compact browser and error presentation, correct explicit-model parallel launches, provider-aware one-line reasoning, and immediate parent input during `subagent_wait`.
 - **Parallel explicit models (`fix/parallel-explicit-model-validation`):** async parallel adapters preserve each child's `model` and `thinking`, including clarify-to-background. No schema or prompt changes.
 - **Tool presentation (`fix/tool-presentation`):** collapsed failed tools keep their error state but hide diagnostic bodies until expansion, including grouped runs. Successful steering receipts stay in backend results and expansion while the header keeps the child description. Browser workflows reuse one non-expandable card per agent run, replace it with plain action text using a short character reveal, and restore the final action immediately from history.
 - **One-line reasoning (`feat/single-line-reasoning`):** `/settings` Reasoning display defaults to `auto`, one line for `openai-codex` and four lines otherwise. Manual `one-line`/`four-lines` overrides persist. One-line reasoning has one blank row above and below and a broad 2.8s highlight sweep at 30 FPS. Hidden, expanded, completed, and history reasoning remain unanimated; stored reasoning is unchanged.
@@ -140,6 +141,7 @@ Last updated: 2026-09-21 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- v0.2.23 release (2026-09-21): all five offline package builds and the coding-agent Node bundle pass. Focused Agent tests pass 40/40; focused coding-agent tests pass 209 with the 17 documented Windows resource-list and settings fixture failures unchanged. First-paint and first-turn subagent, MCP, LSP, and fetch checks pass with both browser fixtures. Touched non-vendored code passes Biome. Shrinkwrap, installer lock, relative-import, workflow, browser smoke, and `git diff --check` pass. The npm 10 dry run validates all four public packages. Publication workflow `35615006704` succeeded from tag `v0.2.23` at `a898f22`; all four public packages resolve as npm latest. A fresh isolated install reports 0.2.23 for the CLI and all public packages. PR #77 remains open.
 - Click-to-copy response blocks and agent guidance (2026-09-21): all five offline tsgo builds and the coding-agent Node bundle pass. Focused copyable-text, assistant-message, smooth-streaming, and system-prompt Vitest passes 43/43. Touched TypeScript files pass Biome; `git diff --check` passes. The explicit worktree CLI path reports 0.2.22. The tool schema did not change, so first-request tool fingerprints and inventories remain current. No live gateway, auth, settings, installed CLI, original checkout build, or private prompt artifact was touched.
 - Tool presentation (2026-09-21): focused browser, browser lifecycle/settings/install, tool execution, and subagent rendering Vitest passes 153 tests with 6 Chromium-gated skips. All five offline tsgo builds and the coding-agent Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Touched non-vendored code passes Biome; `git diff --check` passes; the explicit worktree CLI reports 0.2.22. No Chromium install or live website was used.
 - Parallel model validation: exact missing-selection error reproduced through the executor before the fix. Focused Vitest passes 108/108 across six suites, including 15 new launch-validation cases. All five offline builds, Node bundle, first-paint/first-turn checks, test Biome, and diff checks pass. No live provider launches or installed CLI changes.
@@ -221,6 +223,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- npm 12 returns keyed objects from `npm pack --json`; `scripts/publish.mjs` expects npm 10's array. Use npm 10 for local publish dry runs until the parser accepts both. The Node 22 publication workflow currently uses npm 10.
 - Async parallel launch converts `tasks` into `chain.parallel`; both the direct and clarify-to-background adapters must forward `model` and `thinking` alongside `tier`. Runner-only tests miss fields dropped by that conversion.
 
 - Combined first-request fixtures have separate browser-enabled and browser-disabled hashes. Refresh both after any agent-facing tool schema change.
@@ -301,6 +304,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-21: ship PRs #99 through #103 together as v0.2.23 and keep native computer use #77 open.
+- 2026-09-21: preserve every PR head in merge ancestry, resolve overlapping AGENTS.md entries additively, and keep the newer rebuild behavior alongside the reasoning display callback.
+- 2026-09-21: publish v0.2.23 only after combined builds, focused tests, first-turn checks, artifact checks, and four-package dry-run validation.
 - 2026-09-21: make the whole `lunr-copy` background box the hit target and show only failure feedback so reusable text stays readable without labels or buttons.
 - 2026-09-21: put fresh-versus-resume and documented gateway management in the default prompt because both choices must be correct before the first tool call.
 - 2026-09-21: coalesce browser calls only in the interactive presentation layer so model-visible results, permission gates, and persisted tool history remain exact.
