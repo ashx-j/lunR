@@ -37,12 +37,14 @@ export function renderCommunicationCall(
 	theme: Theme,
 	context: Pick<ToolRenderContext<unknown, CommunicationArgs>, "result" | "expanded"> | undefined,
 	communication?: SubagentCommunication,
+	displayTitle?: string,
 ): Container {
 	const container = new Container();
 	const details = context?.result?.details as CommunicationResultDetails | undefined;
 	const saved = readCommunication(details?.communication) ?? communication;
 	const action = args.action ?? (args.reason === "need_decision" ? "request" : args.reason === "interview_request" ? "interview" : args.reason === "progress_update" ? "progress" : args.reason);
-	container.addChild(new Text(theme.fg("toolTitle", theme.bold(`${name}${action ? ` ${action}` : ""}`)), 0, 0));
+	const title = theme.fg("toolTitle", theme.bold(`${name}${action ? ` ${action}` : ""}`));
+	container.addChild(new Text(displayTitle ? `${title} ${theme.fg("accent", displayTitle)}` : title, 0, 0));
 	if (context?.expanded && saved) container.addChild(renderCommunicationBody(saved, theme));
 	return container;
 }

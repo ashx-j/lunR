@@ -188,7 +188,14 @@ export function renderSubagentCall(rawArgs, theme, context, options) {
 		const resolvedTitle = resultTitle || options?.resolveActionTitle?.(args);
 		const target = resolvedTitle || args.id || args.runId || "";
 		if ((args.action === "steer" || args.action === "resume") && args.message) {
-			return renderCommunicationCall("subagent", args, theme, context, { direction: "to", peer: resolvedTitle || "Subagent", kind: "steer", message: args.message });
+			return renderCommunicationCall(
+				"subagent",
+				args,
+				theme,
+				context,
+				{ direction: "to", peer: resolvedTitle || "Subagent", kind: "steer", message: args.message },
+				resolvedTitle,
+			);
 		}
 		return new Text(
 			`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
