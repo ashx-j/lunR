@@ -24,6 +24,7 @@ import {
 	type ModelInstructionsSettings,
 	type ModelTierName,
 	type ModelTiersSettings,
+	type ReasoningDisplay,
 	type RollbackCapture,
 	type RollbackScope,
 	SKILL_TAG_CHARACTERS,
@@ -89,6 +90,7 @@ export interface SettingsConfig {
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
 	thinkingCollapse: boolean;
+	reasoningDisplay: ReasoningDisplay;
 	showCacheMissNotices: boolean;
 	/** Display value; unset settings render as "short". */
 	cacheRetention: "none" | "short" | "long";
@@ -157,6 +159,7 @@ export interface SettingsCallbacks {
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
 	onThinkingCollapseChange: (collapse: boolean) => void;
+	onReasoningDisplayChange: (display: ReasoningDisplay) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCacheRetentionChange: (retention: "none" | "short" | "long") => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
@@ -1448,6 +1451,15 @@ export class SettingsSelectorComponent extends Container {
 				disabled: () => config.hideThinkingBlock,
 			},
 			{
+				id: "reasoning-display",
+				label: "Reasoning display",
+				description:
+					"Auto uses one line for OpenAI Codex, four lines for other models. One line has a soft moving highlight.",
+				currentValue: config.reasoningDisplay ?? "auto",
+				values: ["auto", "one-line", "four-lines"],
+				disabled: () => config.hideThinkingBlock,
+			},
+			{
 				id: "cache-miss-notices",
 				label: "Cache miss notices",
 				description: "Prompt cache miss notices in the transcript",
@@ -1845,6 +1857,11 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "thinking-collapse":
 						callbacks.onThinkingCollapseChange(newValue === "true");
+						break;
+					case "reasoning-display":
+						if (newValue === "auto" || newValue === "one-line" || newValue === "four-lines") {
+							callbacks.onReasoningDisplayChange(newValue);
+						}
 						break;
 					case "cache-miss-notices":
 						callbacks.onShowCacheMissNoticesChange(newValue === "true");

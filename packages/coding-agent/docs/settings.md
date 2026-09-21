@@ -57,6 +57,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `smoothStreaming` | boolean | `false` | Reveal streamed responses grapheme by grapheme (~30 FPS). Interactive TUI only |
 | `subagentSpinner` | string | `"braille"` | Foreground and async running child indicator: `"braille"`, `"orbit"`, `"snake"`, or `"sparkle"` |
 | `thinkingCollapse` | boolean | `true` | Collapse completed thinking blocks to a short label plus the first sentence |
+| `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
 | `defaultPermissionMode` | string | `"manual"` | Startup permission mode: `"manual"`, `"yolo"`, `"plan"`, or `"auto"` |

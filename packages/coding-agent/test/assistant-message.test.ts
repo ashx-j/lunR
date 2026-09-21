@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { THINKING_TAIL_LINES } from "../src/modes/interactive/components/thinking-tail.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -311,6 +311,67 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("✻ Thought for 1s");
 		expect(rendered).toContain("First thought.");
 		expect(rendered).not.toContain("Answer");
+	});
+
+	test("auto follows the streaming provider and manual choices override it", () => {
+		initTheme("moon");
+		const component = createStreamingThinkingComponent();
+		const message = createAssistantMessage([{ type: "thinking", thinking: "first\nsecond\nthird\n**latest**" }]);
+		message.provider = "openai-codex";
+		component.updateContent(message);
+		const plain = () => component.render(80).map(stripAnsi);
+		expect(plain().map((line) => line.trim())).toEqual(["", "latest", ""]);
+		component.setReasoningDisplay("four-lines");
+		expect(plain().filter((line) => line.trim())).toHaveLength(4);
+		message.provider = "anthropic";
+		component.setReasoningDisplay("one-line");
+		expect(plain().filter((line) => line.trim())).toHaveLength(1);
+		component.setReasoningDisplay("auto");
+		expect(plain().filter((line) => line.trim())).toHaveLength(4);
+		expect(message.content[0]).toEqual({ type: "thinking", thinking: "first\nsecond\nthird\n**latest**" });
+	});
+
+	test("one-line animation stops on hide, expansion, completion, and history", () => {
+		initTheme("moon");
+		const onThinkingAnimationChange = vi.fn();
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true, {
+			reasoningDisplay: "one-line",
+			onThinkingAnimationChange,
+		});
+		const message = createAssistantMessage([{ type: "thinking", thinking: "First thought.\nLatest thought." }]);
+		component.setThinkingTimings([{ start: 0 }]);
+		component.updateContent(message);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(true);
+		component.setHideThinkingBlock(true);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(false);
+		expect(component.render(80)).toEqual([]);
+		component.setHideThinkingBlock(false);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(true);
+		component.toggleThinkingRun(0);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("First thought.");
+		component.toggleThinkingRun(0);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(true);
+		component.setThinkingTimings([{ start: 0, end: 1000 }]);
+		component.updateContent(message);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Thought for 1s");
+		component.setThinkingTimings(undefined);
+		component.updateContent(message);
+		expect(onThinkingAnimationChange).toHaveBeenLastCalledWith(false);
+	});
+
+	test("one-line thinking never reveals ahead of smooth streaming", () => {
+		initTheme("moon");
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, true, {
+			reasoningDisplay: "one-line",
+		});
+		const message = createAssistantMessage([{ type: "thinking", thinking: "Visible. Hidden ending." }]);
+		component.setThinkingTimings([{ start: 0, end: 1000 }]);
+		component.updateContent(sliceMessageContent(message, 8), { thinkingSource: message });
+		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "Visible.", ""]);
+		component.updateContent(message, { thinkingSource: message });
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Thought for 1s");
 	});
 
 	test("history messages still collapse when thinkingCollapse is true", () => {
