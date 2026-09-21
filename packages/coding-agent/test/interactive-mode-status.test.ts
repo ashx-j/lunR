@@ -70,6 +70,34 @@ type ExtensionFixture = {
 	sourceInfo?: SourceInfo;
 };
 
+describe("InteractiveMode reasoning animation", () => {
+	test("keeps one paint timer and releases it when reasoning or streaming stops", () => {
+		vi.useFakeTimers();
+		try {
+			const mode = Object.create(InteractiveMode.prototype) as {
+				setThinkingAnimation(active: boolean): void;
+				stopSmoothStreaming(): void;
+			};
+			const requestRender = vi.fn();
+			Reflect.set(mode, "ui", { requestRender });
+			mode.setThinkingAnimation(true);
+			mode.setThinkingAnimation(true);
+			expect(vi.getTimerCount()).toBe(1);
+			vi.advanceTimersByTime(99);
+			expect(requestRender).toHaveBeenCalledTimes(3);
+			mode.setThinkingAnimation(false);
+			expect(vi.getTimerCount()).toBe(0);
+			mode.setThinkingAnimation(true);
+			mode.stopSmoothStreaming();
+			expect(vi.getTimerCount()).toBe(0);
+			vi.advanceTimersByTime(100);
+			expect(requestRender).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(() => {
 		// showStatus uses the global theme instance

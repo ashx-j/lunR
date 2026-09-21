@@ -25,6 +25,21 @@ describe("SettingsManager", () => {
 		}
 	});
 
+	it("defaults reasoning display to auto and persists each choice", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getReasoningDisplay()).toBe("auto");
+		for (const choice of ["one-line", "four-lines", "auto"] as const) {
+			manager.setReasoningDisplay(choice);
+			await manager.flush();
+			expect(SettingsManager.create(projectDir, agentDir).getReasoningDisplay()).toBe(choice);
+		}
+	});
+
+	it("uses auto for an invalid reasoning display setting", () => {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ reasoningDisplay: "invalid" }));
+		expect(SettingsManager.create(projectDir, agentDir).getReasoningDisplay()).toBe("auto");
+	});
+
 	it("defaults todos on and persists the toggle", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getTodosEnabled()).toBe(true);

@@ -111,6 +111,8 @@ export type PackageSource =
 			themes?: string[];
 	  };
 
+export type ReasoningDisplay = "auto" | "one-line" | "four-lines";
+
 export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -127,6 +129,7 @@ export interface Settings {
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
+	reasoningDisplay?: ReasoningDisplay;
 	thinkingCollapse?: boolean; // default: true - collapse completed thinking blocks to "Thought for Xs" + first sentence
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
 	cacheRetention?: "none" | "short" | "long"; // default: unset - falls back to PI_CACHE_RETENTION env, then "short" (packages/ai)
@@ -925,6 +928,17 @@ export class SettingsManager {
 
 	getHideThinkingBlock(): boolean {
 		return this.settings.hideThinkingBlock ?? false;
+	}
+
+	getReasoningDisplay(): ReasoningDisplay {
+		const value = this.settings.reasoningDisplay;
+		return value === "one-line" || value === "four-lines" ? value : "auto";
+	}
+
+	setReasoningDisplay(display: ReasoningDisplay): void {
+		this.globalSettings.reasoningDisplay = display;
+		this.markModified("reasoningDisplay");
+		this.save();
 	}
 
 	getThinkingCollapse(): boolean {

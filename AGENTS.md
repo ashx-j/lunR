@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-20 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.22`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-21 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.22`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **One-line reasoning (`feat/single-line-reasoning`):** `/settings` Reasoning display defaults to `auto`, one line for `openai-codex` and four lines otherwise. Manual `one-line`/`four-lines` overrides persist. One-line reasoning has one blank row above and below and a broad 2.8s highlight sweep at 30 FPS. Hidden, expanded, completed, and history reasoning remain unanimated; stored reasoning is unchanged.
 - **v0.2.22:** ships approved PRs #88 and #91 through #96. Native computer use #77 remains open and is excluded. The release adds copyable response blocks, quieter subagent communication, Codex thought cleanup, the default-on browser with a settings toggle, optional todos, fixed tool-tree wrapping, and gateway remote-work/session handoff.
 - **Codex thought formatting (`fix/codex-thinking-formatting`):** collapsed `openai-codex` thought snippets remove double-asterisk bold markers before plain-text rendering. Stored reasoning, live and expanded Markdown, and other providers are unchanged. Focused Vitest passes 56/56 across four suites; all five offline package builds and touched-file Biome pass.
 - **Copyable response blocks (`feat/copyable-text-blocks`):** assistant `lunr-copy` fences render as literal reusable text with an exact-payload Copy button. Longer backtick or tilde wrappers can contain shorter fences. Incomplete or unrevealed blocks stay readable without an active button; saved message text reconstructs buttons on replay. Copy status is per block, clipboard errors stay errors, and optional click X propagation leaves row-only handlers compatible. Default-prompt guidance applies only without a custom system replacement. Tests: copyable-text + assistant-message + smooth-streaming + system-prompt + TUI mouse.
@@ -135,6 +136,8 @@ Last updated: 2026-09-20 (v0.2.22 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- One-line reasoning (2026-09-21): five offline package builds and the coding-agent Node bundle pass. Focused reasoning/rendering tests pass 62/62, plus three settings/timer tests. Touched-file Biome, `git diff --check`, and built CLI 0.2.22 pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged tool-schema fingerprints. Original checkout and installed CLI remain untouched.
 
 - v0.2.22 release (2026-09-20): all five offline package builds and the coding-agent Node bundle pass. Focused validation passes 455 tests across 28 coding-agent suites plus 15 TUI mouse tests; five existing Windows `.pi` settings-manager fixture failures remain. First-paint and first-turn checks pass with browser-enabled and disabled schema fixtures. The compiled gateway remote-work check passes desktop continuation, project preservation, local model use, phone approval, file download, and reclaim. Shrinkwrap, installer lock, relative-import, workflow, and browser smoke checks pass. Publication workflow `35522831619` succeeded from tag `v0.2.22` at `0d22fd0`; all four public packages resolve as npm latest. A fresh isolated install reports 0.2.22 for the CLI and all public packages. Local npm blocked lifecycle scripts under its install-script policy, so the fresh install did not exercise automatic Chromium setup.
 - Codex thought formatting (2026-09-20): tui → ai → agent → coding-agent → orchestrator offline builds pass. Focused assistant-message, thinking-summary, smooth-streaming, and thinking-tail Vitest passes 56/56. Touched source and test files pass Biome.
@@ -271,7 +274,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - `lunr update` is npm global `@ashx-j/lunr` only. Workspace `PACKAGE_NAME !== NPM_CLI_PACKAGE` skips the nag and refuses to self-update.
 - Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps `wk 32%`.
 - Chatbox thinking chip prints the effective session level including `xhigh`/`max`; `/thinking` offers only `getSupportedThinkingLevels` (those two are opt-in). Do not clobber `ChatboxEditor.borderColor`.
-- Live thinking shows at most four lines of the revealed prefix when smoothing is enabled, or the full received text otherwise. `thinkingSource` checks reveal completion only; never render its unrevealed text. Collapse requires both provider completion and full reveal. Empty rows are not padded. History still collapses to `✻ Thought` + first sentence.
+- Live thinking uses `reasoningDisplay`: auto selects one line for `openai-codex`, four lines otherwise. One-line rendering owns exactly one blank row above/below and paints a theme-derived gradient; the interactive session owns its timer and clears it on reset, end, and stop. Four-line tails do not pad short content. Both modes use the revealed prefix when smoothing is enabled. `thinkingSource` checks completion only; collapse requires provider completion and full reveal. History still collapses to `✻ Thought` + first sentence.
 - `/undo` = same-session `navigateTree` rewind, no editor paste. `/edit` = that rewind then paste. Neither forks. `/rollback` still forks.
 - Compact running subagent row is one line (glyph, description, tier or model, tokens, time). Do not hang a tools/tokens/time line or thinking text. Do not print activity or `⚠ Subagent needs attention` TUI cards (`display: false`).
 - Feature statuses ≠ TPS. The Customize TPS counter gates `tps`; statuses only gate plan/goal.
@@ -287,6 +290,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-21: default reasoning display to provider-aware Auto with explicit overrides, and animate a wide gradient rather than one bright character while leaving transcript data unchanged.
 
 - 2026-09-20: ship approved PRs #88 and #91 through #96 together as v0.2.22; keep native computer use #77 open and out of the release.
 - 2026-09-20: publish v0.2.22 from the release merge commit after live npm propagation confirms all four lockstep packages.

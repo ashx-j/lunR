@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import type { ReasoningDisplay } from "../../../core/settings-manager.ts";
 import { copyToClipboard } from "../../../utils/clipboard.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { CopyableTextBlockComponent, type CopyableTextStatus, parseCopyableTextSegments } from "./copyable-text.ts";
@@ -9,15 +10,17 @@ import {
 	type ThinkingRunTiming,
 	thinkingSnippet,
 } from "./thinking-summary.ts";
-import { ThinkingTailComponent } from "./thinking-tail.ts";
+import { ThinkingLineComponent, ThinkingTailComponent } from "./thinking-tail.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
-export interface AssistantMessageCopyOptions {
+export interface AssistantMessageOptions {
 	copyText?: (text: string) => Promise<void>;
 	requestRender?: () => void;
+	reasoningDisplay?: ReasoningDisplay;
+	onThinkingAnimationChange?: (active: boolean) => void;
 }
 
 interface CopyState {
@@ -52,6 +55,10 @@ export class AssistantMessageComponent extends Container {
 	private readonly copyText: (text: string) => Promise<void>;
 	private readonly requestRender: () => void;
 	private readonly copyStates = new Map<string, CopyState>();
+	private reasoningDisplay: ReasoningDisplay;
+	private readonly onThinkingAnimationChange?: (active: boolean) => void;
+	private readonly thinkingAnimationStart = performance.now();
+	private thinkingAnimationActive = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -60,7 +67,7 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		thinkingCollapse = false,
-		copyOptions: AssistantMessageCopyOptions = {},
+		options: AssistantMessageOptions = {},
 	) {
 		super();
 
@@ -69,8 +76,10 @@ export class AssistantMessageComponent extends Container {
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
-		this.copyText = copyOptions.copyText ?? copyToClipboard;
-		this.requestRender = copyOptions.requestRender ?? (() => {});
+		this.copyText = options.copyText ?? copyToClipboard;
+		this.requestRender = options.requestRender ?? (() => {});
+		this.reasoningDisplay = options.reasoningDisplay ?? "auto";
+		this.onThinkingAnimationChange = options.onThinkingAnimationChange;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -86,6 +95,11 @@ export class AssistantMessageComponent extends Container {
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
+	}
+
+	setReasoningDisplay(display: ReasoningDisplay): void {
+		this.reasoningDisplay = display;
+		if (this.lastMessage) this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
@@ -185,6 +199,7 @@ export class AssistantMessageComponent extends Container {
 	updateContent(message: AssistantMessage, options?: { thinkingSource?: AssistantMessage }): void {
 		this.lastMessage = message;
 		this.thinkingSource = options?.thinkingSource;
+		this.thinkingAnimationActive = false;
 
 		// Clear content container
 		this.contentContainer.clear();
@@ -294,6 +309,7 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}
+		this.onThinkingAnimationChange?.(this.thinkingAnimationActive);
 	}
 
 	private copyPayload(key: string, payload: string): void {
@@ -362,6 +378,25 @@ export class AssistantMessageComponent extends Container {
 			return;
 		}
 		if (!runComplete && !this.isRunExpanded(thinkingRunIndex)) {
+			const oneLine =
+				this.reasoningDisplay === "one-line" ||
+				(this.reasoningDisplay === "auto" && displayMessage.provider === "openai-codex");
+			if (oneLine) {
+				this.thinkingAnimationActive = true;
+				// The line owns its vertical padding, including the initial message spacer.
+				if (this.contentContainer.children.length === 1 && this.contentContainer.children[0] instanceof Spacer) {
+					this.contentContainer.clear();
+				}
+				wrap(
+					new ThinkingLineComponent(
+						thinkingBlocks.join("\n\n"),
+						this.outputPad,
+						this.markdownTheme,
+						this.thinkingAnimationStart,
+					),
+				);
+				return;
+			}
 			wrap(
 				new ThinkingTailComponent(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("thinkingText", text),

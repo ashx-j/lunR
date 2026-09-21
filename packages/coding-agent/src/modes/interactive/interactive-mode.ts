@@ -503,6 +503,7 @@ export class InteractiveMode {
 	private streamingTargetMessage: AssistantMessage | undefined = undefined;
 	private streamingDisplayedLength = 0;
 	private smoothStreamingTimer: NodeJS.Timeout | undefined = undefined;
+	private thinkingAnimationTimer: NodeJS.Timeout | undefined;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -3339,6 +3340,17 @@ export class InteractiveMode {
 		return { hideThinking: this.hideThinkingBlock };
 	}
 
+	private setThinkingAnimation(active: boolean): void {
+		if (!active) {
+			if (this.thinkingAnimationTimer) clearInterval(this.thinkingAnimationTimer);
+			this.thinkingAnimationTimer = undefined;
+			return;
+		}
+		if (this.thinkingAnimationTimer) return;
+		this.thinkingAnimationTimer = setInterval(() => this.ui.requestRender(), 33);
+		this.thinkingAnimationTimer.unref?.();
+	}
+
 	private clearSmoothStreamingTimer(): void {
 		if (this.smoothStreamingTimer) {
 			clearInterval(this.smoothStreamingTimer);
@@ -3427,6 +3439,7 @@ export class InteractiveMode {
 	}
 
 	private stopSmoothStreaming(): void {
+		this.setThinkingAnimation(false);
 		this.clearSmoothStreamingTimer();
 		this.streamingTargetMessage = undefined;
 		this.streamingDisplayedLength = 0;
@@ -3539,7 +3552,11 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.thinkingCollapse,
-						{ requestRender: () => this.ui.requestRender() },
+						{
+							requestRender: () => this.ui.requestRender(),
+							reasoningDisplay: this.settingsManager.getReasoningDisplay(),
+							onThinkingAnimationChange: (active) => this.setThinkingAnimation(active),
+						},
 					);
 					// lunr: collapsible reasoning — fresh timing array for this message.
 					this.thinkingRunTimings = [];
@@ -3960,7 +3977,10 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.thinkingCollapse,
-					{ requestRender: () => this.ui.requestRender() },
+					{
+						requestRender: () => this.ui.requestRender(),
+						reasoningDisplay: this.settingsManager.getReasoningDisplay(),
+					},
 				);
 				// lunr: collapsible reasoning — re-attach live timings when this
 				// message was streamed in this session (undefined = history).
@@ -4874,6 +4894,7 @@ export class InteractiveMode {
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					thinkingCollapse: this.thinkingCollapse,
+					reasoningDisplay: this.settingsManager.getReasoningDisplay(),
 					cacheRetention: this.settingsManager.getCacheRetention() ?? "short",
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
@@ -4991,8 +5012,7 @@ export class InteractiveMode {
 								child.setHideThinkingBlock(hidden);
 							}
 						}
-						this.chatContainer.clear();
-						this.rebuildChatFromMessages();
+						this.ui.requestRender();
 					},
 					onThinkingCollapseChange: (collapse) => {
 						this.thinkingCollapse = collapse;
@@ -5002,8 +5022,16 @@ export class InteractiveMode {
 								child.setThinkingCollapse(collapse);
 							}
 						}
-						this.chatContainer.clear();
-						this.rebuildChatFromMessages();
+						this.ui.requestRender();
+					},
+					onReasoningDisplayChange: (display) => {
+						this.settingsManager.setReasoningDisplay(display);
+						for (const child of this.chatContainer.children) {
+							if (child instanceof AssistantMessageComponent) {
+								child.setReasoningDisplay(this.settingsManager.getReasoningDisplay());
+							}
+						}
+						this.ui.requestRender();
 					},
 					onShowCacheMissNoticesChange: (shown) => {
 						this.settingsManager.setShowCacheMissNotices(shown);
@@ -8114,6 +8142,7 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 	}
 
 	stop(): void {
+		this.setThinkingAnimation(false);
 		this.stopCatalogRefresh?.();
 		this.stopCatalogRefresh = undefined;
 		if (this.settingsManager.getShowTerminalProgress()) {
