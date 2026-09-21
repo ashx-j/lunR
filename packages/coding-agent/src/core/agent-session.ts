@@ -105,6 +105,10 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import {
+	registerSubagentWaitInterruptionOwner,
+	type SubagentWaitInterruptionRegistration,
+} from "./subagent-wait-interruption.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { measureStartup } from "./timings.ts";
 import { TODO_TOOL_NAMES } from "./todo-settings.ts";
@@ -240,6 +244,42 @@ export interface PromptOptions {
 	preflightResult?: (success: boolean) => void;
 }
 
+export interface WaitPromptHandoff {
+	/** Resolves after the reserved prompt finishes its fresh parent run. */
+	completion: Promise<void>;
+}
+
+interface PreparedPromptInput {
+	text: string;
+	images?: ImageContent[];
+}
+
+interface ActiveSubagentWait {
+	controller: AbortController;
+	interrupted: boolean;
+	ownerSignal: AbortSignal;
+}
+
+interface ActivePromptRun {
+	waits: Set<ActiveSubagentWait>;
+	gracefulStopRequested: boolean;
+}
+
+interface WaitPromptReservation {
+	input: PreparedPromptInput;
+	resolve: () => void;
+	reject: (error: unknown) => void;
+}
+
+interface WaitPromptHandoffState {
+	run: ActivePromptRun;
+	ownerSignal: AbortSignal;
+	generation: number;
+	reservations: WaitPromptReservation[];
+	draining: boolean;
+	accepting: boolean;
+}
+
 /** Result from cycleModel() */
 export interface ModelCycleResult {
 	model: Model<any>;
@@ -313,6 +353,11 @@ export class AgentSession {
 	private _isAgentRunActive = false;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
+	private _activePromptRun: ActivePromptRun | undefined;
+	private _waitPromptHandoff: WaitPromptHandoffState | undefined;
+	private _waitPromptAcceptance: Promise<void> = Promise.resolve();
+	private _waitPromptGeneration = 0;
+	private _unregisterSubagentWaitInterruptionOwners: Array<() => void> = [];
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	private _steeringMessages: string[] = [];
@@ -395,6 +440,12 @@ export class AgentSession {
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
+		const waitInterruptionOwner = { register: () => this._registerSubagentWaitInterruption() };
+		for (const identity of new Set([this.sessionId, this.sessionFile].filter((value): value is string => !!value))) {
+			this._unregisterSubagentWaitInterruptionOwners.push(
+				registerSubagentWaitInterruptionOwner(identity, waitInterruptionOwner),
+			);
+		}
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -932,6 +983,7 @@ export class AgentSession {
 
 	setTransferring(value: boolean): void {
 		this.transferring = value;
+		if (value) this._invalidateWaitPromptHandoffs("Session transfer interrupted the pending prompt.");
 	}
 
 	private assertCanStartWork(): void {
@@ -940,6 +992,8 @@ export class AgentSession {
 	}
 
 	dispose(): void {
+		this._invalidateWaitPromptHandoffs("Session closed before the pending prompt could run.");
+		for (const unregister of this._unregisterSubagentWaitInterruptionOwners.splice(0)) unregister();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -986,6 +1040,11 @@ export class AgentSession {
 	/** Whether the session has no active agent run, retry, auto-compaction, or queued continuation. */
 	get isIdle(): boolean {
 		return !this._isAgentRunActive;
+	}
+
+	/** Whether normal Enter is still being reserved for an interrupted wait handoff. */
+	get isWaitPromptHandoffActive(): boolean {
+		return this._waitPromptHandoff?.accepting === true;
 	}
 
 	/** Current effective system prompt (includes any per-turn extension modifications) */
@@ -1220,24 +1279,66 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
+	private _registerSubagentWaitInterruption(): SubagentWaitInterruptionRegistration {
+		const run = this._activePromptRun;
+		const ownerSignal = this.agent.signal;
+		const wait =
+			run && ownerSignal ? { controller: new AbortController(), interrupted: false, ownerSignal } : undefined;
+		if (run && wait) {
+			run.waits.add(wait);
+			if (run.gracefulStopRequested) {
+				wait.interrupted = true;
+				wait.controller.abort();
+			}
+		}
+		const signal = wait?.controller.signal ?? new AbortController().signal;
+		return {
+			signal,
+			wasInterrupted: () => wait?.interrupted === true,
+			unregister: () => {
+				if (wait) run?.waits.delete(wait);
+			},
+		};
+	}
+
+	private _interruptSubagentWaits(run: ActivePromptRun, ownerSignal: AbortSignal): void {
+		for (const wait of run.waits) {
+			if (wait.ownerSignal !== ownerSignal) continue;
+			wait.interrupted = true;
+			wait.controller.abort();
+		}
+	}
+
+	private _invalidateWaitPromptHandoffs(message: string): void {
+		this._waitPromptGeneration++;
+		const handoff = this._waitPromptHandoff;
+		this._waitPromptHandoff = undefined;
+		if (!handoff) return;
+		const error = new Error(message);
+		for (const reservation of handoff.reservations.splice(0)) reservation.reject(error);
+	}
+
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		const run: ActivePromptRun = { waits: new Set(), gracefulStopRequested: false };
+		this._activePromptRun = run;
 		this._isAgentRunActive = true;
 		try {
 			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun()) {
+			while (await this._handlePostAgentRun(run)) {
 				await this.agent.continue();
 			}
 		} finally {
+			if (this._activePromptRun === run) this._activePromptRun = undefined;
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 			await this._emitAgentSettled();
 		}
 	}
 
-	private async _handlePostAgentRun(): Promise<boolean> {
+	private async _handlePostAgentRun(run: ActivePromptRun): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
-		if (!msg) {
+		if (!msg || run.gracefulStopRequested) {
 			return false;
 		}
 
@@ -1286,50 +1387,21 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		this.assertCanStartWork();
-		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
-		let messages: AgentMessage[] | undefined;
+		let prepared: PreparedPromptInput | undefined;
+		let messages: AgentMessage[];
 
 		try {
-			// Handle extension commands first (execute immediately, even during streaming)
-			// Extension commands manage their own LLM interaction via pi.sendMessage()
-			if (expandPromptTemplates && text.startsWith("/")) {
-				const handled = await this._tryExecuteExtensionCommand(text);
-				if (handled) {
-					// Extension command executed, no prompt to send
-					preflightResult?.(true);
-					return;
-				}
+			prepared = await this._preparePromptInput(
+				text,
+				options,
+				this.isStreaming ? options?.streamingBehavior : undefined,
+			);
+			if (!prepared) {
+				preflightResult?.(true);
+				return;
 			}
 
-			// Emit input event for extension interception (before skill/template expansion)
-			let currentText = text;
-			let currentImages = options?.images;
-			if (this._extensionRunner.hasHandlers("input")) {
-				const inputResult = await this._extensionRunner.emitInput(
-					currentText,
-					currentImages,
-					options?.source ?? "interactive",
-					this.isStreaming ? options?.streamingBehavior : undefined,
-				);
-				if (inputResult.action === "handled") {
-					preflightResult?.(true);
-					return;
-				}
-				if (inputResult.action === "transform") {
-					currentText = inputResult.text;
-					currentImages = inputResult.images ?? currentImages;
-				}
-			}
-
-			// Expand skill commands (/skill:name args) and prompt templates (/template args)
-			let expandedText = currentText;
-			if (expandPromptTemplates) {
-				expandedText = this._expandSkillCommand(expandedText);
-				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-			}
-
-			// If streaming, queue via steer() or followUp() based on option
 			if (this.isStreaming) {
 				if (!options?.streamingBehavior) {
 					throw new Error(
@@ -1337,105 +1409,212 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(prepared.text, prepared.images);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(prepared.text, prepared.images);
 				}
 				preflightResult?.(true);
 				return;
 			}
 
-			// Flush any pending bash messages before the new prompt
-			this._flushPendingBashMessages();
-
-			// Validate model
-			if (!this.model) {
-				throw new Error(formatNoModelSelectedMessage());
-			}
-
-			const hasConfiguredAuth =
-				this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
-				(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
-			if (!hasConfiguredAuth) {
-				const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
-				if (isOAuth) {
-					throw new Error(
-						`Authentication failed for "${this.model.provider}". ` +
-							`Credentials may have expired or network is unavailable. ` +
-							`Run '/login ${this.model.provider}' to re-authenticate.`,
-					);
-				}
-				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
-			}
-
-			// Check if we need to compact before sending (catches aborted responses).
-			// The user's new prompt is sent below, so do not call agent.continue() here.
-			const lastAssistant = this._findLastAssistantMessage();
-			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
-			}
-
-			// Build messages array (custom message if any, then user message)
-			messages = [];
-
-			// Add user message
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-			if (currentImages) {
-				userContent.push(...currentImages);
-			}
-			messages.push({
-				role: "user",
-				content: userContent,
-				timestamp: Date.now(),
-			});
-
-			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this._pendingNextTurnMessages) {
-				messages.push(msg);
-			}
-			this._pendingNextTurnMessages = [];
-
-			// Emit before_agent_start extension event
-			const result = await this._extensionRunner.emitBeforeAgentStart(
-				expandedText,
-				currentImages,
-				this._baseSystemPrompt,
-				this._baseSystemPromptOptions,
-			);
-			// Add all custom messages from extensions
-			if (result?.messages) {
-				for (const msg of result.messages) {
-					messages.push({
-						role: "custom",
-						customType: msg.customType,
-						// Untyped extensions can pass null/missing content; normalize at ingestion.
-						content: msg.content ?? [],
-						display: msg.display,
-						details: msg.details,
-						timestamp: Date.now(),
-					});
-				}
-			}
-			// Apply extension-modified system prompt, or reset to base
-			if (result?.systemPrompt !== undefined) {
-				this._systemPromptOverride = result.systemPrompt;
-				this.agent.state.systemPrompt = this._withSystemPromptAppend(result.systemPrompt);
-			} else {
-				// Ensure we're using the base prompt (in case previous turn had modifications)
-				this._systemPromptOverride = undefined;
-				this.agent.state.systemPrompt = this._withSystemPromptAppend(this._baseSystemPrompt);
-			}
+			messages = await this._createPromptMessages(prepared);
 		} catch (error) {
 			preflightResult?.(false);
 			throw error;
 		}
 
-		if (!messages) {
-			return;
-		}
-
 		preflightResult?.(true);
 		await this._runAgentPrompt(messages);
+	}
+
+	private async _preparePromptInput(
+		text: string,
+		options: Pick<PromptOptions, "expandPromptTemplates" | "images" | "source"> | undefined,
+		streamingBehavior: PromptOptions["streamingBehavior"],
+	): Promise<PreparedPromptInput | undefined> {
+		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+		if (expandPromptTemplates && text.startsWith("/") && (await this._tryExecuteExtensionCommand(text))) {
+			return undefined;
+		}
+
+		let currentText = text;
+		let currentImages = options?.images;
+		if (this._extensionRunner.hasHandlers("input")) {
+			const inputResult = await this._extensionRunner.emitInput(
+				currentText,
+				currentImages,
+				options?.source ?? "interactive",
+				streamingBehavior,
+			);
+			if (inputResult.action === "handled") return undefined;
+			if (inputResult.action === "transform") {
+				currentText = inputResult.text;
+				currentImages = inputResult.images ?? currentImages;
+			}
+		}
+
+		if (expandPromptTemplates) {
+			currentText = this._expandSkillCommand(currentText);
+			currentText = expandPromptTemplate(currentText, [...this.promptTemplates]);
+		}
+		return { text: currentText, images: currentImages };
+	}
+
+	private async _createPromptMessages(input: PreparedPromptInput): Promise<AgentMessage[]> {
+		this._flushPendingBashMessages();
+		if (!this.model) throw new Error(formatNoModelSelectedMessage());
+
+		const hasConfiguredAuth =
+			this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
+			(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
+		if (!hasConfiguredAuth) {
+			if (this._modelRuntime.isUsingOAuth(this.model.provider)) {
+				throw new Error(
+					`Authentication failed for "${this.model.provider}". ` +
+						`Credentials may have expired or network is unavailable. ` +
+						`Run '/login ${this.model.provider}' to re-authenticate.`,
+				);
+			}
+			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+		}
+
+		const lastAssistant = this._findLastAssistantMessage();
+		if (lastAssistant) await this._checkCompaction(lastAssistant, false);
+
+		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: input.text }];
+		if (input.images) userContent.push(...input.images);
+		const messages: AgentMessage[] = [
+			{
+				role: "user",
+				content: userContent,
+				timestamp: Date.now(),
+			},
+			...this._pendingNextTurnMessages,
+		];
+		this._pendingNextTurnMessages = [];
+
+		const result = await this._extensionRunner.emitBeforeAgentStart(
+			input.text,
+			input.images,
+			this._baseSystemPrompt,
+			this._baseSystemPromptOptions,
+		);
+		if (result?.messages) {
+			for (const msg of result.messages) {
+				messages.push({
+					role: "custom",
+					customType: msg.customType,
+					content: msg.content ?? [],
+					display: msg.display,
+					details: msg.details,
+					timestamp: Date.now(),
+				});
+			}
+		}
+		if (result?.systemPrompt !== undefined) {
+			this._systemPromptOverride = result.systemPrompt;
+			this.agent.state.systemPrompt = this._withSystemPromptAppend(result.systemPrompt);
+		} else {
+			this._systemPromptOverride = undefined;
+			this.agent.state.systemPrompt = this._withSystemPromptAppend(this._baseSystemPrompt);
+		}
+		return messages;
+	}
+
+	async interruptSubagentWaitWithPrompt(
+		text: string,
+		options?: Pick<PromptOptions, "expandPromptTemplates" | "images" | "source">,
+	): Promise<WaitPromptHandoff | undefined> {
+		const acceptance = this._waitPromptAcceptance.then(() => this._reserveWaitPrompt(text, options));
+		this._waitPromptAcceptance = acceptance.then(
+			() => {},
+			() => {},
+		);
+		return acceptance;
+	}
+
+	private async _reserveWaitPrompt(
+		text: string,
+		options?: Pick<PromptOptions, "expandPromptTemplates" | "images" | "source">,
+	): Promise<WaitPromptHandoff | undefined> {
+		this.assertCanStartWork();
+		const activeRun = this._activePromptRun;
+		const existing = this._waitPromptHandoff;
+		const activeWait = activeRun?.waits.values().next().value;
+		const run = existing?.accepting ? existing.run : activeWait ? activeRun : undefined;
+		const ownerSignal = existing?.accepting ? existing.ownerSignal : activeWait?.ownerSignal;
+		if (!run || !ownerSignal) return undefined;
+
+		const handoff =
+			existing?.run === run && existing.accepting
+				? existing
+				: {
+						run,
+						ownerSignal,
+						generation: this._waitPromptGeneration,
+						reservations: [],
+						draining: false,
+						accepting: true,
+					};
+		this._waitPromptHandoff = handoff;
+
+		let prepared: PreparedPromptInput | undefined;
+		try {
+			prepared = await this._preparePromptInput(text, options, undefined);
+		} catch (error) {
+			if (handoff.reservations.length === 0 && this._waitPromptHandoff === handoff) {
+				this._waitPromptHandoff = undefined;
+			}
+			throw error;
+		}
+		if (!prepared) {
+			if (handoff.reservations.length === 0 && this._waitPromptHandoff === handoff) {
+				this._waitPromptHandoff = undefined;
+			}
+			return { completion: Promise.resolve() };
+		}
+
+		let resolveCompletion = () => {};
+		let rejectCompletion = (_error: unknown) => {};
+		const completion = new Promise<void>((resolve, reject) => {
+			resolveCompletion = resolve;
+			rejectCompletion = reject;
+		});
+		handoff.reservations.push({ input: prepared, resolve: resolveCompletion, reject: rejectCompletion });
+
+		if (!run.gracefulStopRequested && this.agent.requestGracefulStop(handoff.ownerSignal)) {
+			run.gracefulStopRequested = true;
+		}
+		this._interruptSubagentWaits(run, handoff.ownerSignal);
+		if (!handoff.draining) {
+			handoff.draining = true;
+			void this._drainWaitPromptHandoff(handoff);
+		}
+		return { completion };
+	}
+
+	private async _drainWaitPromptHandoff(handoff: WaitPromptHandoffState): Promise<void> {
+		await this.waitForIdle();
+		while (
+			this._waitPromptHandoff === handoff &&
+			handoff.generation === this._waitPromptGeneration &&
+			handoff.reservations.length > 0
+		) {
+			const reservation = handoff.reservations[0]!;
+			try {
+				this.assertCanStartWork();
+				const messages = await this._createPromptMessages(reservation.input);
+				handoff.accepting = false;
+				await this._runAgentPrompt(messages);
+				reservation.resolve();
+			} catch (error) {
+				reservation.reject(error);
+			} finally {
+				if (handoff.reservations[0] === reservation) handoff.reservations.shift();
+			}
+		}
+		handoff.accepting = false;
+		if (this._waitPromptHandoff === handoff) this._waitPromptHandoff = undefined;
 	}
 
 	/**
@@ -1717,6 +1896,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._invalidateWaitPromptHandoffs("The active run was aborted before the pending prompt could run.");
 		this.abortRetry();
 		this.agent.abort();
 		await this.waitForIdle();
@@ -2902,6 +3082,7 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
+		this._invalidateWaitPromptHandoffs("Extensions reloaded before the pending prompt could run.");
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();

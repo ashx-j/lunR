@@ -3310,15 +3310,30 @@ export class InteractiveMode {
 				return;
 			}
 
-			// If streaming, use prompt() with steer behavior
-			// This handles extension commands (execute immediately), prompt template expansion, and queueing
-			if (this.session.isStreaming) {
-				this.editor.addToHistory?.(text);
-				this.editor.setText("");
-				await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer", images });
-				this.updatePendingMessagesDisplay();
-				this.ui.requestRender();
-				return;
+			// While streaming or settling a wait handoff, reserve normal Enter for subagent_wait when possible.
+			// Extension commands keep their existing path.
+			if (this.session.isStreaming || this.session.isWaitPromptHandoffActive) {
+				if (!this.isExtensionCommand(text)) {
+					await this.awaitDeferredBuiltinsForPrompt();
+					const handoff = await this.session.interruptSubagentWaitWithPrompt(text, { images });
+					if (handoff) {
+						this.editor.addToHistory?.(text);
+						this.editor.setText("");
+						void handoff.completion.catch((error) => {
+							this.showError(error instanceof Error ? error.message : String(error));
+						});
+						this.ui.requestRender();
+						return;
+					}
+				}
+				if (this.session.isStreaming) {
+					this.editor.addToHistory?.(text);
+					this.editor.setText("");
+					await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer", images });
+					this.updatePendingMessagesDisplay();
+					this.ui.requestRender();
+					return;
+				}
 			}
 
 			// Normal message submission

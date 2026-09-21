@@ -234,12 +234,14 @@ Click a thinking or tool card to expand or collapse that item. `app.tools.expand
 
 Submit messages while the agent is working:
 
-- **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls
+- **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls. If the parent is executing `subagent_wait`, Enter instead ends only that wait. The current tool batch settles, background children keep running, and the text starts a fresh parent turn without appearing in the steering queue.
 - **Alt+Enter** queues a *follow-up* message, delivered only after the agent finishes all work
 - **Escape** aborts and restores queued messages to editor
 - **Alt+Up** retrieves queued messages back to editor
 
 On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so lunR can receive the follow-up shortcut.
+
+Parallel tools beside `subagent_wait` finish before the fresh Enter prompt starts. Alt+Enter and Enter outside an executing wait keep their normal queue behavior.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
