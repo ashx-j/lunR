@@ -114,9 +114,9 @@ export function toolGroupRole(continuation: boolean, followed: boolean): ToolGro
  * ```
  *
  * Singletons and expanded rows keep `● title detail` on one line.
- * Collapsed errors stay in the same-name tree; the error body is hoisted
- * under the last leaf so it does not split the file list. Grouped still-running
- * cards share the same tree as finished ones. `compact` is header-only body
+ * Collapsed errors stay in the same-name tree with a red status dot; details
+ * remain available on expansion. Grouped still-running cards share the same
+ * tree as finished ones. `compact` is header-only body
  * hiding at the caller; pass `tree` for chrome. `isError` is accepted so
  * callers can keep passing it, but it does not drop tree chrome.
  */

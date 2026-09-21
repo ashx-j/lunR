@@ -460,6 +460,38 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("subagent_wait");
 	});
 
+	test("collapsed successful steering keeps its receipt in the backend result only", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition("subagent"),
+			renderCall: renderSubagentCall,
+			renderResult: renderSubagentResult,
+		};
+		const component = new ToolExecutionComponent(
+			"subagent",
+			"subagent-steer",
+			{ action: "steer", id: "run-123", message: "Focus on the failing test" },
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Steering delivered for async run run-123 (request req-456)." }],
+				details: { mode: "management", results: [], displayTitle: "Inspect auth flow" },
+				isError: false,
+			},
+			false,
+		);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("subagent steer Inspect auth flow");
+		expect(collapsed).not.toContain("Steering delivered");
+
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Steering delivered for async run run-123");
+	});
+
 	test("collapsed management stop results still render the text", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition("subagent"),
@@ -1112,7 +1144,7 @@ describe("ToolExecutionComponent density", () => {
 		expect(rendered).toContain("line3");
 	});
 
-	test("errored bash calls keep the full output and Took footer", () => {
+	test("errored bash calls hide diagnostics until expanded", () => {
 		const component = new ToolExecutionComponent(
 			"bash",
 			"tool-bash-error",
@@ -1132,10 +1164,17 @@ describe("ToolExecutionComponent density", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("line2");
-		expect(rendered).not.toContain("— Took");
-		expect(rendered).toContain("Took");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("$ echo line1");
+		expect(collapsed).not.toContain("line2");
+		expect(collapsed).not.toContain("Command exited with code 1");
+		expect(collapsed).not.toContain("Took");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("line2");
+		expect(expanded).toContain("Command exited with code 1");
+		expect(expanded).toContain("Took");
 	});
 
 	test("slim bash header keeps only the first line of multi-line commands", () => {
@@ -1342,7 +1381,7 @@ describe("ToolExecutionComponent density", () => {
 		expect(isBlank(lines[indexes[1]! + 1])).toBe(true);
 	});
 
-	test("errored grep calls render the full result", () => {
+	test("errored grep calls hide diagnostics until expanded", () => {
 		const component = new ToolExecutionComponent(
 			"grep",
 			"tool-grep-error",
@@ -1357,11 +1396,15 @@ describe("ToolExecutionComponent density", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("ripgrep exited with code 2");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("grep");
+		expect(collapsed).not.toContain("ripgrep exited with code 2");
+
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("ripgrep exited with code 2");
 	});
 
-	test("grouped read error keeps the file tree then prints the error under the last leaf", () => {
+	test("grouped read errors keep the file tree without dumping diagnostics", () => {
 		const error = "EISDIR: illegal operation on a directory, read";
 		const leaves = ["pi-web-access", "format-grouped-call.test.ts", "render-utils.ts"];
 		const lines = renderGroupedTools(
@@ -1377,21 +1420,21 @@ describe("ToolExecutionComponent density", () => {
 			expect(visible[titleIdx + 1 + i]?.trim().startsWith(branch)).toBe(true);
 			expect(visible[titleIdx + 1 + i]).toContain(leaves[i]);
 		}
-		const lastLeafIdx = titleIdx + leaves.length;
-		const errorIdx = visible.findIndex((line) => line.includes(error));
-		expect(errorIdx).toBeGreaterThan(lastLeafIdx);
-		expect(visible.filter((line) => line.includes(error))).toHaveLength(1);
+		expect(visible.some((line) => line.includes(error))).toBe(false);
 		expect(visible.filter((line) => line.trim() === "● read")).toHaveLength(1);
 	});
 
-	test("singleton read error still shows the body under its own header", () => {
+	test("singleton read errors hide the body until expanded", () => {
 		const error = "EISDIR: illegal operation on a directory, read";
 		const lines = renderGroupedTools(compactReadError("tool-read-lone-err", "pi-web-access", error));
 		const headerIdx = headerIndex(lines, "read pi-web-access");
-		const errorIdx = headerIndex(lines, error);
 		expect(headerIdx).toBeGreaterThan(0);
-		expect(errorIdx).toBeGreaterThan(headerIdx);
+		expect(headerIndex(lines, error)).toBe(-1);
 		expect(lines.map(visibleLine).some((line) => line.trim() === "● read")).toBe(false);
+
+		const component = compactReadError("tool-read-lone-expanded", "pi-web-access", error);
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain(error);
 	});
 
 	test("expanded grouped read error keeps its body on that card", () => {

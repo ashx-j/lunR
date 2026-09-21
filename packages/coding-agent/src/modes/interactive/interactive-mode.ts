@@ -506,6 +506,7 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private browserActivityComponent: ToolExecutionComponent | undefined;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -1870,7 +1871,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					this.clearChatContainer();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.restoreEditorFromTreeResult(result);
@@ -1995,7 +1996,7 @@ export class InteractiveMode {
 	private renderCurrentSessionState(): void {
 		this.ui.setChatScroll(0);
 		this.loadedResourcesContainer.clear();
-		this.chatContainer.clear();
+		this.clearChatContainer();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.pendingCompactionRender = undefined;
@@ -3378,20 +3379,10 @@ export class InteractiveMode {
 		for (const content of target.content) {
 			if (content.type !== "toolCall" || !revealedIds.has(content.id)) continue;
 			if (!this.pendingTools.has(content.id)) {
-				const component = new ToolExecutionComponent(
-					content.name,
-					content.id,
-					content.arguments,
-					{
-						showImages: this.settingsManager.getShowImages(),
-						imageWidthCells: this.settingsManager.getImageWidthCells(),
-					},
-					this.getRegisteredToolDefinition(content.name),
-					this.ui,
-					this.sessionManager.getCwd(),
-				);
-				component.setExpanded(this.toolOutputExpanded);
-				this.addToolComponentToChat(component);
+				const component =
+					content.name === "browser" && this.browserActivityComponent
+						? this.browserActivityComponent
+						: this.createToolExecutionComponent(content.name, content.id, content.arguments);
 				this.pendingTools.set(content.id, component);
 			} else {
 				const component = this.pendingTools.get(content.id);
@@ -3472,6 +3463,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
+				this.browserActivityComponent = undefined;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3649,21 +3641,10 @@ export class InteractiveMode {
 				}
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
-					component = new ToolExecutionComponent(
-						event.toolName,
-						event.toolCallId,
-						event.args,
-						{
-							showImages: this.settingsManager.getShowImages(),
-							imageWidthCells: this.settingsManager.getImageWidthCells(),
-						},
-						this.getRegisteredToolDefinition(event.toolName),
-						this.ui,
-						this.sessionManager.getCwd(),
-					);
-					component.setExpanded(this.toolOutputExpanded);
-					this.addToolComponentToChat(component);
+					component = this.createToolExecutionComponent(event.toolName, event.toolCallId, event.args);
 					this.pendingTools.set(event.toolCallId, component);
+				} else if (event.toolName === "browser" && !component.matchesToolCall(event.toolCallId)) {
+					component.beginNextExecution(event.toolCallId, event.args);
 				}
 				component.markExecutionStarted();
 				this.ui.requestRender();
@@ -3702,6 +3683,7 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				this.browserActivityComponent = undefined;
 
 				this.maybeAutoNameSession();
 
@@ -3985,6 +3967,7 @@ export class InteractiveMode {
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
+		let browserActivityComponent: ToolExecutionComponent | undefined;
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
 		// list and re-inject them after the assistant messages that paid for them.
@@ -4010,20 +3993,26 @@ export class InteractiveMode {
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
-							content.name,
-							content.id,
-							content.arguments,
-							{
-								showImages: this.settingsManager.getShowImages(),
-								imageWidthCells: this.settingsManager.getImageWidthCells(),
-							},
-							this.getRegisteredToolDefinition(content.name),
-							this.ui,
-							this.sessionManager.getCwd(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.addToolComponentToChat(component);
+						let component = content.name === "browser" ? browserActivityComponent : undefined;
+						if (component) {
+							component.beginNextExecution(content.id, content.arguments);
+						} else {
+							component = new ToolExecutionComponent(
+								content.name,
+								content.id,
+								content.arguments,
+								{
+									showImages: this.settingsManager.getShowImages(),
+									imageWidthCells: this.settingsManager.getImageWidthCells(),
+								},
+								this.getRegisteredToolDefinition(content.name),
+								this.ui,
+								this.sessionManager.getCwd(),
+							);
+							component.setExpanded(this.toolOutputExpanded);
+							this.addToolComponentToChat(component);
+							if (content.name === "browser") browserActivityComponent = component;
+						}
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -4054,6 +4043,7 @@ export class InteractiveMode {
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
+				if (message.role === "user") browserActivityComponent = undefined;
 				// All other messages use standard rendering
 				this.addMessageToChat(message, options);
 			}
@@ -4165,7 +4155,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		this.clearChatContainer();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
 
@@ -4520,6 +4510,41 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private createToolExecutionComponent(toolName: string, toolCallId: string, args: unknown): ToolExecutionComponent {
+		if (toolName === "browser" && this.browserActivityComponent) {
+			this.browserActivityComponent.beginNextExecution(toolCallId, args);
+			return this.browserActivityComponent;
+		}
+		const component = new ToolExecutionComponent(
+			toolName,
+			toolCallId,
+			args,
+			{
+				showImages: this.settingsManager.getShowImages(),
+				imageWidthCells: this.settingsManager.getImageWidthCells(),
+			},
+			this.getRegisteredToolDefinition(toolName),
+			this.ui,
+			this.sessionManager.getCwd(),
+		);
+		component.setExpanded(this.toolOutputExpanded);
+		this.addToolComponentToChat(component);
+		if (toolName === "browser") this.browserActivityComponent = component;
+		return component;
+	}
+
+	private disposeChatToolComponents(): void {
+		for (const child of this.chatContainer.children) {
+			if (child instanceof ToolExecutionComponent) child.dispose();
+		}
+		this.browserActivityComponent = undefined;
+	}
+
+	private clearChatContainer(): void {
+		this.disposeChatToolComponents();
+		this.chatContainer.clear();
+	}
+
 	// lunr: consecutive same-tool grouping — a tool component appended right after
 	// another component for the SAME tool becomes a group continuation (no top
 	// spacer / top pad); the previous card drops its bottom pad. Mixed neighbors
@@ -4535,7 +4560,6 @@ export class InteractiveMode {
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
 		// Rebuild chat from session messages
-		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render.
@@ -4733,7 +4757,6 @@ export class InteractiveMode {
 	}
 
 	private renderCompactionResult(result: { summary: string; tokensBefore: number }): void {
-		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 		this.addMessageToChat(
 			createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString()),
@@ -4991,7 +5014,6 @@ export class InteractiveMode {
 								child.setHideThinkingBlock(hidden);
 							}
 						}
-						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
 					},
 					onThinkingCollapseChange: (collapse) => {
@@ -5002,7 +5024,6 @@ export class InteractiveMode {
 								child.setThinkingCollapse(collapse);
 							}
 						}
-						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
 					},
 					onShowCacheMissNoticesChange: (shown) => {
@@ -5828,7 +5849,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						this.clearChatContainer();
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.restoreEditorFromTreeResult(result);
@@ -6840,7 +6861,7 @@ export class InteractiveMode {
 			if (leafId) {
 				this.redoStack.push(leafId);
 			}
-			this.chatContainer.clear();
+			this.clearChatContainer();
 			this.renderInitialMessages();
 			void this.flushCompactionQueue({ willRetry: false });
 			return { editorText: result.editorText, editorImages: result.editorImages };
@@ -6885,7 +6906,7 @@ export class InteractiveMode {
 				this.showStatus("Navigation cancelled");
 				return;
 			}
-			this.chatContainer.clear();
+			this.clearChatContainer();
 			this.renderInitialMessages();
 			if (result.editorText && !this.editor.getText().trim()) {
 				this.restoreEditorFromTreeResult(result);
@@ -8124,6 +8145,7 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
+		this.disposeChatToolComponents();
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}
