@@ -116,6 +116,8 @@ export interface SubagentWaitDeps {
 	/** Internal auto-drain mode waits through needs-attention states. */
 	stopOnAttention?: boolean;
 	shouldYield?: () => boolean;
+	/** True when interactive input released only this local wait. */
+	wasInterrupted?: () => boolean;
 	/** Internal auto-drain mode surfaces failed terminal subagent runs as errors. */
 	failOnFailedRuns?: boolean;
 	/** Injectable provider protocol surfaces for deterministic tests. */
@@ -327,6 +329,9 @@ async function waitForDetachedForegroundRun(
 				`Waited ${formatDuration(now() - startedAt)} for remembered detached foreground run "${run.runId}"; done. Outcome: ${outcome || "no recovered child status"}. Completion event observed; inspect with subagent({ action: "status", id: "${run.runId}" }) for recovered output.`,
 			);
 		}
+		if (deps.wasInterrupted?.()) {
+			return result("Wait interrupted by user input; background work remains active.");
+		}
 		if (signal?.aborted) {
 			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Remembered foreground run "${run.runId}" remains detached.`, true);
 		}
@@ -388,6 +393,9 @@ async function waitForSupervisorQuestion(
 						delivered: Boolean(question.deliveredAt),
 					},
 				};
+			}
+			if (deps.wasInterrupted?.()) {
+				return result("Wait interrupted by user input; background work remains active.");
 			}
 			if (signal?.aborted) {
 				return result(`Wait aborted after ${formatDuration(now() - startedAt)} for supervisor question "${questionId}".`, true);
@@ -484,6 +492,9 @@ export async function waitForSubagents(
 			...activeInitialRuns.map((run) => `${run.id} (${run.state})`),
 			...activeInitialProviderItems.map((item) => `${item.provider}/${item.id}`),
 		].join(", ");
+		if (deps.wasInterrupted?.()) {
+			return result("Wait interrupted by user input; background work remains active.");
+		}
 		if (signal?.aborted) {
 			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Still active: ${stillActive}.`, true);
 		}

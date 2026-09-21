@@ -162,6 +162,7 @@ type ActiveRun = {
 	promise: Promise<void>;
 	resolve: () => void;
 	abortController: AbortController;
+	gracefulStopRequested: boolean;
 };
 
 /**
@@ -316,6 +317,13 @@ export class Agent {
 		this.activeRun?.abortController.abort();
 	}
 
+	/** Stop the owning run after its current assistant turn and tool batch finish. */
+	requestGracefulStop(ownerSignal: AbortSignal): boolean {
+		if (!this.activeRun || this.activeRun.abortController.signal !== ownerSignal) return false;
+		this.activeRun.gracefulStopRequested = true;
+		return true;
+	}
+
 	/**
 	 * Resolve when the current run and all awaited event listeners have finished.
 	 *
@@ -436,6 +444,7 @@ export class Agent {
 
 	private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
+		const activeRun = this.activeRun;
 		return {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
@@ -469,6 +478,7 @@ export class Agent {
 				return this.steeringQueue.drain();
 			},
 			getFollowUpMessages: async () => this.followUpQueue.drain(),
+			shouldStopAfterTurn: () => activeRun?.gracefulStopRequested === true,
 		};
 	}
 
@@ -482,7 +492,7 @@ export class Agent {
 		const promise = new Promise<void>((resolve) => {
 			resolvePromise = resolve;
 		});
-		this.activeRun = { promise, resolve: resolvePromise, abortController };
+		this.activeRun = { promise, resolve: resolvePromise, abortController, gracefulStopRequested: false };
 
 		this._state.isStreaming = true;
 		this._state.streamingMessage = undefined;
