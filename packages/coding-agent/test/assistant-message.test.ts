@@ -320,7 +320,7 @@ describe("AssistantMessageComponent", () => {
 		message.provider = "openai-codex";
 		component.updateContent(message);
 		const plain = () => component.render(80).map(stripAnsi);
-		expect(plain().map((line) => line.trim())).toEqual(["", "latest", ""]);
+		expect(plain().map((line) => line.trim())).toEqual(["", "latest"]);
 		component.setReasoningDisplay("four-lines");
 		expect(plain().filter((line) => line.trim())).toHaveLength(4);
 		message.provider = "anthropic";
@@ -369,7 +369,7 @@ describe("AssistantMessageComponent", () => {
 		const message = createAssistantMessage([{ type: "thinking", thinking: "Visible. Hidden ending." }]);
 		component.setThinkingTimings([{ start: 0, end: 1000 }]);
 		component.updateContent(sliceMessageContent(message, 8), { thinkingSource: message });
-		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "Visible.", ""]);
+		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "Visible."]);
 		component.updateContent(message, { thinkingSource: message });
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("Thought for 1s");
 	});

@@ -13,17 +13,17 @@ function renderPlain(component: ThinkingTailComponent, width: number): string[] 
 }
 
 describe("ThinkingLineComponent", () => {
-	test("keeps the latest nonempty visual line with one blank row on each side", () => {
+	test("keeps the latest nonempty visual line without trailing padding", () => {
 		initTheme("moon");
 		const component = new ThinkingLineComponent("old\n\n**latest**\n\n", 1, getMarkdownTheme(), 0);
-		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "latest", ""]);
+		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "latest"]);
 	});
 
 	test("respects narrow widths and keeps emoji and combining characters intact", () => {
 		initTheme("moon");
 		const component = new ThinkingLineComponent("old\n界 é 👩‍💻", 0, getMarkdownTheme(), 0);
 		for (const width of [0, 1, 8, 20]) {
-			expect(component.render(width)).toHaveLength(3);
+			expect(component.render(width)).toHaveLength(2);
 			for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 		const line = component.render(20)[1];
