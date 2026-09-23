@@ -304,11 +304,11 @@ function isDeadTerminalError(error: unknown): boolean {
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
-	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage.";
+	"Claude Code handles Anthropic subscription authentication. lunR retains tool execution and conversation state. Check your Claude account for usage and any extra charges.";
 
 // lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
 const ANTHROPIC_TOS_DISCLAIMER =
-	"Connecting an Anthropic subscription (Claude Pro/Max) account to lunR may violate Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Third-party harness usage also draws from paid extra usage, not your plan limits. Continue?";
+	"Connecting an Anthropic subscription through Claude Code may be subject to Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Claude Code authenticates each lunR generation; lunR keeps its own tools and history. Continue?";
 
 const INIT_PROMPT = `Analyze this codebase and write a starter AGENTS.md in the project root.
 Scan: package manifests, directory layout, build/test/lint scripts, CI config,
@@ -6056,7 +6056,8 @@ export class InteractiveMode {
 		// lunr: providers with a multi-key pool list one entry per subscription plus an
 		// "all subscriptions" entry, encoding the target as "<providerId>#<subId|all>".
 		const options: AuthSelectorProvider[] = [];
-		for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
+		for (const { providerId, type: credentialType } of await this.session.modelRuntime.listCredentials()) {
+			const type = credentialType === "external_claude_code" ? "oauth" : credentialType;
 			const name = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
 			const status = { type, source: "stored credential" };
 			if (type === "api_key") {
@@ -6795,6 +6796,28 @@ export class InteractiveMode {
 			signal: dialog.signal,
 			prompt: (prompt) => this.showAuthPrompt(dialog, prompt),
 			notify: (event) => this.notifyAuthDialog(dialog, event),
+			handoff: async (command, args, env) => {
+				this.ui.stop();
+				try {
+					await new Promise<void>((resolve, reject) => {
+						const child = spawn(command, [...args], { stdio: "inherit", env, windowsHide: false });
+						const abort = () => child.kill();
+						dialog.signal.addEventListener("abort", abort, { once: true });
+						if (dialog.signal.aborted) abort();
+						child.once("error", (error) => {
+							dialog.signal.removeEventListener("abort", abort);
+							reject(error);
+						});
+						child.once("close", (code) => {
+							dialog.signal.removeEventListener("abort", abort);
+							if (code === 0) resolve();
+							else reject(new Error("Claude Code login did not complete"));
+						});
+					});
+				} finally {
+					this.ui.start();
+				}
+			},
 		});
 	}
 

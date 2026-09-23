@@ -50,7 +50,11 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 
 					if (!context.allowNetwork || context.signal?.aborted) return;
 					const apiKey =
-						context.credential?.type === "oauth" ? context.credential.access : context.credential?.key;
+						context.credential?.type === "oauth"
+							? context.credential.access
+							: context.credential?.type === "api_key"
+								? context.credential.key
+								: undefined;
 					const config = await loadRadiusGatewayConfig(gateway, apiKey, context.signal);
 					if (context.signal?.aborted) return;
 					models = getRadiusModelsFromConfig(id, config);
