@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.24] - 2026-09-24
+
+### Added
+
+- Anthropic subscription requests use the installed Claude Code CLI through a pinned Python bridge; API-key requests continue through Anthropic Messages. Legacy OAuth tokens fail closed.
+
 ## [0.2.23] - 2026-09-21
 
 ## [0.2.22] - 2026-09-20
