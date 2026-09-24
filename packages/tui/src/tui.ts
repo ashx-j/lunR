@@ -688,6 +688,37 @@ export class TUI extends Container {
 		return start;
 	}
 
+	private findChatAnchor(previous: string[], next: string[], start: number, viewH: number): number | undefined {
+		for (let offset = 0; offset < Math.min(4, viewH, previous.length - start); offset++) {
+			const line = previous[start + offset];
+			if (!line || visibleWidth(line) === 0) continue;
+			const following = previous[start + offset + 1];
+			let best: number | undefined;
+			let bestScore = 0;
+			for (let match = next.indexOf(line); match !== -1; match = next.indexOf(line, match + 1)) {
+				if (following !== undefined && next[match + 1] !== following) continue;
+				const candidate = match - offset;
+				if (candidate < 0) continue;
+				let score = 1;
+				while (
+					score < 12 &&
+					start + offset + score < previous.length &&
+					previous[start + offset + score] === next[match + score]
+				)
+					score++;
+				if (
+					score > bestScore ||
+					(score === bestScore && (best === undefined || Math.abs(candidate - start) < Math.abs(best - start)))
+				) {
+					best = candidate;
+					bestScore = score;
+				}
+			}
+			if (best !== undefined) return best;
+		}
+		return undefined;
+	}
+
 	override render(width: number): string[] {
 		const pinIndex = this.getPinIndex();
 		if (pinIndex < 0) {
@@ -762,9 +793,23 @@ export class TUI extends Container {
 			chatSlice = scrollLines.slice();
 			this.lastChatStart = 0;
 		} else {
-			this.lastChatScrollMax = scrollLines.length - viewH;
-			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.lastChatScrollMax));
-			start = scrollLines.length - viewH - this.chatScrollOffset;
+			const scrollMax = scrollLines.length - viewH;
+			if (this.chatScrollOffset > 0) {
+				const anchor =
+					cache && !fromCache
+						? (this.findChatAnchor(
+								cache.scrollLines,
+								scrollLines,
+								this.lastChatStart,
+								this.lastChatViewportHeight,
+							) ?? this.lastChatStart)
+						: this.lastChatStart;
+				const pendingScroll = this.chatScrollOffset - (this.lastChatScrollMax - this.lastChatStart);
+				this.chatScrollOffset = scrollMax - anchor + pendingScroll;
+			}
+			this.lastChatScrollMax = scrollMax;
+			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, scrollMax));
+			start = scrollMax - this.chatScrollOffset;
 			start = this.snapStartToKittyImageHeader(scrollLines, start);
 			start = Math.max(0, start);
 			this.lastChatStart = start;
