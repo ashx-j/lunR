@@ -45,7 +45,7 @@ export function restorePermissionModeAfterPlan(
 	defaultMode: PermissionMode,
 ): PermissionMode {
 	if (previous && previous !== "read-only") return previous;
-	return defaultMode === "read-only" ? "yolo" : defaultMode;
+	return defaultMode;
 }
 
 export interface ApprovalRequest {
@@ -91,7 +91,14 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_symbols",
 	"lsp_code_actions",
 	"lsp_completions",
+	"lsp_rename",
 	"memory_load",
+	"subagent_wait",
+	"subagent_supervisor",
+	"intercom",
+	"contact_supervisor",
+	"present_plan",
+	"structured_output",
 ]);
 
 export const NO_HANDLER_REASON = "Approval channel unavailable.";
@@ -416,6 +423,12 @@ export async function gateToolCall(
 	if (ctx.mode === "read-only") {
 		const reason = readOnlyModeBlockReason(toolName, input);
 		if (reason) return { block: true, reason };
+		if (toolName === "mcp") {
+			if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
+				return { block: true, reason: "Read-only mode blocks MCP tool calls, connections, and authentication." };
+			}
+			return undefined;
+		}
 		if (toolName === "subagent") {
 			const action = input.action;
 			if (
@@ -423,11 +436,18 @@ export async function gateToolCall(
 				action === "resume" ||
 				action === "steer" ||
 				action === "append-step" ||
-				action === "schedule"
-			)
-				return { block: true, reason: "Read-only mode cannot launch or resume a full-access child." };
+				action === "schedule" ||
+				action === "schedule-cancel"
+			) {
+				return {
+					block: true,
+					reason: "Read-only mode cannot launch full-access children or change running children.",
+				};
+			}
+			return undefined;
 		}
-		return undefined;
+		if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
+		return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
 	}
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);

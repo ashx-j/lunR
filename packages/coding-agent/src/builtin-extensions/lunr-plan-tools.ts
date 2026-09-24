@@ -27,8 +27,8 @@ import { isReadOnlyModeActive, requestPlanApproval } from "../core/permissions.t
 export const PRESENT_PLAN_WRONG_MODE_TEXT = "present_plan is only available in read-only mode.";
 
 /** Execute-body logic, exported for tests: gate on read-only mode, then ask. */
-export async function runPresentPlan(summary: string): Promise<string> {
-	if (!isReadOnlyModeActive()) return PRESENT_PLAN_WRONG_MODE_TEXT;
+export async function runPresentPlan(summary: string, sessionId?: string): Promise<string> {
+	if (!isReadOnlyModeActive(sessionId)) return PRESENT_PLAN_WRONG_MODE_TEXT;
 	return requestPlanApproval(summary);
 }
 
@@ -44,9 +44,9 @@ export default function (pi: ExtensionAPI): void {
 		parameters: Type.Object({
 			summary: Type.String({ description: "Concise summary of the plan to approve." }),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const summary = typeof params?.summary === "string" ? params.summary.trim() : "";
-			return { content: [{ type: "text" as const, text: await runPresentPlan(summary) }] };
+			return { content: [{ type: "text" as const, text: await runPresentPlan(summary, ctx.sessionManager.getSessionId()) }] };
 		},
 		renderCall(_args, theme) {
 			return new Text(theme.fg("toolTitle", theme.bold("present_plan")), 0, 0);

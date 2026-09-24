@@ -1904,7 +1904,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					}
 					case "default-permission-mode":
-						callbacks.onDefaultPermissionModeChange(newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode));
+						callbacks.onDefaultPermissionModeChange(
+							newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode),
+						);
 						break;
 					case "double-escape-action":
 						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");

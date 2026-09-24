@@ -15,7 +15,7 @@ export const MOBILE_COMMANDS = [
 	{ name: "project", description: "Browse folders and choose a project" },
 	{ name: "continue", description: "Continue a handoff or the latest TUI session" },
 	{ name: "sessions", description: "Browse saved sessions across projects" },
-	{ name: "mode", description: "Choose manual, yolo, plan, or auto permissions" },
+	{ name: "mode", description: "Choose yolo, auto, or read-only permissions" },
 	{ name: "plan", description: "Plan work and approve it from this chat" },
 	{ name: "settings", description: "Change this session's model, thinking, or permissions" },
 	{ name: "stopall", description: "Stop this session and its background subagents" },

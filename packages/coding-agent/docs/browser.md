@@ -43,7 +43,7 @@ Targets use an accessible `role` and optional exact `name`, or an exact field `l
 
 ## Permissions and external effects
 
-Plan mode and read-only children can navigate, inspect, capture screenshots, and manage tabs. They cannot call `act`. Manual mode uses the existing approval dialog for interactions, including its session-approval option. Auto and yolo use their existing approval rules.
+Read-only sessions and children can navigate, inspect, capture screenshots, and manage tabs. They cannot call `act`. Yolo and auto permit interactions without per-action approval.
 
 Observation is not a guarantee of zero external effects. Loading a page executes its JavaScript and can send requests. Clicking, filling, checking, selecting, or pressing a key may submit forms or change remote data. `/undo`, `/edit`, and `/rollback` cannot reverse website effects. After a timeout or cancellation, inspect the site before retrying an action that might already have succeeded.
 

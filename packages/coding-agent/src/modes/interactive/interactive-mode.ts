@@ -938,7 +938,8 @@ export class InteractiveMode {
 				const resp = await this.showPlanApprovalDialog(req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
-					this.applyPermissionMode(this.restoreTargetAfterPlan());
+					const target = this.restoreTargetAfterPlan();
+					this.applyPermissionMode(target === "read-only" ? "yolo" : target);
 				}
 				return resp;
 			}
@@ -3070,7 +3071,7 @@ export class InteractiveMode {
 				text &&
 				!this.runtimeHost.isDetached &&
 				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|off|minimal|low|medium|high|xhigh|max|mode|plan|manual|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+					/^\/(?:model|thinking|effort|reasoning|off|minimal|low|medium|high|xhigh|max|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
 						text,
 					))
 			) {
@@ -7518,7 +7519,9 @@ export class InteractiveMode {
 		const inReadOnly = getPermissionMode() === "read-only";
 
 		if (sub === "status") {
-			this.showStatus(inReadOnly ? "Read mode is active. /plan off to leave it." : `Permission mode: ${getPermissionMode()}.`);
+			this.showStatus(
+				inReadOnly ? "Read mode is active. /plan off to leave it." : `Permission mode: ${getPermissionMode()}.`,
+			);
 			return;
 		}
 
@@ -7528,7 +7531,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		const next = sub === "" ? !inReadOnly : sub === "on";
+		const next = sub !== "off";
 		if (next === inReadOnly) {
 			this.showStatus(next ? "Read mode is already active." : "Read mode is already off.");
 			return;

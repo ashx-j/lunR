@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { buildProxyDescription } from "../src/builtin-extensions/pi-mcp-adapter/direct-tools.ts";
 import {
 	effectiveLargeSubagentLaunchCount,
 	effectiveLargeSubagentLaunchCountForTurn,
@@ -68,6 +69,7 @@ describe("permission modes", () => {
 		);
 		expect(await gateToolCall("bash", { command: "ls -la" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("read", { path: "/cwd/out" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("lsp_rename", { path: "/cwd/out", newName: "renamed" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("code_rewrite", { pattern: "x", dry_run: true }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("code_rewrite", { pattern: "x", dry_run: false }, "/cwd")).toEqual({
 			block: true,
@@ -75,6 +77,21 @@ describe("permission modes", () => {
 		});
 		expect(prompts).toBe(0);
 		expect(isReadOnlyModeActive()).toBe(true);
+	});
+
+	it("blocks MCP execution and unknown extension tools but permits MCP inspection", async () => {
+		setPermissionMode("read-only");
+		for (const input of [
+			{ tool: "write_file", args: '{"path":"x"}' },
+			{ connect: "server" },
+			{ action: "auth-complete" },
+		]) {
+			expect((await gateToolCall("mcp", input, "/cwd"))?.block).toBe(true);
+		}
+		expect(await gateToolCall("mcp", { search: "tools" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("mcp", { action: "ui-messages" }, "/cwd")).toBeUndefined();
+		expect((await gateToolCall("server_write_file", {}, "/cwd"))?.block).toBe(true);
+		expect(buildProxyDescription({ mcpServers: {} }, null, [])).toContain("Read-only mode permits status");
 	});
 
 	it("retains protected file blocks in all modes", async () => {
@@ -107,7 +124,7 @@ describe("permission modes", () => {
 
 	it("restores the previous mode after planning", () => {
 		expect(restorePermissionModeAfterPlan("auto", "read-only")).toBe("auto");
-		expect(restorePermissionModeAfterPlan(undefined, "read-only")).toBe("yolo");
+		expect(restorePermissionModeAfterPlan(undefined, "read-only")).toBe("read-only");
 		expect(restorePermissionModeAfterPlan(undefined, "auto")).toBe("auto");
 	});
 });

@@ -5,12 +5,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveChildExcludeTools } from "../src/builtin-extensions/pi-subagents/src/runs/shared/child-tools.ts";
 import { browserUrl, createBrowserProxy, isPublicAddress, resolveBrowserHost } from "../src/core/browser/network.ts";
 import { BrowserSession, boundedBrowserText } from "../src/core/browser/runtime.ts";
-import { BrowserParams } from "../src/core/browser/schema.ts";
-import {
-	gateToolCall,
-	resetAllPermissionContexts,
-	setPermissionMode,
-} from "../src/core/permissions.ts";
+import { BROWSER_DESCRIPTION, BrowserParams } from "../src/core/browser/schema.ts";
+import { gateToolCall, resetAllPermissionContexts, setPermissionMode } from "../src/core/permissions.ts";
 
 const text = (result: Awaited<ReturnType<BrowserSession["run"]>>) =>
 	result.content
@@ -66,6 +62,8 @@ describe("browser policy and contract", () => {
 		expect(result.split("\n").length).toBeLessThanOrEqual(301);
 	});
 	it("has one bounded schema without evaluation or file-transfer parameters", () => {
+		expect(BROWSER_DESCRIPTION).toContain("Read-only mode permits observation but blocks act");
+		expect(BROWSER_DESCRIPTION).not.toContain("manual approval");
 		expect(BrowserParams.properties.action.enum).toEqual([
 			"navigate",
 			"inspect",

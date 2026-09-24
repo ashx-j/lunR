@@ -154,7 +154,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		await runtimeHost.switchSession(file);
 		expect(runtimeHost.session).not.toBe(old);
 		expect(runtimeHost.isDetached).toBe(false);
-		expect(runtimeHost.session.sessionManager.getPermissionMode()).toBe("plan");
+		expect(runtimeHost.session.sessionManager.getPermissionMode()).toBe("read-only");
 		expect(runtimeHost.session.sessionManager.buildSessionContext().messages).toHaveLength(1);
 	});
 

@@ -1,18 +1,18 @@
 # Built-in features
 
-lunR ships these workflows as baked-in extensions. You do not need a third-party package for MCP, subagents, plan mode, or todos.
+lunR ships these workflows as baked-in extensions. You do not need a third-party package for MCP, subagents, planning, or todos.
 
 Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`, and `examples/extensions/subagent/` is **Extension API sample code**, not the product implementation.
 
-## Permissions and plan mode
+## Permissions and planning
 
 Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
 - **yolo** auto-approves tools but still confirms large subagent launches. This is the default.
 - **auto** runs without questions or large-launch confirmation.
-- **read-only** permits investigation but blocks writes and full-access child launches.
+- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. The shell command check is heuristic, not an OS sandbox.
 
-Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
+Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
 
 ## Subagents
 
@@ -132,7 +132,7 @@ Use `/project` to browse approved roots, open child folders, go back, select a f
 **The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
 
 - `/model`, `/thinking`, `/settings`, and `/mode` control the active session. `/fast` controls Codex fast mode.
-- `/plan <task>` starts planning. The plan appears in chat with approval buttons. Approval returns the session to manual mode.
+- `/plan <task>` starts planning. The plan appears in chat with approval buttons. Approval returns the session to yolo mode.
 - `/goal`, `/cron`, `/run`, `/chain`, and `/parallel` use the same built-in extensions as the terminal. Pass arguments when an extension's interactive editor requires the terminal.
 - `/skill` selects a loaded skill and asks for a task. `/mcp` and `/lsp` expose their text status commands; the agent retains the configured coding tools.
 - `/usage` reports session tokens and provider-plan usage. `/status` includes the selected project.
@@ -149,7 +149,7 @@ In the terminal, `/handoff` marks the current saved session for eight hours. Rep
 
 On your phone, `/continue` opens the only marked session, or offers a picker if several are marked. Without an active mark, it selects the latest TUI activity. TUI activation, user prompts, and state-changing user commands count as activity. Background results and file timestamps do not. Closed TUI sessions remain eligible.
 
-`/sessions [filter]` browses saved sessions across projects, including locally registered custom session paths. It works before you have sent the bot its first task. Continuation preserves the session file, selected conversation branch, original project directory, and permission checkpoint. Resuming `auto` or `yolo` asks for confirmation on the phone and defaults to manual if declined.
+`/sessions [filter]` browses saved sessions across projects, including locally registered custom session paths. It works before you have sent the bot its first task. Continuation preserves the session file, selected conversation branch, original project directory, and permission checkpoint. Resuming `auto` or `yolo` asks for confirmation on the phone and defaults to read-only if declined.
 
 Only one updated lunR process may write a persistent session at a time. A running owner must release it cooperatively. If it is busy, choose Wait, Stop and continue, or Cancel. Wait retries busy requests for up to two minutes. Stop and continue aborts the foreground turn; it does not migrate children or shell processes. Those must finish or actually stop before transfer. Cancellation stops pending acquisition, but cannot undo extension shutdown once release has begun.
 
@@ -167,7 +167,7 @@ All concurrent writers must use a lunR version with session ownership support. O
 
 The first-party `browser` tool is on by default. Normal installation and updates install matching Chromium automatically. Browser in `/settings` turns the tool off and closes active contexts immediately; cached binaries remain. Offline or ignored-script installs can recover later with `lunr browser install`. Startup and tool execution never install Chromium. The browser handles JavaScript-rendered pages and accessible website interactions, while `web_search` remains discovery and `fetch_content` remains URL reading. There is no automatic browser fallback.
 
-The browser uses ephemeral session-owned contexts. Plan/read-only blocks interactions, and manual mode approves them through the existing permission gate. Public HTTP(S) is the default; local/private access requires explicit user configuration. Website effects cannot be reversed by `/undo`.
+The browser uses ephemeral session-owned contexts. Read-only mode blocks interactions. Yolo and auto allow them without per-action approval. Public HTTP(S) is the default; local/private access requires explicit user configuration. Website effects cannot be reversed by `/undo`.
 
 See [Headless browser](browser.md) for action parameters, installation exceptions, legacy setting precedence, private-network risks, lifecycle limits, and validation.
 
