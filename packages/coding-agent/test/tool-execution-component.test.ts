@@ -460,6 +460,67 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("subagent_wait");
 	});
 
+	test("collapsed subagent waits show only elapsed time while expansion keeps the full result", () => {
+		const component = new ToolExecutionComponent(
+			"subagent_wait",
+			"wait-attention",
+			{ id: "run-123" },
+			{},
+			createBaseToolDefinition("subagent_wait"),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const output =
+			'Waited 8m13s for run "run-123"; attention required. 1 run(s) need attention: run-123 — inspect with subagent({ action: "status" }).\nCompletion/control events have been observed; inspect status if a notification is not visible yet.';
+		component.updateResult({ content: [{ type: "text", text: output }], isError: false }, false);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed.trim().split("\n").filter(Boolean)).toEqual([expect.stringContaining("subagent_wait 8m13s")]);
+		expect(collapsed).not.toContain("run-123");
+		expect(collapsed).not.toContain("attention required");
+
+		expect(component.handleClick(0, 120)).toBe(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("attention required");
+		expect(expanded).toContain("Completion/control events");
+		expect(expanded).toContain("run-123");
+	});
+
+	test("collapsed subagent waits keep timeout state and hide results without a duration", () => {
+		const component = new ToolExecutionComponent(
+			"subagent_wait",
+			"wait-timeout",
+			{ all: true },
+			{},
+			createBaseToolDefinition("subagent_wait"),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Wait timed out after 30s with 1 async run still active." }],
+				isError: true,
+			},
+			false,
+		);
+		let collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("subagent_wait 30s");
+		expect(collapsed).not.toContain("still active");
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Wait interrupted by user input; background work remains active." }],
+				isError: false,
+			},
+			false,
+		);
+		collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("subagent_wait");
+		expect(collapsed).not.toContain("Wait interrupted");
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Wait interrupted by user input");
+	});
+
 	test("collapsed successful steering keeps its receipt in the backend result only", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition("subagent"),
