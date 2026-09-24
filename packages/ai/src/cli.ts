@@ -66,6 +66,7 @@ async function login(providerId: string): Promise<void> {
 				}
 			},
 		});
+		if (credential.type !== "oauth") throw new Error("Use lunr /login anthropic for Claude Code setup");
 		const auth = loadAuth();
 		auth[providerId] = credential;
 		saveAuth(auth);

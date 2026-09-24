@@ -1,350 +1,262 @@
-/**
- * Anthropic OAuth flow (Claude Pro/Max)
- *
- * NOTE: This module uses Node.js http.createServer for the OAuth callback server.
- * It is only intended for CLI use, not browser environments.
- */
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { access, constants } from "node:fs/promises";
+import { homedir } from "node:os";
+import { delimiter, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { claudeCodeEnvironment, stopNative } from "../../api/anthropic-claude-code-bridge.ts";
+import type { AuthInteraction, ExternalClaudeCodeCredential, OAuthAuth } from "../types.ts";
 
-import type { Server } from "node:http";
-import { getProviderEnvValue } from "../../utils/provider-env.ts";
-import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
-import { generatePKCE } from "./pkce.ts";
+const SETUP_WORKER = fileURLToPath(
+	new URL("../../../vendor/hermes-claude-subscription-directsdk/lunr_setup_bridge.py", import.meta.url),
+);
+const VERSION = "2.1.263";
 
-type CallbackServerInfo = {
-	server: Server;
-	redirectUri: string;
-	cancelWait: () => void;
-	waitForCode: () => Promise<{ code: string; state: string } | null>;
-};
-
-type NodeApis = {
-	createServer: typeof import("node:http").createServer;
-};
-
-let nodeApis: NodeApis | null = null;
-let nodeApisPromise: Promise<NodeApis> | null = null;
-
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
-const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
-const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const CALLBACK_HOST = getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
-const CALLBACK_PORT = 53692;
-const CALLBACK_PATH = "/callback";
-const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
-const SCOPES =
-	"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
-async function getNodeApis(): Promise<NodeApis> {
-	if (nodeApis) return nodeApis;
-	if (!nodeApisPromise) {
-		if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
-			throw new Error("Anthropic OAuth is only available in Node.js environments");
-		}
-		nodeApisPromise = import("node:http").then((httpModule) => ({
-			createServer: httpModule.createServer,
-		}));
-	}
-	nodeApis = await nodeApisPromise;
-	return nodeApis;
+export function isQualifiedClaudeCodeVersion(value: string): boolean {
+	return new RegExp(`^${VERSION.replaceAll(".", "\\.")}(?:\\s|$)`).test(value);
 }
 
-function parseAuthorizationInput(input: string): { code?: string; state?: string } {
-	const value = input.trim();
-	if (!value) return {};
-
-	try {
-		const url = new URL(value);
-		return {
-			code: url.searchParams.get("code") ?? undefined,
-			state: url.searchParams.get("state") ?? undefined,
-		};
-	} catch {
-		// not a URL
-	}
-
-	if (value.includes("#")) {
-		const [code, state] = value.split("#", 2);
-		return { code, state };
-	}
-
-	if (value.includes("code=")) {
-		const params = new URLSearchParams(value);
-		return {
-			code: params.get("code") ?? undefined,
-			state: params.get("state") ?? undefined,
-		};
-	}
-
-	return { code: value };
-}
-
-function formatErrorDetails(error: unknown): string {
-	if (error instanceof Error) {
-		const details: string[] = [`${error.name}: ${error.message}`];
-		const errorWithCode = error as Error & { code?: string; errno?: number | string; cause?: unknown };
-		if (errorWithCode.code) details.push(`code=${errorWithCode.code}`);
-		if (typeof errorWithCode.errno !== "undefined") details.push(`errno=${String(errorWithCode.errno)}`);
-		if (typeof error.cause !== "undefined") {
-			details.push(`cause=${formatErrorDetails(error.cause)}`);
-		}
-		if (error.stack) {
-			details.push(`stack=${error.stack}`);
-		}
-		return details.join("; ");
-	}
-	return String(error);
-}
-
-async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
-	const { createServer } = await getNodeApis();
-
+async function run(command: string, args: string[], input?: string, timeout = 25_000): Promise<string> {
 	return new Promise((resolve, reject) => {
-		let settleWait: ((value: { code: string; state: string } | null) => void) | undefined;
-		const waitForCodePromise = new Promise<{ code: string; state: string } | null>((resolveWait) => {
-			let settled = false;
-			settleWait = (value) => {
-				if (settled) return;
-				settled = true;
-				resolveWait(value);
-			};
+		const child = spawn(command, args, {
+			stdio: ["pipe", "pipe", "ignore"],
+			windowsHide: true,
+			detached: process.platform !== "win32",
+			env: claudeCodeEnvironment(undefined, false),
 		});
+		let output = "";
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			void stopNative(child.pid ?? 0).finally(() => {
+				child.kill();
+				child.stdout.destroy();
+				child.stdin.destroy();
+				reject(new Error("Dependency check timed out"));
+			});
+		}, timeout);
+		child.stdout.on("data", (chunk: Buffer) => {
+			output += chunk.toString("utf8");
+			if (output.length > 64 * 1024) child.kill();
+		});
+		child.stdin.on("error", () => {});
+		child.on("error", reject);
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (timedOut) return;
+			if (code !== 0) reject(new Error("Dependency check failed"));
+			else resolve(output.trim());
+		});
+		child.stdin.end(input);
+	});
+}
 
-		const server = createServer((req, res) => {
+async function executable(name: string): Promise<string | undefined> {
+	const suffixes = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+	const directories = isAbsolute(name)
+		? [""]
+		: [...(process.env.PATH ?? "").split(delimiter), join(homedir(), ".local", "bin")];
+	for (const directory of directories) {
+		for (const suffix of suffixes) {
+			const candidate = directory ? join(directory, `${name}${suffix}`) : `${name}${suffix}`;
 			try {
-				const url = new URL(req.url || "", "http://localhost");
-				if (url.pathname !== CALLBACK_PATH) {
-					res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("Callback route not found."));
-					return;
-				}
-
-				const code = url.searchParams.get("code");
-				const state = url.searchParams.get("state");
-				const error = url.searchParams.get("error");
-
-				if (error) {
-					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("Anthropic authentication did not complete.", `Error: ${error}`));
-					return;
-				}
-
-				if (!code || !state) {
-					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("Missing code or state parameter."));
-					return;
-				}
-
-				if (state !== expectedState) {
-					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("State mismatch."));
-					return;
-				}
-
-				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-				res.end(oauthSuccessHtml("Anthropic authentication completed. You can close this window."));
-				settleWait?.({ code, state });
+				await access(candidate, constants.X_OK);
+				return candidate;
 			} catch {
-				res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-				res.end("Internal error");
+				/* Next location. */
 			}
-		});
+		}
+	}
+	return undefined;
+}
 
-		server.on("error", (err) => {
-			reject(err);
-		});
+async function pythonInterpreter(): Promise<string | undefined> {
+	for (const name of ["python3", "python"]) {
+		const path = await executable(name);
+		if (!path) continue;
+		try {
+			const version = await run(path, ["--version"]);
+			const match = /^Python (\d+)\.(\d+)/.exec(version);
+			if (match && (Number(match[1]) > 3 || (Number(match[1]) === 3 && Number(match[2]) >= 10))) return path;
+		} catch {
+			/* Try another interpreter. */
+		}
+	}
+	return undefined;
+}
 
-		server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
-			resolve({
-				server,
-				redirectUri: REDIRECT_URI,
-				cancelWait: () => {
-					settleWait?.(null);
-				},
-				waitForCode: () => waitForCodePromise,
-			});
-		});
+async function install(command: string, args: string[], interaction: AuthInteraction): Promise<void> {
+	const confirm = await interaction.prompt({
+		type: "select",
+		message: `Run ${command} ${args.join(" ")}? This downloads software and changes your user-level system installation.`,
+		options: [
+			{ id: "yes", label: "Install" },
+			{ id: "no", label: "Cancel" },
+		],
 	});
+	if (confirm !== "yes") throw new Error("Anthropic subscription setup cancelled");
+	interaction.notify({ type: "progress", message: "Running the confirmed installer..." });
+	await run(command, args, undefined, 300_000);
 }
 
-async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
-	const response = await fetch(url, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Accept: "application/json",
-		},
-		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(30_000),
+async function setupProbe(python: string, command: string, type: "status" | "discover" | "version"): Promise<unknown> {
+	const requestId = randomUUID();
+	const line = await run(
+		python,
+		["-s", "-B", "-u", SETUP_WORKER],
+		`${JSON.stringify({ v: 1, requestId, type, command, env: claudeCodeEnvironment(undefined, false) })}\n`,
+		55_000,
+	);
+	const record: unknown = JSON.parse(line);
+	if (
+		!record ||
+		typeof record !== "object" ||
+		!("v" in record) ||
+		record.v !== 1 ||
+		!("requestId" in record) ||
+		record.requestId !== requestId ||
+		!("type" in record) ||
+		record.type !== "result" ||
+		!("result" in record)
+	) {
+		throw new Error("Invalid Claude Code setup response");
+	}
+	return record.result;
+}
+
+async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCredential> {
+	interaction.notify({
+		type: "info",
+		message:
+			"Claude Code handles subscription authentication and one generation per lunR request. lunR still owns tools, permissions, history, compaction, and subagents. Python 3.10+ and Claude Code are required. No credentials are copied into lunR.",
 	});
-
-	const responseBody = await response.text();
-
-	if (!response.ok) {
-		throw new Error(`HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`);
-	}
-
-	return responseBody;
-}
-
-async function exchangeAuthorizationCode(
-	code: string,
-	state: string,
-	verifier: string,
-	redirectUri: string,
-): Promise<OAuthCredential> {
-	let responseBody: string;
-	try {
-		responseBody = await postJson(TOKEN_URL, {
-			grant_type: "authorization_code",
-			client_id: CLIENT_ID,
-			code,
-			state,
-			redirect_uri: redirectUri,
-			code_verifier: verifier,
-		});
-	} catch (error) {
-		throw new Error(
-			`Token exchange request failed. url=${TOKEN_URL}; redirect_uri=${redirectUri}; response_type=authorization_code; details=${formatErrorDetails(error)}`,
-		);
-	}
-
-	let tokenData: { access_token: string; refresh_token: string; expires_in: number };
-	try {
-		tokenData = JSON.parse(responseBody) as { access_token: string; refresh_token: string; expires_in: number };
-	} catch (error) {
-		throw new Error(
-			`Token exchange returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
-		);
-	}
-
-	return {
-		type: "oauth",
-		refresh: tokenData.refresh_token,
-		access: tokenData.access_token,
-		expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
-	};
-}
-
-async function loginAnthropic(interaction: AuthInteraction): Promise<OAuthCredential> {
-	const { verifier, challenge } = await generatePKCE();
-	const server = await startCallbackServer(verifier);
-	const manualAbort = new AbortController();
-	let code: string | undefined;
-	let state: string | undefined;
-	let manualInput: string | undefined;
-	let manualError: Error | undefined;
-
-	try {
-		const authParams = new URLSearchParams({
-			code: "true",
-			client_id: CLIENT_ID,
-			response_type: "code",
-			redirect_uri: REDIRECT_URI,
-			scope: SCOPES,
-			code_challenge: challenge,
-			code_challenge_method: "S256",
-			state: verifier,
-		});
+	let python = await pythonInterpreter();
+	if (!python) {
 		interaction.notify({
-			type: "auth_url",
-			url: `${AUTHORIZE_URL}?${authParams.toString()}`,
-			instructions:
-				"Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
+			type: "info",
+			message:
+				"Install Python 3.10+ from https://www.python.org/downloads/ . This is a separate operating-system installation, not part of lunR.",
 		});
-
-		const manualPromise = interaction
-			.prompt({
-				type: "manual_code",
-				message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
-				placeholder: REDIRECT_URI,
-				signal: manualAbort.signal,
-			})
-			.then((input) => {
-				manualInput = input;
-				server.cancelWait();
-			})
-			.catch((error) => {
-				manualError = error instanceof Error ? error : new Error(String(error));
-				server.cancelWait();
-			});
-
-		const result = await server.waitForCode();
-		if (manualError) throw manualError;
-		if (result?.code) {
-			code = result.code;
-			state = result.state;
-		} else if (manualInput) {
-			const parsed = parseAuthorizationInput(manualInput);
-			if (parsed.state && parsed.state !== verifier) throw new Error("OAuth state mismatch");
-			code = parsed.code;
-			state = parsed.state ?? verifier;
-		}
-
-		if (!code) {
-			await manualPromise;
-			if (manualError) throw manualError;
-			if (manualInput) {
-				const parsed = parseAuthorizationInput(manualInput);
-				if (parsed.state && parsed.state !== verifier) throw new Error("OAuth state mismatch");
-				code = parsed.code;
-				state = parsed.state ?? verifier;
-			}
-		}
-
-		if (!code) throw new Error("Missing authorization code");
-		if (!state) throw new Error("Missing OAuth state");
-		interaction.notify({ type: "progress", message: "Exchanging authorization code for tokens..." });
-		return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI);
-	} finally {
-		manualAbort.abort();
-		server.server.close();
-	}
-}
-
-/**
- * Refresh Anthropic OAuth token
- */
-async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredential> {
-	let responseBody: string;
-	try {
-		responseBody = await postJson(TOKEN_URL, {
-			grant_type: "refresh_token",
-			client_id: CLIENT_ID,
-			refresh_token: refreshToken,
+		const packageManager =
+			process.platform === "darwin"
+				? await executable("brew")
+				: process.platform === "linux"
+					? ((await executable("apt-get")) ?? (await executable("dnf")))
+					: undefined;
+		const installer =
+			process.platform === "win32"
+				? { command: "winget", args: ["install", "--id", "Python.Python.3.13", "-e"] }
+				: packageManager?.endsWith("apt-get")
+					? { command: "sudo", args: [packageManager, "install", "-y", "python3"] }
+					: packageManager?.endsWith("dnf")
+						? { command: "sudo", args: [packageManager, "install", "-y", "python3"] }
+						: packageManager
+							? { command: packageManager, args: ["install", "python@3.13"] }
+							: undefined;
+		const choice = await interaction.prompt({
+			type: "select",
+			message:
+				"Python 3.10+ is missing. A system installer may request administrator access and change your machine.",
+			options: [
+				...(installer
+					? [{ id: "install", label: `Install through ${installer.command} ${installer.args.join(" ")}` }]
+					: []),
+				{ id: "cancel", label: "Cancel and install Python yourself" },
+			],
 		});
-	} catch (error) {
-		throw new Error(`Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`);
+		if (choice === "install" && installer) await install(installer.command, installer.args, interaction);
+		else throw new Error("Install Python 3.10+ and retry /login anthropic");
+		python = await pythonInterpreter();
+		if (!python)
+			throw new Error("Python installation finished but the interpreter is not on PATH. Restart lunR and retry.");
 	}
-
-	let data: { access_token: string; refresh_token: string; expires_in: number; scope?: string };
-	try {
-		data = JSON.parse(responseBody) as {
-			access_token: string;
-			refresh_token: string;
-			expires_in: number;
-			scope?: string;
-		};
-	} catch (error) {
+	let command = await executable("claude");
+	if (!command) {
+		const choice = await interaction.prompt({
+			type: "select",
+			message: "Claude Code is missing. Installation changes your user-level system and may require a new PATH.",
+			options: [
+				{ id: "install", label: "Install Claude Code" },
+				{ id: "existing", label: "Use existing executable" },
+				{ id: "cancel", label: "Cancel" },
+			],
+		});
+		if (choice === "install") {
+			if (process.platform === "win32")
+				await install(
+					"powershell",
+					["-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"],
+					interaction,
+				);
+			else await install("sh", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"], interaction);
+			command = await executable("claude");
+		} else if (choice === "existing") {
+			const path = await interaction.prompt({ type: "text", message: "Absolute path to Claude Code executable:" });
+			if (!isAbsolute(path)) throw new Error("Claude Code path must be absolute");
+			command = await executable(path);
+		} else throw new Error("Anthropic subscription setup cancelled");
+	}
+	if (!command) throw new Error("Claude Code executable not found. Restart lunR after installation and retry.");
+	const version = (await setupProbe(python, command, "version")) as string;
+	if (!isQualifiedClaudeCodeVersion(version))
 		throw new Error(
-			`Anthropic token refresh returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
+			`Claude Code ${VERSION} is the only qualified version. Found ${version.slice(0, 40)}. Subscription requests are disabled until this version is qualified.`,
 		);
+	let status = (await setupProbe(python, command, "status")) as {
+		logged_in?: boolean;
+		plan?: string;
+		accountFingerprint?: string;
+	};
+	if (!status.logged_in || !/Claude (Pro|Max|Team|Enterprise)/i.test(status.plan ?? "")) {
+		if (!interaction.handoff)
+			throw new Error(
+				`Run "${command}" auth login in a terminal, select a Claude subscription, then retry /login anthropic`,
+			);
+		const choice = await interaction.prompt({
+			type: "select",
+			message: "Claude Code needs a subscription login. Hand the terminal to Claude Code now?",
+			options: [
+				{ id: "login", label: "Run Claude Code login" },
+				{ id: "cancel", label: "Cancel" },
+			],
+		});
+		if (choice !== "login") throw new Error("Anthropic subscription setup cancelled");
+		await interaction.handoff(
+			python,
+			["-s", "-B", "-u", SETUP_WORKER, "auth-login", command],
+			claudeCodeEnvironment(undefined, false),
+		);
+		status = (await setupProbe(python, command, "status")) as typeof status;
+		if (!status.logged_in || !/Claude (Pro|Max|Team|Enterprise)/i.test(status.plan ?? ""))
+			throw new Error("Claude Code is not signed into a Claude subscription");
 	}
-
+	const discovered = await setupProbe(python, command, "discover");
+	if (
+		!Array.isArray(discovered) ||
+		!discovered.length ||
+		discovered.some((row) => !row || typeof row.id !== "string" || row.upstream_requests !== 0)
+	) {
+		throw new Error("Claude Code model discovery did not verify zero Messages requests. Setup not saved.");
+	}
 	return {
-		type: "oauth",
-		refresh: data.refresh_token,
-		access: data.access_token,
-		expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
+		type: "external_claude_code",
+		version: 1,
+		manager: "claude-code",
+		command,
+		python,
+		accountFingerprint: status.accountFingerprint ?? randomUUID(),
+		routes: discovered.map((row) => row.id),
 	};
 }
 
 export const anthropicOAuth: OAuthAuth = {
-	name: "Anthropic (Claude Pro/Max)",
-	login: loginAnthropic,
-	refresh: (credential) => refreshAnthropicToken(credential.refresh),
-
-	async toAuth(credential) {
-		return { apiKey: credential.access };
+	name: "Anthropic subscription through Claude Code",
+	loginLabel: "Connect Claude Pro/Max through Claude Code",
+	login,
+	refresh: async () => {
+		throw new Error("Legacy Anthropic OAuth tokens are unsupported. Run /login anthropic.");
+	},
+	toAuth: async () => {
+		throw new Error("Legacy Anthropic OAuth tokens are unsupported. Run /login anthropic.");
 	},
 };

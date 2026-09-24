@@ -1,0 +1,14 @@
+--- a/directsdk.py
++++ b/directsdk.py
+@@ -269,0 +270,2 @@
++            if self.client.on_spawn is not None:
++                self.client.on_spawn(self.process.pid)
+@@ -368 +370 @@
+-    def __init__(self, command=None, args=None, env=None, timeout=180, **_):
++    def __init__(self, command=None, args=None, env=None, timeout=180, on_spawn=None, on_replay=None, **_):
+@@ -376,0 +379,2 @@
++        self.on_spawn = on_spawn
++        self.on_replay = on_replay
+@@ -525,0 +530,2 @@
++                                if self.on_replay is not None:
++                                    self.on_replay()
