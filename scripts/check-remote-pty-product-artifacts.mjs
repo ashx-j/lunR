@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -19,7 +19,7 @@ if (process.argv.slice(2).some((arg) => !arg.startsWith("--scope=") && !arg.star
 assert.ok(["npm", "standalone", "full"].includes(scope));
 const target = `${process.platform}-${process.arch}`;
 assert.ok(["darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "win32-x64", "win32-arm64"].includes(target));
-const directory = mkdtempSync(join(tmpdir(), "lunr-phase0-product-"));
+const directory = realpathSync(mkdtempSync(join(tmpdir(), "lunr-phase0-product-")));
 const report = { scope, target, node: process.version, npm: "not-run", standalone: "not-run", result: "not-run" };
 
 function npmFailureDetails(profile) {
@@ -103,8 +103,9 @@ async function proveNpm() {
 	await mkdir(install);
 	writeFileSync(join(install, "package.json"), `${JSON.stringify({ name: "phase0-isolated-product", private: true, version: "1.0.0", dependencies })}\n`);
 	const installProfile = join(directory, "install-profile");
-	// npm's HTTP fetch timeout is 300 seconds; let it emit its own failure before terminating the install.
-	run(process.execPath, [npmCliPath(), "install", "--prefix", install, "--no-audit", "--no-fund", "--foreground-scripts"], { cwd: install, env: await npmEnv(installProfile), timeout: 360_000, npmProfile: installProfile });
+	// Windows CI was still unpacking packages after five minutes; keep this budget local to the product install.
+	const installTimeout = process.platform === "win32" ? 600_000 : 360_000;
+	run(process.execPath, [npmCliPath(), "install", "--no-audit", "--no-fund", "--foreground-scripts"], { cwd: install, env: await npmEnv(installProfile), timeout: installTimeout, npmProfile: installProfile });
 	const lock = JSON.parse(readFileSync(join(install, "package-lock.json"), "utf8"));
 	for (const [name, archive] of stagedArchives) assertStagedTarball(lock, name, archive, install);
 	const productRoot = join(install, "node_modules", "@ashx-j", "lunr");

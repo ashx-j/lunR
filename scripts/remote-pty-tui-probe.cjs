@@ -26,7 +26,7 @@ async function run() {
 	try {
 		await waitFor(/\x1b\[\?1049h/, 20_000);
 		await waitFor(/╭[^\r\n]*╮/, 20_000);
-		assert.match(screen, /> /);
+		await waitFor(/> [^\r\n]*\r?\n[\s\S]*╰[^\r\n]*╯/, 20_000);
 		await sleep(4500);
 		if (extension) {
 			child.write("/phase0-native\r");

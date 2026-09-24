@@ -68,7 +68,11 @@ try {
 		const productScope = scope === "product-npm" ? "npm" : scope;
 		const args = [join(root, "scripts", "check-remote-pty-product-artifacts.mjs"), `--scope=${productScope}`];
 		if (options["bun-path"]) args.push(`--bun-path=${options["bun-path"]}`);
-		const execution = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8", timeout: 600_000, maxBuffer: 5 * 1024 * 1024 });
+		let productTimeout = 600_000;
+		if (target.startsWith("win32-") && scope !== "standalone") {
+			productTimeout = scope === "full" ? 1_080_000 : 720_000;
+		}
+		const execution = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8", timeout: productTimeout, maxBuffer: 5 * 1024 * 1024 });
 		if (execution.error) throw execution.error;
 		const product = JSON.parse(execution.stdout.trim());
 		report.productNpmLayout = product.npm;
