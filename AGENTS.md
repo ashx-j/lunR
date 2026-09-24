@@ -149,6 +149,7 @@ Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
 - Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
 - Denser one-line reasoning (2026-09-23): offline tui → ai → agent → coding-agent → orchestrator tsgo passes; focused assistant-message and thinking-tail Vitest passes 28/28. Changed files pass Biome and `git diff --check`. No installed CLI or live provider was touched.
 - Collapsed subagent waits (2026-09-24): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused tool-execution Vitest passes 61/61; touched TypeScript Biome and `git diff --check` pass. No installed CLI or live provider was changed.
@@ -323,6 +324,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-24: merge PRs #106, #107, #109, #110, and #111 without #77 or #108; keep additive AGENTS.md entries and refresh the combined first-request schema fixture.
 - 2026-09-24: replace manual and plan permission modes with yolo, auto, and read-only; keep `/plan` as a read-only planning shortcut so inspection does not force a plan workflow.
 - 2026-09-24: fail closed on unclassified tools in read-only mode, because proxy and direct MCP calls can write despite the old plan-mode heuristic.
 - 2026-09-24: keep parent-child messaging and autonomous delegation independent and default-on, because direct-work mode should still permit explicitly requested children.
