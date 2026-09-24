@@ -157,7 +157,16 @@ export class ToolExecutionComponent extends Container {
 		return toolStatusDot(state, theme);
 	}
 
+	private getWaitDuration(): string | undefined {
+		if (this.toolName !== "subagent_wait" || this.isPartial || this.expanded) return undefined;
+		const match = /^(?:Waited |Wait (?:timed out|aborted) after )(\d+(?:ms|[smhd])(?:\d+[smhd])*)\b/.exec(
+			this.getTextOutput(),
+		);
+		return match?.[1];
+	}
+
 	private createCallFallback(): Component {
+		const waitDuration = this.getWaitDuration();
 		return new Text(
 			formatGroupedCall({
 				role: toolGroupRole(this.groupContinuation, this.groupFollowed),
@@ -165,6 +174,7 @@ export class ToolExecutionComponent extends Container {
 				tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 				dot: this.getStatusDot(),
 				title: theme.fg("toolTitle", theme.bold(this.toolName)),
+				detail: waitDuration && theme.fg("toolOutput", waitDuration),
 			}),
 			0,
 			0,
@@ -243,8 +253,7 @@ export class ToolExecutionComponent extends Container {
 
 	handleClick(_localY: number, _width: number): boolean {
 		if (this.isPartial) return false;
-		if (this.toolName === "browser" || this.toolName === "subagent" || this.toolName === "subagent_wait")
-			return false;
+		if (this.toolName === "browser" || this.toolName === "subagent") return false;
 		this.setExpanded(!this.expanded);
 		this.ui.requestRender();
 		return true;
@@ -332,7 +341,7 @@ export class ToolExecutionComponent extends Container {
 			if (details?.mode === "management") return false;
 			return true;
 		}
-		if (this.toolName === "subagent_wait") return false;
+		if (this.toolName === "subagent_wait") return true;
 		if (this.result.isError) return true;
 		return this.getRenderShell() === "default";
 	}
@@ -518,12 +527,14 @@ export class ToolExecutionComponent extends Container {
 
 	private formatToolExecution(): string {
 		const compact = !this.isPartial && !this.expanded;
+		const waitDuration = this.getWaitDuration();
 		let text = formatGroupedCall({
 			role: toolGroupRole(this.groupContinuation, this.groupFollowed),
 			compact,
 			tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 			dot: this.getStatusDot(),
 			title: theme.fg("toolTitle", theme.bold(this.toolName)),
+			detail: waitDuration && theme.fg("toolOutput", waitDuration),
 		});
 		if (!compact) {
 			const content = JSON.stringify(this.args, null, 2);

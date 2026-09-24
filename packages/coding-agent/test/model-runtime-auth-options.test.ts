@@ -109,10 +109,11 @@ describe("ModelRuntime auth options", () => {
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory({
 				anthropic: {
-					type: "oauth",
-					access: "access",
-					refresh: "refresh",
-					expires: Date.now() + 60_000,
+					type: "external_claude_code",
+					version: 1,
+					manager: "claude-code",
+					python: "python",
+					command: "claude",
 				},
 			}),
 			modelsPath: null,
@@ -121,6 +122,32 @@ describe("ModelRuntime auth options", () => {
 		const options = authOptions(runtime).filter((option) => option.provider.id === "anthropic");
 		expect(options).toHaveLength(2);
 		expect(await runtime.checkAuth("anthropic")).toMatchObject({ type: "oauth" });
+	});
+
+	it("rejects custom headers before a Claude Code subscription request starts", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory({
+				anthropic: {
+					type: "external_claude_code",
+					version: 1,
+					manager: "claude-code",
+					python: "python",
+					command: "claude",
+				},
+			}),
+			modelsPath: null,
+		});
+		const model = runtime.getModel("anthropic", "claude-sonnet-5");
+		expect(model).toBeDefined();
+		const response = await runtime.completeSimple(
+			model!,
+			{
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			{ headers: { authorization: "nope" } },
+		);
+		expect(response.stopReason).toBe("error");
+		expect(response.errorMessage).toContain("custom headers");
 	});
 
 	it("constructs an API key method for an extension API-key provider", async () => {

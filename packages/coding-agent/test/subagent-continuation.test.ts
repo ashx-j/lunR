@@ -108,6 +108,8 @@ const envKeys = [
 	"PI_SUBAGENT_ORCHESTRATOR_SESSION_ID",
 	"PI_SUBAGENT_INTERCOM_SESSION_NAME",
 	"PI_INTERCOM_ASK_TIMEOUT_MS",
+	"PI_SUBAGENT_CHILD",
+	"PI_SUBAGENT_COMMUNICATION_ENABLED",
 ] as const;
 
 const originalEnv: Record<string, string | undefined> = {};
@@ -601,6 +603,22 @@ describe("broker launch spec", () => {
 });
 
 describe("native supervisor channel", () => {
+	it("does not register native or generic communication tools when disabled for a child", () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		process.env.PI_SUBAGENT_COMMUNICATION_ENABLED = "0";
+		process.env.PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR = path.join(os.tmpdir(), "lunr-disabled-channel");
+		process.env.PI_SUBAGENT_ORCHESTRATOR_TARGET = "parent";
+		process.env.PI_SUBAGENT_ORCHESTRATOR_SESSION_ID = "parent-session";
+		process.env.PI_SUBAGENT_RUN_ID = "run-disabled";
+		process.env.PI_SUBAGENT_CHILD_AGENT = "child";
+		process.env.PI_SUBAGENT_CHILD_INDEX = "0";
+		const pi = fakePi();
+		piIntercomExtension(pi as never);
+		registerNativeSupervisorClient(pi as never);
+		expect(pi.tools.has("contact_supervisor")).toBe(false);
+		expect(pi.tools.has("intercom")).toBe(false);
+	});
+
 	it("does not spawn the broker for contact_supervisor when supervisor env is set", async () => {
 		process.env.PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR = path.join(os.tmpdir(), "lunr-supervisor-channel");
 		process.env.PI_SUBAGENT_ORCHESTRATOR_TARGET = "parent";

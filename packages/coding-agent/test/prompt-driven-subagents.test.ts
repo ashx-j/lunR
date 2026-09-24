@@ -40,7 +40,7 @@ import { REMOVED_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../src/builtin-exten
 import { buildChainExpressionSteps } from "../src/builtin-extensions/pi-subagents/src/slash/slash-commands.ts";
 import { effectiveLargeSubagentLaunchCountForTurn } from "../src/core/large-subagent-launch.ts";
 import { MODEL_TIERS_BRIDGE_SYMBOL } from "../src/core/model-tiers.ts";
-import { PLAN_MODE_WRITE_SPAWN_ERROR } from "../src/core/subagent-permission-inherit.ts";
+import { READ_ONLY_WRITE_SPAWN_ERROR } from "../src/core/subagent-permission-inherit.ts";
 
 const AVAILABLE_MODELS = [{ provider: "xai", id: "grok-4", fullId: "xai/grok-4" }];
 
@@ -70,7 +70,8 @@ describe("prompt-driven subagent schema", () => {
 			SUBAGENT_SAFETY_GUIDANCE,
 		]) {
 			expect(description).toContain(SUBAGENT_COORDINATION_GUIDANCE);
-			expect(description).toContain("Native child intercom reaches the supervisor only, not siblings");
+			expect(description).toContain("When enabled, native child intercom reaches the supervisor only, not siblings");
+			expect(description).toContain("When Subagent communication is off in /settings");
 		}
 	});
 
@@ -200,8 +201,10 @@ describe("prompt-driven subagent schema", () => {
 			expect(text.toLowerCase()).not.toContain('use { action: "list" }');
 			expect(text).toContain("description");
 			expect(text).toContain("permissions");
-			expect(text).toContain("read-only");
+			expect(text).toContain("Read-only parents");
+			expect(text).not.toContain("Plan-mode parents");
 		}
+		expect(SubagentParams.properties.permissions.description).toContain("Read-only parents");
 	});
 });
 
@@ -291,21 +294,21 @@ describe("child description validation", () => {
 		expect(() =>
 			normalizeChildSpec(
 				{ task: "Edit files", description: "Merge PR #26", tier: "standard" },
-				{ parentMode: "plan", runId: "run", index: 0 },
+				{ parentMode: "read-only", runId: "run", index: 0 },
 			),
-		).toThrow(PLAN_MODE_WRITE_SPAWN_ERROR);
+		).toThrow(READ_ONLY_WRITE_SPAWN_ERROR);
 		expect(() =>
 			normalizeChildSpec(
 				{ task: "Edit files", description: "Merge PR #26", permissions: "full", tier: "standard" },
-				{ parentMode: "plan", runId: "run", index: 1 },
+				{ parentMode: "read-only", runId: "run", index: 1 },
 			),
-		).toThrow(PLAN_MODE_WRITE_SPAWN_ERROR);
+		).toThrow(READ_ONLY_WRITE_SPAWN_ERROR);
 	});
 
 	it("allows explicit read-only children from plan parents", () => {
 		const spec = normalizeChildSpec(
 			{ task: "Inspect auth.", description: "Search auth flow for bugs", permissions: "read-only", tier: "light" },
-			{ parentMode: "plan", runId: "run", index: 2 },
+			{ parentMode: "read-only", runId: "run", index: 2 },
 		);
 		expect(spec.effectivePermissions).toBe("read-only");
 	});

@@ -58,7 +58,7 @@ export class ThinkingLineComponent extends ThinkingTailComponent {
 	}
 
 	override render(width: number): string[] {
-		if (width <= 0) return ["", "", ""];
+		if (width <= 0) return ["", ""];
 		const lines = this.markdown.render(width);
 		let latest = "";
 		for (let index = lines.length - 1; index >= 0; index--) {
@@ -79,6 +79,6 @@ export class ThinkingLineComponent extends ThinkingTailComponent {
 			highlighted += this.palette[Math.round(intensity * (this.palette.length - 1))] + segment;
 			column += cells;
 		}
-		return ["", `\x1b[3m${highlighted}\x1b[23m\x1b[39m`, ""];
+		return ["", `\x1b[3m${highlighted}\x1b[23m\x1b[39m`];
 	}
 }

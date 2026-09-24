@@ -112,6 +112,8 @@ export interface SettingsConfig {
 	globalInstructionsPath: string;
 	modelInstructionsPath: string;
 	confirmLargeSubagentLaunches: boolean;
+	subagentCommunicationEnabled: boolean;
+	automaticSubagentDelegation: boolean;
 	browserEnabled: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
@@ -181,6 +183,8 @@ export interface SettingsCallbacks {
 	onModelInstructionsEnabledChange: (enabled: boolean) => void;
 	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
 	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
+	onSubagentCommunicationChange: (enabled: boolean) => void;
+	onAutomaticSubagentDelegationChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onBrowserEnabledChange: (enabled: boolean) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
@@ -1571,8 +1575,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "default-permission-mode",
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
-				currentValue: config.defaultPermissionMode,
-				values: ["manual", "yolo", "plan", "auto"],
+				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
+				values: ["yolo", "auto", "read"],
 			},
 			{
 				id: "double-escape-action",
@@ -1631,6 +1635,20 @@ export class SettingsSelectorComponent extends Container {
 				description: "Global and selected-model AGENTS.md loading",
 				currentValue: config.modelInstructions.enabled ? "on" : "off",
 				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
+			},
+			{
+				id: "subagent-communication",
+				label: "Subagent communication",
+				description: "Allow parent and child to exchange messages during a task",
+				currentValue: config.subagentCommunicationEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "automatic-subagent-delegation",
+				label: "Automatic subagent delegation",
+				description: "Let the agent decide when to delegate work",
+				currentValue: config.automaticSubagentDelegation ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "confirm-large-subagent-launches",
@@ -1875,6 +1893,12 @@ export class SettingsSelectorComponent extends Container {
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
 						break;
+					case "subagent-communication":
+						callbacks.onSubagentCommunicationChange(newValue === "on");
+						break;
+					case "automatic-subagent-delegation":
+						callbacks.onAutomaticSubagentDelegationChange(newValue === "on");
+						break;
 					case "plan-usage-window":
 						callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");
 						break;
@@ -1904,7 +1928,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					}
 					case "default-permission-mode":
-						callbacks.onDefaultPermissionModeChange(newValue as DefaultPermissionMode);
+						callbacks.onDefaultPermissionModeChange(
+							newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode),
+						);
 						break;
 					case "double-escape-action":
 						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");

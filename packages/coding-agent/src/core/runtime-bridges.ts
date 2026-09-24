@@ -2,6 +2,7 @@ import type { CreateAgentSessionRuntimeResult } from "./agent-session-runtime.ts
 import { registerCustomizeBridge } from "./customize.ts";
 import { registerMemoryCapBridge } from "./memory-cap.ts";
 import { getModelTiersBridge, registerModelTierBridge } from "./model-tiers.ts";
+import { bindSubagentCommunicationSetting } from "./settings-manager.ts";
 import { registerUsageServiceBridge } from "./usage-service.ts";
 
 /** Re-point every settings-backed process-global bridge at the applied runtime. */
@@ -13,6 +14,7 @@ export function bindRuntimeBridges({
 	registerModelTierBridge(settingsManager);
 	getModelTiersBridge()?.setParentThinkingProvider(() => session.thinkingLevel);
 	registerMemoryCapBridge(settingsManager);
+	bindSubagentCommunicationSetting(settingsManager);
 	registerCustomizeBridge(settingsManager);
 	registerUsageServiceBridge(modelRuntime, settingsManager);
 }

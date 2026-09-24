@@ -23,9 +23,10 @@ describe.sequential("OAuthAuth adapters", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("anthropic toAuth derives the api key from the access token", async () => {
-		const auth = await anthropicOAuth.toAuth({ type: "oauth", access: "token", refresh: "r", expires: 0 });
-		expect(auth).toEqual({ apiKey: "token" });
+	it("anthropic never converts a legacy OAuth token into an API key", async () => {
+		await expect(anthropicOAuth.toAuth({ type: "oauth", access: "token", refresh: "r", expires: 0 })).rejects.toThrow(
+			"Legacy Anthropic OAuth tokens are unsupported",
+		);
 	});
 
 	it("openai-codex toAuth derives the api key from the access token", async () => {
@@ -63,19 +64,10 @@ describe.sequential("OAuthAuth adapters", () => {
 		expect(individual.baseUrl).toBe("https://api.individual.githubcopilot.com");
 	});
 
-	it("anthropic refresh exchanges the refresh token and returns a typed credential", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () =>
-				jsonResponse({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 }),
-			),
-		);
-
-		const refreshed = await anthropicOAuth.refresh({ type: "oauth", access: "old", refresh: "old-r", expires: 0 });
-		expect(refreshed.type).toBe("oauth");
-		expect(refreshed.access).toBe("new-access");
-		expect(refreshed.refresh).toBe("new-refresh");
-		expect(refreshed.expires).toBeGreaterThan(Date.now());
+	it("anthropic never refreshes a legacy OAuth token", async () => {
+		await expect(
+			anthropicOAuth.refresh({ type: "oauth", access: "old", refresh: "old-r", expires: 0 }),
+		).rejects.toThrow("Legacy Anthropic OAuth tokens are unsupported");
 	});
 
 	it("github-copilot refresh preserves the enterprise domain", async () => {
@@ -104,7 +96,7 @@ describe.sequential("OAuthAuth adapters", () => {
 });
 
 describe("OAuth through Models.getAuth (lazy load chain)", () => {
-	it("resolves stored anthropic oauth credentials via the lazy flow import", async () => {
+	it("requires reconnecting stored Anthropic OAuth credentials", async () => {
 		const credentials = new InMemoryCredentialStore();
 		await credentials.modify("anthropic", async () => ({
 			type: "oauth",
@@ -116,9 +108,7 @@ describe("OAuth through Models.getAuth (lazy load chain)", () => {
 		models.setProvider(anthropicProvider());
 
 		const model = models.getModels("anthropic")[0];
-		const result = await models.getAuth(model.provider);
-		expect(result?.auth.apiKey).toBe("oauth-access-token");
-		expect(result?.source).toBe("OAuth");
+		await expect(models.getAuth(model.provider)).rejects.toThrow("requires Claude Code");
 	});
 
 	it("resolves stored github-copilot oauth credentials including per-credential baseUrl", async () => {

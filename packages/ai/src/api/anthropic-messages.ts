@@ -71,7 +71,6 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.75";
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -508,6 +507,19 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 		};
 
 		try {
+			if (
+				model.provider === "anthropic" &&
+				(isOAuthToken(options?.apiKey) ||
+					options?.env?.ANTHROPIC_OAUTH_TOKEN ||
+					[options?.headers, model.headers].some((headers) =>
+						Object.entries(headers ?? {}).some(
+							([name, value]) =>
+								["authorization", "x-api-key"].includes(name.toLowerCase()) && isOAuthToken(value ?? undefined),
+						),
+					))
+			) {
+				throw new Error("Anthropic subscription authentication requires Claude Code. Run /login anthropic.");
+			}
 			let client: Anthropic;
 			let isOAuth: boolean;
 
@@ -825,8 +837,8 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 	} satisfies AnthropicOptions);
 };
 
-function isOAuthToken(apiKey: string): boolean {
-	return apiKey.includes("sk-ant-oat");
+function isOAuthToken(apiKey: string | undefined): boolean {
+	return !!apiKey && (apiKey.includes("sk-ant-oat") || apiKey.startsWith("sk-ant-oauth"));
 }
 
 function createClient(
@@ -868,29 +880,6 @@ function createClient(
 		});
 
 		return { client, isOAuthToken: false };
-	}
-
-	// OAuth: Bearer auth, Claude Code identity headers
-	if (apiKey && isOAuthToken(apiKey)) {
-		const client = new Anthropic({
-			apiKey: null,
-			authToken: apiKey,
-			baseURL: model.baseUrl,
-			dangerouslyAllowBrowser: true,
-			defaultHeaders: mergeHeaders(
-				{
-					accept: "application/json",
-					"anthropic-dangerous-direct-browser-access": "true",
-					"anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
-					"user-agent": `claude-cli/${claudeCodeVersion}`,
-					"x-app": "cli",
-				},
-				model.headers,
-				optionsHeaders,
-			),
-		});
-
-		return { client, isOAuthToken: true };
 	}
 
 	// API key or header-owned auth.

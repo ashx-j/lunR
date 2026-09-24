@@ -21,7 +21,7 @@ Use `/login` in interactive mode, then select a provider:
 - xAI (Grok/X subscription)
 - Radius
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.lunr/agent/auth.json` and auto-refresh when expired.
+Use `/logout` to remove the lunR connection. Most subscription providers store refreshable tokens in `~/.lunr/agent/auth.json`. Anthropic uses a non-secret Claude Code connection record instead.
 
 ### OpenAI Codex
 
@@ -30,7 +30,11 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.lunr/agent/auth.jso
 
 ### Claude Pro/Max
 
-Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party harness usage draws from [extra usage](https://claude.ai/settings/usage) and is billed per token, not against Claude plan limits.
+`/login anthropic` offers a Claude Code subscription connection. It checks for Python 3.10+ and Claude Code only after you select that option. If either is missing, setup asks before running an installer. You can also install them yourself from [Python](https://www.python.org/downloads/) and [Claude Code](https://code.claude.com/docs/en/setup), then retry. If logged out, confirm the terminal handoff to `claude auth login` and select a Claude subscription. The current bridge accepts Claude Code 2.1.263 only. Other versions fail closed until qualified.
+
+Claude Code owns your account session. lunR does not read its credentials or copy tokens into `auth.json`. Each lunR generation starts a separate Claude Code process with native tools disabled; lunR still runs its own tools and manages history. `/logout anthropic` removes only lunR's connection and cached provider models, not your Claude Code login or installed software. Existing lunR Anthropic OAuth tokens and `ANTHROPIC_OAUTH_TOKEN` require reconnecting; they cannot make direct Messages API requests. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
+
+The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Model routes are checked during setup using Claude Code's model picker. This work has not yet been qualified against a live account on every supported platform; do not assume cross-model signed-history replay or an arbitrary CLI version works.
 
 ### GitHub Copilot
 

@@ -5,6 +5,8 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { subagentCommunicationEnabled } from "../../../../core/settings-manager.ts";
+import { getAgentDir } from "../shared/utils.ts";
 import {
 	SUBAGENT_CHILD_AGENT_ENV,
 	SUBAGENT_CHILD_INDEX_ENV,
@@ -110,7 +112,7 @@ interface IntercomParams {
 }
 
 const PARENT_ASK_DESCRIPTION = [
-	"Ask a specific running async child, or reply to a child supervisor request.",
+	"Ask a specific running async child, or reply to a child supervisor request. Asking is unavailable when Subagent communication is off in /settings; final results still arrive normally.",
 	"Ask only when the child owns missing context, the answer changes a concrete next decision, and waiting risks a block or rework.",
 	"Use available results first, batch related questions, and keep working while awaiting the answer. Do not use ask for status checks, polling, duplicate queries, or step-by-step supervision. Follow up only when the answer leaves the original decision unresolved.",
 	"Returns a question id immediately. The child's explicit answer is delivered separately from the final run result.",
@@ -450,7 +452,7 @@ function hasTool(pi: ExtensionAPI, name: string): boolean {
 }
 
 export function registerNativeSupervisorClient(pi: ExtensionAPI, options: { includeIntercomFallback?: boolean } = {}): void {
-	if (!readChildMetadata()) return;
+	if (process.env.PI_SUBAGENT_COMMUNICATION_ENABLED === "0" || !readChildMetadata()) return;
 	const includeIntercomFallback = options.includeIntercomFallback !== false;
 	if (!hasTool(pi, "contact_supervisor")) {
 		const tool: ToolDefinition<typeof ContactSupervisorParamsSchema, Record<string, unknown>> = {
@@ -804,6 +806,9 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 				return { content: [{ type: "text", text: `Replied to ${requestCommunication(request, state).peer}.` }], details: { replyTo: request.id, runId: request.runId, agent: request.agent, communication: { ...requestCommunication(request, state), direction: "to", kind: "reply", message: input.message } } };
 			}
 			if (input.action === "ask") {
+				if (!subagentCommunicationEnabled(process.cwd(), getAgentDir())) {
+					return { content: [{ type: "text", text: "Subagent communication is off in /settings. Wait for the child to complete instead of asking it." }], isError: true, details: { disabled: true } };
+				}
 				return askRunningAsyncChild({
 					params: {
 						id: input.id,

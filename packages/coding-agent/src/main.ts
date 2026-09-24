@@ -625,8 +625,7 @@ export async function main(args: string[], options?: MainOptions) {
 		appMode === "interactive" ? import("./modes/interactive/interactive-mode.ts") : undefined;
 	const startupView = appMode === "interactive" ? options?.startupView : undefined;
 	if (options?.startupView && !startupView) options.startupView.stop();
-	// lunr: parent-delegated children inherit plan or auto before any tool call.
-	// Non-child print/json stays fail-closed (module default manual, no handler).
+	// Parent-delegated children inherit read-only or auto before any tool call.
 	applyInheritedSubagentPermissions();
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {

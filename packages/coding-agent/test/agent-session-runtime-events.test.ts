@@ -129,7 +129,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		const old = runtimeHost.session;
 		const file = old.sessionFile!;
 		old.sessionManager.resetLeaf();
-		old.sessionManager.setPermissionMode("plan");
+		old.sessionManager.setPermissionMode("read-only");
 		const unregister = registerSubagentCancellation(old.sessionId, {
 			hasActiveRuns: () => true,
 			stop: async () => ({ requested: 1, failed: 0 }),
@@ -154,7 +154,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		await runtimeHost.switchSession(file);
 		expect(runtimeHost.session).not.toBe(old);
 		expect(runtimeHost.isDetached).toBe(false);
-		expect(runtimeHost.session.sessionManager.getPermissionMode()).toBe("plan");
+		expect(runtimeHost.session.sessionManager.getPermissionMode()).toBe("read-only");
 		expect(runtimeHost.session.sessionManager.buildSessionContext().messages).toHaveLength(1);
 	});
 

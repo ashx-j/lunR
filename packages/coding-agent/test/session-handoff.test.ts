@@ -144,7 +144,7 @@ describe("exclusive session ownership and handoff", () => {
 			const file = manager.getSessionFile()!;
 			const first = manager.getLeafId()!;
 			manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
-			manager.setPermissionMode("plan");
+			manager.setPermissionMode("read-only");
 			if (kind === "root") manager.resetLeaf();
 			else manager.branch(first);
 			manager.dispose();
@@ -154,9 +154,28 @@ describe("exclusive session ownership and handoff", () => {
 			expect(next.getLeafId()).toBe(kind === "root" ? null : first);
 			expect(next.getCwd()).toBe(directory);
 			expect(next.getSessionDir()).toBe(join(directory, "custom"));
-			expect(next.getPermissionMode()).toBe("plan");
+			expect(next.getPermissionMode()).toBe("read-only");
 		},
 	);
+
+	it("maps saved legacy permission modes when reopening a session", () => {
+		const manager = saved();
+		const file = manager.getSessionFile()!;
+		manager.setPermissionMode("yolo");
+		manager.dispose();
+		const leafFile = `${file}.leaf.json`;
+		const leaf = JSON.parse(readFileSync(leafFile, "utf8"));
+		for (const [savedMode, expected] of [
+			["manual", "yolo"],
+			["plan", "read-only"],
+		] as const) {
+			writeFileSync(leafFile, JSON.stringify({ ...leaf, permissionMode: savedMode }));
+			const reopened = SessionManager.open(file);
+			managers.push(reopened);
+			expect(reopened.getPermissionMode()).toBe(expected);
+			reopened.dispose();
+		}
+	});
 
 	it("marks for exactly eight hours, refreshes, cancels and keeps latest TUI activity independent of background appends", () => {
 		const first = saved();
