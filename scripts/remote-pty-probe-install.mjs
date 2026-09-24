@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 export const candidateVersion = "1.2.0-beta.15";
 
@@ -23,8 +23,15 @@ export async function isolatedNpmEnvironment(profileDir) {
 	const globalNpmrc = join(profileDir, "global-npmrc");
 	await writeFile(npmrc, "registry=https://registry.npmjs.org/\n");
 	await writeFile(globalNpmrc, "");
+	const windowsShell = process.platform === "win32" && process.env.SystemRoot
+		? join(process.env.SystemRoot, "System32", "cmd.exe")
+		: undefined;
+	if (process.platform === "win32" && (!windowsShell || !isAbsolute(windowsShell) || !existsSync(windowsShell))) {
+		throw new Error("Cannot locate Windows system cmd.exe for isolated npm lifecycle scripts");
+	}
 	return {
 		PATH: process.env.PATH ?? "",
+		...(windowsShell ? { ComSpec: windowsShell } : {}),
 		SystemRoot: process.env.SystemRoot ?? "",
 		HOME: profileDir,
 		USERPROFILE: profileDir,

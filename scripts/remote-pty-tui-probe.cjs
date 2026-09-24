@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { createRequire } = require("node:module");
 const { join } = require("node:path");
+const editorFrame = require("./remote-pty-tui-frame.cjs");
 
 const [install, cli, workspace, home, agentDir, temp] = process.argv.slice(2);
 const pty = createRequire(join(install, "entry.cjs"))("@lydell/node-pty");
@@ -26,7 +27,7 @@ async function run() {
 	try {
 		await waitFor(/\x1b\[\?1049h/, 20_000);
 		await waitFor(/╭[^\r\n]*╮/, 20_000);
-		await waitFor(/> [^\r\n]*\r?\n[\s\S]*╰[^\r\n]*╯/, 20_000);
+		await waitFor(editorFrame, 20_000);
 		await sleep(4500);
 		if (extension) {
 			child.write("/phase0-native\r");
