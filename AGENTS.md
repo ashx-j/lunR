@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Three permission modes (`feat/three-permission-modes`):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
+- **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
 
 Last updated: 2026-09-21 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.23`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
