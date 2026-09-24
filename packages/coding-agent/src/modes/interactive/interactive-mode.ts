@@ -4956,6 +4956,8 @@ export class InteractiveMode {
 						this.session.model?.id ?? "no-model-selected",
 					),
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
+					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
+					automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
 					browserEnabled: this.settingsManager.getBrowserEnabled(),
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
@@ -5165,6 +5167,13 @@ export class InteractiveMode {
 					},
 					onConfirmLargeSubagentLaunchesChange: (enabled) => {
 						this.settingsManager.setConfirmLargeSubagentLaunches(enabled);
+					},
+					onSubagentCommunicationChange: (enabled) => {
+						this.settingsManager.setSubagentCommunicationEnabled(enabled);
+					},
+					onAutomaticSubagentDelegationChange: (enabled) => {
+						this.settingsManager.setAutomaticSubagentDelegation(enabled);
+						this.session.refreshToolRegistry();
 					},
 					getTierThinkingLevels: (tier) => {
 						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));

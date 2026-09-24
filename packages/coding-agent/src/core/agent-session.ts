@@ -1257,6 +1257,7 @@ export class AgentSession {
 		this._baseSystemPromptOptions = {
 			cwd: this._cwd,
 			modelSlug: this.model ? `${this.model.provider}/${this.model.id}` : undefined,
+			automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
 			skills: loadedSkills,
 			contextFiles,
 			customPrompt: loaderSystemPrompt,

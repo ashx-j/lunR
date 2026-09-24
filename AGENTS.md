@@ -22,7 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-21 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.23`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+- **Subagent controls and pinned scroll (`feat/subagent-controls-scroll`):** `/settings` now has independent default-on switches for parent-child communication and automatic delegation guidance. Communication off removes child contact/intercom for newly launched and resumed runs, blocks new parent questions/steering, and preserves waiting, status, and final output. Direct-work guidance keeps tier and launch instructions. The pinned chat anchors the visible message while new output appends or earlier lines expand.
+
+Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.23`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.23:** ships PRs #99 through #103. Native computer use #77 remains open and is excluded. The release adds quieter copyable blocks, compact browser and error presentation, correct explicit-model parallel launches, provider-aware one-line reasoning, and immediate parent input during `subagent_wait`.
 - **Parallel explicit models (`fix/parallel-explicit-model-validation`):** async parallel adapters preserve each child's `model` and `thinking`, including clarify-to-background. No schema or prompt changes.
@@ -141,6 +143,7 @@ Last updated: 2026-09-21 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Subagent controls and pinned scroll (2026-09-24): five offline tsgo package builds and the coding-agent Node bundle pass in an isolated worktree. TUI pinned-scroll tests pass 24/24; focused subagent, communication, prompt, and settings Vitest passes 130/130 across nine suites. The isolated local-provider run with communication off proves direct-work prompt, no child communication tools, and retrieval of the final result with wait plus transcript; the existing question run remains green. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser schema hashes refreshed. No installed CLI, original checkout build, live provider, or real settings changed.
 - v0.2.23 release (2026-09-21): all five offline package builds and the coding-agent Node bundle pass. Focused Agent tests pass 40/40; focused coding-agent tests pass 209 with the 17 documented Windows resource-list and settings fixture failures unchanged. First-paint and first-turn subagent, MCP, LSP, and fetch checks pass with both browser fixtures. Touched non-vendored code passes Biome. Shrinkwrap, installer lock, relative-import, workflow, browser smoke, and `git diff --check` pass. The npm 10 dry run validates all four public packages. Publication workflow `35615006704` succeeded from tag `v0.2.23` at `a898f22`; all four public packages resolve as npm latest. A fresh isolated install reports 0.2.23 for the CLI and all public packages. PR #77 remains open.
 - Click-to-copy response blocks and agent guidance (2026-09-21): all five offline tsgo builds and the coding-agent Node bundle pass. Focused copyable-text, assistant-message, smooth-streaming, and system-prompt Vitest passes 43/43. Touched TypeScript files pass Biome; `git diff --check` passes. The explicit worktree CLI path reports 0.2.22. The tool schema did not change, so first-request tool fingerprints and inventories remain current. No live gateway, auth, settings, installed CLI, original checkout build, or private prompt artifact was touched.
 - Tool presentation (2026-09-21): focused browser, browser lifecycle/settings/install, tool execution, and subagent rendering Vitest passes 153 tests with 6 Chromium-gated skips. All five offline tsgo builds and the coding-agent Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Touched non-vendored code passes Biome; `git diff --check` passes; the explicit worktree CLI reports 0.2.22. No Chromium install or live website was used.
@@ -223,6 +226,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Subagent communication is a global preference. A live settings bridge avoids a pending-save race in the parent; each run carries its launch choice to queued foreground children and detached async runners. Existing children keep registered tools, but turning communication off immediately blocks new parent questions and steering. Replies to already-pending requests stay available. Final output remains in run transcripts if a headless wait returns before a completion notification reaches the parent.
+- Pinned chat anchors matching rendered line sequences across appends and insertions above the viewport, using nearby context to distinguish repeated rows. If width reflow changes the anchor text, it falls back to the previous line position.
 - npm 12 returns keyed objects from `npm pack --json`; `scripts/publish.mjs` expects npm 10's array. Use npm 10 for local publish dry runs until the parser accepts both. The Node 22 publication workflow currently uses npm 10.
 - Async parallel launch converts `tasks` into `chain.parallel`; both the direct and clarify-to-background adapters must forward `model` and `thinking` alongside `tier`. Runner-only tests miss fields dropped by that conversion.
 
@@ -304,6 +309,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-24: keep parent-child messaging and autonomous delegation independent and default-on, because direct-work mode should still permit explicitly requested children.
+- 2026-09-24: snapshot communication per run while blocking new parent messages immediately on disable, so queued children do not get mismatched tools and prompts while pending requests can still finish.
+- 2026-09-24: anchor the scrolled-up chat to rendered message lines rather than a fixed bottom offset, because both streaming and expansions above the viewport shift line positions.
 - 2026-09-21: ship PRs #99 through #103 together as v0.2.23 and keep native computer use #77 open.
 - 2026-09-21: preserve every PR head in merge ancestry, resolve overlapping AGENTS.md entries additively, and keep the newer rebuild behavior alongside the reasoning display callback.
 - 2026-09-21: publish v0.2.23 only after combined builds, focused tests, first-turn checks, artifact checks, and four-package dry-run validation.

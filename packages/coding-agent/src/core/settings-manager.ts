@@ -113,6 +113,28 @@ export type PackageSource =
 
 export type ReasoningDisplay = "auto" | "one-line" | "four-lines";
 
+const SUBAGENT_COMMUNICATION_BRIDGE = Symbol.for("@lunr/subagent-communication");
+
+export function bindSubagentCommunicationSetting(manager: SettingsManager | undefined): void {
+	if (manager) (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE] = manager;
+	else delete (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+}
+
+export function subagentCommunicationEnabled(cwd: string, agentDir = getAgentDir()): boolean {
+	const inherited = process.env.PI_SUBAGENT_COMMUNICATION_ENABLED;
+	if (process.env.PI_SUBAGENT_CHILD === "1" && (inherited === "0" || inherited === "1")) return inherited === "1";
+	const active = (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+	if (
+		agentDir === getAgentDir() &&
+		active &&
+		typeof (active as SettingsManager).getSubagentCommunicationEnabled === "function"
+	) {
+		return (active as SettingsManager).getSubagentCommunicationEnabled();
+	}
+	if (inherited === "0" || inherited === "1") return inherited === "1";
+	return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSubagentCommunicationEnabled();
+}
+
 export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -190,6 +212,8 @@ export interface Settings {
 	rollbackScope?: RollbackScope; // default "tools"
 	autoManageSubscriptions?: boolean; // lunr: when true, subscription key switching is fully automatic (no manual picker)
 	confirmLargeSubagentLaunches?: boolean; // default true - ask before launching 3+ children outside Auto mode
+	subagentCommunicationEnabled?: boolean;
+	automaticSubagentDelegation?: boolean;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -1608,6 +1632,26 @@ export class SettingsManager {
 		this.globalSettings.modelInstructions ??= {};
 		this.globalSettings.modelInstructions.mode = mode;
 		this.markModified("modelInstructions", "mode");
+		this.save();
+	}
+
+	getSubagentCommunicationEnabled(): boolean {
+		return this.globalSettings.subagentCommunicationEnabled ?? true;
+	}
+
+	setSubagentCommunicationEnabled(enabled: boolean): void {
+		this.globalSettings.subagentCommunicationEnabled = enabled;
+		this.markModified("subagentCommunicationEnabled");
+		this.save();
+	}
+
+	getAutomaticSubagentDelegation(): boolean {
+		return this.settings.automaticSubagentDelegation ?? true;
+	}
+
+	setAutomaticSubagentDelegation(enabled: boolean): void {
+		this.globalSettings.automaticSubagentDelegation = enabled;
+		this.markModified("automaticSubagentDelegation");
 		this.save();
 	}
 

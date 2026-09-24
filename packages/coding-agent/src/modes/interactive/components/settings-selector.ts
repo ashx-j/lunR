@@ -112,6 +112,8 @@ export interface SettingsConfig {
 	globalInstructionsPath: string;
 	modelInstructionsPath: string;
 	confirmLargeSubagentLaunches: boolean;
+	subagentCommunicationEnabled: boolean;
+	automaticSubagentDelegation: boolean;
 	browserEnabled: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
@@ -181,6 +183,8 @@ export interface SettingsCallbacks {
 	onModelInstructionsEnabledChange: (enabled: boolean) => void;
 	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
 	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
+	onSubagentCommunicationChange: (enabled: boolean) => void;
+	onAutomaticSubagentDelegationChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onBrowserEnabledChange: (enabled: boolean) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
@@ -1633,6 +1637,20 @@ export class SettingsSelectorComponent extends Container {
 				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
 			},
 			{
+				id: "subagent-communication",
+				label: "Subagent communication",
+				description: "Allow parent and child to exchange messages during a task",
+				currentValue: config.subagentCommunicationEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "automatic-subagent-delegation",
+				label: "Automatic subagent delegation",
+				description: "Let the agent decide when to delegate work",
+				currentValue: config.automaticSubagentDelegation ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "confirm-large-subagent-launches",
 				label: "Confirm large subagent launches",
 				description: "Confirm 3+ children; Auto bypasses confirmation",
@@ -1874,6 +1892,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "subagent-communication":
+						callbacks.onSubagentCommunicationChange(newValue === "on");
+						break;
+					case "automatic-subagent-delegation":
+						callbacks.onAutomaticSubagentDelegationChange(newValue === "on");
 						break;
 					case "plan-usage-window":
 						callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");

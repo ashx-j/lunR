@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { subagentCommunicationEnabled } from "../../../../core/settings-manager.ts";
 import type { ChildRuntimeConfig } from "../shared/types.ts";
 import type { ExtensionConfig, IntercomBridgeConfig, IntercomBridgeMode } from "../shared/types.ts";
 import { getAgentDir } from "../shared/utils.ts";
@@ -25,6 +26,7 @@ Return one self-contained final result; the runtime delivers it. If you cannot w
 
 export interface IntercomBridgeState {
 	active: boolean;
+	communicationEnabled: boolean;
 	mode: IntercomBridgeMode;
 	orchestratorTarget?: string;
 	extensionDir: string;
@@ -47,6 +49,7 @@ interface ResolveIntercomBridgeInput {
 	orchestratorTarget?: string;
 	settingsDir?: string;
 	agentDir?: string;
+	cwd?: string;
 }
 
 export function resolveIntercomSessionTarget(sessionName: string | undefined, sessionId: string): string {
@@ -113,7 +116,7 @@ function inactiveReason(mode: IntercomBridgeMode, context: "fresh" | "fork" | un
 
 export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): IntercomBridgeDiagnostic {
 	const config = resolveIntercomBridgeConfig(input.config);
-	const mode = config.mode;
+	const mode = subagentCommunicationEnabled(input.cwd ?? process.cwd(), input.agentDir ?? defaultAgentDir()) ? config.mode : "off";
 	const orchestratorTarget = input.orchestratorTarget?.trim();
 	const wantsIntercom = mode !== "off" && !(mode === "fork-only" && input.context !== "fork");
 	const reason = inactiveReason(mode, input.context, orchestratorTarget);
@@ -130,7 +133,8 @@ export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): Inter
 
 export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): IntercomBridgeState {
 	const config = resolveIntercomBridgeConfig(input.config);
-	const mode = config.mode;
+	const communicationEnabled = subagentCommunicationEnabled(input.cwd ?? process.cwd(), input.agentDir ?? defaultAgentDir());
+	const mode = communicationEnabled ? config.mode : "off";
 	const orchestratorTarget = input.orchestratorTarget?.trim();
 	const agentDir = path.resolve(input.agentDir ?? defaultAgentDir());
 	const settingsDir = path.resolve(input.settingsDir ?? defaultSubagentConfigDir(agentDir));
@@ -140,10 +144,11 @@ export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): Interc
 	);
 	const reason = inactiveReason(mode, input.context, orchestratorTarget);
 	if (reason || !orchestratorTarget) {
-		return { active: false, mode, extensionDir: NATIVE_INTERCOM_EXTENSION_DIR, instruction: defaultInstruction };
+		return { active: false, communicationEnabled, mode, extensionDir: NATIVE_INTERCOM_EXTENSION_DIR, instruction: defaultInstruction };
 	}
 	return {
 		active: true,
+		communicationEnabled,
 		mode,
 		orchestratorTarget,
 		extensionDir: NATIVE_INTERCOM_EXTENSION_DIR,

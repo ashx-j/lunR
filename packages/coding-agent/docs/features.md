@@ -19,6 +19,10 @@ Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cy
 
 ## Subagents
 
+`/settings` has two independent switches, both on by default. Automatic subagent delegation controls the built-in system prompt: off tells the agent to work directly and launch children only when you explicitly ask. Tier selection and other launch instructions remain available when you do ask. Custom system prompts and project instruction files are unchanged.
+
+Subagent communication controls messages between a child and its parent while work is in progress. Off removes child `contact_supervisor` and `intercom`, parent questions and live steering for new children. Final results, status, cancellation, and `subagent_wait` still work. New launches and resumed children use the selected mode for their whole run, including queued steps. Turning it off blocks new parent questions and live steering immediately; already-running children retain their tools, and pending requests can still receive replies. The setting does not disable intercom between unrelated lunR sessions.
+
 Advertised subagents always start **fresh** (no forked parent context). Default parallel concurrency / max tasks / global run cap are unlimited; an explicit `concurrency` is still honored.
 
 Single, parallel, and chain launches run async when `async` is omitted. Set `async:false` for an immediate foreground result or use `clarify:true` for the interactive preview/editor. Continue independent work after an async launch, then yield for normal interactive completion. Use `subagent_wait` only when the same turn or skill must finish after its children. Headless sessions auto-drain current-session work. Use status for one-time inspection rather than polling or sleeping for completion.
