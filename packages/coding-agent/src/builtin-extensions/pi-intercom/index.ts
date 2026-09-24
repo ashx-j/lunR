@@ -431,6 +431,7 @@ function getNamePollMs(): number {
   return 1000;
 }
 export default function piIntercomExtension(pi: ExtensionAPI) {
+  if (process.env.PI_SUBAGENT_CHILD === "1" && process.env.PI_SUBAGENT_COMMUNICATION_ENABLED === "0") return;
   let client: IntercomClient | null = null;
   const config: IntercomConfig = loadConfig();
   const askTimeoutMs = getAskTimeoutMs();

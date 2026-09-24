@@ -70,7 +70,8 @@ describe("prompt-driven subagent schema", () => {
 			SUBAGENT_SAFETY_GUIDANCE,
 		]) {
 			expect(description).toContain(SUBAGENT_COORDINATION_GUIDANCE);
-			expect(description).toContain("Native child intercom reaches the supervisor only, not siblings");
+			expect(description).toContain("When enabled, native child intercom reaches the supervisor only, not siblings");
+			expect(description).toContain("When Subagent communication is off in /settings");
 		}
 	});
 

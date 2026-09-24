@@ -241,6 +241,7 @@ async function runSingleAttempt(
 		inheritSkills: false,
 		requireReadTool: Boolean(shared.resolvedSkillNames?.length),
 		excludeTools,
+		communicationEnabled: options.communicationEnabled,
 		childPermission: spec.effectivePermissions,
 		childId: spec.childId,
 		childDescription: spec.description,

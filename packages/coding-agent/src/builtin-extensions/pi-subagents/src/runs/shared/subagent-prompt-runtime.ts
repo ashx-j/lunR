@@ -361,11 +361,12 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 	let nativeSupervisorClientRegistered = false;
 	let nativeSupervisorFallbackRegistered = false;
 	const registerNativeSupervisorClientOnce = (): void => {
-		if (nativeSupervisorClientRegistered) return;
+		if (process.env.PI_SUBAGENT_COMMUNICATION_ENABLED === "0" || nativeSupervisorClientRegistered) return;
 		nativeSupervisorClientRegistered = true;
 		registerNativeSupervisorClient(pi, { includeIntercomFallback: false });
 	};
 	const registerNativeSupervisorFallbackOnce = (): void => {
+		if (process.env.PI_SUBAGENT_COMMUNICATION_ENABLED === "0") return;
 		registerNativeSupervisorClientOnce();
 		if (nativeSupervisorFallbackRegistered) return;
 		nativeSupervisorFallbackRegistered = true;

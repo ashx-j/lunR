@@ -40,6 +40,24 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain(`- Examples: ${getExamplesPath()}`);
 	});
 
+	test("keeps delegation guidance on by default and requires explicit requests when off", () => {
+		const options = { cwd: process.cwd(), contextFiles: [], skills: [] };
+		const defaultPrompt = buildSystemPrompt(options);
+		const directPrompt = buildSystemPrompt({ ...options, automaticSubagentDelegation: false });
+
+		expect(defaultPrompt).toContain("Use subagents for independent parallel work");
+		expect(defaultPrompt).toContain("Orchestrate subagents with intent!");
+		expect(directPrompt).toContain(
+			"Launch subagents only when the user specifically instructs you to delegate work.",
+		);
+		expect(directPrompt).not.toContain("Use subagents for independent parallel work");
+		expect(directPrompt).not.toContain("Orchestrate subagents with intent!");
+		expect(directPrompt).toContain("Resume a subagent only when its work is unfinished");
+		expect(
+			buildSystemPrompt({ ...options, customPrompt: "Custom", automaticSubagentDelegation: false }),
+		).not.toContain("Launch subagents only");
+	});
+
 	test("includes todo guidance only while the todo tool is active", () => {
 		const withTodos = buildSystemPrompt({
 			selectedTools: ["read", "todo"],

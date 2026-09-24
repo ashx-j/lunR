@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
+import { getAgentDir } from "../../shared/utils.ts";
 import { encodeNestedPathEnv, parseNestedPathEnv, type NestedPathEntry } from "./nested-path.ts";
 import { resolveMcpDirectToolNames } from "./mcp-direct-tool-allowlist.ts";
 import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV } from "./structured-output.ts";
@@ -25,6 +27,7 @@ function resolveRuntimeScriptPath(basePathWithoutExt: string): string {
 }
 const PROMPT_RUNTIME_EXTENSION_PATH = resolveRuntimeScriptPath(path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime"));
 const FANOUT_CHILD_EXTENSION_PATH = resolveRuntimeScriptPath(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "extension", "fanout-child"));
+export const SUBAGENT_COMMUNICATION_ENV = "PI_SUBAGENT_COMMUNICATION_ENABLED";
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 export const SUBAGENT_ORCHESTRATOR_TARGET_ENV = "PI_SUBAGENT_ORCHESTRATOR_TARGET";
 export const SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV = "PI_SUBAGENT_ORCHESTRATOR_SESSION_ID";
@@ -100,6 +103,7 @@ interface BuildPiArgsInput {
 	excludeTools?: string[];
 	childId?: string;
 	childDescription?: string;
+	communicationEnabled?: boolean;
 }
 
 interface BuildPiArgsResult {
@@ -127,6 +131,7 @@ export function applyThinkingSuffix(model: string | undefined, thinking: string 
 }
 
 export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
+	const communicationEnabled = input.communicationEnabled ?? subagentCommunicationEnabled(input.cwd ?? process.cwd(), getAgentDir());
 	const args = [...input.baseArgs];
 
 	if (input.sessionFile) {
@@ -147,7 +152,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		args.push("--model", modelArg);
 	}
 
-	const declaredBuiltinToolsBase = input.tools?.filter((tool) => !(tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js"))) ?? [];
+	const declaredBuiltinToolsBase = input.tools?.filter((tool) =>
+		!(tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js"))
+		&& (communicationEnabled || (tool !== "contact_supervisor" && tool !== "intercom"))) ?? [];
 	const declaredBuiltinTools = input.requireReadTool && input.tools?.length && !declaredBuiltinToolsBase.includes("read")
 		? ["read", ...declaredBuiltinToolsBase]
 		: declaredBuiltinToolsBase;
@@ -170,8 +177,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 			args.push("--tools", requiredChildTools.join(","));
 		}
 	}
-	if (input.excludeTools?.length) {
-		args.push("--exclude-tools", [...new Set(input.excludeTools)].join(","));
+	const excludedTools = [...(input.excludeTools ?? []), ...(communicationEnabled ? [] : ["contact_supervisor", "intercom"])];
+	if (excludedTools.length) {
+		args.push("--exclude-tools", [...new Set(excludedTools)].join(","));
 	}
 
 	const runtimeExtensions = fanoutAuthorized
@@ -221,6 +229,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		env[CHILD_TOOL_DIAGNOSTIC_PATH_ENV] = toolDiagnosticPath;
 	}
 	env[SUBAGENT_CHILD_ENV] = "1";
+	env[SUBAGENT_COMMUNICATION_ENV] = communicationEnabled ? "1" : "0";
 	env[SUBAGENT_CHILD_PERMISSION_ENV] = input.childPermission
 		?? (input.parentPermissionMode === "plan" ? "read-only" : "full");
 	env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] = "";
@@ -263,19 +272,14 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		: "";
 	env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = input.inheritProjectContext ? "1" : "0";
 	env.PI_SUBAGENT_INHERIT_SKILLS = input.inheritSkills ? "1" : "0";
-	if (input.intercomSessionName) {
-		env.PI_SUBAGENT_INTERCOM_SESSION_NAME = input.intercomSessionName;
-	}
-	if (input.orchestratorIntercomTarget) {
-		env[SUBAGENT_ORCHESTRATOR_TARGET_ENV] = input.orchestratorIntercomTarget;
-	}
-	if (input.parentSessionId) {
-		env[SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV] = input.parentSessionId;
-	}
-	env[SUBAGENT_SUPERVISOR_SESSION_ID_ENV] = input.supervisorSessionId ?? "";
+	env.PI_SUBAGENT_INTERCOM_SESSION_NAME = communicationEnabled ? input.intercomSessionName ?? "" : "";
+	env[SUBAGENT_ORCHESTRATOR_TARGET_ENV] = communicationEnabled ? input.orchestratorIntercomTarget ?? "" : "";
+	env[SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV] = communicationEnabled ? input.parentSessionId ?? "" : "";
+	env[SUBAGENT_SUPERVISOR_SESSION_ID_ENV] = communicationEnabled ? input.supervisorSessionId ?? "" : "";
+	env[SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV] = "";
 	env[SUPERVISOR_PROTOCOL_ENV] = String(SUPERVISOR_PROTOCOL_VERSION);
 	env[CHILD_DESCRIPTION_ENV] = input.childDescription ?? input.childAgentName ?? "";
-	if (input.parentSessionId && input.runId && (input.childId || input.childAgentName)) {
+	if (communicationEnabled && input.parentSessionId && input.runId && (input.childId || input.childAgentName)) {
 		const childIndex = input.childIndex ?? 0;
 		const channelAgent = input.childId ?? input.childAgentName!;
 		const channelDir = supervisorChannelDir(input.runId, channelAgent, childIndex);

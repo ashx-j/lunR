@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPiArgs } from "../src/builtin-extensions/pi-subagents/src/runs/shared/pi-args.ts";
+import {
+	buildPiArgs,
+	SUBAGENT_COMMUNICATION_ENV,
+	SUBAGENT_ORCHESTRATOR_TARGET_ENV,
+	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
+} from "../src/builtin-extensions/pi-subagents/src/runs/shared/pi-args.ts";
 import {
 	gateToolCall,
 	getPermissionMode,
@@ -10,6 +15,7 @@ import {
 	setPermissionMode,
 } from "../src/core/permissions.ts";
 import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
+import { bindSubagentCommunicationSetting, SettingsManager } from "../src/core/settings-manager.ts";
 import {
 	applyInheritedSubagentPermissions,
 	PLAN_MODE_WRITE_SPAWN_ERROR,
@@ -155,6 +161,57 @@ describe("subagent permission inherit", () => {
 		expect(snapshotParentPermissionMode()).toBe("yolo");
 		setPermissionMode("plan");
 		expect(snapshotParentPermissionMode()).toBe("plan");
+	});
+
+	it("uses the current preference before its settings write has flushed", () => {
+		const manager = SettingsManager.inMemory();
+		bindSubagentCommunicationSetting(manager);
+		try {
+			manager.setSubagentCommunicationEnabled(false);
+			const { env, args } = buildPiArgs({
+				baseArgs: ["--mode", "json", "-p"],
+				task: "complete the task",
+				sessionEnabled: false,
+				inheritProjectContext: true,
+				inheritSkills: false,
+			});
+			expect(env[SUBAGENT_COMMUNICATION_ENV]).toBe("0");
+			expect(args[args.indexOf("--exclude-tools") + 1]).toContain("contact_supervisor");
+			const continuedRun = buildPiArgs({
+				baseArgs: ["--mode", "json", "-p"],
+				task: "finish the queued step",
+				sessionEnabled: false,
+				inheritProjectContext: true,
+				inheritSkills: false,
+				communicationEnabled: true,
+			});
+			expect(continuedRun.env[SUBAGENT_COMMUNICATION_ENV]).toBe("1");
+		} finally {
+			bindSubagentCommunicationSetting(undefined);
+		}
+	});
+
+	it("omits parent communication without affecting child completion", () => {
+		const { env, args } = buildPiArgs({
+			baseArgs: ["--mode", "json", "-p"],
+			task: "complete the task",
+			sessionEnabled: false,
+			inheritProjectContext: true,
+			inheritSkills: false,
+			communicationEnabled: false,
+			tools: ["read", "intercom", "contact_supervisor"],
+			parentSessionId: "parent",
+			runId: "run",
+			childId: "child",
+			orchestratorIntercomTarget: "parent-target",
+		});
+		expect(env[SUBAGENT_COMMUNICATION_ENV]).toBe("0");
+		expect(env[SUBAGENT_ORCHESTRATOR_TARGET_ENV]).toBe("");
+		expect(env[SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV]).toBe("");
+		expect(args[args.indexOf("--exclude-tools") + 1]).toContain("contact_supervisor");
+		expect(args[args.indexOf("--exclude-tools") + 1]).toContain("intercom");
+		expect(args[args.indexOf("--tools") + 1]).toBe("read");
+		expect(args).toContain("Task: complete the task");
 	});
 
 	it("writes the resolved child permission into the child env", () => {
