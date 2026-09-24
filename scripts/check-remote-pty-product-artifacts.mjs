@@ -73,7 +73,9 @@ async function probeTui(artifactRoot, cli, anchor, standalone, controllerInstall
 	const expectedBackend = standalone && process.platform !== "win32" ? "bun-terminal" : "native-addon";
 	assert.equal(result.artifactPtyBackend, expectedBackend);
 	assert.equal(result.artifactNativeSpawn, expectedBackend === "native-addon");
-	return { firstPaint: result.tuiFirstPaint, settings: result.settingsDialogSeen, artifactPtyBackend: result.artifactPtyBackend, artifactNativeSpawn: result.artifactNativeSpawn, reattachColumns: result.repaintColumns };
+	if (expectedBackend === "bun-terminal") assert.ok(["pending", "0", "1"].includes(result.artifactPtyStreamStatus));
+	else assert.equal(result.artifactPtyStreamStatus, "not-applicable");
+	return { firstPaint: result.tuiFirstPaint, settings: result.settingsDialogSeen, artifactPtyBackend: result.artifactPtyBackend, artifactPtyStreamStatus: result.artifactPtyStreamStatus, artifactNativeSpawn: result.artifactNativeSpawn, reattachColumns: result.repaintColumns };
 }
 
 async function proveNpm() {

@@ -92,7 +92,8 @@ export default function productPtyProbe(pi) {
 						settled = true;
 						clearTimeout(timer);
 						if (!error) {
-							try { child.close?.(); resolve({ ptyStatus }); }
+							const statusAtCompletion = ptyStatus;
+							try { child.close?.(); resolve({ ptyStatus: statusAtCompletion }); }
 							catch (closeError) { reject(new Error(`${kind} terminal close failed (${closeError?.code ?? "unknown"})`)); }
 							return;
 						}
@@ -129,8 +130,10 @@ export default function productPtyProbe(pi) {
 						ptyStatus = status;
 						ptyStatusType = typeof status;
 						lastEvent = "pty-eof";
-						if (status !== 0) finish(`PTY stream error (status=${JSON.stringify(status)}, type=${ptyStatusType}, phaseAtExit=${phaseAtExit})`);
-						else if (phaseAtExit !== "finish") finish(`PTY EOF before FINISH (phaseAtExit=${phaseAtExit})`);
+						// Bun maps every master read error to 1; Linux may return EIO when the slave closes.
+						const linuxClose = bunUnix && process.platform === "linux" && phaseAtExit === "finish" && status === 1;
+						if (status !== 0 && !linuxClose) finish(`PTY stream error (status=${JSON.stringify(status)}, type=${ptyStatusType}, phaseAtExit=${phaseAtExit})`);
+						else if (status === 0 && phaseAtExit !== "finish") finish(`PTY EOF before FINISH (phaseAtExit=${phaseAtExit})`);
 					});
 					child.onExit(({ exitCode: code, signal: childSignal }) => {
 						exitCode = code;
@@ -148,8 +151,9 @@ export default function productPtyProbe(pi) {
 				});
 			};
 			const executable = process.env.PI_REMOTE_PHASE0_NODE_EXECUTABLE;
+			let proof;
 			try {
-				await handshake(executable, ["-e", source], "node");
+				proof = await handshake(executable, ["-e", source], "node");
 			} catch (error) {
 				if (process.platform === "win32") throw error;
 				let diagnostic = error?.message?.startsWith("node ") ? error.message : `node spawn failed (${error?.code ?? "unknown"})`;
@@ -191,7 +195,7 @@ export default function productPtyProbe(pi) {
 				}
 				throw new Error(diagnostic);
 			}
-			ctx.ui.notify(bunUnix ? "PRODUCT_PTY_BUN_TERMINAL_OK" : "PRODUCT_PTY_NATIVE_OK", "info");
+			ctx.ui.notify(bunUnix ? `PRODUCT_PTY_BUN_TERMINAL_OK_PTY_${proof.ptyStatus}` : "PRODUCT_PTY_NATIVE_OK", "info");
 		},
 	});
 }

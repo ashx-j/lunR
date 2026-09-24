@@ -62,7 +62,9 @@ async function run() {
 		const borders = [...reattached.matchAll(/╭[^\r\n]*╮/g)].map(([border]) => border.length);
 		assert.ok(borders.length, "Reattached client received no complete frame after resize");
 		assert.ok(borders.includes(110), `Reattached frame did not use the new 110-column viewport: ${borders.join(",")}`);
-		console.log(JSON.stringify({ result: "passed", platform: `${process.platform}-${process.arch}`, tuiFirstPaint: true, settingsDialogSeen, inputEchoSeen, workerAliveAfterDetach: true, artifactPtyBackend: extension ? artifactPtyBackend : "none", artifactNativeSpawn: Boolean(extension && artifactPtyBackend === "native-addon"), reattachedOutputBytes: reattached.length, repaintColumns: borders, dimensions: [110, 35], scope: extension ? "isolated installed product artifact and artifact-local PTY" : "isolated actual worktree CLI; no agent inference" }));
+		const artifactPtyStreamStatus = artifactPtyBackend === "bun-terminal" ? screen.match(/PRODUCT_PTY_BUN_TERMINAL_OK_PTY_(pending|0|1)/)?.[1] : "not-applicable";
+		assert.ok(artifactPtyStreamStatus, "Bun Terminal stream status receipt missing");
+		console.log(JSON.stringify({ result: "passed", platform: `${process.platform}-${process.arch}`, tuiFirstPaint: true, settingsDialogSeen, inputEchoSeen, workerAliveAfterDetach: true, artifactPtyBackend: extension ? artifactPtyBackend : "none", artifactPtyStreamStatus, artifactNativeSpawn: Boolean(extension && artifactPtyBackend === "native-addon"), reattachedOutputBytes: reattached.length, repaintColumns: borders, dimensions: [110, 35], scope: extension ? "isolated installed product artifact and artifact-local PTY" : "isolated actual worktree CLI; no agent inference" }));
 	} finally {
 		child.kill();
 		for (let i = 0; i < 50 && !exited; i++) await sleep(100);
