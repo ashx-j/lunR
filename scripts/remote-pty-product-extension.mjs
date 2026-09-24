@@ -5,6 +5,8 @@ import { basename, isAbsolute, join, sep } from "node:path";
 
 const require = createRequire(import.meta.url);
 
+export const productPtySource = "process.stdin.setRawMode?.(true);process.stdin.resume();let check,sizeReported=false;const reportSize=()=>{if(sizeReported)return;const size=process.stdout.getWindowSize?.();if(size?.join('x')==='112x36'){sizeReported=true;console.log('PRODUCT_PTY_SIZE 112x36');if(check)clearInterval(check)}};process.stdout.on('resize',reportSize);process.stdin.on('data',d=>{const input=d.toString();if(input.includes('PRODUCT_PTY_START'))console.log('PRODUCT_PTY_READY');if(input.includes('PRODUCT_PTY_PING')){console.log('PRODUCT_PTY_ACK');console.log('PRODUCT_PTY_OBSERVED_SIZE '+process.stdout.getWindowSize?.().join('x'));reportSize();if(!sizeReported)check=setInterval(reportSize,50)}if(input.includes('PRODUCT_PTY_FINISH'))process.exit(0)})";
+
 export function spawnBunTerminal(executable, args, options) {
 	const dataListeners = new Set();
 	const exitListeners = new Set();
@@ -72,7 +74,7 @@ export default function productPtyProbe(pi) {
 				spawn = require("@lydell/node-pty").spawn;
 			}
 			const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "" };
-			const source = "process.stdin.setRawMode?.(true);process.stdin.resume();process.stdin.on('data',d=>{const input=d.toString();if(input.includes('PRODUCT_PTY_START'))console.log('PRODUCT_PTY_READY');if(input.includes('PRODUCT_PTY_PING')){console.log('PRODUCT_PTY_ACK');console.log('PRODUCT_PTY_SIZE '+process.stdout.getWindowSize?.().join('x'))}if(input.includes('PRODUCT_PTY_FINISH'))process.exit(0)})";
+			const source = productPtySource;
 			const handshake = (executable, args, kind) => {
 				const child = spawn(executable, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: root, env });
 				return new Promise((resolve, reject) => {
@@ -81,6 +83,7 @@ export default function productPtyProbe(pi) {
 					let exitCode;
 					let signal;
 					let ptyStatus = "pending";
+					let ptyStatusType = "pending";
 					let lastEvent = "spawn";
 					let dataEvents = 0;
 					let settled = false;
@@ -100,7 +103,7 @@ export default function productPtyProbe(pi) {
 						}
 						try { child.close?.(); }
 						catch (closeError) { kill += `, close=${closeError?.code ?? "failed"}`; }
-						reject(new Error(`${kind} ${error}; pid=${child.pid ?? "unknown"}, phase=${phase}, last=${lastEvent}, exit=${exitCode ?? "pending"}, signal=${signal ?? "none"}, pty=${ptyStatus}, events=${dataEvents}, bytes=${text.length}, kill=${kill}, tail=${JSON.stringify(text.slice(-120))}`));
+						reject(new Error(`${kind} ${error}; pid=${child.pid ?? "unknown"}, phase=${phase}, last=${lastEvent}, exit=${exitCode ?? "pending"}, signal=${signal ?? "none"}, pty=${ptyStatus}, ptyType=${ptyStatusType}, events=${dataEvents}, bytes=${text.length}, kill=${kill}, tail=${JSON.stringify(text.slice(-120))}`));
 					};
 					const timer = setTimeout(() => finish("handshake timed out"), 8000);
 					child.onData((chunk) => {
@@ -122,9 +125,12 @@ export default function productPtyProbe(pi) {
 						}
 					});
 					child.onPtyExit?.(({ status }) => {
+						const phaseAtExit = phase;
 						ptyStatus = status;
+						ptyStatusType = typeof status;
 						lastEvent = "pty-eof";
-						if (status !== 0 || phase !== "finish") finish("PTY stream closed before subprocess completion");
+						if (status !== 0) finish(`PTY stream error (status=${JSON.stringify(status)}, type=${ptyStatusType}, phaseAtExit=${phaseAtExit})`);
+						else if (phaseAtExit !== "finish") finish(`PTY EOF before FINISH (phaseAtExit=${phaseAtExit})`);
 					});
 					child.onExit(({ exitCode: code, signal: childSignal }) => {
 						exitCode = code;
