@@ -617,7 +617,7 @@ export class DiscordAdapter implements PlatformAdapter {
 			}
 			const query = String(interaction.options.getFocused()).toLowerCase();
 			let values: string[] = [];
-			if (interaction.commandName === "mode") values = ["manual", "yolo", "plan", "auto"];
+			if (interaction.commandName === "mode") values = ["yolo", "auto", "read-only"];
 			if (this.commandSuggestions && ["thinking", "model"].includes(interaction.commandName)) {
 				values = [...(await this.commandSuggestions(source, interaction.commandName))];
 			}

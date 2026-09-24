@@ -313,7 +313,7 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
-// lunr: core-owned tool-call gate (plan mode). Return { block: true, reason } to prevent
+// lunr: core-owned tool-call gate (read-only mode). Return { block: true, reason } to prevent
 // execution; the agent loop turns it into an error tool result shown to the model.
 export interface ToolCallGateResult {
 	block: boolean;
@@ -418,9 +418,9 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _systemPromptOverride?: string;
-	// lunr: core-owned system-prompt append (plan mode addendum) applied on top of base/override
+	// lunr: core-owned system-prompt append (read-only mode addendum) applied on top of base/override
 	private _systemPromptAppend?: string;
-	// lunr: core-owned tool-call gates (plan mode) checked before extension tool_call handlers
+	// lunr: core-owned tool-call gates (read-only mode) checked before extension tool_call handlers
 	private _toolCallGates: ToolCallGate[] = [];
 
 	constructor(config: AgentSessionConfig) {
@@ -583,7 +583,7 @@ export class AgentSession {
 				// rollback failures must never block the tool call
 			}
 
-			// lunr: core-owned gates (plan mode) run first, even without extension handlers
+			// lunr: core-owned gates (read-only mode) run first, even without extension handlers
 			for (const gate of this._toolCallGates) {
 				const gateResult = gate(toolCall.name, args as Record<string, unknown>);
 				if (gateResult?.block) {
@@ -1053,7 +1053,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * lunr: register a core-owned tool-call gate (plan mode). Gates run before extension
+	 * lunr: register a core-owned tool-call gate (read-only mode). Gates run before extension
 	 * tool_call handlers and even when no extension handles tool_call. Returns an
 	 * unsubscribe function.
 	 */

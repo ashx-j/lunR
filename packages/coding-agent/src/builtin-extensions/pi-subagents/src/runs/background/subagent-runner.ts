@@ -1123,7 +1123,7 @@ export async function runSingleStep(
 			})
 			: undefined;
 		const parentPermissionMode = step.parentPermissionMode ?? snapshotParentPermissionMode(step.parentSessionId);
-		const childPermission = step.permissions === "read-only" || parentPermissionMode === "plan" ? "read-only" : "full";
+		const childPermission = step.permissions === "read-only" || parentPermissionMode === "read-only" ? "read-only" : "full";
 		const excludeTools = resolveChildExcludeTools({
 			permissions: childPermission,
 			fanoutAuthorized: Array.isArray(step.tools) && step.tools.includes("subagent"),

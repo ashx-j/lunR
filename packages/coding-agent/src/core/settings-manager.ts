@@ -81,7 +81,7 @@ export interface MarkdownSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
-export type DefaultPermissionMode = "manual" | "yolo" | "plan" | "auto";
+export type DefaultPermissionMode = "yolo" | "auto" | "read-only";
 export type SkillTagCharacter = "+" | "~" | "$";
 export const SKILL_TAG_CHARACTERS: readonly SkillTagCharacter[] = ["+", "~", "$"];
 export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "+";
@@ -204,7 +204,7 @@ export interface Settings {
 	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
-	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
+	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
@@ -1229,8 +1229,9 @@ export class SettingsManager {
 
 	// lunr: default permission mode (startup default; per-session mode is in-memory)
 	getDefaultPermissionMode(): DefaultPermissionMode {
-		const value = this.settings.defaultPermissionMode;
-		return value === "manual" || value === "yolo" || value === "plan" || value === "auto" ? value : "manual";
+		const value: unknown = this.settings.defaultPermissionMode;
+		if (value === "plan") return "read-only";
+		return value === "auto" || value === "read-only" ? value : "yolo";
 	}
 
 	setDefaultPermissionMode(mode: DefaultPermissionMode): void {

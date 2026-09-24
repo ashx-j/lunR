@@ -7,7 +7,7 @@
   <a href="https://github.com/ashx-j/lunR"><img alt="GitHub" src="https://img.shields.io/badge/github-ashx--j%2FlunR-181717?style=flat-square&logo=github" /></a>
 </p>
 
-lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, and SDK modes, plus baked-in MCP, subagents, permissions, plan mode, todos, cron, and a Telegram/Discord gateway.
+lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
 
 Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle those as [packages](#packages) and share them via npm or git.
 
@@ -88,7 +88,7 @@ You can also `npm uninstall -g @ashx-j/lunr`. That leaves `~/.lunr/agent` in pla
 
 Config lives in `~/.lunr/agent` (global) and project `.lunr/` (`piConfig.configDir`). Override the agent dir with `PI_CODING_AGENT_DIR`. **Do not use `~/.pi/` as the lunR home.**
 
-Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, plan mode, cron, and the gateway.
+Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -177,9 +177,9 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
-| `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
-| `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
-| `/manual`, `/yolo`, `/auto` | Activate that permission mode |
+| `/mode` | Set permission mode: `yolo`, `auto`, or `read` (Shift+Tab cycles) |
+| `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
+| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (forces session auto permission mode) |
 | `/processes` | Background processes started this session |
@@ -223,7 +223,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
+| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
 | Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
@@ -395,7 +395,7 @@ The factory argument is conventionally named `pi` (`export default function (pi:
 
 The default export can also be `async`. lunR waits for async extension factories before startup continues.
 
-Place in `~/.lunr/agent/extensions/`, `.lunr/extensions/`, or a [package](#packages). See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/). Sample extensions such as `examples/extensions/plan-mode`, `todo.ts`, and `subagent/` are **Extension API samples**, not the product implementation. lunR ships plan mode, todos, and subagents as built-ins; see [docs/features.md](docs/features.md).
+Place in `~/.lunr/agent/extensions/`, `.lunr/extensions/`, or a [package](#packages). See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/). Sample extensions such as `examples/extensions/plan-mode`, `todo.ts`, and `subagent/` are **Extension API samples**, not the product implementation. lunR ships read-only planning, todos, and subagents as built-ins; see [docs/features.md](docs/features.md).
 
 ### Themes
 
@@ -485,9 +485,9 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
-- **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
-- **Plan mode** — `/plan` plus the `present_plan` tool
+- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in yolo; default parallel concurrency is unlimited
+- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
+- **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)

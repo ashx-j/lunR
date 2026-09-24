@@ -14,11 +14,11 @@ import {
 	resetPermissions,
 	setPermissionMode,
 } from "../src/core/permissions.ts";
-import { PLAN_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
+import { READ_ONLY_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
 import { bindSubagentCommunicationSetting, SettingsManager } from "../src/core/settings-manager.ts";
 import {
 	applyInheritedSubagentPermissions,
-	PLAN_MODE_WRITE_SPAWN_ERROR,
+	READ_ONLY_WRITE_SPAWN_ERROR,
 	resolveChildPermissions,
 	resolveChildRuntimePermissionMode,
 	resolveRequestedChildPermission,
@@ -31,13 +31,13 @@ import {
 describe("subagent permission inherit", () => {
 	beforeEach(() => {
 		resetAllPermissionContexts();
-		resetPermissions("manual");
+		resetPermissions("yolo");
 		registerApprovalHandler(undefined);
 	});
 
 	afterEach(() => {
 		resetAllPermissionContexts();
-		resetPermissions("manual");
+		resetPermissions("yolo");
 		registerApprovalHandler(undefined);
 	});
 
@@ -47,14 +47,14 @@ describe("subagent permission inherit", () => {
 		expect(resolveRequestedChildPermission("read-only")).toBe("read-only");
 	});
 
-	it("maps full to child auto and read-only to child plan", () => {
+	it("maps full to child auto and read-only to child read-only", () => {
 		expect(resolveChildRuntimePermissionMode("full")).toBe("auto");
-		expect(resolveChildRuntimePermissionMode("read-only")).toBe("plan");
+		expect(resolveChildRuntimePermissionMode("read-only")).toBe("read-only");
 		expect(resolveChildRuntimePermissionMode(undefined)).toBe("auto");
 	});
 
-	it("lets manual/yolo/auto parents launch full and read-only children", () => {
-		for (const parent of ["manual", "yolo", "auto"] as const) {
+	it("lets yolo/auto parents launch full and read-only children", () => {
+		for (const parent of ["yolo", "auto"] as const) {
 			expect(resolveChildPermissions(parent, undefined)).toEqual({
 				ok: true,
 				requested: "full",
@@ -73,28 +73,28 @@ describe("subagent permission inherit", () => {
 		}
 	});
 
-	it("lets plan parents launch only explicit read-only children", () => {
-		expect(resolveChildPermissions("plan", "read-only")).toEqual({
+	it("lets read-only parents launch only explicit read-only children", () => {
+		expect(resolveChildPermissions("read-only", "read-only")).toEqual({
 			ok: true,
 			requested: "read-only",
 			effective: "read-only",
 		});
-		expect(resolveChildPermissions("plan", "full")).toEqual({
+		expect(resolveChildPermissions("read-only", "full")).toEqual({
 			ok: false,
 			requested: "full",
-			error: PLAN_MODE_WRITE_SPAWN_ERROR,
+			error: READ_ONLY_WRITE_SPAWN_ERROR,
 		});
-		expect(resolveChildPermissions("plan", undefined)).toEqual({
+		expect(resolveChildPermissions("read-only", undefined)).toEqual({
 			ok: false,
 			requested: "full",
-			error: PLAN_MODE_WRITE_SPAWN_ERROR,
+			error: READ_ONLY_WRITE_SPAWN_ERROR,
 		});
-		expect(PLAN_MODE_WRITE_SPAWN_ERROR).toContain('permissions: "read-only"');
+		expect(READ_ONLY_WRITE_SPAWN_ERROR).toContain('permissions: "read-only"');
 	});
 
 	it("does not apply inherit to non-child print processes", () => {
 		expect(applyInheritedSubagentPermissions({})).toBeUndefined();
-		expect(getPermissionMode()).toBe("manual");
+		expect(getPermissionMode()).toBe("yolo");
 	});
 
 	it("ignores leftover parent-mode env when this process is not a child", () => {
@@ -103,7 +103,7 @@ describe("subagent permission inherit", () => {
 				[SUBAGENT_PARENT_PERMISSION_MODE_ENV]: "auto",
 			}),
 		).toBeUndefined();
-		expect(getPermissionMode()).toBe("manual");
+		expect(getPermissionMode()).toBe("yolo");
 	});
 
 	it("applies auto to a full child when the permission env is missing", () => {
@@ -111,14 +111,14 @@ describe("subagent permission inherit", () => {
 		expect(getPermissionMode()).toBe("auto");
 	});
 
-	it("applies plan to a read-only child", () => {
+	it("applies read-only to a read-only child", () => {
 		expect(
 			applyInheritedSubagentPermissions({
 				[SUBAGENT_CHILD_ENV]: "1",
 				[SUBAGENT_CHILD_PERMISSION_ENV]: "read-only",
 			}),
-		).toBe("plan");
-		expect(getPermissionMode()).toBe("plan");
+		).toBe("read-only");
+		expect(getPermissionMode()).toBe("read-only");
 	});
 
 	it("lets a full child write without an approval handler", async () => {
@@ -143,24 +143,24 @@ describe("subagent permission inherit", () => {
 		expect(await gateToolCall("ls", {}, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("edit", { path: "/cwd/a.ts" }, "/cwd")).toEqual({
 			block: true,
-			reason: PLAN_MODE_BLOCK_MESSAGE,
+			reason: READ_ONLY_MODE_BLOCK_MESSAGE,
 		});
 		expect(await gateToolCall("write", { path: "/cwd/b.ts" }, "/cwd")).toEqual({
 			block: true,
-			reason: PLAN_MODE_BLOCK_MESSAGE,
+			reason: READ_ONLY_MODE_BLOCK_MESSAGE,
 		});
 		expect(await gateToolCall("code_rewrite", { dry_run: true, pattern: "Foo" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("code_rewrite", { dry_run: false, pattern: "Foo" }, "/cwd")).toEqual({
 			block: true,
-			reason: PLAN_MODE_BLOCK_MESSAGE,
+			reason: READ_ONLY_MODE_BLOCK_MESSAGE,
 		});
 	});
 
 	it("snapshots the live parent mode at spawn", () => {
 		setPermissionMode("yolo");
 		expect(snapshotParentPermissionMode()).toBe("yolo");
-		setPermissionMode("plan");
-		expect(snapshotParentPermissionMode()).toBe("plan");
+		setPermissionMode("read-only");
+		expect(snapshotParentPermissionMode()).toBe("read-only");
 	});
 
 	it("uses the current preference before its settings write has flushed", () => {

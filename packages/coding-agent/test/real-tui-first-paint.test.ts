@@ -218,7 +218,7 @@ describe("real TUI first paint", () => {
 			const services = await createAgentSessionServices({
 				cwd: tempDir,
 				agentDir: tempDir,
-				settingsManager: SettingsManager.inMemory({ theme: "moon", defaultPermissionMode: "manual" }),
+				settingsManager: SettingsManager.inMemory({ theme: "moon", defaultPermissionMode: "read-only" }),
 				resourceLoaderOptions: {
 					noSkills: true,
 					noPromptTemplates: true,

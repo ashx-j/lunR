@@ -1,10 +1,6 @@
 /**
- * lunR: gateway approval prompt for manual permission mode.
- *
- * The gateway runs headless sessions. When a mutating tool call arrives in
- * manual mode, this module posts an inline-button approve/reject prompt to
- * the originating chat and awaits the callback. If no chat context is present
- * the request is rejected (fail-closed).
+ * Gateway approvals for large subagent launches and plans.
+ * A missing chat context rejects large launches; plans pass through.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -205,7 +201,7 @@ export async function handleApprovalCallback(event: CallbackEvent, adapter?: Pla
 	}
 	if (entry.plan && response !== "reject" && entry.key) {
 		const sessionId = getSession(entry.key)?.sessionId;
-		if (sessionId) setPermissionMode("manual", sessionId);
+		if (sessionId) setPermissionMode("yolo", sessionId);
 	}
 	entry.resolve(response);
 

@@ -231,7 +231,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	env[SUBAGENT_CHILD_ENV] = "1";
 	env[SUBAGENT_COMMUNICATION_ENV] = communicationEnabled ? "1" : "0";
 	env[SUBAGENT_CHILD_PERMISSION_ENV] = input.childPermission
-		?? (input.parentPermissionMode === "plan" ? "read-only" : "full");
+		?? (input.parentPermissionMode === "read-only" ? "read-only" : "full");
 	env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] = "";
 	env[SUBAGENT_FANOUT_CHILD_ENV] = fanoutAuthorized ? "1" : "0";
 	if (input.waitToolEnabled !== undefined) {

@@ -24,6 +24,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.23`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
+
 - **Subagent controls and pinned scroll (`feat/subagent-controls-scroll`):** `/settings` has independent default-on switches for parent-child communication and automatic delegation guidance. Communication off removes child contact/intercom for new and resumed runs, blocks new parent questions and steering, and preserves waiting, status, and final output. Direct-work guidance retains tier and launch instructions. Pinned chat anchors the visible message while output appends or earlier lines expand.
 
 - **Anthropic subscription bridge (`feat/anthropic-claude-code-oauth`):** external Claude Code credentials route through pinned vendored Hermes Python transport and the installed Claude Code CLI; Anthropic API keys still use Messages. Legacy OAuth tokens fail closed. Setup explicitly confirms each missing prerequisite and checks Claude Code 2.1.263; no installation or account access happened during development. Only offline fixtures were exercised; live, user-authorized subscription qualification and cross-platform native checks remain before release. Vendor provenance and hashes: `scripts/verify-claude-vendor.mjs`; integration limits: `packages/coding-agent/docs/providers.md`.
@@ -147,6 +149,7 @@ Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
 - Denser one-line reasoning (2026-09-23): offline tui → ai → agent → coding-agent → orchestrator tsgo passes; focused assistant-message and thinking-tail Vitest passes 28/28. Changed files pass Biome and `git diff --check`. No installed CLI or live provider was touched.
 - Collapsed subagent waits (2026-09-24): offline tui → ai → agent → coding-agent → orchestrator tsgo passes. Focused tool-execution Vitest passes 61/61; touched TypeScript Biome and `git diff --check` pass. No installed CLI or live provider was changed.
 - Subagent controls and pinned scroll (2026-09-24): five offline tsgo package builds and the coding-agent Node bundle pass in an isolated worktree. TUI pinned-scroll tests pass 24/24; focused subagent, communication, prompt, and settings Vitest passes 130/130 across nine suites. The isolated local-provider run with communication off proves direct-work prompt, no child communication tools, and retrieval of the final result with wait plus transcript; the existing question run remains green. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser schema hashes refreshed. No installed CLI, original checkout build, live provider, or real settings changed.
@@ -233,6 +236,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Read-only blocks unclassified extension tools, including direct MCP tools. The `mcp` proxy still permits status, search, describe, and ui-messages. Saved `defaultPermissionMode` and session `.leaf.json` can still contain `manual` or `plan`; read them as yolo or read-only without rewriting files. Gateway session switches to a saved writable mode pause in read-only until the owner confirms. Read-only does not revoke full-access background children already running when the mode changes.
 - Subagent communication is a global preference. A live settings bridge avoids a pending-save race in the parent; each run carries its launch choice to queued foreground children and detached async runners. Existing children keep registered tools, but turning communication off immediately blocks new parent questions and steering. Replies to already-pending requests stay available. Final output remains in run transcripts if a headless wait returns before a completion notification reaches the parent.
 - Pinned chat anchors matching rendered line sequences across appends and insertions above the viewport, using nearby context to distinguish repeated rows. If width reflow changes the anchor text, it falls back to the previous line position.
 - The working-status Loader already prepends a blank row. Streaming one-line thinking leaves its bottom unpadded so the combined view has one empty row between text and spinner.
@@ -319,6 +323,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-24: replace manual and plan permission modes with yolo, auto, and read-only; keep `/plan` as a read-only planning shortcut so inspection does not force a plan workflow.
+- 2026-09-24: fail closed on unclassified tools in read-only mode, because proxy and direct MCP calls can write despite the old plan-mode heuristic.
 - 2026-09-24: keep parent-child messaging and autonomous delegation independent and default-on, because direct-work mode should still permit explicitly requested children.
 - 2026-09-24: snapshot communication per run while blocking new parent messages immediately on disable, so queued children do not get mismatched tools and prompts while pending requests can still finish.
 - 2026-09-24: anchor the scrolled-up chat to rendered message lines rather than a fixed bottom offset, because streaming and expansions above the viewport shift line positions.

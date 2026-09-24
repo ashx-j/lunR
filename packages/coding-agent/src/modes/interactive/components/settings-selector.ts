@@ -1575,8 +1575,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "default-permission-mode",
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
-				currentValue: config.defaultPermissionMode,
-				values: ["manual", "yolo", "plan", "auto"],
+				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
+				values: ["yolo", "auto", "read"],
 			},
 			{
 				id: "double-escape-action",
@@ -1928,7 +1928,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					}
 					case "default-permission-mode":
-						callbacks.onDefaultPermissionModeChange(newValue as DefaultPermissionMode);
+						callbacks.onDefaultPermissionModeChange(
+							newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode),
+						);
 						break;
 					case "double-escape-action":
 						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");
