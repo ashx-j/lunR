@@ -8,7 +8,7 @@
  * persistent/user-config tools stay excluded.
  *
  * Read-only drops mutating coding tools from the registry and still runs under
- * Plan mode as defense in depth.
+ * Read-only mode as defense in depth.
  */
 
 import type { ChildPermission } from "../../../../../core/subagent-permission-inherit.ts";

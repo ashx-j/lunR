@@ -177,9 +177,9 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
-| `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
-| `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
-| `/manual`, `/yolo`, `/auto` | Activate that permission mode |
+| `/mode` | Set permission mode: `yolo`, `auto`, or `read` (Shift+Tab cycles) |
+| `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
+| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (forces session auto permission mode) |
 | `/processes` | Background processes started this session |
@@ -223,7 +223,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
+| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
 | Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
@@ -485,9 +485,9 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
-- **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
-- **Plan mode** — `/plan` plus the `present_plan` tool
+- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in yolo; default parallel concurrency is unlimited
+- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
+- **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)

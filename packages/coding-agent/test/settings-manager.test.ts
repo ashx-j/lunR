@@ -48,6 +48,20 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getTodosEnabled()).toBe(false);
 	});
 
+	it("maps saved permission defaults to the three supported modes", async () => {
+		const settingsPath = join(agentDir, "settings.json");
+		for (const [saved, expected] of [
+			[undefined, "yolo"],
+			["manual", "yolo"],
+			["plan", "read-only"],
+			["read-only", "read-only"],
+			["auto", "auto"],
+		] as const) {
+			writeFileSync(settingsPath, JSON.stringify({ defaultPermissionMode: saved }));
+			expect(SettingsManager.create(projectDir, agentDir).getDefaultPermissionMode()).toBe(expected);
+		}
+	});
+
 	it("persists OpenAI Codex Fast mode", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getOpenAIFastMode()).toBe(false);

@@ -1,14 +1,13 @@
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveChildExcludeTools } from "../src/builtin-extensions/pi-subagents/src/runs/shared/child-tools.ts";
 import { browserUrl, createBrowserProxy, isPublicAddress, resolveBrowserHost } from "../src/core/browser/network.ts";
 import { BrowserSession, boundedBrowserText } from "../src/core/browser/runtime.ts";
 import { BrowserParams } from "../src/core/browser/schema.ts";
 import {
 	gateToolCall,
-	registerApprovalHandler,
 	resetAllPermissionContexts,
 	setPermissionMode,
 } from "../src/core/permissions.ts";
@@ -21,7 +20,6 @@ const text = (result: Awaited<ReturnType<BrowserSession["run"]>>) =>
 
 afterEach(() => {
 	resetAllPermissionContexts();
-	registerApprovalHandler(undefined);
 });
 
 describe("browser policy and contract", () => {
@@ -94,7 +92,7 @@ describe("browser policy and contract", () => {
 		}
 	});
 	it("gates interactions through existing modes, while observation stays allowed", async () => {
-		for (const mode of ["manual", "plan", "auto", "yolo"] as const) {
+		for (const mode of ["yolo", "auto", "read-only"] as const) {
 			setPermissionMode(mode);
 			for (const action of ["navigate", "inspect", "screenshot", "tabs", "close"])
 				expect(await gateToolCall("browser", { action }, process.cwd())).toBeUndefined();
@@ -103,17 +101,8 @@ describe("browser policy and contract", () => {
 				{ action: "act", interaction: "click", name: "Submit" },
 				process.cwd(),
 			);
-			expect(Boolean(result?.block)).toBe(mode === "manual" || mode === "plan");
+			expect(Boolean(result?.block)).toBe(mode === "read-only");
 		}
-		setPermissionMode("manual");
-		const approval = vi.fn(async () => "once" as const);
-		registerApprovalHandler(approval);
-		expect(
-			await gateToolCall("browser", { action: "act", interaction: "click", name: "Submit" }, process.cwd()),
-		).toBeUndefined();
-		expect(approval).toHaveBeenCalledWith(
-			expect.objectContaining({ action: "browser", detail: expect.stringContaining("Submit") }),
-		);
 	});
 	it("blocks HTTP subrequests and HTTPS tunnels to private destinations at the proxy", async () => {
 		const proxy = await createBrowserProxy(false);

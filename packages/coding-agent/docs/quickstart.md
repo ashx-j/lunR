@@ -105,7 +105,7 @@ By default, lunR gives the model four tools:
 
 Additional built-in read-only tools (`grep`, `find`, `ls`) exist but start off. lunR runs in your current working directory and can modify files there. Use git or `/rollback` if you want easy undo.
 
-Permission modes are `manual | yolo | plan | auto`. Shift+Tab cycles that order. In plan mode the model uses `present_plan` for approval.
+Permission modes are `yolo | auto | read-only`. Shift+Tab cycles that order. The TUI displays read-only as `read`; `/plan` enters read-only mode and `present_plan` is available there for approval.
 
 ## Give lunR project instructions
 
@@ -152,7 +152,7 @@ The command output is sent to the model. Use `!!command` to run a command withou
 
 ### Switch models
 
-Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle permission mode (manual → yolo → plan → auto). Use `/thinking`, `/effort`, `/reasoning`, or `/settings` to change thinking level. `xhigh` and `max` are opt-in when the model supports them. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models. Catalog refresh is `/refresh`, not `lunr update`.
+Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle permission mode (yolo → auto → read). Use `/thinking`, `/effort`, `/reasoning`, or `/settings` to change thinking level. `xhigh` and `max` are opt-in when the model supports them. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models. Catalog refresh is `/refresh`, not `lunr update`.
 
 ### Continue later
 

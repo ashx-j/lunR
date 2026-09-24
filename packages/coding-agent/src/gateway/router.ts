@@ -73,7 +73,7 @@ function mentionedBot(event: MessageEvent): boolean {
 export function createRouter(deps: RouterDeps): Router {
 	const { adapters, cfg: initialCfg, pairing, bridge, reloadConfig } = deps;
 
-	// lunr: headless gateway sessions must prompt for mutating tools in manual mode.
+	// Headless gateway sessions still prompt for large subagent launches in yolo mode.
 	registerGatewayApprovalHandler();
 
 	/** Reload gateway.json on every inbound event so CLI edits (e.g. pair approve) take effect immediately. */

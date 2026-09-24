@@ -317,13 +317,13 @@ describe("gateway session transfer", () => {
 		const bridge = new AgentBridge({ sessionFactory: async () => session });
 		try {
 			await bridge.runTurn("k1", makeEvent("k1"));
-			setPermissionMode("plan", manager.getSessionId());
+			setPermissionMode("read-only", manager.getSessionId());
 			await requestSessionTransfer(file);
 			expect(session.setTransferring).toHaveBeenCalledWith(true);
 			expect(await bridge.getSession("k1")).toBeNull();
 			const desktop = SessionManager.open(file);
 			try {
-				expect(desktop.getPermissionMode()).toBe("plan");
+				expect(desktop.getPermissionMode()).toBe("read-only");
 			} finally {
 				desktop.dispose();
 			}

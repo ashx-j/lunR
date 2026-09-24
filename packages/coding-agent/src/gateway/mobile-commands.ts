@@ -221,13 +221,13 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 	const id = session?.sessionManager?.getSessionId();
 	if (id && ["auto", "yolo"].includes(getPermissionMode(id))) {
 		const requested = getPermissionMode(id);
-		setPermissionMode("manual", id);
-		session?.sessionManager?.setPermissionMode?.("manual");
+		setPermissionMode("read-only", id);
+		session?.sessionManager?.setPermissionMode?.("read-only");
 		if (
 			(await gatewaySelect(
 				key,
 				`Continue with ${requested} permissions? Tools can change files and run commands without individual approval.`,
-				["Keep manual", `Use ${requested}`],
+				["Keep read-only", `Use ${requested}`],
 			)) === `Use ${requested}`
 		) {
 			setPermissionMode(requested, id);
@@ -446,16 +446,17 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	}
 	const requested =
 		command === "plan"
-			? "plan"
+			? "read-only"
 			: args || (await gatewaySelect(ctx.key, `Permission mode: ${getPermissionMode(id)}`, [...PERMISSION_MODES]));
 	if (!requested) return true;
-	if (!PERMISSION_MODES.includes(requested as (typeof PERMISSION_MODES)[number]))
-		throw new Error("Choose manual, yolo, plan, or auto.");
-	setPermissionMode(requested as (typeof PERMISSION_MODES)[number], id);
-	session.sessionManager?.setPermissionMode?.(requested as (typeof PERMISSION_MODES)[number]);
-	await ctx.adapter.send(ctx.event.source.chatId, `Permission mode: ${requested}`);
+	const mode = requested === "read" ? "read-only" : requested;
+	if (!PERMISSION_MODES.includes(mode as (typeof PERMISSION_MODES)[number]))
+		throw new Error("Choose yolo, auto, or read-only.");
+	setPermissionMode(mode as (typeof PERMISSION_MODES)[number], id);
+	session.sessionManager?.setPermissionMode?.(mode as (typeof PERMISSION_MODES)[number]);
+	await ctx.adapter.send(ctx.event.source.chatId, `Permission mode: ${mode}`);
 	if (command === "plan" && args) {
-		ctx.event.text = args;
+		ctx.event.text = `Create a plan for: ${args}`;
 		return false;
 	}
 	return true;

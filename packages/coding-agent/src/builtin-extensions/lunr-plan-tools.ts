@@ -1,14 +1,14 @@
 // @ts-nocheck
 /**
- * lunr-plan-tools — lunR-native plan-approval tool for plan mode.
+ * lunr-plan-tools — plan approval for read-only sessions.
  *
  * lunR: this file is lunR-native (not an absorbed upstream extension).
  *
  *  - One `present_plan` tool (TypeBox): the model calls it with a plan summary
- *    while plan mode is active; the user approves or declines in a dedicated
+ *    while read-only mode is active; the user approves or declines in a dedicated
  *    dialog (kind "plan" approval request, see core/permissions.ts). Any
- *    approve exits plan mode in interactive-mode BEFORE the result resolves.
- *  - Outside plan mode the tool returns an error text. Without an approval
+ *    approve exits read-only mode in interactive-mode BEFORE the result resolves.
+ *  - Outside read-only mode the tool returns an error text. Without an approval
  *    handler (gateway/headless) it passes through instead of deadlocking.
  *  - Chat render is a quiet one-liner (renderCall/renderResult), matching the
  *    todo/cron tools' minimal footprint.
@@ -22,13 +22,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { isPlanModeActive, requestPlanApproval } from "../core/permissions.ts";
+import { isReadOnlyModeActive, requestPlanApproval } from "../core/permissions.ts";
 
-export const PRESENT_PLAN_WRONG_MODE_TEXT = "present_plan is only available in plan mode.";
+export const PRESENT_PLAN_WRONG_MODE_TEXT = "present_plan is only available in read-only mode.";
 
-/** Execute-body logic, exported for tests: gate on plan mode, then ask. */
+/** Execute-body logic, exported for tests: gate on read-only mode, then ask. */
 export async function runPresentPlan(summary: string): Promise<string> {
-	if (!isPlanModeActive()) return PRESENT_PLAN_WRONG_MODE_TEXT;
+	if (!isReadOnlyModeActive()) return PRESENT_PLAN_WRONG_MODE_TEXT;
 	return requestPlanApproval(summary);
 }
 
@@ -37,7 +37,7 @@ export default function (pi: ExtensionAPI): void {
 		name: "present_plan",
 		label: "Plan",
 		description: [
-			"Present the finished plan for user approval. Only available in plan mode.",
+			"Present a finished plan for user approval. Only available in read-only mode.",
 			"Call once with a concise, concrete summary of the plan; the user approves",
 			"or declines it in a dialog. The result text says whether to implement or revise.",
 		].join("\n"),

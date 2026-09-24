@@ -60,7 +60,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
-| `defaultPermissionMode` | string | `"manual"` | Startup permission mode: `"manual"`, `"yolo"`, `"plan"`, or `"auto"` |
+| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). Saved `"manual"` becomes yolo; saved `"plan"` becomes read-only. |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
 | `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
 | `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |

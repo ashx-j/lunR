@@ -2,10 +2,7 @@
  * lunR: parent-delegated children inherit an explicit permission level, not a
  * named agent role. The parent process resolves the requested level against
  * its own mode, then snapshots that resolved child permission into the child
- * environment. Full maps to child runtime Auto; read-only maps to Plan.
- *
- * Ordinary `lunr -p`, cron, and gateway headless sessions are not children and
- * stay fail-closed.
+ * environment. Full maps to child runtime Auto; read-only maps to Read-only.
  */
 
 import { getPermissionMode, type PermissionMode, resetPermissions } from "./permissions.ts";
@@ -17,15 +14,17 @@ export const SUBAGENT_PARENT_PERMISSION_MODE_ENV = "PI_SUBAGENT_PARENT_PERMISSIO
 
 export type ChildPermission = "full" | "read-only";
 
-export const PLAN_MODE_WRITE_SPAWN_ERROR =
-	'Cannot launch a full-access child in plan mode. Relaunch with permissions: "read-only".';
+export const READ_ONLY_WRITE_SPAWN_ERROR =
+	'Cannot launch a full-access child in read-only mode. Relaunch with permissions: "read-only".';
 
 export function isSubagentChildProcess(env: NodeJS.ProcessEnv = process.env): boolean {
 	return env[SUBAGENT_CHILD_ENV] === "1";
 }
 
 export function parseParentPermissionMode(value: string | undefined): PermissionMode | undefined {
-	if (value === "manual" || value === "yolo" || value === "plan" || value === "auto") return value;
+	if (value === "yolo" || value === "auto" || value === "read-only") return value;
+	if (value === "plan") return "read-only";
+	if (value === "manual") return "yolo";
 	return undefined;
 }
 
@@ -40,7 +39,7 @@ export function resolveRequestedChildPermission(requested?: string): ChildPermis
 }
 
 export function resolveChildRuntimePermissionMode(childPermission: string | undefined): PermissionMode {
-	return parseChildPermission(childPermission) === "read-only" ? "plan" : "auto";
+	return parseChildPermission(childPermission) === "read-only" ? "read-only" : "auto";
 }
 
 export function snapshotParentPermissionMode(sessionId?: string): PermissionMode {
@@ -63,19 +62,18 @@ export interface RejectedChildPermissions {
  * Resolve the child's permission level before spawn.
  *
  * Parent mode           Requested          Result
- * Manual/YOLO/Auto      omitted            Full
- * Manual/YOLO/Auto      full               Full
- * Manual/YOLO/Auto      read-only          Read-only
- * Plan                  read-only          Read-only
- * Plan                  full / omitted     Reject (omission resolves to full)
+ * YOLO/Auto             omitted/full       Full
+ * YOLO/Auto             read-only          Read-only
+ * Read-only             read-only          Read-only
+ * Read-only             full / omitted     Reject (omission resolves to full)
  */
 export function resolveChildPermissions(
 	parentMode: string | undefined,
 	requested?: string,
 ): ResolvedChildPermissions | RejectedChildPermissions {
 	const requestedPermission = resolveRequestedChildPermission(requested);
-	if (parseParentPermissionMode(parentMode) === "plan" && requestedPermission === "full") {
-		return { ok: false, requested: requestedPermission, error: PLAN_MODE_WRITE_SPAWN_ERROR };
+	if (parseParentPermissionMode(parentMode) === "read-only" && requestedPermission === "full") {
+		return { ok: false, requested: requestedPermission, error: READ_ONLY_WRITE_SPAWN_ERROR };
 	}
 	return { ok: true, requested: requestedPermission, effective: requestedPermission };
 }

@@ -891,8 +891,12 @@ export class SessionManager {
 		if (!this.sessionFile) return;
 		try {
 			const saved = JSON.parse(readFileSync(`${this.sessionFile}.leaf.json`, "utf8"));
-			if (saved.id === this.sessionId && ["manual", "yolo", "plan", "auto"].includes(saved.permissionMode))
-				this.permissionMode = saved.permissionMode;
+			if (saved.id === this.sessionId) {
+				const mode: unknown = saved.permissionMode;
+				if (mode === "plan" || mode === "read-only") this.permissionMode = "read-only";
+				else if (mode === "manual" || mode === "yolo") this.permissionMode = "yolo";
+				else if (mode === "auto") this.permissionMode = "auto";
+			}
 			if (
 				saved.id === this.sessionId &&
 				(saved.leafId === null || this.byId.has(saved.leafId)) &&

@@ -28,7 +28,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | Hidden shell command | `!!command` runs without sending output to the model |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
 
-See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`manual` → `yolo` → `plan` → `auto`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
+See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`yolo` → `auto` → `read`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
 
 ### Copyable response blocks
 
@@ -68,9 +68,9 @@ Built-in commands (from `slash-commands.ts`):
 | `/usage` | This-session token totals, context, and every stored subscription plan (no `/token-usage`) |
 | `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
-| `/plan` | Switch to plan permission mode, or `/plan <task>` to plan a task |
-| `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` |
-| `/manual`, `/yolo`, `/auto` | Activate that permission mode |
+| `/plan` | Switch to read-only mode, or `/plan <task>` to plan a task |
+| `/mode` | Set permission mode: `yolo`, `auto`, or `read` |
+| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/processes` | View and manage background processes started this session |
 | `/rollback` | Undo the last turn's file changes and rewind the conversation |
 | `/hotkeys` | Show all keyboard shortcuts |

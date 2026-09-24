@@ -144,7 +144,7 @@ describe("exclusive session ownership and handoff", () => {
 			const file = manager.getSessionFile()!;
 			const first = manager.getLeafId()!;
 			manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
-			manager.setPermissionMode("plan");
+			manager.setPermissionMode("read-only");
 			if (kind === "root") manager.resetLeaf();
 			else manager.branch(first);
 			manager.dispose();

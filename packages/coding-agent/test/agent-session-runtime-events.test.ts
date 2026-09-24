@@ -129,7 +129,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		const old = runtimeHost.session;
 		const file = old.sessionFile!;
 		old.sessionManager.resetLeaf();
-		old.sessionManager.setPermissionMode("plan");
+		old.sessionManager.setPermissionMode("read-only");
 		const unregister = registerSubagentCancellation(old.sessionId, {
 			hasActiveRuns: () => true,
 			stop: async () => ({ requested: 1, failed: 0 }),

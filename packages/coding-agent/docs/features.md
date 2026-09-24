@@ -6,16 +6,13 @@ Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`
 
 ## Permissions and plan mode
 
-Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cycles that order. Ctrl+T (`app.thinking.cycle`) cycles thinking levels for the selected model.
+Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
-- **manual** — approve every tool
-- **yolo** — auto-approve ordinary tools; large subagent launches still request confirmation
-- **plan** — read-oriented planning; the model calls `present_plan` with a summary; you approve or decline in a dock
-- **auto** — fully autonomous
+- **yolo** auto-approves tools but still confirms large subagent launches. This is the default.
+- **auto** runs without questions or large-launch confirmation.
+- **read-only** permits investigation but blocks writes and full-access child launches.
 
-`/plan` enters plan mode. `/plan <task>` enters plan mode and sends the task. If you are already in plan, `/plan <task>` restores the previous mode and sends. Default startup mode is `defaultPermissionMode` in settings (`manual`).
-
-`present_plan` is only available in plan mode. After approval, interactive lunR leaves plan mode before the tool result resolves.
+Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
 
 ## Subagents
 
@@ -29,7 +26,7 @@ The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remai
 
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
-A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **manual and yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
+A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 

@@ -115,7 +115,7 @@ import {
 	restorePermissionModeAfterPlan,
 	setPermissionMode,
 } from "../../core/permissions.ts";
-import { PLAN_MODE_ADDENDUM } from "../../core/plan-mode.ts";
+import { READ_ONLY_MODE_ADDENDUM } from "../../core/plan-mode.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
@@ -532,8 +532,7 @@ export class InteractiveMode {
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
 
-	// lunr: mode in effect before the current plan stretch. Used by approve / `/plan off`
-	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
+	// Restore the previous mode after approving a plan or leaving read-only via /plan.
 	private previousPermissionMode: PermissionMode | undefined;
 
 	// lunr: mode in effect before `/goal` forced session auto. Dedicated so it cannot
@@ -929,14 +928,12 @@ export class InteractiveMode {
 		void this.maybeNotifyCliUpdate();
 		this.startPlanUsagePolling();
 
-		// lunr: register the permission approval dialog handler so manual mode can prompt.
+		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
 			if (req.kind === "large-subagent-launch") {
 				return this.showLargeSubagentLaunchApprovalDialog(req);
 			}
-			// lunr: plan approval (present_plan tool). Any approve leaves plan mode —
-			// restore runs BEFORE resolving so the model's next tool call already
-			// has full access. Decline keeps plan mode active.
+			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
 				const resp = await this.showPlanApprovalDialog(req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
@@ -945,7 +942,7 @@ export class InteractiveMode {
 				}
 				return resp;
 			}
-			return this.showApprovalDialog(req);
+			return "reject";
 		});
 
 		// lunr: initialize rollback service for this session.
@@ -3204,9 +3201,9 @@ export class InteractiveMode {
 				this.handleModeCommand(text === "/mode" ? "" : text.slice(6).trim());
 				return;
 			}
-			if (text === "/manual" || text === "/yolo" || text === "/auto") {
+			if (text === "/read" || text === "/yolo" || text === "/auto") {
 				this.editor.setText("");
-				this.applyPermissionMode(text.slice(1) as PermissionMode);
+				this.applyPermissionMode(text === "/read" ? "read-only" : (text.slice(1) as PermissionMode));
 				return;
 			}
 			if (text === "/processes") {
@@ -7515,81 +7512,63 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: /plan — shortcut onto the plan permission mode (not a second state machine).
+	// /plan is a shortcut into read-only mode for planning.
 	private async handlePlanCommand(args: string): Promise<void> {
 		const sub = args.toLowerCase();
-		const inPlan = getPermissionMode() === "plan";
+		const inReadOnly = getPermissionMode() === "read-only";
 
 		if (sub === "status") {
-			this.showStatus(
-				inPlan
-					? "Plan mode is active — edit/write and mutating bash are blocked. /plan off to implement."
-					: `Permission mode: ${getPermissionMode()}.`,
-			);
+			this.showStatus(inReadOnly ? "Read mode is active. /plan off to leave it." : `Permission mode: ${getPermissionMode()}.`);
 			return;
 		}
 
-		// lunr: `/plan <text>` — any arg other than on/off/status is task text.
-		// While not in plan: enter plan and send. While in plan: restore previous
-		// mode and send with full tool access ("looks good, go implement it").
 		if (sub !== "" && sub !== "on" && sub !== "off") {
-			if (inPlan) {
-				this.applyPermissionMode(this.restoreTargetAfterPlan());
-			} else {
-				this.applyPermissionMode("plan");
-			}
-			await this.sendUserMessageAfterDeferredBuiltins(args);
+			if (!inReadOnly) this.applyPermissionMode("read-only");
+			await this.sendUserMessageAfterDeferredBuiltins(`Create a plan for: ${args}`);
 			return;
 		}
 
-		const next = sub === "" ? !inPlan : sub === "on";
-		if (next === inPlan) {
-			this.showStatus(next ? "Plan mode is already active." : "Plan mode is already off.");
+		const next = sub === "" ? !inReadOnly : sub === "on";
+		if (next === inReadOnly) {
+			this.showStatus(next ? "Read mode is already active." : "Read mode is already off.");
 			return;
 		}
 
-		if (next) {
-			this.applyPermissionMode("plan");
-		} else {
-			this.applyPermissionMode(this.restoreTargetAfterPlan());
-		}
+		this.applyPermissionMode(next ? "read-only" : this.restoreTargetAfterPlan());
 	}
 
-	// lunr: /mode — permission mode selector (manual / yolo / plan / auto). Per-session only.
 	private handleModeCommand(args: string): void {
 		const sub = args.toLowerCase();
 
 		if (sub === "status") {
-			this.showStatus(`Permission mode: ${getPermissionMode()}`);
+			this.showStatus(`Permission mode: ${getPermissionMode() === "read-only" ? "read" : getPermissionMode()}`);
 			return;
 		}
 
-		if (sub === "manual" || sub === "yolo" || sub === "plan" || sub === "auto") {
-			this.applyPermissionMode(sub);
+		if (sub === "yolo" || sub === "auto" || sub === "read-only" || sub === "read") {
+			this.applyPermissionMode(sub === "read" ? "read-only" : sub);
 			return;
 		}
 
 		if (sub !== "") {
-			this.showStatus("Usage: /mode [manual|yolo|plan|auto] — bare /mode opens the selector.");
+			this.showStatus("Usage: /mode [yolo|auto|read] — bare /mode opens the selector.");
 			return;
 		}
 
 		const options = [
-			"Manual — approve every action",
 			"YOLO — auto-approve tools, agent may still ask",
-			"Plan — read-only; present a plan for approval",
 			"Auto — fully autonomous, no questions",
+			"Read — inspect without making changes",
 		];
 		void this.showExtensionSelector("Permission mode", options).then((choice) => {
 			if (!choice) return;
-			if (choice.startsWith("Manual")) this.applyPermissionMode("manual");
-			else if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
-			else if (choice.startsWith("Plan")) this.applyPermissionMode("plan");
+			if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
 			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
+			else if (choice.startsWith("Read")) this.applyPermissionMode("read-only");
 		});
 	}
 
-	/** Destination when leaving plan via approve / `/plan off` / `/plan <text>`. */
+	/** Destination after plan approval or /plan off. */
 	private restoreTargetAfterPlan(): PermissionMode {
 		return restorePermissionModeAfterPlan(
 			this.previousPermissionMode,
@@ -7601,8 +7580,8 @@ export class InteractiveMode {
 	private syncPermissionModeEffects(mode: PermissionMode): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		this.sessionManager.setPermissionMode(mode);
-		if (mode === "plan") {
-			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		if (mode === "read-only") {
+			this.session.setSystemPromptAppend(READ_ONLY_MODE_ADDENDUM);
 		} else if (mode === "auto") {
 			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
 			enableRollbackForSession(this.sessionManager.getSessionId());
@@ -7633,14 +7612,14 @@ export class InteractiveMode {
 		this.sessionManager.setPermissionMode(mode);
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const prev = getPermissionMode();
-		if (mode === "plan" && prev !== "plan") {
+		if (mode === "read-only" && prev !== "read-only") {
 			this.previousPermissionMode = prev;
 		}
 		setPermissionMode(mode);
 		this.ui.requestRender();
 
-		if (mode === "plan") {
-			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		if (mode === "read-only") {
+			this.session.setSystemPromptAppend(READ_ONLY_MODE_ADDENDUM);
 		} else if (mode === "auto") {
 			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
 		} else {
@@ -7657,47 +7636,11 @@ export class InteractiveMode {
 
 		if (mode === "auto" && prev !== "auto") {
 			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
-		} else if (mode === "plan") {
-			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
+		} else if (mode === "read-only") {
+			this.showStatus("Read mode active. Changes are blocked.");
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
 		}
-	}
-
-	// lunr: approval dialog for manual permission mode.
-	// lunr: adds "Switch to auto" / "Switch to yolo" at the bottom so users can
-	// escape manual approval mid-turn without a separate /mode round-trip.
-	private async showApprovalDialog(req: {
-		toolName: string;
-		action: string;
-		detail: string;
-	}): Promise<"once" | "session" | "reject"> {
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					`Approve ${req.action}?`,
-					["Approve once", "Approve for session", "Reject", "Switch to auto", "Switch to yolo"],
-					(option) => {
-						done();
-						if (option === "Approve once") resolve("once");
-						else if (option === "Approve for session") resolve("session");
-						else if (option === "Switch to auto") {
-							this.applyPermissionMode("auto");
-							resolve("once");
-						} else if (option === "Switch to yolo") {
-							this.applyPermissionMode("yolo");
-							resolve("once");
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-					{ message: req.detail.slice(0, 500) },
-				);
-				return { component: selector, focus: selector };
-			});
-		});
 	}
 
 	// Approval dialog for one subagent call launching more than two children.
@@ -7738,7 +7681,7 @@ export class InteractiveMode {
 		});
 	}
 
-	// lunr: approval dialog for present_plan (plan mode). The "with feedback"
+	// Approval dialog for present_plan (read-only mode). The "with feedback"
 	// options collect a one-line note via showExtensionInput that becomes part of
 	// the result text the model sees. Esc/close counts as Decline.
 	private showPlanInChat(summary: string): void {
