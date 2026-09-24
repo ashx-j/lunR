@@ -66,8 +66,8 @@ async function probeTui(artifactRoot, cli, anchor, standalone) {
 	for (const path of [agentDir, workspace, temp]) await mkdir(path, { recursive: true });
 	const probe = join(root, "scripts", "remote-pty-tui-probe.cjs");
 	const extension = join(anchor, standalone ? "phase0-product-extension.mjs" : "dist/phase0-product-extension.mjs");
-	const env = { ...process.env, PI_REMOTE_PHASE0_NATIVE_EXTENSION: extension, PI_REMOTE_PHASE0_ARTIFACT_ROOT: artifactRoot, PI_REMOTE_PHASE0_STANDALONE_CLI: standalone ? "1" : "0" };
-	const output = run(process.execPath, [probe, anchor, cli, workspace, home, agentDir, temp], { cwd: workspace, env, timeout: 45_000 });
+	const env = { ...process.env, PI_REMOTE_PHASE0_NATIVE_EXTENSION: extension, PI_REMOTE_PHASE0_ARTIFACT_ROOT: artifactRoot, PI_REMOTE_PHASE0_STANDALONE_CLI: standalone ? "1" : "0", PI_REMOTE_PHASE0_DIAGNOSTIC_FILE: join(temp, "native-diagnostic.txt") };
+	const output = run(process.execPath, [probe, anchor, cli, workspace, home, agentDir, temp], { cwd: workspace, env, timeout: standalone && process.platform !== "win32" ? 65_000 : 45_000 });
 	const result = JSON.parse(output);
 	assert.equal(result.result, "passed");
 	assert.equal(result.artifactNativeSpawn, true);

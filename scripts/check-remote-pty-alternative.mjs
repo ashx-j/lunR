@@ -74,6 +74,11 @@ try {
 	record.failure = String(error?.stack ?? error);
 	process.exitCode = 1;
 } finally {
+	try {
+		await rm(directory, { recursive: true, force: true, maxRetries: 6, retryDelay: 200 });
+	} catch (error) {
+		record.cleanupFailure = String(error);
+		process.exitCode = 1;
+	}
 	console.log(JSON.stringify(record, null, 2));
-	await rm(directory, { recursive: true, force: true });
 }

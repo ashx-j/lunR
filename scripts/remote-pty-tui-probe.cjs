@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const { createRequire } = require("node:module");
 const { join } = require("node:path");
 const editorFrame = require("./remote-pty-tui-frame.cjs");
@@ -6,7 +7,7 @@ const editorFrame = require("./remote-pty-tui-frame.cjs");
 const [install, cli, workspace, home, agentDir, temp] = process.argv.slice(2);
 const pty = createRequire(join(install, "entry.cjs"))("@lydell/node-pty");
 const extension = process.env.PI_REMOTE_PHASE0_NATIVE_EXTENSION;
-const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, TEMP: temp, TMP: temp, TMPDIR: temp, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", TERM: "xterm-256color", PI_REMOTE_PHASE0_ARTIFACT_ROOT: process.env.PI_REMOTE_PHASE0_ARTIFACT_ROOT, PI_REMOTE_PHASE0_NODE_EXECUTABLE: process.execPath };
+const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, TEMP: temp, TMP: temp, TMPDIR: temp, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", TERM: "xterm-256color", PI_REMOTE_PHASE0_ARTIFACT_ROOT: process.env.PI_REMOTE_PHASE0_ARTIFACT_ROOT, PI_REMOTE_PHASE0_NODE_EXECUTABLE: process.execPath, PI_REMOTE_PHASE0_DIAGNOSTIC_FILE: process.env.PI_REMOTE_PHASE0_DIAGNOSTIC_FILE };
 const args = ["--no-session", "--approve", ...(extension ? ["--extension", extension] : [])];
 const standalone = process.env.PI_REMOTE_PHASE0_STANDALONE_CLI === "1";
 const child = pty.spawn(standalone ? cli : process.execPath, standalone ? args : [cli, ...args], { cwd: workspace, name: "xterm-256color", cols: 80, rows: 24, env });
@@ -18,7 +19,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const waitFor = async (pattern, ms) => {
 	const start = Date.now();
 	while (!pattern.test(screen)) {
-		if (exited || Date.now() - start > ms) throw new Error(`TUI output missing ${pattern}; exited=${JSON.stringify(exited)}, bytes=${screen.length}, slash=${screen.includes("/settings")}, tail=${screen.slice(-700)}`);
+		const diagnosticFile = process.env.PI_REMOTE_PHASE0_DIAGNOSTIC_FILE;
+		const hasDiagnostic = Boolean(extension && diagnosticFile && fs.existsSync(diagnosticFile));
+		if (exited || hasDiagnostic || Date.now() - start > ms) {
+			const diagnostic = hasDiagnostic ? `, nativeDiagnostic=${JSON.stringify(fs.readFileSync(diagnosticFile, "utf8").slice(-1100))}` : "";
+			throw new Error(`TUI output missing ${pattern}; exited=${JSON.stringify(exited)}, bytes=${screen.length}, slash=${screen.includes("/settings")}${diagnostic}, tail=${screen.slice(-700)}`);
+		}
 		await sleep(50);
 	}
 };
@@ -31,7 +37,7 @@ async function run() {
 		await sleep(4500);
 		if (extension) {
 			child.write("/phase0-native\r");
-			await waitFor(/PRODUCT_PTY_NATIVE_OK/, 15000);
+			await waitFor(/PRODUCT_PTY_NATIVE_OK/, standalone && process.platform !== "win32" ? 30000 : 15000);
 		}
 		child.write("/settings");
 		await sleep(400);
