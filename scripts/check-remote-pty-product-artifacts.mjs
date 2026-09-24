@@ -9,6 +9,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertPublishedEntryPointsExist, rewritePackageJsonForNpm } from "./lunr-npm-names.mjs";
 import { copyPackageForPublish } from "./lunr-npm-staging.mjs";
+import { assertStagedTarball } from "./remote-product-tarballs.mjs";
 import { candidateVersion, installCandidate, isolatedNpmEnvironment, npmCliPath } from "./remote-pty-probe-install.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,14 +22,25 @@ assert.ok(["darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "win32-x64"
 const directory = mkdtempSync(join(tmpdir(), "lunr-phase0-product-"));
 const report = { scope, target, node: process.version, npm: "not-run", standalone: "not-run", result: "not-run" };
 
+function npmFailureDetails(profile) {
+	const logsDir = join(profile, "cache", "_logs");
+	if (!existsSync(logsDir)) return "npm timing log unavailable";
+	const logName = readdirSync(logsDir).filter((name) => name.endsWith("-debug-0.log")).sort().at(-1);
+	if (!logName) return "npm timing log unavailable";
+	const lines = readFileSync(join(logsDir, logName), "utf8").split(/\r?\n/)
+		.filter((line) => /^\d+ (?:http fetch|timing |error |warn )/.test(line)).slice(-20)
+		.map((line) => line.slice(0, 300));
+	return `npm log ${logName}:\n${lines.join("\n") || "no fetch, timing or error entries"}`;
+}
+
 function run(command, args, options = {}) {
 	const result = spawnSync(command, args, { cwd: options.cwd ?? directory, env: options.env ?? process.env, encoding: "utf8", timeout: options.timeout ?? 180_000, maxBuffer: 5 * 1024 * 1024 });
-	if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed (${result.status}): ${result.error?.message ?? ""}\n${result.stdout?.slice(-1600)}\n${result.stderr?.slice(-1600)}`);
+	if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed (${result.status}): ${result.error?.message ?? ""}\n${result.stdout?.slice(-1600)}\n${result.stderr?.slice(-1600)}${options.npmProfile ? `\n${npmFailureDetails(options.npmProfile)}` : ""}`);
 	return result.stdout.trim();
 }
 
 async function npmEnv(profile) {
-	return { ...await isolatedNpmEnvironment(profile), PI_OFFLINE: "1", PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" };
+	return { ...await isolatedNpmEnvironment(profile), npm_config_cache: join(profile, "cache"), npm_config_timing: "true", PI_OFFLINE: "1", PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" };
 }
 
 function assertCandidateFromArtifact(anchor, artifactRoot) {
@@ -67,6 +79,7 @@ async function proveNpm() {
 	const packs = join(directory, "packs");
 	await mkdir(packs);
 	const dependencies = {};
+	const stagedArchives = new Map();
 	for (const relative of packageDirs) {
 		const staged = copyPackageForPublish(join(root, relative), directory);
 		const manifestPath = join(staged.dest, "package.json");
@@ -82,17 +95,18 @@ async function proveNpm() {
 		run(process.execPath, [npmCliPath(), "pack", "--ignore-scripts", "--pack-destination", stagePacks], { cwd: staged.dest, env: await npmEnv(join(directory, "pack-profile")) });
 		const filenames = readdirSync(stagePacks).filter((name) => name.endsWith(".tgz"));
 		assert.equal(filenames.length, 1);
-		dependencies[staged.publishedName] = `file:${join(stagePacks, filenames[0])}`;
+		const archive = join(stagePacks, filenames[0]);
+		dependencies[staged.publishedName] = `file:${archive}`;
+		stagedArchives.set(staged.publishedName, archive);
 	}
 	const install = join(directory, "product-npm-install");
 	await mkdir(install);
 	writeFileSync(join(install, "package.json"), `${JSON.stringify({ name: "phase0-isolated-product", private: true, version: "1.0.0", dependencies })}\n`);
-	run(process.execPath, [npmCliPath(), "install", "--prefix", install, "--no-audit", "--no-fund", "--foreground-scripts"], { cwd: install, env: await npmEnv(join(directory, "install-profile")), timeout: 240_000 });
+	const installProfile = join(directory, "install-profile");
+	// npm's HTTP fetch timeout is 300 seconds; let it emit its own failure before terminating the install.
+	run(process.execPath, [npmCliPath(), "install", "--prefix", install, "--no-audit", "--no-fund", "--foreground-scripts"], { cwd: install, env: await npmEnv(installProfile), timeout: 360_000, npmProfile: installProfile });
 	const lock = JSON.parse(readFileSync(join(install, "package-lock.json"), "utf8"));
-	for (const name of Object.keys(dependencies)) {
-		const row = lock.packages[`node_modules/${name}`];
-		assert.ok(row?.resolved?.startsWith("file:"), `${name} was not installed from a staged tarball`);
-	}
+	for (const [name, archive] of stagedArchives) assertStagedTarball(lock, name, archive, install);
 	const productRoot = join(install, "node_modules", "@ashx-j", "lunr");
 	assert.equal(lstatSync(productRoot).isSymbolicLink(), false, "npm product links to workspace");
 	const manifest = JSON.parse(readFileSync(join(productRoot, "package.json"), "utf8"));
@@ -133,6 +147,13 @@ async function proveStandalone() {
 	const vendor = join(artifact, "node_modules", "@lydell");
 	await mkdir(vendor, { recursive: true });
 	for (const name of ["node-pty", selected]) cpSync(join(nativeInstall, "node_modules", "@lydell", name), join(vendor, name), { recursive: true });
+	const nativeRoot = join(vendor, selected);
+	const nativeManifest = JSON.parse(readFileSync(join(nativeRoot, "package.json"), "utf8"));
+	assert.equal(nativeManifest.exports, "./lib/index.js");
+	assert.equal(existsSync(join(nativeRoot, "index.js")), false);
+	// Bun 1.3.14 compiled runtime ignores this external package's exports/main.
+	// Keep the native addon and helper paths relative to the original lib entry.
+	writeFileSync(join(nativeRoot, "index.js"), 'module.exports = require("./lib/index.js");\n');
 	cpSync(join(root, "scripts", "remote-pty-product-extension.mjs"), join(artifact, "phase0-product-extension.mjs"));
 	const source = JSON.parse(readFileSync(join(root, "packages", "coding-agent", "package.json"), "utf8"));
 	const manifest = rewritePackageJsonForNpm(source);
