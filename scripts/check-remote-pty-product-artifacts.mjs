@@ -83,6 +83,7 @@ async function probeTui(artifactRoot, cli, anchor, standalone, controllerInstall
 		assert.equal(result.compiledWorker.settings, true);
 		assert.equal(result.compiledWorker.input, true);
 		assert.equal(result.compiledWorker.detachedReattachColumns, 110);
+		assert.equal(result.compiledWorker.renderWidth, 110);
 		assert.equal(result.compiledWorker.aliveAfterDetach, true);
 	} else assert.equal(result.compiledWorker, "not-run");
 	return { firstPaint: result.tuiFirstPaint, settings: result.settingsDialogSeen, artifactPtyBackend: result.artifactPtyBackend, artifactPtyStreamStatus: result.artifactPtyStreamStatus, compiledWorker: result.compiledWorker, artifactNativeSpawn: result.artifactNativeSpawn, reattachColumns: result.repaintColumns };

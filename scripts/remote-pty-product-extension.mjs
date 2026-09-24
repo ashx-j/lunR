@@ -55,6 +55,10 @@ export function spawnBunTerminal(executable, args, options) {
 	};
 }
 
+export function assertWorkerResizeReceipt(receipt, columns, rows) {
+	if (receipt.columns !== columns || receipt.rows !== rows || receipt.observed !== `${columns}x${rows}` || receipt.renderWidth !== columns || receipt.renderColumns !== columns || receipt.renderRows !== rows) throw new Error(`compiled worker resize receipt: ${JSON.stringify(receipt)}`);
+}
+
 export async function probeCompiledWorker(spawn, artifactRoot, disposableRoot) {
 	const cli = realpathSync(join(artifactRoot, process.platform === "win32" ? "lunr.exe" : "lunr"));
 	const base = mkdtempSync(join(disposableRoot, "compiled-worker-"));
@@ -99,17 +103,16 @@ export async function probeCompiledWorker(spawn, artifactRoot, disposableRoot) {
 		writeFileSync(resizeFile, JSON.stringify({ columns: 110, rows: 35 }));
 		await waitFor(() => existsSync(`${resizeFile}.result`), "explicit resize receipt", 5000);
 		const resizeReceipt = JSON.parse(readFileSync(`${resizeFile}.result`, "utf8"));
-		if (resizeReceipt.columns !== 110 || resizeReceipt.rows !== 35 || resizeReceipt.observed !== "110x35") throw new Error(`compiled worker resize receipt: ${JSON.stringify(resizeReceipt)}`);
+		assertWorkerResizeReceipt(resizeReceipt, 110, 35);
 		try {
-			await waitFor(() => repaint.includes("\x1b[2J") && /(?:^|\r*\n)─{110}(?=\x1b|\r*\n)/.test(repaint) && [...repaint.matchAll(/╰[^\r\n]*╯/g)].some(([border]) => border.length === (process.platform === "win32" ? 109 : 110)) && repaint.includes("Auto-compact") && repaint.includes("Type to search"), "complete 110-column settings repaint after reattachment", 10_000);
+			await waitFor(() => repaint.includes("\x1b[2J") && repaint.includes("Auto-compact") && repaint.includes("Type to search"), "full settings repaint after 110-column render", 10_000);
 		} catch (error) {
-			const borders = [...repaint.matchAll(/╰[^\r\n]*╯/g)].map(([border]) => border.length);
-			throw new Error(`${error.message}; receipt=${JSON.stringify(resizeReceipt)}, repaintBytes=${repaint.length}, borders=${borders.join(",")}, clear=${repaint.includes("\x1b[2J")}, repaintHead=${JSON.stringify(repaint.slice(0, 320))}`);
+			throw new Error(`${error.message}; receipt=${JSON.stringify(resizeReceipt)}, repaintBytes=${repaint.length}, clear=${repaint.includes("\x1b[2J")}, settings=${repaint.includes("Auto-compact") && repaint.includes("Type to search")}, repaintHead=${JSON.stringify(repaint.slice(0, 320))}`);
 		}
 		child.write("\u001b");
 		await sleep(300);
 		if (exited) throw new Error("compiled worker exited after reattachment");
-		return { pid: child.pid, executable: basename(cli), firstPaint: true, settings: true, repaintColumns: 110, workerAliveAfterDetach: true };
+		return { pid: child.pid, executable: basename(cli), firstPaint: true, settings: true, repaintColumns: 110, renderWidth: resizeReceipt.renderWidth, workerAliveAfterDetach: true };
 	} finally {
 		subscription.dispose();
 		child.kill();
@@ -135,8 +138,18 @@ export default function productPtyProbe(pi) {
 					const { columns, rows } = JSON.parse(content);
 					const observed = process.stdout.getWindowSize?.().join("x");
 					const result = { columns: tui.terminal.columns, rows: tui.terminal.rows, observed, resizeEvents };
-					if (columns === result.columns && rows === result.rows && observed === `${columns}x${rows}`) tui.requestRender(true);
-					writeFileSync(`${resizeFile}.result`, JSON.stringify(result));
+					if (columns !== result.columns || rows !== result.rows || observed !== `${columns}x${rows}`) {
+						writeFileSync(`${resizeFile}.result`, JSON.stringify({ ...result, renderWidth: null }));
+						return;
+					}
+					const render = tui.render;
+					tui.render = function(width) {
+						const lines = render.call(this, width);
+						tui.render = render;
+						writeFileSync(`${resizeFile}.result`, JSON.stringify({ ...result, renderWidth: width, renderColumns: tui.terminal.columns, renderRows: tui.terminal.rows }));
+						return lines;
+					};
+					tui.requestRender(true);
 				}, 50);
 				return { render: () => [] };
 			});
@@ -304,7 +317,7 @@ export default function productPtyProbe(pi) {
 				writeFileSync(diagnosticFile, `compiled worker: ${error.message}`);
 				throw error;
 			}
-			ctx.ui.notify(`PRODUCT_PTY_WORKER_OK_${bunTerminal ? "BUN" : "NATIVE"}_PID_${worker.pid}_${worker.executable === "lunr.exe" ? "LUNR_EXE" : "LUNR"}_COLS_${worker.repaintColumns}`, "info");
+			ctx.ui.notify(`PRODUCT_PTY_WORKER_OK_${bunTerminal ? "BUN" : "NATIVE"}_PID_${worker.pid}_${worker.executable === "lunr.exe" ? "LUNR_EXE" : "LUNR"}_COLS_${worker.repaintColumns}_RENDER_${worker.renderWidth}`, "info");
 		},
 	});
 }

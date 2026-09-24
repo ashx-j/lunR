@@ -43,7 +43,7 @@ async function run() {
 			await waitFor(artifactPtyBackend === "bun-terminal" ? /PRODUCT_PTY_BUN_TERMINAL_OK/ : /PRODUCT_PTY_NATIVE_OK/, standalone ? 30000 : 15000);
 			if (standalone) {
 				child.write("/phase0-worker\r");
-				await waitFor(/PRODUCT_PTY_WORKER_OK_(BUN|NATIVE)_PID_\d+_(LUNR_EXE|LUNR)_COLS_110/, 65000);
+				await waitFor(/PRODUCT_PTY_WORKER_OK_(BUN|NATIVE)_PID_\d+_(LUNR_EXE|LUNR)_COLS_110_RENDER_110/, 65000);
 			}
 		}
 		child.write("/settings");
@@ -70,9 +70,9 @@ async function run() {
 		assert.ok(borders.includes(110), `Reattached frame did not use the new 110-column viewport: ${borders.join(",")}`);
 		const artifactPtyStreamStatus = artifactPtyBackend === "bun-terminal" ? screen.match(/PRODUCT_PTY_BUN_TERMINAL_OK_PTY_(pending|0|1)/)?.[1] : "not-applicable";
 		assert.ok(artifactPtyStreamStatus, "Bun Terminal stream status receipt missing");
-		const nested = standalone ? screen.match(/PRODUCT_PTY_WORKER_OK_(BUN|NATIVE)_PID_(\d+)_(LUNR_EXE|LUNR)_COLS_110/) : null;
+		const nested = standalone ? screen.match(/PRODUCT_PTY_WORKER_OK_(BUN|NATIVE)_PID_(\d+)_(LUNR_EXE|LUNR)_COLS_110_RENDER_(\d+)/) : null;
 		if (standalone) assert.ok(nested && Number(nested[2]) > 0 && Number(nested[2]) !== child.pid, "Compiled host did not retain a distinct nested worker PTY");
-		const compiledWorker = nested ? { ownerBackend: nested[1] === "BUN" ? "bun-terminal" : "native-addon", pid: Number(nested[2]), executable: nested[3] === "LUNR_EXE" ? "lunr.exe" : "lunr", firstPaint: true, settings: true, input: true, detachedReattachColumns: 110, aliveAfterDetach: true } : "not-run";
+		const compiledWorker = nested ? { ownerBackend: nested[1] === "BUN" ? "bun-terminal" : "native-addon", pid: Number(nested[2]), executable: nested[3] === "LUNR_EXE" ? "lunr.exe" : "lunr", firstPaint: true, settings: true, input: true, detachedReattachColumns: 110, renderWidth: Number(nested[4]), aliveAfterDetach: true } : "not-run";
 		console.log(JSON.stringify({ result: "passed", platform: `${process.platform}-${process.arch}`, tuiFirstPaint: true, settingsDialogSeen, inputEchoSeen, workerAliveAfterDetach: true, artifactPtyBackend: extension ? artifactPtyBackend : "none", artifactPtyStreamStatus, compiledWorker, artifactNativeSpawn: Boolean(extension && artifactPtyBackend === "native-addon"), reattachedOutputBytes: reattached.length, repaintColumns: borders, dimensions: [110, 35], scope: extension ? "isolated installed product artifact and artifact-local PTY" : "isolated actual worktree CLI; no agent inference" }));
 	} finally {
 		child.kill();

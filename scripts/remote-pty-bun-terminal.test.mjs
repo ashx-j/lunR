@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
-import productPtyProbe, { probeCompiledWorker, productPtySource, spawnBunTerminal } from "./remote-pty-product-extension.mjs";
+import productPtyProbe, { assertWorkerResizeReceipt, probeCompiledWorker, productPtySource, spawnBunTerminal } from "./remote-pty-product-extension.mjs";
 
 test("Bun terminal EOF is separate from subprocess exit", async () => {
 	const originalBun = globalThis.Bun;
@@ -219,18 +219,23 @@ test("isolated worker control requests a full TUI repaint only for observed dime
 	const listeners = new Map();
 	const renders = [];
 	let columns = 80;
+	const tui = {
+		terminal: { get columns() { return columns; }, rows: 35 },
+		render(width) { renders.push(width); return ["existing TUI render"]; },
+		requestRender(force) { renders.push(force); queueMicrotask(() => tui.render(columns)); },
+	};
 	try {
 		productPtyProbe({ on(event, handler) { listeners.set(event, handler); } });
 		listeners.get("session_start")({}, { hasUI: true, ui: { setWidget(_key, factory) {
-			if (factory) factory({ terminal: { get columns() { return columns; }, rows: 35 }, requestRender(force) { renders.push(force); } });
+			if (factory) factory(tui);
 		} } });
 		await Promise.resolve();
 		columns = 110;
 		writeFileSync(file, JSON.stringify({ columns: 110, rows: 35 }));
 		const deadline = Date.now() + 1000;
 		while (!existsSync(`${file}.result`) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-		assert.deepEqual(JSON.parse(readFileSync(`${file}.result`, "utf8")), { columns: 110, rows: 35, observed: "110x35", resizeEvents: 0 });
-		assert.deepEqual(renders, [true]);
+		assert.deepEqual(JSON.parse(readFileSync(`${file}.result`, "utf8")), { columns: 110, rows: 35, observed: "110x35", resizeEvents: 0, renderWidth: 110, renderColumns: 110, renderRows: 35 });
+		assert.deepEqual(renders, [true, 110]);
 	} finally {
 		listeners.get("session_shutdown")?.();
 		if (descriptor) Object.defineProperty(process.stdout, "getWindowSize", descriptor);
@@ -238,6 +243,12 @@ test("isolated worker control requests a full TUI repaint only for observed dime
 		if (previous === undefined) delete process.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE;
 		else process.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE = previous;
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("stale 80- or 108-column renders cannot satisfy a 110-column worker receipt", () => {
+	for (const width of [80, 108]) {
+		assert.throws(() => assertWorkerResizeReceipt({ columns: 110, rows: 35, observed: "110x35", renderWidth: width, renderColumns: 110, renderRows: 35 }, 110, 35), /compiled worker resize receipt/);
 	}
 });
 
@@ -272,8 +283,8 @@ test("compiled host PTY owns a distinct real-CLI worker across settings detach a
 			resize(cols, rows) {
 				resizes.push([cols, rows, listeners.size]);
 				if (cols === 110) {
-					writeFileSync(`${options.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE}.result`, JSON.stringify({ columns: 110, rows: 35, observed: "110x35", resizeEvents: 2 }));
-					setTimeout(() => emit(`\x1b[2J\r\n${"─".repeat(110)}\x1b[m\r\n╰${"─".repeat(107)}╯ Auto-compact Type to search`), 400);
+					writeFileSync(`${options.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE}.result`, JSON.stringify({ columns: 110, rows: 35, observed: "110x35", resizeEvents: 2, renderWidth: 110, renderColumns: 110, renderRows: 35 }));
+					setTimeout(() => emit("\x1b[2J Auto-compact Type to search"), 400);
 				}
 			},
 			kill() { killed++; },
@@ -281,7 +292,7 @@ test("compiled host PTY owns a distinct real-CLI worker across settings detach a
 			};
 		}, artifact, directory);
 		assert.deepEqual(resizes, [[108, 34, 0], [110, 35, 1]]);
-		assert.deepEqual(result, { pid: process.pid + 1, executable: process.platform === "win32" ? "lunr.exe" : "lunr", firstPaint: true, settings: true, repaintColumns: 110, workerAliveAfterDetach: true });
+		assert.deepEqual(result, { pid: process.pid + 1, executable: process.platform === "win32" ? "lunr.exe" : "lunr", firstPaint: true, settings: true, repaintColumns: 110, renderWidth: 110, workerAliveAfterDetach: true });
 		assert.equal(killed, 1);
 		assert.equal(closed, 1);
 		assert.equal(listeners.size, 0);
