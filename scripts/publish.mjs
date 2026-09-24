@@ -7,46 +7,10 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import {
-	assertPublishedEntryPointsExist,
-	assertPublishedTreeHasNoEarendil,
-	npmNameFor,
-	rewritePackageJsonForNpm,
-	rewriteWorkspaceSpecifiers,
-} from "./lunr-npm-names.mjs";
-
-const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
-
-function shouldRewriteFile(filePath) {
-	const norm = filePath.replaceAll("\\", "/");
-	if (norm.includes("/node_modules/")) return false;
-	for (const ext of REWRITE_EXT) {
-		if (norm.endsWith(ext)) return true;
-	}
-	return false;
-}
-
-function rewritePublishedTree(root) {
-	const stack = [root];
-	while (stack.length > 0) {
-		const dir = stack.pop();
-		for (const name of readdirSync(dir)) {
-			const full = join(dir, name);
-			if (statSync(full).isDirectory()) {
-				if (name === "node_modules") continue;
-				stack.push(full);
-				continue;
-			}
-			if (!shouldRewriteFile(full)) continue;
-			const before = readFileSync(full, "utf8");
-			const after = rewriteWorkspaceSpecifiers(before);
-			if (after !== before) writeFileSync(full, after, "utf8");
-		}
-	}
-}
+import { assertPublishedEntryPointsExist, npmNameFor } from "./lunr-npm-names.mjs";
+import { copyPackageForPublish } from "./lunr-npm-staging.mjs";
 
 const packages = [
 	{ directory: "packages/ai", workspaceName: "@earendil-works/pi-ai" },
@@ -107,29 +71,6 @@ async function isPublished(name, version) {
 		throw new Error(`Failed to query ${name}@${version}: HTTP ${res.status}`);
 	}
 	return true;
-}
-
-function copyPackageForPublish(directory) {
-	const dest = mkdtempSync(join(tmpdir(), "lunr-publish-"));
-	cpSync(directory, dest, {
-		recursive: true,
-		filter: (src) => {
-			const norm = src.replaceAll("\\", "/");
-			if (norm.includes("/node_modules")) return false;
-			if (norm.includes("/binaries")) return false;
-			if (norm.endsWith("npm-shrinkwrap.json")) return false;
-			return true;
-		},
-	});
-	const sourcePkg = readPackageJson(directory);
-	const rewritten = rewritePackageJsonForNpm(sourcePkg);
-	if (rewritten.repository && rewritten.repository.directory === undefined) {
-		delete rewritten.repository.directory;
-	}
-	writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`, "utf8");
-	rewritePublishedTree(dest);
-	assertPublishedTreeHasNoEarendil(dest, rewritten.name);
-	return { dest, publishedName: rewritten.name, version: rewritten.version };
 }
 
 const packageVersions = new Map();

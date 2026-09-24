@@ -10,6 +10,8 @@
 #   --skip-install      Skip npm ci
 #   --skip-deps         Skip installing cross-platform dependencies
 #   --skip-build        Skip npm run build
+#   --skip-archive      Leave unpacked artifact layouts without archive tools
+#   --bun-bin <path>    Use a disposable Bun executable instead of PATH
 #   --platform <name>   Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64)
 #   --out <dir>         Output directory (default: packages/coding-agent/binaries)
 #
@@ -29,8 +31,10 @@ cd "$(dirname "$0")/.."
 SKIP_INSTALL=false
 SKIP_DEPS=false
 SKIP_BUILD=false
+SKIP_ARCHIVE=false
 PLATFORM=""
 OUTPUT_DIR=""
+BUN_BIN="bun"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -45,6 +49,14 @@ while [[ $# -gt 0 ]]; do
         --skip-build)
             SKIP_BUILD=true
             shift
+            ;;
+        --skip-archive)
+            SKIP_ARCHIVE=true
+            shift
+            ;;
+        --bun-bin)
+            BUN_BIN="$2"
+            shift 2
             ;;
         --platform)
             PLATFORM="$2"
@@ -130,13 +142,12 @@ fi
 
 for platform in "${PLATFORMS[@]}"; do
     echo "Building for $platform..."
-    # Bun compiled executables only embed worker scripts when they are passed as
-    # explicit build entrypoints. The runtime can still use new URL(...), but the
-    # worker must be present in the compiled executable.
+    # Linkedom probes the optional node-canvas package and falls back to its shim.
+    # Bun must not bundle the dev-only canvas package without its native addon.
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/lunr.exe"
+        "$BUN_BIN" build --compile --target=bun-$platform --external canvas ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/lunr.exe"
     else
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/lunr"
+        "$BUN_BIN" build --compile --target=bun-$platform --external canvas ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/lunr"
     fi
 done
 
@@ -207,6 +218,11 @@ for platform in "${PLATFORMS[@]}"; do
         cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "$OUTPUT_DIR/$platform/native/win32/prebuilds/$win32_arch_dir/"
     fi
 done
+
+if [[ "$SKIP_ARCHIVE" == "true" ]]; then
+    echo "==> Staged unpacked binaries in $OUTPUT_DIR"
+    exit 0
+fi
 
 # Create archives
 cd "$OUTPUT_DIR"

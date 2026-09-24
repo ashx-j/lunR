@@ -1,0 +1,79 @@
+name: Remote Phase 0 candidate validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/remote-phase0-validation.yml'
+      - 'scripts/check-remote-phase0-acceptance.mjs'
+      - 'scripts/check-remote-pty-*.mjs'
+      - 'scripts/remote-pty-*'
+      - 'scripts/lunr-npm-staging.mjs'
+      - 'scripts/publish.mjs'
+      - 'scripts/build-binaries.sh'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'packages/coding-agent/package.json'
+      - 'packages/coding-agent/npm-shrinkwrap.json'
+      - 'packages/coding-agent/install-lock/package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-npm:
+    name: ${{ matrix.target }} / Node ${{ matrix.node }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+            node: '22.19.0'
+            major: '22'
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            node: '22.19.0'
+            major: '22'
+          - target: darwin-x64
+            runner: macos-15-intel
+            node: '22.19.0'
+            major: '22'
+          - target: darwin-arm64
+            runner: macos-15
+            node: '22.19.0'
+            major: '22'
+          - target: win32-x64
+            runner: windows-2025
+            node: '22.19.0'
+            major: '22'
+          - target: win32-arm64
+            runner: windows-11-arm
+            node: '22.19.0'
+            major: '22'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Build worktree CLI without catalog generation
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx tsgo -p packages/tui/tsconfig.build.json
+          npx tsgo -p packages/ai/tsconfig.build.json
+          npx tsgo -p packages/agent/tsconfig.build.json
+          npm --prefix packages/coding-agent run build
+      - name: Validate candidate npm install and PTY/TUI
+        run: node scripts/check-remote-phase0-acceptance.mjs --scope=candidate-npm --target=${{ matrix.target }} --node-major=${{ matrix.major }}
+      - name: Validate staged public-name npm product
+        run: node scripts/check-remote-phase0-acceptance.mjs --scope=product-npm --target=${{ matrix.target }} --node-major=${{ matrix.major }}
+      - name: Record scope
+        if: always()
+        shell: bash
+        run: |
+          echo 'Phase 0 npm-only validation on Node 22.19. Node 24, standalone Bun binaries, musl, signing and production remote hosting remain separate release gates.' >> "$GITHUB_STEP_SUMMARY"

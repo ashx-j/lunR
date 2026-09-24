@@ -23,6 +23,8 @@ type SubmitContext = {
 		prompt: (text: string, options?: unknown) => Promise<void>;
 	};
 	flushPendingBashComponents: () => void;
+	runtimeHost: { isDetached: boolean; services: { agentDir: string } };
+	sessionManager: { isPersisted: () => boolean };
 	onInputCallback?: (input: QueuedUserInput) => void;
 	pendingUserInputs: QueuedUserInput[];
 	ui: { setChatScroll: (n: number) => void };
@@ -38,6 +40,7 @@ type SubmitContext = {
 
 type InteractiveModePrivate = {
 	setupEditorSubmitHandler(this: SubmitContext): void;
+	writeClipboardImageFile(image: { bytes: Uint8Array; mimeType: string }): { path: string; mimeType: string };
 	loadImageAttachments(
 		this: {
 			settingsManager: { getImageAutoResize: () => boolean };
@@ -84,6 +87,22 @@ describe("InteractiveMode image paste chips", () => {
 		expect(images?.[1]?.mimeType).toBe("image/png");
 	});
 
+	it("accepts synthetic image bytes through the existing attachment loader", async () => {
+		const saved = proto.writeClipboardImageFile({
+			bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+			mimeType: "image/png",
+		});
+		try {
+			const images = await proto.loadImageAttachments.call(
+				{ settingsManager: { getImageAutoResize: () => false }, showStatus: vi.fn() },
+				[{ id: 1, ...saved }],
+			);
+			expect(images).toEqual([{ type: "image", mimeType: "image/png", data: TINY_PNG_BASE64 }]);
+		} finally {
+			rmSync(saved.path, { force: true });
+		}
+	});
+
 	it("submits chip text plus loaded images", async () => {
 		const first = join(dir, "one.png");
 		writeFileSync(first, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -115,6 +134,8 @@ describe("InteractiveMode image paste chips", () => {
 			takeSubmittedImages: vi.fn(() => [{ id: 1, path: first, mimeType: "image/png" }]),
 			consumeStagedSubmitImages: vi.fn(() => undefined),
 			loadImageAttachments: vi.fn(async () => loaded),
+			runtimeHost: { isDetached: false, services: { agentDir: dir } },
+			sessionManager: { isPersisted: () => false },
 		};
 
 		proto.setupEditorSubmitHandler.call(context);
@@ -146,6 +167,8 @@ describe("InteractiveMode image paste chips", () => {
 			takeSubmittedImages: vi.fn(() => []),
 			consumeStagedSubmitImages: vi.fn(() => undefined),
 			loadImageAttachments: vi.fn(async () => undefined),
+			runtimeHost: { isDetached: false, services: { agentDir: dir } },
+			sessionManager: { isPersisted: () => false },
 		};
 
 		proto.setupEditorSubmitHandler.call(context);
