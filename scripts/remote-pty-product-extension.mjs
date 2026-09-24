@@ -1,22 +1,78 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, isAbsolute, join, sep } from "node:path";
 
 const require = createRequire(import.meta.url);
+
+export function spawnBunTerminal(executable, args, options) {
+	const dataListeners = new Set();
+	const exitListeners = new Set();
+	const ptyExitListeners = new Set();
+	let processExit;
+	let ptyExit;
+	const proc = Bun.spawn([executable, ...args], {
+		cwd: options.cwd,
+		env: { ...options.env, TERM: options.name },
+		terminal: {
+			name: options.name,
+			cols: options.cols,
+			rows: options.rows,
+			data(_terminal, bytes) {
+				const chunk = Buffer.from(bytes).toString("utf8");
+				for (const listener of dataListeners) listener(chunk);
+			},
+			exit(_terminal, status, signal) {
+				ptyExit = { status, signal };
+				for (const listener of ptyExitListeners) listener(ptyExit);
+			},
+		},
+	});
+	const terminal = proc.terminal;
+	if (!terminal) {
+		proc.kill();
+		throw new Error("Bun did not attach a terminal");
+	}
+	proc.exited.then((exitCode) => {
+		processExit = { exitCode, signal: proc.signalCode };
+		for (const listener of exitListeners) listener(processExit);
+	}, () => {
+		processExit = { exitCode: null, signal: proc.signalCode };
+		for (const listener of exitListeners) listener(processExit);
+	});
+	let closed = false;
+	return {
+		pid: proc.pid,
+		write: (text) => terminal.write(text),
+		resize: (cols, rows) => terminal.resize(cols, rows),
+		kill: () => proc.kill(),
+		close: () => { if (!closed) { closed = true; terminal.close(); } },
+		onData: (listener) => { dataListeners.add(listener); },
+		onExit: (listener) => { if (processExit) listener(processExit); else exitListeners.add(listener); },
+		onPtyExit: (listener) => { if (ptyExit) listener(ptyExit); else ptyExitListeners.add(listener); },
+	};
+}
 
 export default function productPtyProbe(pi) {
 	pi.registerCommand("phase0-native", {
 		description: "Disposable native PTY check from product artifact",
 		handler: async (_args, ctx) => {
 			const root = realpathSync(process.env.PI_REMOTE_PHASE0_ARTIFACT_ROOT);
-			const expected = `${join(root, "node_modules", "@lydell")}${sep}`;
-			for (const name of ["@lydell/node-pty", `@lydell/node-pty-${process.platform}-${process.arch}`]) {
-				if (!realpathSync(require.resolve(name)).startsWith(expected)) throw new Error(`${name} resolved outside disposable artifact`);
+			const bunUnix = process.env.PI_REMOTE_PHASE0_STANDALONE_CLI === "1" && process.platform !== "win32";
+			let spawn;
+			if (bunUnix) {
+				if (process.versions.bun !== "1.3.14" || typeof Bun === "undefined" || typeof Bun.spawn !== "function") throw new Error("Bun 1.3.14 Terminal backend is required");
+				if (existsSync(join(root, "node_modules", "@lydell", "node-pty"))) throw new Error("Unix standalone unexpectedly contains native PTY addon");
+				spawn = spawnBunTerminal;
+			} else {
+				const expected = `${join(root, "node_modules", "@lydell")}${sep}`;
+				for (const name of ["@lydell/node-pty", `@lydell/node-pty-${process.platform}-${process.arch}`]) {
+					if (!realpathSync(require.resolve(name)).startsWith(expected)) throw new Error(`${name} resolved outside disposable artifact`);
+				}
+				spawn = require("@lydell/node-pty").spawn;
 			}
-			const { spawn } = require("@lydell/node-pty");
 			const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "" };
-			const source = "process.stdin.setRawMode?.(true);process.stdin.resume();process.stdin.on('data',d=>{const input=d.toString();if(input.includes('PRODUCT_PTY_START'))console.log('PRODUCT_PTY_READY');if(input.includes('PRODUCT_PTY_PING'))console.log('PRODUCT_PTY_ACK');if(input.includes('PRODUCT_PTY_FINISH'))process.exit(0)})";
+			const source = "process.stdin.setRawMode?.(true);process.stdin.resume();process.stdin.on('data',d=>{const input=d.toString();if(input.includes('PRODUCT_PTY_START'))console.log('PRODUCT_PTY_READY');if(input.includes('PRODUCT_PTY_PING')){console.log('PRODUCT_PTY_ACK');console.log('PRODUCT_PTY_SIZE '+process.stdout.getWindowSize?.().join('x'))}if(input.includes('PRODUCT_PTY_FINISH'))process.exit(0)})";
 			const handshake = (executable, args, kind) => {
 				const child = spawn(executable, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: root, env });
 				return new Promise((resolve, reject) => {
@@ -24,6 +80,7 @@ export default function productPtyProbe(pi) {
 					let phase = "start";
 					let exitCode;
 					let signal;
+					let ptyStatus = "pending";
 					let lastEvent = "spawn";
 					let dataEvents = 0;
 					let settled = false;
@@ -31,13 +88,19 @@ export default function productPtyProbe(pi) {
 						if (settled) return;
 						settled = true;
 						clearTimeout(timer);
-						if (!error) return resolve();
+						if (!error) {
+							try { child.close?.(); resolve({ ptyStatus }); }
+							catch (closeError) { reject(new Error(`${kind} terminal close failed (${closeError?.code ?? "unknown"})`)); }
+							return;
+						}
 						let kill = "not-needed";
 						if (exitCode === undefined) {
 							try { child.kill(); kill = "requested"; }
 							catch (killError) { kill = killError?.code ?? "failed"; }
 						}
-						reject(new Error(`${kind} ${error}; pid=${child.pid ?? "unknown"}, phase=${phase}, last=${lastEvent}, exit=${exitCode ?? "pending"}, signal=${signal ?? "none"}, events=${dataEvents}, bytes=${text.length}, kill=${kill}, tail=${JSON.stringify(text.slice(-120))}`));
+						try { child.close?.(); }
+						catch (closeError) { kill += `, close=${closeError?.code ?? "failed"}`; }
+						reject(new Error(`${kind} ${error}; pid=${child.pid ?? "unknown"}, phase=${phase}, last=${lastEvent}, exit=${exitCode ?? "pending"}, signal=${signal ?? "none"}, pty=${ptyStatus}, events=${dataEvents}, bytes=${text.length}, kill=${kill}, tail=${JSON.stringify(text.slice(-120))}`));
 					};
 					const timer = setTimeout(() => finish("handshake timed out"), 8000);
 					child.onData((chunk) => {
@@ -46,10 +109,11 @@ export default function productPtyProbe(pi) {
 						dataEvents++;
 						try {
 							if (phase === "start" && text.includes("PRODUCT_PTY_READY")) {
+								if (bunUnix) child.resize(112, 36);
 								phase = "ping";
 								child.write("PRODUCT_PTY_PING\r");
 							}
-							if (phase === "ping" && text.includes("PRODUCT_PTY_ACK")) {
+							if (phase === "ping" && text.includes("PRODUCT_PTY_ACK") && (!bunUnix || text.includes("PRODUCT_PTY_SIZE 112x36"))) {
 								phase = "finish";
 								child.write("PRODUCT_PTY_FINISH\r");
 							}
@@ -57,11 +121,16 @@ export default function productPtyProbe(pi) {
 							finish(`write failed (${error?.code ?? "unknown"})`);
 						}
 					});
+					child.onPtyExit?.(({ status }) => {
+						ptyStatus = status;
+						lastEvent = "pty-eof";
+						if (status !== 0 || phase !== "finish") finish("PTY stream closed before subprocess completion");
+					});
 					child.onExit(({ exitCode: code, signal: childSignal }) => {
 						exitCode = code;
 						signal = childSignal;
-						lastEvent = "exit";
-						if (code === 0 && phase === "finish" && text.includes("PRODUCT_PTY_READY") && text.includes("PRODUCT_PTY_ACK")) finish();
+						lastEvent = "process-exit";
+						if (code === 0 && phase === "finish" && text.includes("PRODUCT_PTY_READY") && text.includes("PRODUCT_PTY_ACK") && (!bunUnix || text.includes("PRODUCT_PTY_SIZE 112x36"))) finish();
 						else finish("exited before handshake completed");
 					});
 					try {
@@ -77,30 +146,34 @@ export default function productPtyProbe(pi) {
 				await handshake(executable, ["-e", source], "node");
 			} catch (error) {
 				if (process.platform === "win32") throw error;
-				const nodeFailure = error?.message?.startsWith("node ") ? error.message : `node spawn failed (${error?.code ?? "unknown"})`;
-				let nodePath = `absolute=${isAbsolute(executable ?? "")}, name=${basename(executable ?? "")}`;
-				try {
-					const resolved = realpathSync(executable);
-					accessSync(resolved, constants.X_OK);
-					nodePath += `, executable=true, resolvedName=${basename(resolved)}`;
-				} catch {
-					nodePath += ", executable=false";
+				let diagnostic = error?.message?.startsWith("node ") ? error.message : `node spawn failed (${error?.code ?? "unknown"})`;
+				if (bunUnix) {
+					diagnostic = `bun-terminal ${diagnostic}`;
+				} else {
+					let nodePath = `absolute=${isAbsolute(executable ?? "")}, name=${basename(executable ?? "")}`;
+					try {
+						const resolved = realpathSync(executable);
+						accessSync(resolved, constants.X_OK);
+						nodePath += `, executable=true, resolvedName=${basename(resolved)}`;
+					} catch {
+						nodePath += ", executable=false";
+					}
+					let directNode;
+					try {
+						const direct = spawnSync(executable, ["-e", source], { cwd: root, env, input: "PRODUCT_PTY_START\nPRODUCT_PTY_PING\n", encoding: "utf8", timeout: 3000, maxBuffer: 4096 });
+						directNode = `exit=${direct.status ?? "none"}, ready=${direct.stdout?.includes("PRODUCT_PTY_READY") ?? false}, ack=${direct.stdout?.includes("PRODUCT_PTY_ACK") ?? false}, error=${direct.error?.code ?? "none"}`;
+					} catch (directError) {
+						directNode = `threw=${directError?.code ?? "unknown"}`;
+					}
+					const shellSource = 'IFS= read -r start || exit 11; [ "$start" = PRODUCT_PTY_START ] || exit 12; printf "PRODUCT_PTY_READY\\n"; IFS= read -r ping || exit 13; [ "$ping" = PRODUCT_PTY_PING ] || exit 14; printf "PRODUCT_PTY_ACK\\n"; IFS= read -r finish || exit 15; [ "$finish" = PRODUCT_PTY_FINISH ] || exit 16';
+					let shell = "passed";
+					try {
+						await handshake("/bin/sh", ["-c", shellSource], "shell");
+					} catch (shellError) {
+						shell = shellError?.message?.startsWith("shell ") ? shellError.message : `spawn failed (${shellError?.code ?? "unknown"})`;
+					}
+					diagnostic += `; nodePath={${nodePath}}, args=-e, directNode={${directNode}}, shell={${shell}}`;
 				}
-				let directNode;
-				try {
-					const direct = spawnSync(executable, ["-e", source], { cwd: root, env, input: "PRODUCT_PTY_START\nPRODUCT_PTY_PING\n", encoding: "utf8", timeout: 3000, maxBuffer: 4096 });
-					directNode = `exit=${direct.status ?? "none"}, ready=${direct.stdout?.includes("PRODUCT_PTY_READY") ?? false}, ack=${direct.stdout?.includes("PRODUCT_PTY_ACK") ?? false}, error=${direct.error?.code ?? "none"}`;
-				} catch (directError) {
-					directNode = `threw=${directError?.code ?? "unknown"}`;
-				}
-				const shellSource = 'IFS= read -r start || exit 11; [ "$start" = PRODUCT_PTY_START ] || exit 12; printf "PRODUCT_PTY_READY\\n"; IFS= read -r ping || exit 13; [ "$ping" = PRODUCT_PTY_PING ] || exit 14; printf "PRODUCT_PTY_ACK\\n"; IFS= read -r finish || exit 15; [ "$finish" = PRODUCT_PTY_FINISH ] || exit 16';
-				let shell = "passed";
-				try {
-					await handshake("/bin/sh", ["-c", shellSource], "shell");
-				} catch (shellError) {
-					shell = shellError?.message?.startsWith("shell ") ? shellError.message : `spawn failed (${shellError?.code ?? "unknown"})`;
-				}
-				const diagnostic = `${nodeFailure}; nodePath={${nodePath}}, args=-e, directNode={${directNode}}, shell={${shell}}`;
 				const diagnosticFile = process.env.PI_REMOTE_PHASE0_DIAGNOSTIC_FILE;
 				if (diagnosticFile) {
 					try {
@@ -112,7 +185,7 @@ export default function productPtyProbe(pi) {
 				}
 				throw new Error(diagnostic);
 			}
-			ctx.ui.notify("PRODUCT_PTY_NATIVE_OK", "info");
+			ctx.ui.notify(bunUnix ? "PRODUCT_PTY_BUN_TERMINAL_OK" : "PRODUCT_PTY_NATIVE_OK", "info");
 		},
 	});
 }
