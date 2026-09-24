@@ -1,6 +1,19 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.23`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.24`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.24] - 2026-09-24
+
+### Added
+
+- Anthropic subscriptions can use the installed Claude Code CLI through a pinned Python transport. API-key access remains on Anthropic Messages; old OAuth tokens fail closed. Setup asks before installing missing prerequisites.
+- Independent settings control automatic subagent delegation guidance and parent-child communication. Turning communication off does not hide child results.
+
+### Changed
+
+- Permission modes are yolo, auto, and read-only. `/plan` enters read-only; saved manual and plan defaults map to yolo and read-only respectively.
+- Scrolled-up chat keeps its visible position as new content arrives. Completed `subagent_wait` cards show elapsed time, with details available on expansion.
+- Streaming one-line reasoning has one blank row before the working spinner.
 
 ## [0.2.23] - 2026-09-21
 
