@@ -22,14 +22,14 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.23`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
-- **v0.2.24 integration:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry. #77 and #108 remain open and excluded. The release branch has the 0.2.24 version and changelogs; publication is pending. Anthropic subscription qualification requires separate user authorization and remains unrun.
+- **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 and #108 remain open and excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
 - **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
 
 - **Subagent controls and pinned scroll (`feat/subagent-controls-scroll`):** `/settings` has independent default-on switches for parent-child communication and automatic delegation guidance. Communication off removes child contact/intercom for new and resumed runs, blocks new parent questions and steering, and preserves waiting, status, and final output. Direct-work guidance retains tier and launch instructions. Pinned chat anchors the visible message while output appends or earlier lines expand.
 
-- **Anthropic subscription bridge (`feat/anthropic-claude-code-oauth`):** external Claude Code credentials route through pinned vendored Hermes Python transport and the installed Claude Code CLI; Anthropic API keys still use Messages. Legacy OAuth tokens fail closed. Setup explicitly confirms each missing prerequisite and checks Claude Code 2.1.263; no installation or account access happened during development. Only offline fixtures were exercised; live, user-authorized subscription qualification and cross-platform native checks remain before release. Vendor provenance and hashes: `scripts/verify-claude-vendor.mjs`; integration limits: `packages/coding-agent/docs/providers.md`.
+- **Anthropic subscription bridge (`feat/anthropic-claude-code-oauth`):** external Claude Code credentials route through pinned vendored Hermes Python transport and the installed Claude Code CLI; Anthropic API keys still use Messages. Legacy OAuth tokens fail closed. Setup explicitly confirms each missing prerequisite and checks Claude Code 2.1.263; no installation or account access happened during development. Only offline fixtures were exercised; live subscription qualification and cross-platform native checks remain unverified and require separate authorization. Vendor provenance and hashes: `scripts/verify-claude-vendor.mjs`; integration limits: `packages/coding-agent/docs/providers.md`.
 
 - **Denser one-line reasoning (`fix/denser-thinking-spinner`):** streaming one-line thinking no longer adds a trailing blank row; the working spinner's leading row supplies the single gap. Four-line reasoning and completed thoughts are unchanged.
 - **Collapsed subagent waits (`fix/collapsed-subagent-wait`):** completed `subagent_wait` cards show only the wait duration beside the tool name. Click or expand to read full outcomes and diagnostics; results without a duration stay header-only. The model-visible result is unchanged. Focused tool-execution tests pass 61/61.
@@ -136,7 +136,7 @@ Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.21**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.24**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -150,7 +150,7 @@ Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- v0.2.24 release preparation (2026-09-24): five offline package builds and the Node bundle pass at 0.2.24; CLI `--version` reports 0.2.24. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. This is not a published release; no live Anthropic subscription or installed CLI was used.
+- v0.2.24 release (2026-09-24): five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. Publication workflow `36066384313` succeeded from tag `v0.2.24` at `8a5bfb4`; all four public npm packages resolve as latest. A fresh isolated install reports 0.2.24 for the CLI and all four packages. The full CI test job retains the documented 11 TUI and 101 coding-agent baseline failures. No installed global CLI or live Anthropic subscription was used.
 - v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
 - Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
 - Denser one-line reasoning (2026-09-23): offline tui → ai → agent → coding-agent → orchestrator tsgo passes; focused assistant-message and thinking-tail Vitest passes 28/28. Changed files pass Biome and `git diff --check`. No installed CLI or live provider was touched.
@@ -203,7 +203,7 @@ Last updated: 2026-09-24 (v0.2.23 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 - Compile ai with `npx tsgo -p packages/ai/tsconfig.build.json` (offline). Then agent → coding-agent → orchestrator.
 - JSON catalog: `npm run sync:model-catalog` (needs network). Do not hook generate into root `npm run build`.
-- `npx lunr --version` / workspace CLI → **0.2.21**. Rebuild tui then coding-agent with its Node bundle after merge.
+- The workspace CLI reports **0.2.24** after rebuilding tui and coding-agent with its Node bundle; an unrebuilt worktree can still report an older version.
 - Commits often `--no-verify` (`check:pinned-deps` vs unpinned `^`).
 - `npx lunr --print` does not self-exit here — wrap with `timeout`.
 - From this repo, `npx lunr` uses the workspace bin (`packages/coding-agent/dist/cli.js`); rebuild coding-agent `dist` first. The startup benchmark reports first content frame separately from runtime and feature readiness.
@@ -239,6 +239,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- The v0.2.24 Anthropic bridge shipped with offline fixtures and vendor provenance verification; no live subscription qualification was possible. Keep account access and prerequisite installation behind explicit owner consent.
+- npm accepted all four v0.2.24 publishes before the CLI package metadata and tarball became available. Verify the tarball and a fresh isolated install before declaring a tag shipment complete.
 - Read-only blocks unclassified extension tools, including direct MCP tools. The `mcp` proxy still permits status, search, describe, and ui-messages. Saved `defaultPermissionMode` and session `.leaf.json` can still contain `manual` or `plan`; read them as yolo or read-only without rewriting files. Gateway session switches to a saved writable mode pause in read-only until the owner confirms. Read-only does not revoke full-access background children already running when the mode changes.
 - Subagent communication is a global preference. A live settings bridge avoids a pending-save race in the parent; each run carries its launch choice to queued foreground children and detached async runners. Existing children keep registered tools, but turning communication off immediately blocks new parent questions and steering. Replies to already-pending requests stay available. Final output remains in run transcripts if a headless wait returns before a completion notification reaches the parent.
 - Pinned chat anchors matching rendered line sequences across appends and insertions above the viewport, using nearby context to distinguish repeated rows. If width reflow changes the anchor text, it falls back to the previous line position.
@@ -327,7 +329,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 # Decisions (keep; why in one line)
 
 - 2026-09-24: merge PRs #106, #107, #109, #110, and #111 without #77 or #108; keep additive AGENTS.md entries and refresh the combined first-request schema fixture.
-- 2026-09-24: prepare v0.2.24 on a release branch after integration so the versioned tag can be published only after release checks and Anthropic qualification are resolved.
+- 2026-09-24: prepare v0.2.24 on a release branch after integration; publish after offline checks when the owner explicitly chooses to ship without unavailable live Anthropic qualification.
+- 2026-09-24: record the release only after the npm tarball resolves and an isolated install reports 0.2.24 for every public package.
 - 2026-09-24: replace manual and plan permission modes with yolo, auto, and read-only; keep `/plan` as a read-only planning shortcut so inspection does not force a plan workflow.
 - 2026-09-24: fail closed on unclassified tools in read-only mode, because proxy and direct MCP calls can write despite the old plan-mode heuristic.
 - 2026-09-24: keep parent-child messaging and autonomous delegation independent and default-on, because direct-work mode should still permit explicitly requested children.
