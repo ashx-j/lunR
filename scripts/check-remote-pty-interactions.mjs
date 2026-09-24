@@ -23,10 +23,18 @@ const server = createServer(async (req, res) => {
 		for await (const chunk of req) data += chunk;
 		const body = JSON.parse(data);
 		assert.equal(body.model, "probe");
+		const requestIndex = requestCount++;
+		if (requestIndex === 1) {
+			const messages = Array.isArray(body.messages) ? body.messages : [];
+			const receivedResult = messages.some((message) => message.role === "tool" && message.tool_call_id === "call_pty_long" && typeof message.content === "string" && message.content.includes("LONG_TOOL_DONE"));
+			if (!receivedResult) record.unmatchedRequest = { requestIndex, roles: messages.slice(-5).map((message) => message.role), toolCallIds: messages.filter((message) => message.role === "tool").map((message) => message.tool_call_id) };
+			assert.ok(receivedResult, "Scripted model did not receive completed tool result");
+			await writeFile(join(workspace, "model-saw-tool-result"), "yes");
+		}
 		res.writeHead(200, { "Content-Type": "text/event-stream" });
 		const base = { id: "chatcmpl-pty", object: "chat.completion.chunk", created: 1, model: "probe" };
 		const send = (delta, finish) => res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
-		if (requestCount++ === 0) {
+		if (requestIndex === 0) {
 			const command = `node -e "require('fs').writeFileSync('tool-started','yes');setTimeout(()=>{require('fs').writeFileSync('tool-finished','yes');console.log('LONG_TOOL_DONE')},3500)"`;
 			send({ role: "assistant", tool_calls: [{ index: 0, id: "call_pty_long", type: "function", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }, null);
 			send({}, "tool_calls");
@@ -63,13 +71,16 @@ try {
 		child.once("exit", (code) => { clearTimeout(timer); resolve(code); });
 	});
 	record.requestCount = requestCount;
-	record.result = code === 0 ? "passed" : "failed";
 	if (stdout.trim()) record.probe = JSON.parse(stdout);
-	if (code !== 0) record.failure = stderr.slice(-2000);
+	if (code !== 0 && stderr.trim()) record.failure = stderr.slice(-2000);
 	assert.equal(code, 0, "PTY interaction probe failed");
+	assert.equal(record.serverError, undefined, "Scripted provider rejected a request");
 	assert.ok(requestCount >= 2, "Scripted model did not receive tool result");
+	assert.equal(await readFile(join(workspace, "model-saw-tool-result"), "utf8"), "yes");
 	assert.equal(await readFile(join(workspace, "tool-finished"), "utf8"), "yes");
+	record.result = "passed";
 } catch (error) {
+	record.result = "failed";
 	record.failure ??= String(error?.stack ?? error);
 	process.exitCode = 1;
 } finally {
@@ -77,7 +88,7 @@ try {
 	server.close();
 	for (let attempt = 0; attempt < 15; attempt++) {
 		try { await rm(directory, { recursive: true, force: true }); break; }
-		catch (error) { if (attempt === 14) { record.cleanupFailure = String(error); process.exitCode = 1; } else await new Promise((resolve) => setTimeout(resolve, 500)); }
+		catch (error) { if (attempt === 14) { record.cleanupFailure = String(error); record.result = "failed"; process.exitCode = 1; } else await new Promise((resolve) => setTimeout(resolve, 500)); }
 	}
 	console.log(JSON.stringify(record, null, 2));
 }

@@ -70,7 +70,7 @@ async function run() {
 		let toolRepaint = "";
 		subscription = child.onData((chunk) => { output += chunk; toolRepaint += chunk; });
 		child.resize(114, 38);
-		await waitFor(() => output.includes("PTY_MODEL_DONE") || toolRepaint.includes("LONG_TOOL_DONE"), "model continuation after tool", 15000);
+		await waitFor(() => (output.includes("PTY_MODEL_DONE") || toolRepaint.includes("LONG_TOOL_DONE")) && fs.existsSync(join(workspace, "model-saw-tool-result")), "model continuation with scripted tool result", 15000);
 		observations.longToolCompletedWhileDetached = true;
 		observations.workerPidUnchanged = child.pid === workerPid && !exited;
 		assert.ok(observations.workerPidUnchanged, `Worker identity/liveness changed: ${JSON.stringify({ pid: child.pid, workerPid, exited })}`);
