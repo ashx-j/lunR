@@ -10,7 +10,7 @@ const extension = process.env.PI_REMOTE_PHASE0_NATIVE_EXTENSION;
 const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, TEMP: temp, TMP: temp, TMPDIR: temp, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", TERM: "xterm-256color", PI_REMOTE_PHASE0_ARTIFACT_ROOT: process.env.PI_REMOTE_PHASE0_ARTIFACT_ROOT, PI_REMOTE_PHASE0_NODE_EXECUTABLE: process.execPath, PI_REMOTE_PHASE0_DIAGNOSTIC_FILE: process.env.PI_REMOTE_PHASE0_DIAGNOSTIC_FILE, PI_REMOTE_PHASE0_STANDALONE_CLI: process.env.PI_REMOTE_PHASE0_STANDALONE_CLI };
 const args = ["--no-session", "--approve", ...(extension ? ["--extension", extension] : [])];
 const standalone = process.env.PI_REMOTE_PHASE0_STANDALONE_CLI === "1";
-const artifactPtyBackend = standalone && process.platform !== "win32" ? "bun-terminal" : "native-addon";
+const artifactPtyBackend = standalone ? "bun-terminal" : "native-addon";
 const child = pty.spawn(standalone ? cli : process.execPath, standalone ? args : [cli, ...args], { cwd: workspace, name: "xterm-256color", cols: 80, rows: 24, env });
 let exited;
 child.onExit((event) => { exited = event; });
@@ -24,7 +24,9 @@ const waitFor = async (pattern, ms) => {
 		const hasDiagnostic = Boolean(extension && diagnosticFile && fs.existsSync(diagnosticFile));
 		if (exited || hasDiagnostic || Date.now() - start > ms) {
 			const diagnostic = hasDiagnostic ? `, nativeDiagnostic=${JSON.stringify(fs.readFileSync(diagnosticFile, "utf8").slice(-1100))}` : "";
-			throw new Error(`TUI output missing ${pattern}; exited=${JSON.stringify(exited)}, bytes=${screen.length}, slash=${screen.includes("/settings")}${diagnostic}, tail=${screen.slice(-700)}`);
+			const plain = screen.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+			const firstError = plain.match(/(?:Error|error):[^\r\n]{0,240}/)?.[0] ?? "none";
+			throw new Error(`TUI output missing ${pattern}; exited=${JSON.stringify(exited)}, bytes=${screen.length}, slash=${screen.includes("/settings")}, firstError=${JSON.stringify(firstError)}${diagnostic}, tail=${screen.slice(-700)}`);
 		}
 		await sleep(50);
 	}
@@ -38,7 +40,11 @@ async function run() {
 		await sleep(4500);
 		if (extension) {
 			child.write("/phase0-native\r");
-			await waitFor(artifactPtyBackend === "bun-terminal" ? /PRODUCT_PTY_BUN_TERMINAL_OK/ : /PRODUCT_PTY_NATIVE_OK/, standalone && process.platform !== "win32" ? 30000 : 15000);
+			await waitFor(artifactPtyBackend === "bun-terminal" ? /PRODUCT_PTY_BUN_TERMINAL_OK/ : /PRODUCT_PTY_NATIVE_OK/, standalone ? 30000 : 15000);
+			if (standalone) {
+				child.write("/phase0-worker\r");
+				await waitFor(/PRODUCT_PTY_WORKER_OK_(BUN|NATIVE)_PID_\d+_(LUNR_EXE|LUNR)_COLS_110/, 65000);
+			}
 		}
 		child.write("/settings");
 		await sleep(400);
@@ -64,7 +70,10 @@ async function run() {
 		assert.ok(borders.includes(110), `Reattached frame did not use the new 110-column viewport: ${borders.join(",")}`);
 		const artifactPtyStreamStatus = artifactPtyBackend === "bun-terminal" ? screen.match(/PRODUCT_PTY_BUN_TERMINAL_OK_PTY_(pending|0|1)/)?.[1] : "not-applicable";
 		assert.ok(artifactPtyStreamStatus, "Bun Terminal stream status receipt missing");
-		console.log(JSON.stringify({ result: "passed", platform: `${process.platform}-${process.arch}`, tuiFirstPaint: true, settingsDialogSeen, inputEchoSeen, workerAliveAfterDetach: true, artifactPtyBackend: extension ? artifactPtyBackend : "none", artifactPtyStreamStatus, artifactNativeSpawn: Boolean(extension && artifactPtyBackend === "native-addon"), reattachedOutputBytes: reattached.length, repaintColumns: borders, dimensions: [110, 35], scope: extension ? "isolated installed product artifact and artifact-local PTY" : "isolated actual worktree CLI; no agent inference" }));
+		const nested = standalone ? screen.match(/PRODUCT_PTY_WORKER_OK_(BUN|NATIVE)_PID_(\d+)_(LUNR_EXE|LUNR)_COLS_110/) : null;
+		if (standalone) assert.ok(nested && Number(nested[2]) > 0 && Number(nested[2]) !== child.pid, "Compiled host did not retain a distinct nested worker PTY");
+		const compiledWorker = nested ? { ownerBackend: nested[1] === "BUN" ? "bun-terminal" : "native-addon", pid: Number(nested[2]), executable: nested[3] === "LUNR_EXE" ? "lunr.exe" : "lunr", firstPaint: true, settings: true, input: true, detachedReattachColumns: 110, aliveAfterDetach: true } : "not-run";
+		console.log(JSON.stringify({ result: "passed", platform: `${process.platform}-${process.arch}`, tuiFirstPaint: true, settingsDialogSeen, inputEchoSeen, workerAliveAfterDetach: true, artifactPtyBackend: extension ? artifactPtyBackend : "none", artifactPtyStreamStatus, compiledWorker, artifactNativeSpawn: Boolean(extension && artifactPtyBackend === "native-addon"), reattachedOutputBytes: reattached.length, repaintColumns: borders, dimensions: [110, 35], scope: extension ? "isolated installed product artifact and artifact-local PTY" : "isolated actual worktree CLI; no agent inference" }));
 	} finally {
 		child.kill();
 		for (let i = 0; i < 50 && !exited; i++) await sleep(100);

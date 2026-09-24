@@ -67,15 +67,25 @@ async function probeTui(artifactRoot, cli, anchor, standalone, controllerInstall
 	const probe = join(root, "scripts", "remote-pty-tui-probe.cjs");
 	const extension = join(anchor, standalone ? "phase0-product-extension.mjs" : "dist/phase0-product-extension.mjs");
 	const env = { ...process.env, PI_REMOTE_PHASE0_NATIVE_EXTENSION: extension, PI_REMOTE_PHASE0_ARTIFACT_ROOT: artifactRoot, PI_REMOTE_PHASE0_STANDALONE_CLI: standalone ? "1" : "0", PI_REMOTE_PHASE0_DIAGNOSTIC_FILE: join(temp, "native-diagnostic.txt") };
-	const output = run(process.execPath, [probe, controllerInstall, cli, workspace, home, agentDir, temp], { cwd: workspace, env, timeout: standalone && process.platform !== "win32" ? 65_000 : 45_000 });
+	const output = run(process.execPath, [probe, controllerInstall, cli, workspace, home, agentDir, temp], { cwd: workspace, env, timeout: standalone ? 120_000 : 45_000 });
 	const result = JSON.parse(output);
 	assert.equal(result.result, "passed");
-	const expectedBackend = standalone && process.platform !== "win32" ? "bun-terminal" : "native-addon";
+	const expectedBackend = standalone ? "bun-terminal" : "native-addon";
 	assert.equal(result.artifactPtyBackend, expectedBackend);
 	assert.equal(result.artifactNativeSpawn, expectedBackend === "native-addon");
 	if (expectedBackend === "bun-terminal") assert.ok(["pending", "0", "1"].includes(result.artifactPtyStreamStatus));
 	else assert.equal(result.artifactPtyStreamStatus, "not-applicable");
-	return { firstPaint: result.tuiFirstPaint, settings: result.settingsDialogSeen, artifactPtyBackend: result.artifactPtyBackend, artifactPtyStreamStatus: result.artifactPtyStreamStatus, artifactNativeSpawn: result.artifactNativeSpawn, reattachColumns: result.repaintColumns };
+	if (standalone) {
+		assert.equal(result.compiledWorker.ownerBackend, expectedBackend);
+		assert.ok(result.compiledWorker.pid > 0);
+		assert.equal(result.compiledWorker.executable, process.platform === "win32" ? "lunr.exe" : "lunr");
+		assert.equal(result.compiledWorker.firstPaint, true);
+		assert.equal(result.compiledWorker.settings, true);
+		assert.equal(result.compiledWorker.input, true);
+		assert.equal(result.compiledWorker.detachedReattachColumns, 110);
+		assert.equal(result.compiledWorker.aliveAfterDetach, true);
+	} else assert.equal(result.compiledWorker, "not-run");
+	return { firstPaint: result.tuiFirstPaint, settings: result.settingsDialogSeen, artifactPtyBackend: result.artifactPtyBackend, artifactPtyStreamStatus: result.artifactPtyStreamStatus, compiledWorker: result.compiledWorker, artifactNativeSpawn: result.artifactNativeSpawn, reattachColumns: result.repaintColumns };
 }
 
 async function proveNpm() {
@@ -141,6 +151,7 @@ async function proveStandalone() {
 	}
 	const bun = resolve(found);
 	assert.ok(existsSync(bun), `Bun executable missing: ${bun}`);
+	assert.equal(run(bun, ["--version"]), "1.4.2", "Standalone compiler must match the Bun Terminal runtime under test");
 	const nativeInstall = join(directory, "standalone-native");
 	await installCandidate(nativeInstall, join(directory, "native-profile"));
 	const output = join(directory, "standalone-layout");
@@ -148,35 +159,19 @@ async function proveStandalone() {
 	const shellPath = (path) => process.platform === "win32" ? run("cygpath", ["-u", path]) : path;
 	run(bash, [join(root, "scripts", "build-binaries.sh"), "--skip-install", "--skip-deps", "--skip-build", "--skip-archive", "--platform", target.replace("win32-", "windows-"), "--bun-bin", shellPath(bun), "--out", shellPath(output)], { cwd: root, timeout: 240_000 });
 	const artifact = join(output, target.replace("win32-", "windows-"));
-	const addonBackend = process.platform === "win32";
-	const selected = `node-pty-${target}`;
-	if (addonBackend) {
-		const vendor = join(artifact, "node_modules", "@lydell");
-		await mkdir(vendor, { recursive: true });
-		for (const name of ["node-pty", selected]) cpSync(join(nativeInstall, "node_modules", "@lydell", name), join(vendor, name), { recursive: true });
-		const nativeRoot = join(vendor, selected);
-		const nativeManifest = JSON.parse(readFileSync(join(nativeRoot, "package.json"), "utf8"));
-		assert.equal(nativeManifest.exports, "./lib/index.js");
-		assert.equal(existsSync(join(nativeRoot, "index.js")), false);
-		// Bun 1.3.14 compiled runtime ignores this external package's exports/main.
-		// Keep the native addon and helper paths relative to the original lib entry.
-		writeFileSync(join(nativeRoot, "index.js"), 'module.exports = require("./lib/index.js");\n');
-	}
 	cpSync(join(root, "scripts", "remote-pty-product-extension.mjs"), join(artifact, "phase0-product-extension.mjs"));
 	const source = JSON.parse(readFileSync(join(root, "packages", "coding-agent", "package.json"), "utf8"));
 	const manifest = rewritePackageJsonForNpm(source);
-	if (addonBackend) manifest.optionalDependencies["@lydell/node-pty"] = candidateVersion;
 	writeFileSync(join(artifact, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
-	const cli = join(artifact, addonBackend ? "lunr.exe" : "lunr");
+	const cli = join(artifact, process.platform === "win32" ? "lunr.exe" : "lunr");
 	assert.ok(existsSync(cli), "Compiled product executable missing");
-	const wrapperPath = addonBackend ? assertCandidateFromArtifact(artifact, artifact) : "not-packaged";
 	const nativeAddonPresent = existsSync(join(artifact, "node_modules", "@lydell", "node-pty"));
-	assert.equal(nativeAddonPresent, addonBackend);
-	if (!addonBackend) assert.equal(manifest.optionalDependencies["@lydell/node-pty"], undefined);
-	const ptyBackend = addonBackend ? "native-addon" : "bun-terminal";
-	report.standalone = { result: "blocked", compiledCli: true, wrapperPath, candidateVersion: addonBackend ? candidateVersion : "not-used", nativeBundle: addonBackend ? selected : "none", nativeAddonPresent, ptyBackend, artifactPtyTui: "not-run" };
-	const tui = await probeTui(artifact, cli, artifact, true, addonBackend ? artifact : nativeInstall);
-	report.standalone = { result: "passed", compiledCli: true, wrapperPath, candidateVersion: addonBackend ? candidateVersion : "not-used", nativeBundle: addonBackend ? selected : "none", nativeAddonPresent, ptyBackend, tui };
+	assert.equal(nativeAddonPresent, false);
+	assert.equal(manifest.optionalDependencies["@lydell/node-pty"], undefined);
+	const ptyBackend = "bun-terminal";
+	report.standalone = { result: "blocked", compiledCli: true, wrapperPath: "not-packaged", candidateVersion: "not-used", nativeBundle: "none", nativeAddonPresent, ptyBackend, artifactPtyTui: "not-run" };
+	const tui = await probeTui(artifact, cli, artifact, true, nativeInstall);
+	report.standalone = { result: "passed", compiledCli: true, wrapperPath: "not-packaged", candidateVersion: "not-used", nativeBundle: "none", nativeAddonPresent, ptyBackend, tui };
 }
 
 try {

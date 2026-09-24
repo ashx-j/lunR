@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
-import productPtyProbe, { productPtySource, spawnBunTerminal } from "./remote-pty-product-extension.mjs";
+import productPtyProbe, { probeCompiledWorker, productPtySource, spawnBunTerminal } from "./remote-pty-product-extension.mjs";
 
 test("Bun terminal EOF is separate from subprocess exit", async () => {
 	const originalBun = globalThis.Bun;
@@ -78,7 +78,7 @@ async function withBunHandshake(run, platformName = "linux") {
 	const exited = new Promise((resolve) => { resolveExit = resolve; });
 	try {
 		Object.defineProperty(process, "platform", { ...platform, value: platformName });
-		process.versions.bun = "1.3.14";
+		process.versions.bun = "1.4.2";
 		process.env.PI_REMOTE_PHASE0_ARTIFACT_ROOT = root;
 		process.env.PI_REMOTE_PHASE0_NODE_EXECUTABLE = process.execPath;
 		process.env.PI_REMOTE_PHASE0_STANDALONE_CLI = "1";
@@ -109,7 +109,7 @@ async function withBunHandshake(run, platformName = "linux") {
 		};
 		state.emit = (chunk) => state.options.terminal.data(null, new TextEncoder().encode(chunk));
 		let handler;
-		productPtyProbe({ registerCommand(_name, registration) { handler = registration.handler; } });
+		productPtyProbe({ registerCommand(name, registration) { if (name === "phase0-native") handler = registration.handler; } });
 		await run({ state, handler, resolveExit });
 	} finally {
 		Object.defineProperty(process, "platform", platform);
@@ -205,5 +205,87 @@ test("child reports the actual resized dimensions after an old-size response", (
 		assert.equal(cleared, true);
 		poll();
 		assert.equal(lines.filter((line) => line === "PRODUCT_PTY_SIZE 112x36").length, 1);
+	}
+});
+
+test("isolated worker control requests a full TUI repaint only for observed dimensions", async () => {
+	const root = mkdtempSync(join(tmpdir(), "lunr-worker-repaint-"));
+	const file = join(root, "viewport.json");
+	writeFileSync(file, "");
+	const previous = process.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE;
+	const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "getWindowSize");
+	process.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE = file;
+	Object.defineProperty(process.stdout, "getWindowSize", { configurable: true, value: () => [110, 35] });
+	const listeners = new Map();
+	const renders = [];
+	let columns = 80;
+	try {
+		productPtyProbe({ on(event, handler) { listeners.set(event, handler); } });
+		listeners.get("session_start")({}, { hasUI: true, ui: { setWidget(_key, factory) {
+			if (factory) factory({ terminal: { get columns() { return columns; }, rows: 35 }, requestRender(force) { renders.push(force); } });
+		} } });
+		await Promise.resolve();
+		columns = 110;
+		writeFileSync(file, JSON.stringify({ columns: 110, rows: 35 }));
+		const deadline = Date.now() + 1000;
+		while (!existsSync(`${file}.result`) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.deepEqual(JSON.parse(readFileSync(`${file}.result`, "utf8")), { columns: 110, rows: 35, observed: "110x35", resizeEvents: 0 });
+		assert.deepEqual(renders, [true]);
+	} finally {
+		listeners.get("session_shutdown")?.();
+		if (descriptor) Object.defineProperty(process.stdout, "getWindowSize", descriptor);
+		else delete process.stdout.getWindowSize;
+		if (previous === undefined) delete process.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE;
+		else process.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("compiled host PTY owns a distinct real-CLI worker across settings detach and resize", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "lunr-worker-pty-"));
+	const artifact = join(directory, "artifact");
+	mkdirSync(artifact);
+	const cli = join(artifact, process.platform === "win32" ? "lunr.exe" : "lunr");
+	writeFileSync(cli, "fixture");
+	let killed = 0;
+	let closed = 0;
+	const resizes = [];
+	const listeners = new Set();
+	const emit = (text) => { for (const listener of listeners) listener(text); };
+	try {
+		const result = await probeCompiledWorker((executable, args, options) => {
+			assert.equal(executable, cli);
+			assert.deepEqual(args, ["--no-session", "--approve", "--extension", join(artifact, "phase0-product-extension.mjs")]);
+			assert.ok(options.cwd.startsWith(directory));
+			assert.ok(options.env.PI_CODING_AGENT_DIR.startsWith(directory));
+			assert.equal(options.env.PI_REMOTE_PHASE0_NATIVE_EXTENSION, undefined);
+			assert.ok(options.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE.startsWith(directory));
+			queueMicrotask(() => emit("\x1b[?1049h╭──╮\n> \n╰──╯"));
+			return {
+				pid: process.pid + 1,
+				onData(listener) { listeners.add(listener); return { dispose() { listeners.delete(listener); } }; },
+			onExit() {},
+			write(text) {
+				if (text === "/settings") emit("/settings");
+				if (text === "\r") emit("Auto-compact Type to search");
+			},
+			resize(cols, rows) {
+				resizes.push([cols, rows, listeners.size]);
+				if (cols === 110) {
+					writeFileSync(`${options.env.PI_REMOTE_PHASE0_WORKER_RESIZE_FILE}.result`, JSON.stringify({ columns: 110, rows: 35, observed: "110x35", resizeEvents: 2 }));
+					setTimeout(() => emit(`\x1b[2J\r\n${"─".repeat(110)}\x1b[m\r\n╰${"─".repeat(107)}╯ Auto-compact Type to search`), 400);
+				}
+			},
+			kill() { killed++; },
+			close() { closed++; },
+			};
+		}, artifact, directory);
+		assert.deepEqual(resizes, [[108, 34, 0], [110, 35, 1]]);
+		assert.deepEqual(result, { pid: process.pid + 1, executable: process.platform === "win32" ? "lunr.exe" : "lunr", firstPaint: true, settings: true, repaintColumns: 110, workerAliveAfterDetach: true });
+		assert.equal(killed, 1);
+		assert.equal(closed, 1);
+		assert.equal(listeners.size, 0);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
 	}
 });
