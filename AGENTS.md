@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Large child image events (`fix/subagent-large-image-transport`):** child JSON output frames events above 1 MiB into bounded chunks; foreground and async readers reconstruct the original event before recording and accounting. The 4 MiB per-line guard remains, and total framed events cap at 24 MiB. Compact child token stats still count uncached input plus output; cached input stays separate.
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
 - **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
 
@@ -150,6 +151,7 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Large child image events (2026-09-25): five offline tsgo builds and coding-agent Node bundle pass; isolated image-transport, compact-row, delivery, continuation, and wait-startup tests pass 72/72. No original image, live provider, installed CLI, or desktop worktree was changed.
 - v0.2.24 release (2026-09-24): five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. Publication workflow `36066384313` succeeded from tag `v0.2.24` at `8a5bfb4`; all four public npm packages resolve as latest. A fresh isolated install reports 0.2.24 for the CLI and all four packages. The full CI test job retains the documented 11 TUI and 101 coding-agent baseline failures. No installed global CLI or live Anthropic subscription was used.
 - v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
 - Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
@@ -239,6 +241,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Child event frames apply only to print JSON in a child process. The parent must decode them before persisting the normal event; preserve the per-line guard and total-event cap when changing transport. `cacheRead` is separate from the compact row's input/output count. Local subagent fixtures must run with inherited `PI_SUBAGENT_*`, `PI_SUBAGENTS_*`, and `PI_INTERCOM_*` variables stripped, or fixture supervisor requests can leak into the parent session.
 - The v0.2.24 Anthropic bridge shipped with offline fixtures and vendor provenance verification; no live subscription qualification was possible. Keep account access and prerequisite installation behind explicit owner consent.
 - npm accepted all four v0.2.24 publishes before the CLI package metadata and tarball became available. Verify the tarball and a fresh isolated install before declaring a tag shipment complete.
 - Read-only blocks unclassified extension tools, including direct MCP tools. The `mcp` proxy still permits status, search, describe, and ui-messages. Saved `defaultPermissionMode` and session `.leaf.json` can still contain `manual` or `plan`; read them as yolo or read-only without rewriting files. Gateway session switches to a saved writable mode pause in read-only until the owner confirms. Read-only does not revoke full-access background children already running when the mode changes.
@@ -328,6 +331,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-25: frame oversized child JSON events instead of raising the stdout line limit, so full image results survive while process transport stays bounded.
 - 2026-09-24: merge PRs #106, #107, #109, #110, and #111 without #77 or #108; keep additive AGENTS.md entries and refresh the combined first-request schema fixture.
 - 2026-09-24: prepare v0.2.24 on a release branch after integration; publish after offline checks when the owner explicitly chooses to ship without unavailable live Anthropic qualification.
 - 2026-09-24: record the release only after the npm tarball resolves and an isolated install reports 0.2.24 for every public package.
