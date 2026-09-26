@@ -58,6 +58,12 @@ recording, or permission tool is exposed.
 5. Call `computer_end` when finished.
 
 The token lasts 30 seconds, belongs to one exact target, and permits one action.
+Copy it exactly, without abbreviating or reconstructing it. A failed action
+consumes the active token. Capture again before any next action, including window
+focus. `background_unavailable` makes foreground input the next candidate after
+a fresh capture, if permitted. Do not substitute another background shortcut.
+Token rejection does not prove foreground typing failed.
+
 Every new observation invalidates the previous token before capture. Failed,
 cancelled, or malformed captures issue no token. Old tokens cannot be replayed,
 including after a successful action returns a new image.
@@ -76,10 +82,20 @@ capture an exact window before acting.
 
 A successful transport or a changed image does not prove the intended application
 effect. Results preserve partial/unverifiable outcomes and bounded refusal codes.
+Pre-dispatch failures report `input:"not_dispatched"` and state that this call
+sent no input. They do not establish whether earlier calls had an effect. Token
+codes distinguish a missing active observation, a mismatched token, a wrong
+target, and expiry only while that state is available. A closed workflow cannot
+identify whether an old token was consumed or unknown. Once dispatch begins,
+transport failure reports `input:"uncertain"` and possible effects. Neither path
+retries input. Unparseable driver text is omitted rather than forwarded as a
+message; structured refusal fields remain bounded and allowlisted.
 When input returns but its post-image fails, the tool reports possible effects
 and stops the workflow. Capture again before deciding; never repeat input blindly.
 After an unchanged post-image, the same action against identical captured pixels
-is refused. Click signatures normalize omitted left-button/single-click/empty
+is refused. Pixel identity hashes decoded full-image RGBA values and dimensions,
+not PNG encoding bytes, before cropping or resizing. Full captures reuse the
+image processor's decode, and crops reuse the existing full-image decode. Click signatures normalize omitted left-button/single-click/empty
 modifier defaults and modifier order. Three consecutive unchanged full observations
 stop polling in that workflow. Crops are explicit requests, not an automatic retry loop.
 
@@ -201,6 +217,17 @@ opaque archive. Stable publication remains gated on production approval and a
 new CLI version. Dev-channel update/publication changes were not ported here.
 
 ## Verification and remaining acceptance
+
+After integrating v0.2.24 master, all five offline package builds and the Node
+bundle pass. Focused tests pass 138/139 across 14 suites. The installation fixture
+fails because its native payload is absent. Fake-driver tests cover exact-token
+rejection with zero action dispatch, background refusal followed by fresh-capture
+foreground input, and uncertain or partial post-dispatch outcomes. Real PNG
+fixtures reproduce encoding-independent pixel identity and preserve crop mapping.
+First-paint and first-request checks pass for both browser settings; removing only
+`computer_load` reproduces master's unchanged tool hashes. Independent verification
+and stable packaging remain pending. These checks did not operate a desktop or
+launch CuaDriver. Foreground typing on hardware still requires separate approval.
 
 The dev integration passed all five offline package builds, the Node bundle,
 265 focused tests across 23 suites, and eight archive/package tests. A real

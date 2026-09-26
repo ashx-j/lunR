@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Production publication remains blocked.
+- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Production publication remains blocked.
 
 Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
@@ -152,7 +152,7 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- PR #77 master integration: all five offline tsgo builds pass in an isolated worktree. Computer permissions follow master's read-only, yolo, and auto modes. Combined first-request fingerprints and post-integration packaging verification remain pending.
+- PR #77 integration and recovery: all five offline tsgo builds and the Node bundle pass in an isolated worktree. Focused fake-driver, real-PNG, image-processing, permission, and runtime tests pass 138/139 across 14 suites; the installation fixture fails because its native payload is absent. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with browser on/off and supported-host hashes `4f547e94…` / `aba75162…`. Removing only `computer_load` reproduces master's two hashes. The 14 initial recovery/pixel/leakage failures were reproduced before repair. Correctness lint and diff checks pass; existing dense computer files retain formatter findings. Private isolated prompt/tool inventories remain local. Stable packaging and independent verification remain pending; no desktop, native driver, or installed CLI was used.
 
 - Image-only computer use: dev integration passed five offline builds, Node bundle, 265 focused tests across 23 suites, eight archive/package tests, first-paint/first-request checks, and seven local-package install checks. Workflow `35456243519` published `0.2.21-dev.12.1`; the user reported testing it. This master-targeted branch ports the same computer source, constructor repair, real Photon crop fixture, Node fixture compatibility, captured tool fingerprint, and npm 12 pack parsing. Dev naming/update changes remain excluded. Stable packaging is not separately fully verified; native platform acceptance, smooth cursor work, measured savings, and production approval remain open. Ancestry merge `3bb9839` permits a fast-forward update of PR #77.
 
@@ -244,6 +244,8 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Computer failure reporting tracks dispatch per call, not per workflow. A rejected token says nothing about earlier input. Pixel fingerprints reuse the existing decode before crop/resize; ordinary image callers leave hashing disabled.
 
 - Image-only means no application accessibility tree in model observations, not zero native accessibility calls for targeting/safety. Map returned image coordinates through the crop/resize exactly once to driver-image pixels. Keep screenshots in sessions; provider history still accumulates until normal compaction, because rolling pruning changes prompt-cache prefixes and has no measured cost evidence yet.
 - Computer runtime payload dependencies are release-staged, not workspace dependencies. `scripts/computer-use-release.json` owns the pin; regenerate `release.generated.ts` after changing it. CuaDriver 0.28.1 is approved for branch development only. Production requires separate approval and a new CLI version.
@@ -337,7 +339,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
-- 2026-09-25: merge v0.2.24 master into PR #77 without rewriting ancestry, keeping its current permission modes and unrelated features alongside native computer use.
+- 2026-09-26: merge v0.2.24 master into PR #77 without rewriting ancestry, keeping its current permission modes and unrelated features alongside native computer use.
+- 2026-09-26: report input only after dispatch starts, require fresh exact tokens after failures, and hash decoded pixels because safe fixtures reproduced false uncertainty, raw-text leakage, and PNG-encoding repeat bypasses.
 
 - 2026-09-19: update PR #77 with the user-tested image-only implementation and dev-verified repairs, retaining its ancestry while excluding dev-channel naming and update changes.
 

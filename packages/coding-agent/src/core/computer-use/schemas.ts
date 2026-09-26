@@ -5,7 +5,7 @@ const target = {
 	window_id: Type.Integer({ minimum: 1 }),
 };
 const observation = Type.String({
-	description: "Latest image token for this exact target. Single action, expires after 30 seconds.",
+	description: "Copy the latest image token exactly for this target. Single action, expires after 30 seconds. Failed actions consume it; capture again before acting.",
 });
 const grounded = {
 	pid: Type.Optional(target.pid),

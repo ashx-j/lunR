@@ -15,7 +15,7 @@ vi.mock("../src/core/computer-use/image.ts", () => ({
 	screenshotDimensions: () => ({ width: 2048, height: 1024 }),
 	prepareComputerImage: async (image: { type: "image"; data: string; mimeType: string }, crop?: { x: number; y: number; width: number; height: number }) => {
 		const region = crop ?? { x: 0, y: 0, width: 2048, height: 1024 };
-		return { image, width: region.width / 2, height: region.height / 2,
+		return { image, fingerprint: image.data, width: region.width / 2, height: region.height / 2,
 			sourceWidth: 2048, sourceHeight: 1024, region, scaleX: 2, scaleY: 2 };
 	},
 }));
@@ -50,22 +50,21 @@ afterEach(async () => {
 });
 
 describe("computer policy and discovery", () => {
-	it("isolates cron approvals and keeps observation/manual, mutation/Plan and release boundaries", async () => {
+	it("isolates cron approvals and keeps read-only observation, mutation and release boundaries", async () => {
 		resetPermissions("auto");
 		const handler = vi.fn(async () => "session" as const);
 		registerApprovalHandler(handler);
-		createPermissionContext("cron-test", "manual", false);
-		expect(await gateToolCall("computer_observe", {}, ".", "cron-test")).toMatchObject({ block: true });
+		createPermissionContext("cron-test", "read-only", false);
+		expect(await gateToolCall("computer_observe", {}, ".", "cron-test")).toBeUndefined();
+		expect(await gateToolCall("computer_click", {}, ".", "cron-test")).toMatchObject({ block: true });
 		expect(handler).not.toHaveBeenCalled();
 		deletePermissionContext("cron-test");
 		registerApprovalHandler(undefined);
-		resetPermissions("manual");
-		expect(await gateToolCall("computer_observe", target, ".")).toMatchObject({ block: true });
+		resetPermissions("read-only");
 		expect(await gateToolCall("computer_end", {}, ".")).toBeUndefined();
-		resetPermissions("plan");
 		expect(await gateToolCall("computer_observe", {}, ".")).toBeUndefined();
 		expect(await gateToolCall("computer_click", {}, ".")).toMatchObject({ block: true });
-		for (const mode of ["auto", "yolo", "manual", "plan"] as const) {
+		for (const mode of ["auto", "yolo", "read-only"] as const) {
 			resetPermissions(mode);
 			expect(await gateToolCall("computer_raw", {}, ".")).toMatchObject({ block: true });
 		}
@@ -79,6 +78,11 @@ describe("computer policy and discovery", () => {
 			expect(computerSchemas[name].additionalProperties).toBe(false);
 			expect(computerSchemas[name].properties).not.toHaveProperty("element_index");
 			expect(computerSchemas[name].properties).not.toHaveProperty("snapshot_id");
+			const properties = computerSchemas[name].properties;
+			if ("observation" in properties) {
+				expect(properties.observation.description).toContain("Copy the latest image token exactly");
+				expect(properties.observation.description).toContain("Failed actions consume it");
+			}
 		}
 		expect(computerSchemas.computer_apps.properties.offset).toMatchObject({ type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 		expect(computerSchemas.computer_observe.properties).not.toHaveProperty("screenshot");
@@ -96,7 +100,85 @@ describe("computer policy and discovery", () => {
 	});
 });
 
+async function rejectedData(pending: Promise<unknown>): Promise<Record<string, unknown>> {
+	try {
+		await pending;
+	} catch (error) {
+		if (!(error instanceof Error)) throw error;
+		return JSON.parse(error.message);
+	}
+	throw new Error("Expected workflow rejection");
+}
+
 describe("image-only workflow", () => {
+	it.each(["altered", "annotated", "expired", "pid", "window_id", "coordinate", "argument"])("reports %s validation as no input from this call", async (kind) => {
+		const { workflow, call, close } = await fixture();
+		const observed = await workflow.execute("computer_observe", target);
+		const input: Record<string, unknown> = { ...target, observation: observed.details.observation, x: 1, y: 1 };
+		if (kind === "altered") input.observation = "incorrect-token";
+		if (kind === "annotated") input.observation = `${observed.details.observation} stale?`;
+		if (kind === "expired") vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30001);
+		if (kind === "pid" || kind === "window_id") input[kind] = 9;
+		if (kind === "coordinate") input.x = 9999;
+		if (kind === "argument") input.element_index = 1;
+		const data = await rejectedData(workflow.execute("computer_click", input));
+		expect(data.input).toBe("not_dispatched");
+		expect(data.code).toBe(kind === "expired" ? "observation_expired" : ["pid", "window_id"].includes(kind) ? "observation_target_mismatch" : ["altered", "annotated"].includes(kind) ? "observation_mismatch" : "invalid_arguments");
+		expect(data.message).toContain("No input was sent by this call");
+		expect(data.guidance).toContain("fresh capture");
+		expect(data.guidance).toContain("including window focus");
+		expect(JSON.stringify(data)).not.toContain("Input may have taken effect");
+		expect(call).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(1);
+	});
+	it("reports a missing active observation without inventing its cause", async () => {
+		const { workflow, call } = await fixture();
+		const data = await rejectedData(workflow.execute("computer_click", { ...target, observation: "unknown", x: 1, y: 1 }));
+		expect(data).toMatchObject({ code: "observation_unavailable", input: "not_dispatched" });
+		expect(call).not.toHaveBeenCalled();
+	});
+	it("keeps uncertainty after native dispatch throws and never forwards raw driver exception text", async () => {
+		const { workflow, call, close } = await fixture();
+		const observed = await workflow.execute("computer_observe", target);
+		call.mockRejectedValueOnce(new Error("RAW SECRET TREE"));
+		const data = await rejectedData(workflow.execute("computer_text", { ...target, observation: observed.details.observation, text: "fixture" }));
+		expect(data).toMatchObject({ code: "input_dispatch_failed", input: "uncertain" });
+		expect(data.message).toContain("Input may have taken effect");
+		expect(JSON.stringify(data)).not.toContain("SECRET");
+		expect(call).toHaveBeenCalledTimes(2);
+		expect(close).toHaveBeenCalledTimes(1);
+	});
+	it("recovers from background_unavailable only with a fresh capture and exact foreground token", async () => {
+		const first = await fixture();
+		const observed = await first.workflow.execute("computer_observe", target);
+		first.call.mockResolvedValueOnce({ isError: true, content: [], structuredContent: { code: "background_unavailable" } });
+		const refusal = await first.workflow.execute("computer_text", { ...target, observation: observed.details.observation, text: "fixture" });
+		const data = JSON.parse(refusal.content.find((item) => item.type === "text")?.text ?? "{}");
+		expect(data.code).toBe("background_unavailable");
+		expect(data.guidance).toContain("fresh capture");
+		expect(data.guidance).toContain("foreground");
+		expect(data.guidance).toContain("background shortcut");
+		const consumed = await rejectedData(first.workflow.execute("computer_window", { ...target, observation: observed.details.observation, action: "focus" }));
+		expect(consumed.input).toBe("not_dispatched");
+		expect(consumed.guidance).toContain("does not prove foreground typing failed");
+		expect(first.call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text"]);
+		const recovery = await fixture();
+		const fresh = await recovery.workflow.execute("computer_observe", target);
+		const result = await recovery.workflow.execute("computer_text", { ...target, observation: fresh.details.observation, foreground: true, text: "fixture" });
+		expect(recovery.call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text", "get_window_state"]);
+		expect(recovery.call.mock.calls[1]?.[1]).toMatchObject({ ...target, delivery_mode: "foreground", text: "fixture" });
+		expect(result.content.filter((item) => item.type === "image")).toHaveLength(1);
+		await recovery.workflow.close();
+	});
+	it.each(["{\"accessibility_tree\":\"RAW SECRET", "RAW SECRET AX fragment"])("does not leak unparseable driver text: %s", async (text) => {
+		const { workflow, call } = await fixture();
+		const observed = await workflow.execute("computer_observe", target);
+		call.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text }] });
+		const result = await workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 });
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result)).not.toContain("RAW SECRET");
+		expect(JSON.stringify(result)).toContain("unverified");
+	});
 	it("requests image-only capture and returns one bounded metadata record plus image, never raw AX/JSON", async () => {
 		const { workflow, call } = await fixture();
 		const result = await workflow.execute("computer_observe", target);
@@ -198,8 +280,41 @@ describe("image-only workflow", () => {
 		expect(result.details.observation).toBeUndefined();
 		expect(JSON.stringify(result.content)).toContain("partial");
 		expect(JSON.stringify(result.content)).toContain("Input may have taken effect");
+		expect(JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}")).toMatchObject({ input: "dispatched", applicationEffect: "unverified", observation: "unavailable" });
 		expect(call).toHaveBeenCalledTimes(3);
 		expect(close).toHaveBeenCalledTimes(1);
+	});
+	it("keeps partial typing recovery and explicit uncertainty when the post-image fails", async () => {
+		const { workflow, call } = await fixture();
+		call.mockResolvedValueOnce(screenshot()).mockResolvedValueOnce({ content: [], structuredContent: {
+			effect: "partial", requested_chars: 3, delivered_chars: 2, retryable: true, retry_from_character: 2,
+		} }).mockRejectedValueOnce(new Error("RAW SECRET capture error"));
+		const observed = await workflow.execute("computer_observe", target);
+		const result = await workflow.execute("computer_text", { ...target, observation: observed.details.observation, text: "A😀B" });
+		const data = JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		expect(data).toMatchObject({ effect: "partial", requested_chars: 3, delivered_chars: 2, retry_from_character: 2, observation: "unavailable" });
+		expect(data.guidance).toContain("Input may have taken effect");
+		expect(data.guidance).toContain("Unicode code-point");
+		expect(JSON.stringify(result)).not.toContain("RAW SECRET");
+		expect(call).toHaveBeenCalledTimes(3);
+	});
+	it("retains the lease and no-dispatch reporting when cleanup cannot be confirmed", async () => {
+		const path = await directory();
+		const lease = new DesktopLease(path);
+		const call = vi.fn(async () => screenshot());
+		const close = vi.fn(async () => { throw new Error("shutdown failed"); });
+		const workflow = new ComputerWorkflow({ call, close }, lease);
+		const next = new DesktopLease(path);
+		try {
+			await workflow.execute("computer_observe", target);
+			const data = await rejectedData(workflow.execute("computer_click", { ...target, observation: "bad", x: 1, y: 1 }));
+			expect(data).toMatchObject({ input: "not_dispatched", code: "observation_mismatch", cleanup: "unconfirmed" });
+			expect(call).toHaveBeenCalledTimes(1);
+			await expect(next.run(async () => undefined)).rejects.toThrow("busy");
+		} finally {
+			await lease.close();
+			await next.close();
+		}
 	});
 	it("stops repeated unchanged polling and refuses an identical action after an unchanged result", async () => {
 		const poll = await fixture();

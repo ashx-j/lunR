@@ -71,6 +71,8 @@ describe("computer extension lifecycle", () => {
 		expect(f.tools.get("computer_load")?.description).toContain(
 			"computer_end releases the workflow without a prompt",
 		);
+		expect(f.tools.get("computer_load")?.description).toContain("Read-only permits observation and release only");
+		expect(f.tools.get("computer_load")?.description).not.toContain("Manual approves");
 		expect(f.tools.get("computer_key")?.description).toContain("post-action image");
 		expect(f.tools.get("computer_observe")?.description).toContain("crop");
 		for (const tool of f.tools.values()) {
@@ -80,7 +82,9 @@ describe("computer extension lifecycle", () => {
 		await f.handlers.get("session_start")?.({}, f.ctx);
 		await f.handlers.get("before_agent_start")?.({}, f.ctx);
 		expect(f.active()).toEqual(["read", "computer_load"]);
-		await f.tools.get("computer_load")?.execute("load", {}, undefined, undefined, f.ctx);
+		const loaded = await f.tools.get("computer_load")?.execute("load", {}, undefined, undefined, f.ctx);
+		expect(JSON.stringify(loaded)).toContain("copy its image token exactly");
+		expect(JSON.stringify(loaded)).toContain("including window focus");
 		await f.handlers.get("before_agent_start")?.({}, f.ctx);
 		expect(f.active()).toEqual(["read", ...COMPUTER_TOOLS]);
 		computerSettingsChanged({ enabled: false, foreground: true });
