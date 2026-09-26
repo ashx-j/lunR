@@ -22,15 +22,17 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Dev test release integration (`integrate/pr77-v0.2.25-dev`):** preserves `dev/tui`, incorporates the current PR #77 head `b216d44`, and merges stable `v0.2.25` into the dev channel. The CLI remains `@ashx-j/lunr-dev`/`lunr-dev`; only a reviewed merge into `dev/tui` triggers dev publication. Stable npm and its `v*` tag workflow remain separate. The pinned native runtime remains development-only.
+
 - **Computer discovery filtering (`fix/computer-use-token-efficiency`):** `computer_apps.query` filters app names and window titles before bounded pagination. Its runtime 240-character limit counts Unicode code points to match the schema. A synthetic 139-app lookup falls from three calls and 8699 result-text characters to one call and 147 characters. Loaded tool definitions add 230 characters; first-request definitions are unchanged. These are payload/call proxies, not measured provider tokens. Image quality, history, input safeguards and runtime approval are unchanged.
 
 - **CI baseline repairs (`fix/ci-baseline-fixtures`):** extension loading now resolves AI catalog subpaths before the root compatibility alias. Tests cover the legacy gateway inference cutoff, current shutdown cleanup, current Kimi/OpenCode metadata, API-key tool-name casing, and fail-closed Anthropic OAuth. Generated catalogs and subscription routing are unchanged.
 
-- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance, provider-driven use and production approval remain separate gates.
+- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 integrates v0.2.24 master, and this dev branch also merges stable v0.2.25 while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance, provider-driven use and production approval remain separate gates.
 
 Last updated: 2026-09-26 (v0.2.25 dev integration). Public npm is `@ashx-j/lunr@0.2.25`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
-- **v0.2.25 preparation:** PR #119 merged without conflicts as `af3eaf6`. This release contains its gateway usability and recovery fixes; publication remains pending.
+- **v0.2.25:** PR #119 merged as `af3eaf6`; tag `v0.2.25` shipped gateway usability and recovery fixes in the stable npm package. PR #77 remains outside stable.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
 - **Gateway usability and recovery (`fix/gateway-usability-and-recovery`):** owner-first `/start`, `/model`, and approved default project work before the first message; paired non-owners stay restricted. Foreground/follow-up/error replies share a persistent per-destination outbox with acknowledged ordered chunks and bounded retries. Failed final preview edits fall back to full replies; silence markers do not leak through streaming. Picker confirmations fall back to a new message without repeating actions, Discord channel lookup failures are not cached, and gateway status text has no decorative moon prefix. No live platform or service validation.
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
@@ -145,7 +147,7 @@ Last updated: 2026-09-26 (v0.2.25 dev integration). Public npm is `@ashx-j/lunr@
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.24**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current stable: **0.2.25**. Dev test builds install separately with `npm i -g @ashx-j/lunr-dev`.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -158,6 +160,8 @@ Last updated: 2026-09-26 (v0.2.25 dev integration). Public npm is `@ashx-j/lunr@
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- Dev 0.2.25 plus PR #77 integration (2026-09-26): five offline package builds and the coding-agent Node bundle pass. Focused computer/dev identity tests pass 138/138 across 13 suites; eight release archive/package tests pass. Browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass. Pinned real CuaDriver archives pass size/SHA-256 verification. Seven dev tarballs pass local staging; a relocated isolated install passes first requests, host-only payload selection, omitted-optional recovery, and standalone installer `npm ci --ignore-scripts`. Shrinkwrap, installer lock, vendor hashes, and `git diff --check` pass. No driver launch, live provider, stable publication, or global CLI installation was part of this integration check.
 
 - PR #77 delta-review repair, 2026-09-26: independent heavy review found one low-severity Unicode query-length mismatch and no standards or foreground-dispatch findings. The 121- and 240-code-point cases failed before the runtime fix; all 109 focused computer tests across ten suites now pass, including rejection above the 240-code-point limit. Coding-agent build/Node bundle, touched-file lint and whitespace checks pass. No further live desktop test was needed for this discovery-only correction.
 
@@ -267,6 +271,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Dev publication runs only on `dev/tui` pushes via `publish-npm-dev.yml`. Its CLI uses `latest`, while shared libraries and native payloads use `dev`; the stable `v*` tag workflow is separate. `scripts/publish.mjs --pack-dir` needs an absolute destination because staging runs in temporary directories.
+
 - Windows CuaDriver 0.28.1 dispatches XAML `hotkey` through UIA regardless of `delivery_mode`, whereas `press_key` with modifiers honors foreground via SendInput. Keep foreground window modifier shortcuts without x/y on that supported route; image-coordinate shortcuts and background behavior stay separate. One owned Windows x64 Notepad scratch accepted that route; other apps, focus states and held-input release remain unverified.
 
 - Computer discovery queries match only native `name`, `app_name` and `title` strings before truncation; they never select an input target. Keep the same PID and query when using a matching-row offset. Unfiltered discovery remains available.
@@ -370,6 +376,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: merge current PR #77 and stable 0.2.25 into the existing dev branch rather than replacing it, so dev package identity and its separate publication workflow survive.
 
 - 2026-09-26: count discovery-query limits in Unicode code points so runtime validation accepts the same strings as the declared JSON Schema limit.
 

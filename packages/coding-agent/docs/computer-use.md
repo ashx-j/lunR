@@ -1,10 +1,12 @@
 # Image-only computer use
 
-The image-only implementation shipped on `lunr-dev` as `0.2.21-dev.12.1`
-and received user testing. Automated validation passed on the dev integration.
-This PR builds on that implementation without dev-channel naming or update
-changes, and repairs failure reporting and unchanged-image detection. Smooth cursor animation is not implemented. Production
-publication remains blocked pending the native runtime's separate approval.
+This dev-channel build combines stable lunR 0.2.25 and PR #77's current
+image-only computer use. The earlier image-only build shipped as
+`@ashx-j/lunr-dev@0.2.21-dev.12.1` and received user testing. The dev command
+is `lunr-dev`, including `lunr-dev update`; stable `lunr` stays separate. Both
+commands share `~/.lunr/agent` settings, credentials, and sessions. Smooth cursor
+animation is not implemented. Stable production publication remains blocked
+pending the native runtime's separate approval.
 
 ## Setup and permissions
 
@@ -245,7 +247,7 @@ Archive integrity and packaging are verified, but native signing, permission and
 input acceptance remain separate. Production approval is still development-only;
 publication requires separate approval and a new CLI version.
 
-The PR also incorporates the separately tracked baseline repairs from PR #118.
+PR #77 also incorporates the separately tracked baseline repairs from PR #118.
 That work fixes AI catalog subpath resolution in extension loading and updates
 fixtures for current gateway, shutdown, provider and subscription contracts.
 Its 152 focused tests across ten files pass. The complete Ubuntu log before
