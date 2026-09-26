@@ -693,7 +693,7 @@ describe("image-only workflow", () => {
 describe("driver outcome interpretation", () => {
 	it("extracts one structured record and never treats uncertain replies as proof", () => {
 		expect(driverData({ content: [{ type: "text", text: '{"status":"partial"}' }] }).status).toBe("partial");
-		for (const data of [{ refusal: { code: "background_occluded" } }, { effect: "refused" }, { status: "failed" }, { code: "window_target_mismatch" }])
+		for (const data of [{ refusal: { code: "background_occluded" } }, { effect: "refused" }, { status: "failed" }, { code: "window_target_mismatch" }, { code: "background_unavailable", effect: "unverifiable" }])
 			expect(driverRefused({ content: [], structuredContent: data, isError: false })).toBe(true);
 		expect(driverRefused({ content: [], isError: true, structuredContent: { success: true } })).toBe(true);
 		expect(driverRefused({ content: [], structuredContent: { status: "partial", verified: false } })).toBe(false);

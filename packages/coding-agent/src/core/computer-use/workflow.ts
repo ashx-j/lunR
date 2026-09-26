@@ -38,7 +38,7 @@ export function driverRefused(reply: DriverReply): boolean {
 		(data.refusal !== undefined && data.refusal !== null && data.refusal !== false) ||
 		(data.error !== undefined && data.error !== null && data.error !== false) ||
 		data.effect === "refused" || data.status === "refused" || data.status === "failed" || data.success === false ||
-		data.code === "window_target_mismatch" ||
+		["window_target_mismatch", "window_target_not_found", "background_unavailable", "foreground_unavailable", "type_text_incomplete", "verification_failed"].includes(String(data.code)) ||
 		(data.status !== undefined && !acknowledged && !uncertain && !["ok", "success", "completed"].includes(String(data.status))) ||
 		(data.code !== undefined && data.code !== 0 && !acknowledged && !uncertain);
 }
