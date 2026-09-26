@@ -61,7 +61,7 @@ import {
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { resolveChildExcludeTools } from "../shared/child-tools.ts";
-import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
+import { outputEntryFromAsyncResult, resolveOutputReferences, withChainHandoff } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
@@ -915,6 +915,7 @@ function writeRunLog(
 interface SingleStepContext {
 	supervisorSessionId?: string;
 	previousOutput: string;
+	handoffToNext?: boolean;
 	outputs?: ChainOutputMap;
 	placeholder: string;
 	cwd: string;
@@ -1060,6 +1061,7 @@ export async function runSingleStep(
 		const acceptancePrompt = formatAcceptancePrompt(step.effectiveAcceptance);
 		if (acceptancePrompt) task = `${task}\n${acceptancePrompt}`;
 	}
+	task = withChainHandoff(task, ctx.handoffToNext === true);
 	const sessionEnabled = Boolean(step.sessionFile) || ctx.sessionEnabled;
 	const sessionDir = step.sessionFile ? undefined : ctx.sessionDir;
 
@@ -2821,6 +2823,7 @@ async function runSubagent(
 				const singleResult = await runSingleStep(task, {
 					supervisorSessionId: config.sessionId ?? undefined,
 					previousOutput, placeholder, cwd, sessionEnabled,
+					handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
 					artifactsDir, artifactConfig, id,
@@ -3125,6 +3128,7 @@ async function runSubagent(
 						const singleResult = await runSingleStep(taskForRun, {
 							supervisorSessionId: config.sessionId ?? undefined,
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
+							handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 							outputs,
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
@@ -3335,6 +3339,7 @@ async function runSubagent(
 			const singleResult = await runSingleStep(seqStep, {
 				supervisorSessionId: config.sessionId ?? undefined,
 				previousOutput, placeholder, cwd, sessionEnabled,
+				handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
