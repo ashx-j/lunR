@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { getModel } from "../src/compat.ts";
 import type { AssistantMessage, Context, Tool, ToolResultMessage, UserMessage } from "../src/types.ts";
@@ -155,23 +155,20 @@ describe("Anthropic cache breakpoints (dual-mark tail)", () => {
 		expect(lastCacheableBlock(lastUser?.content ?? [])?.cache_control).toEqual({ type: "ephemeral" });
 		expect(lastCacheableBlock(lastAssistant?.content ?? [])?.cache_control).toEqual({ type: "ephemeral" });
 
-		expect(countCacheControls(payload)).toBeLessThanOrEqual(4);
+		expect(countCacheControls(payload)).toBe(4);
+		expect(payload.system).toHaveLength(1);
+		expect(payload.system?.[0]?.text).toBe(toolLoopContext().systemPrompt);
 	});
 
-	it("drops the OAuth preamble breakpoint so dual-mark still fits in 4 slots", async () => {
-		const payload = await capturePayload("sk-ant-oat01-fake");
+	it("rejects legacy OAuth before constructing a cached HTTP payload", async () => {
+		const onPayload = vi.fn();
+		const result = await streamAnthropic(getModel("anthropic", "claude-haiku-4-5"), toolLoopContext(), {
+			apiKey: "sk-ant-oat01-fake",
+			onPayload,
+		}).result();
 
-		expect(payload.system?.length).toBeGreaterThanOrEqual(2);
-		expect(payload.system?.[0]?.text).toContain("You are Claude Code");
-		expect(payload.system?.[0]?.cache_control).toBeUndefined();
-		expect(payload.system?.[1]?.cache_control).toEqual({ type: "ephemeral" });
-		expect(payload.tools?.[payload.tools.length - 1]?.cache_control).toEqual({ type: "ephemeral" });
-
-		const lastUser = [...payload.messages].reverse().find((message) => message.role === "user");
-		const lastAssistant = [...payload.messages].reverse().find((message) => message.role === "assistant");
-		expect(lastCacheableBlock(lastUser?.content ?? [])?.cache_control).toEqual({ type: "ephemeral" });
-		expect(lastCacheableBlock(lastAssistant?.content ?? [])?.cache_control).toEqual({ type: "ephemeral" });
-
-		expect(countCacheControls(payload)).toBe(4);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Anthropic subscription authentication requires Claude Code");
+		expect(onPayload).not.toHaveBeenCalled();
 	});
 });

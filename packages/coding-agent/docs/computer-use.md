@@ -219,8 +219,8 @@ new CLI version. Dev-channel update/publication changes were not ported here.
 ## Verification and remaining acceptance
 
 After integrating v0.2.24 master, all five offline package builds and the Node
-bundle pass. Validation passes 239 focused tests across 21 files and eight
-archive/package tests. Installation and archive staging tests now create inert
+bundle pass. With the PR #118 baseline repairs integrated, validation passes
+391 focused tests across 31 files and eight archive/package tests. Installation and archive staging tests now create inert
 fixtures, so source tests need no native release payload. The Windows installation
 test exercises real extraction, locking, cache reuse, and helper-tamper rejection
 without executing either fixture file. Fake-driver tests cover exact-token
@@ -241,12 +241,14 @@ Archive integrity and packaging are verified, but native signing, permission and
 input acceptance remain separate. Production approval is still development-only;
 publication requires separate approval and a new CLI version.
 
-The eight suites implicated by the prior CI annotations produce the same ten
-failures on this branch and an isolated build of master `b57c148`: three in
-coding-agent gateway inference, extension discovery, and the SIGTERM fixture;
-seven in AI catalog and Anthropic/OpenCode fixtures. Each comparison passes 108
-other tests. This is not clean full-suite CI. Those baseline failures require a
-separate repair or explicit acceptance decision before calling the PR merge-ready.
+The PR also incorporates the separately tracked baseline repairs from PR #118.
+That work fixes AI catalog subpath resolution in extension loading and updates
+fixtures for current gateway, shutdown, provider and subscription contracts.
+Its 152 focused tests across ten files pass. The complete Ubuntu log before
+those repairs records 101 coding-agent failures across 27 suites and 11 AI
+failures, more than the subset exposed by check annotations. Agent passes
+181/181 in that run. Clean full-suite CI still requires broader baseline work;
+local Windows-only diagnostics are not evidence of Ubuntu failures.
 These checks did not operate a desktop or launch CuaDriver. Foreground typing on
 hardware still requires separate approval.
 

@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **CI baseline repairs (`fix/ci-baseline-fixtures`):** extension loading now resolves AI catalog subpaths before the root compatibility alias. Tests cover the legacy gateway inference cutoff, current shutdown cleanup, current Kimi/OpenCode metadata, API-key tool-name casing, and fail-closed Anthropic OAuth. Generated catalogs and subscription routing are unchanged.
+
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. Native hardware acceptance and production approval remain separate gates.
 
 Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
@@ -152,7 +154,9 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- PR #77 validation, 2026-09-26: five offline tsgo builds, the Node bundle, 239 focused tests across 21 files, and eight archive/package tests pass. Browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged supported-host hashes `4f547e94…` / `aba75162…`; removing only `computer_load` matches master. All three pinned upstream archives pass byte-count and SHA-256 verification. Real-payload public staging produces seven tarballs and passes relocated first requests, OS/CPU selection, omitted optional recovery, and installer `npm ci --ignore-scripts` on Windows x64. Exact source locks and changed-test lint/diff checks pass. No native driver was launched; approval stays development-only. Eight CI-annotated suites reproduce the same ten failures and 108 passes on HEAD and isolated master `b57c148`. Full clean CI and native hardware acceptance remain unverified. Private inventories stay local. No desktop, CuaDriver, installed CLI, or original checkout build was used.
+- CI baseline repairs, 2026-09-26: 152 focused tests across ten files pass after reproducing fourteen annotated failures. All five offline builds, Node bundle, and browser-on/off first-request checks pass. Full AI passes 623 tests with 760 credential-gated skips. A broader isolated Windows diagnostic remains red in coding-agent, TUI, and Agent; its offline environment also suppresses mocked catalog/update requests. The complete Ubuntu log for PR #77 at `55e97bc` also records 101 coding-agent failures across 27 suites and 11 AI failures, beyond the subset exposed by annotations. Agent passes 181/181 there; local Windows TUI/Agent failures are not confirmed Ubuntu failures. This is not clean full CI. No live provider or installed CLI was used.
+
+- PR #77 validation, 2026-09-26: five offline tsgo builds, the Node bundle, 391 focused tests across 31 files including the PR #118 baseline repairs, and eight archive/package tests pass. Browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged supported-host hashes `4f547e94…` / `aba75162…`; removing only `computer_load` matches master. All three pinned upstream archives pass byte-count and SHA-256 verification. Real-payload public staging produces seven tarballs and passes relocated first requests, OS/CPU selection, omitted optional recovery, and installer `npm ci --ignore-scripts` on Windows x64. Exact source locks and changed-test lint/diff checks pass. No native driver was launched; approval stays development-only. The initial eight-suite comparison reproduced ten failures and 108 passes on the feature and isolated master `b57c148`; the fourteen annotated failures now pass after integrating PR #118. Full Ubuntu logs expose a larger baseline backlog, so clean CI and native hardware acceptance remain unverified. Private inventories stay local. No desktop, CuaDriver, installed CLI, or original checkout build was used.
 
 - Image-only computer use: dev integration passed five offline builds, Node bundle, 265 focused tests across 23 suites, eight archive/package tests, first-paint/first-request checks, and seven local-package install checks. Workflow `35456243519` published `0.2.21-dev.12.1`; the user reported testing it. This master-targeted branch ports the same computer source, constructor repair, real Photon crop fixture, Node fixture compatibility, captured tool fingerprint, and npm 12 pack parsing. Dev naming/update changes remain excluded. Current stable packaging results appear above; native platform acceptance, smooth cursor work, measured savings, and production approval remain open. Ancestry merge `3bb9839` permits a fast-forward update of PR #77.
 
@@ -244,6 +248,8 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Extension aliases match prefixes. Keep the AI catalog directory ahead of its root compatibility-file alias so `catalog/codex` does not resolve beneath `compat.js`.
 
 - Computer installation and staging tests generate inert local payloads with test-only checksum metadata. Their success validates extraction and packaging mechanics, not signed native runtime acceptance. Keep real release metadata and production approval unchanged when validating fixtures.
 
@@ -340,6 +346,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: repair catalog-subpath resolution and version-dependent fixtures without changing generated metadata or reviving direct Anthropic OAuth, because the failing tests mixed a real alias bug with retired contracts.
 
 - 2026-09-26: qualify the unchanged pinned native archives through local public-package staging and isolated installs, keeping byte integrity and packaging separate from hardware acceptance and production approval.
 
