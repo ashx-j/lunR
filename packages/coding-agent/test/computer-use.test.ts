@@ -380,6 +380,55 @@ describe("image-only workflow", () => {
 		expect(readPage(await workflow.execute("computer_apps", { ...selection, offset: 500 })).items).toEqual([]);
 		await workflow.close();
 	});
+	it("finds a named app beyond the first page without returning unrelated identities", async () => {
+		const { workflow, call } = await fixture();
+		const rows = Array.from({ length: 139 }, (_, i) => ({ pid: 0, name: i === 117 ? "Notepad" : `app-${i}`, running: false, secret: "SECRET" }));
+		call.mockResolvedValue({ content: [], structuredContent: { apps: rows } });
+		const result = await workflow.execute("computer_apps", { query: "  nOtEpAd  " });
+		const data = JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		expect(data).toMatchObject({ items: [{ pid: 0, name: "Notepad", running: false }], total: 1, offset: 0, query: "nOtEpAd" });
+		expect(data.items).toHaveLength(1);
+		expect(data.next_offset).toBeUndefined();
+		expect(JSON.stringify(result)).not.toMatch(/SECRET|app-\d/);
+		expect(call).toHaveBeenCalledExactlyOnceWith("list_apps", {}, expect.any(AbortSignal));
+		await workflow.close();
+	});
+	it.each(["apps", "windows"] as const)("filters %s before pagination and display truncation, without matching hidden fields", async (kind) => {
+		const { workflow, call } = await fixture();
+		const rows = [...Array.from({ length: 103 }, (_, i) => i % 2 === 0
+			? { pid: i + 1, window_id: i + 1, title: `${"x".repeat(240)} 日本語 [draft]`, secret: "SECRET" }
+			: { pid: i + 1, name: "unrelated", secret: "日本語 [draft] SECRET" }),
+			{ pid: 999, window_id: 999, app_name: "日本語 [draft]", secret: "SECRET" }];
+		call.mockResolvedValue({ content: [], structuredContent: { [kind]: rows } });
+		const selection = kind === "windows" ? { pid: 1 } : {};
+		const readPage = async (input: Record<string, unknown>) => {
+			const result = await workflow.execute("computer_apps", { ...selection, ...input });
+			return JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		};
+		const first = await readPage({ query: "日本語 [draft]" });
+		const second = await readPage({ query: "日本語 [draft]", offset: first.next_offset });
+		expect([first.items.length, second.items.length]).toEqual([50, 3]);
+		expect(first).toMatchObject({ total: 53, omitted: 3, next_offset: 50 });
+		expect(first.guidance).toContain("same pid and query");
+		expect(second.next_offset).toBeUndefined();
+		expect(first.items[0].title).toHaveLength(240);
+		expect(second.items[2]).toMatchObject({ pid: 999, app_name: "日本語 [draft]" });
+		expect(JSON.stringify([first, second])).not.toContain("SECRET");
+		expect(await readPage({ query: "no match" })).toMatchObject({ items: [], total: 0 });
+		expect(await readPage({ query: "日本語 [draft]", offset: 500 })).toMatchObject({ items: [], total: 53 });
+		for (const [name, args] of call.mock.calls) {
+			expect(name).toBe(kind === "windows" ? "list_windows" : "list_apps");
+			expect(args).toEqual(selection);
+		}
+		await workflow.close();
+	});
+	it.each([42, "", "   ", "x".repeat(241)])("rejects invalid discovery query %j before native dispatch", async (query) => {
+		const { workflow, call } = await fixture();
+		const data = await rejectedData(workflow.execute("computer_apps", { query }));
+		expect(data).toMatchObject({ input: "not_dispatched", code: "invalid_arguments" });
+		expect(data.message).toContain("Discovery query");
+		expect(call).not.toHaveBeenCalled();
+	});
 	it("preserves validated Unicode typing recovery without retrying or trusting completion", async () => {
 		const { workflow, call } = await fixture();
 		call.mockResolvedValueOnce(screenshot()).mockResolvedValueOnce({

@@ -21,6 +21,7 @@ export const computerSchemas = {
 	computer_load: Type.Object({}, { additionalProperties: false }),
 	computer_apps: Type.Object({
 		pid: Type.Optional(target.pid),
+		query: Type.Optional(Type.String({ minLength: 1, maxLength: 240, description: "Case-insensitive literal substring in name, app_name or title, before pagination. Omit to list all." })),
 		offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Zero-based row offset, default 0. Pass the result's next_offset to retrieve the next 50 apps or windows." })),
 	}, { additionalProperties: false }),
 	computer_observe: Type.Object(

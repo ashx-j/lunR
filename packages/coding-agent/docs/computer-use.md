@@ -43,10 +43,14 @@ recording, or permission tool is exposed.
 
 ## Observe, act, inspect
 
-1. Use `computer_apps` for app identities or windows for a PID. Results allowlist
-   at most 50 rows and truncate titles to 240 characters. Pass `next_offset` as
-   `offset` with the same PID selection to retrieve more apps or windows. Lists
-   refresh per call, so changing native order can shift page boundaries. PID zero
+1. Use `computer_apps` for app identities or windows for a PID. For a known app
+   or title, pass `query` to avoid paging through unrelated identities. It matches
+   a case-insensitive literal substring in `name`, `app_name`, or `title` before
+   pagination and display truncation. `total` counts matching rows. Omit `query`
+   to browse all rows. Results allowlist at most 50 rows and truncate titles to
+   240 characters. Pass `next_offset` as `offset` with the same PID and query to
+   retrieve more matches. Lists refresh per call, so changing native order can
+   shift page boundaries. PID zero
    identifies an installed app that is not running. Window `bounds` are native
    geometry, not screenshot coordinates.
 2. Use `computer_observe` with an exact `pid` and `window_id`, or `desktop=true`.
@@ -277,7 +281,14 @@ scenarios were not supplied. This does not establish full platform acceptance.
 Native gates remain Windows locked/UAC/integrity states, Electron/native apps,
 display scaling and moved/resized windows, Unicode, held-input cancellation, and
 macOS TCC/LaunchServices/FIFO/shutdown on hardware. Cursor/runtime changes need
-a separate scoped decision before implementation. Token savings remain unmeasured.
+a separate scoped decision before implementation. Provider token savings remain
+unmeasured. An offline fake-driver discovery comparison finds a named app at row
+118 of 139 synthetic apps in one query instead of three unfiltered pages. It
+returns one identity instead of 139 and 147 result-text characters instead of
+8699. The loaded computer-tool definitions grow by 230 serialized characters;
+the first-request definitions are unchanged because detailed tools load on demand.
+These are call and text-payload measurements, not model tokens or billing. The
+comparison uses no desktop, provider, screenshot resizing, or history pruning.
 
 ## Privacy
 

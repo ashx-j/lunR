@@ -261,6 +261,10 @@ export class ComputerWorkflow {
 				this.observation = undefined;
 				if (name === "computer_apps" || name === "computer_launch") {
 					const operation = name === "computer_launch" ? "launch_app" : input.pid === undefined ? "list_apps" : "list_windows";
+					if (input.query !== undefined && (typeof input.query !== "string" || !input.query.trim() || input.query.length > 240))
+						throw new Error("Discovery query must be a nonblank string of at most 240 characters.");
+					const query = typeof input.query === "string" ? input.query.trim() : undefined;
+					const needle = query?.toLowerCase();
 					const offset = input.offset ?? 0;
 					if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0)
 						throw new Error("Discovery offset must be a nonnegative safe integer.");
@@ -270,7 +274,11 @@ export class ComputerWorkflow {
 					failureCode = "discovery_failed";
 					const reply = await abortable(this.driver.call(operation, args, combined), combined);
 					const data = driverData(reply);
-					const rows = data.apps ?? data.windows;
+					const discovered = data.apps ?? data.windows;
+					const rows = Array.isArray(discovered) && needle ? discovered.filter((row) => {
+						const item = record(row);
+						return [item.name, item.app_name, item.title].some((value) => typeof value === "string" && value.toLowerCase().includes(needle));
+					}) : discovered;
 					const metadata = Array.isArray(rows) ? rows.slice(offset, offset + 50).map((row) => {
 						const item = record(row);
 						return { ...select(item, ["pid", "window_id", "name", "app_name", "title", "active", "running", "is_on_screen", "minimized"]),
@@ -279,9 +287,9 @@ export class ComputerWorkflow {
 					const remaining = Array.isArray(rows) ? Math.max(0, rows.length - offset - (metadata?.length ?? 0)) : 0;
 					return { content: [{ type: "text", text: JSON.stringify({
 						...outcome(reply), ...select(data, ["pid", "window_id", "name", "title"]),
-						items: metadata, offset, total: Array.isArray(rows) ? rows.length : undefined,
+						items: metadata, query, offset, total: Array.isArray(rows) ? rows.length : undefined,
 						omitted: remaining || undefined, next_offset: remaining ? offset + 50 : undefined,
-						guidance: name === "computer_launch" ? "Capture the exact target before input." : remaining ? "Pass next_offset as offset with the same pid selection. Lists refresh per call." : undefined,
+						guidance: name === "computer_launch" ? "Capture the exact target before input." : remaining ? "Pass next_offset as offset with the same pid and query. Lists refresh per call." : undefined,
 					}) }], details: {}, isError: driverRefused(reply) };
 				}
 				const target = targetFrom(input);

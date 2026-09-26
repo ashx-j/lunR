@@ -75,6 +75,8 @@ describe("computer extension lifecycle", () => {
 		expect(f.tools.get("computer_load")?.description).not.toContain("Manual approves");
 		expect(f.tools.get("computer_key")?.description).toContain("post-action image");
 		expect(f.tools.get("computer_observe")?.description).toContain("crop");
+		expect(f.tools.get("computer_apps")?.description).toContain("Prefer query");
+		expect(f.tools.get("computer_apps")?.parameters.properties.query).toMatchObject({ type: "string", minLength: 1, maxLength: 240 });
 		for (const tool of f.tools.values()) {
 			expect(tool.description).not.toContain("accessibility element");
 			expect(tool.parameters.properties).not.toHaveProperty("element_index");
