@@ -4,9 +4,9 @@
  * StreamConsumer accumulates assistant text deltas and mirrors them into a
  * single chat message: the first flush sends a new message, later flushes
  * edit it. Flushes happen at most every intervalMs and only once at least
- * `threshold` new chars have accumulated. finalize() forces a last flush and
- * returns the full text — the caller splits THAT via text.ts for final
- * delivery; the streaming preview itself is truncated to maxPreview-3 + "…".
+ * `threshold` new chars have accumulated. finalize() waits for pending previews;
+ * the router owns final delivery. Previews omit silence-marker lines and truncate
+ * at maxPreview-3 + "…".
  *
  * applySilenceFilter() recognizes the [SILENT] / NO_REPLY markers (whole
  * response, or first/last line) and returns null when nothing deliverable
@@ -51,6 +51,7 @@ export class StreamConsumer {
 	private readonly options: StreamConsumerOptions;
 	private buffer = "";
 	private flushedLen = 0;
+	private lastPreview = "";
 	private messageId: string | null = null;
 	private lastFlushAt = 0;
 	private chain: Promise<void> = Promise.resolve();
@@ -74,9 +75,8 @@ export class StreamConsumer {
 		}
 	}
 
-	/** Force a final flush; resolves with the FULL text (caller splits for delivery). */
+	/** Wait for pending previews; final delivery belongs to the router. */
 	async finalize(): Promise<string> {
-		this.schedule(true);
 		await this.chain;
 		return this.buffer;
 	}
@@ -91,14 +91,21 @@ export class StreamConsumer {
 		return this.buffer.length > this.maxPreview;
 	}
 
-	/** The streaming preview: full text truncated to maxPreview-3 + "…". */
+	/** Preview visible text without a trailing silence-marker fragment. */
 	private preview(): string {
-		if (this.buffer.length <= this.maxPreview) return this.buffer;
+		const lines = this.buffer.split("\n");
+		const last = lines.at(-1)?.trim() ?? "";
+		if (SILENCE_MARKERS.has(last) || (last && [...SILENCE_MARKERS].some((marker) => marker.startsWith(last))))
+			lines.pop();
+		if (lines.length && isMarkerLine(lines[0])) lines.shift();
+		const visible = lines.join("\n").trim();
+		if (!visible) return "";
+		if (visible.length <= this.maxPreview) return visible;
 		let cut = this.maxPreview - 3;
 		// Don't truncate between surrogate halves.
-		const code = this.buffer.charCodeAt(cut - 1);
+		const code = visible.charCodeAt(cut - 1);
 		if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
-		return `${this.buffer.slice(0, cut)}…`;
+		return `${visible.slice(0, cut)}…`;
 	}
 
 	private schedule(force = false): void {
@@ -110,13 +117,16 @@ export class StreamConsumer {
 		if (!hasNew) return;
 		if (!force && this.messageId !== null && this.now() - this.lastFlushAt < this.options.intervalMs) return;
 		const text = this.preview();
+		if (!text || text === this.lastPreview) return;
+		const length = this.buffer.length;
 		if (this.messageId === null) {
 			this.messageId = await this.options.sendInitial(text);
 			if (this.messageId === null) return; // send failed; retry on the next flush
 		} else {
 			await this.options.edit(this.messageId, text);
 		}
-		this.flushedLen = this.buffer.length;
+		this.flushedLen = length;
+		this.lastPreview = text;
 		this.lastFlushAt = this.now();
 	}
 }

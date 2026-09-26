@@ -292,7 +292,7 @@ describe("createPlatformDeliverer", () => {
 		expect(adapter.sent).toHaveLength(1);
 		expect(adapter.sent[0].chatId).toBe("chat1");
 		expect(adapter.sent[0].opts?.threadId).toBe("th9");
-		expect(adapter.sent[0].text).toBe("☾ Cron: testjob\n———\nresult text");
+		expect(adapter.sent[0].text).toBe("Cron: testjob\n———\nresult text");
 	});
 
 	it("'origin' with a missing origin falls back to the platform homeChannel", async () => {
@@ -441,14 +441,14 @@ describe("createPlatformDeliverer", () => {
 		for (const msg of adapter.sent) {
 			expect(msg.text.length).toBeLessThanOrEqual(40);
 		}
-		expect(adapter.sent[0].text).toContain("☾ Cron: testjob");
+		expect(adapter.sent[0].text).toContain("Cron: testjob");
 		expect(adapter.sent.map((m) => m.text).join("")).toContain("word");
 	});
 });
 
 describe("wrapCronContent", () => {
 	it("is the compact cron header", () => {
-		expect(wrapCronContent(fakeJob({ name: "nightly" }), "body")).toBe("☾ Cron: nightly\n———\nbody");
+		expect(wrapCronContent(fakeJob({ name: "nightly" }), "body")).toBe("Cron: nightly\n———\nbody");
 	});
 });
 
@@ -516,7 +516,7 @@ describe("startGatewayCron", () => {
 		}
 		expect(adapter.sent).toHaveLength(1);
 		expect(adapter.sent[0].chatId).toBe("123");
-		expect(adapter.sent[0].text).toBe("☾ Cron: e2ejob\n———\nall green");
+		expect(adapter.sent[0].text).toBe("Cron: e2ejob\n———\nall green");
 		expect(guardSeenDuringPrompt).toBe(true);
 		expect(shutdownEvents).toEqual([{ type: "session_shutdown", reason: "quit" }]);
 
@@ -555,7 +555,7 @@ describe("startGatewayCron", () => {
 		);
 		expect(err).toBeNull();
 		expect(adapter.sent[0].chatId).toBe("321");
-		expect(adapter.sent[0].text).toBe("☾ Cron: bridgejob\n———\nvia bridge");
+		expect(adapter.sent[0].text).toBe("Cron: bridgejob\n———\nvia bridge");
 	});
 
 	it("rejects an explicit deliver target not in the allowlist", async () => {
@@ -689,9 +689,7 @@ describe("startGatewayCron fallback models", () => {
 
 		await waitFor(() => adapter.sent.length > 0);
 		expect(seen).toEqual(["default", "ollama-cloud/glm-5.2"]);
-		expect(adapter.sent[0].text).toBe(
-			"☾ Cron: fallbackjob\n———\n[fell back to ollama-cloud/glm-5.2]\nfallback result",
-		);
+		expect(adapter.sent[0].text).toBe("Cron: fallbackjob\n———\n[fell back to ollama-cloud/glm-5.2]\nfallback result");
 		expect(getJob(job.id).lastStatus).toBe("ok");
 	});
 

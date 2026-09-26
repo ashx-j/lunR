@@ -16,7 +16,7 @@
  *    "origin" (the chat that created the job, homeChannel fallback), a bare
  *    platform name (that platform's homeChannel), or
  *    "<platform>:<chatId>[:<threadId>]" (explicit). Content is wrapped as
- *    "☾ Cron: <name>" and split to the adapter's maxMessageLength.
+ *    "Cron: <name>" and split to the adapter's maxMessageLength.
  *
  * The bridge is re-installed after every cron session creation because loading
  * the builtin extensions (lunr-cron) re-registers its local-notify bridge per
@@ -231,7 +231,7 @@ export function createDeliverValidator(
 
 /** Wrap the run output with a compact cron header. */
 export function wrapCronContent(job: CronJob, content: string): string {
-	return `☾ Cron: ${job.name}\n———\n${content}`;
+	return `Cron: ${job.name}\n———\n${content}`;
 }
 
 /**

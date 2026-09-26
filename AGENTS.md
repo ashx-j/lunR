@@ -22,8 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-26 (gateway usability branch). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
+- **Gateway usability and recovery (`fix/gateway-usability-and-recovery`):** owner-first `/start`, `/model`, and approved default project work before the first message; paired non-owners stay restricted. Foreground/follow-up/error replies share a persistent per-destination outbox with acknowledged ordered chunks and bounded retries. Failed final preview edits fall back to full replies; silence markers do not leak through streaming. Picker confirmations fall back to a new message without repeating actions, Discord channel lookup failures are not cached, and gateway status text has no decorative moon prefix. No live platform or service validation.
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
 - **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
 
@@ -150,6 +152,7 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Gateway usability and recovery (2026-09-26): offline tui → ai → agent → coding-agent → orchestrator tsgo and coding-agent Node bundle pass. Focused gateway, owner first-use, and setup menu tests pass 238/238 across eleven suites. Setup tests drive actual SelectList arrow/Enter/Escape handling with mocked terminal and service boundaries. The compiled local scripted-provider flow passes first-use `/start` and `/model`, handoff/continuation approval, failed final send/retry, file download, `/new`, and reclaim. All fixtures use a temporary profile and local provider; real Telegram/Discord, provider, service, and installed CLI remain untested. Artifacts under `.artifacts/gateway-*.log` and `.artifacts/gateway-local-output.json`.
 - v0.2.24 release (2026-09-24): five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. Publication workflow `36066384313` succeeded from tag `v0.2.24` at `8a5bfb4`; all four public npm packages resolve as latest. A fresh isolated install reports 0.2.24 for the CLI and all four packages. The full CI test job retains the documented 11 TUI and 101 coding-agent baseline failures. No installed global CLI or live Anthropic subscription was used.
 - v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
 - Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
@@ -239,6 +242,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- The compiled local gateway check uses an OS-temp fixture only. Windows may keep its temporary profile directory until worker handles close; its output under `.artifacts/` is ignored by git and must not be committed.
+- Gateway outbox keeps legacy entries without source/kind metadata, resolving their chat through the stored conversation binding. New result entries retain their original source across `/new`; prompt/notices use an epoch and are removed on invalidation. Discord role assertions remain process-local and cannot authorize replay after restart without a new inbound role check. Failed batches remain on disk with `failed: true` for diagnosis, while other destinations continue. A crash between a successful platform send and its on-disk acknowledgement can duplicate the last chunk after restart; chat APIs do not provide a transactional send/ack.
 - The v0.2.24 Anthropic bridge shipped with offline fixtures and vendor provenance verification; no live subscription qualification was possible. Keep account access and prerequisite installation behind explicit owner consent.
 - npm accepted all four v0.2.24 publishes before the CLI package metadata and tarball became available. Verify the tarball and a fresh isolated install before declaring a tag shipment complete.
 - Read-only blocks unclassified extension tools, including direct MCP tools. The `mcp` proxy still permits status, search, describe, and ui-messages. Saved `defaultPermissionMode` and session `.leaf.json` can still contain `manual` or `plan`; read them as yolo or read-only without rewriting files. Gateway session switches to a saved writable mode pause in read-only until the owner confirms. Read-only does not revoke full-access background children already running when the mode changes.
@@ -328,6 +333,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-26: reuse the gateway outbox for final answers and follow-ups, and retain bounded failed batches instead of endlessly retrying or dropping completed text.
+- 2026-09-26: use the existing scrolling TUI list for setup choices so users navigate options instead of typing names, numbers, and yes/no answers.
 - 2026-09-24: merge PRs #106, #107, #109, #110, and #111 without #77 or #108; keep additive AGENTS.md entries and refresh the combined first-request schema fixture.
 - 2026-09-24: prepare v0.2.24 on a release branch after integration; publish after offline checks when the owner explicitly chooses to ship without unavailable live Anthropic qualification.
 - 2026-09-24: record the release only after the npm tarball resolves and an isolated install reports 0.2.24 for every public package.
@@ -480,7 +487,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Deferred
 
-- Gateway cold first slash after daemon start can hang minutes.
+- Gateway cold first slash after daemon start can hang minutes; local scripted-provider first-use flow passes but does not establish a cold-start latency bound.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Scope rename; `PI_CODING_AGENT*` rename; `/share` still pi.dev.
 - **`~/.pi` leakage (vendored copies only):** mcp-adapter, intercom broker, web-access keys/settings, pi-goal-state, simple-pi-memory (+ rollback snapshots that path), TUI crash log `~/.pi/agent/pi-crash.log`. Fix: route through `getAgentDir()` / set `PI_CODING_AGENT_DIR` at startup + migrate. Catalog no longer hits pi.dev.

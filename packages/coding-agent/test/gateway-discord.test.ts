@@ -560,6 +560,17 @@ describe("DiscordAdapter", () => {
 		await adapter.disconnect();
 	});
 
+	it("retries a channel lookup after a temporary fetch error", async () => {
+		const client = new MockClient();
+		const channel = fakeChannel("555", ChannelType.DM);
+		const { adapter } = await connectAdapter(client);
+		expect((await adapter.send("555", "first")).success).toBe(false);
+		client.channelMap.set("555", channel.channel);
+		expect((await adapter.send("555", "second")).success).toBe(true);
+		expect(client.fetchCalls).toEqual(["555", "555"]);
+		await adapter.disconnect();
+	});
+
 	it("send passes a reply reference and falls back to a plain send when it fails", async () => {
 		const client = new MockClient();
 		const channel = fakeChannel("555", ChannelType.DM);
