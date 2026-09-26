@@ -6,6 +6,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { browserEnabledDefault, notifyBrowserEnabledChange } from "./browser/settings.ts";
 import { computerSettingsChanged } from "./computer-use/policy.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
@@ -81,7 +82,7 @@ export interface MarkdownSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
-export type DefaultPermissionMode = "manual" | "yolo" | "plan" | "auto";
+export type DefaultPermissionMode = "yolo" | "auto" | "read-only";
 export type SkillTagCharacter = "+" | "~" | "$";
 export const SKILL_TAG_CHARACTERS: readonly SkillTagCharacter[] = ["+", "~", "$"];
 export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "+";
@@ -111,6 +112,30 @@ export type PackageSource =
 			themes?: string[];
 	  };
 
+export type ReasoningDisplay = "auto" | "one-line" | "four-lines";
+
+const SUBAGENT_COMMUNICATION_BRIDGE = Symbol.for("@lunr/subagent-communication");
+
+export function bindSubagentCommunicationSetting(manager: SettingsManager | undefined): void {
+	if (manager) (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE] = manager;
+	else delete (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+}
+
+export function subagentCommunicationEnabled(cwd: string, agentDir = getAgentDir()): boolean {
+	const inherited = process.env.PI_SUBAGENT_COMMUNICATION_ENABLED;
+	if (process.env.PI_SUBAGENT_CHILD === "1" && (inherited === "0" || inherited === "1")) return inherited === "1";
+	const active = (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+	if (
+		agentDir === getAgentDir() &&
+		active &&
+		typeof (active as SettingsManager).getSubagentCommunicationEnabled === "function"
+	) {
+		return (active as SettingsManager).getSubagentCommunicationEnabled();
+	}
+	if (inherited === "0" || inherited === "1") return inherited === "1";
+	return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSubagentCommunicationEnabled();
+}
+
 export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -127,6 +152,7 @@ export interface Settings {
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
+	reasoningDisplay?: ReasoningDisplay;
 	thinkingCollapse?: boolean; // default: true - collapse completed thinking blocks to "Thought for Xs" + first sentence
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
 	cacheRetention?: "none" | "short" | "long"; // default: unset - falls back to PI_CACHE_RETENTION env, then "short" (packages/ai)
@@ -163,8 +189,11 @@ export interface Settings {
 	sessionRetentionDays?: number; // default: 30 - delete session files older than N days at launch; 0 = keep forever
 	computerUse?: boolean;
 	computerForeground?: boolean;
+	browserEnabled?: boolean;
+	browserAllowPrivateNetwork?: boolean;
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
+	todosEnabled?: boolean; // default: true - expose the todo tool and its prompt guidance
 	// lunr: footer element toggles (ashxj-tui stats line)
 	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
@@ -178,7 +207,7 @@ export interface Settings {
 	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
-	defaultPermissionMode?: DefaultPermissionMode; // default "manual"
+	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
@@ -186,6 +215,8 @@ export interface Settings {
 	rollbackScope?: RollbackScope; // default "tools"
 	autoManageSubscriptions?: boolean; // lunr: when true, subscription key switching is fully automatic (no manual picker)
 	confirmLargeSubagentLaunches?: boolean; // default true - ask before launching 3+ children outside Auto mode
+	subagentCommunicationEnabled?: boolean;
+	automaticSubagentDelegation?: boolean;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -926,6 +957,17 @@ export class SettingsManager {
 		return this.settings.hideThinkingBlock ?? false;
 	}
 
+	getReasoningDisplay(): ReasoningDisplay {
+		const value = this.settings.reasoningDisplay;
+		return value === "one-line" || value === "four-lines" ? value : "auto";
+	}
+
+	setReasoningDisplay(display: ReasoningDisplay): void {
+		this.globalSettings.reasoningDisplay = display;
+		this.markModified("reasoningDisplay");
+		this.save();
+	}
+
 	getThinkingCollapse(): boolean {
 		return this.settings.thinkingCollapse ?? true;
 	}
@@ -1051,6 +1093,17 @@ export class SettingsManager {
 		computerSettingsChanged({ enabled: this.getComputerUse(), foreground: enabled });
 	}
 
+	getBrowserEnabled(): boolean {
+		return this.globalSettings.browserEnabled ?? browserEnabledDefault();
+	}
+
+	setBrowserEnabled(enabled: boolean): void {
+		this.globalSettings.browserEnabled = enabled;
+		this.markModified("browserEnabled");
+		this.save();
+		notifyBrowserEnabledChange(enabled);
+	}
+
 	getMemoryEnabled(): boolean {
 		return this.globalSettings.memoryEnabled ?? true;
 	}
@@ -1058,6 +1111,16 @@ export class SettingsManager {
 	setMemoryEnabled(enabled: boolean): void {
 		this.globalSettings.memoryEnabled = enabled;
 		this.markModified("memoryEnabled");
+		this.save();
+	}
+
+	getTodosEnabled(): boolean {
+		return this.globalSettings.todosEnabled ?? true;
+	}
+
+	setTodosEnabled(enabled: boolean): void {
+		this.globalSettings.todosEnabled = enabled;
+		this.markModified("todosEnabled");
 		this.save();
 	}
 
@@ -1191,8 +1254,9 @@ export class SettingsManager {
 
 	// lunr: default permission mode (startup default; per-session mode is in-memory)
 	getDefaultPermissionMode(): DefaultPermissionMode {
-		const value = this.settings.defaultPermissionMode;
-		return value === "manual" || value === "yolo" || value === "plan" || value === "auto" ? value : "manual";
+		const value: unknown = this.settings.defaultPermissionMode;
+		if (value === "plan") return "read-only";
+		return value === "auto" || value === "read-only" ? value : "yolo";
 	}
 
 	setDefaultPermissionMode(mode: DefaultPermissionMode): void {
@@ -1594,6 +1658,26 @@ export class SettingsManager {
 		this.globalSettings.modelInstructions ??= {};
 		this.globalSettings.modelInstructions.mode = mode;
 		this.markModified("modelInstructions", "mode");
+		this.save();
+	}
+
+	getSubagentCommunicationEnabled(): boolean {
+		return this.globalSettings.subagentCommunicationEnabled ?? true;
+	}
+
+	setSubagentCommunicationEnabled(enabled: boolean): void {
+		this.globalSettings.subagentCommunicationEnabled = enabled;
+		this.markModified("subagentCommunicationEnabled");
+		this.save();
+	}
+
+	getAutomaticSubagentDelegation(): boolean {
+		return this.settings.automaticSubagentDelegation ?? true;
+	}
+
+	setAutomaticSubagentDelegation(enabled: boolean): void {
+		this.globalSettings.automaticSubagentDelegation = enabled;
+		this.markModified("automaticSubagentDelegation");
 		this.save();
 	}
 

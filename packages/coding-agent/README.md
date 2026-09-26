@@ -7,7 +7,7 @@
   <a href="https://github.com/ashx-j/lunR"><img alt="GitHub" src="https://img.shields.io/badge/github-ashx--j%2FlunR-181717?style=flat-square&logo=github" /></a>
 </p>
 
-lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, and SDK modes, plus baked-in MCP, subagents, permissions, plan mode, todos, cron, and a Telegram/Discord gateway.
+lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
 
 Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle those as [packages](#packages) and share them via npm or git.
 
@@ -17,6 +17,7 @@ Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt 
 - [Providers & Models](#providers--models)
 - [Interactive Mode](#interactive-mode)
   - [Editor](#editor)
+  - [Copyable response blocks](#copyable-response-blocks)
   - [Commands](#commands)
   - [Keyboard Shortcuts](#keyboard-shortcuts)
   - [Message Queue](#message-queue)
@@ -45,7 +46,7 @@ Requires **Node.js ≥ 22.19**.
 npm i -g @ashx-j/lunr
 ```
 
-`--ignore-scripts` is optional; lunR does not require install scripts for a normal npm install.
+Normal installation also installs matching Chromium for the built-in [browser](docs/browser.md). Turn Browser off in `/settings` if you do not want its tool. `--ignore-scripts` and offline installs skip Chromium; the rest of lunR remains usable, and `lunr browser install` repairs missing binaries later.
 
 Then run it in a project directory:
 
@@ -68,7 +69,7 @@ lunr
 /login  # Then select provider
 ```
 
-First-run optional features (Telegram/Discord gateway):
+First-run setup installs Chromium and offers the optional Telegram/Discord gateway:
 
 ```bash
 lunr setup
@@ -87,7 +88,7 @@ You can also `npm uninstall -g @ashx-j/lunr`. That leaves `~/.lunr/agent` in pla
 
 Config lives in `~/.lunr/agent` (global) and project `.lunr/` (`piConfig.configDir`). Override the agent dir with `PI_CODING_AGENT_DIR`. **Do not use `~/.pi/` as the lunR home.**
 
-Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, plan mode, cron, and the gateway.
+Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -148,6 +149,20 @@ The editor can be temporarily replaced by other UI, like built-in `/settings` or
 
 Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.md](docs/keybindings.md).
 
+### Copyable response blocks
+
+Assistant responses can mark a reusable excerpt, prompt, or code fragment as click-to-copy. The marked section appears in a plain background box. Click anywhere in that box to copy only its contents.
+
+The source format is a fenced Markdown block with the exact info string `lunr-copy`:
+
+````markdown
+```lunr-copy
+npm test
+```
+````
+
+The payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR copies it without trimming whitespace and excludes both fence lines. A longer backtick or tilde fence can contain shorter fenced code. Incomplete streamed blocks remain readable but become clickable only after the closing fence arrives. Print, JSON, RPC, and gateway output keep the raw fences and never write to the clipboard.
+
 ### Commands
 
 Type `/` in the editor to trigger commands. [Extensions](#extensions) can register custom commands, [skills](#skills) are available as `/skill:name`, and [prompt templates](#prompt-templates) expand via `/templatename`.
@@ -162,9 +177,9 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
-| `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` (Shift+Tab cycles) |
-| `/plan` | Switch to plan mode, or `/plan <task>` to plan a task |
-| `/manual`, `/yolo`, `/auto` | Activate that permission mode |
+| `/mode` | Set permission mode: `yolo`, `auto`, or `read` (Shift+Tab cycles) |
+| `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
+| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (forces session auto permission mode) |
 | `/processes` | Background processes started this session |
@@ -208,7 +223,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
+| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
 | Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
@@ -219,12 +234,14 @@ Click a thinking or tool card to expand or collapse that item. `app.tools.expand
 
 Submit messages while the agent is working:
 
-- **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls
+- **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls. If the parent is executing `subagent_wait`, Enter instead ends only that wait. The current tool batch settles, background children keep running, and the text starts a fresh parent turn without appearing in the steering queue.
 - **Alt+Enter** queues a *follow-up* message, delivered only after the agent finishes all work
 - **Escape** aborts and restores queued messages to editor
 - **Alt+Up** retrieves queued messages back to editor
 
 On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so lunR can receive the follow-up shortcut.
+
+Parallel tools beside `subagent_wait` finish before the fresh Enter prompt starts. Alt+Enter and Enter outside an executing wait keep their normal queue behavior.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
@@ -378,7 +395,7 @@ The factory argument is conventionally named `pi` (`export default function (pi:
 
 The default export can also be `async`. lunR waits for async extension factories before startup continues.
 
-Place in `~/.lunr/agent/extensions/`, `.lunr/extensions/`, or a [package](#packages). See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/). Sample extensions such as `examples/extensions/plan-mode`, `todo.ts`, and `subagent/` are **Extension API samples**, not the product implementation. lunR ships plan mode, todos, and subagents as built-ins; see [docs/features.md](docs/features.md).
+Place in `~/.lunr/agent/extensions/`, `.lunr/extensions/`, or a [package](#packages). See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/). Sample extensions such as `examples/extensions/plan-mode`, `todo.ts`, and `subagent/` are **Extension API samples**, not the product implementation. lunR ships read-only planning, todos, and subagents as built-ins; see [docs/features.md](docs/features.md).
 
 ### Themes
 
@@ -468,10 +485,10 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in manual and yolo; default parallel concurrency is unlimited
-- **Permission modes** — `manual | yolo | plan | auto`; Shift+Tab cycles that order
-- **Plan mode** — `/plan` plus the `present_plan` tool
-- **Todos** — lunr-todos (full-replace)
+- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in yolo; default parallel concurrency is unlimited
+- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
+- **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
+- **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)
 - **Gateway** — `lunr gateway` for Telegram and Discord
@@ -490,7 +507,8 @@ lunr [options] [@files...] [messages...]
 ### Product Commands
 
 ```bash
-lunr setup                         # First-run / reconfigure optional features
+lunr setup                         # Install Chromium and configure optional features
+lunr browser install               # Repair missing Chromium after a skipped/failed install
 lunr features [list|enable|disable]
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Remove this lunR install (keeps ~/.lunr/agent unless --purge)

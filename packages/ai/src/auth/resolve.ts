@@ -1,4 +1,5 @@
 import type { ProviderEnv } from "../types.ts";
+import { ANTHROPIC_SETUP_REQUIRED, isAnthropicOAuthToken } from "./anthropic-route.ts";
 import type {
 	ApiKeyAuth,
 	ApiKeyCredential,
@@ -42,6 +43,9 @@ export async function resolveProviderAuth(
 ): Promise<AuthResult | undefined> {
 	const requestAuthContext = overrides?.env ? overlayEnvAuthContext(authContext, overrides.env) : authContext;
 
+	if (provider.id === "anthropic" && isAnthropicOAuthToken(overrides?.apiKey)) {
+		throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+	}
 	if (overrides?.apiKey !== undefined && provider.auth.apiKey) {
 		return resolveApiKey(requestAuthContext, provider.auth.apiKey, provider.id, {
 			type: "api_key",
@@ -52,10 +56,32 @@ export async function resolveProviderAuth(
 
 	const stored = await readCredential(credentials, provider.id);
 	if (stored) {
+		if (provider.id === "anthropic" && stored.type === "oauth") {
+			throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+		}
+		if (
+			stored.type === "external_claude_code" &&
+			provider.id === "anthropic" &&
+			stored.version === 1 &&
+			stored.manager === "claude-code"
+		) {
+			const apiKey = await requestAuthContext.env("ANTHROPIC_API_KEY");
+			if (apiKey && provider.auth.apiKey)
+				return resolveApiKey(requestAuthContext, provider.auth.apiKey, provider.id, {
+					type: "api_key",
+					key: apiKey,
+				});
+			if (await requestAuthContext.env("ANTHROPIC_OAUTH_TOKEN"))
+				throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+			return { auth: { externalClaudeCode: stored }, source: "Claude Code subscription" };
+		}
 		if (stored.type === "oauth" && provider.auth.oauth) {
 			return resolveStoredOAuth(credentials, provider.id, provider.auth.oauth, stored);
 		}
 		if (stored.type === "api_key" && provider.auth.apiKey) {
+			if (provider.id === "anthropic" && isAnthropicOAuthToken(stored.key)) {
+				throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+			}
 			const credential = overrides?.env ? { ...stored, env: { ...stored.env, ...overrides.env } } : stored;
 			return resolveApiKey(requestAuthContext, provider.auth.apiKey, provider.id, credential);
 		}
@@ -63,6 +89,9 @@ export async function resolveProviderAuth(
 	}
 
 	// Ambient (env vars, AWS profiles, ADC files).
+	if (provider.id === "anthropic" && (await requestAuthContext.env("ANTHROPIC_OAUTH_TOKEN"))) {
+		throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+	}
 	return provider.auth.apiKey
 		? resolveApiKey(requestAuthContext, provider.auth.apiKey, provider.id, undefined)
 		: undefined;

@@ -32,7 +32,12 @@
  * through an injectable Scheduler; backoffDelayMs() is a pure function.
  */
 
-import type { PlatformConfig } from "../config.ts";
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
+import { isAuthorized } from "../authz.ts";
+import { loadGatewayConfig, type PlatformConfig } from "../config.ts";
+import { downloadAttachment } from "../download.ts";
+import { createPairingStore } from "../pairing.ts";
 import type {
 	ButtonSpec,
 	CallbackEvent,
@@ -206,9 +211,7 @@ async function defaultCallApi(
 
 /** lunr: download an inbound file by its file_path from the Telegram file API. */
 async function defaultDownloadFile(token: string, filePath: string): Promise<Uint8Array> {
-	const res = await fetch(`${API_BASE}/file/bot${token}/${filePath}`);
-	if (!res.ok) throw new TelegramApiError(res.status, `file download HTTP ${res.status}`);
-	return new Uint8Array(await res.arrayBuffer());
+	return downloadAttachment(`${API_BASE}/file/bot${token}/${filePath}`);
 }
 
 function errMessage(err: unknown): string {
@@ -282,11 +285,7 @@ export interface TelegramMediaDescriptor {
 	fileSize?: number;
 }
 
-function isImageMimeType(mimeType: string | undefined): boolean {
-	return typeof mimeType === "string" && mimeType.split(";")[0]?.trim().toLowerCase().startsWith("image/");
-}
-
-/** lunr: collect inbound image media from a Telegram message (largest photo + image documents). */
+/** Collect the largest photo and document attachments. */
 export function collectTelegramMedia(message: TelegramMessage): TelegramMediaDescriptor[] {
 	const descriptors: TelegramMediaDescriptor[] = [];
 	if (message.photo && message.photo.length > 0) {
@@ -298,10 +297,10 @@ export function collectTelegramMedia(message: TelegramMessage): TelegramMediaDes
 			...(largest.file_size !== undefined ? { fileSize: largest.file_size } : {}),
 		});
 	}
-	if (message.document && isImageMimeType(message.document.mime_type)) {
+	if (message.document) {
 		descriptors.push({
 			fileId: message.document.file_id,
-			mimeType: message.document.mime_type ?? "image/jpeg",
+			mimeType: message.document.mime_type ?? "application/octet-stream",
 			...(message.document.file_name ? { filename: message.document.file_name } : {}),
 			...(message.document.file_size !== undefined ? { fileSize: message.document.file_size } : {}),
 		});
@@ -416,7 +415,9 @@ export class TelegramAdapter implements PlatformAdapter {
 	private readonly pending = new Map<string, PendingEntry>();
 	private readonly typing = new Map<string, TypingEntry>();
 
+	private readonly cfg: PlatformConfig;
 	constructor(cfg: PlatformConfig, options: TelegramAdapterOptions = {}) {
+		this.cfg = cfg;
 		this.scheduler = options.scheduler ?? defaultScheduler;
 		this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 		this.now = options.now ?? Date.now;
@@ -524,7 +525,10 @@ export class TelegramAdapter implements PlatformAdapter {
 		if (!event) return;
 		// lunr: download inbound image media before dispatch so the bridge can attach
 		// images to the turn. Failures drop the media but keep the text turn going.
-		if (update.message) {
+		if (
+			update.message &&
+			isAuthorized(event.source, { ...loadGatewayConfig(), telegram: this.cfg }, createPairingStore())
+		) {
 			const attachments = await this.downloadMedia(update.message);
 			if (attachments.length > 0) event.attachments = attachments;
 		}
@@ -637,6 +641,24 @@ export class TelegramAdapter implements PlatformAdapter {
 	}
 
 	/** lunr: register the bot's slash-command menu (Telegram client autocomplete). Best-effort — caller catches. */
+	async sendFile(chatId: string, file: string, opts?: SendOptions): Promise<SendResult> {
+		try {
+			const data = new FormData();
+			data.set("chat_id", chatId);
+			if (opts?.threadId) data.set("message_thread_id", opts.threadId);
+			data.set("document", new Blob([new Uint8Array(readFileSync(file))]), basename(file));
+			const response = await fetch(`${API_BASE}/bot${this.cfg.token}/sendDocument`, {
+				method: "POST",
+				body: data,
+				signal: AbortSignal.timeout(30_000),
+			});
+			if (!response.ok) return { success: false, error: `Telegram file delivery failed: HTTP ${response.status}` };
+			return { success: true };
+		} catch {
+			return { success: false, error: "Telegram file delivery failed. Check your connection." };
+		}
+	}
+
 	async registerCommands(commands: { name: string; description: string }[]): Promise<void> {
 		const valid = commands
 			.filter((c) => /^[a-z0-9_]{1,32}$/.test(c.name) && c.description.trim().length > 0)

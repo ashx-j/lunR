@@ -1,4 +1,5 @@
 import { lazyStream } from "./api/lazy.ts";
+import { ANTHROPIC_SETUP_REQUIRED, anthropicRequestRoute } from "./auth/anthropic-route.ts";
 import { defaultProviderAuthContext as defaultAuthContext } from "./auth/context.ts";
 import { InMemoryCredentialStore } from "./auth/credential-store.ts";
 import { type AuthResolutionOverrides, ModelsError, resolveProviderAuth } from "./auth/resolve.ts";
@@ -333,6 +334,10 @@ class ModelsImpl implements MutableModels {
 		allowNetwork: boolean,
 		signal?: AbortSignal,
 	): Promise<Credential | undefined> {
+		if (provider.id === "anthropic" && stored?.type === "oauth") {
+			throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+		}
+		if (provider.id === "anthropic" && stored?.type === "external_claude_code") return stored;
 		if (stored?.type === "oauth") {
 			const oauth = provider.auth.oauth;
 			if (!oauth) return undefined;
@@ -365,6 +370,12 @@ class ModelsImpl implements MutableModels {
 		provider: Provider,
 		credential: Credential | undefined,
 	): Promise<AuthCheck | undefined> {
+		if (provider.id === "anthropic" && credential?.type === "oauth") return undefined;
+		if (provider.id === "anthropic" && credential?.type === "external_claude_code") {
+			return (await this.authContext.env("ANTHROPIC_API_KEY"))
+				? { source: "ANTHROPIC_API_KEY", type: "api_key" }
+				: { source: "Claude Code subscription", type: "oauth" };
+		}
 		if (credential?.type === "oauth") {
 			return provider.auth.oauth ? { source: "OAuth", type: "oauth" } : undefined;
 		}
@@ -404,7 +415,11 @@ class ModelsImpl implements MutableModels {
 		return checks.flatMap(({ provider, credential, auth }) => {
 			if (!auth) return [];
 			const models = provider.getModels();
-			return provider.filterModels?.(models, credential) ?? models;
+			const effectiveCredential =
+				provider.id === "anthropic" && auth.type === "api_key" && credential?.type === "external_claude_code"
+					? undefined
+					: credential;
+			return provider.filterModels?.(models, effectiveCredential) ?? models;
 		});
 	}
 
@@ -475,13 +490,13 @@ class ModelsImpl implements MutableModels {
 		const auth = resolution.auth;
 
 		// Explicit request options win per-field; the Models-only transform runs last.
-		const apiKey = options?.apiKey ?? auth.apiKey;
+		const route = anthropicRequestRoute(model.provider, resolution, options);
 		let headers = mergeHeaders(auth.headers, options?.headers);
 		if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
 		const env = resolution.env || options?.env ? { ...(resolution.env ?? {}), ...(options?.env ?? {}) } : undefined;
 		const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
 		const { transformHeaders: _transformHeaders, ...providerOptions } = options ?? {};
-		const requestOptions = { ...providerOptions, apiKey, headers, env } as StreamOptions;
+		const requestOptions = { ...providerOptions, ...route, headers, env } as StreamOptions;
 
 		return { requestModel, requestOptions };
 	}

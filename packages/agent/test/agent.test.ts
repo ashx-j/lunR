@@ -265,6 +265,64 @@ describe("Agent", () => {
 		expect(receivedSignal?.aborted).toBe(true);
 	});
 
+	it("rejects a graceful-stop request owned by a settled run", async () => {
+		const slowStarted = createDeferred();
+		const releaseSlow = createDeferred();
+		const toolSchema = Type.Object({});
+		const slowTool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "slow_tool",
+			label: "Slow Tool",
+			description: "Waits for release",
+			parameters: toolSchema,
+			async execute() {
+				slowStarted.resolve();
+				await releaseSlow.promise;
+				return { content: [{ type: "text", text: "released" }], details: {} };
+			},
+		};
+		let providerCalls = 0;
+		const runSignals: AbortSignal[] = [];
+		const agent = new Agent({
+			initialState: { tools: [slowTool] },
+			streamFn: () => {
+				providerCalls++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (providerCalls === 2) {
+						stream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantToolUseMessage([
+								{ type: "toolCall", id: "slow-call", name: "slow_tool", arguments: {} },
+							]),
+						});
+						return;
+					}
+					stream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage(providerCalls === 1 ? "first done" : "second done"),
+					});
+				});
+				return stream;
+			},
+		});
+		agent.subscribe((event, signal) => {
+			if (event.type === "agent_start") runSignals.push(signal);
+		});
+
+		await agent.prompt("first");
+		const secondPrompt = agent.prompt("second");
+		await slowStarted.promise;
+
+		expect(agent.requestGracefulStop(runSignals[0]!)).toBe(false);
+		releaseSlow.resolve();
+		await secondPrompt;
+
+		expect(providerCalls).toBe(3);
+		expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", content: [{ text: "second done" }] });
+	});
+
 	it("should ignore tool updates after the tool execution settles", async () => {
 		const toolSchema = Type.Object({});
 		let delayedUpdate: AgentToolUpdateCallback<{ status: string }> | undefined;

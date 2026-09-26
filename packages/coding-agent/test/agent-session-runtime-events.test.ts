@@ -16,6 +16,8 @@ import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { getModelTiersBridge } from "../src/core/model-tiers.ts";
 import { bindRuntimeBridges } from "../src/core/runtime-bridges.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { readSessionOwner } from "../src/core/session-ownership.ts";
+import { registerSubagentCancellation } from "../src/core/subagent-cancellation.ts";
 import { getUsageServiceBridge } from "../src/core/usage-service.ts";
 import type {
 	ExtensionFactory,
@@ -120,6 +122,51 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 
 		return { runtimeHost, faux };
 	}
+
+	it("refuses transfer with live children, then releases and reclaims fresh state without reviving the stale manager", async () => {
+		const { runtimeHost } = await createRuntimeHost(() => {});
+		await runtimeHost.session.prompt("hello");
+		const old = runtimeHost.session;
+		const file = old.sessionFile!;
+		old.sessionManager.resetLeaf();
+		old.sessionManager.setPermissionMode("read-only");
+		const unregister = registerSubagentCancellation(old.sessionId, {
+			hasActiveRuns: () => true,
+			stop: async () => ({ requested: 1, failed: 0 }),
+		});
+		try {
+			await expect(runtimeHost.releaseForTransfer({ stop: true })).rejects.toMatchObject({ code: "busy" });
+			expect(readSessionOwner(file)).toBeDefined();
+			old.sessionManager.assertWritable();
+		} finally {
+			unregister();
+		}
+		await runtimeHost.releaseForTransfer();
+		expect(runtimeHost.isDetached).toBe(true);
+		expect(readSessionOwner(file)).toBeUndefined();
+		await expect(old.prompt("stale")).rejects.toThrow(/released/);
+		const remote = SessionManager.open(file);
+		remote.appendMessage({ role: "user", content: "remote", timestamp: 1 });
+		remote.flush();
+		await expect(runtimeHost.switchSession(file)).rejects.toThrow(/owned/);
+		expect(runtimeHost.isDetached).toBe(true);
+		remote.dispose();
+		await runtimeHost.switchSession(file);
+		expect(runtimeHost.session).not.toBe(old);
+		expect(runtimeHost.isDetached).toBe(false);
+		expect(runtimeHost.session.sessionManager.getPermissionMode()).toBe("read-only");
+		expect(runtimeHost.session.sessionManager.buildSessionContext().messages).toHaveLength(1);
+	});
+
+	it("does not silently abort a busy runtime during transfer", async () => {
+		const { runtimeHost } = await createRuntimeHost(() => {});
+		runtimeHost.session.agent.followUp({ role: "user", content: "queued", timestamp: 1 });
+		await runtimeHost.session.followUp("queued");
+		await expect(runtimeHost.releaseForTransfer()).rejects.toMatchObject({ code: "busy" });
+		expect(runtimeHost.isDetached).toBe(false);
+		expect(runtimeHost.session.pendingMessageCount).toBeGreaterThan(0);
+		runtimeHost.session.clearQueue();
+	});
 
 	it("rebinds host-owned runtime state after initial creation and every replacement", async () => {
 		const appliedSessionFiles: Array<string | undefined> = [];

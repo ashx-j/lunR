@@ -433,6 +433,28 @@ export class Theme {
 		return ansi;
 	}
 
+	getFgGradient(from: ThemeColor, to: ThemeColor, steps: number): string[] {
+		const start = this.getFgAnsi(from);
+		const end = this.getFgAnsi(to);
+		const toRgb = (ansi: string): RgbColor | undefined => {
+			const rgb = ansi.match(/\x1b\[38;2;(\d+);(\d+);(\d+)m/);
+			if (rgb) return { r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3]) };
+			const indexed = ansi.match(/\x1b\[38;5;(\d+)m/);
+			return indexed ? hexToRgb(ansi256ToHex(Number(indexed[1]))) : undefined;
+		};
+		const a = toRgb(start);
+		const b = toRgb(end);
+		return Array.from({ length: steps }, (_, index) => {
+			const amount = index / Math.max(1, steps - 1);
+			// Terminal-default colors have no known RGB value to interpolate.
+			if (!a || !b) return amount < 0.5 ? start : end;
+			const r = Math.round(a.r + (b.r - a.r) * amount);
+			const g = Math.round(a.g + (b.g - a.g) * amount);
+			const blue = Math.round(a.b + (b.b - a.b) * amount);
+			return this.mode === "truecolor" ? `\x1b[38;2;${r};${g};${blue}m` : fgAnsi(rgbTo256(r, g, blue), this.mode);
+		});
+	}
+
 	getBgAnsi(color: ThemeBg): string {
 		const ansi = this.bgColors.get(color);
 		if (!ansi) throw new Error(`Unknown theme background color: ${color}`);

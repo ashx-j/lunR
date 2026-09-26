@@ -25,8 +25,8 @@ Intel macOS have no native discovery tool. All computer tools except release
 require an image-capable model. There is no text-only accessibility fallback.
 Gateway sessions operate the gateway host, not the chat client's device.
 
-Manual approves observation and input. `computer_end` releases without approval.
-Plan allows relevant observation and release, but blocks mutation. Auto allows
+`computer_end` releases without approval. Read-only allows relevant observation
+and release, but blocks mutation. Yolo and Auto permit input. Auto allows
 requested, implied, or necessary GUI work without lunR per-call prompts. In
 Yolo, ask before introducing GUI work into an otherwise non-GUI task. These
 intent rules are agent guidance, not a natural-language authorization classifier.
@@ -162,7 +162,8 @@ released. Driver-internal helper lifetime and held-input cancellation still need
 native acceptance.
 
 Gateway cron creates fresh permission contexts with the configured default mode,
-without gateway approvals or its approval handler. Missing approval blocks calls.
+without gateway approvals or its approval handler. Read-only blocks input, and
+missing approval blocks operations that still require confirmation.
 Session shutdown precedes disposal, even after partial extension binding failure.
 TUI cron continues to use its live permission context.
 

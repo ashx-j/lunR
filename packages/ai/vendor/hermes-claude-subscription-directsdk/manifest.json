@@ -1,0 +1,32 @@
+{
+  "upstream": "https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk",
+  "commit": "f1c1220778c7864fe4c1494baf9b1566e7c95bd2",
+  "license": "MIT",
+  "upstreamFiles": {
+    "LICENSE": "d1410a18033e51061f8a81279632cfe5d7e8041af30be9810a750f96edf1e0d5",
+    "README.md": "4c2057d1e6cb19fa078f439933b8f73d85a0f183c6651f66440e4e9d4d58e511",
+    "__init__.py": "01654271c9d9802122c7577ec3933c64330148e91aadd12fd711eff34cd9f7a4",
+    "admission.py": "a6841b870887eecc84501ab358891356ee2bb39431de68291ffd890028d82ac3",
+    "conftest.py": "64515322aea459826b85d0255c85779a2b11ef31a42a213b4602469d386627d4",
+    "directsdk.py": "d5d3d60ca59418697eaf08640eb445c25dc41ac64ee827b79008e06e8da2df54",
+    "directsdk_setup.py": "7b3499aea9405ff3f98a7fa25aad22053b1a89ce286d4e0e2841a880fc0dbe8c",
+    "evals/directsdk_admission.py": "58a7bde324a41c26889c910170f8766479b6c98e1a2c4b088b8bb69bd9cddb9a",
+    "evals/directsdk_cache_wire.py": "089cb380386cfe28fadd7c720e7ba609a6cb1ad2cf5a320a617b61a6ad7cfc94",
+    "inert_mcp.py": "6c5a0f64e4470ae90c6171bd83e2b537f641ff6d06cd76b3d49edba227274cb6",
+    "model_catalog.py": "5e4fa7ed95eedf243b46524abbd9771f8c4ba756cc0208f1fa9a5768a1281077",
+    "plugin.yaml": "6e2edc160c8a928e3393bc4e479589dfddee5291814ae930317086f2b0275067",
+    "pyproject.toml": "e041f415bf92d7a3ed71c40f5a1732be9e629000c6b46479f9036ebde3071453",
+    "tests/test_directsdk.py": "884c960c1b88c8727bbd1cc70598d509dd435ba02296bad2a805b23f717bdc91",
+    "tests/test_directsdk_admission.py": "a52d64907973d32e91dbc890f42e67d191a7b7d283b042f4d278968130385251",
+    "tests/test_directsdk_discovery.py": "279a5a0723f3327439238d7a682602627d1aceccc2e45ee9122159cfeb292f16",
+    "tests/test_directsdk_models.py": "b13ccf8b53d9748e41490940ce9fd092a8bf5069f2fa2e44f09cbf0ad49af044",
+    "tests/test_directsdk_replay.py": "9894ab096289142f84785533d728dcac0b721720fc03b1c5f4c5e509533adee3",
+    "tests/test_directsdk_setup.py": "82552e84aa4a0cf0a16c3a70e4418c9edfa85a27a89821b79cf8fb957e8f91f3"
+  },
+  "patchedFiles": {
+    "directsdk.py": "42b8eef95cc313ad0314083a25fd534603adb56cb86c57987ed5e67d31141e73"
+  },
+  "patches": {
+    "patches/0001-lunr-lifecycle-hooks.patch": "0c19a60c69f15745e7076a1791988408feb32611ae29156ab28a2670a50fedb5"
+  }
+}

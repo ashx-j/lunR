@@ -50,7 +50,6 @@ export class ToolExecutionComponent extends Container {
 	private hideComponent = false;
 	private groupContinuation = false;
 	private groupFollowed = false;
-	private groupPrev?: ToolExecutionComponent;
 	private groupNext?: ToolExecutionComponent;
 
 	constructor(
@@ -158,7 +157,16 @@ export class ToolExecutionComponent extends Container {
 		return toolStatusDot(state, theme);
 	}
 
+	private getWaitDuration(): string | undefined {
+		if (this.toolName !== "subagent_wait" || this.isPartial || this.expanded) return undefined;
+		const match = /^(?:Waited |Wait (?:timed out|aborted) after )(\d+(?:ms|[smhd])(?:\d+[smhd])*)\b/.exec(
+			this.getTextOutput(),
+		);
+		return match?.[1];
+	}
+
 	private createCallFallback(): Component {
+		const waitDuration = this.getWaitDuration();
 		return new Text(
 			formatGroupedCall({
 				role: toolGroupRole(this.groupContinuation, this.groupFollowed),
@@ -166,6 +174,7 @@ export class ToolExecutionComponent extends Container {
 				tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 				dot: this.getStatusDot(),
 				title: theme.fg("toolTitle", theme.bold(this.toolName)),
+				detail: waitDuration && theme.fg("toolOutput", waitDuration),
 			}),
 			0,
 			0,
@@ -236,6 +245,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	setExpanded(expanded: boolean): void {
+		if (this.toolName === "browser") return;
 		this.expanded = expanded;
 		this.updateDisplay();
 		this.refreshGroupTail();
@@ -243,16 +253,42 @@ export class ToolExecutionComponent extends Container {
 
 	handleClick(_localY: number, _width: number): boolean {
 		if (this.isPartial) return false;
-		if (this.toolName === "subagent" || this.toolName === "subagent_wait") return false;
+		if (this.toolName === "browser" || this.toolName === "subagent") return false;
 		this.setExpanded(!this.expanded);
 		this.ui.requestRender();
 		return true;
+	}
+
+	beginNextExecution(toolCallId: string, args: any): void {
+		this.toolCallId = toolCallId;
+		this.args = args;
+		this.result = undefined;
+		this.isPartial = true;
+		this.executionStarted = false;
+		this.argsComplete = false;
+		this.expanded = false;
+		this.disposeComponent(this.resultRendererComponent);
+		this.resultRendererComponent = undefined;
+		this.updateDisplay();
+	}
+
+	dispose(): void {
+		const components = new Set([this.callRendererComponent, this.resultRendererComponent]);
+		for (const component of components) this.disposeComponent(component);
+	}
+
+	private disposeComponent(component: Component | undefined): void {
+		(component as (Component & { dispose?: () => void }) | undefined)?.dispose?.();
 	}
 
 	// lunr: consecutive same-tool grouping — exposes the tool name so the caller
 	// can detect adjacency.
 	getToolName(): string {
 		return this.toolName;
+	}
+
+	matchesToolCall(toolCallId: string): boolean {
+		return this.toolCallId === toolCallId;
 	}
 
 	// lunr: consecutive same-tool grouping — continuation calls hide the top
@@ -273,11 +309,9 @@ export class ToolExecutionComponent extends Container {
 		this.invalidate();
 	}
 
-	// lunr: same-name run link so a later card can hoist earlier error bodies
-	// under the last leaf instead of splitting the tree.
+	// lunr: same-name run link keeps the final card refreshed as earlier calls settle.
 	linkGroupNext(next: ToolExecutionComponent): void {
 		this.groupNext = next;
-		next.groupPrev = this;
 	}
 
 	private applyGroupPadding(): void {
@@ -293,18 +327,6 @@ export class ToolExecutionComponent extends Container {
 		}
 	}
 
-	private shouldHideGroupedErrorBody(): boolean {
-		return (
-			Boolean(this.result?.isError) &&
-			this.groupFollowed &&
-			!this.expanded &&
-			!this.isPartial &&
-			this.getRenderShell() === "default" &&
-			this.toolName !== "subagent" &&
-			this.toolName !== "subagent_wait"
-		);
-	}
-
 	private shouldSkipCompactResult(): boolean {
 		if (this.result === undefined || this.isPartial || this.expanded) {
 			return false;
@@ -313,31 +335,15 @@ export class ToolExecutionComponent extends Container {
 		// result exists. Async launch receipts (empty results) stay header-only.
 		if (this.toolName === "subagent") {
 			const details = this.result.details as { mode?: string; results?: unknown[] } | undefined;
+			if (!this.result.isError && this.args?.action === "steer") return true;
 			if (this.result.isError) return false;
 			if (Array.isArray(details?.results) && details.results.length > 0) return false;
 			if (details?.mode === "management") return false;
 			return true;
 		}
-		// lunr: collapsed mid-group errors stay header-only so the same-name
-		// tree is not split; the last card hoists those bodies underneath.
-		if (this.result.isError) {
-			return this.shouldHideGroupedErrorBody();
-		}
+		if (this.toolName === "subagent_wait") return true;
+		if (this.result.isError) return true;
 		return this.getRenderShell() === "default";
-	}
-
-	private formatHoistedGroupErrors(): string | undefined {
-		if (this.groupFollowed || this.expanded) return undefined;
-		const texts: string[] = [];
-		let prev = this.groupPrev;
-		while (prev) {
-			if (prev.shouldHideGroupedErrorBody()) {
-				const output = prev.getTextOutput().trim();
-				if (output) texts.unshift(output);
-			}
-			prev = prev.groupPrev;
-		}
-		return texts.length > 0 ? `\n${texts.join("\n")}` : undefined;
 	}
 
 	private refreshGroupTail(): void {
@@ -466,11 +472,6 @@ export class ToolExecutionComponent extends Container {
 						}
 					}
 				}
-				const hoisted = this.formatHoistedGroupErrors();
-				if (hoisted) {
-					renderContainer.addChild(new Text(theme.fg("toolOutput", hoisted), 0, 0));
-					hasContent = true;
-				}
 			}
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
@@ -525,14 +526,15 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private formatToolExecution(): string {
-		const hideGroupedErrorBody = Boolean(this.result?.isError && this.groupFollowed && !this.expanded);
-		const compact = !this.isPartial && !this.expanded && (!this.result?.isError || hideGroupedErrorBody);
+		const compact = !this.isPartial && !this.expanded;
+		const waitDuration = this.getWaitDuration();
 		let text = formatGroupedCall({
 			role: toolGroupRole(this.groupContinuation, this.groupFollowed),
 			compact,
 			tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 			dot: this.getStatusDot(),
 			title: theme.fg("toolTitle", theme.bold(this.toolName)),
+			detail: waitDuration && theme.fg("toolOutput", waitDuration),
 		});
 		if (!compact) {
 			const content = JSON.stringify(this.args, null, 2);
@@ -543,10 +545,6 @@ export class ToolExecutionComponent extends Container {
 			if (output) {
 				text += `\n${output}`;
 			}
-		}
-		const hoisted = this.formatHoistedGroupErrors();
-		if (hoisted) {
-			text += hoisted;
 		}
 		return text;
 	}

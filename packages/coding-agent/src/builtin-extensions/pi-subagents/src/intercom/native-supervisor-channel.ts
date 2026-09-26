@@ -5,6 +5,8 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { subagentCommunicationEnabled } from "../../../../core/settings-manager.ts";
+import { getAgentDir } from "../shared/utils.ts";
 import {
 	SUBAGENT_CHILD_AGENT_ENV,
 	SUBAGENT_CHILD_INDEX_ENV,
@@ -14,9 +16,13 @@ import {
 	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
 	SUBAGENT_SUPERVISOR_SESSION_ID_ENV,
 } from "../runs/shared/pi-args.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, SUBAGENT_CONTROL_EVENT, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
+import { ASYNC_DIR, INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, SUBAGENT_CONTROL_EVENT, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
 import { askRunningAsyncChild, reconcileAsyncQuestion } from "./supervisor-ask.ts";
+import { CHILD_DESCRIPTION_ENV, SUPERVISOR_PROGRESS_TYPE, SUPERVISOR_PROTOCOL_VERSION, SUPERVISOR_REQUEST_TYPE, legacySupervisorBody, readCommunication, resolveCommunicationPeer, supervisorProtocolAvailable, type SubagentCommunication } from "./communication.ts";
+import { renderCommunicationCall, renderCommunicationCard, renderCommunicationResult } from "../tui/communication.ts";
+import { stopRequestPath } from "../runs/background/control-channel.ts";
+import { readStatus } from "../shared/utils.ts";
 import {
 	answerSupervisorQuestion,
 	cancelPendingSupervisorQuestionsForOwner,
@@ -52,10 +58,12 @@ const CHANNEL_POLL_MS = Math.min(POLL_INTERVAL_MS, 500);
 const STALE_EMPTY_CHANNEL_AGE_MS = 60 * 1000;
 const STALE_EMPTY_CHANNEL_CLEANUP_INTERVAL_MS = 60 * 1000;
 
-type SupervisorReason = "need_decision" | "interview_request" | "progress_update";
+type SupervisorReason = "need_decision" | "interview_request" | "progress_update" | "handoff";
 
 interface SupervisorRequest {
 	type: "subagent.supervisor.request";
+	protocolVersion?: number;
+	description?: string;
 	id: string;
 	createdAt: number;
 	expiresAt?: number;
@@ -104,7 +112,7 @@ interface IntercomParams {
 }
 
 const PARENT_ASK_DESCRIPTION = [
-	"Ask a specific running async child, or reply to a child supervisor request.",
+	"Ask a specific running async child, or reply to a child supervisor request. Asking is unavailable when Subagent communication is off in /settings; final results still arrive normally.",
 	"Ask only when the child owns missing context, the answer changes a concrete next decision, and waiting risks a block or rework.",
 	"Use available results first, batch related questions, and keep working while awaiting the answer. Do not use ask for status checks, polling, duplicate queries, or step-by-step supervision. Follow up only when the answer leaves the original decision unresolved.",
 	"Returns a question id immediately. The child's explicit answer is delivered separately from the final run result.",
@@ -114,13 +122,15 @@ const PARENT_ASK_DESCRIPTION = [
 ].join(" ");
 
 const CHILD_CONTACT_DESCRIPTION = [
-	"Contact the parent/supervisor session for a blocking decision, structured interview, progress update, or reply to a parent question.",
+	"Contact the supervisor for decisions outside your assigned authority, safety concerns, or blockers. Make reversible implementation choices within your scope yourself.",
+	"need_decision/interview_request wait for a reply: state the blocked decision, evidence, and recommended choice. Consolidate related questions; continue independent work before opening a blocking request.",
+	"Return one self-contained final report with outcomes, verification, blockers, and artifact paths; the runtime delivers it. Routine work already appears in activity indicators.",
 	"For parent questions use action='reply' with replyTo set to the question id. Answer from current findings and uncertainty; do not start extra investigation just to reply. Continue the assigned task after replying.",
 	"Do not open a blocking need_decision while a parent question is already outstanding for this child.",
 ].join(" ");
 
 const ContactSupervisorParamsSchema = Type.Object({
-	reason: Type.Optional(Type.String({ enum: ["need_decision", "interview_request", "progress_update"] })),
+	reason: Type.Optional(Type.String({ enum: ["need_decision", "interview_request", "progress_update", "handoff"] })),
 	message: Type.Optional(Type.String()),
 	interview: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: true })),
 	action: Type.Optional(Type.String({ enum: ["reply"] })),
@@ -167,6 +177,7 @@ function readTextEnv(name: string): string | undefined {
 }
 
 function readChildMetadata(): {
+	description?: string;
 	channelDir: string;
 	runId: string;
 	agent: string;
@@ -191,6 +202,7 @@ function readChildMetadata(): {
 		orchestratorSessionId,
 		supervisorSessionId: readTextEnv(SUBAGENT_SUPERVISOR_SESSION_ID_ENV),
 		childTarget: readTextEnv("PI_SUBAGENT_INTERCOM_SESSION_NAME"),
+		description: readTextEnv(CHILD_DESCRIPTION_ENV),
 	};
 }
 
@@ -224,11 +236,13 @@ function answerParentQuestion(params: ContactSupervisorParams): AgentToolResult<
 			replyTo: answered.id,
 			state: supervisorQuestionPublicState(answered),
 			answered: true,
+			communication: { direction: "to", peer: "Supervisor", kind: "reply", message },
 		},
 	};
 }
 
 function reasonHeading(reason: SupervisorReason): string {
+	if (reason === "handoff") return "Subagent dependency handoff.";
 	if (reason === "interview_request") return "Subagent requests a structured supervisor interview.";
 	if (reason === "progress_update") return "Subagent progress update.";
 	return "Subagent needs a supervisor decision.";
@@ -260,6 +274,43 @@ function formatChildMessage(input: {
 		if (input.interview !== undefined) lines.push(JSON.stringify(input.interview, null, "\t"));
 	}
 	return lines.join("\n").trimEnd();
+}
+
+function communicationKind(reason?: SupervisorReason): SubagentCommunication["kind"] {
+	return reason === "progress_update" ? "progress" : reason === "handoff" ? "handoff" : reason === "interview_request" ? "interview" : "request";
+}
+
+function communicationBody(message: string, interview?: unknown, protocolVersion?: number): string {
+	const body = protocolVersion === SUPERVISOR_PROTOCOL_VERSION ? message : legacySupervisorBody(message);
+	return interview !== undefined && protocolVersion === SUPERVISOR_PROTOCOL_VERSION ? `${body}\n\n${JSON.stringify(interview, null, 2)}` : body;
+}
+
+function requestCommunication(request: SupervisorRequest, state: SubagentState): SubagentCommunication {
+	return {
+		direction: "from",
+		peer: resolveCommunicationPeer(state, request.runId, request.childIndex, request.agent, request.description),
+		message: communicationBody(request.message, request.interview, request.protocolVersion),
+		kind: communicationKind(request.reason),
+	};
+}
+
+export function registerSupervisorRenderers(pi: ExtensionAPI, state: SubagentState): void {
+	for (const customType of [SUPERVISOR_REQUEST_TYPE, SUBAGENT_SUPERVISOR_ANSWER_TYPE]) {
+		pi.registerMessageRenderer(customType, (message, options, theme) => {
+			const details = message.details as { communication?: unknown; runId?: string; childIndex?: number; agent?: string; childId?: string; reason?: SupervisorReason } | undefined;
+			const communication = readCommunication(details?.communication) ?? {
+				direction: "from" as const,
+				peer: details?.runId ? resolveCommunicationPeer(state, details.runId, details.childIndex ?? 0, details.childId ?? details.agent) : "Subagent",
+				message: legacySupervisorBody(typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")),
+				kind: customType === SUBAGENT_SUPERVISOR_ANSWER_TYPE ? "answer" as const : communicationKind(details?.reason),
+			};
+			return renderCommunicationCard(communication, options.expanded, theme);
+		});
+	}
+	pi.registerEntryRenderer(SUPERVISOR_PROGRESS_TYPE, (entry, options, theme) => {
+		const communication = readCommunication((entry.data as { communication?: unknown } | undefined)?.communication);
+		return communication ? renderCommunicationCard(communication, options.expanded, theme) : undefined;
+	});
 }
 
 function parseStructuredReply(message: string): { value?: unknown; error?: string } {
@@ -322,21 +373,27 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: A
 	const metadata = readChildMetadata();
 	if (!metadata) throw new Error("Native supervisor channel is not available for this subagent.");
 	if (!params.reason) throw new Error("reason is required for supervisor contact.");
-	if (params.reason !== "progress_update" && hasOutstandingQuestionForChild(metadata.channelDir, metadata.childIndex, metadata.agent)) {
+	if (signal?.aborted) throw new Error("Supervisor request cancelled.");
+	const protocolVersion = supervisorProtocolAvailable() ? SUPERVISOR_PROTOCOL_VERSION : undefined;
+	if (params.reason === "handoff" && !protocolVersion) throw new Error("This supervisor uses the legacy protocol. Send actionable findings with progress_update instead.");
+	const expectsReply = params.reason === "need_decision" || params.reason === "interview_request";
+	if (expectsReply && hasOutstandingQuestionForChild(metadata.channelDir, metadata.childIndex, metadata.agent)) {
 		throw new Error("A parent question is already outstanding for this child. Answer it with action='reply' before opening a blocking supervisor request.");
 	}
-	if (params.reason !== "progress_update" && !params.message?.trim() && params.reason !== "interview_request") {
-		throw new Error("message is required for supervisor decisions.");
+	if (!params.message?.trim() && params.reason !== "interview_request") {
+		throw new Error("message is required for supervisor contact.");
 	}
 	ensureSupervisorChannelDir(metadata.channelDir);
 	const requestId = randomUUID();
-	const expectsReply = params.reason !== "progress_update";
 	const createdAt = Date.now();
 	const replyDeadline = createdAt + askTimeoutMs();
 	const expiresAt = expectsReply ? replyDeadline : undefined;
-	const message = formatChildMessage({ ...metadata, reason: params.reason, message: params.message, interview: params.interview });
+	const message = protocolVersion ? params.message?.trim() || "Structured supervisor input requested." : formatChildMessage({ ...metadata, reason: params.reason, message: params.message, interview: params.interview });
+	const communication: SubagentCommunication = { direction: "to", peer: "Supervisor", kind: communicationKind(params.reason), message: communicationBody(message, params.interview, protocolVersion) };
 	const request: SupervisorRequest = {
 		type: "subagent.supervisor.request",
+		...(protocolVersion ? { protocolVersion } : {}),
+		...(metadata.description ? { description: metadata.description } : {}),
 		id: requestId,
 		createdAt,
 		...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -363,14 +420,14 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: A
 
 	if (!expectsReply) {
 		return {
-			content: [{ type: "text", text: "Supervisor progress update queued." }],
-			details: { delivered: true, requestId, reason: params.reason },
+			content: [{ type: "text", text: params.reason === "handoff" ? "Dependency handoff queued. Continue independent work." : protocolVersion ? "Progress recorded for the UI only; the supervisor model will not receive it." : "Supervisor progress update queued." }],
+			details: { queued: true, requestId, reason: params.reason, communication },
 		};
 	}
 
 	try {
 		const reply = await waitForReply(metadata.channelDir, requestId, replyDeadline, signal);
-		const details: Record<string, unknown> = { requestId, reason: params.reason };
+		const details: Record<string, unknown> = { requestId, reason: params.reason, communication, response: reply.message };
 		if (params.reason === "interview_request") {
 			const structured = parseStructuredReply(reply.message);
 			if (structured.error) details.structuredReplyParseError = structured.error;
@@ -395,14 +452,22 @@ function hasTool(pi: ExtensionAPI, name: string): boolean {
 }
 
 export function registerNativeSupervisorClient(pi: ExtensionAPI, options: { includeIntercomFallback?: boolean } = {}): void {
-	if (!readChildMetadata()) return;
+	if (process.env.PI_SUBAGENT_COMMUNICATION_ENABLED === "0" || !readChildMetadata()) return;
 	const includeIntercomFallback = options.includeIntercomFallback !== false;
 	if (!hasTool(pi, "contact_supervisor")) {
 		const tool: ToolDefinition<typeof ContactSupervisorParamsSchema, Record<string, unknown>> = {
 			name: "contact_supervisor",
 			label: "Contact Supervisor",
-			description: CHILD_CONTACT_DESCRIPTION,
-			parameters: ContactSupervisorParamsSchema,
+			description: `${CHILD_CONTACT_DESCRIPTION} ${supervisorProtocolAvailable()
+				? "handoff delivers actionable dependency findings or corrections without waiting: state what changes and consolidate evidence or reference one artifact. progress_update is UI-only and never reaches the supervisor model."
+				: "This legacy supervisor delivers progress_update to its model. Reserve it for actionable dependency findings or corrections."}`,
+			parameters: supervisorProtocolAvailable() ? ContactSupervisorParamsSchema : Type.Object({ ...ContactSupervisorParamsSchema.properties, reason: Type.Optional(Type.String({ enum: ["need_decision", "interview_request", "progress_update"] })) }, { additionalProperties: false }),
+			renderCall(args, theme, context) {
+				return renderCommunicationCall("contact_supervisor", args, theme, context, { direction: "to", peer: "Supervisor", kind: args.action === "reply" ? "reply" : communicationKind(args.reason), message: communicationBody(args.message ?? "", args.interview, SUPERVISOR_PROTOCOL_VERSION) });
+			},
+			renderResult(result, options, theme, context) {
+				return renderCommunicationResult(result.content, result.details, options.expanded, context.isError, theme);
+			},
 			execute(_id, params, signal) {
 				return sendSupervisorRequest(params as ContactSupervisorParams, signal);
 			},
@@ -413,8 +478,14 @@ export function registerNativeSupervisorClient(pi: ExtensionAPI, options: { incl
 		const tool: ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> = {
 			name: "intercom",
 			label: "Intercom",
-			description: "Native supervisor-channel intercom fallback for subagents. Prefer contact_supervisor when available.",
+			description: "Supervisor-only fallback; sibling discovery and sibling messaging are unavailable. Use contact_supervisor for decisions, replies, and dependency handoffs. list reports no sibling sessions; ask blocks for a supervisor decision; send is progress only.",
 			parameters: IntercomParamsSchema,
+			renderCall(args, theme, context) {
+				return renderCommunicationCall("intercom", args, theme, context, args.message ? { direction: "to", peer: "Supervisor", kind: args.action === "ask" ? "request" : "progress", message: args.message } : undefined);
+			},
+			renderResult(result, options, theme, context) {
+				return renderCommunicationResult(result.content, result.details, options.expanded, context.isError, theme);
+			},
 			async execute(_id, params, signal) {
 				const action = (params as IntercomParams).action;
 				if (action === "status") return { content: [{ type: "text", text: "Native supervisor channel is active." }], details: { active: true } };
@@ -434,7 +505,11 @@ function parseRequestFile(file: string, channelDir: string): PendingSupervisorRe
 		if (parsed.type !== "subagent.supervisor.request") return undefined;
 		if (parsed.supervisorSessionId !== undefined && (typeof parsed.supervisorSessionId !== "string" || !parsed.supervisorSessionId.trim())) return undefined;
 		if (typeof parsed.id !== "string" || !parsed.id) return undefined;
-		if (parsed.reason !== "need_decision" && parsed.reason !== "interview_request" && parsed.reason !== "progress_update") return undefined;
+		if (parsed.reason !== "need_decision" && parsed.reason !== "interview_request" && parsed.reason !== "progress_update" && parsed.reason !== "handoff") return undefined;
+		if (parsed.protocolVersion !== undefined && parsed.protocolVersion !== SUPERVISOR_PROTOCOL_VERSION) return undefined;
+		if (parsed.protocolVersion === SUPERVISOR_PROTOCOL_VERSION && parsed.expectsReply !== (parsed.reason === "need_decision" || parsed.reason === "interview_request")) return undefined;
+		if (parsed.reason === "handoff" && parsed.protocolVersion !== SUPERVISOR_PROTOCOL_VERSION) return undefined;
+		if (parsed.description !== undefined && typeof parsed.description !== "string") return undefined;
 		if (typeof parsed.message !== "string" || !parsed.message) return undefined;
 		if (typeof parsed.runId !== "string" || typeof parsed.agent !== "string" || typeof parsed.childIndex !== "number") return undefined;
 		return { ...parsed as SupervisorRequest, channelDir, requestFile: file };
@@ -600,18 +675,21 @@ function requestExpiresAt(request: SupervisorRequest, now: number): number {
 	return Number.isFinite(request.createdAt) ? request.createdAt + askTimeoutMs() : now;
 }
 
-function requestRunInactive(request: SupervisorRequest, state: SubagentState): boolean {
-	if (state.foregroundControls.has(request.runId)) return false;
+function requestRunState(request: SupervisorRequest, state: SubagentState): "active" | "inactive" | "stopped" {
+	if (state.foregroundControls.has(request.runId)) return "active";
 	const foregroundRun = state.foregroundRuns?.get(request.runId);
 	const foregroundChild = foregroundRun?.children.find((child) => child.index === request.childIndex && child.agent === request.agent)
 		?? foregroundRun?.children[request.childIndex];
-	if (foregroundChild) return foregroundChild.status !== "detached";
+	if (foregroundChild) return foregroundChild.status === "stopped" ? "stopped" : foregroundChild.status === "detached" ? "active" : "inactive";
 
-	const asyncJob = state.asyncJobs.get(request.runId);
-	if (!asyncJob) return false;
-	if (asyncJob.status === "complete" || asyncJob.status === "failed" || asyncJob.status === "paused") return true;
-	const stepStatus = asyncJob.steps?.[request.childIndex]?.status;
-	return stepStatus === "complete" || stepStatus === "completed" || stepStatus === "failed" || stepStatus === "paused";
+	const job = state.asyncJobs.get(request.runId) ?? state.fleetJobs?.get(request.runId);
+	const asyncDir = job?.asyncDir ?? path.join(ASYNC_DIR, safeSegment(request.runId));
+	const status = readStatus(asyncDir);
+	const runStatus = status?.state ?? job?.status;
+	const stepStatus = (status?.steps ?? job?.steps)?.[request.childIndex]?.status;
+	if (fs.existsSync(stopRequestPath(asyncDir)) || runStatus === "stopped" || job?.status === "stopped" || status?.stopped || stepStatus === "stopped") return "stopped";
+	if (["complete", "failed", "paused"].includes(runStatus ?? "") || ["complete", "completed", "failed", "paused"].includes(stepStatus ?? "")) return "inactive";
+	return "active";
 }
 
 function requestLifecycle(request: PendingSupervisorRequest, state: SubagentState, ctx: ExtensionContext | undefined, now: number): SupervisorRequestLifecycle {
@@ -619,7 +697,8 @@ function requestLifecycle(request: PendingSupervisorRequest, state: SubagentStat
 	if (!fs.existsSync(request.requestFile)) return "missing";
 	if (request.expectsReply && fs.existsSync(replyPath(request.channelDir, request.id))) return "resolved";
 	if (request.expectsReply && now > requestExpiresAt(request, now)) return "expired";
-	if (request.expectsReply && requestRunInactive(request, state)) return "inactive";
+	const runState = requestRunState(request, state);
+	if (runState === "stopped" || (request.expectsReply && runState === "inactive")) return "inactive";
 	return "pending";
 }
 
@@ -642,8 +721,9 @@ function formatPendingLine(request: PendingSupervisorRequest): string {
 	return `- ${request.id}: ${request.agent} [${request.runId}#${request.childIndex}] ${request.reason}.${replyHint}`;
 }
 
-function requestVisibleText(request: PendingSupervisorRequest): string {
-	const lines = [request.message];
+function requestVisibleText(request: PendingSupervisorRequest, communication: SubagentCommunication): string {
+	const lines = [`From: ${communication.peer}`, "", communication.message];
+	if (request.reason === "interview_request") lines.push("", "Reply with JSON matching the requested interview shape.");
 	if (request.expectsReply) {
 		lines.push("", `Reply with: ${NATIVE_SUPERVISOR_TOOL_NAME}({ action: "reply", replyTo: "${request.id}", message: "..." })`);
 	}
@@ -701,6 +781,14 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 		label: name === "intercom" ? "Intercom" : "Subagent Supervisor",
 		description: PARENT_ASK_DESCRIPTION,
 		parameters: ParentSupervisorParamsSchema,
+		renderCall(args, theme, context) {
+			const request = args.action === "reply" ? pending.get(args.replyTo) : undefined;
+			const peer = request ? requestCommunication(request, state).peer : args.id ? resolveCommunicationPeer(state, args.id, args.index ?? 0, args.childId) : "Subagent";
+			return renderCommunicationCall(name, args, theme, context, args.message ? { direction: "to", peer, message: args.message, kind: args.action === "ask" ? "question" : "reply" } : undefined);
+		},
+		renderResult(result, options, theme, context) {
+			return renderCommunicationResult(result.content, result.details, options.expanded, context.isError, theme);
+		},
 		async execute(_id, params) {
 			refreshPendingRequests(pending, state, state.lastUiContext ?? undefined);
 			const input = params as IntercomParams;
@@ -715,9 +803,12 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 				const request = resolvePendingRequest(pending, input);
 				writeReply(request, input.message ?? "");
 				pending.delete(request.id);
-				return { content: [{ type: "text", text: `Replied to supervisor request ${request.id}.` }], details: { replyTo: request.id, runId: request.runId, agent: request.agent } };
+				return { content: [{ type: "text", text: `Replied to ${requestCommunication(request, state).peer}.` }], details: { replyTo: request.id, runId: request.runId, agent: request.agent, communication: { ...requestCommunication(request, state), direction: "to", kind: "reply", message: input.message } } };
 			}
 			if (input.action === "ask") {
+				if (!subagentCommunicationEnabled(process.cwd(), getAgentDir())) {
+					return { content: [{ type: "text", text: "Subagent communication is off in /settings. Wait for the child to complete instead of asking it." }], isError: true, details: { disabled: true } };
+				}
 				return askRunningAsyncChild({
 					params: {
 						id: input.id,
@@ -745,7 +836,7 @@ function questionMatchesParentContext(question: SupervisorQuestion, state: Subag
 	return true;
 }
 
-function notifyQuestionTerminal(pi: ExtensionAPI, question: SupervisorQuestion, channelDir: string): void {
+function notifyQuestionTerminal(pi: ExtensionAPI, question: SupervisorQuestion, channelDir: string, state: SubagentState): void {
 	if (!supervisorQuestionIsTerminal(question) || question.notifiedAt) return;
 	(pi as { events?: IntercomEventBus }).events?.emit(SUBAGENT_QUESTION_EVENT, {
 		questionId: question.id,
@@ -754,22 +845,24 @@ function notifyQuestionTerminal(pi: ExtensionAPI, question: SupervisorQuestion, 
 	});
 	if (isQuestionWaitActive(question.id)) return;
 	if (!claimQuestionNotification(channelDir, question.id)) return;
-	const state = supervisorQuestionPublicState(question);
+	const outcome = supervisorQuestionPublicState(question);
+	const communication: SubagentCommunication = { direction: "from", peer: question.childDescription ?? resolveCommunicationPeer(state, question.runId, question.childIndex, question.childId), message: question.answer ?? question.cancelReason ?? outcome, kind: "answer" };
 	pi.sendMessage({
 		customType: SUBAGENT_SUPERVISOR_ANSWER_TYPE,
 		content: formatSupervisorQuestionAnswer(question),
-		display: state === "answered",
+		display: outcome === "answered",
 		details: {
 			questionId: question.id,
-			state,
+			state: outcome,
+			communication,
 			runId: question.runId,
 			childIndex: question.childIndex,
 			childId: question.childId,
 			reason: question.reason,
-			answered: state === "answered",
+			answered: outcome === "answered",
 			delivered: Boolean(question.deliveredAt),
 		},
-	}, { triggerTurn: state === "answered" });
+	}, { triggerTurn: outcome === "answered" });
 }
 
 function pollSupervisorQuestions(pi: ExtensionAPI, state: SubagentState, ctx: ExtensionContext): void {
@@ -777,7 +870,7 @@ function pollSupervisorQuestions(pi: ExtensionAPI, state: SubagentState, ctx: Ex
 		for (const question of listSupervisorQuestions(channelDir)) {
 			if (!questionMatchesParentContext(question, state, ctx)) continue;
 			const current = reconcileAsyncQuestion(channelDir, question, state);
-			notifyQuestionTerminal(pi, current, channelDir);
+			notifyQuestionTerminal(pi, current, channelDir, state);
 		}
 	}
 }
@@ -791,6 +884,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 } {
 	const pending = new Map<string, PendingSupervisorRequest>();
 	const seenFiles = new Set<string>();
+	const deliveredRequests = new Set<string>();
 	let poller: ReturnType<typeof setInterval> | undefined;
 	let lastStaleCleanupAt = 0;
 
@@ -845,24 +939,34 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 				cleanupRequestLifecycle(request, lifecycle);
 				continue;
 			}
-			seenFiles.add(file);
 			if (request.expectsReply) pending.set(request.id, request);
-			else {
-				removeRequestFile(request.requestFile);
+			if (deliveredRequests.has(request.id)) {
+				seenFiles.add(file);
+				continue;
 			}
-			pi.sendMessage({
-				customType: "subagent_supervisor_request",
-				content: requestVisibleText(request),
-				display: true,
-				details: {
-					id: request.id,
-					reason: request.reason,
-					expectsReply: request.expectsReply,
-					runId: request.runId,
-					agent: request.agent,
-					childIndex: request.childIndex,
-				},
-			});
+			const communication = requestCommunication(request, state);
+			const details = {
+				id: request.id,
+				reason: request.reason,
+				expectsReply: request.expectsReply,
+				runId: request.runId,
+				agent: request.agent,
+				childIndex: request.childIndex,
+				communication,
+			};
+			if (request.reason === "progress_update" && request.protocolVersion === SUPERVISOR_PROTOCOL_VERSION) {
+				pi.appendEntry(SUPERVISOR_PROGRESS_TYPE, details);
+			} else {
+				pi.sendMessage({
+					customType: SUPERVISOR_REQUEST_TYPE,
+					content: requestVisibleText(request, communication),
+					display: true,
+					details,
+				}, { triggerTurn: request.expectsReply || request.reason === "handoff" });
+			}
+			deliveredRequests.add(request.id);
+			seenFiles.add(file);
+			if (!request.expectsReply) removeRequestFile(request.requestFile);
 			if (request.expectsReply) {
 				const job = state.asyncJobs.get(request.runId);
 				if (job) job.activityState = "needs_attention";
@@ -888,6 +992,11 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		start: () => {
 			if (poller) return;
 			registerParentTools();
+			for (const entry of state.lastUiContext?.sessionManager.getBranch?.() ?? []) {
+				const data = entry.type === "custom_message" && entry.customType === SUPERVISOR_REQUEST_TYPE ? entry.details
+					: entry.type === "custom" && entry.customType === SUPERVISOR_PROGRESS_TYPE ? entry.data : undefined;
+				if (data && typeof data === "object" && "id" in data && typeof data.id === "string") deliveredRequests.add(data.id);
+			}
 			poll();
 			poller = setInterval(poll, CHANNEL_POLL_MS);
 			poller.unref?.();
@@ -898,6 +1007,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			poller = undefined;
 			pending.clear();
 			seenFiles.clear();
+			deliveredRequests.clear();
 		},
 		pending,
 		cancelOwnedQuestions,

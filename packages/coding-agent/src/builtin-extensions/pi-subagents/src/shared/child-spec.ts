@@ -5,7 +5,7 @@
  */
 
 import {
-	PLAN_MODE_WRITE_SPAWN_ERROR,
+	READ_ONLY_WRITE_SPAWN_ERROR,
 	resolveChildPermissions,
 	type ChildPermission,
 } from "../../../../core/subagent-permission-inherit.ts";
@@ -144,7 +144,7 @@ export function normalizeChildSpec(input: DelegatedTaskInput, options: Normalize
 	const requested = parseChildPermissionsInput(input.permissions, `${pathLabel}.permissions`);
 	const resolved = resolveChildPermissions(options.parentMode, requested);
 	if (!resolved.ok) {
-		throw new Error(resolved.error || PLAN_MODE_WRITE_SPAWN_ERROR);
+		throw new Error(resolved.error || READ_ONLY_WRITE_SPAWN_ERROR);
 	}
 
 	const preservedSelection = isModelSelection(input.modelSelection) ? input.modelSelection : undefined;

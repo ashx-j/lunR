@@ -7,7 +7,9 @@ export function catalogCacheScope(provider: string, baseUrl: string, credential?
 			? typeof credential.accountId === "string"
 				? credential.accountId
 				: credential.refresh || credential.access
-			: credential?.key;
+			: credential?.type === "external_claude_code"
+				? credential.accountFingerprint
+				: credential?.key;
 	return createHash("sha256")
 		.update(JSON.stringify([provider, baseUrl.replace(/\/+$/, ""), identity ?? null]))
 		.digest("hex");

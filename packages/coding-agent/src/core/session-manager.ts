@@ -1,6 +1,6 @@
 import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -9,6 +9,7 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
+	readFileSync,
 	readSync,
 	statSync,
 	writeFileSync,
@@ -26,6 +27,13 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import type { PermissionMode } from "./permissions.ts";
+import {
+	canonicalSessionPath,
+	SessionOwnership,
+	SessionOwnershipError,
+	writeSessionJson,
+} from "./session-ownership.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -800,6 +808,103 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private ownership?: SessionOwnership;
+	private readOnly = false;
+	private disposed = false;
+	private permissionMode?: PermissionMode;
+
+	getPermissionMode(): PermissionMode | undefined {
+		return this.permissionMode;
+	}
+
+	setPermissionMode(mode: PermissionMode): void {
+		this.assertWritable();
+		this.permissionMode = mode;
+		this.saveLeaf();
+	}
+
+	assertWritable(): void {
+		if (this.readOnly || this.disposed)
+			throw new SessionOwnershipError(this.sessionFile ?? "in-memory", "Session is read-only or released.");
+		if (this.persist) {
+			this.ownership?.assert();
+			if (
+				this.ownership &&
+				this.sessionFile &&
+				canonicalSessionPath(this.sessionFile) !== this.ownership.owner.file
+			) {
+				throw new SessionOwnershipError(this.sessionFile, "Session ownership does not match the write target.");
+			}
+		}
+	}
+
+	getOwnership(): SessionOwnership | undefined {
+		return this.ownership;
+	}
+
+	copyInMemory(): SessionManager {
+		const copy = SessionManager.inMemory(this.cwd);
+		copy.sessionId = this.sessionId;
+		copy.fileEntries = structuredClone(this.fileEntries);
+		copy._buildIndex();
+		copy.leafId = this.leafId;
+		return copy;
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		if (!this.readOnly) this.saveLeaf();
+		this.ownership?.release();
+		this.disposed = true;
+	}
+
+	flush(): void {
+		this.assertWritable();
+		if (!this.persist) return;
+		this._rewriteFile();
+		this.flushed = true;
+		this.saveLeaf();
+	}
+
+	private claim(file: string): void {
+		this.assertWritable();
+		const canonical = canonicalSessionPath(file);
+		if (this.ownership?.owner.file === canonical) return;
+		const next = new SessionOwnership(canonical);
+		this.saveLeaf();
+		this.ownership?.release();
+		this.ownership = next;
+	}
+
+	private saveLeaf(): void {
+		if (!this.persist || !this.sessionFile || !this.flushed) return;
+		this.assertWritable();
+		writeSessionJson(`${this.sessionFile}.leaf.json`, {
+			id: this.sessionId,
+			leafId: this.leafId,
+			permissionMode: this.permissionMode,
+			revision: createHash("sha256").update(readFileSync(this.sessionFile)).digest("hex"),
+		});
+	}
+
+	private restoreLeaf(): void {
+		if (!this.sessionFile) return;
+		try {
+			const saved = JSON.parse(readFileSync(`${this.sessionFile}.leaf.json`, "utf8"));
+			if (saved.id === this.sessionId) {
+				const mode: unknown = saved.permissionMode;
+				if (mode === "plan" || mode === "read-only") this.permissionMode = "read-only";
+				else if (mode === "manual" || mode === "yolo") this.permissionMode = "yolo";
+				else if (mode === "auto") this.permissionMode = "auto";
+			}
+			if (
+				saved.id === this.sessionId &&
+				(saved.leafId === null || this.byId.has(saved.leafId)) &&
+				saved.revision === createHash("sha256").update(readFileSync(this.sessionFile)).digest("hex")
+			)
+				this.leafId = saved.leafId;
+		} catch {}
+	}
 
 	private constructor(
 		cwd: string,
@@ -815,15 +920,35 @@ export class SessionManager {
 			mkdirSync(this.sessionDir, { recursive: true });
 		}
 
-		if (sessionFile) {
-			this.setSessionFile(sessionFile);
-		} else {
-			this.newSession(newSessionOptions);
+		try {
+			if (sessionFile) this.loadSessionFile(sessionFile);
+			else this.newSession(newSessionOptions);
+			this.ownership?.bindSession(this.sessionId);
+		} catch (error) {
+			this.ownership?.release();
+			throw error;
 		}
 	}
 
 	/** Switch to a different session file (used for resume and branching) */
 	setSessionFile(sessionFile: string): void {
+		this.assertWritable();
+		if (this.sessionFile && canonicalSessionPath(sessionFile) === canonicalSessionPath(this.sessionFile)) {
+			this.loadSessionFile(sessionFile);
+			return;
+		}
+		const next = new SessionManager(this.cwd, this.sessionDir, sessionFile, this.persist);
+		try {
+			this.dispose();
+		} catch (error) {
+			next.dispose();
+			throw error;
+		}
+		Object.assign(this, next);
+	}
+
+	private loadSessionFile(sessionFile: string): void {
+		this.claim(sessionFile);
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
 			this.fileEntries = loadEntriesFromFile(this.sessionFile);
@@ -835,7 +960,7 @@ export class SessionManager {
 				if (statSync(explicitPath).size > 0) {
 					throw new Error(`Session file is not a valid pi session: ${explicitPath}`);
 				}
-				this.newSession();
+				this.initializeSession();
 				this.sessionFile = explicitPath;
 				this._rewriteFile();
 				this.flushed = true;
@@ -850,20 +975,31 @@ export class SessionManager {
 			}
 
 			this._buildIndex();
+			this.restoreLeaf();
 			this.flushed = true;
 		} else {
 			const explicitPath = this.sessionFile;
-			this.newSession();
+			this.initializeSession();
 			this.sessionFile = explicitPath; // preserve explicit path from --session flag
 		}
 	}
 
 	newSession(options?: NewSessionOptions): string | undefined {
+		this.assertWritable();
+		const id = options?.id ?? createSessionId();
+		assertValidSessionId(id);
+		const timestamp = new Date().toISOString();
+		if (this.persist) this.claim(join(this.getSessionDir(), `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`));
+		this.initializeSession({ ...options, id }, timestamp);
+		this.ownership?.bindSession(this.sessionId);
+		return this.sessionFile;
+	}
+
+	private initializeSession(options?: NewSessionOptions, timestamp = new Date().toISOString()): string | undefined {
 		if (options?.id !== undefined) {
 			assertValidSessionId(options.id);
 		}
 		this.sessionId = options?.id ?? createSessionId();
-		const timestamp = new Date().toISOString();
 		const header: SessionHeader = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -878,6 +1014,7 @@ export class SessionManager {
 		this.labelTimestampsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this.permissionMode = undefined;
 
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -908,6 +1045,7 @@ export class SessionManager {
 	}
 
 	private _rewriteFile(): void {
+		this.assertWritable();
 		if (!this.persist || !this.sessionFile) return;
 		const fd = openSync(this.sessionFile, "w");
 		try {
@@ -944,6 +1082,7 @@ export class SessionManager {
 	}
 
 	_persist(entry: SessionEntry): void {
+		this.assertWritable();
 		if (!this.persist || !this.sessionFile) return;
 
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
@@ -973,6 +1112,7 @@ export class SessionManager {
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		this.assertWritable();
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
@@ -1287,10 +1427,12 @@ export class SessionManager {
 	 * are not modified or deleted.
 	 */
 	branch(branchFromId: string): void {
+		this.assertWritable();
 		if (!this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
 		this.leafId = branchFromId;
+		this.flush();
 	}
 
 	/**
@@ -1299,7 +1441,9 @@ export class SessionManager {
 	 * Use this when navigating to re-edit the first user message.
 	 */
 	resetLeaf(): void {
+		this.assertWritable();
 		this.leafId = null;
+		this.flush();
 	}
 
 	/**
@@ -1308,6 +1452,7 @@ export class SessionManager {
 	 * context from the abandoned conversation path.
 	 */
 	branchWithSummary(branchFromId: string | null, summary: string, details?: unknown, fromHook?: boolean): string {
+		this.assertWritable();
 		if (branchFromId !== null && !this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
@@ -1332,6 +1477,7 @@ export class SessionManager {
 	 * Returns the new session file path, or undefined if not persisting.
 	 */
 	createBranchedSession(leafId: string): string | undefined {
+		this.assertWritable();
 		const previousSessionFile = this.sessionFile;
 		const path = this.getBranch(leafId);
 		if (path.length === 0) {
@@ -1391,8 +1537,10 @@ export class SessionManager {
 				parentId = labelEntry.id;
 			}
 
+			this.claim(newSessionFile);
 			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
 			this.sessionId = newSessionId;
+			this.ownership?.bindSession(this.sessionId);
 			this.sessionFile = newSessionFile;
 			this._buildIndex();
 
@@ -1451,13 +1599,36 @@ export class SessionManager {
 	 */
 	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
 		const resolvedPath = resolvePath(path);
-		// Extract cwd from session header if possible, otherwise use process.cwd()
-		const entries = loadEntriesFromFile(resolvedPath);
-		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
-		const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
-		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
-		return new SessionManager(cwd, dir, resolvedPath, true);
+		const manager = new SessionManager(cwdOverride ?? process.cwd(), dir, resolvedPath, true);
+		manager.cwd = resolvePath(cwdOverride ?? manager.getHeader()?.cwd ?? process.cwd());
+		return manager;
+	}
+
+	static forkBranch(path: string, leafId: string, sessionDir?: string): SessionManager {
+		const manager = SessionManager.openReadOnly(path);
+		manager.readOnly = false;
+		manager.persist = true;
+		if (sessionDir) manager.sessionDir = sessionDir;
+		manager.createBranchedSession(leafId);
+		return manager;
+	}
+
+	static openReadOnly(path: string): SessionManager {
+		const file = canonicalSessionPath(path);
+		const entries = loadEntriesFromFile(file);
+		migrateToCurrentVersion(entries);
+		const header = entries.find((entry) => entry.type === "session") as SessionHeader | undefined;
+		if (!header) throw new Error(`Invalid session: ${file}`);
+		const manager = SessionManager.inMemory(header.cwd);
+		manager.sessionFile = file;
+		manager.sessionDir = resolve(file, "..");
+		manager.sessionId = header.id;
+		manager.fileEntries = entries;
+		manager._buildIndex();
+		manager.restoreLeaf();
+		manager.readOnly = true;
+		return manager;
 	}
 
 	/**
@@ -1528,16 +1699,20 @@ export class SessionManager {
 			cwd: resolvedTargetCwd,
 			parentSession: resolvedSourcePath,
 		};
-		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
-
-		// Copy all non-header entries from source
-		for (const entry of sourceEntries) {
-			if (entry.type !== "session") {
-				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
-			}
+		const manager = new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
+		try {
+			manager.fileEntries = [newHeader, ...sourceEntries.filter((entry) => entry.type !== "session")];
+			manager.sessionId = newSessionId;
+			manager.ownership?.bindSession(newSessionId);
+			manager._buildIndex();
+			const snapshot = SessionManager.openReadOnly(sourcePath);
+			manager.leafId = snapshot.getLeafId();
+			manager.flush();
+			return manager;
+		} catch (error) {
+			manager.dispose();
+			throw error;
 		}
-
-		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
 	}
 
 	/**

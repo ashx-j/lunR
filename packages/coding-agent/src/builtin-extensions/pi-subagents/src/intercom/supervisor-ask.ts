@@ -3,6 +3,7 @@ import { readSteerCapability, requestAsyncSteer } from "../runs/background/contr
 import { resolveSubagentRunId } from "../runs/background/run-id-resolver.ts";
 import { readStatus } from "../shared/utils.ts";
 import type { AsyncStatus, SubagentState } from "../shared/types.ts";
+import { resolveCommunicationPeer } from "./communication.ts";
 import {
 	cancelSupervisorQuestion,
 	createSupervisorQuestion,
@@ -158,8 +159,11 @@ export function askRunningAsyncChild(input: {
 		throw new Error("This child is not ready to receive questions. Continue other work until it is ready; no question was queued.");
 	}
 	const incarnation: SupervisorChildIncarnation = { pid: capability.pid, readyAt: capability.readyAt };
+	const step = status.steps?.[child.index];
+	const childDescription = resolveCommunicationPeer(input.state, status.runId, child.index, child.childId, step?.description ?? child.agent);
 	const question: SupervisorQuestion = createSupervisorQuestion({
 		channelDir,
+		childDescription,
 		reason,
 		message,
 		runId: status.runId,
@@ -191,6 +195,7 @@ export function askRunningAsyncChild(input: {
 			runId: status.runId,
 			childIndex: child.index,
 			childId: child.childId,
+			communication: { direction: "to", peer: childDescription, message, kind: "question" },
 			delivered: false,
 			answered: false,
 		},

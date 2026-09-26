@@ -696,7 +696,7 @@ export function renderStatsLine(
 	// lunr: permission mode safety indicator — always shown (not toggle-gated).
 	const mode = lunrPermissionMode();
 	if (mode === "yolo" || mode === "auto") modeZone.push(color(theme, "warning", mode));
-	else if (mode === "manual" || mode === "plan") modeZone.push(color(theme, "white", mode)); // lunr: theme-polish — manual/plan read white (was dim)
+	else if (mode === "read-only") modeZone.push(color(theme, "white", "read"));
 
 	// lunr: footer element toggles from the customize bridge (read at render time).
 	const footerToggles = lunrFooterToggles();

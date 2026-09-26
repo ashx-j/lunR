@@ -1,52 +1,54 @@
 import { describe, expect, it } from "vitest";
 import {
 	isMutatingBashCommand,
-	PLAN_MODE_ADDENDUM,
-	PLAN_MODE_BLOCK_MESSAGE,
-	planModeBlockReason,
+	READ_ONLY_MODE_ADDENDUM,
+	READ_ONLY_MODE_BLOCK_MESSAGE,
+	readOnlyModeBlockReason,
 } from "../src/core/plan-mode.ts";
 
-describe("planModeBlockReason", () => {
+describe("readOnlyModeBlockReason", () => {
 	it("blocks edit and write unconditionally", () => {
-		expect(planModeBlockReason("edit", { path: "a.ts" })).toBe(PLAN_MODE_BLOCK_MESSAGE);
-		expect(planModeBlockReason("write", { path: "a.ts" })).toBe(PLAN_MODE_BLOCK_MESSAGE);
+		expect(readOnlyModeBlockReason("edit", { path: "a.ts" })).toBe(READ_ONLY_MODE_BLOCK_MESSAGE);
+		expect(readOnlyModeBlockReason("write", { path: "a.ts" })).toBe(READ_ONLY_MODE_BLOCK_MESSAGE);
 	});
 
 	it("blocks extension mutating tools", () => {
 		for (const tool of ["memory_add", "memory_remove", "cron"]) {
-			expect(planModeBlockReason(tool, { content: "x" }), tool).toBe(PLAN_MODE_BLOCK_MESSAGE);
+			expect(readOnlyModeBlockReason(tool, { content: "x" }), tool).toBe(READ_ONLY_MODE_BLOCK_MESSAGE);
 		}
 	});
 
 	it("blocks apply-mode code_rewrite and allows dry-run preview", () => {
-		expect(planModeBlockReason("code_rewrite", { dry_run: false, pattern: "x" })).toBe(PLAN_MODE_BLOCK_MESSAGE);
-		expect(planModeBlockReason("code_rewrite", { dry_run: true, pattern: "x" })).toBeUndefined();
-		expect(planModeBlockReason("code_rewrite", { pattern: "x" })).toBeUndefined();
+		expect(readOnlyModeBlockReason("code_rewrite", { dry_run: false, pattern: "x" })).toBe(
+			READ_ONLY_MODE_BLOCK_MESSAGE,
+		);
+		expect(readOnlyModeBlockReason("code_rewrite", { dry_run: true, pattern: "x" })).toBeUndefined();
+		expect(readOnlyModeBlockReason("code_rewrite", { pattern: "x" })).toBeUndefined();
 	});
 
 	it("allows read tools", () => {
-		expect(planModeBlockReason("read", { path: "a.ts" })).toBeUndefined();
-		expect(planModeBlockReason("grep", { pattern: "x" })).toBeUndefined();
-		expect(planModeBlockReason("find", {})).toBeUndefined();
-		expect(planModeBlockReason("ls", {})).toBeUndefined();
-		expect(planModeBlockReason("web_search", { q: "x" })).toBeUndefined();
+		expect(readOnlyModeBlockReason("read", { path: "a.ts" })).toBeUndefined();
+		expect(readOnlyModeBlockReason("grep", { pattern: "x" })).toBeUndefined();
+		expect(readOnlyModeBlockReason("find", {})).toBeUndefined();
+		expect(readOnlyModeBlockReason("ls", {})).toBeUndefined();
+		expect(readOnlyModeBlockReason("web_search", { q: "x" })).toBeUndefined();
 	});
 
 	it("allows read-only bash and includes the command in the block reason", () => {
-		expect(planModeBlockReason("bash", { command: "ls -la" })).toBeUndefined();
-		const reason = planModeBlockReason("bash", { command: "rm -rf dist" });
-		expect(reason).toContain(PLAN_MODE_BLOCK_MESSAGE);
+		expect(readOnlyModeBlockReason("bash", { command: "ls -la" })).toBeUndefined();
+		const reason = readOnlyModeBlockReason("bash", { command: "rm -rf dist" });
+		expect(reason).toContain(READ_ONLY_MODE_BLOCK_MESSAGE);
 		expect(reason).toContain("rm -rf dist");
 	});
 
 	it("allows bash with a missing/non-string command (defensive)", () => {
-		expect(planModeBlockReason("bash", {})).toBeUndefined();
-		expect(planModeBlockReason("bash", undefined)).toBeUndefined();
+		expect(readOnlyModeBlockReason("bash", {})).toBeUndefined();
+		expect(readOnlyModeBlockReason("bash", undefined)).toBeUndefined();
 	});
 
-	it("exposes a plan-mode system-prompt addendum", () => {
-		expect(PLAN_MODE_ADDENDUM).toContain("plan mode");
-		expect(PLAN_MODE_ADDENDUM).toContain("/plan off");
+	it("exposes a read-only system-prompt addendum", () => {
+		expect(READ_ONLY_MODE_ADDENDUM).toContain("read-only mode");
+		expect(READ_ONLY_MODE_ADDENDUM).toContain("present_plan");
 	});
 });
 

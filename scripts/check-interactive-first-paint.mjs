@@ -110,7 +110,7 @@ const optionalModules = [
 	"pi-mcp-adapter/direct-tool-executor.js",
 ];
 
-async function checkRequest(toolUrl, toolKind) {
+async function checkRequest(toolUrl, toolKind, browserEnabled = true) {
 	const agentDir = mkdtempSync(join(tmpdir(), "lunr-request-check-"));
 	const home = join(agentDir, "home");
 	const workspace = join(home, "workspace");
@@ -119,13 +119,15 @@ async function checkRequest(toolUrl, toolKind) {
 	mkdirSync(temp);
 	writeFileSync(join(workspace, "index.ts"), "export function increment(value: number) { return value + 1; }\n");
 	writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ ssrf: { allowRanges: ["127.0.0.1/32"] } }));
+	if (!browserEnabled) writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ browserEnabled: false }));
 	const blocked = optionalModules.map((name) => pathToFileURL(join(dist, "builtin-extensions", name)).href);
+	blocked.push(pathToFileURL(join(dist, "core/browser/runtime.js")).href);
 	if (existsSync(join(dist, "node-runtime/cli-runtime.js"))) {
 		const metadata = JSON.parse(readFileSync(join(root, ".artifacts/node-runtime/metafile.json"), "utf8"));
 		for (const [output, details] of Object.entries(metadata.outputs)) {
 			if (
 				Object.keys(details.inputs).some((input) =>
-					optionalModules.some((name) => input.endsWith(`/builtin-extensions/${name}`)),
+					optionalModules.some((name) => input.endsWith(`/builtin-extensions/${name}`)) || input.endsWith("/core/browser/runtime.js"),
 				)
 			) {
 				blocked.push(pathToFileURL(join(dist, "node-runtime", basename(output))).href);
@@ -135,7 +137,7 @@ async function checkRequest(toolUrl, toolKind) {
 	const preload = `import { registerHooks } from "node:module";
 const blocked = new Set(${JSON.stringify(blocked)});
 registerHooks({load(url, context, nextLoad) {
- if (blocked.has(url)) return {format:"module",shortCircuit:true,source:'process.stderr.write("OPTIONAL_IMPORT_BLOCKED\\\\n"); await new Promise(() => {});'};
+ if (blocked.has(url) || url.includes('/playwright-core/')) return {format:"module",shortCircuit:true,source:'process.stderr.write("OPTIONAL_IMPORT_BLOCKED\\\\n"); await new Promise(() => {});'};
  return nextLoad(url,context);
 }});`;
 	const child = spawn(
@@ -200,9 +202,10 @@ registerHooks({load(url, context, nextLoad) {
 		const computerHost = (process.platform === "win32" && ["x64", "arm64"].includes(process.arch)) || (process.platform === "darwin" && process.arch === "arm64");
 		assert.equal(request.tools.includes("computer_load"), computerHost);
 		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
+		assert.equal(request.tools.includes("browser"), browserEnabled);
 		assert.equal(
 			request.toolSchemaHash,
-			computerHost ? "83860ad17c8c081d0e0ac67861644940f6110ebd207f102711a37969e4952b7a" : "5325fdc0cf75a1998cb0a1d8ab184bf34342c4eac71add793bcf106c6f2c9da4",
+			browserEnabled ? "c7a60ad06073297d688a4ec1b5c7056ae9ff6df1738123b0d471f20aa0a85bbf" : "3693bff47d556206b75ccf61c3c6de2cd53f81e0a40c441fe6210993972287fa",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
@@ -216,7 +219,7 @@ registerHooks({load(url, context, nextLoad) {
 				? "first-turn fetch: real local HTTP extraction completed"
 				: toolKind
 					? `first-turn ${toolKind}: lazy implementation completed`
-					: "stalled optional implementations: first request retains tools and instructions",
+					: `stalled optional implementations: first request retains tools and instructions${browserEnabled ? " with browser enabled" : ""}`,
 		);
 		console.log(
 			`  request ${requestMs.toFixed(1)}ms${toolMs === undefined ? "" : `; first tool +${(toolMs - requestMs).toFixed(1)}ms`}`,
@@ -238,6 +241,7 @@ registerHooks({load(url, context, nextLoad) {
 await check(false);
 await check(true);
 await checkRequest();
+await checkRequest(undefined, undefined, false);
 for (const tool of ["subagent", "mcp", "lsp"]) await checkRequest(undefined, tool);
 const server = createServer((_request, response) => {
 	response.writeHead(200, { "Content-Type": "text/html" });

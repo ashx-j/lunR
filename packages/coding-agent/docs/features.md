@@ -1,35 +1,56 @@
 # Built-in features
 
-lunR ships these workflows as baked-in extensions. You do not need a third-party package for MCP, subagents, plan mode, or todos.
+lunR ships these workflows as baked-in extensions. You do not need a third-party package for MCP, subagents, planning, or todos.
 
 Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`, and `examples/extensions/subagent/` is **Extension API sample code**, not the product implementation.
 
-## Permissions and plan mode
+## Permissions and planning
 
-Permission modes: `manual | yolo | plan | auto`. Shift+Tab (`app.mode.cycle`) cycles that order. Ctrl+T (`app.thinking.cycle`) cycles thinking levels for the selected model.
+Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
-- **manual** — approve every tool
-- **yolo** — auto-approve ordinary tools; large subagent launches still request confirmation
-- **plan** — read-oriented planning; the model calls `present_plan` with a summary; you approve or decline in a dock
-- **auto** — fully autonomous
+- **yolo** auto-approves tools but still confirms large subagent launches. This is the default.
+- **auto** runs without questions or large-launch confirmation.
+- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. The shell command check is heuristic, not an OS sandbox.
 
-`/plan` enters plan mode. `/plan <task>` enters plan mode and sends the task. If you are already in plan, `/plan <task>` restores the previous mode and sends. Default startup mode is `defaultPermissionMode` in settings (`manual`).
-
-`present_plan` is only available in plan mode. After approval, interactive lunR leaves plan mode before the tool result resolves.
+Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
 
 ## Subagents
+
+`/settings` has two independent switches, both on by default. Automatic subagent delegation controls the built-in system prompt: off tells the agent to work directly and launch children only when you explicitly ask. Tier selection and other launch instructions remain available when you do ask. Custom system prompts and project instruction files are unchanged.
+
+Subagent communication controls messages between a child and its parent while work is in progress. Off removes child `contact_supervisor` and `intercom`, parent questions and live steering for new children. Final results, status, cancellation, and `subagent_wait` still work. New launches and resumed children use the selected mode for their whole run, including queued steps. Turning it off blocks new parent questions and live steering immediately; already-running children retain their tools, and pending requests can still receive replies. The setting does not disable intercom between unrelated lunR sessions.
 
 Advertised subagents always start **fresh** (no forked parent context). Default parallel concurrency / max tasks / global run cap are unlimited; an explicit `concurrency` is still honored.
 
 Single, parallel, and chain launches run async when `async` is omitted. Set `async:false` for an immediate foreground result or use `clarify:true` for the interactive preview/editor. Continue independent work after an async launch, then yield for normal interactive completion. Use `subagent_wait` only when the same turn or skill must finish after its children. Headless sessions auto-drain current-session work. Use status for one-time inspection rather than polling or sleeping for completion.
 
+In the interactive TUI, normal Enter during an executing `subagent_wait` releases only the parent's local wait. It does not stop background children or parallel sibling tools. After the current tool batch fully settles, lunR submits the text as a fresh parent prompt rather than a steering message. Alt+Enter remains a follow-up, and normal Enter outside `subagent_wait` remains steering while the parent works.
+
 The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remain accepted but no longer change launch mode. Omitted `async` resolves to async, while explicit `async:false`, `clarify:true`, and internal `foregroundOnly` calls stay foreground. RPC and scheduled launches remain always async.
 
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
-A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **manual and yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
+A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
 
 `/goal` sets a session goal and **forces session auto** permission mode.
+
+### Child communication
+
+Children own reversible implementation choices within their assigned scope. Define file ownership and required outputs at launch. Establish a shared contract before dependent parallel work, then pass it through chain outputs or an artifact. Native child intercom reaches the supervisor only; it cannot discover or message siblings.
+
+`contact_supervisor` separates delivery by purpose:
+
+- `progress_update` records a UI-only entry. It never enters parent model context or starts a parent turn. Existing activity indicators usually make an explicit progress call unnecessary.
+- `handoff` delivers actionable dependency findings or corrections without waiting for a reply. State what another task can now do, consolidate related findings, and reference one artifact for supporting detail. Continue independent work.
+- `need_decision` and `interview_request` wait for a supervisor reply. Use them for decisions outside the child's authority, permission or safety concerns, and blockers. Include the blocked decision, evidence, and recommended choice.
+
+Blocking requests and handoffs wake an idle parent. Headless waits yield to queued messages so a child can receive a decision before it finishes. Expired requests, stopped runs, and requests owned by another session cannot wake it. Legacy children retain model-facing progress delivery; UI-only progress requires the new protocol advertised by the spawning parent.
+
+Inactivity and threshold notices stay in diagnostic entries rather than parent context or intercom relays. Repeated tool failures remain model-facing. Completion-guard diagnostics do not duplicate the normal terminal failure report.
+
+Return one self-contained final report with outcomes, verification, blockers, and artifact paths. The runtime delivers it. A final report that only says findings were sent earlier is insufficient.
+
+Communication cards are collapsed tool-style rows. Click to show `From` or `To`, the child's description, and the message. Routing IDs stay in structured diagnostics. Outgoing steering also shows its delivery state when expanded; delivery acknowledgement is not a model answer.
 
 ### Questions to async children
 
@@ -43,9 +64,13 @@ A child must have an active question-capable input channel. Only one question ma
 
 The agent must ask only when the child has missing context, the answer changes a concrete next decision, and waiting for completion would block progress or risk rework. It must use available results first and batch related questions. Routine progress checks, duplicate questions, polling, and step-by-step supervision are prohibited. A follow-up is appropriate only when the answer leaves the original decision unresolved.
 
+### Measuring communication cost
+
+Compare the same task, models, thinking levels, and starting checkout before and after a communication change. Count parent wakeups by their triggering event, provider calls in both parent and child sessions, duplicate deliveries, input/output tokens, cache reads/writes, elapsed time, and blocked time. Check task correctness and delivery of required escalations before comparing cost. Cached input is separate from uncached input; fewer messages or a quieter UI alone do not establish savings. Keep transcript evidence local.
+
 ## Todos, memory, and global instructions
 
-- **Todos** — lunr-todos is a full-replace list. Collapsed lists show all four active items; lists of five or more show three and a `+N more` line. Completed todos prune on the next user turn (no leftover `✓ N done` footer).
+- **Todos** — lunr-todos is a full-replace list. `/settings` → Todos disables its system-prompt guidance, model-facing tool, and editor widget. Collapsed lists show all four active items; lists of five or more show three and a `+N more` line. Completed todos prune on the next user turn, so the footer does not leave a `✓ N done` line.
 - **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
 - **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file. The retired `behavior.md` file and behavior presets are no longer loaded.
 - **Model instructions** — `/settings` can enable `~/.lunr/agent/agents/<model-name>/AGENTS.md` and choose **Both** (global then model-specific) or **Model only**. The folder name is provider-independent and filesystem-safe. Project `AGENTS.md`/`CLAUDE.md` files are unaffected, and `--no-context-files` disables all instruction files.
@@ -60,39 +85,95 @@ Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). Interactive TUI cron runs i
 
 Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30m`), an ISO timestamp, or a 5-field cron expression.
 
-## Gateway (Telegram / Discord)
+## Gateway for Telegram and Discord
 
-Enable the chat-platforms feature, then run the daemon:
+Run `lunr gateway setup` in your terminal. It explains bot creation and permissions, masks token entry, validates the bot identity, and asks for your user ID, project roots, saved model, and startup preference. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
 
-```bash
-lunr setup
-lunr features enable chat-platforms
-lunr gateway
-```
+Telegram uses BotFather and long polling. Discord needs the bot and `applications.commands` installation scopes. Enable Message Content Intent for ordinary text messages. GuildMembers intent is not required. Discord registers native slash commands; Telegram registers a command menu. Both platforms use buttons for selections and approvals.
 
-Config: `~/.lunr/agent/gateway.json` (chmod 0600; may hold bot tokens). Secrets do not go in `install-features.json`.
+Your computer must stay awake and online. Startup cannot make a sleeping or disconnected computer available.
 
-Token resolution: `LUNR_<PLATFORM>_BOT_TOKEN` env → `<PLATFORM>_BOT_TOKEN` env → file token.
+### Service controls
 
 ```bash
-lunr gateway                     # run the daemon
-lunr gateway pair approve <platform> <code>
-lunr gateway pair list
+lunr gateway setup
+lunr gateway start
+lunr gateway stop
+lunr gateway restart
 lunr gateway status
+lunr gateway logs
+lunr gateway doctor
+lunr gateway run
+lunr gateway autostart login
+lunr gateway autostart boot
+lunr gateway autostart off
 ```
 
-- Telegram: long-poll bot. Talk to @BotFather, put the token in `gateway.json` or `LUNR_TELEGRAM_BOT_TOKEN`, set `telegram.enabled = true`.
-- Discord: mention-gated by default (`requireMention: true`). Enable the Message Content intent. No GuildMembers intent. Put the token in `gateway.json` or `LUNR_DISCORD_BOT_TOKEN`.
-- Authz is fail-closed. Unauthorized DMs pair (`unauthorizedDmBehavior: "pair"`) unless you set `ignore`.
-- Gateway `/new` while a session is busy aborts the live turn and drops the queue.
+Bare `lunr gateway` also runs in the foreground. The terminal's `/settings` Gateway menu opens setup, service controls, logs, and diagnostics.
 
-Without runnable adapters (enabled platform + resolvable token), `lunr gateway` prints setup instructions and exits 1.
+Login startup runs after you sign in. Boot startup runs before login and may require administrator approval or OS-managed account credentials. Linux uses a systemd user service, with lingering for boot startup. macOS uses a LaunchAgent for login or a LaunchDaemon running as your user for boot. Windows uses Scheduled Tasks; its boot option asks Windows to obtain the account credentials rather than saving the password in lunR. lunR checks the native installation command before recording a successful startup change. Changing or disabling startup removes the previous lunR service, not other applications' services.
+
+Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile. Native startup specifications have automated tests; installing and rebooting services on all three operating systems still requires host verification.
+
+### Owner access
+
+Configuration lives in `~/.lunr/agent/gateway.json` and may contain bot tokens. It is written with mode 0600 where supported; Windows security follows the profile directory's ACL. Tokens are not stored in `install-features.json` or startup command arguments. Environment tokens override file tokens in this order: `LUNR_<PLATFORM>_BOT_TOKEN`, then `<PLATFORM>_BOT_TOKEN`.
+
+If you skipped your user ID during setup, message the bot privately and approve its pairing code locally:
+
+```bash
+lunr gateway pair approve telegram <code> --owner
+lunr gateway pair approve discord <code> --owner
+lunr gateway pair list
+```
+
+Owner access includes local projects and saved TUI conversation history. Ordinary pairing, group access, and Discord roles do not grant it. Project browsing, cross-project sessions, permission changes, and file downloads require an explicitly configured owner in a private DM. Removing owner access invalidates later owner actions and approvals.
+
+### Projects and mobile controls
+
+Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
+
+**The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
+
+- `/model`, `/thinking`, `/settings`, and `/mode` control the active session. `/fast` controls Codex fast mode.
+- `/plan <task>` starts planning. The plan appears in chat with approval buttons. Approval returns the session to yolo mode.
+- `/goal`, `/cron`, `/run`, `/chain`, and `/parallel` use the same built-in extensions as the terminal. Pass arguments when an extension's interactive editor requires the terminal.
+- `/skill` selects a loaded skill and asks for a task. `/mcp` and `/lsp` expose their text status commands; the agent retains the configured coding tools.
+- `/usage` reports session tokens and provider-plan usage. `/status` includes the selected project.
+- `/stop` aborts the current turn and pending transfer. `/stopall` also requests cancellation of background subagents and tracked shell processes. `/processes` lists this session's processes; `/processes stop <pid>` requests a stop.
+- `/cancel` cancels a pending selection or transfer. `/new` aborts the current turn and drops queued input, but refuses to discard a session that still has attached background work.
+
+Upload images or documents in chat. Images reach the model as images; documents are saved under the project's `.lunr/uploads/` directory and passed to the model as paths. `/download <project-relative path>` sends a file back. Files are limited to 8 MB; common credential filenames are blocked from download. This filename check is not a content-based secret scanner. Only send files you intend to share with the chat platform.
+
+Extension notices and background results reach the originating conversation even after the foreground answer. Undelivered notices persist for retry. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
+
+### Continue between desktop and phone
+
+In the terminal, `/handoff` marks the current saved session for eight hours. Repeat it to refresh the mark; `/handoff cancel` removes it. Unsaved sessions must be persisted first.
+
+On your phone, `/continue` opens the only marked session, or offers a picker if several are marked. Without an active mark, it selects the latest TUI activity. TUI activation, user prompts, and state-changing user commands count as activity. Background results and file timestamps do not. Closed TUI sessions remain eligible.
+
+`/sessions [filter]` browses saved sessions across projects, including locally registered custom session paths. It works before you have sent the bot its first task. Continuation preserves the session file, selected conversation branch, original project directory, and permission checkpoint. Resuming `auto` or `yolo` asks for confirmation on the phone and defaults to read-only if declined.
+
+Only one updated lunR process may write a persistent session at a time. A running owner must release it cooperatively. If it is busy, choose Wait, Stop and continue, or Cancel. Wait retries busy requests for up to two minutes. Stop and continue aborts the foreground turn; it does not migrate children or shell processes. Those must finish or actually stop before transfer. Cancellation stops pending acquisition, but cannot undo extension shutdown once release has begun.
+
+A detached terminal keeps its draft and can use `/reclaim` to reopen fresh state after the phone releases ownership. It does not append from its old in-memory conversation. Marks remain until expiry or cancellation, even after a successful continuation. Expiry only removes the preference; it neither deletes the conversation nor disconnects it.
+
+All concurrent writers must use a lunR version with session ownership support. Old versions and external file editors cannot honor these locks. Recovery only clears an owner after verified local process death. Uncertain, foreign-host, or incomplete ownership records fail closed; inspect them rather than deleting a live lock.
 
 ## MCP, LSP, web search
 
 - **MCP** — `/mcp`, `/mcp-auth`. Footer MCP segment is on by default (`footerMcp`).
 - **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
 - **Web search** — `/websearch` (and related search commands). Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+
+## Headless browser
+
+The first-party `browser` tool is on by default. Normal installation and updates install matching Chromium automatically. Browser in `/settings` turns the tool off and closes active contexts immediately; cached binaries remain. Offline or ignored-script installs can recover later with `lunr browser install`. Startup and tool execution never install Chromium. The browser handles JavaScript-rendered pages and accessible website interactions, while `web_search` remains discovery and `fetch_content` remains URL reading. There is no automatic browser fallback.
+
+The browser uses ephemeral session-owned contexts. Read-only mode blocks interactions. Yolo and auto allow them without per-action approval. Public HTTP(S) is the default; local/private access requires explicit user configuration. Website effects cannot be reversed by `/undo`.
+
+See [Headless browser](browser.md) for action parameters, installation exceptions, legacy setting precedence, private-network risks, lifecycle limits, and validation.
 
 ## Thinking, usage, streaming, UI
 

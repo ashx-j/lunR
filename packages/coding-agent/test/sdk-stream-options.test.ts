@@ -4,11 +4,12 @@ import { join } from "node:path";
 import {
 	type Api,
 	type AssistantMessage,
+	anthropicRequestRoute,
 	createAssistantMessageEventStream,
 	type Model,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -122,6 +123,46 @@ describe("createAgentSession stream options", () => {
 			modelRegistry.unregisterProvider(model.provider);
 		}
 	}
+
+	it("does not attach HTTP hooks to a normal Anthropic subscription turn", async () => {
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		await authStorage.modify("anthropic", async () => ({
+			type: "external_claude_code",
+			version: 1,
+			manager: "claude-code",
+			python: "python",
+			command: "claude",
+		}));
+		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
+		const runtime = getModelRuntime(modelRegistry);
+		const model = runtime.getModel("anthropic", "claude-sonnet-5");
+		expect(model).toBeDefined();
+		let capturedOptions: Parameters<typeof runtime.streamSimple>[2];
+		const streamSpy = vi.spyOn(runtime, "streamSimple").mockImplementation((_model, _context, options) => {
+			capturedOptions = options;
+			return createDoneStream("anthropic-messages");
+		});
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model: model!,
+			modelRuntime: runtime,
+			settingsManager: SettingsManager.inMemory(),
+			sessionManager: SessionManager.inMemory(cwd),
+		});
+		try {
+			await (await session.agent.streamFn(model!, { messages: [] })).result();
+			expect(capturedOptions?.transformHeaders).toBeUndefined();
+			expect(capturedOptions?.onPayload).toBeUndefined();
+			expect(capturedOptions?.onResponse).toBeUndefined();
+			expect(anthropicRequestRoute("anthropic", (await runtime.getAuth(model!))!, capturedOptions)).toMatchObject({
+				externalClaudeCode: { manager: "claude-code" },
+			});
+		} finally {
+			session.dispose();
+			streamSpy.mockRestore();
+		}
+	});
 
 	it("forwards httpIdleTimeoutMs as timeoutMs for OpenAI Codex", async () => {
 		const options = await captureStreamOptions("openai-codex-responses", { httpIdleTimeoutMs: 1234 });

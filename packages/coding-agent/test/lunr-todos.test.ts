@@ -5,6 +5,7 @@ import lunrTodos, {
 	TODO_WIDGET_COLLAPSED_ROWS,
 	type TodoItem,
 } from "../src/builtin-extensions/lunr-todos.ts";
+import { notifyTodosEnabledChanged, TODOS_ENABLED_CHANGED_SYMBOL } from "../src/core/todo-settings.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const todo = (id: string, content: string, status: TodoItem["status"] = "pending"): TodoItem => ({
@@ -145,6 +146,7 @@ function createHarness() {
 describe("lunr-todos extension", () => {
 	beforeEach(() => {
 		delete (globalThis as any)[BRIDGE];
+		delete (globalThis as any)[TODOS_ENABLED_CHANGED_SYMBOL];
 	});
 
 	test("set semantics: tool result text summarizes, widget shows rows above the editor", async () => {
@@ -240,6 +242,15 @@ describe("lunr-todos extension", () => {
 		expect(h.widgetRemoved()).toBe(true);
 	});
 
+	test("disabling todos clears the current list and widget", async () => {
+		const h = createHarness();
+		h.fireSessionStart();
+		await h.toolDef().execute("c1", { todos: [todo("1", "a")] }, null, null, h.ctx);
+		expect(h.widgetLines()).toEqual(["○ a"]);
+		notifyTodosEnabledChanged(false);
+		expect(h.widgetRemoved()).toBe(true);
+	});
+
 	test("session_shutdown removes the widget and unregisters the bridge", async () => {
 		const h = createHarness();
 		h.fireSessionStart();
@@ -248,6 +259,7 @@ describe("lunr-todos extension", () => {
 		h.fireSessionShutdown();
 		expect(h.widgetRemoved()).toBe(true);
 		expect((globalThis as any)[BRIDGE]).toBeUndefined();
+		expect((globalThis as any)[TODOS_ENABLED_CHANGED_SYMBOL]).toBeUndefined();
 	});
 
 	test("chat render stays one line (renderCall/renderResult)", async () => {

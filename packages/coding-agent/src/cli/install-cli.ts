@@ -94,7 +94,6 @@ async function runSetup(argv: string[]): Promise<number> {
 
 	const current = loadInstallFeatures();
 	let next = current;
-	const secrets: Record<string, string> = {};
 
 	if (parsed.yes) {
 		const applied = applyFeatureFlags(current, parsed);
@@ -119,53 +118,12 @@ async function runSetup(argv: string[]): Promise<number> {
 			await FEATURE_HANDLERS[id].disable({ purgeSecrets: false });
 		}
 	} else {
-		console.log(`lunR ${VERSION} setup\n`);
-		const layout = loadInstallLayout();
-		if (layout) {
-			console.log(`Install location:  ${join(layout.prefix, "versions", layout.version)}`);
-			console.log(`Command:           ${layout.argv0}\n`);
-		}
-		console.log("Optional features");
-		for (const spec of FEATURE_CATALOG) {
-			const existing = current.features[spec.id];
-			const defaultEnabled = existing?.enabled ?? spec.defaultEnabled;
-			console.log(`  ${spec.title}`);
-			console.log(`    ${spec.summary}`);
-			const enable = await askYesNo("    Enable?", defaultEnabled);
-			next.features[spec.id] = {
-				enabled: enable,
-				options: { ...existing?.options },
-			};
-			if (!enable) {
-				await FEATURE_HANDLERS[spec.id].disable({ purgeSecrets: false });
-				continue;
-			}
-			for (const option of spec.options) {
-				if (option.type === "boolean") {
-					const currentBool =
-						typeof existing?.options[option.id] === "boolean"
-							? (existing.options[option.id] as boolean)
-							: (option.default ?? false);
-					const value = await askYesNo(`    ${option.prompt}`, currentBool);
-					next.features[spec.id].options[option.id] = value;
-				}
-			}
-			await collectSecretsForFeature(spec.id, secrets);
-			await FEATURE_HANDLERS[spec.id].apply({
-				previous: existing,
-				next: next.features[spec.id],
-				secrets,
-				nonInteractive: false,
-			});
-		}
-		next = {
-			...next,
-			installerVersion: VERSION,
-			updatedAt: new Date().toISOString(),
-			installedAt: next.installedAt || new Date().toISOString(),
-		};
+		await (await import("../gateway/setup.ts")).setupGateway();
+		return 0;
 	}
 
+	const { installBrowser } = await import("../core/browser/setup.ts");
+	await installBrowser(false);
 	saveInstallFeatures(next);
 	appendInstallLog(`setup installerVersion=${VERSION}`);
 	console.log(`Writing ${getAgentDir()}/install-features.json`);
@@ -352,6 +310,16 @@ async function runProductUninstall(argv: string[]): Promise<number> {
  */
 export async function handleInstallCli(args: string[]): Promise<boolean> {
 	const [verb, ...rest] = args;
+	if (verb === "browser") {
+		if (rest.length !== 1 || rest[0] !== "install") {
+			console.error("Usage: lunr browser install. Browser on/off is in /settings.");
+			process.exitCode = 2;
+		} else {
+			const { installBrowser } = await import("../core/browser/setup.ts");
+			await installBrowser();
+		}
+		return true;
+	}
 	if (verb === "setup") {
 		process.exitCode = await runSetup(rest);
 		return true;

@@ -1,15 +1,12 @@
 /**
- * lunR: permission modes (Manual / YOLO / Plan / Auto).
+ * lunR: permission modes (YOLO / Auto / Read-only).
  *
- * Per-session only — never persisted per session, but the default mode new
- * sessions start with is configurable in /settings (`defaultPermissionMode`,
- * default "manual").
+ * Per-session only, with a configurable default for new sessions.
  *
- * - manual: every mutating tool call (bash, edit, write) requires approval.
- * - yolo:   auto-approve tools; the agent may still ask questions.
- * - plan:   read-only; mutating tools are hard-blocked (planModeBlockReason).
- * - auto:   fully autonomous; a system-prompt addendum steers the model to
- *           self-decide, and rollback is force-enabled for the session.
+ * - yolo: auto-approve tools; the agent may still ask questions.
+ * - auto: fully autonomous; a system-prompt addendum steers the model to
+ *         self-decide, and rollback is force-enabled for the session.
+ * - read-only: mutating tools are hard-blocked.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
  * the synchronous `_toolCallGates` loop. beforeToolCall is already async, so
@@ -24,10 +21,10 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { isUserInstructionsPath } from "./model-instructions.ts";
-import { isCodeRewriteMutating, planModeBlockReason } from "./plan-mode.ts";
+import { readOnlyModeBlockReason } from "./plan-mode.ts";
 
 /** Shift+Tab cycle order. */
-export const PERMISSION_MODES = ["manual", "yolo", "plan", "auto"] as const;
+export const PERMISSION_MODES = ["yolo", "auto", "read-only"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 export function nextPermissionMode(current: PermissionMode): PermissionMode {
@@ -35,28 +32,26 @@ export function nextPermissionMode(current: PermissionMode): PermissionMode {
 	return PERMISSION_MODES[(i + 1) % PERMISSION_MODES.length];
 }
 
-/** True when the (default or session) permission mode is plan. */
-export function isPlanModeActive(sessionId?: string): boolean {
-	return getPermissionMode(sessionId) === "plan";
+/** True when the session is read-only. */
+export function isReadOnlyModeActive(sessionId?: string): boolean {
+	return getPermissionMode(sessionId) === "read-only";
 }
 
 /**
- * Destination mode when leaving plan via approve / `/plan off` / `/plan <text>`.
- * Explicit Shift+Tab or `/mode` picks do not use this — they already chose a mode.
+ * Destination mode when leaving a read-only planning session.
+ * Explicit Shift+Tab or `/mode` picks do not use this.
  */
 export function restorePermissionModeAfterPlan(
 	previous: PermissionMode | undefined,
 	defaultMode: PermissionMode,
 ): PermissionMode {
-	if (previous && previous !== "plan") return previous;
-	return defaultMode === "plan" ? "yolo" : defaultMode;
+	if (previous && previous !== "read-only") return previous;
+	return defaultMode;
 }
 
 export interface ApprovalRequest {
 	toolName: string;
-	/** "bash" (detail = command), "edit"/"write" (detail = path),
-	 *  "edit-outside"/"write-outside" when path escapes cwd,
-	 *  "subagent-full" for full-access children, or "large-subagent-launch" for aggregate confirmation. */
+	/** "large-subagent-launch" or "plan" approval. */
 	action: string;
 	detail: string;
 	/** "large-subagent-launch" for aggregate child confirmation, "plan" for the
@@ -97,19 +92,20 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_symbols",
 	"lsp_code_actions",
 	"lsp_completions",
+	"lsp_rename",
 	"memory_load",
+	"subagent_wait",
+	"subagent_supervisor",
+	"intercom",
+	"contact_supervisor",
+	"present_plan",
+	"structured_output",
 ]);
 
-/** Tools that mutate state and must be gated in manual mode. */
-const MUTATING_TOOLS = new Set(["bash", "edit", "write", "memory_add", "memory_remove", "cron"]);
-
-const REJECT_REASON = "Rejected by user (permission mode: manual).";
-export const NO_HANDLER_REASON = "Mutating tool blocked in manual mode: no approval channel available.";
+export const NO_HANDLER_REASON = "Approval channel unavailable.";
 export const LARGE_SUBAGENT_LAUNCH_REJECT_REASON = "Large subagent launch rejected by user.";
 export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch blocked: no approval channel available.";
-/** Session-approval keys for child launches. */
 const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
-const FULL_CHILD_ACTION = "subagent-full";
 
 interface PermissionContext {
 	allowApprovals?: boolean;
@@ -118,13 +114,10 @@ interface PermissionContext {
 }
 
 const contexts = new Map<string, PermissionContext>();
-let defaultContext: PermissionContext = { mode: "manual", approvals: new Set() };
+let defaultContext: PermissionContext = { mode: "yolo", approvals: new Set() };
 let approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined;
 /** One aggregate prompt covers every sibling SINGLE `subagent` on the same assistant message. */
-const turnLargeLaunchDecisions = new WeakMap<
-	object,
-	{ decision: ApprovalDecision; feedback?: string; fullChildrenApproved: boolean }
->();
+const turnLargeLaunchDecisions = new WeakMap<object, { decision: ApprovalDecision; feedback?: string }>();
 
 function getContext(sessionId?: string): PermissionContext {
 	if (!sessionId) return defaultContext;
@@ -151,7 +144,7 @@ export function setPermissionMode(mode: PermissionMode, sessionId?: string): voi
 	getContext(sessionId).mode = mode;
 }
 
-export function resetPermissions(defaultMode: PermissionMode = "manual", sessionId?: string): void {
+export function resetPermissions(defaultMode: PermissionMode = "yolo", sessionId?: string): void {
 	if (sessionId) {
 		contexts.set(sessionId, { mode: defaultMode, approvals: new Set() });
 	} else {
@@ -181,7 +174,7 @@ export function planApprovalResultText(resp: ApprovalResponse): string {
 }
 
 /**
- * lunr: present_plan approval request. Unlike mutating-tool and aggregate launch gates
+ * lunr: present_plan approval request. Unlike the aggregate launch gate
  * this fails OPEN when no approval handler is registered (or none is reachable,
  * e.g. a gateway turn without a chat context): headless sessions have no one to
  * show the dialog to, so the plan is presented and the user replies in chat
@@ -207,21 +200,13 @@ export function clearSessionApprovals(sessionId?: string): void {
 /** Test seam: remove every per-session context and restore the default. */
 export function resetAllPermissionContexts(): void {
 	contexts.clear();
-	defaultContext = { mode: "manual", approvals: new Set() };
+	defaultContext = { mode: "yolo", approvals: new Set() };
 	approvalHandler = undefined;
 }
 
 /** Appended to the system prompt while auto mode is active. */
 export const AUTO_MODE_ADDENDUM =
 	"You are running fully autonomously. Do not ask the user questions or wait for confirmation; make reasonable decisions and complete the task end-to-end.";
-
-function isPathOutsideCwd(absPath: string, cwd: string): boolean {
-	const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/$/, "");
-	const np = norm(absPath);
-	const nc = norm(cwd);
-	if (np === nc) return false;
-	return !np.startsWith(`${nc}/`);
-}
 
 function resolvePath(cwd: string, p: unknown): string {
 	if (typeof p !== "string") return "";
@@ -253,14 +238,13 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 	const globalSettings = normalize(join(getAgentDir(), "settings.json"));
 	const projectSettings = normalize(join(cwd, CONFIG_DIR_NAME, "settings.json"));
 	const normalizedTarget = normalize(target);
+	if (normalizedTarget === normalize(join(getAgentDir(), "install-features.json"))) {
+		return "Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.";
+	}
 	if (normalizedTarget === globalSettings || normalizedTarget === projectSettings) {
 		return SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON;
 	}
 	return undefined;
-}
-
-function isMutatingTool(toolName: string): boolean {
-	return MUTATING_TOOLS.has(toolName);
 }
 
 interface RequestedChildLaunch {
@@ -295,15 +279,6 @@ function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChi
 	const launches: RequestedChildLaunch[] = [];
 	collectRequestedChildLaunches(input, launches);
 	return launches;
-}
-
-function requiresManualApproval(toolName: string, input: Record<string, unknown>): boolean {
-	if (toolName.startsWith("computer_")) return toolName !== "computer_end";
-	if (isMutatingTool(toolName)) return true;
-	if (toolName === "subagent") {
-		return getRequestedChildLaunches(input).some((launch) => launch.permissions === "full");
-	}
-	return toolName === "code_rewrite" && isCodeRewriteMutating(input);
 }
 
 export interface GateOptions {
@@ -349,20 +324,20 @@ function largeLaunchTaskSummary(
 /**
  * Aggregate launch gate. A launch above LARGE_SUBAGENT_LAUNCH_THRESHOLD
  * parallel subagents in one `tasks`/`chain.parallel` call, or that many same-turn
- * SINGLE `subagent` calls) requires user approval in manual AND yolo modes; auto
+ * SINGLE `subagent` calls) requires user approval in yolo mode; auto
  * mode runs it unconditionally.
- * Fail-closed without an approval handler, same as the mutating-tool gate.
+ * Fail-closed without an approval handler.
  */
 async function gateLargeSubagentLaunch(
 	input: Record<string, unknown>,
 	ctx: PermissionContext,
 	options?: GateOptions,
-): Promise<{ block: true; reason: string } | { fullChildrenApproved: boolean } | undefined> {
+): Promise<{ block: true; reason: string } | undefined> {
 	if (ctx.mode === "auto") return undefined;
 	if (options?.confirmLargeSubagentLaunches === false) return undefined;
 	const count = effectiveLargeSubagentLaunchCountForTurn(input, options?.assistantMessage);
 	if (count <= LARGE_SUBAGENT_LAUNCH_THRESHOLD) return undefined;
-	if (ctx.approvals.has(LARGE_SUBAGENT_LAUNCH_ACTION)) return { fullChildrenApproved: false };
+	if (ctx.approvals.has(LARGE_SUBAGENT_LAUNCH_ACTION)) return undefined;
 
 	const turnKey = options?.assistantMessage;
 	const cached = turnKey ? turnLargeLaunchDecisions.get(turnKey) : undefined;
@@ -375,7 +350,7 @@ async function gateLargeSubagentLaunch(
 					: LARGE_SUBAGENT_LAUNCH_REJECT_REASON,
 			};
 		}
-		return { fullChildrenApproved: cached.fullChildrenApproved };
+		return undefined;
 	}
 
 	if (!approvalHandler || ctx.allowApprovals === false) {
@@ -392,7 +367,6 @@ async function gateLargeSubagentLaunch(
 		return args ? getRequestedChildLaunches(args) : [];
 	});
 	const launches = siblingLaunches.length > 0 ? siblingLaunches : getRequestedChildLaunches(input);
-	const fullChildrenApproved = launches.some((launch) => launch.permissions === "full");
 	const launchSummary = launches
 		.map((launch) => `${launch.description}\npermissions: ${launch.permissions}`)
 		.join("\n");
@@ -413,12 +387,11 @@ async function gateLargeSubagentLaunch(
 	const decision: ApprovalDecision = rawDecision === "approve" ? "once" : rawDecision;
 	const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
 	if (turnKey) {
-		turnLargeLaunchDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}), fullChildrenApproved });
+		turnLargeLaunchDecisions.set(turnKey, { decision, ...(feedback ? { feedback } : {}) });
 	}
 	if (decision === "session") {
 		ctx.approvals.add(LARGE_SUBAGENT_LAUNCH_ACTION);
-		if (fullChildrenApproved) ctx.approvals.add(FULL_CHILD_ACTION);
-		return { fullChildrenApproved };
+		return undefined;
 	}
 	if (decision === "reject") {
 		return {
@@ -426,7 +399,7 @@ async function gateLargeSubagentLaunch(
 			reason: feedback ? `${LARGE_SUBAGENT_LAUNCH_REJECT_REASON} ${feedback}` : LARGE_SUBAGENT_LAUNCH_REJECT_REASON,
 		};
 	}
-	return { fullChildrenApproved };
+	return undefined;
 }
 
 function sanitizeDetail(value: unknown): string {
@@ -436,10 +409,8 @@ function sanitizeDetail(value: unknown): string {
 
 /**
  * Returns a block result when the tool call should be blocked, else undefined.
- * Read-only tools always pass. YOLO and Auto always pass mutating tools. Plan
- * mode hard-blocks mutating tools (no prompt). Manual mode gates every mutating
- * tool; if an approval handler is registered it is asked, otherwise the call is
- * blocked (fail-closed — no silent allow).
+ * Read-only tools always pass. YOLO and Auto pass mutating tools. Read-only
+ * mode hard-blocks mutating tools without prompting.
  */
 export async function gateToolCall(
 	toolName: string,
@@ -462,84 +433,39 @@ export async function gateToolCall(
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
-	// Aggregate launch confirmation runs before the mode early-return, including YOLO.
-	// yolo mode too (only auto mode bypasses it).
-	let largeLaunchCoveredManualApproval = false;
+	if (ctx.mode === "read-only") {
+		const reason = readOnlyModeBlockReason(toolName, input);
+		if (reason) return { block: true, reason };
+		if (toolName === "mcp") {
+			if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
+				return { block: true, reason: "Read-only mode blocks MCP tool calls, connections, and authentication." };
+			}
+			return undefined;
+		}
+		if (toolName === "subagent") {
+			const action = input.action;
+			if (
+				getRequestedChildLaunches(input).some((child) => child.permissions === "full") ||
+				action === "resume" ||
+				action === "steer" ||
+				action === "append-step" ||
+				action === "schedule" ||
+				action === "schedule-cancel"
+			) {
+				return {
+					block: true,
+					reason: "Read-only mode cannot launch full-access children or change running children.",
+				};
+			}
+			return undefined;
+		}
+		if (toolName.startsWith("computer_")) return undefined;
+		if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
+		return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
+	}
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);
-		if (launchResult && "block" in launchResult) return launchResult;
-		largeLaunchCoveredManualApproval = ctx.mode === "manual" && launchResult?.fullChildrenApproved === true;
+		if (launchResult) return launchResult;
 	}
-
-	if (ctx.mode === "plan") {
-		const reason = planModeBlockReason(toolName, input);
-		return reason ? { block: true, reason } : undefined;
-	}
-
-	if (ctx.mode !== "manual") return undefined;
-	if (!requiresManualApproval(toolName, input) || largeLaunchCoveredManualApproval) return undefined;
-
-	let action: string;
-	let detail: string;
-
-	if (toolName.startsWith("computer_")) {
-		action = toolName;
-		detail = sanitizeDetail(JSON.stringify(input));
-	} else if (toolName === "bash") {
-		action = "bash";
-		detail = sanitizeDetail(input.command);
-	} else if (toolName === "edit" || toolName === "write") {
-		const path = resolvePath(cwd, input.path);
-		const outside = path ? isPathOutsideCwd(path, cwd) : false;
-		action = outside ? `${toolName}-outside` : toolName;
-		detail = path || String(input.path ?? "");
-	} else if (toolName === "memory_add") {
-		action = toolName;
-		detail = sanitizeDetail(input.content);
-	} else if (toolName === "memory_remove") {
-		action = toolName;
-		detail = sanitizeDetail(input.line);
-	} else if (toolName === "cron") {
-		action = "cron";
-		detail = sanitizeDetail(input.action);
-	} else if (toolName === "subagent") {
-		action = FULL_CHILD_ACTION;
-		const launches = getRequestedChildLaunches(input).filter((launch) => launch.permissions === "full");
-		detail = sanitizeDetail(
-			launches.map((launch) => `${launch.description}\npermissions: ${launch.permissions}`).join("\n"),
-		);
-	} else if (toolName === "code_rewrite") {
-		action = "code_rewrite";
-		detail = sanitizeDetail(input.path ?? input.pattern);
-	} else {
-		// All other mutating tools fall back to the tool name with no extra detail.
-		action = toolName;
-		detail = "";
-	}
-
-	if (!toolName.startsWith("computer_") && ctx.approvals.has(action)) return undefined;
-
-	if (!approvalHandler || ctx.allowApprovals === false) {
-		return { block: true, reason: NO_HANDLER_REASON };
-	}
-
-	let resp: ApprovalResponse;
-	try {
-		resp = await approvalHandler({ toolName, action, detail });
-	} catch (err) {
-		const message = err instanceof Error ? err.message : NO_HANDLER_REASON;
-		return { block: true, reason: message };
-	}
-
-	const decision = typeof resp === "string" ? resp : resp.decision;
-	if (decision === "session") {
-		if (!toolName.startsWith("computer_")) ctx.approvals.add(action);
-		return undefined;
-	}
-	if (decision === "reject") {
-		const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
-		return { block: true, reason: feedback ? `${REJECT_REASON} ${feedback}` : REJECT_REASON };
-	}
-	// "once" — allow this call only
 	return undefined;
 }

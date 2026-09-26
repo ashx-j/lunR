@@ -28,7 +28,21 @@ function globalAllowedUsers(): string[] {
 		.filter((u) => u.length > 0);
 }
 
+export function isGatewayOwner(source: SessionSource, cfg: GatewayConfig): boolean {
+	if (source.chatType !== "dm") return false;
+	if (source.platform !== "telegram" && source.platform !== "discord") return false;
+	return cfg.owners?.[source.platform].includes(source.userId) ?? false;
+}
+
+export function requireGatewayOwner(source: SessionSource, cfg = loadGatewayConfig()): void {
+	if (!isGatewayOwner(source, cfg))
+		throw new Error(
+			"This command is available only to the configured owner in a private chat. Use lunr gateway setup to configure owner access.",
+		);
+}
+
 export function isAuthorized(source: SessionSource, cfg: GatewayConfig, pairing: PairingStore): boolean {
+	if (isGatewayOwner(source, cfg)) return true;
 	if (envFlagEnabled("LUNR_GATEWAY_ALLOW_ALL_USERS")) return true;
 	const platformCfg = platformConfigFor(cfg, source.platform);
 	if (platformCfg?.allowedChats.includes(source.chatId)) return true;

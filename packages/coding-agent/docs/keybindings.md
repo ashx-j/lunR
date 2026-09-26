@@ -113,7 +113,7 @@ While async subagents are active, the second Escape takes priority over tree/for
 | `app.model.select` | `ctrl+l` | Open model selector |
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` | Cycle to previous model |
-| `app.mode.cycle` | `shift+tab` | Cycle permission mode (`manual` → `yolo` → `plan` → `auto`) |
+| `app.mode.cycle` | `shift+tab` | Cycle permission mode (`yolo` → `auto` → `read`) |
 | `app.thinking.cycle` | `ctrl+t` | Cycle thinking level for the selected model |
 | `app.thinking.toggle` | *(unbound)* | Collapse or expand thinking blocks (`/thinking hide`, `show`, or `toggle`) |
 

@@ -167,6 +167,81 @@ describe("TUI pinFrom dock", () => {
 		tui.stop();
 	});
 
+	it("keeps the same older chat lines visible as the agent adds output", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+		tui.setChatScroll(2);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[0]!.startsWith("C2"));
+
+		chat.setLines([...chat.getLines(), "C10", "C11"]);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[0]!.startsWith("C2"));
+		assert.strictEqual(tui.getChatScroll(), 4);
+
+		dock.setLines(["D0", "D1", "D2"]);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[0]!.startsWith("C2"));
+		assert.strictEqual(tui.getChatScroll(), 5);
+
+		tui.setChatScroll(0);
+		await renderPinned(tui, terminal);
+		chat.setLines([...chat.getLines(), "C12"]);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[4]!.startsWith("C12"));
+		assert.strictEqual(tui.getChatScroll(), 0);
+		tui.stop();
+	});
+
+	it("keeps a scrolled-up message in place when earlier output expands", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(10, "C");
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+		tui.setChatScroll(2);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[0]!.startsWith("C2"));
+
+		chat.setLines(["new earlier output", ...chat.getLines()]);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[0]!.startsWith("C2"));
+		assert.strictEqual(tui.getChatScroll(), 2);
+		tui.stop();
+	});
+
+	it("anchors the right copy when earlier messages repeat the visible lines", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new Lines(0, "C");
+		chat.setLines(["C0", "repeat", "same", "old", "repeat", "same", "visible", "C7", "C8", "C9", "C10", "C11"]);
+		const dock = new Lines(2, "D");
+		tui.addChild(chat);
+		tui.addChild(dock);
+		tui.pinFrom(dock);
+		tui.start();
+		await renderPinned(tui, terminal);
+		tui.setChatScroll(2);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[2]!.startsWith("visible"));
+
+		chat.setLines(["new A", "new B", ...chat.getLines()]);
+		await renderPinned(tui, terminal);
+		assert.ok(tui.render(20)[2]!.startsWith("visible"));
+		tui.stop();
+	});
+
 	it("growing dock shrinks the chat viewport and stays on the last rows", async () => {
 		const terminal = new VirtualTerminal(20, 8);
 		const tui = new TUI(terminal);
