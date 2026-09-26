@@ -22,8 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-26 (gateway usability branch). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-26 (v0.2.25 release preparation). Public npm is `@ashx-j/lunr@0.2.24` until publication. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **v0.2.25 preparation:** PR #119 merged without conflicts as `af3eaf6`. This release contains its gateway usability and recovery fixes; publication remains pending.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
 - **Gateway usability and recovery (`fix/gateway-usability-and-recovery`):** owner-first `/start`, `/model`, and approved default project work before the first message; paired non-owners stay restricted. Foreground/follow-up/error replies share a persistent per-destination outbox with acknowledged ordered chunks and bounded retries. Failed final preview edits fall back to full replies; silence markers do not leak through streaming. Picker confirmations fall back to a new message without repeating actions, Discord channel lookup failures are not cached, and gateway status text has no decorative moon prefix. No live platform or service validation.
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
@@ -152,6 +153,8 @@ Last updated: 2026-09-26 (gateway usability branch). Public npm is `@ashx-j/lunr
 
 ## Build & run
 
+- v0.2.25 preparation (2026-09-26): PR #119 merged into master without conflicts. Five offline package builds and the Node bundle pass; 238 gateway tests across 11 suites pass. The compiled local gateway handoff/delivery smoke and first-paint/first-turn checks pass. Vendor, catalog, pinned-dependency, shrinkwrap, installer-lock, relative-import, workflow, browser-smoke and diff checks pass. All four public package dry-run packs pass with npm 10. No live gateway or account request was made. Publication pending.
+
 - Gateway usability and recovery (2026-09-26): offline tui → ai → agent → coding-agent → orchestrator tsgo and coding-agent Node bundle pass. Focused gateway, owner first-use, and setup menu tests pass 238/238 across eleven suites. Setup tests drive actual SelectList arrow/Enter/Escape handling with mocked terminal and service boundaries. The compiled local scripted-provider flow passes first-use `/start` and `/model`, handoff/continuation approval, failed final send/retry, file download, `/new`, and reclaim. All fixtures use a temporary profile and local provider; real Telegram/Discord, provider, service, and installed CLI remain untested. Artifacts under `.artifacts/gateway-*.log` and `.artifacts/gateway-local-output.json`.
 - v0.2.24 release (2026-09-24): five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. Publication workflow `36066384313` succeeded from tag `v0.2.24` at `8a5bfb4`; all four public npm packages resolve as latest. A fresh isolated install reports 0.2.24 for the CLI and all four packages. The full CI test job retains the documented 11 TUI and 101 coding-agent baseline failures. No installed global CLI or live Anthropic subscription was used.
 - v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
@@ -241,6 +244,8 @@ Last updated: 2026-09-26 (gateway usability branch). Public npm is `@ashx-j/lunr
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- For v0.2.25 dry-run pack verification, use `npm exec --yes --package=npm@10 -- node scripts/publish.mjs --dry-run`; npm 12 changed the `npm pack --json` output that this release script parses.
 
 - The compiled local gateway check uses an OS-temp fixture only. Windows may keep its temporary profile directory until worker handles close; its output under `.artifacts/` is ignored by git and must not be committed.
 - Gateway outbox keeps legacy entries without source/kind metadata, resolving their chat through the stored conversation binding. New result entries retain their original source across `/new`; prompt/notices use an epoch and are removed on invalidation. Discord role assertions remain process-local and cannot authorize replay after restart without a new inbound role check. Failed batches remain on disk with `failed: true` for diagnosis, while other destinations continue. A crash between a successful platform send and its on-disk acknowledgement can duplicate the last chunk after restart; chat APIs do not provide a transactional send/ack.
@@ -332,6 +337,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: ship PR #119 as the next patch version after its reviewed changes merged cleanly, keeping the release branch scoped to versions and release notes.
 
 - 2026-09-26: reuse the gateway outbox for final answers and follow-ups, and retain bounded failed batches instead of endlessly retrying or dropping completed text.
 - 2026-09-26: use the existing scrolling TUI list for setup choices so users navigate options instead of typing names, numbers, and yes/no answers.
