@@ -18,6 +18,7 @@
 
 import { dirname, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { isUserInstructionsPath } from "./model-instructions.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
@@ -107,6 +108,7 @@ export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch bl
 const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 
 interface PermissionContext {
+	allowApprovals?: boolean;
 	mode: PermissionMode;
 	approvals: Set<string>;
 }
@@ -122,8 +124,12 @@ function getContext(sessionId?: string): PermissionContext {
 	return contexts.get(sessionId) ?? defaultContext;
 }
 
-export function createPermissionContext(sessionId: string, mode: PermissionMode = defaultContext.mode): void {
-	contexts.set(sessionId, { mode, approvals: new Set() });
+export function createPermissionContext(
+	sessionId: string,
+	mode: PermissionMode = defaultContext.mode,
+	allowApprovals = true,
+): void {
+	contexts.set(sessionId, { mode, allowApprovals, approvals: new Set() });
 }
 
 export function deletePermissionContext(sessionId: string): void {
@@ -347,7 +353,7 @@ async function gateLargeSubagentLaunch(
 		return undefined;
 	}
 
-	if (!approvalHandler) {
+	if (!approvalHandler || ctx.allowApprovals === false) {
 		return { block: true, reason: NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON };
 	}
 
@@ -414,6 +420,13 @@ export async function gateToolCall(
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
 	const ctx = getContext(sessionId);
+	if (toolName.startsWith("computer_")) {
+		try {
+			computerPolicy(toolName, input);
+		} catch (error) {
+			return { block: true, reason: String(error) };
+		}
+	}
 	const protectedWriteReason = protectedFileWriteReason(toolName, input, cwd);
 	if (protectedWriteReason) {
 		return { block: true, reason: protectedWriteReason };
@@ -446,6 +459,7 @@ export async function gateToolCall(
 			}
 			return undefined;
 		}
+		if (toolName.startsWith("computer_")) return undefined;
 		if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
 		return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
 	}

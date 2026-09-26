@@ -1,3 +1,5 @@
+import { computerPolicy } from "./computer-use/policy.ts";
+
 /**
  * lunr: read-only tool-gating heuristics + system-prompt addendum.
  *
@@ -169,6 +171,13 @@ export function isCodeRewriteMutating(input: unknown): boolean {
  * Returns the block reason when read-only mode should block this tool call, else undefined.
  */
 export function readOnlyModeBlockReason(toolName: string, input: unknown): string | undefined {
+	if (toolName.startsWith("computer_")) {
+		try {
+			return computerPolicy(toolName, {})?.observation ? undefined : READ_ONLY_MODE_BLOCK_MESSAGE;
+		} catch {
+			return READ_ONLY_MODE_BLOCK_MESSAGE;
+		}
+	}
 	if (toolName === "browser" && (input as { action?: unknown } | undefined)?.action === "act") {
 		return `${READ_ONLY_MODE_BLOCK_MESSAGE} Browser interactions require a writable mode; observation remains available.`;
 	}

@@ -112,6 +112,8 @@ export interface SettingsConfig {
 	globalInstructionsPath: string;
 	modelInstructionsPath: string;
 	confirmLargeSubagentLaunches: boolean;
+	computerUse?: boolean;
+	computerForeground?: boolean;
 	subagentCommunicationEnabled: boolean;
 	automaticSubagentDelegation: boolean;
 	browserEnabled: boolean;
@@ -186,6 +188,8 @@ export interface SettingsCallbacks {
 	onSubagentCommunicationChange: (enabled: boolean) => void;
 	onAutomaticSubagentDelegationChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
+	onComputerUseChange?: (enabled: boolean) => void;
+	onComputerForegroundChange?: (enabled: boolean) => void;
 	onBrowserEnabledChange: (enabled: boolean) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
@@ -1494,6 +1498,20 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "computer-use",
+				label: "Computer use",
+				description: "Control this computer with native desktop tools",
+				currentValue: config.computerUse !== false ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "computer-foreground",
+				label: "Allow foreground control",
+				description: "Allow desktop tools to change focus when background control fails",
+				currentValue: config.computerForeground !== false ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "browser-enabled",
 				label: "Browser",
 				description:
@@ -1904,6 +1922,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "memory-char-cap":
 						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+						break;
+					case "computer-use":
+						callbacks.onComputerUseChange?.(newValue === "on");
+						break;
+					case "computer-foreground":
+						callbacks.onComputerForegroundChange?.(newValue === "on");
 						break;
 					case "browser-enabled":
 						callbacks.onBrowserEnabledChange(newValue === "on");
