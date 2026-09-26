@@ -87,7 +87,7 @@ Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30
 
 ## Gateway for Telegram and Discord
 
-Run `lunr gateway setup` in your terminal. Use Up/Down and Enter to choose the platform, saved token and owner options, default project, startup preference, provider, and model. Long lists scroll; Escape cancels. Only a new bot token, user ID, or custom folder path needs typing. Token entry stays hidden. Setup explains bot creation, validates the bot identity, and asks before saving or starting the gateway. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
+Run `lunr gateway setup` in your terminal. Use Up/Down and Enter to choose the platform, saved token and approved-user options, default project, startup preference, provider, and model. Long lists scroll; Escape cancels. Only a new bot token, user ID, or custom folder path needs typing. Token entry stays hidden. Setup explains bot creation, validates the bot identity, and asks before saving or starting the gateway. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
 
 Telegram uses BotFather and long polling. Discord needs the bot and `applications.commands` installation scopes. Enable Message Content Intent for ordinary text messages. GuildMembers intent is not required. Discord registers native slash commands; Telegram registers a command menu. Both platforms use buttons for selections and approvals.
 
@@ -115,23 +115,25 @@ Login startup runs after you sign in. Boot startup runs before login and may req
 
 Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile. Native startup specifications have automated tests; installing and rebooting services on all three operating systems still requires host verification.
 
-### Owner access
+### Gateway access
 
 Configuration lives in `~/.lunr/agent/gateway.json` and may contain bot tokens. It is written with mode 0600 where supported; Windows security follows the profile directory's ACL. Tokens are not stored in `install-features.json` or startup command arguments. Environment tokens override file tokens in this order: `LUNR_<PLATFORM>_BOT_TOKEN`, then `<PLATFORM>_BOT_TOKEN`.
 
 If you skipped your user ID during setup, message the bot privately and approve its pairing code locally:
 
 ```bash
-lunr gateway pair approve telegram <code> --owner
-lunr gateway pair approve discord <code> --owner
+lunr gateway pair approve telegram <code>
+lunr gateway pair approve discord <code>
 lunr gateway pair list
 ```
 
-Owner access includes local projects and saved TUI conversation history. Ordinary `lunr gateway pair approve <platform> <code>` grants chat access only; add `--owner` locally to grant owner access. Ordinary pairing, group access, and Discord roles do not grant it. Project browsing, cross-project sessions, permission changes, and file downloads require an explicitly configured owner in a private DM. Removing owner access invalidates later owner actions and approvals.
+Approval grants full gateway access, including local projects, saved TUI conversations, permission changes, and file downloads. Existing paired users work immediately without pairing again or receiving a separate owner grant. User allowlists, approved chats, and Discord roles use the same access check for messages and commands. Only approve people, chats, and roles you trust with this computer. In shared chats, other members may see replies and downloaded files.
+
+Legacy `owners` entries and the `--owner` flag remain compatible, but do not grant a separate permission level. Unapproved users remain blocked. Removing every applicable access grant prevents later commands, approvals, and result delivery. Picker and approval buttons still belong to the user who requested them; session transfer and tool permission checks remain in effect.
 
 ### Projects and mobile controls
 
-The owner can send `/start` to check setup before the first task, `/model` to select an authenticated model before a task, and a normal message immediately when setup's default project remains approved. With multiple approved roots and no explicit default, choose `/project` first. A paired non-owner without a project must ask the local owner to configure access; `/project` and `/continue` are owner-only. Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
+Approved users can send `/start` to check setup before the first task, `/model` to select an authenticated model before a task, and a normal message immediately when setup's default project remains approved. With multiple approved roots and no explicit default, choose `/project` first. Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
 
 **The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
 

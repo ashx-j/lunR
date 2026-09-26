@@ -19,7 +19,7 @@
 import { existsSync } from "node:fs";
 import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
 import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
-import { isAuthorized, isGatewayOwner, requireGatewayOwner } from "./authz.ts";
+import { isAuthorized, requireAuthorized } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
@@ -143,7 +143,7 @@ export function createRouter(deps: RouterDeps): Router {
 		if (code === null) return true; // rate-limited or pending list full: stay silent
 		await adapter.send(
 			source.chatId,
-			`Your lunR pairing code: ${formatPairingCode(code)}. Ask the computer's owner to run lunr gateway pair approve ${source.platform} ${formatPairingCode(code)} --owner if this is their account. Approval without --owner grants chat access only.`,
+			`Your lunR pairing code: ${formatPairingCode(code)}. On the computer running lunr, approve access with: lunr gateway pair approve ${source.platform} ${formatPairingCode(code)}. Approval grants full gateway access, including local projects and saved sessions.`,
 			{ replyTo: event.messageId, threadId: source.threadId },
 		);
 		return true;
@@ -151,10 +151,8 @@ export function createRouter(deps: RouterDeps): Router {
 
 	function workspaceReadiness(event: MessageEvent, key: string, cfg: GatewayConfig): string | undefined {
 		if (getStoredSession(key) || conversationBinding(key)?.cwd) return undefined;
-		if (!isGatewayOwner(event.source, cfg))
-			return "This chat is paired but has no project. Ask the computer's gateway owner to configure your access locally. /project and /continue require owner access.";
 		const root = cfg.defaultProject;
-		if (!root) return "No default project selected. Use /project in this private chat to choose an approved folder.";
+		if (!root) return "No default project selected. Use /project to choose an approved folder.";
 		try {
 			const cwd = resolveWithinRoots(root, cfg.projectRoots ?? []);
 			bindConversation(key, event.source, { cwd, owner: event.source.userId });
@@ -346,9 +344,9 @@ export function createRouter(deps: RouterDeps): Router {
 				if (deps.remoteControls) {
 					const binding = conversationBinding(key);
 					if (binding?.owner) {
-						requireGatewayOwner(event.source, cfg);
+						requireAuthorized(event.source, cfg);
 						if (binding.owner !== event.source.userId)
-							throw new Error("This session belongs to a different owner.");
+							throw new Error("This session belongs to a different user.");
 					}
 					bindConversation(key, event.source);
 					if (acceptGatewayInput(key, event)) return;

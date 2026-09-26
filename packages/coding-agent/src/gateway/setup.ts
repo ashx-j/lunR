@@ -124,8 +124,10 @@ export async function setupGateway(): Promise<void> {
 			cfg[platform].token = token;
 			cfg[platform].enabled = true;
 			cfg.owners ??= { telegram: [], discord: [] };
-			const ownerChoice = await choose(`${platform} owner access`, [
-				...(cfg.owners[platform].length ? [{ label: "Keep the saved owners", value: "keep" }] : []),
+			const ownerChoice = await choose(`${platform} gateway access`, [
+				...(cfg.owners[platform].length || cfg[platform].allowedUsers.length
+					? [{ label: "Keep the approved users", value: "keep" }]
+					: []),
 				{ label: "Enter my user ID", value: "enter" },
 				{ label: "Approve a pairing code later on this computer", value: "later" },
 			]);
@@ -221,7 +223,7 @@ export async function setupGateway(): Promise<void> {
 		)
 			console.log(await startGatewayService());
 		console.log(
-			"\nIf you entered your user ID, send /start to your bot, then send a task. Otherwise send /whoami, then on this computer run:\nlunr gateway pair approve <telegram|discord> <code> --owner\nOrdinary pairing without --owner does not grant project or TUI access.",
+			"\nIf you entered your user ID, send /start to your bot, then send a task. Otherwise send /whoami, then on this computer run:\nlunr gateway pair approve <telegram|discord> <code>\nApproval grants full gateway access, including local projects and saved sessions. Only approve people you trust with this computer.",
 		);
 	} catch (error) {
 		if (error !== cancelled) throw error;
@@ -239,5 +241,5 @@ export function approveGatewayOwner(platform: string, code: string): string {
 	cfg.owners[platform] = [...new Set([...cfg.owners[platform], user])];
 	cfg[platform].allowedUsers = [...new Set([...cfg[platform].allowedUsers, user])];
 	saveGatewayConfig(cfg);
-	return `Approved ${platform} owner ${user}. Owner access includes local projects and TUI session history.`;
+	return `Approved ${platform} user ${user}. Gateway access includes local projects and saved sessions.`;
 }

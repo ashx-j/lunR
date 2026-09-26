@@ -22,11 +22,13 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
+
 Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.25`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
-- **Gateway usability and recovery (`fix/gateway-usability-and-recovery`):** owner-first `/start`, `/model`, and approved default project work before the first message; paired non-owners stay restricted. Foreground/follow-up/error replies share a persistent per-destination outbox with acknowledged ordered chunks and bounded retries. Failed final preview edits fall back to full replies; silence markers do not leak through streaming. Picker confirmations fall back to a new message without repeating actions, Discord channel lookup failures are not cached, and gateway status text has no decorative moon prefix. No live platform or service validation.
+- **Gateway usability and recovery (`fix/gateway-usability-and-recovery`):** `/start`, `/model`, and approved default project work before the first message; the separate owner restriction is superseded by unified approved access. Foreground/follow-up/error replies share a persistent per-destination outbox with acknowledged ordered chunks and bounded retries. Failed final preview edits fall back to full replies; silence markers do not leak through streaming. Picker confirmations fall back to a new message without repeating actions, Discord channel lookup failures are not cached, and gateway status text has no decorative moon prefix. No live platform or service validation.
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
 - **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
 
@@ -153,6 +155,8 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Gateway approved access: 177 tests across ten focused gateway suites pass; five offline package builds, coding-agent Node bundle, changed-TypeScript Biome, and diff checks pass. The compiled local-provider gateway check uses ordinary pairing without an owner or allowlist entry and passes first-use, continuation, writable-mode confirmation, tool execution, delivery retry, download, reset, and reclaim. No live gateway, installed CLI, or account configuration changed.
+
 - v0.2.25 release (2026-09-26): five offline package builds and the Node bundle pass; 238 gateway tests across 11 suites pass. The compiled local gateway handoff/delivery smoke and first-paint/first-turn checks pass. Vendor, catalog, pinned-dependency, shrinkwrap, installer-lock, relative-import, workflow, browser-smoke and diff checks pass. All four public package dry-run packs pass with npm 10. Publication workflow `36246239777` succeeded from tag `v0.2.25` at `1f323a3`. All four public npm packages expose their 0.2.25 tarballs; a fresh isolated install reports 0.2.25 for the CLI and all four packages. The separate binary build workflow failed with exit code 126 at its Build binaries step; this did not affect npm publication. No installed global CLI or live gateway account was used.
 
 - Gateway usability and recovery (2026-09-26): offline tui → ai → agent → coding-agent → orchestrator tsgo and coding-agent Node bundle pass. Focused gateway, owner first-use, and setup menu tests pass 238/238 across eleven suites. Setup tests drive actual SelectList arrow/Enter/Escape handling with mocked terminal and service boundaries. The compiled local scripted-provider flow passes first-use `/start` and `/model`, handoff/continuation approval, failed final send/retry, file download, `/new`, and reclaim. All fixtures use a temporary profile and local provider; real Telegram/Discord, provider, service, and installed CLI remain untested. Artifacts under `.artifacts/gateway-*.log` and `.artifacts/gateway-local-output.json`.
@@ -244,6 +248,8 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Gateway `ConversationBinding.owner` still identifies the requesting user; it is not an authorization tier. Keep requester checks and fresh access checks on delayed approvals and deliveries. Legacy `GatewayConfig.owners` entries are ordinary user grants.
 
 - For v0.2.25 dry-run pack verification, use `npm exec --yes --package=npm@10 -- node scripts/publish.mjs --dry-run`; npm 12 changed the `npm pack --json` output that this release script parses. npm accepted all four packages before the CLI metadata and tarball propagated; a fresh install confirmed it afterward.
 
@@ -337,6 +343,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: use one gateway authorization check for messages and commands because pairing should grant usable access rather than require a second owner approval.
 
 - 2026-09-26: ship PR #119 as the next patch version after its reviewed changes merged cleanly, keeping the release branch scoped to versions and release notes.
 
