@@ -115,6 +115,9 @@ export interface SubagentWaitDeps {
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/** Internal auto-drain mode waits through needs-attention states. */
 	stopOnAttention?: boolean;
+	shouldYield?: () => boolean;
+	/** True when interactive input released only this local wait. */
+	wasInterrupted?: () => boolean;
 	/** Internal auto-drain mode surfaces failed terminal subagent runs as errors. */
 	failOnFailedRuns?: boolean;
 	/** Injectable provider protocol surfaces for deterministic tests. */
@@ -326,6 +329,9 @@ async function waitForDetachedForegroundRun(
 				`Waited ${formatDuration(now() - startedAt)} for remembered detached foreground run "${run.runId}"; done. Outcome: ${outcome || "no recovered child status"}. Completion event observed; inspect with subagent({ action: "status", id: "${run.runId}" }) for recovered output.`,
 			);
 		}
+		if (deps.wasInterrupted?.()) {
+			return result("Wait interrupted by user input; background work remains active.");
+		}
 		if (signal?.aborted) {
 			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Remembered foreground run "${run.runId}" remains detached.`, true);
 		}
@@ -387,6 +393,9 @@ async function waitForSupervisorQuestion(
 						delivered: Boolean(question.deliveredAt),
 					},
 				};
+			}
+			if (deps.wasInterrupted?.()) {
+				return result("Wait interrupted by user input; background work remains active.");
 			}
 			if (signal?.aborted) {
 				return result(`Wait aborted after ${formatDuration(now() - startedAt)} for supervisor question "${questionId}".`, true);
@@ -483,9 +492,13 @@ export async function waitForSubagents(
 			...activeInitialRuns.map((run) => `${run.id} (${run.state})`),
 			...activeInitialProviderItems.map((item) => `${item.provider}/${item.id}`),
 		].join(", ");
+		if (deps.wasInterrupted?.()) {
+			return result("Wait interrupted by user input; background work remains active.");
+		}
 		if (signal?.aborted) {
 			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Still active: ${stillActive}.`, true);
 		}
+		if (deps.shouldYield?.()) return result("Wait yielded for pending session messages; background work remains active.");
 		if (now() - startedAt >= timeoutMs) {
 			return result(
 				`Wait timed out after ${formatDuration(timeoutMs)} with ${activeInitialRuns.length} async run(s) and ${activeInitialProviderItems.length} provider item(s) still active: ${stillActive}. The work keeps going; call subagent_wait again or inspect subagent status.`,

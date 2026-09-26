@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -42,22 +43,31 @@ test("public lock rewriting updates tarball basenames as well as scoped names", 
 	assert.ok(original.packages["node_modules/@earendil-works/pi-tui"]);
 });
 
-test("staged packages and standalone assets preserve opaque approved archives", async () => {
+test("staged packages and standalone assets preserve verified opaque fixture archives", async () => {
 	const root = await mkdtemp(join(tmpdir(), "lunr-payload-test-"));
+	const originalArtifacts = release.artifacts;
 	try {
-		const packages = await stagePayloadPackages(join(root, "packages"), "0.9.0");
+		const source = join(root, "source");
+		await mkdir(source);
+		release.artifacts = await Promise.all(originalArtifacts.map(async (artifact) => {
+			const bytes = Buffer.from(`inert archive fixture for ${artifact.platform}/${artifact.arch}`);
+			await writeFile(join(source, artifact.name), bytes);
+			return { ...artifact, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+		}));
+		const packages = await stagePayloadPackages(join(root, "packages"), "0.9.0", source);
 		for (const { directory, artifact } of packages) {
 			assert.deepEqual((await readdir(directory)).sort(), ["LICENSE.md", artifact.name, "package.json"].sort());
 			await verifyComputerUseArchive(directory, artifact);
 			assert.equal(JSON.parse(await readFile(join(directory, "package.json"), "utf8")).name, artifact.packageName);
 			const standalone = join(root, `${artifact.platform}-${artifact.arch}`);
-			assert.equal(await copyStandalonePayload(standalone, artifact.platform, artifact.arch), true);
+			assert.equal(await copyStandalonePayload(standalone, artifact.platform, artifact.arch, source), true);
 			const assets = join(standalone, "native", "computer-use");
 			assert.deepEqual((await readdir(assets)).sort(), ["LICENSE.md", artifact.name, "release.json"].sort());
 			await verifyComputerUseArchive(assets, artifact);
 		}
 		assert.equal(await copyStandalonePayload(join(root, "unsupported"), "linux", "x64"), false);
 	} finally {
+		release.artifacts = originalArtifacts;
 		await rm(root, { recursive: true, force: true });
 	}
 });

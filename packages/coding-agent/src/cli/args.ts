@@ -226,7 +226,8 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} setup                      First-run / reconfigure optional features
+  ${APP_NAME} setup                      Install Chromium and configure optional features
+  ${APP_NAME} browser install            Repair Chromium after offline or ignored-script installs
   ${APP_NAME} features [list|enable|disable]
   ${APP_NAME} uninstall                  Remove this ${APP_NAME} install (keeps agent dir unless --purge)
   ${APP_NAME} uninstall <source> [-l]    Remove an extension package (alias for remove)

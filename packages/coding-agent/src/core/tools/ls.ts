@@ -8,7 +8,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import {
-	formatGroupedCall,
+	GroupedCallText,
 	getTextOutput,
 	renderToolFileName,
 	renderToolPath,
@@ -224,18 +224,16 @@ export function createLsToolDefinition(
 			});
 		},
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as GroupedCallText | undefined) ?? new GroupedCallText("", 0, 0);
 			const compact = !context.isPartial && !context.expanded && !context.isError;
-			text.setText(
-				formatGroupedCall({
-					role: context.groupRole ?? "singleton",
-					compact,
-					tree: toolGroupTree(context),
-					dot: toolStatusDotFromContext(context, theme),
-					title: theme.fg("toolTitle", theme.bold("ls")),
-					detail: formatLsCall(args, theme, context.cwd, !context.expanded),
-				}),
-			);
+			text.setCall({
+				role: context.groupRole ?? "singleton",
+				compact,
+				tree: toolGroupTree(context),
+				dot: toolStatusDotFromContext(context, theme),
+				title: theme.fg("toolTitle", theme.bold("ls")),
+				detail: formatLsCall(args, theme, context.cwd, !context.expanded),
+			});
 			return text;
 		},
 		renderResult(result, options, theme, context) {

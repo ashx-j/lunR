@@ -1,6 +1,6 @@
 # Plan Mode Extension (sample)
 
-This is an **Extension API sample**, not lunR's product plan mode. lunR ships plan permission mode plus `present_plan`; see [docs/features.md](../../../docs/features.md).
+This is an **Extension API sample**, not lunR's permission system. lunR has read-only mode and the `present_plan` tool; see [docs/features.md](../../../docs/features.md).
 
 Read-only exploration mode for safe code analysis.
 

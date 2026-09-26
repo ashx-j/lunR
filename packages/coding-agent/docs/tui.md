@@ -14,6 +14,7 @@ All components implement:
 interface Component {
   render(width: number): string[];
   handleInput?(data: string): void;
+  handleClick?(localY: number, width: number, localX?: number): boolean;
   wantsKeyRelease?: boolean;
   invalidate(): void;
 }
@@ -23,6 +24,7 @@ interface Component {
 |--------|-------------|
 | `render(width)` | Return array of strings (one per line). Each line **must not exceed `width`**. |
 | `handleInput?(data)` | Receive keyboard input when component has focus. |
+| `handleClick?(localY, width, localX?)` | Handle a click. Coordinates are zero-based within the component. `localX` is optional for compatibility with row-only handlers. Return `true` when handled. |
 | `wantsKeyRelease?` | If true, component receives key release events (Kitty protocol). Default: false. |
 | `invalidate()` | Clear cached render state. Called on theme changes. |
 

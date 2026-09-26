@@ -164,6 +164,19 @@ function getDefaultAgentDir(): string {
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
+	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
+	try {
+		sessionManager.assertWritable();
+		return await createOwnedAgentSession({ ...options, sessionManager });
+	} catch (error) {
+		sessionManager.dispose();
+		throw error;
+	}
+}
+
+async function createOwnedAgentSession(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> {
+	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
+	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
 	let resourceLoader = options.resourceLoader;
 
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
@@ -304,24 +317,33 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			const headerRunner = extensionRunnerRef.current;
+			const subscription =
+				model.provider === "anthropic" &&
+				(await modelRuntime.getAuth(model, { apiKey: options?.apiKey, env: options?.env }))?.auth
+					.externalClaudeCode;
 			return modelRuntime.streamSimple(model, context, {
 				...options,
+				...(subscription && !headerRunner?.hasHandlers("before_provider_request") ? { onPayload: undefined } : {}),
+				...(subscription && !headerRunner?.hasHandlers("after_provider_response") ? { onResponse: undefined } : {}),
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				cacheRetention: settingsManager.getCacheRetention(),
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				transformHeaders: async (requestHeaders) => {
-					const headers = mergeProviderAttributionHeaders(
-						model,
-						settingsManager,
-						options?.sessionId,
-						requestHeaders,
-					);
-					return headerRunner?.hasHandlers("before_provider_headers")
-						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
-						: (headers ?? {});
-				},
+				transformHeaders:
+					subscription && !headerRunner?.hasHandlers("before_provider_headers")
+						? undefined
+						: async (requestHeaders) => {
+								const headers = mergeProviderAttributionHeaders(
+									model,
+									settingsManager,
+									options?.sessionId,
+									requestHeaders,
+								);
+								return headerRunner?.hasHandlers("before_provider_headers")
+									? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+									: (headers ?? {});
+							},
 			});
 		},
 		onPayload: async (payload, _model) => {

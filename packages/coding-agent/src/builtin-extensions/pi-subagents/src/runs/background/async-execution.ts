@@ -15,6 +15,7 @@ import { SUBAGENT_ASYNC_GUIDANCE } from "../../shared/async-guidance.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
@@ -118,6 +119,7 @@ interface AsyncExecutionContext {
 }
 
 interface AsyncChainParams {
+	communicationEnabled?: boolean;
 	chain: ChainStep[];
 	task?: string;
 	/** Raw caller-facing goal used only by the started event. */
@@ -156,6 +158,7 @@ interface AsyncChainParams {
 }
 
 interface AsyncSingleParams {
+	communicationEnabled?: boolean;
 	spec: ChildSpec;
 	/** Current follow-up without revival metadata, used only by the mutation guard. */
 	completionTask?: string;
@@ -430,6 +433,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string): { pid?: number; 
 			windowsHide: true,
 			env: {
 				...process.env,
+				PI_SUBAGENT_COMMUNICATION_ENABLED: ((cfg as { communicationEnabled?: boolean }).communicationEnabled ?? subagentCommunicationEnabled(cwd)) ? "1" : "0",
 				...(piPackageRoot ? { [PI_CODING_AGENT_PACKAGE_ROOT_ENV]: piPackageRoot } : {}),
 			},
 		});
@@ -895,6 +899,7 @@ export function executeAsyncChain(
 				worktreeSetupHookTimeoutMs,
 				worktreeBaseDir,
 				controlConfig,
+				communicationEnabled: params.communicationEnabled,
 				turnBudget: params.turnBudget,
 				toolBudget: params.toolBudget,
 				controlIntercomTarget,
@@ -1227,6 +1232,7 @@ export function executeAsyncSingle(
 				worktreeSetupHookTimeoutMs,
 				worktreeBaseDir,
 				controlConfig,
+				communicationEnabled: params.communicationEnabled,
 				timeoutMs,
 				deadlineAt,
 				turnBudget: params.turnBudget,

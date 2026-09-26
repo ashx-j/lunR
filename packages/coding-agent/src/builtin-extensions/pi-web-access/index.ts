@@ -58,7 +58,7 @@ import {
 	formatSearchChrome,
 	formatSearchDetail,
 } from "./render-search-chrome.ts";
-import { formatGroupedCall, toolGroupTree, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
+import { GroupedCallText, toolGroupTree, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
 import { loadEnabledModelPatterns, modelMatchesEnabledPatterns } from "./summary-model-scope.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
@@ -1324,7 +1324,7 @@ export default function (pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			`Search the web using OpenAI, Brave, Parallel, Tavily, Exa, Perplexity, or Gemini. Returns an AI-synthesized answer with source citations. OpenAI web_search uses a Codex subscription or OpenAI API key. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query — each query gets its own synthesized answer, so varying phrasing and scope gives much broader coverage. When includeContent is true, full page content is fetched in the background. Searches auto-open the interactive browser curator and stream results live; set workflow to "none" to skip curation or "auto-summary" for a model-generated summary without the browser curator. Provider auto-selects: OpenAI when suitable and available, then Exa, Brave, Parallel, Tavily, Perplexity, Gemini API, then Gemini Web.`,
+			`Search the web using OpenAI, Brave, Parallel, Tavily, Exa, Perplexity, or Gemini. Use web_search for discovery and fetch_content for reading URLs. When the browser tool is available, use it for JavaScript-rendered inspection or explicit website interaction; never automatically fall back to browser. Returns an AI-synthesized answer with source citations. OpenAI web_search uses a Codex subscription or OpenAI API key. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query — each query gets its own synthesized answer, so varying phrasing and scope gives much broader coverage. When includeContent is true, full page content is fetched in the background. Searches auto-open the interactive browser curator and stream results live; set workflow to "none" to skip curation or "auto-summary" for a model-generated summary without the browser curator. Provider auto-selects: OpenAI when suitable and available, then Exa, Brave, Parallel, Tavily, Perplexity, Gemini API, then Gemini Web.`,
 		promptSnippet:
 			"Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage.",
 		parameters: Type.Object({
@@ -1633,18 +1633,16 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
 			}
 			const detail = formatSearchDetail(queryList, compact ? context?.result?.details : undefined);
-			return new Text(
-				formatGroupedCall({
-					role: context?.groupRole ?? "singleton",
-					compact,
-					tree: context ? toolGroupTree(context) : false,
-					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
-					title: theme.fg("toolTitle", theme.bold("search")),
-					detail: theme.fg("accent", detail),
-				}),
-				0,
-				0,
-			);
+			const header = new GroupedCallText("", 0, 0);
+			header.setCall({
+				role: context?.groupRole ?? "singleton",
+				compact,
+				tree: context ? toolGroupTree(context) : false,
+				dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
+				title: theme.fg("toolTitle", theme.bold("search")),
+				detail: theme.fg("accent", detail),
+			});
+			return header;
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {
@@ -1754,7 +1752,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "fetch_content",
 		label: "Fetch Content",
-		description: "Fetch URL(s) and extract readable content as markdown. Supports YouTube video transcripts (with thumbnail), GitHub repository contents, and local video files (with frame thumbnail). Video frames can be extracted via timestamp/range or sampled across the entire video with frames alone. Falls back to Gemini for pages that block bots or fail Readability extraction. For YouTube and video files: ALWAYS pass the user's specific question via the prompt parameter — this directs the AI to focus on that aspect of the video, producing much better results than a generic extraction. Content is always stored and can be retrieved with get_search_content.",
+		description: "Fetch URL(s) and extract readable content as markdown. Prefer fetch_content for reading URLs and web_search for discovery. The browser tool handles JavaScript-rendered inspection and explicit website interactions when enabled; it is not an automatic fallback, and interaction tasks do not require a preliminary fetch. Supports YouTube video transcripts (with thumbnail), GitHub repository contents, and local video files (with frame thumbnail). Video frames can be extracted via timestamp/range or sampled across the entire video with frames alone. Falls back to Gemini for pages that block bots or fail Readability extraction. For YouTube and video files: ALWAYS pass the user's specific question via the prompt parameter — this directs the AI to focus on that aspect of the video, producing much better results than a generic extraction. Content is always stored and can be retrieved with get_search_content.",
 		promptSnippet:
 			"Use to extract readable content from URL(s), YouTube, GitHub repos, or local videos. For video questions, pass the user's exact question in prompt.",
 		parameters: Type.Object({
@@ -1898,18 +1896,16 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
 			}
 			const detail = formatFetchDetail(urlList, compact ? context?.result?.details : undefined);
-			return new Text(
-				formatGroupedCall({
-					role: context?.groupRole ?? "singleton",
-					compact,
-					tree: context ? toolGroupTree(context) : false,
-					dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
-					title: theme.fg("toolTitle", theme.bold("fetch")),
-					detail: theme.fg("accent", detail),
-				}),
-				0,
-				0,
-			);
+			const header = new GroupedCallText("", 0, 0);
+			header.setCall({
+				role: context?.groupRole ?? "singleton",
+				compact,
+				tree: context ? toolGroupTree(context) : false,
+				dot: context ? toolStatusDotFromContext(context, theme) : theme.fg("success", "●"),
+				title: theme.fg("toolTitle", theme.bold("fetch")),
+				detail: theme.fg("accent", detail),
+			});
+			return header;
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {

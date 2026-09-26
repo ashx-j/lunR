@@ -141,128 +141,87 @@ function findButtonByLabel(adapter: FakeAdapter, label: string): ButtonSpec | un
 	return undefined;
 }
 
+const threeTasks = {
+	tasks: [
+		{ task: "one", description: "One" },
+		{ task: "two", description: "Two" },
+		{ task: "three", description: "Three" },
+	],
+};
+
 beforeEach(() => {
 	tmpDir = mkdtempSync(join(tmpdir(), "lunr-gw-approval-"));
-	resetPermissions("manual");
+	resetPermissions("yolo");
 	clearSessionApprovals();
 	resetApprovalRegistry();
 });
 
 afterEach(() => {
-	resetPermissions("manual");
+	resetPermissions("yolo");
 	resetApprovalRegistry();
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe("gateway manual-mode approvals", () => {
-	it("prompts the originating chat for a mutating tool call and allows once", async () => {
+describe("gateway yolo-mode approvals", () => {
+	it("prompts the originating chat for a large launch", async () => {
 		const { adapter, bridge, router } = makeDeps(makeConfig());
 		const gateResults: GateResult[] = [];
 		bridge.onRunTurn = async () => {
-			gateResults.push(await gateToolCall("bash", { command: "rm -rf /tmp" }, process.cwd()));
+			gateResults.push(await gateToolCall("subagent", threeTasks, process.cwd()));
 		};
-		bridge.results = ["done"];
-
 		const runPromise = router.handleEvent(dmEvent("go"));
 		await waitFor(() => adapter.sent.some((m) => m.buttons));
-
-		const once = findButtonByLabel(adapter, "✓ Approve once");
-		expect(once).toBeDefined();
-		expect(adapter.sent[0].text).toContain("Approve bash?");
-		expect(adapter.sent[0].text).toContain("rm -rf /tmp");
-
+		expect(adapter.sent[0].text).toContain("Approve large subagent launch?");
+		const once = findButtonByLabel(adapter, "✓ Approve once")!;
 		adapter.simulateCallback({
 			id: "cb1",
 			chatId: "chat1",
 			messageId: adapter.sent[0].messageId ?? "m1",
 			userId: "u1",
-			data: once!.data,
+			data: once.data,
 		});
-
 		await runPromise;
-		expect(gateResults).toHaveLength(1);
-		expect(gateResults[0]).toBeUndefined();
-		expect(adapter.edits[adapter.edits.length - 1].text).toBe("Approved (once).");
+		expect(gateResults).toEqual([undefined]);
 	});
 
-	it("blocks the mutating tool when the user rejects", async () => {
+	it("ignores approvals from a different user and permits rejection", async () => {
 		const { adapter, bridge, router } = makeDeps(makeConfig());
-		const gateResults: GateResult[] = [];
+		let result: GateResult;
 		bridge.onRunTurn = async () => {
-			gateResults.push(await gateToolCall("write", { path: "/tmp/x.ts" }, process.cwd()));
+			result = await gateToolCall("subagent", threeTasks, process.cwd());
 		};
-		bridge.results = ["done"];
-
 		const runPromise = router.handleEvent(dmEvent("go"));
 		await waitFor(() => adapter.sent.some((m) => m.buttons));
-
-		const reject = findButtonByLabel(adapter, "✗ Reject");
-		expect(reject).toBeDefined();
-
+		const reject = findButtonByLabel(adapter, "✗ Reject")!;
 		adapter.simulateCallback({
 			id: "cb2",
 			chatId: "chat1",
 			messageId: adapter.sent[0].messageId ?? "m1",
-			userId: "u1",
-			data: reject!.data,
+			userId: "u2",
+			data: reject.data,
 		});
-
-		await runPromise;
-		expect(gateResults).toHaveLength(1);
-		expect(gateResults[0]).toEqual({ block: true, reason: "Rejected by user (permission mode: manual)." });
-		expect(adapter.edits[adapter.edits.length - 1].text).toBe("Rejected.");
-	});
-
-	it("blocks mutating tools when there is no gateway approval context", async () => {
-		makeDeps(makeConfig()); // registers the global gateway handler
-		setPermissionMode("manual");
-		clearSessionApprovals();
-		const result = await gateToolCall("bash", { command: "ls" }, process.cwd());
-		expect(result).toEqual({
-			block: true,
-			reason: "Mutating tool blocked in manual mode: no approval channel available.",
-		});
-	});
-
-	it("ignores approval taps from a different user", async () => {
-		const { adapter, bridge, router } = makeDeps(makeConfig());
-		let gateDone = false;
-		bridge.onRunTurn = async () => {
-			await gateToolCall("edit", { path: "/tmp/a.ts" }, process.cwd());
-			gateDone = true;
-		};
-		bridge.results = ["done"];
-
-		const runPromise = router.handleEvent(dmEvent("go"));
-		await waitFor(() => adapter.sent.some((m) => m.buttons));
-
-		const once = findButtonByLabel(adapter, "✓ Approve once")!;
-		// Wrong user taps first — should be ignored.
+		expect(adapter.callbackAnswers.some((a) => a.text?.includes("Not your approval"))).toBe(true);
 		adapter.simulateCallback({
 			id: "cb3",
 			chatId: "chat1",
 			messageId: adapter.sent[0].messageId ?? "m1",
-			userId: "u2",
-			data: once.data,
-		});
-
-		expect(gateDone).toBe(false);
-		expect(adapter.callbackAnswers.some((a) => a.text?.includes("Not your approval"))).toBe(true);
-
-		// Correct user approves.
-		adapter.simulateCallback({
-			id: "cb4",
-			chatId: "chat1",
-			messageId: adapter.sent[0].messageId ?? "m1",
 			userId: "u1",
-			data: once.data,
+			data: reject.data,
 		});
-
 		await runPromise;
-		expect(gateDone).toBe(true);
+		expect(result).toEqual({ block: true, reason: "Large subagent launch rejected by user." });
 	});
 
-	it("defaults to manual permission mode for gateway sessions", () => {
-		expect(getPermissionMode()).toBe("manual");
+	it("fails closed without an originating chat for large launches", async () => {
+		makeDeps(makeConfig());
+		setPermissionMode("yolo");
+		expect(await gateToolCall("subagent", threeTasks, process.cwd())).toEqual({
+			block: true,
+			reason: "Approval channel unavailable.",
+		});
+	});
+
+	it("defaults to yolo permission mode for gateway sessions", () => {
+		expect(getPermissionMode()).toBe("yolo");
 	});
 });

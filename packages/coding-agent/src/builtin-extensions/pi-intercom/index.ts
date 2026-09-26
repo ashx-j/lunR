@@ -12,6 +12,7 @@ import { InlineMessageComponent } from "./ui/inline-message.ts";
 import { getAskTimeoutMs, loadConfig, type IntercomConfig } from "./config.ts";
 import type { SessionInfo, Message, Attachment } from "./types.ts";
 import { ReplyTracker } from "./reply-tracker.ts";
+import { isDiagnosticControlEvent } from "../pi-subagents/src/runs/shared/subagent-control.ts";
 
 const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 const SUBAGENT_RESULT_INTERCOM_EVENT = "subagent:result-intercom";
@@ -430,6 +431,7 @@ function getNamePollMs(): number {
   return 1000;
 }
 export default function piIntercomExtension(pi: ExtensionAPI) {
+  if (process.env.PI_SUBAGENT_CHILD === "1" && process.env.PI_SUBAGENT_COMMUNICATION_ENABLED === "0") return;
   let client: IntercomClient | null = null;
   const config: IntercomConfig = loadConfig();
   const askTimeoutMs = getAskTimeoutMs();
@@ -1033,6 +1035,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     });
   }
   const unsubscribeSubagentControlIntercom = pi.events.on(SUBAGENT_CONTROL_INTERCOM_EVENT, (payload) => {
+    if (isDiagnosticControlEvent(payload?.event)) return;
     relaySubagentIntercomPayload(payload, {
       sender: "subagent-control",
       status: "needs_attention",

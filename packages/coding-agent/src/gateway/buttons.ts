@@ -31,7 +31,9 @@ export type PickerResolveResult =
 	| { done: false; items: PickerItem[]; title: string; breadcrumbs?: string };
 
 export interface PickerSpec {
-	kind: "model" | "thinking" | "sessions";
+	kind: "model" | "thinking" | "sessions" | "project" | "dialog";
+	validate?(): boolean;
+	onCancel?(): void;
 	sessionKey: string;
 	invokerId: string;
 	items: PickerItem[];
@@ -42,6 +44,7 @@ export interface PickerSpec {
 }
 
 interface PendingPicker extends PickerSpec {
+	resolving?: boolean;
 	id: string;
 	chatId: string;
 	messageId: string;
@@ -206,7 +209,15 @@ export async function handleCallback(
 		return;
 	}
 
+	if (picker.validate && !picker.validate()) {
+		registry.delete(parsed.id);
+		picker.onCancel?.();
+		await answerExpired(adapter, cb);
+		return;
+	}
+
 	if (Date.now() > picker.createdAt + PICKER_TTL_MS) {
+		picker.onCancel?.();
 		registry.delete(parsed.id);
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, "⏱ Expired — run the command again.", []);
@@ -234,6 +245,7 @@ export async function handleCallback(
 
 	if (parsed.action === "cancel") {
 		registry.delete(parsed.id);
+		picker.onCancel?.();
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, "Cancelled.", []);
 		} catch {}
@@ -266,6 +278,12 @@ export async function handleCallback(
 		return;
 	}
 
+	if (picker.resolving) {
+		await adapter.answerCallback(cb.id, "Selection is still running.").catch(() => {});
+		return;
+	}
+	picker.resolving = true;
+	await adapter.answerCallback(cb.id).catch(() => {});
 	try {
 		const result = await picker.resolve(item);
 		if (!result.done) {
@@ -277,21 +295,20 @@ export async function handleCallback(
 			try {
 				await picker.adapter.editMessage(picker.chatId, picker.messageId, text, buttons);
 			} catch {}
-			await adapter.answerCallback(cb.id).catch(() => {});
 			return;
 		}
 		registry.delete(parsed.id);
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, result.text, []);
 		} catch {}
-		await adapter.answerCallback(cb.id).catch(() => {});
 	} catch (err) {
 		registry.delete(parsed.id);
 		const message = err instanceof Error ? err.message : String(err);
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, `⚠ ${message}`, []);
 		} catch {}
-		await adapter.answerCallback(cb.id).catch(() => {});
+	} finally {
+		picker.resolving = false;
 	}
 }
 
@@ -303,6 +320,7 @@ export function startButtonSweeper(): void {
 		for (const [id, entry] of registry) {
 			if (entry.createdAt > cutoff) continue;
 			registry.delete(id);
+			entry.onCancel?.();
 			try {
 				void entry.adapter.editMessage(entry.chatId, entry.messageId, "⏱ Expired — run the command again.", []);
 			} catch {

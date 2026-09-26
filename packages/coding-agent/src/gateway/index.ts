@@ -31,7 +31,10 @@ import {
 } from "./config.ts";
 import { startGatewayCron } from "./cron.ts";
 import { createPairingStore } from "./pairing.ts";
+import { startGatewayPresenter, stopGatewayPresenter } from "./presenter.ts";
 import { createRouter } from "./router.ts";
+import { claimGateway } from "./service.ts";
+import { buildSessionKey } from "./session-keys.ts";
 import { listSessions } from "./store.ts";
 import type { PlatformAdapter } from "./types.ts";
 
@@ -175,16 +178,64 @@ async function runDaemon(): Promise<number> {
 
 	const pairing = createPairingStore();
 	const bridge = new AgentBridge();
-	const router = createRouter({ adapters, cfg, pairing, bridge, reloadConfig: true });
+	for (const adapter of adapters.values())
+		adapter.setCommandSuggestions?.(async (source, command) => {
+			const session = bridge.peekSession(buildSessionKey(source, loadGatewayConfig()));
+			if (!session) return [];
+			if (command === "thinking") return session.getAvailableThinkingLevels();
+			if (command === "model")
+				return (await session.modelRuntime.getAvailable()).map((model) => `${model.provider}/${model.id}`);
+			return [];
+		});
+	const router = createRouter({ adapters, cfg, pairing, bridge, reloadConfig: true, remoteControls: true });
 
+	let finish!: () => void;
+	const stopped = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	let stopping = false;
+	let cron: ReturnType<typeof startGatewayCron> | undefined;
+	const platformStatus: Record<string, string> = {};
+	const retries = new Set<ReturnType<typeof setTimeout>>();
+	const shutdown = () => {
+		if (stopping) return;
+		stopping = true;
+		owner.update(platformStatus, "stopping");
+		cron?.stop();
+		for (const timer of retries) clearTimeout(timer);
+		stopButtonSweeper();
+		void (async () => {
+			await bridge.shutdown();
+			await Promise.all([...adapters.values()].map((adapter) => adapter.disconnect().catch(() => {})));
+			stopGatewayPresenter();
+			owner.release();
+			process.removeListener("SIGINT", shutdown);
+			process.removeListener("SIGTERM", shutdown);
+			finish();
+		})().catch((error) => {
+			console.error("Gateway shutdown failed:", error instanceof Error ? error.message : String(error));
+			stopping = false;
+			owner.update(platformStatus, "ready");
+			startButtonSweeper();
+			cron = startGatewayCron({ adapters, cfg });
+			for (const [platform, adapter] of adapters)
+				if (platformStatus[platform] !== "connected") void connect(platform, adapter);
+		});
+	};
+	const owner = claimGateway(shutdown);
+	process.on("SIGINT", shutdown);
+	process.on("SIGTERM", shutdown);
+	startGatewayPresenter(adapters);
 	const connected: PlatformAdapter[] = [];
 	startButtonSweeper();
-	for (const [platform, adapter] of adapters) {
+	const connect = async (platform: string, adapter: PlatformAdapter): Promise<void> => {
+		if (stopping) return;
 		try {
+			platformStatus[platform] = "connecting";
+			owner.update(platformStatus, "starting");
 			const ok = await adapter.connect();
 			if (!ok) {
-				console.error(`[gateway] ${platform}: connect() reported failure; skipping`);
-				continue;
+				throw new Error("Connection failed");
 			}
 			adapter.onMessage((event) => {
 				void router.handleEvent(event);
@@ -192,7 +243,7 @@ async function runDaemon(): Promise<number> {
 			adapter.onCallback(async (event) => {
 				const consumed = await handleApprovalCallback(event, adapter);
 				if (!consumed) {
-					void handleCallback(event, { adapters, cfg, pairing, bridge, adapter });
+					void handleCallback(event, { adapters, cfg: loadGatewayConfig(), pairing, bridge, adapter });
 				}
 			});
 			try {
@@ -202,37 +253,35 @@ async function runDaemon(): Promise<number> {
 					`[gateway] ${platform}: command menu registration failed: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
+			if (stopping) {
+				await adapter.disconnect();
+				return;
+			}
 			connected.push(adapter);
+			platformStatus[platform] = "connected";
 			console.log(`lunR gateway: ${platform} connected`);
-		} catch (err) {
-			console.error(`[gateway] ${platform}: connect failed: ${err instanceof Error ? err.message : String(err)}`);
+		} catch {
+			platformStatus[platform] = "disconnected, retrying";
+			await adapter.disconnect().catch(() => {});
+			if (!stopping) {
+				const retry = setTimeout(() => {
+					retries.delete(retry);
+					void connect(platform, adapter);
+				}, 5000);
+				retries.add(retry);
+			}
 		}
-	}
-
-	if (connected.length === 0) {
-		console.error("lunR gateway: every configured platform failed to connect.");
-		stopButtonSweeper();
-		return 1;
-	}
+		if (!stopping) owner.update(platformStatus);
+	};
+	for (const [platform, adapter] of adapters) void connect(platform, adapter);
 
 	// Phase 4: cron jobs fire inside the daemon and deliver back to chats.
 	// Starts even with zero stored jobs — jobs can be created later from chats.
-	const cron = startGatewayCron({ adapters, cfg });
+	cron = startGatewayCron({ adapters, cfg });
 	console.log(`lunR gateway: cron scheduler started (${cron.intervalMs / 1000}s interval)`);
 
-	const shutdown = () => {
-		cron.stop();
-		stopButtonSweeper();
-		void Promise.all(connected.map((adapter) => adapter.disconnect().catch(() => {}))).finally(() => {
-			process.exit(0);
-		});
-	};
-	process.on("SIGINT", shutdown);
-	process.on("SIGTERM", shutdown);
-
-	await new Promise<void>(() => {
-		// Keep the process alive until SIGINT/SIGTERM.
-	});
+	owner.update(platformStatus);
+	await stopped;
 	return 0;
 }
 

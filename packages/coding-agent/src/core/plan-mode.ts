@@ -1,12 +1,11 @@
 import { computerPolicy } from "./computer-use/policy.ts";
 
 /**
- * lunr: plan permission mode — read-only tool-gating heuristics + system-prompt addendum.
+ * lunr: read-only tool-gating heuristics + system-prompt addendum.
  *
- * Plan is a first-class permission mode (`PermissionMode = "plan"`). `gateToolCall`
- * in permissions.ts applies `planModeBlockReason` when the session is in plan:
+ * `gateToolCall` in permissions.ts applies `readOnlyModeBlockReason` in read-only mode:
  * `edit`/`write` and mutating `bash` are hard-blocked; read tools stay open.
- * InteractiveMode installs `PLAN_MODE_ADDENDUM` via the shared system-prompt
+ * InteractiveMode installs `READ_ONLY_MODE_ADDENDUM` via the shared system-prompt
  * append slot (same slot auto mode uses).
  *
  * Bash heuristic (conservative, blocklist-based — NOT a security boundary):
@@ -20,19 +19,18 @@ import { computerPolicy } from "./computer-use/policy.ts";
  *   - arbitrary runners (sudo, xargs, npx, sh -c …) are blocked.
  * Unknown-but-not-listed commands are ALLOWED (blocklist, not allowlist) — the model is
  * additionally steered by the system-prompt addendum. False positives are expected; the
- * user can run the command themselves or exit plan mode with /plan off.
+ * user can run the command themselves or switch to another mode.
  */
 
-/** Appended to the system prompt while plan mode is active. */
-export const PLAN_MODE_ADDENDUM =
-	"You are in plan mode. Investigate read-only, then present your plan by calling the present_plan tool with a concise summary — the user approves or declines it in a dialog. Do not make changes until the plan is approved. The user can also exit plan mode manually with /plan off.";
+/** Appended to the system prompt while read-only mode is active. */
+export const READ_ONLY_MODE_ADDENDUM =
+	"You are in read-only mode. Investigate and answer without making changes. If the user asks for a plan, you may call present_plan for approval. Do not implement until the user switches modes or approves that plan.";
 
-/** Error returned to the model when a tool call is blocked by plan mode. */
-export const PLAN_MODE_BLOCK_MESSAGE = "Plan mode is active — propose a plan; no file changes.";
+export const READ_ONLY_MODE_BLOCK_MESSAGE = "Read-only mode is active; no changes allowed.";
 
 const BLOCKED_TOOLS = new Set(["edit", "write", "memory_add", "memory_remove", "cron"]);
 
-/** Small allowlist of read-only commands permitted in plan mode. Everything else is rejected. */
+/** Small allowlist of read-only commands permitted in read-only mode. Everything else is rejected. */
 const ALLOWED_COMMANDS = new Set([
 	"ls",
 	"ll",
@@ -150,7 +148,7 @@ const ALWAYS_MUTATING_MANAGERS = new Set([
 	"scoop",
 ]);
 
-/** Flags that cause an interpreter to execute code and are never allowed in plan mode. */
+/** Flags that cause an interpreter to execute code and are never allowed in read-only mode. */
 const EXECUTING_NODE_FLAGS = new Set([
 	"-e",
 	"--eval",
@@ -170,26 +168,29 @@ export function isCodeRewriteMutating(input: unknown): boolean {
 }
 
 /**
- * Returns the block reason when plan mode should block this tool call, else undefined.
+ * Returns the block reason when read-only mode should block this tool call, else undefined.
  */
-export function planModeBlockReason(toolName: string, input: unknown): string | undefined {
+export function readOnlyModeBlockReason(toolName: string, input: unknown): string | undefined {
 	if (toolName.startsWith("computer_")) {
 		try {
-			return computerPolicy(toolName, {})?.observation ? undefined : PLAN_MODE_BLOCK_MESSAGE;
+			return computerPolicy(toolName, {})?.observation ? undefined : READ_ONLY_MODE_BLOCK_MESSAGE;
 		} catch {
-			return PLAN_MODE_BLOCK_MESSAGE;
+			return READ_ONLY_MODE_BLOCK_MESSAGE;
 		}
 	}
+	if (toolName === "browser" && (input as { action?: unknown } | undefined)?.action === "act") {
+		return `${READ_ONLY_MODE_BLOCK_MESSAGE} Browser interactions require a writable mode; observation remains available.`;
+	}
 	if (BLOCKED_TOOLS.has(toolName)) {
-		return PLAN_MODE_BLOCK_MESSAGE;
+		return READ_ONLY_MODE_BLOCK_MESSAGE;
 	}
 	if (toolName === "code_rewrite" && isCodeRewriteMutating(input)) {
-		return PLAN_MODE_BLOCK_MESSAGE;
+		return READ_ONLY_MODE_BLOCK_MESSAGE;
 	}
 	if (toolName === "bash") {
 		const command = readBashCommand(input);
 		if (command && isMutatingBashCommand(command)) {
-			return `${PLAN_MODE_BLOCK_MESSAGE} Blocked command: ${command}`;
+			return `${READ_ONLY_MODE_BLOCK_MESSAGE} Blocked command: ${command}`;
 		}
 	}
 	return undefined;
@@ -201,7 +202,7 @@ function readBashCommand(input: unknown): string {
 }
 
 /**
- * Plan-mode bash allowlist. A command is mutating unless every segment is a
+ * Read-only bash allowlist. A command is mutating unless every segment is a
  * known read-only command used safely (no redirects, no command substitution,
  * no process substitution, no executing-interpreter flags).
  */

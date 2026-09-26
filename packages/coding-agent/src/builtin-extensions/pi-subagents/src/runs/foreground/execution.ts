@@ -55,7 +55,7 @@ import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { PLAN_MODE_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { READ_ONLY_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
@@ -241,6 +241,7 @@ async function runSingleAttempt(
 		inheritSkills: false,
 		requireReadTool: Boolean(shared.resolvedSkillNames?.length),
 		excludeTools,
+		communicationEnabled: options.communicationEnabled,
 		childPermission: spec.effectivePermissions,
 		childId: spec.childId,
 		childDescription: spec.description,
@@ -1198,7 +1199,7 @@ export async function runSync(
 	const parentMode = snapshotParentPermissionMode(options.parentSessionId);
 	const resolvedPermissions = resolveChildPermissions(parentMode, spec.requestedPermissions);
 	if (!resolvedPermissions.ok) {
-		const error = resolvedPermissions.error || PLAN_MODE_WRITE_SPAWN_ERROR;
+		const error = resolvedPermissions.error || READ_ONLY_WRITE_SPAWN_ERROR;
 		return {
 			childId: spec.childId,
 			description: spec.description,

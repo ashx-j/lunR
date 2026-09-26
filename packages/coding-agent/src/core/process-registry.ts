@@ -105,15 +105,15 @@ function isAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
 	}
 }
 
 export function kill(pid: number): void {
 	if (!processes.has(pid)) return;
 	killProcessTree(pid);
-	processes.delete(pid);
+	if (!isAlive(pid)) markExited(pid, null);
 }
 
 export function killAll(sessionId?: string): void {
@@ -124,7 +124,7 @@ export function killAll(sessionId?: string): void {
 		} catch {
 			// ignore
 		}
-		processes.delete(pid);
+		if (!isAlive(pid)) markExited(pid, null);
 	}
 }
 

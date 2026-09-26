@@ -17,6 +17,7 @@ export interface SupervisorChildIncarnation {
 
 export interface SupervisorQuestion {
 	type: "subagent.supervisor.question";
+	childDescription?: string;
 	id: string;
 	createdAt: number;
 	expiresAt: number;
@@ -48,6 +49,7 @@ export interface SupervisorQuestionOwner {
 
 interface QuestionRecord {
 	type: "subagent.supervisor.question";
+	childDescription?: string;
 	id: string;
 	createdAt: number;
 	expiresAt: number;
@@ -194,6 +196,7 @@ function parseQuestionRecord(raw: unknown): QuestionRecord | undefined {
 		runId: input.runId.trim(),
 		childIndex,
 		childId: input.childId.trim(),
+		...(typeof input.childDescription === "string" && input.childDescription.trim() ? { childDescription: input.childDescription.trim() } : {}),
 		parentSessionId: input.parentSessionId.trim(),
 		parentGeneration,
 		...(incarnation ? { childIncarnation: incarnation } : {}),
@@ -313,6 +316,7 @@ function readTerminal(channelDir: string, questionId: string): TerminalRecord | 
 
 export function createSupervisorQuestion(input: {
 	channelDir: string;
+	childDescription?: string;
 	reason: string;
 	message: string;
 	runId: string;
@@ -343,6 +347,7 @@ export function createSupervisorQuestion(input: {
 		runId: input.runId,
 		childIndex: input.childIndex,
 		childId: input.childId,
+		...(input.childDescription ? { childDescription: input.childDescription } : {}),
 		parentSessionId: input.parentSessionId,
 		parentGeneration: input.parentGeneration,
 		...(input.childIncarnation ? { childIncarnation: input.childIncarnation } : {}),
@@ -523,8 +528,7 @@ export function formatSupervisorQuestionAnswer(question: SupervisorQuestion): st
 		: `Subagent question ${state} (${question.id})`;
 	const lines = [
 		header,
-		`Run: ${question.runId}`,
-		`Child: ${question.childId} [#${question.childIndex}]`,
+		`From: ${question.childDescription ?? `Subagent ${question.childIndex + 1}`}`,
 		`Decision: ${question.reason}`,
 	];
 	if (state === "answered" && question.answer?.trim()) {

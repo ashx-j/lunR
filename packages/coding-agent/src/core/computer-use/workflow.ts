@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ComputerDriver, DriverReply } from "./adapter.ts";
 import { type ImageRegion, prepareComputerImage, screenshotDimensions } from "./image.ts";
@@ -62,12 +62,10 @@ function typingRecovery(data: Record<string, unknown>, text: unknown) {
 
 function outcome(reply: DriverReply, text?: unknown) {
 	const data = driverData(reply);
-	const message = Array.isArray(reply.content) ? reply.content.find((item) => item.type === "text" && typeof item.text === "string") : undefined;
 	return {
 		...select(data, ["status", "effect", "refusal", "error", "code", "path", "verified", "verify", "success", "activated"]),
 		refusal: typeof data.refusal === "object" && data.refusal !== null ? select(record(data.refusal), ["code", "message", "facility"]) : select(data, ["refusal"]).refusal,
 		error: typeof data.error === "object" && data.error !== null ? select(record(data.error), ["code", "message", "facility"]) : select(data, ["error"]).error,
-		message: Object.keys(data).length === 0 && message?.type === "text" ? String(message.text).slice(0, 240) : undefined,
 		escalation: record(data.escalation).recommended === "foreground" ? "foreground" : undefined,
 		input: driverRefused(reply) ? "refused_or_failed" : "dispatched",
 		applicationEffect: "unverified",
@@ -91,6 +89,16 @@ function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
 		});
 		if (signal.aborted) abort();
 	});
+}
+
+const freshActionGuidance = "This failed call consumes the active token. Get a fresh capture of the exact target before any next action, including window focus. Copy the returned token exactly; never abbreviate or reconstruct it. This rejection does not prove foreground typing failed or that earlier calls had no effect.";
+
+class ObservationError extends Error {
+	readonly code: string;
+	constructor(code: string, message: string) {
+		super(`Stale observation. ${message}`);
+		this.code = code;
+	}
 }
 
 type Target = { desktop: true } | { pid: number; window_id: number; desktop?: false };
@@ -128,9 +136,10 @@ export class ComputerWorkflow {
 	}
 
 	private fresh(input: Record<string, unknown>, previous?: Observation): Observation {
-		if (!previous || previous.token !== input.observation || !sameTarget(previous.target, targetFrom(input)) ||
-			Date.now() - previous.time > 30000)
-			throw new Error("Stale observation. Capture this exact target again before acting.");
+		if (!previous) throw new ObservationError("observation_unavailable", "No active observation is available.");
+		if (previous.token !== input.observation) throw new ObservationError("observation_mismatch", "Token does not match the active observation.");
+		if (!sameTarget(previous.target, targetFrom(input))) throw new ObservationError("observation_target_mismatch", "Token belongs to a different target.");
+		if (Date.now() - previous.time > 30000) throw new ObservationError("observation_expired", "The active observation is older than 30 seconds.");
 		return previous;
 	}
 
@@ -152,8 +161,7 @@ export class ComputerWorkflow {
 			throw new Error("Target geometry changed. Capture a full image before selecting a crop.");
 		const prepared = await abortable(prepareComputerImage(image, crop), signal);
 		signal.throwIfAborted();
-		return { ...prepared, token: randomUUID(), target, time, geometry,
-			fingerprint: createHash("sha256").update(image.data).digest("hex") };
+		return { ...prepared, token: randomUUID(), target, time, geometry };
 	}
 
 	private imageResult(observation: Observation, extra: Record<string, unknown> = {}): Result {
@@ -212,11 +220,22 @@ export class ComputerWorkflow {
 				if (!["from_x", "from_y", "to_x", "to_y"].every((key) => typeof args[key] === "number")) throw new Error("Drag requires both endpoints.");
 				operation = "drag";
 				break;
-			case "computer_key":
+			case "computer_key": {
 				if ((input.key === undefined) === (input.keys === undefined)) throw new Error("Provide key OR keys.");
-				operation = input.keys === undefined ? "press_key" : "hotkey";
-				args[input.keys === undefined ? "key" : "keys"] = input.keys ?? input.key;
+				const keys: readonly unknown[] | undefined = Array.isArray(input.keys) ? input.keys : undefined;
+				const last = keys?.at(-1);
+				const modifiers = new Set(["ctrl", "control", "shift", "alt", "win", "windows", "cmd", "command"]);
+				const foregroundShortcut = process.platform === "win32" && input.foreground === true && input.x === undefined &&
+					keys !== undefined && keys.length >= 2 && keys.slice(0, -1).every((key) => typeof key === "string" && modifiers.has(key.toLowerCase())) &&
+					typeof last === "string" && !modifiers.has(last.toLowerCase());
+				// Pinned Windows hotkey routes XAML through UIA before honoring foreground; press_key honors SendInput.
+				operation = input.keys === undefined || foregroundShortcut ? "press_key" : "hotkey";
+				if (foregroundShortcut) {
+					args.key = last;
+					args.modifiers = keys.slice(0, -1);
+				} else args[input.keys === undefined ? "key" : "keys"] = input.keys ?? input.key;
 				break;
+			}
 			case "computer_text":
 				operation = "type_text";
 				args.text = input.text;
@@ -240,8 +259,12 @@ export class ComputerWorkflow {
 
 	async execute(name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<Result> {
 		const combined = AbortSignal.any([this.abort.signal, this.lease.signal, AbortSignal.timeout(90000), ...(signal ? [signal] : [])]);
+		let inputDispatched = false;
+		let failureCode = "workflow_unavailable";
+		let actionOutcome: ReturnType<typeof outcome> | undefined;
 		try {
 			const result = await this.lease.run(async (): Promise<Result> => {
+				failureCode = "invalid_arguments";
 				if (!Object.hasOwn(computerSchemas, name)) throw new Error("Unknown computer operation.");
 				const schema = computerSchemas[name as keyof typeof computerSchemas];
 				if (Object.keys(input).some((key) => !Object.hasOwn(schema.properties, key))) throw new Error("Unsupported computer argument. Use image coordinates only.");
@@ -249,13 +272,24 @@ export class ComputerWorkflow {
 				this.observation = undefined;
 				if (name === "computer_apps" || name === "computer_launch") {
 					const operation = name === "computer_launch" ? "launch_app" : input.pid === undefined ? "list_apps" : "list_windows";
+					if (input.query !== undefined && (typeof input.query !== "string" || !input.query.trim() || Array.from(input.query).length > 240))
+						throw new Error("Discovery query must be a nonblank string of at most 240 characters.");
+					const query = typeof input.query === "string" ? input.query.trim() : undefined;
+					const needle = query?.toLowerCase();
 					const offset = input.offset ?? 0;
 					if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0)
 						throw new Error("Discovery offset must be a nonnegative safe integer.");
 					const args = name === "computer_launch" ? { name: input.name } : input.pid === undefined ? {} : { pid: input.pid };
+					combined.throwIfAborted();
+					inputDispatched = name === "computer_launch";
+					failureCode = "discovery_failed";
 					const reply = await abortable(this.driver.call(operation, args, combined), combined);
 					const data = driverData(reply);
-					const rows = data.apps ?? data.windows;
+					const discovered = data.apps ?? data.windows;
+					const rows = Array.isArray(discovered) && needle ? discovered.filter((row) => {
+						const item = record(row);
+						return [item.name, item.app_name, item.title].some((value) => typeof value === "string" && value.toLowerCase().includes(needle));
+					}) : discovered;
 					const metadata = Array.isArray(rows) ? rows.slice(offset, offset + 50).map((row) => {
 						const item = record(row);
 						return { ...select(item, ["pid", "window_id", "name", "app_name", "title", "active", "running", "is_on_screen", "minimized"]),
@@ -264,14 +298,15 @@ export class ComputerWorkflow {
 					const remaining = Array.isArray(rows) ? Math.max(0, rows.length - offset - (metadata?.length ?? 0)) : 0;
 					return { content: [{ type: "text", text: JSON.stringify({
 						...outcome(reply), ...select(data, ["pid", "window_id", "name", "title"]),
-						items: metadata, offset, total: Array.isArray(rows) ? rows.length : undefined,
+						items: metadata, query, offset, total: Array.isArray(rows) ? rows.length : undefined,
 						omitted: remaining || undefined, next_offset: remaining ? offset + 50 : undefined,
-						guidance: name === "computer_launch" ? "Capture the exact target before input." : remaining ? "Pass next_offset as offset with the same pid selection. Lists refresh per call." : undefined,
+						guidance: name === "computer_launch" ? "Capture the exact target before input." : remaining ? "Pass next_offset as offset with the same pid and query. Lists refresh per call." : undefined,
 					}) }], details: {}, isError: driverRefused(reply) };
 				}
 				const target = targetFrom(input);
 				if (name === "computer_observe") {
 					const crop = input.crop === undefined ? undefined : this.crop(input, this.fresh(input, previous));
+					failureCode = "capture_failed";
 					const captured = await this.capture(target, combined, previous, crop);
 					const unchanged = this.lastCapture?.fingerprint === captured.fingerprint && sameTarget(this.lastCapture.target, target);
 					const repeats = crop ? 0 : unchanged ? (this.lastCapture?.repeats ?? 0) + 1 : 1;
@@ -289,14 +324,24 @@ export class ComputerWorkflow {
 					: args });
 				if (this.lastAction?.unchanged && this.lastAction.signature === signature && this.lastAction.fingerprint === grounded.fingerprint)
 					throw new Error("The identical action had no visible change. Choose a different grounded action; never retry blindly.");
+				combined.throwIfAborted();
+				inputDispatched = true;
 				const reply = await abortable(this.driver.call(operation, args, combined), combined);
 				combined.throwIfAborted();
-				const actionOutcome = outcome(reply, name === "computer_text" ? input.text : undefined);
+				actionOutcome = outcome(reply, name === "computer_text" ? input.text : undefined);
 				const recoveryGuidance = "retry_from_character" in actionOutcome && actionOutcome.retry_from_character !== undefined
 					? "Verify the field in a fresh image before considering any remaining suffix. retry_from_character is a zero-based Unicode code-point offset, not UTF-16. retryable is driver advice, not authorization to retry."
 					: undefined;
-				if (driverRefused(reply)) return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome,
-					guidance: recoveryGuidance ?? "Capture again before deciding; never retry input blindly." }) }], details: {}, isError: true };
+				if (driverRefused(reply)) {
+					const data = driverData(reply);
+					const backgroundUnavailable = [data.code, data.refusal, data.error, record(data.refusal).code, record(data.error).code].includes("background_unavailable");
+					const guidance = [
+						"The failed action consumes its token. Get a fresh capture of the exact target before any next action, including window focus. Copy the new token exactly. Input may have taken effect; never retry blindly.",
+						backgroundUnavailable ? "After the fresh capture, foreground input is the next candidate if permitted, not another background shortcut. Inspect the field before deciding." : undefined,
+						recoveryGuidance,
+					].filter(Boolean).join(" ");
+					return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome, guidance }) }], details: {}, isError: true };
+				}
 				try {
 					const after = await this.capture(target, combined);
 					const unchanged = after.fingerprint === grounded.fingerprint;
@@ -304,19 +349,32 @@ export class ComputerWorkflow {
 					this.lastCapture = { fingerprint: after.fingerprint, target, repeats: 0 };
 					return this.imageResult(after, { ...actionOutcome, unchanged,
 						guidance: recoveryGuidance ?? (unchanged ? "No visible change; this does not prove failure. Do not repeat input blindly." : "Inspect the post-action image to verify the intended effect.") });
-				} catch (error) {
+				} catch {
 					combined.throwIfAborted();
 					return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome,
-						observation: "unavailable", guidance: recoveryGuidance ?? "Input may have taken effect. Capture again before deciding; never repeat blindly.",
-						error: error instanceof Error ? error.message.slice(0, 300) : "Post-action capture failed.",
+						observation: "unavailable", guidance: `Input may have taken effect. Get a fresh capture of the exact target before any next action, including window focus; never repeat blindly. ${recoveryGuidance ?? "Inspect the field before deciding."}`,
+						error: "Post-action capture failed.",
 					}) }], details: {}, isError: true };
 				}
 			}, combined);
 			if (result.isError) await this.close();
 			return result;
 		} catch (error) {
-			await this.close();
-			throw new Error(`Computer workflow stopped. Input may have taken effect; observe before deciding, never retry blindly. ${error instanceof Error ? error.message : String(error)}`);
+			let cleanup = "confirmed";
+			try { await this.close(); } catch { cleanup = "unconfirmed"; }
+			throw new Error(JSON.stringify({
+				...actionOutcome,
+				code: inputDispatched ? "input_dispatch_failed" : error instanceof ObservationError ? error.code : failureCode,
+				input: inputDispatched ? "uncertain" : "not_dispatched",
+				applicationEffect: "unverified",
+				message: inputDispatched
+					? "Computer workflow stopped after dispatch began. Input may have taken effect."
+					: `Computer workflow stopped. No input was sent by this call. ${error instanceof Error ? error.message.slice(0, 300) : "Operation unavailable."}`,
+				guidance: inputDispatched
+					? "Get a fresh capture of the exact target before any next action, including window focus. Inspect for possible effects; never repeat input blindly. Copy the new token exactly."
+					: freshActionGuidance,
+				cleanup,
+			}));
 		}
 	}
 

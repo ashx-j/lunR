@@ -8,6 +8,7 @@ export interface ModelAuth {
 	apiKey?: string;
 	headers?: ProviderHeaders;
 	baseUrl?: string;
+	externalClaudeCode?: ExternalClaudeCodeCredential;
 }
 
 /**
@@ -34,7 +35,18 @@ export interface OAuthCredential extends OAuthCredentials {
 }
 
 /** One type-tagged credential per provider — the shape of today's auth.json. */
-export type Credential = ApiKeyCredential | OAuthCredential;
+export interface ExternalClaudeCodeCredential {
+	type: "external_claude_code";
+	version: 1;
+	manager: "claude-code";
+	command: string;
+	python: string;
+	configDir?: string;
+	accountFingerprint?: string;
+	routes?: string[];
+}
+
+export type Credential = ApiKeyCredential | OAuthCredential | ExternalClaudeCodeCredential;
 
 /** Non-secret credential metadata for account/status enumeration. */
 export interface CredentialInfo {
@@ -152,6 +164,8 @@ export interface AuthInteraction {
 
 	prompt(prompt: AuthPrompt): Promise<string>;
 	notify(event: AuthEvent): void;
+	/** Interactive terminal handoff for external account login, never used by headless callers. */
+	handoff?(command: string, args: readonly string[], env: Record<string, string>): Promise<void>;
 }
 
 /**
@@ -193,7 +207,7 @@ export interface OAuthAuth {
 	/** Selector label for the subscription login option, e.g. "Sign in with SuperGrok or X Premium". */
 	loginLabel?: string;
 
-	login(interaction: AuthInteraction): Promise<OAuthCredential>;
+	login(interaction: AuthInteraction): Promise<OAuthCredential | ExternalClaudeCodeCredential>;
 
 	/**
 	 * Exchange the refresh token. Network call; throws on failure

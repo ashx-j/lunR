@@ -1,14 +1,10 @@
 # Image-only computer use
 
-This dev-channel integration combines stable lunR 0.2.21 with image-only computer
-use. Offline builds, focused automated tests, local scripted-provider startup
-checks, and isolated package installation pass. No live desktop capture or input,
-native runtime launch, or remote inference ran. Stable production publication
-remains blocked. Smooth cursor animation is not included.
-
-The dev package is `@ashx-j/lunr-dev`, with command `lunr-dev` and update command
-`lunr-dev update`. Stable `@ashx-j/lunr` and `lunr` remain separate. Both commands
-share `~/.lunr/agent` credentials, settings, and sessions.
+The image-only implementation shipped on `lunr-dev` as `0.2.21-dev.12.1`
+and received user testing. Automated validation passed on the dev integration.
+This PR builds on that implementation without dev-channel naming or update
+changes, and repairs failure reporting and unchanged-image detection. Smooth cursor animation is not implemented. Production
+publication remains blocked pending the native runtime's separate approval.
 
 ## Setup and permissions
 
@@ -29,8 +25,8 @@ Intel macOS have no native discovery tool. All computer tools except release
 require an image-capable model. There is no text-only accessibility fallback.
 Gateway sessions operate the gateway host, not the chat client's device.
 
-Manual approves observation and input. `computer_end` releases without approval.
-Plan allows relevant observation and release, but blocks mutation. Auto allows
+`computer_end` releases without approval. Read-only allows relevant observation
+and release, but blocks mutation. Yolo and Auto permit input. Auto allows
 requested, implied, or necessary GUI work without lunR per-call prompts. In
 Yolo, ask before introducing GUI work into an otherwise non-GUI task. These
 intent rules are agent guidance, not a natural-language authorization classifier.
@@ -47,10 +43,14 @@ recording, or permission tool is exposed.
 
 ## Observe, act, inspect
 
-1. Use `computer_apps` for app identities or windows for a PID. Results allowlist
-   at most 50 rows and truncate titles to 240 characters. Pass `next_offset` as
-   `offset` with the same PID selection to retrieve more apps or windows. Lists
-   refresh per call, so changing native order can shift page boundaries. PID zero
+1. Use `computer_apps` for app identities or windows for a PID. For a known app
+   or title, pass `query` to avoid paging through unrelated identities. It matches
+   a case-insensitive literal substring in `name`, `app_name`, or `title` before
+   pagination and display truncation. `total` counts matching rows. Omit `query`
+   to browse all rows. Results allowlist at most 50 rows and truncate titles to
+   240 characters. Pass `next_offset` as `offset` with the same PID and query to
+   retrieve more matches. Lists refresh per call, so changing native order can
+   shift page boundaries. PID zero
    identifies an installed app that is not running. Window `bounds` are native
    geometry, not screenshot coordinates.
 2. Use `computer_observe` with an exact `pid` and `window_id`, or `desktop=true`.
@@ -62,6 +62,12 @@ recording, or permission tool is exposed.
 5. Call `computer_end` when finished.
 
 The token lasts 30 seconds, belongs to one exact target, and permits one action.
+Copy it exactly, without abbreviating or reconstructing it. A failed action
+consumes the active token. Capture again before any next action, including window
+focus. `background_unavailable` makes foreground input the next candidate after
+a fresh capture, if permitted. Do not substitute another background shortcut.
+Token rejection does not prove foreground typing failed.
+
 Every new observation invalidates the previous token before capture. Failed,
 cancelled, or malformed captures issue no token. Old tokens cannot be replayed,
 including after a successful action returns a new image.
@@ -80,10 +86,20 @@ capture an exact window before acting.
 
 A successful transport or a changed image does not prove the intended application
 effect. Results preserve partial/unverifiable outcomes and bounded refusal codes.
+Pre-dispatch failures report `input:"not_dispatched"` and state that this call
+sent no input. They do not establish whether earlier calls had an effect. Token
+codes distinguish a missing active observation, a mismatched token, a wrong
+target, and expiry only while that state is available. A closed workflow cannot
+identify whether an old token was consumed or unknown. Once dispatch begins,
+transport failure reports `input:"uncertain"` and possible effects. Neither path
+retries input. Unparseable driver text is omitted rather than forwarded as a
+message; structured refusal fields remain bounded and allowlisted.
 When input returns but its post-image fails, the tool reports possible effects
 and stops the workflow. Capture again before deciding; never repeat input blindly.
 After an unchanged post-image, the same action against identical captured pixels
-is refused. Click signatures normalize omitted left-button/single-click/empty
+is refused. Pixel identity hashes decoded full-image RGBA values and dimensions,
+not PNG encoding bytes, before cropping or resizing. Full captures reuse the
+image processor's decode, and crops reuse the existing full-image decode. Click signatures normalize omitted left-button/single-click/empty
 modifier defaults and modifier order. Three consecutive unchanged full observations
 stop polling in that workflow. Crops are explicit requests, not an automatic retry loop.
 
@@ -166,7 +182,8 @@ released. Driver-internal helper lifetime and held-input cancellation still need
 native acceptance.
 
 Gateway cron creates fresh permission contexts with the configured default mode,
-without gateway approvals or its approval handler. Missing approval blocks calls.
+without gateway approvals or its approval handler. Read-only blocks input, and
+missing approval blocks operations that still require confirmation.
 Session shutdown precedes disposal, even after partial extension binding failure.
 TUI cron continues to use its live permission context.
 
@@ -201,37 +218,104 @@ Release staging creates exact-version host-specific optional payload packages.
 They contain unchanged archives and no install scripts. Workspace manifests keep
 unpublished payload dependencies out. Standalone asset copying selects one
 opaque archive. Stable publication remains gated on production approval and a
-new CLI version. This integration retains dev-channel CLI naming, update routing,
-and exact-version package/lock rewriting. Dev publication uses `latest` only for
-`@ashx-j/lunr-dev`; shared libraries and payload packages use the `dev` tag. Stable
-tags remain unchanged. The user requested a dev-channel update and installation,
-with automated release checks complete. Publication and global installation remain
-separate distribution steps.
+new CLI version. Dev-channel update/publication changes were not ported here.
 
-## Pending acceptance
+## Verification and remaining acceptance
 
-Source tests cover image-only capture flags, metadata allowlists, image/crop
-mapping, fresh tokens, single-action post-images, bounded unchanged behavior,
-uncertain outcomes, permissions, and ownership. Source-review fixes add equivalent
-click defaults, app/window pagination, and Unicode partial-typing recovery coverage.
-The focused 23-suite run passes 265 tests, including a real Photon PNG crop
-fixture that checks output pixels and coordinate mapping. All five offline package
-builds and the Node bundle pass. Clean-parent first-request capture confirms that
-`computer_load` is the only addition to the unsupported-host tool inventory; the
-supported-host fingerprint is current. Private prompt and tool snapshots remain
-local validation artifacts.
+After integrating v0.2.24 master, all five offline package builds and the Node
+bundle pass. With the PR #118 baseline repairs integrated, validation passes
+391 focused tests across 31 files and eight archive/package tests. Installation and archive staging tests now create inert
+fixtures, so source tests need no native release payload. The Windows installation
+test exercises real extraction, locking, cache reuse, and helper-tamper rejection
+without executing either fixture file. Fake-driver tests cover exact-token
+rejection with zero action dispatch, background refusal followed by fresh-capture
+foreground input, and uncertain or partial post-dispatch outcomes. Real PNG
+fixtures reproduce encoding-independent pixel identity and preserve crop mapping.
+First-paint and first-request checks pass for both browser settings; removing only
+`computer_load` reproduces master's unchanged tool hashes.
 
-Seven dev package tarballs pass isolated installation and relocation checks,
-host-only payload selection, archive verification, omitted-optional handling, and
-the standalone installer lock. First-paint and first-turn subagent, MCP, LSP, and
-local HTTP fixtures pass without remote inference. These checks do not launch the
-native driver or prove application effects.
+All three pinned upstream archives match their committed byte counts and SHA-256
+hashes. Seven public-name tarballs staged with those unchanged real payloads pass
+relocated installation, first requests, all supported OS/CPU selections, omitted
+optional-payload recovery, and standalone installer `npm ci --ignore-scripts`.
+Staging validates rewritten JavaScript and declaration imports and exact payload
+versions in both locks. These checks ran on Windows x64 without launching the
+native driver; OS/CPU selection tests do not establish operation on other hardware.
+Archive integrity and packaging are verified, but native signing, permission and
+input acceptance remain separate. Production approval is still development-only;
+publication requires separate approval and a new CLI version.
 
-Explicitly authorized desktop acceptance remains required. Native gates include
-Windows locked/UAC/integrity states,
-Electron/native apps, display scaling and moved/resized windows, Unicode,
-held-input cancellation, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
-Cursor/runtime changes need a separate scoped decision before implementation.
+The PR also incorporates the separately tracked baseline repairs from PR #118.
+That work fixes AI catalog subpath resolution in extension loading and updates
+fixtures for current gateway, shutdown, provider and subscription contracts.
+Its 152 focused tests across ten files pass. The complete Ubuntu log before
+those repairs records 101 coding-agent failures across 27 suites and 11 AI
+failures, more than the subset exposed by check annotations. Agent passes
+181/181 in that run. Clean full-suite CI still requires broader baseline work;
+local Windows-only diagnostics are not evidence of Ubuntu failures.
+The automated checks did not operate a desktop or launch CuaDriver.
+
+A separately authorized Windows x64 smoke test used this branch's compiled
+computer tools with the real pinned runtime. It launched a new blank Notepad
+window, captured that exact window, and typed a fixed 39-character phrase using
+background delivery. The post-action screenshot showed the complete expected
+text and character count. The driver's outcome remained `unverifiable`; the
+image established the application effect. `computer_end` confirmed shutdown and
+released the desktop lease. No document was saved or installed CLI changed.
+This verifies basic launch, window capture and background text input only.
+A later Windows x64 test on an owned scratch Notepad window found that background
+Ctrl+A failed with `tool_invocation_failed`; a fresh image showed no selection.
+A fresh-token `foreground=true` retry initially returned the same XAML/UIA error.
+Pinned upstream source at `d8028a7943087ee258dc1b4d19dc12a7cd27669c`
+routes `hotkey` for a XAML window through UIA before checking `delivery_mode`.
+This native refusal was not a `background_unavailable` code. The unchanged
+screenshot established that the background shortcut had not selected the text.
+
+The Windows workflow now sends foreground modifier shortcuts without x/y through
+that pin's `press_key` with `modifiers`, whose foreground branch uses verified
+window focus and SendInput. Background shortcuts, keys with image coordinates,
+and non-Windows dispatch remain unchanged. On a subsequent parent-run test,
+foreground Ctrl+A selected all 39 characters in the same owned Notepad scratch;
+its post-action image showed the selection. Foreground Ctrl+N then opened a
+blank unsaved tab in that window, leaving the earlier scratch tab intact.
+
+The parent next cancelled a 2048-character `computer_text` call 86 ms after the
+real SDK call began, while it was still pending. The result reported
+`input_dispatch_failed`, `input:uncertain` and `cleanup:confirmed`. The native
+runtime exited and its desktop lease was absent before a fresh workflow captured
+the same owned window. That image showed exactly six characters in the new tab.
+This verifies partial text input followed by in-flight cancellation, cleanup and
+reacquisition, not a pre-dispatch cancellation or complete text delivery.
+`computer_end` shut down the new runtime and released its lease. Both tabs
+remained unsaved; other user documents were untouched. No global CLI changed.
+The complete-gesture tool API did not exercise held modifier or mouse-button
+release under abort, which remains unverified.
+
+The dev integration passed all five offline package builds, the Node bundle,
+265 focused tests across 23 suites, and eight archive/package tests. A real
+Photon fixture checks cropped pixels and coordinate mapping. First-paint and
+first-request checks passed with the regenerated supported-host fingerprint;
+removing only `computer_load` reproduced the unchanged unsupported-host baseline.
+Seven local dev tarballs passed relocated installation, OS/CPU payload selection,
+omitted-optional handling, and installer-lock checks. The dev publication workflow
+also passed. These historical results describe the dev integration. The current branch's
+stable packaging checks are recorded above.
+
+The user reported testing the published dev build; specific applications and
+scenarios were not supplied. This does not establish full platform acceptance.
+Native gates remain Windows locked/UAC/integrity states, other Electron/native
+apps, display scaling and moved/resized windows, Unicode, held modifier/button
+release under abort, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
+Provider-driven computer tool choice has not been live-qualified. Cursor/runtime
+changes need a separate scoped decision before implementation. Provider token
+savings remain unmeasured. An offline fake-driver discovery comparison finds a
+named app at row 118 of 139 synthetic apps in one query instead of three
+unfiltered pages. It
+returns one identity instead of 139 and 147 result-text characters instead of
+8699. The loaded computer-tool definitions grow by 230 serialized characters;
+the first-request definitions are unchanged because detailed tools load on demand.
+These are call and text-payload measurements, not model tokens or billing. The
+comparison uses no desktop, provider, screenshot resizing, or history pruning.
 
 ## Privacy
 

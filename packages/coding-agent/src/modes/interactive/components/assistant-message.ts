@@ -1,17 +1,32 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import type { ReasoningDisplay } from "../../../core/settings-manager.ts";
+import { copyToClipboard } from "../../../utils/clipboard.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { CopyableTextBlockComponent, type CopyableTextStatus, parseCopyableTextSegments } from "./copyable-text.ts";
 import {
 	formatThoughtDuration,
 	isThinkingRunComplete,
 	type ThinkingRunTiming,
 	thinkingSnippet,
 } from "./thinking-summary.ts";
-import { ThinkingTailComponent } from "./thinking-tail.ts";
+import { ThinkingLineComponent, ThinkingTailComponent } from "./thinking-tail.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+export interface AssistantMessageOptions {
+	copyText?: (text: string) => Promise<void>;
+	requestRender?: () => void;
+	reasoningDisplay?: ReasoningDisplay;
+	onThinkingAnimationChange?: (active: boolean) => void;
+}
+
+interface CopyState {
+	payload: string;
+	status: CopyableTextStatus;
+}
 
 /**
  * Component that renders a complete assistant message
@@ -37,6 +52,13 @@ export class AssistantMessageComponent extends Container {
 	private lastMessage?: AssistantMessage;
 	private thinkingSource?: AssistantMessage;
 	private hasToolCalls = false;
+	private readonly copyText: (text: string) => Promise<void>;
+	private readonly requestRender: () => void;
+	private readonly copyStates = new Map<string, CopyState>();
+	private reasoningDisplay: ReasoningDisplay;
+	private readonly onThinkingAnimationChange?: (active: boolean) => void;
+	private readonly thinkingAnimationStart = performance.now();
+	private thinkingAnimationActive = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -45,6 +67,7 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		thinkingCollapse = false,
+		options: AssistantMessageOptions = {},
 	) {
 		super();
 
@@ -53,6 +76,10 @@ export class AssistantMessageComponent extends Container {
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
+		this.copyText = options.copyText ?? copyToClipboard;
+		this.requestRender = options.requestRender ?? (() => {});
+		this.reasoningDisplay = options.reasoningDisplay ?? "auto";
+		this.onThinkingAnimationChange = options.onThinkingAnimationChange;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -68,6 +95,11 @@ export class AssistantMessageComponent extends Container {
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 		}
+	}
+
+	setReasoningDisplay(display: ReasoningDisplay): void {
+		this.reasoningDisplay = display;
+		if (this.lastMessage) this.updateContent(this.lastMessage, this.thinkingSourceOptions());
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
@@ -116,14 +148,14 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	handleClick(localY: number, width: number): boolean {
+	handleClick(localY: number, width: number, localX?: number): boolean {
 		const contentWidth = width;
 		let y = 0;
 		for (const child of this.contentContainer.children) {
 			const h = child.render(contentWidth).length;
 			if (localY >= y && localY < y + h) {
 				if (typeof child.handleClick === "function") {
-					return child.handleClick(localY - y, contentWidth);
+					return child.handleClick(localY - y, contentWidth, localX);
 				}
 				return false;
 			}
@@ -167,6 +199,7 @@ export class AssistantMessageComponent extends Container {
 	updateContent(message: AssistantMessage, options?: { thinkingSource?: AssistantMessage }): void {
 		this.lastMessage = message;
 		this.thinkingSource = options?.thinkingSource;
+		this.thinkingAnimationActive = false;
 
 		// Clear content container
 		this.contentContainer.clear();
@@ -189,20 +222,30 @@ export class AssistantMessageComponent extends Container {
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
-				// Assistant text messages with no background - trim the text
-				// Set paddingY=0 to avoid extra spacing before tool executions
-				// lunr: leading ● marks the first text block (never thinking blocks). It rides
-				// the defaultTextStyle below, so it renders bright white like the body.
-				const trimmed = content.text.trim();
-				const text = isFirstTextBlock ? `● ${trimmed}` : trimmed;
-				isFirstTextBlock = false;
-				// lunr: theme-polish — assistant message body renders bright white via the
-				// shared userMessageText token (same knob as user messages).
-				this.contentContainer.addChild(
-					new Markdown(text, this.outputPad, 0, this.markdownTheme, {
-						color: (body: string) => theme.fg("userMessageText", body),
-					}),
-				);
+				for (const segment of parseCopyableTextSegments(content.text)) {
+					if (segment.type === "markdown") {
+						const trimmed = segment.text.trim();
+						if (!trimmed) continue;
+						const text = isFirstTextBlock ? `● ${trimmed}` : trimmed;
+						isFirstTextBlock = false;
+						this.contentContainer.addChild(
+							new Markdown(text, this.outputPad, 0, this.markdownTheme, {
+								color: (body: string) => theme.fg("userMessageText", body),
+							}),
+						);
+						continue;
+					}
+
+					const key = `${i}:${segment.start}`;
+					const copyState = this.copyStates.get(key);
+					const status = copyState?.payload === segment.payload ? copyState.status : "idle";
+					if (copyState && copyState.payload !== segment.payload) this.copyStates.delete(key);
+					this.contentContainer.addChild(
+						new CopyableTextBlockComponent(segment.payload, segment.complete, this.outputPad, status, () =>
+							this.copyPayload(key, segment.payload),
+						),
+					);
+				}
 			} else if (content.type === "thinking") {
 				thinkingRunIndex++;
 				const displayBlocks: string[] = [];
@@ -261,6 +304,30 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}
+		this.onThinkingAnimationChange?.(this.thinkingAnimationActive);
+	}
+
+	private copyPayload(key: string, payload: string): void {
+		if (this.copyStates.get(key)?.status === "copying") return;
+		this.copyStates.set(key, { payload, status: "copying" });
+		this.refreshCopyStatus();
+
+		Promise.resolve()
+			.then(() => this.copyText(payload))
+			.then(() => {
+				this.copyStates.set(key, { payload, status: "copied" });
+				this.refreshCopyStatus();
+			})
+			.catch((error: unknown) => {
+				const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+				this.copyStates.set(key, { payload, status: { error: message || "Unknown error" } });
+				this.refreshCopyStatus();
+			});
+	}
+
+	private refreshCopyStatus(): void {
+		if (this.lastMessage) this.updateContent(this.lastMessage, this.thinkingSourceOptions());
+		this.requestRender();
 	}
 
 	private renderThinkingRun(
@@ -292,7 +359,10 @@ export class AssistantMessageComponent extends Container {
 					: "✻ Thought";
 			const block = new Container();
 			block.addChild(new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0));
-			const snippet = thinkingSnippet(thinkingBlocks.join("\n\n"));
+			const joinedThinking = thinkingBlocks.join("\n\n");
+			const snippet = thinkingSnippet(
+				displayMessage.provider === "openai-codex" ? joinedThinking.replaceAll("**", "") : joinedThinking,
+			);
 			if (snippet) {
 				block.addChild(new Text(theme.fg("thinkingText", theme.italic(snippet)), this.outputPad + 2, 0));
 			}
@@ -303,6 +373,25 @@ export class AssistantMessageComponent extends Container {
 			return;
 		}
 		if (!runComplete && !this.isRunExpanded(thinkingRunIndex)) {
+			const oneLine =
+				this.reasoningDisplay === "one-line" ||
+				(this.reasoningDisplay === "auto" && displayMessage.provider === "openai-codex");
+			if (oneLine) {
+				this.thinkingAnimationActive = true;
+				// The line owns its vertical padding, including the initial message spacer.
+				if (this.contentContainer.children.length === 1 && this.contentContainer.children[0] instanceof Spacer) {
+					this.contentContainer.clear();
+				}
+				wrap(
+					new ThinkingLineComponent(
+						thinkingBlocks.join("\n\n"),
+						this.outputPad,
+						this.markdownTheme,
+						this.thinkingAnimationStart,
+					),
+				);
+				return;
+			}
 			wrap(
 				new ThinkingTailComponent(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("thinkingText", text),

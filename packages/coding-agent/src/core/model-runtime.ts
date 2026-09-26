@@ -8,6 +8,7 @@ import {
 	type AuthInteraction,
 	type AuthResult,
 	type AuthType,
+	anthropicRequestRoute,
 	type Context,
 	type Credential,
 	type CredentialInfo,
@@ -558,6 +559,7 @@ export class ModelRuntime implements Models {
 		if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
 
 		const { transformHeaders, ...providerOptions } = options ?? {};
+		const route = anthropicRequestRoute(model.provider, resolution, options);
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
 		const env =
@@ -569,7 +571,7 @@ export class ModelRuntime implements Models {
 			model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
 			options: {
 				...providerOptions,
-				apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
+				...route,
 				headers,
 				env,
 			},

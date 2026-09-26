@@ -66,9 +66,8 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 		return ["COPILOT_GITHUB_TOKEN"];
 	}
 
-	// ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
 	if (provider === "anthropic") {
-		return ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+		return ["ANTHROPIC_API_KEY"];
 	}
 
 	const envMap: Record<string, string> = {

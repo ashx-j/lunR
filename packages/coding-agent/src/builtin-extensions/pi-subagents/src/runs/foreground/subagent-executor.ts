@@ -5,6 +5,8 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
+import { getAgentDir } from "../../shared/utils.ts";
 import { allocateChildId, normalizeChildSpec } from "../../shared/child-spec.ts";
 import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
@@ -1151,6 +1153,7 @@ async function resumeAsyncRun(input: {
 	const sessionName = resolveIntercomSessionTarget(input.deps.pi.getSessionName(), input.ctx.sessionManager.getSessionId());
 	const intercomBridge = resolveIntercomBridge({
 		config: input.deps.config.intercomBridge,
+		cwd: input.requestCwd,
 		context: input.params.context,
 		orchestratorTarget: sessionName,
 	});
@@ -1215,6 +1218,7 @@ async function resumeAsyncRun(input: {
 			worktreeSetupHookTimeoutMs: input.deps.config.worktreeSetupHookTimeoutMs,
 			worktreeBaseDir: input.deps.config.worktreeBaseDir,
 			controlConfig: resolveControlConfig(input.deps.config.control, input.params.control),
+			communicationEnabled: intercomBridge.communicationEnabled,
 			controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 			childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 			globalConcurrencyLimit: input.deps.config.globalConcurrencyLimit,
@@ -1311,6 +1315,7 @@ async function resumeAsyncRun(input: {
 		worktreeSetupHookTimeoutMs: input.deps.config.worktreeSetupHookTimeoutMs,
 		worktreeBaseDir: input.deps.config.worktreeBaseDir,
 		controlConfig: recoveryDescriptor?.controlConfig ?? resolveControlConfig(input.deps.config.control, input.params.control),
+		communicationEnabled: intercomBridge.communicationEnabled,
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		availableModels,
@@ -2048,7 +2053,9 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			description: task.description,
 			permissions: task.permissions,
 			cwd: task.cwd,
+			model: task.model,
 			tier: task.tier,
+			thinking: task.thinking,
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
 			...(task.output !== undefined && task.output !== true ? { output: task.output } : {}),
 			...(task.outputMode !== undefined ? { outputMode: task.outputMode } : {}),
@@ -2064,6 +2071,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				worktree: params.worktree,
 			}],
 			resultMode: "parallel",
+			communicationEnabled: intercomBridge.communicationEnabled,
 			goal: params.tasks[0]?.task ?? "",
 			ctx: asyncCtx,
 			availableModels,
@@ -2102,6 +2110,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			chain,
 			task: params.task,
 			goal: resolveAsyncEventGoal(params.task, rawChain),
+			communicationEnabled: intercomBridge.communicationEnabled,
 			ctx: asyncCtx,
 			availableModels,
 			cwd: effectiveCwd,
@@ -2199,6 +2208,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			worktreeBaseDir: deps.config.worktreeBaseDir,
 			controlConfig,
+			communicationEnabled: intercomBridge.communicationEnabled,
 			controlIntercomTarget,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(agent, index) : undefined,
 			nestedRoute,
@@ -2264,6 +2274,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		controlConfig,
 		childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
 		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
+		communicationEnabled: data.intercomBridge.communicationEnabled,
 		foregroundControl,
 		nestedRoute: foregroundControl?.nestedRoute,
 		chainSkills,
@@ -2327,6 +2338,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			controlConfig,
 			controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
+			communicationEnabled: data.intercomBridge.communicationEnabled,
 			nestedRoute: data.nestedRoute,
 			timeoutMs: data.timeoutMs,
 			turnBudget: data.turnBudget,
@@ -2398,6 +2410,7 @@ interface ForegroundParallelRunInput {
 	onControlEvent?: (event: ControlEvent) => void;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	orchestratorIntercomTarget?: string;
+	communicationEnabled?: boolean;
 	foregroundControl?: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
 	concurrencyLimit: number;
 	globalSemaphore?: Semaphore;
@@ -2596,6 +2609,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			onDetachedExit: (result) => updateRememberedForegroundChild(input.state, { runId: input.runId, mode: "parallel", cwd: taskCwd, sessionId: input.parentSessionId, index, result, events: input.intercomEvents }),
 			intercomSessionName: input.childIntercomTarget?.(task.agent, index),
 			orchestratorIntercomTarget: input.orchestratorIntercomTarget,
+			communicationEnabled: input.communicationEnabled,
 			nestedRoute: input.foregroundControl?.nestedRoute,
 			modelOverride: input.modelOverrides[index],
 			thinkingOverride: input.thinkingOverrideForTask(task.agent, index, input.modelOverrides[index]),
@@ -2810,7 +2824,9 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 					description: t.description,
 					permissions: t.permissions,
 					cwd: t.cwd,
+					model: t.model,
 					tier: t.tier,
+					thinking: t.thinking,
 					...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
 					...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
 					...(behaviorOverrides[i]?.outputMode !== undefined ? { outputMode: behaviorOverrides[i]!.outputMode } : {}),
@@ -2824,6 +2840,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
 				resultMode: "parallel",
 				goal: taskTexts[0] ?? "",
+				communicationEnabled: data.intercomBridge.communicationEnabled,
 				ctx: asyncCtx,
 				availableModels,
 				cwd: effectiveCwd,
@@ -2924,6 +2941,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			onControlEvent,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
 			orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
+			communicationEnabled: data.intercomBridge.communicationEnabled,
 			foregroundControl,
 			concurrencyLimit: parallelConcurrency,
 			globalSemaphore: new Semaphore(deps.config.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT),
@@ -3153,6 +3171,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			};
 			return executeAsyncSingle(id, {
 				spec: { ...spec, task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(task) : task },
+				communicationEnabled: data.intercomBridge.communicationEnabled,
 				goal: task,
 				ctx: asyncCtx,
 				availableModels,
@@ -3263,6 +3282,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		onControlEvent,
 		intercomSessionName: childIntercomTarget,
 		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
+		communicationEnabled: data.intercomBridge.communicationEnabled,
 		nestedRoute: foregroundControl?.nestedRoute,
 		index: 0,
 		modelOverride,
@@ -3500,6 +3520,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				return resumeAsyncRun({ params: paramsWithResolvedCwd, requestCwd, ctx, deps });
 			}
 			if (action === "steer") {
+				if (!subagentCommunicationEnabled(requestCwd, getAgentDir())) {
+					return { content: [{ type: "text", text: "Subagent communication is off in /settings. Wait for the child to complete instead of steering it." }], isError: true, details: { mode: "management", results: [] } };
+				}
 				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 				const message = (paramsWithResolvedCwd.message ?? paramsWithResolvedCwd.task ?? "").trim();
 				if (!message) return { content: [{ type: "text", text: "action='steer' requires message." }], isError: true, details: { mode: "management", results: [] } };
@@ -3679,6 +3702,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
+			cwd: ctx.cwd,
 			context: effectiveParams.context,
 			orchestratorTarget: sessionName,
 		});

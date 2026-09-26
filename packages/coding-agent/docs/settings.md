@@ -57,12 +57,14 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `smoothStreaming` | boolean | `false` | Reveal streamed responses grapheme by grapheme (~30 FPS). Interactive TUI only |
 | `subagentSpinner` | string | `"braille"` | Foreground and async running child indicator: `"braille"`, `"orbit"`, `"snake"`, or `"sparkle"` |
 | `thinkingCollapse` | boolean | `true` | Collapse completed thinking blocks to a short label plus the first sentence |
+| `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
-| `defaultPermissionMode` | string | `"manual"` | Startup permission mode: `"manual"`, `"yolo"`, `"plan"`, or `"auto"` |
+| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). Saved `"manual"` becomes yolo; saved `"plan"` becomes read-only. |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
 | `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
 | `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |
+| `todosEnabled` | boolean | `true` | Enable todo guidance, the `todo` tool, and its editor widget. Global-only |
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |

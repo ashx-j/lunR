@@ -24,6 +24,7 @@ import {
 	type ModelInstructionsSettings,
 	type ModelTierName,
 	type ModelTiersSettings,
+	type ReasoningDisplay,
 	type RollbackCapture,
 	type RollbackScope,
 	SKILL_TAG_CHARACTERS,
@@ -89,6 +90,7 @@ export interface SettingsConfig {
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
 	thinkingCollapse: boolean;
+	reasoningDisplay: ReasoningDisplay;
 	showCacheMissNotices: boolean;
 	/** Display value; unset settings render as "short". */
 	cacheRetention: "none" | "short" | "long";
@@ -112,8 +114,12 @@ export interface SettingsConfig {
 	confirmLargeSubagentLaunches: boolean;
 	computerUse?: boolean;
 	computerForeground?: boolean;
+	subagentCommunicationEnabled: boolean;
+	automaticSubagentDelegation: boolean;
+	browserEnabled: boolean;
 	memoryEnabled: boolean;
 	memoryCharCap: number;
+	todosEnabled: boolean;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
@@ -157,6 +163,7 @@ export interface SettingsCallbacks {
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
 	onThinkingCollapseChange: (collapse: boolean) => void;
+	onReasoningDisplayChange: (display: ReasoningDisplay) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCacheRetentionChange: (retention: "none" | "short" | "long") => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
@@ -178,11 +185,15 @@ export interface SettingsCallbacks {
 	onModelInstructionsEnabledChange: (enabled: boolean) => void;
 	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
 	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
+	onSubagentCommunicationChange: (enabled: boolean) => void;
+	onAutomaticSubagentDelegationChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
 	onComputerUseChange?: (enabled: boolean) => void;
 	onComputerForegroundChange?: (enabled: boolean) => void;
+	onBrowserEnabledChange: (enabled: boolean) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
+	onTodosEnabledChange: (enabled: boolean) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
 	onFooterMcpChange: (enabled: boolean) => void;
@@ -198,6 +209,7 @@ export interface SettingsCallbacks {
 	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
+	onGatewayAction?: (action: string) => void;
 	// lunr: rollback callbacks
 	onRollbackEnabledChange: (enabled: boolean) => void;
 	onRollbackTurnsChange: (turns: number) => void;
@@ -1447,6 +1459,15 @@ export class SettingsSelectorComponent extends Container {
 				disabled: () => config.hideThinkingBlock,
 			},
 			{
+				id: "reasoning-display",
+				label: "Reasoning display",
+				description:
+					"Auto uses one line for OpenAI Codex, four lines for other models. One line has a soft moving highlight.",
+				currentValue: config.reasoningDisplay ?? "auto",
+				values: ["auto", "one-line", "four-lines"],
+				disabled: () => config.hideThinkingBlock,
+			},
+			{
 				id: "cache-miss-notices",
 				label: "Cache miss notices",
 				description: "Prompt cache miss notices in the transcript",
@@ -1491,10 +1512,25 @@ export class SettingsSelectorComponent extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "browser-enabled",
+				label: "Browser",
+				description:
+					"Browse JavaScript pages and interact with websites. Off closes the browser and hides its tool.",
+				currentValue: config.browserEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "agent-memory",
 				label: "Agent memory",
 				description: "Durable facts the agent can manage",
 				currentValue: config.memoryEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "todos",
+				label: "Todos",
+				description: "Agent task list and todo tool",
+				currentValue: config.todosEnabled ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
@@ -1528,11 +1564,37 @@ export class SettingsSelectorComponent extends Container {
 				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
 			},
 			{
+				id: "gateway",
+				label: "Gateway",
+				description: "Phone access and automatic startup",
+				currentValue: "manage",
+				submenu: (_value, done) =>
+					new SelectSubmenu(
+						"Gateway",
+						"Boot startup may require administrator permission. Setup manages bot accounts and approved folders.",
+						[
+							{ value: "setup", label: "Set up Telegram or Discord" },
+							{ value: "status", label: "Show gateway status" },
+							{ value: "start", label: "Start gateway" },
+							{ value: "stop", label: "Stop gateway" },
+							{ value: "autostart login", label: "Start automatically at login" },
+							{ value: "autostart boot", label: "Start automatically at boot" },
+							{ value: "autostart off", label: "Disable automatic startup" },
+						],
+						"",
+						(action) => {
+							done();
+							callbacks.onGatewayAction?.(action);
+						},
+						() => done(),
+					),
+			},
+			{
 				id: "default-permission-mode",
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
-				currentValue: config.defaultPermissionMode,
-				values: ["manual", "yolo", "plan", "auto"],
+				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
+				values: ["yolo", "auto", "read"],
 			},
 			{
 				id: "double-escape-action",
@@ -1591,6 +1653,20 @@ export class SettingsSelectorComponent extends Container {
 				description: "Global and selected-model AGENTS.md loading",
 				currentValue: config.modelInstructions.enabled ? "on" : "off",
 				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
+			},
+			{
+				id: "subagent-communication",
+				label: "Subagent communication",
+				description: "Allow parent and child to exchange messages during a task",
+				currentValue: config.subagentCommunicationEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "automatic-subagent-delegation",
+				label: "Automatic subagent delegation",
+				description: "Let the agent decide when to delegate work",
+				currentValue: config.automaticSubagentDelegation ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "confirm-large-subagent-launches",
@@ -1818,6 +1894,11 @@ export class SettingsSelectorComponent extends Container {
 					case "thinking-collapse":
 						callbacks.onThinkingCollapseChange(newValue === "true");
 						break;
+					case "reasoning-display":
+						if (newValue === "auto" || newValue === "one-line" || newValue === "four-lines") {
+							callbacks.onReasoningDisplayChange(newValue);
+						}
+						break;
 					case "cache-miss-notices":
 						callbacks.onShowCacheMissNoticesChange(newValue === "true");
 						break;
@@ -1829,6 +1910,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "smooth-streaming":
 						callbacks.onSmoothStreamingChange(newValue === "true");
+						break;
+					case "subagent-communication":
+						callbacks.onSubagentCommunicationChange(newValue === "on");
+						break;
+					case "automatic-subagent-delegation":
+						callbacks.onAutomaticSubagentDelegationChange(newValue === "on");
 						break;
 					case "plan-usage-window":
 						callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");
@@ -1842,8 +1929,14 @@ export class SettingsSelectorComponent extends Container {
 					case "computer-foreground":
 						callbacks.onComputerForegroundChange?.(newValue === "on");
 						break;
+					case "browser-enabled":
+						callbacks.onBrowserEnabledChange(newValue === "on");
+						break;
 					case "agent-memory":
 						callbacks.onMemoryEnabledChange(newValue === "on");
+						break;
+					case "todos":
+						callbacks.onTodosEnabledChange(newValue === "on");
 						break;
 					case "search-curator":
 						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
@@ -1859,7 +1952,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					}
 					case "default-permission-mode":
-						callbacks.onDefaultPermissionModeChange(newValue as DefaultPermissionMode);
+						callbacks.onDefaultPermissionModeChange(
+							newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode),
+						);
 						break;
 					case "double-escape-action":
 						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");

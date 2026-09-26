@@ -1,6 +1,6 @@
 # lunR Documentation
 
-lunR is a terminal coding agent derived from pi. It stays small at the core while shipping MCP, subagents, permissions, plan mode, todos, cron, and a Telegram/Discord gateway — and it still extends through TypeScript extensions, skills, prompt templates, themes, and packages.
+lunR is a terminal coding agent derived from pi. It stays small at the core while shipping MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway — and it still extends through TypeScript extensions, skills, prompt templates, themes, and packages.
 
 ## Quick start
 

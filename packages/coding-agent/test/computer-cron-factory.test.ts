@@ -28,7 +28,7 @@ vi.mock("../src/core/memory-cap.ts", () => ({ registerMemoryCapBridge() {} }));
 vi.mock("../src/core/model-tiers.ts", () => ({ registerModelTierBridge() {} }));
 vi.mock("../src/core/runtime-bridges.ts", () => ({ bindRuntimeBridges() {} }));
 vi.mock("../src/core/settings-manager.ts", () => ({
-	SettingsManager: { create: () => ({ getDefaultPermissionMode: () => "manual" }) },
+	SettingsManager: { create: () => ({ getDefaultPermissionMode: () => "read-only" }) },
 }));
 vi.mock("../src/core/session-manager.ts", () => ({
 	SessionManager: {
@@ -52,7 +52,7 @@ vi.mock("../src/core/agent-session-services.ts", () => ({
 				},
 				prompt: async () => {
 					record.order.push(
-						`prompt:${Boolean((await gateToolCall("computer_observe", {}, ".", record.id))?.block)}`,
+						`prompt:${Boolean((await gateToolCall("computer_click", {}, ".", record.id))?.block)}`,
 					);
 				},
 				extensionRunner: {
@@ -87,7 +87,7 @@ describe("native computer gateway cron factory", () => {
 		expect(state.sessions).toHaveLength(2);
 		expect(state.sessions[0].id).not.toBe(state.sessions[1].id);
 		for (const session of state.sessions)
-			expect(session.order).toEqual(["bind:manual", "prompt:true", "shutdown:manual", "dispose:auto"]);
+			expect(session.order).toEqual(["bind:read-only", "prompt:true", "shutdown:read-only", "dispose:auto"]);
 		expect(approve).not.toHaveBeenCalled();
 		scheduler.stop();
 	});
@@ -96,7 +96,7 @@ describe("native computer gateway cron factory", () => {
 		state.bindFailure = true;
 		const scheduler = startGatewayCron({ adapters: new Map(), cfg: {} as GatewayConfig, fallbackModels: [] });
 		await expect(state.run?.("task", { id: "job-failed" } as CronJob)).rejects.toThrow("partial bind");
-		expect(state.sessions[0].order).toEqual(["bind:manual", "shutdown:manual", "dispose:auto"]);
+		expect(state.sessions[0].order).toEqual(["bind:read-only", "shutdown:read-only", "dispose:auto"]);
 		scheduler.stop();
 	});
 });
