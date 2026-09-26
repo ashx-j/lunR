@@ -15,6 +15,7 @@ export const COMPUTER_TOOLS = [
 	"computer_apps",
 	"computer_observe",
 	"computer_click",
+	"computer_hover",
 	"computer_drag",
 	"computer_key",
 	"computer_text",
@@ -36,11 +37,15 @@ export function computerPolicy(
 		case "computer_end":
 			return { observation: true, foreground: false };
 		case "computer_click":
+		case "computer_hover":
 		case "computer_drag":
 		case "computer_key":
 		case "computer_text":
 		case "computer_scroll":
-			return { observation: false, foreground: input.foreground === true || input.desktop === true };
+			return {
+				observation: false,
+				foreground: name === "computer_hover" || input.foreground === true || input.desktop === true,
+			};
 		case "computer_window":
 		case "computer_launch":
 			return { observation: false, foreground: true };
