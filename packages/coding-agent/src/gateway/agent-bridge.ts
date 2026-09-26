@@ -49,7 +49,13 @@ import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
 import { processImage } from "../utils/image-process.ts";
 import { cancelGatewayApprovals } from "./approval.ts";
 import { conversationBinding } from "./conversations.ts";
-import { createGatewayUI, invalidateGatewayDialogs, sendGatewayNotice, withGatewayPresentation } from "./presenter.ts";
+import {
+	createGatewayUI,
+	gatewayEpoch,
+	invalidateGatewayDialogs,
+	sendGatewayNotice,
+	withGatewayPresentation,
+} from "./presenter.ts";
 import { getSession, putSession, removeSession, touchSession } from "./store.ts";
 import type { InboundAttachment, MessageEvent, SessionSource } from "./types.ts";
 
@@ -279,6 +285,13 @@ export class AgentBridge {
 	private readonly redoStack = new Map<string, string[]>();
 	private readonly creating = new Map<string, Promise<CacheEntry>>();
 	private readonly changing = new Set<string>();
+	private readonly generations = new Map<string, number>();
+	private shuttingDown = false;
+
+	private invalidate(key: string): void {
+		this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+		this.creating.delete(key);
+	}
 
 	constructor(options: { cacheCap?: number; sessionFactory?: SessionFactory } = {}) {
 		this.cap = options.cacheCap ?? CACHE_CAP;
@@ -290,11 +303,15 @@ export class AgentBridge {
 	 * the QUEUED sentinel when the session was busy (router must not reply).
 	 */
 	async runTurn(key: string, event: MessageEvent, callbacks: TurnCallbacks = {}): Promise<string> {
+		const generation = this.generations.get(key) ?? 0;
 		const entry = await this.getOrCreate(key);
+		if (this.shuttingDown || generation !== (this.generations.get(key) ?? 0))
+			throw new Error("This request was stopped before the session was ready.");
 		if (entry.busy) {
 			if (entry.queue.length >= QUEUE_CAP) {
 				entry.queue.shift();
 				entry.dropped++;
+				callbacks.onError?.("The pending queue was full. An earlier message was dropped; resend it if needed.");
 			}
 			entry.queue.push(event);
 			return QUEUED;
@@ -304,7 +321,9 @@ export class AgentBridge {
 		try {
 			result = await this.runPrompt(entry, event.text, callbacks, event.source, event.attachments);
 		} catch (err) {
-			entry.busy = false;
+			void this.drainQueue(entry, callbacks).finally(() => {
+				entry.busy = false;
+			});
 			throw err;
 		}
 		touchSession(key);
@@ -318,6 +337,7 @@ export class AgentBridge {
 	}
 
 	async abort(key: string): Promise<void> {
+		this.invalidate(key);
 		const entry = this.cache.get(key);
 		if (entry) entry.queue.length = 0;
 		invalidateGatewayDialogs(key);
@@ -326,7 +346,31 @@ export class AgentBridge {
 	}
 
 	async shutdown(): Promise<void> {
-		await Promise.allSettled([...this.creating.values()]);
+		this.shuttingDown = true;
+		const initializing = [...this.creating];
+		for (const [key] of initializing) this.invalidate(key);
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				Promise.allSettled(initializing.map(([, pending]) => pending)),
+				new Promise<never>((_, reject) => {
+					timeout = setTimeout(
+						() =>
+							reject(
+								new Error(
+									"Session initialization is still pending. Ownership was retained; retry stopping later.",
+								),
+							),
+						20_000,
+					);
+				}),
+			]);
+		} catch (error) {
+			this.shuttingDown = false;
+			throw error;
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
 		const entries = [...this.cache];
 		for (const [key, entry] of entries) {
 			this.changing.add(key);
@@ -353,6 +397,7 @@ export class AgentBridge {
 				this.cache.delete(key);
 			}
 		} finally {
+			this.shuttingDown = false;
 			for (const [key, entry] of entries) {
 				this.changing.delete(key);
 				if (this.cache.get(key) === entry) entry.session.setTransferring?.(false);
@@ -365,10 +410,10 @@ export class AgentBridge {
 	}
 
 	/** Return the live session for a key, or null when none exists yet. */
-	async getSession(key: string): Promise<BridgeSession | null> {
+	async getSession(key: string, create = false): Promise<BridgeSession | null> {
 		const cached = this.cache.get(key);
 		if (cached) return cached.session;
-		if (!getSession(key)) return null;
+		if (!create && !getSession(key)) return null;
 		return (await this.getOrCreate(key)).session;
 	}
 
@@ -493,6 +538,7 @@ export class AgentBridge {
 	async reset(key: string): Promise<void> {
 		invalidateGatewayDialogs(key);
 		cancelGatewayApprovals(key);
+		this.invalidate(key);
 		const entry = this.cache.get(key);
 		if (entry) {
 			// lunr: /new while busy must stop the live turn and drop queued follow-ups
@@ -645,13 +691,13 @@ export class AgentBridge {
 				callbacks.onFollowUpResult?.(text);
 			} catch (err) {
 				callbacks.onError?.(err instanceof Error ? err.message : String(err));
-				return;
 			}
 		}
 	}
 
 	private async getOrCreate(key: string): Promise<CacheEntry> {
-		if (this.changing.has(key)) throw new Error("The session is changing. Wait before sending another task.");
+		if (this.shuttingDown || this.changing.has(key))
+			throw new Error("The session is changing. Wait before sending another task.");
 		const cached = this.cache.get(key);
 		if (cached) {
 			// LRU refresh
@@ -664,18 +710,23 @@ export class AgentBridge {
 		if (!pending) {
 			pending = this.createEntry(key);
 			this.creating.set(key, pending);
-			try {
-				await pending;
-			} finally {
-				this.creating.delete(key);
-			}
+			void pending
+				.finally(() => {
+					if (this.creating.get(key) === pending) this.creating.delete(key);
+				})
+				.catch(() => {});
 		}
 		return pending;
 	}
 
 	private async createEntry(key: string): Promise<CacheEntry> {
+		const generation = this.generations.get(key) ?? 0;
 		const stored = getSession(key);
 		const session = await this.sessionFactory(key, stored ? { sessionFile: stored.sessionFile } : undefined);
+		if (generation !== (this.generations.get(key) ?? 0) || this.shuttingDown) {
+			await shutdownBridgeSession(session, "quit");
+			throw new Error("Session initialization was stopped. Send a new message to retry.");
+		}
 		const sessionFile = session.sessionManager?.getSessionFile();
 		const sessionId = session.sessionManager?.getSessionId();
 		if (sessionFile) {
@@ -769,10 +820,11 @@ export class AgentBridge {
 	}
 
 	private _subscribeToSession(key: string, entry: CacheEntry): () => void {
-		return entry.session.subscribe((event) => this._handleSessionEvent(key, event));
+		const epoch = gatewayEpoch(key);
+		return entry.session.subscribe((event) => this._handleSessionEvent(key, event, epoch));
 	}
 
-	private _handleSessionEvent(key: string, event: AgentSessionEvent): void {
+	private _handleSessionEvent(key: string, event: AgentSessionEvent, epoch: number): void {
 		if (event.type === "message_end") {
 			const message = event.message;
 			if (message.role === "custom" && message.display) {
@@ -783,7 +835,7 @@ export class AgentBridge {
 								.filter((c) => c.type === "text")
 								.map((c) => c.text)
 								.join("\n");
-				void sendGatewayNotice(key, text).catch(() => {});
+				void sendGatewayNotice(key, text, "notice", epoch).catch(() => {});
 			} else if (message.role === "assistant" && !this.cache.get(key)?.busy) {
 				void sendGatewayNotice(
 					key,
@@ -791,6 +843,7 @@ export class AgentBridge {
 						.filter((c) => c.type === "text")
 						.map((c) => c.text)
 						.join("\n"),
+					"result",
 				).catch(() => {});
 			}
 		}

@@ -1,6 +1,14 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.24`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.25`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.25] - 2026-09-26
+
+### Fixed
+
+- Gateway owner setup now guides the first private chat through an approved project and authenticated model. Paired non-owners cannot choose local projects or bypass owner checks.
+- Gateway replies and follow-ups use a persistent, bounded-retry outbox. Failed preview edits fall back to full replies, failed destinations do not block others, and stale interactive prompts stop after a session change. Discord retries temporary channel lookup failures, and button selections confirm their outcome even if the original message cannot be edited.
+- Streaming suppresses standalone silence markers before a preview appears. Gateway-generated status text no longer adds a decorative moon prefix.
 
 ## [0.2.24] - 2026-09-24
 

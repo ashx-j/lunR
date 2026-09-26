@@ -328,6 +328,17 @@ describe("TelegramAdapter", () => {
 		expect(sends[1].text).toBe("hi *bold*");
 	});
 
+	it("sends without a reply reference when the original message was deleted", async () => {
+		const api = new MockApi();
+		api.queue("sendMessage", new TelegramApiError(400, "Bad Request: message to be replied not found"), {
+			message_id: 11,
+		});
+		const adapter = new TelegramAdapter(CFG, { callApi: api.callApi });
+		expect(await adapter.send("123", "answer", { replyTo: "7" })).toEqual({ success: true, messageId: "11" });
+		expect(api.callsFor("sendMessage")).toHaveLength(2);
+		expect(api.callsFor("sendMessage")[1].reply_parameters).toBeUndefined();
+	});
+
 	it("send honors 429 retry_after, then succeeds", async () => {
 		const api = new MockApi();
 		api.queue("sendMessage", new TelegramApiError(429, "Too Many Requests", 2), { message_id: 9 });

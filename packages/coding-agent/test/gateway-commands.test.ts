@@ -550,7 +550,7 @@ describe("/sessions", () => {
 		await runChatCommand(findCommand("sessions"), ctx);
 		expect(adapter.sent[0].text).toContain("Pick a session");
 		const labels = adapter.sent[0].buttons?.flat().map((b) => b.label);
-		expect(labels).toContain("☾ test-session");
+		expect(labels).toContain("(current) test-session");
 		expect(labels).toContain("other");
 	});
 
