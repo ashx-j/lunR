@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ComputerDriver, DriverReply } from "./adapter.ts";
+import { type ComputerDriver, DriverCallError, type DriverReply } from "./adapter.ts";
 import { type ImageRegion, prepareComputerImage, screenshotDimensions } from "./image.ts";
 import { DesktopLease } from "./lease.ts";
 import { computerSchemas } from "./schemas.ts";
@@ -18,15 +19,26 @@ export function driverData(reply: DriverReply): Record<string, unknown> {
 	return {};
 }
 
+function plainLaunchReason(reply: DriverReply): string | undefined {
+	if (reply.structuredContent || !Array.isArray(reply.content)) return undefined;
+	const text = reply.content.find((item) => item.type === "text")?.text;
+	if (typeof text !== "string") return undefined;
+	if (/^App name lookup for .+ is (?:temporarily unavailable|unavailable).+No app was launched;/s.test(text)) return "app_lookup_unavailable";
+	if (/^App .+ was not found in shell:AppsFolder or by Windows PATH\/association lookup:/s.test(text)) return "app_not_found";
+	if (/^Launch of .+ timed out after 15s/s.test(text)) return "launch_timeout_unknown";
+	if (/^(?:Failed to launch|Task error): /s.test(text)) return "launch_native_error_unknown";
+	return undefined;
+}
+
 export function driverRefused(reply: DriverReply): boolean {
 	const data = driverData(reply);
 	const acknowledged = data.activated === true || data.success === true || data.verified === true || data.effect === "confirmed";
 	const uncertain = [data.status, data.effect].some((value) => value === "partial" || value === "unverifiable");
-	return reply.isError === true ||
+	return reply.isError === true || plainLaunchReason(reply) !== undefined ||
 		(data.refusal !== undefined && data.refusal !== null && data.refusal !== false) ||
 		(data.error !== undefined && data.error !== null && data.error !== false) ||
 		data.effect === "refused" || data.status === "refused" || data.status === "failed" || data.success === false ||
-		data.code === "window_target_mismatch" ||
+		["window_target_mismatch", "window_target_not_found", "background_unavailable", "foreground_unavailable", "type_text_incomplete", "verification_failed"].includes(String(data.code)) ||
 		(data.status !== undefined && !acknowledged && !uncertain && !["ok", "success", "completed"].includes(String(data.status))) ||
 		(data.code !== undefined && data.code !== 0 && !acknowledged && !uncertain);
 }
@@ -39,8 +51,9 @@ function select(data: Record<string, unknown>, keys: readonly string[]): Record<
 	const result: Record<string, string | number | boolean> = {};
 	for (const key of keys) {
 		const value = data[key];
-		if (typeof value === "string") result[key] = value.slice(0, 240);
-		else if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) result[key] = value;
+		if (["name", "app_name", "title"].includes(key) && typeof value === "string") result[key] = value.slice(0, 240);
+		else if (["active", "running", "is_on_screen", "minimized"].includes(key) && typeof value === "boolean") result[key] = value;
+		else if (["pid", "window_id", "x", "y", "width", "height"].includes(key) && typeof value === "number" && Number.isSafeInteger(value)) result[key] = value;
 	}
 	return result;
 }
@@ -55,19 +68,56 @@ function typingRecovery(data: Record<string, unknown>, text: unknown) {
 	return {
 		requested_chars: requested,
 		delivered_chars: validDelivered ? delivered : undefined,
-		retryable: typeof data.retryable === "boolean" ? data.retryable : undefined,
+		retryable: validDelivered && data.retry_from_character === delivered && typeof data.retryable === "boolean" ? data.retryable : undefined,
 		retry_from_character: validDelivered && data.retry_from_character === delivered ? delivered : undefined,
 	};
 }
 
-function outcome(reply: DriverReply, text?: unknown) {
+const nativeCodes = new Set(["background_unavailable", "background_occluded", "background_uipi_blocked", "window_target_mismatch", "window_target_not_found", "type_text_incomplete", "foreground_unavailable", "foreground_rejected", "stale_target", "target_not_found", "verification_failed", "tool_invocation_failed"]);
+function safeCode(value: unknown): string | undefined {
+	return typeof value === "string" && nativeCodes.has(value) ? value : undefined;
+}
+function nativeReason(reply: DriverReply): string {
 	const data = driverData(reply);
+	const code = safeCode(data.code) ?? safeCode(record(data.refusal).code) ?? safeCode(record(data.error).code) ?? safeCode(data.refusal) ?? safeCode(data.error);
+	if (code) return code;
+	if (plainLaunchReason(reply)) return plainLaunchReason(reply)!;
+	return "native_error_unknown";
+}
+type FailurePhase = "validation" | "adapter_preflight" | "native_request" | "native_result" | "observation_capture" | "post_action_capture" | "cleanup";
+type InputState = "not_dispatched" | "dispatched" | "partial" | "uncertain";
+type NativeOutcome = {
+	phase: FailurePhase;
+	code?: string;
+	native_code?: string;
+	status?: string;
+	effect?: string;
+	verified?: boolean;
+	success?: boolean;
+	activated?: boolean;
+	escalation?: "foreground";
+	input: InputState;
+	applicationEffect: "unverified";
+	requested_chars?: number;
+	delivered_chars?: number;
+	retryable?: boolean;
+	retry_from_character?: number;
+};
+function outcome(reply: DriverReply, text?: unknown): NativeOutcome {
+	const data = driverData(reply);
+	const refused = driverRefused(reply);
+	const partial = data.effect === "partial" || data.status === "partial";
 	return {
-		...select(data, ["status", "effect", "refusal", "error", "code", "path", "verified", "verify", "success", "activated"]),
-		refusal: typeof data.refusal === "object" && data.refusal !== null ? select(record(data.refusal), ["code", "message", "facility"]) : select(data, ["refusal"]).refusal,
-		error: typeof data.error === "object" && data.error !== null ? select(record(data.error), ["code", "message", "facility"]) : select(data, ["error"]).error,
+		phase: refused || partial ? "native_result" : "native_request",
+		code: refused || partial ? nativeReason(reply) : undefined,
+		native_code: safeCode(data.code) ?? safeCode(record(data.refusal).code) ?? safeCode(record(data.error).code),
+		status: typeof data.status === "string" && ["ok", "success", "completed", "partial", "refused", "failed"].includes(data.status) ? data.status : undefined,
+		effect: typeof data.effect === "string" && ["confirmed", "partial", "unverifiable", "refused"].includes(data.effect) ? data.effect : undefined,
+		verified: typeof data.verified === "boolean" ? data.verified : undefined,
+		success: typeof data.success === "boolean" ? data.success : undefined,
+		activated: typeof data.activated === "boolean" ? data.activated : undefined,
 		escalation: record(data.escalation).recommended === "foreground" ? "foreground" : undefined,
-		input: driverRefused(reply) ? "refused_or_failed" : "dispatched",
+		input: partial && typingRecovery(data, text).delivered_chars !== undefined ? "partial" : refused || partial ? "uncertain" : "dispatched",
 		applicationEffect: "unverified",
 		...typingRecovery(data, text),
 	};
@@ -91,7 +141,12 @@ function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
 	});
 }
 
-const freshActionGuidance = "This failed call consumes the active token. Get a fresh capture of the exact target before any next action, including window focus. Copy the returned token exactly; never abbreviate or reconstruct it. This rejection does not prove foreground typing failed or that earlier calls had no effect.";
+const freshActionGuidance = "Get a fresh capture of the exact target before any next action, including window focus. Copy its token exactly. No input was sent by this call; earlier calls may have had an effect.";
+
+class CaptureError extends Error {
+	readonly code: string;
+	constructor(code: string) { super(code); this.code = code; }
+}
 
 class ObservationError extends Error {
 	readonly code: string;
@@ -104,7 +159,8 @@ class ObservationError extends Error {
 type Target = { desktop: true } | { pid: number; window_id: number; desktop?: false };
 type PreparedImage = Awaited<ReturnType<typeof prepareComputerImage>>;
 type Observation = PreparedImage & { token: string; target: Target; time: number; fingerprint: string; geometry: string };
-type Result = { content: (ImageContent | TextContent)[]; details: { observation?: string }; isError: boolean };
+type WorkflowState = "ready" | "stopped" | "cleanup_unconfirmed";
+type Result = { content: (ImageContent | TextContent)[]; details: { observation?: string; computer: { failed: boolean; workflow: WorkflowState } }; isError: boolean };
 
 function targetFrom(input: Record<string, unknown>): Target {
 	if (input.desktop === true) {
@@ -147,33 +203,37 @@ export class ComputerWorkflow {
 		const time = Date.now();
 		const reply = await abortable(this.driver.call(target.desktop ? "get_desktop_state" : "get_window_state",
 			target.desktop ? {} : { pid: target.pid, window_id: target.window_id, include_accessibility_tree: false, include_screenshot: true, max_dimension: 2560 }, signal), signal);
-		if (driverRefused(reply)) throw new Error(`Capture refused: ${JSON.stringify(outcome(reply))}`);
+		if (driverRefused(reply)) throw new CaptureError(nativeReason(reply));
 		const data = driverData(reply);
 		const images = Array.isArray(reply.content) ? reply.content.filter((item) => item.type === "image") : [];
 		if (images.length !== 1 || typeof images[0].data !== "string" || typeof images[0].mimeType !== "string")
-			throw new Error("Capture must return exactly one screenshot.");
+			throw new CaptureError("screenshot_unavailable");
 		const image: ImageContent = { type: "image", data: images[0].data, mimeType: images[0].mimeType };
-		const dimensions = screenshotDimensions(image);
+		let dimensions: { width: number; height: number };
+		try { dimensions = screenshotDimensions(image); } catch { throw new CaptureError("image_decode_failed"); }
 		if (data.screenshot_frame_valid === false || data.screenshot_error != null || dimensions.width !== data.screenshot_width || dimensions.height !== data.screenshot_height)
-			throw new Error("Screenshot dimensions or frame could not be verified. Capture again.");
+			throw new CaptureError("image_frame_invalid");
 		const geometry = JSON.stringify(select(record(data.window_bounds), ["x", "y", "width", "height"]));
 		if (crop && previous && (previous.sourceWidth !== dimensions.width || previous.sourceHeight !== dimensions.height || previous.geometry !== geometry))
-			throw new Error("Target geometry changed. Capture a full image before selecting a crop.");
-		const prepared = await abortable(prepareComputerImage(image, crop), signal);
+			throw new CaptureError("target_geometry_changed");
+		let prepared: PreparedImage;
+		try { prepared = await abortable(prepareComputerImage(image, crop), signal); }
+		catch (error) { if (signal.aborted) throw error; throw new CaptureError("image_decode_failed"); }
 		signal.throwIfAborted();
-		return { ...prepared, token: randomUUID(), target, time, geometry };
+		return { ...prepared, token: randomUUID(), target, time, fingerprint: prepared.fingerprint, geometry };
 	}
 
 	private imageResult(observation: Observation, extra: Record<string, unknown> = {}): Result {
 		this.observation = observation;
 		const { width, height, region, sourceWidth, sourceHeight, scaleX, scaleY, target, token } = observation;
+		const failed = extra.failed === true;
 		return {
 			content: [{ type: "text", text: JSON.stringify({
-				...extra, observation: token, target, image: { width, height },
+				...extra, observation: token, target, captured_at: observation.time, expires_at: observation.time + 30000, image: { width, height },
 				mapping: { sourceWidth, sourceHeight, ...region, scaleX, scaleY },
 				coordinates: "Use returned-image pixels; mapping is applied automatically.",
 			}) }, observation.image],
-			details: { observation: token }, isError: false,
+			details: { observation: token, computer: { failed, workflow: "ready" } }, isError: failed,
 		};
 	}
 
@@ -194,7 +254,7 @@ export class ComputerWorkflow {
 	private action(name: string, input: Record<string, unknown>, previous: Observation) {
 		const args: Record<string, unknown> = previous.target.desktop ? { scope: "desktop" } : { pid: previous.target.pid, window_id: previous.target.window_id };
 		if (previous.target.desktop && input.foreground !== true) throw new Error("Desktop input requires foreground=true.");
-		if (name !== "computer_window") args.delivery_mode = input.foreground === true ? "foreground" : "background";
+		if (name !== "computer_window" && name !== "computer_hover") args.delivery_mode = input.foreground === true ? "foreground" : "background";
 		for (const key of ["x", "y", "from_x", "from_y", "to_x", "to_y"]) {
 			if (name === "computer_window") break;
 			const value = input[key];
@@ -209,6 +269,11 @@ export class ComputerWorkflow {
 			throw new Error("Desktop keyboard input uses the observed focused field. Change focus with a separate grounded click.");
 		let operation: string;
 		switch (name) {
+			case "computer_hover":
+				if (process.platform !== "win32" || !previous.target.desktop || input.desktop !== true || input.foreground !== true ||
+					input.x === undefined || input.y === undefined) throw new Error("Hover requires a Windows foreground desktop image and x/y coordinates.");
+				operation = "move_cursor";
+				break;
 			case "computer_click":
 			case "computer_scroll":
 				if (input.x === undefined || input.y === undefined) throw new Error("This action requires x/y image coordinates.");
@@ -261,17 +326,26 @@ export class ComputerWorkflow {
 		const combined = AbortSignal.any([this.abort.signal, this.lease.signal, AbortSignal.timeout(90000), ...(signal ? [signal] : [])]);
 		let inputDispatched = false;
 		let failureCode = "workflow_unavailable";
+		let phase: FailurePhase = "validation";
+		const currentPhase = (): FailurePhase => phase;
+		let operationName = name;
+		let actionTarget: Target | undefined;
 		let actionOutcome: ReturnType<typeof outcome> | undefined;
 		try {
 			const result = await this.lease.run(async (): Promise<Result> => {
 				failureCode = "invalid_arguments";
+				const previous = this.observation;
+				if (name !== "computer_apps") this.observation = undefined;
 				if (!Object.hasOwn(computerSchemas, name)) throw new Error("Unknown computer operation.");
 				const schema = computerSchemas[name as keyof typeof computerSchemas];
 				if (Object.keys(input).some((key) => !Object.hasOwn(schema.properties, key))) throw new Error("Unsupported computer argument. Use image coordinates only.");
-				const previous = this.observation;
-				this.observation = undefined;
 				if (name === "computer_apps" || name === "computer_launch") {
 					const operation = name === "computer_launch" ? "launch_app" : input.pid === undefined ? "list_apps" : "list_windows";
+					operationName = operation;
+					if (input.include_windows !== undefined && (name !== "computer_apps" || typeof input.include_windows !== "boolean" || (input.include_windows && (input.pid !== undefined || typeof input.query !== "string" || !input.query.trim()))))
+						throw new Error("include_windows requires a named app query without pid.");
+					if (input.pid !== undefined && (typeof input.pid !== "number" || !Number.isSafeInteger(input.pid) || input.pid < 1)) throw new Error("Window lookup requires a positive pid.");
+					if (name === "computer_launch" && (typeof input.name !== "string" || !input.name.trim() || input.name.length > 500)) throw new Error("Launch requires a nonblank name.");
 					if (input.query !== undefined && (typeof input.query !== "string" || !input.query.trim() || Array.from(input.query).length > 240))
 						throw new Error("Discovery query must be a nonblank string of at most 240 characters.");
 					const query = typeof input.query === "string" ? input.query.trim() : undefined;
@@ -282,6 +356,7 @@ export class ComputerWorkflow {
 					const args = name === "computer_launch" ? { name: input.name } : input.pid === undefined ? {} : { pid: input.pid };
 					combined.throwIfAborted();
 					inputDispatched = name === "computer_launch";
+					phase = "native_request";
 					failureCode = "discovery_failed";
 					const reply = await abortable(this.driver.call(operation, args, combined), combined);
 					const data = driverData(reply);
@@ -296,15 +371,65 @@ export class ComputerWorkflow {
 							bounds: item.bounds ? select(record(item.bounds), ["x", "y", "width", "height"]) : undefined };
 					}) : undefined;
 					const remaining = Array.isArray(rows) ? Math.max(0, rows.length - offset - (metadata?.length ?? 0)) : 0;
+					const failed = driverRefused(reply);
+					const pid = typeof data.pid === "number" && Number.isSafeInteger(data.pid) && data.pid > 0 ? data.pid : undefined;
+					const launchWindows = Array.isArray(data.windows) ? data.windows.slice(0, 50).map((row) => {
+						const item = record(row);
+						return { ...select(item, ["window_id", "title", "is_on_screen", "minimized"]), bounds: item.bounds ? select(record(item.bounds), ["x", "y", "width", "height"]) : undefined };
+					}) : [];
+					const returnedId = data.window_id ?? (Array.isArray(data.windows) && data.windows.length === 1 ? record(data.windows[0]).window_id : undefined);
+					const windowId = typeof returnedId === "number" && Number.isSafeInteger(returnedId) && returnedId > 0 ? returnedId : undefined;
+					let windowsByPid: { pid: number; windows?: typeof metadata; error?: string; omitted?: number; next_offset?: number }[] | undefined;
+					let guidance = remaining ? "Pass next_offset as offset with the same pid and query. Lists refresh per call." : input.pid !== undefined
+						? "Use computer_observe({pid,window_id}) for an exact returned window."
+						: "App query filters app identities, not every window title. Use computer_apps({pid}) to find windows for a running app.";
+					if (name === "computer_apps" && input.include_windows === true && !failed) {
+						const pids = [...new Set((Array.isArray(rows) ? rows : []).map((row) => record(row).pid).filter((value): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0))];
+						if (pids.length > 5) guidance = "More than five running processes matched. Narrow the query or choose one positive pid with computer_apps({pid}); no arbitrary process was selected.";
+						else {
+							windowsByPid = [];
+							let budget = 50;
+							for (const matchingPid of pids) {
+								combined.throwIfAborted();
+								try {
+									const windowsReply = await abortable(this.driver.call("list_windows", { pid: matchingPid }, combined), combined);
+									const windows = driverData(windowsReply).windows;
+									if (driverRefused(windowsReply) || !Array.isArray(windows)) { windowsByPid.push({ pid: matchingPid, error: driverRefused(windowsReply) ? nativeReason(windowsReply) : "windows_unavailable" }); continue; }
+									const subset = windows.slice(0, budget).map((row) => {
+										const item = record(row);
+										return { ...select(item, ["pid", "window_id", "name", "app_name", "title", "active", "running", "is_on_screen", "minimized"]),
+											bounds: item.bounds ? select(record(item.bounds), ["x", "y", "width", "height"]) : undefined };
+									});
+									const omitted = windows.length - subset.length;
+									windowsByPid.push({ pid: matchingPid, windows: subset, omitted: omitted || undefined, next_offset: omitted ? subset.length : undefined });
+									budget -= subset.length;
+								} catch (error) {
+									if (combined.aborted) throw error;
+									if (error instanceof DriverCallError) throw error;
+									windowsByPid.push({ pid: matchingPid, error: "window_lookup_failed" });
+								}
+							}
+							guidance = "Use computer_observe({pid,window_id}) for a returned window. For omitted windows use computer_apps({pid,offset:next_offset}). Per-PID failures need a targeted lookup.";
+						}
+					}
+					if (name === "computer_launch") guidance = pid && windowId && !failed
+						? `Use computer_observe({pid:${pid},window_id:${windowId}}) before input.`
+						: `Launch ${failed ? "may have completed despite an unsuccessful reply" : "returned no exact window"}. Use computer_apps({${pid ? `pid:${pid}` : `query:${JSON.stringify(input.name)}`}}) before another launch or input.`;
 					return { content: [{ type: "text", text: JSON.stringify({
-						...outcome(reply), ...select(data, ["pid", "window_id", "name", "title"]),
-						items: metadata, query, offset, total: Array.isArray(rows) ? rows.length : undefined,
-						omitted: remaining || undefined, next_offset: remaining ? offset + 50 : undefined,
-						guidance: name === "computer_launch" ? "Capture the exact target before input." : remaining ? "Pass next_offset as offset with the same pid and query. Lists refresh per call." : undefined,
-					}) }], details: {}, isError: driverRefused(reply) };
+						kind: name === "computer_launch" ? "launch" : input.pid === undefined ? "apps" : "windows", operation,
+						...(name === "computer_launch" ? outcome(reply) : { phase: "native_result", code: failed ? nativeReason(reply) : undefined }),
+						input: name === "computer_launch" ? "not_applicable" : undefined,
+						launch: name === "computer_launch" ? plainLaunchReason(reply) === "app_lookup_unavailable" ? "not_started" : failed ? "completion_uncertain" : "acknowledged" : undefined,
+						...select(data, ["pid", "window_id", "name", "title"]), window_id: name === "computer_launch" ? windowId : select(data, ["window_id"]).window_id,
+						windows: name === "computer_launch" ? launchWindows : undefined, items: name === "computer_launch" ? undefined : metadata,
+						windows_by_pid: windowsByPid, query, offset, total: Array.isArray(rows) ? rows.length : undefined,
+						omitted: remaining || undefined, next_offset: remaining ? offset + 50 : undefined, guidance,
+					}) }], details: { computer: { failed, workflow: "ready" } }, isError: failed };
 				}
 				const target = targetFrom(input);
+				actionTarget = target;
 				if (name === "computer_observe") {
+					phase = "observation_capture";
 					const crop = input.crop === undefined ? undefined : this.crop(input, this.fresh(input, previous));
 					failureCode = "capture_failed";
 					const captured = await this.capture(target, combined, previous, crop);
@@ -312,7 +437,8 @@ export class ComputerWorkflow {
 					const repeats = crop ? 0 : unchanged ? (this.lastCapture?.repeats ?? 0) + 1 : 1;
 					this.lastCapture = { fingerprint: captured.fingerprint, target, repeats };
 					if (repeats >= 3) return {
-						content: [{ type: "text", text: "Three captures are unchanged. Workflow stopped; stop polling and reconsider the target or approach. No input token issued." }], details: {}, isError: true,
+						content: [{ type: "text", text: JSON.stringify({ phase: "observation_capture", code: "unchanged_polling_limit", guidance: "Three captures are unchanged. Stop polling and reconsider the target or approach. No input token issued." }) }],
+						details: { computer: { failed: true, workflow: "stopped" } }, isError: true,
 					};
 					return this.imageResult(captured, { unchanged });
 				}
@@ -326,55 +452,74 @@ export class ComputerWorkflow {
 					throw new Error("The identical action had no visible change. Choose a different grounded action; never retry blindly.");
 				combined.throwIfAborted();
 				inputDispatched = true;
+				phase = "native_request";
+				operationName = operation;
 				const reply = await abortable(this.driver.call(operation, args, combined), combined);
 				combined.throwIfAborted();
 				actionOutcome = outcome(reply, name === "computer_text" ? input.text : undefined);
-				const recoveryGuidance = "retry_from_character" in actionOutcome && actionOutcome.retry_from_character !== undefined
+				const recoveryGuidance = actionOutcome.retry_from_character !== undefined
 					? "Verify the field in a fresh image before considering any remaining suffix. retry_from_character is a zero-based Unicode code-point offset, not UTF-16. retryable is driver advice, not authorization to retry."
 					: undefined;
-				if (driverRefused(reply)) {
-					const data = driverData(reply);
-					const backgroundUnavailable = [data.code, data.refusal, data.error, record(data.refusal).code, record(data.error).code].includes("background_unavailable");
-					const guidance = [
-						"The failed action consumes its token. Get a fresh capture of the exact target before any next action, including window focus. Copy the new token exactly. Input may have taken effect; never retry blindly.",
-						backgroundUnavailable ? "After the fresh capture, foreground input is the next candidate if permitted, not another background shortcut. Inspect the field before deciding." : undefined,
-						recoveryGuidance,
-					].filter(Boolean).join(" ");
-					return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome, guidance }) }], details: {}, isError: true };
-				}
+				const failed = driverRefused(reply) || driverData(reply).effect === "partial" || driverData(reply).status === "partial";
+				const backgroundUnavailable = actionOutcome.code === "background_unavailable";
+				if (name === "computer_hover") await delay(700, undefined, { signal: combined });
+				phase = "post_action_capture";
 				try {
 					const after = await this.capture(target, combined);
 					const unchanged = after.fingerprint === grounded.fingerprint;
 					this.lastAction = { signature, fingerprint: after.fingerprint, unchanged };
-					this.lastCapture = { fingerprint: after.fingerprint, target, repeats: 0 };
-					return this.imageResult(after, { ...actionOutcome, unchanged,
-						guidance: recoveryGuidance ?? (unchanged ? "No visible change; this does not prove failure. Do not repeat input blindly." : "Inspect the post-action image to verify the intended effect.") });
-				} catch {
+					this.lastCapture = { fingerprint: after.fingerprint, target, repeats: failed && this.lastCapture?.fingerprint === after.fingerprint && sameTarget(this.lastCapture.target, target)
+						? this.lastCapture.repeats : 0 };
+					return this.imageResult(after, { kind: "action", operation, target, ...actionOutcome, failed, unchanged,
+						guidance: ["Inspect the post-action image before another action. No visible change does not prove failure; never repeat blindly.",
+							backgroundUnavailable ? "After this fresh capture, foreground input may be considered if permitted, not another background shortcut." : undefined,
+							recoveryGuidance].filter(Boolean).join(" ") });
+				} catch (error) {
 					combined.throwIfAborted();
-					return { content: [{ type: "text", text: JSON.stringify({ ...actionOutcome,
-						observation: "unavailable", guidance: `Input may have taken effect. Get a fresh capture of the exact target before any next action, including window focus; never repeat blindly. ${recoveryGuidance ?? "Inspect the field before deciding."}`,
-						error: "Post-action capture failed.",
-					}) }], details: {}, isError: true };
+					if (!(error instanceof CaptureError)) throw error;
+					this.lastAction = { signature, fingerprint: grounded.fingerprint, unchanged: true };
+					return { content: [{ type: "text", text: JSON.stringify({ kind: "action", operation, target, ...actionOutcome, phase: "post_action_capture",
+						capture_error: error.code, observation: "unavailable", guidance: `Input may have taken effect. ${["target_not_found", "window_target_not_found", "window_target_mismatch"].includes(error.code)
+							? "Use computer_apps({pid}) or observe the desktop to find the target." : "Get a fresh capture of the exact target"} before another action; never repeat blindly. ${recoveryGuidance ?? ""}`,
+					}) }], details: { computer: { failed: true, workflow: "ready" } }, isError: true };
 				}
 			}, combined);
-			if (result.isError) await this.close();
+			if (result.details.computer.workflow !== "ready") return this.finish(result);
 			return result;
 		} catch (error) {
-			let cleanup = "confirmed";
-			try { await this.close(); } catch { cleanup = "unconfirmed"; }
-			throw new Error(JSON.stringify({
-				...actionOutcome,
-				code: inputDispatched ? "input_dispatch_failed" : error instanceof ObservationError ? error.code : failureCode,
-				input: inputDispatched ? "uncertain" : "not_dispatched",
-				applicationEffect: "unverified",
-				message: inputDispatched
-					? "Computer workflow stopped after dispatch began. Input may have taken effect."
-					: `Computer workflow stopped. No input was sent by this call. ${error instanceof Error ? error.message.slice(0, 300) : "Operation unavailable."}`,
-				guidance: inputDispatched
-					? "Get a fresh capture of the exact target before any next action, including window focus. Inspect for possible effects; never repeat input blindly. Copy the new token exactly."
-					: freshActionGuidance,
-				cleanup,
-			}));
+			if (error instanceof DriverCallError && !(currentPhase() === "post_action_capture" && actionOutcome)) {
+				phase = error.phase;
+				inputDispatched = error.dispatched;
+			}
+			const failurePhase = currentPhase();
+			const fatal = combined.aborted || this.abort.signal.aborted || this.lease.signal.aborted || error instanceof DriverCallError ||
+				!(error instanceof ObservationError || error instanceof CaptureError || failurePhase === "validation" || failurePhase === "observation_capture" && !inputDispatched);
+			const code = error instanceof ObservationError || error instanceof CaptureError ? error.code
+				: inputDispatched && failurePhase === "post_action_capture" ? "capture_transport_failed"
+				: error instanceof DriverCallError ? error.dispatched ? "input_dispatch_failed" : "adapter_preflight_failed"
+				: inputDispatched ? "input_dispatch_failed" : failurePhase === "validation" ? "invalid_arguments" : failureCode;
+			const message = name === "computer_launch" ? inputDispatched ? "Launch request began; activation may have occurred." : "No launch request was sent by this call."
+				: inputDispatched ? "Input may have taken effect; request began." : "No input was sent by this call.";
+			const guidance = inputDispatched ? name === "computer_launch"
+				? `Use computer_apps({query:${JSON.stringify(input.name)}) before considering another launch.`
+				: `Get a fresh capture of the exact target before another action. Input may have taken effect; inspect the field before deciding and never repeat blindly. ${actionOutcome?.retry_from_character !== undefined ? "Verify the field in a fresh image before considering any remaining suffix. retry_from_character is a zero-based Unicode code-point offset, not UTF-16." : ""}`
+				: freshActionGuidance;
+			const result: Result = { content: [{ type: "text", text: JSON.stringify({ kind: name === "computer_apps" ? "apps" : name === "computer_launch" ? "launch" : name === "computer_observe" ? "observation" : "action",
+				operation: operationName, target: actionTarget, ...actionOutcome, action_outcome: actionOutcome, phase: failurePhase, code,
+				input: name === "computer_apps" ? undefined : name === "computer_launch" ? "not_applicable" : inputDispatched ? "uncertain" : "not_dispatched",
+				request: name === "computer_launch" ? inputDispatched ? "sent" : "not_sent" : undefined, applicationEffect: "unverified",
+				observation: "unavailable", capture_error: failurePhase === "post_action_capture" ? code : undefined, message, guidance }) }], details: { computer: { failed: true, workflow: fatal ? "stopped" : "ready" } }, isError: true };
+			return fatal ? this.finish(result) : result;
+		}
+	}
+
+	private async finish(result: Result): Promise<Result> {
+		try {
+			await this.close();
+			return { ...result, details: { ...result.details, computer: { failed: result.details.computer.failed, workflow: "stopped" } } };
+		} catch {
+			return { content: [...result.content, { type: "text", text: JSON.stringify({ phase: "cleanup", cleanup: "unconfirmed", guidance: "Desktop ownership retained until shutdown is confirmed." }) }],
+				details: { ...result.details, computer: { failed: true, workflow: "cleanup_unconfirmed" } }, isError: true };
 		}
 	}
 
