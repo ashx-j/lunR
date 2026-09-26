@@ -9,10 +9,13 @@ const CUSTOM_TOOL_DESCRIPTION_FILE = "subagent-tool-description.md";
 const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 
 export const SUBAGENT_TIER_GUIDANCE = `TIER SELECTION:
-• Choose the lowest tier that can reliably complete the task.
-• light: Use for simple, straightforward tasks that require little reasoning. Good for quick checks, finding information, collecting facts for research, inspecting a small amount of code, or verifying a specific fact.
-• standard: Use for moderately difficult work and everyday coding tasks. Good for writing simple code, fixing a clearly described bug, reviewing a focused change, or completing work with clear requirements. Use heavy when the task requires deep architectural understanding or complex reasoning.
-• heavy: Use for complex or ambiguous tasks that require deep reasoning and strong code understanding. Good for implementing complex plans, debugging difficult or poorly understood problems, reviewing large or high-risk changes, and making architectural decisions.`;
+• Choose the tier for the child's specific assignment, not the size or importance of the overall project.
+• light: Use for bounded lookups, fact gathering, small code inspections, and straightforward verification.
+• standard: Default for implementation, debugging, testing, research synthesis, planning, and focused code review. Standard can handle multi-file changes and unfamiliar code when the assignment has a clear goal.
+• heavy: Reserve for tasks whose central difficulty requires reasoning across tightly coupled systems, resolving conflicting architectural constraints, diagnosing subtle concurrency or state bugs, or adversarial analysis of security-critical behavior.
+• Before choosing heavy, identify the specific difficulty that makes standard insufficient. Task length, file count, unfamiliarity, importance, or the words "review" and "architecture" are not enough by themselves.
+• When uncertain between standard and heavy, choose standard. Use heavy upfront when the difficulty is already clear; do not require a failed standard attempt.
+• If standard gets blocked, distinguish missing context, unavailable tools, and unclear requirements from a reasoning limitation. Escalate for the reasoning limitation, passing along findings rather than restarting the investigation.`;
 
 export const SUBAGENT_COORDINATION_GUIDANCE = "Define file ownership, local decision authority, and required outputs at launch. Establish shared contracts before dependent parallel work; use chains and artifacts to pass results. When enabled, native child intercom reaches the supervisor only, not siblings. Reserve parent relays for actionable exceptions, not routine progress or implementation approvals.";
 
@@ -48,7 +51,7 @@ CHAIN TEMPLATE VARIABLES (use in task and description strings):
 • {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-subagents-<scope>/chain-runs/abc123/)
 
 CHAIN EXAMPLES:
-• Sequential: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {task:"Plan based on {previous}", description:"Draft plan", tier:"heavy"}] }
+• Sequential: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {task:"Plan based on {previous}", description:"Draft plan", tier:"standard"}] }
 • Parallel fan-out: { chain: [{parallel: [{task:"Check part of {task}", description:"Check one part", tier:"light", permissions:"read-only", count: 3}]}] }
 • Mixed: { chain: [{task:"Research {task}", description:"Research request", tier:"standard", permissions:"read-only"}, {parallel: [{task:"Review {previous}", description:"Review findings", tier:"light", permissions:"read-only", count: 2}]}, {task:"Summarize {previous}", description:"Summarize reviews", tier:"standard"}] }
 

@@ -88,7 +88,7 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - **Shipped npm docs (`docs/lunr-user-facing`):** `packages/coding-agent` README/docs/examples/CHANGELOG now describe `@ashx-j/lunr`, binary `lunr`, `~/.lunr/agent` + project `.lunr/`. Catalog refresh is `/refresh`; `lunr update` only reinstalls the global CLI. Builtin theme is `moon`. Dropped stale `files` entry `containerization.md`. ExtensionAPI `pi` parameter, package.json `"pi"` key, and `PI_*` env names stay. Untracked `lunr-docs/` is not shipped.
 
 - **Prompt-driven subagents (`feat/prompt-driven-subagents`):** no named agent types. Every child is `{ task, description, permissions? }`. `description` is required UI metadata (single-line, max 80). `permissions` is `full` or `read-only`; omitted means full. Full is child-safe coding tools (read/search/shell/edit/write/web/LSP/MCP) minus cron/memory/goals/plan-approval/nested subagents. Plan parents may launch only explicit `permissions: "read-only"`. Full maps to child Auto; read-only maps to child Plan. Named markdown, the legacy discovery/serializer/memory source cluster, agent CRUD/profile commands, provider profiles, and saved named chains are removed; `/run`, `/chain`, `/parallel`, and prompt workflows now build generic children. Foreground and async paths use `ChildSpec`; private `childId` drives routing while descriptions drive UI. Lifecycle artifact version 3; old runs cannot be resumed. Scheduled singles and appended async steps use the generic contract. Tests: prompt-driven-subagents + subagent-permission-inherit + subagent-compact-row + permissions/control/parallel fixtures.
-- **Subagent tier selection guidance (`feat/subagent-tier-selection-guidance`):** full, compact, and custom tool descriptions tell agents to choose the lowest tier that can reliably finish the task, with concrete boundaries and examples for `light`, `standard`, and `heavy`. SINGLE and nested child schemas carry matching short guidance. Tests: model-tiers + prompt-driven-subagents.
+- **Subagent tier selection guidance (`fix/subagent-standard-tier`):** full, compact, and mandatory custom guidance defaults to standard for substantive assignments and reserves heavy for a specific reasoning difficulty. Bounded lookups remain light; uncertainty alone favors standard. SINGLE and nested child schema descriptions and the generic planning example agree. Tier mappings and runtime selection are unchanged.
 
 - **Same-turn swarm + leftover gates (`0.2.11`):** 3+ SINGLE `subagent` calls in one assistant turn count as a swarm (one prompt / one reject covers the message). Same-turn SINGLEs overlap (`executionMode: "parallel"`); sequential work stays `chain`. Gateway `/new` aborts the live turn and drops the queue. TUI cron uses the same deliver allowlist as the gateway. Corrupt models-store JSON is treated as empty. Plan-mode git walk skips known globals. Manual mode prompts for apply-mode `code_rewrite`. Tests: permissions + plan-mode + models-store + gateway-cron + gateway-router + gateway-agent-bridge.
 
@@ -152,6 +152,8 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- Standard-tier guidance: 61 focused model-tiers and prompt-driven-subagents tests pass. Five offline package builds, the Node bundle, touched-test Biome, and diff checks pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with refreshed browser-on/off tool-payload snapshots. No installed CLI or live model was used; real delegation behavior remains for user testing.
 
 - v0.2.25 release (2026-09-26): five offline package builds and the Node bundle pass; 238 gateway tests across 11 suites pass. The compiled local gateway handoff/delivery smoke and first-paint/first-turn checks pass. Vendor, catalog, pinned-dependency, shrinkwrap, installer-lock, relative-import, workflow, browser-smoke and diff checks pass. All four public package dry-run packs pass with npm 10. Publication workflow `36246239777` succeeded from tag `v0.2.25` at `1f323a3`. All four public npm packages expose their 0.2.25 tarballs; a fresh isolated install reports 0.2.25 for the CLI and all four packages. The separate binary build workflow failed with exit code 126 at its Build binaries step; this did not affect npm publication. No installed global CLI or live gateway account was used.
 
@@ -337,6 +339,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: default substantive delegation to standard in tool guidance and require a specific reasoning difficulty for heavy, because broad complexity labels encouraged over-selection without changing runtime tier mappings.
 
 - 2026-09-26: ship PR #119 as the next patch version after its reviewed changes merged cleanly, keeping the release branch scoped to versions and release notes.
 
