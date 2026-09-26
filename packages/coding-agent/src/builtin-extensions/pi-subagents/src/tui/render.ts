@@ -391,9 +391,10 @@ export function formatCompactSubagentRow(
 		durationMs: number;
 		prefix?: string;
 		terminalStatus?: string;
+		waiting?: boolean;
 	},
 ): string {
-	const stats = formatCompactRowStats(parts.tokens, parts.durationMs);
+	const stats = parts.waiting ? "waiting" : formatCompactRowStats(parts.tokens, parts.durationMs);
 	const body = [
 		`${parts.prefix ?? ""}${parts.glyph} ${themeBold(theme, parts.description)}`,
 		parts.modelBadge ? theme.fg("dim", parts.modelBadge) : "",
@@ -1046,14 +1047,15 @@ function compactTerminalStatus(
 
 function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): { tokens: number; durationMs: number } {
 	const running = (step?.status ?? job.status) === "running";
-	const tokens = step?.tokens?.total ?? job.totalTokens?.total ?? 0;
+	const wholeJob = !step || (!job.steps?.length && job.agents?.length === 1);
+	const tokens = step?.tokens?.total ?? (wholeJob ? job.totalTokens?.total : undefined) ?? 0;
 	if (step?.durationMs !== undefined) {
 		return {
 			tokens,
 			durationMs: liveDurationMs({ durationMs: step.durationMs, lastActivityAt: step.lastActivityAt }, running, now),
 		};
 	}
-	const startedAt = step?.startedAt ?? job.startedAt;
+	const startedAt = step?.startedAt ?? (wholeJob ? job.startedAt : undefined);
 	if (startedAt === undefined) return { tokens, durationMs: 0 };
 	const endedAt = running ? now : step?.endedAt ?? step?.lastActivityAt ?? job.updatedAt ?? now;
 	return { tokens, durationMs: Math.max(0, endedAt - startedAt) };
@@ -1081,6 +1083,7 @@ function compactJobLines(job: AsyncJobState, step: NonNullable<AsyncJobState["st
 		tokens: progress.tokens,
 		durationMs: progress.durationMs,
 		terminalStatus: compactTerminalStatus(step?.status ?? job.status),
+		waiting: step?.status === "pending" || (step?.status ?? job.status) === "queued",
 	})];
 }
 

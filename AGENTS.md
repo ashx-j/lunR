@@ -22,8 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-26 (v0.2.24 on `master`; pending chain stats and handoff on `fix/subagent-pending-chain-stats`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
+- **Supervisor handoff label (`fix/subagent-pending-chain-stats`):** native actionable `handoff` messages show `subagent progress` in parent chat. The stored kind, delivery/wakeup, and UI-only `progress_update` behavior stay unchanged.
+- **Pending chain display and handoff (`fix/subagent-pending-chain-stats`):** async pending rows say `waiting` without another child's tokens or elapsed time. Real steps use only their own counters; a single child without a step snapshot still shows whole-job stats. Foreground and async nonterminal chain children receive one brief handoff notice, including parallel-group children when another chain step follows. Final chain, standalone, and parallel-only children do not.
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
 - **Three permission modes (`feat/three-permission-modes`, PR #111):** yolo (default), auto, and read-only replace manual/plan. Shift+Tab cycles in that order; the TUI shows `read`. `/plan` remains a planning shortcut into read-only; `present_plan` remains available there. Saved manual defaults map to yolo; saved plan defaults and session leaves map to read-only. Yolo still confirms large subagent launches, auto bypasses them, and read-only blocks known writes, browser actions, MCP calls, unknown extension tools, and full child launches or resumptions. Bash remains heuristic, not an OS sandbox.
 
@@ -150,6 +152,8 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Supervisor handoff label (2026-09-26): coding-agent offline tsgo and focused subagent-communication-render Vitest pass 14/14; changed test passes Biome and `git diff --check` passes. No installed CLI, original checkout, or live provider changed.
+- Pending chain display and handoff (2026-09-26): isolated offline tui → ai → agent → coding-agent tsgo builds pass; focused compact-row, handoff, prompt-driven, and async-default Vitest passes 94/94 across four files. Touched tests pass Biome and `git diff --check` passes. No installed CLI, original checkout, live provider, or release build changed.
 - v0.2.24 release (2026-09-24): five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. Publication workflow `36066384313` succeeded from tag `v0.2.24` at `8a5bfb4`; all four public npm packages resolve as latest. A fresh isolated install reports 0.2.24 for the CLI and all four packages. The full CI test job retains the documented 11 TUI and 101 coding-agent baseline failures. No installed global CLI or live Anthropic subscription was used.
 - v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
 - Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
@@ -239,6 +243,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- The parent chat card maps the native supervisor `handoff` kind to the visible word `progress`; the stored kind still controls actionable delivery and wakeup. UI-only `progress_update` has a separate persisted entry path.
+- A chain's next step receives text through `{previous}` or the existing chain instruction path; notify only producers with a later chain step. A parallel group's children contribute to its aggregate handoff only when another step follows. Widget job totals belong only to whole-job rows or single-child jobs without step snapshots.
 - The v0.2.24 Anthropic bridge shipped with offline fixtures and vendor provenance verification; no live subscription qualification was possible. Keep account access and prerequisite installation behind explicit owner consent.
 - npm accepted all four v0.2.24 publishes before the CLI package metadata and tarball became available. Verify the tarball and a fresh isolated install before declaring a tag shipment complete.
 - Read-only blocks unclassified extension tools, including direct MCP tools. The `mcp` proxy still permits status, search, describe, and ui-messages. Saved `defaultPermissionMode` and session `.leaf.json` can still contain `manual` or `plan`; read them as yolo or read-only without rewriting files. Gateway session switches to a saved writable mode pause in read-only until the owner confirms. Read-only does not revoke full-access background children already running when the mode changes.
@@ -328,6 +334,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-09-26: show actionable supervisor handoffs as `subagent progress` only in the parent card title, because the protocol kind must still wake the model while the wording stays calm.
+- 2026-09-26: label pending async children as waiting, isolate real step stats, and give only nonterminal chain producers a brief handoff instruction so the display and final outputs reflect actual child boundaries.
 - 2026-09-24: merge PRs #106, #107, #109, #110, and #111 without #77 or #108; keep additive AGENTS.md entries and refresh the combined first-request schema fixture.
 - 2026-09-24: prepare v0.2.24 on a release branch after integration; publish after offline checks when the owner explicitly chooses to ship without unavailable live Anthropic qualification.
 - 2026-09-24: record the release only after the npm tarball resolves and an isolated install reports 0.2.24 for every public package.

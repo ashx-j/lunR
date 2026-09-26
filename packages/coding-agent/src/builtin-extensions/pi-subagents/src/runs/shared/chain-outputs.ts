@@ -83,6 +83,12 @@ export function validateChainOutputBindingsWithContext(
 	}
 }
 
+export function withChainHandoff(task: string, hasNextStep: boolean): string {
+	return hasNextStep
+		? `${task}\n\nYour final output will be handed to the next agent. Briefly summarize results, relevant references, verification, and remaining work.`
+		: task;
+}
+
 export function resolveOutputReferences(template: string, outputs: ChainOutputMap): string {
 	return template.replace(OUTPUT_REF_PATTERN, (rawReference, name: string) => {
 		if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) {
