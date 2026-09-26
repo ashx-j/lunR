@@ -1,11 +1,27 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertOwnedPath, installRuntime, resolveRuntimeArchive } from "../src/core/computer-use/runtime.ts";
 
-const state = vi.hoisted(() => ({ root: "" }));
+const state = vi.hoisted(() => ({ root: "", archive: undefined as { bytes: number; sha256: string } | undefined }));
+vi.mock("../src/core/computer-use/release.generated.ts", async (original) => {
+	const { computerRelease } = await original<typeof import("../src/core/computer-use/release.generated.ts")>();
+	return {
+		computerRelease: {
+			...computerRelease,
+			get artifacts() {
+				return computerRelease.artifacts.map((artifact) =>
+					artifact.platform === process.platform && artifact.arch === process.arch && state.archive
+						? { ...artifact, ...state.archive }
+						: artifact,
+				);
+			},
+		},
+	};
+});
 vi.mock("node:os", async (original) => {
 	const os = await original<typeof import("node:os")>();
 	return {
@@ -20,6 +36,7 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	if (state.root) await rm(state.root, { recursive: true, force: true });
 	state.root = "";
+	state.archive = undefined;
 });
 
 describe("verified native installation", () => {
@@ -40,7 +57,31 @@ describe("verified native installation", () => {
 		"serializes extraction and rejects tampered cached helpers without overwriting them",
 		async () => {
 			state.root = await mkdtemp(join(tmpdir(), "lunr-install-test-"));
-			vi.stubEnv("PI_PACKAGE_DIR", fileURLToPath(new URL("../", import.meta.url)));
+			const { computerRelease } = await import("../src/core/computer-use/release.generated.ts");
+			const artifact = computerRelease.artifacts.find(
+				(item) => item.platform === process.platform && item.arch === process.arch,
+			);
+			if (!artifact) throw new Error("No host fixture metadata.");
+			const source = join(state.root, "source");
+			const packageRoot = join(state.root, "package");
+			const payload = join(packageRoot, "native", "computer-use");
+			await mkdir(source);
+			await mkdir(payload, { recursive: true });
+			await writeFile(join(source, "cua-driver.exe"), "inert driver fixture");
+			await writeFile(join(source, "cua-driver-uia.exe"), "inert helper fixture");
+			const archive = join(payload, artifact.name);
+			execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), [
+				"-a",
+				"-cf",
+				archive,
+				"-C",
+				source,
+				"cua-driver.exe",
+				"cua-driver-uia.exe",
+			]);
+			const bytes = await readFile(archive);
+			state.archive = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+			vi.stubEnv("PI_PACKAGE_DIR", packageRoot);
 			vi.stubEnv("SESSIONNAME", "Console");
 			const results = await Promise.allSettled([installRuntime(), installRuntime()]);
 			expect(

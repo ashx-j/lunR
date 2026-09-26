@@ -219,15 +219,34 @@ new CLI version. Dev-channel update/publication changes were not ported here.
 ## Verification and remaining acceptance
 
 After integrating v0.2.24 master, all five offline package builds and the Node
-bundle pass. Focused tests pass 138/139 across 14 suites. The installation fixture
-fails because its native payload is absent. Fake-driver tests cover exact-token
+bundle pass. Validation passes 239 focused tests across 21 files and eight
+archive/package tests. Installation and archive staging tests now create inert
+fixtures, so source tests need no native release payload. The Windows installation
+test exercises real extraction, locking, cache reuse, and helper-tamper rejection
+without executing either fixture file. Fake-driver tests cover exact-token
 rejection with zero action dispatch, background refusal followed by fresh-capture
 foreground input, and uncertain or partial post-dispatch outcomes. Real PNG
 fixtures reproduce encoding-independent pixel identity and preserve crop mapping.
 First-paint and first-request checks pass for both browser settings; removing only
-`computer_load` reproduces master's unchanged tool hashes. Independent verification
-and stable packaging remain pending. These checks did not operate a desktop or
-launch CuaDriver. Foreground typing on hardware still requires separate approval.
+`computer_load` reproduces master's unchanged tool hashes.
+
+Seven public-name tarballs staged in an isolated sandbox with inert payloads pass
+relocated installation, first requests, all supported OS/CPU selections, omitted
+optional-payload recovery, and standalone installer `npm ci --ignore-scripts`.
+Staging validates rewritten JavaScript and declaration imports and exact payload
+versions in both locks. This tests packaging mechanics, not the real CuaDriver
+archives. The real-archive stable dry-run stops on a missing pinned archive.
+Production approval remains development-only, and publication still requires
+separate approval and a new CLI version.
+
+The eight suites implicated by the prior CI annotations produce the same ten
+failures on this branch and an isolated build of master `b57c148`: three in
+coding-agent gateway inference, extension discovery, and the SIGTERM fixture;
+seven in AI catalog and Anthropic/OpenCode fixtures. Each comparison passes 108
+other tests. This is not clean full-suite CI. Those baseline failures require a
+separate repair or explicit acceptance decision before calling the PR merge-ready.
+These checks did not operate a desktop or launch CuaDriver. Foreground typing on
+hardware still requires separate approval.
 
 The dev integration passed all five offline package builds, the Node bundle,
 265 focused tests across 23 suites, and eight archive/package tests. A real
