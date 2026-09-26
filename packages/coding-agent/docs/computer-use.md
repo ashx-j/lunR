@@ -2,8 +2,8 @@
 
 The image-only implementation shipped on `lunr-dev` as `0.2.21-dev.12.1`
 and received user testing. Automated validation passed on the dev integration.
-This PR carries the same computer-use implementation without dev-channel naming
-or update changes. Smooth cursor animation is not implemented. Production
+This PR builds on that implementation without dev-channel naming or update
+changes, and repairs failure reporting and unchanged-image detection. Smooth cursor animation is not implemented. Production
 publication remains blocked pending the native runtime's separate approval.
 
 ## Setup and permissions
@@ -230,14 +230,16 @@ fixtures reproduce encoding-independent pixel identity and preserve crop mapping
 First-paint and first-request checks pass for both browser settings; removing only
 `computer_load` reproduces master's unchanged tool hashes.
 
-Seven public-name tarballs staged in an isolated sandbox with inert payloads pass
+All three pinned upstream archives match their committed byte counts and SHA-256
+hashes. Seven public-name tarballs staged with those unchanged real payloads pass
 relocated installation, first requests, all supported OS/CPU selections, omitted
 optional-payload recovery, and standalone installer `npm ci --ignore-scripts`.
 Staging validates rewritten JavaScript and declaration imports and exact payload
-versions in both locks. This tests packaging mechanics, not the real CuaDriver
-archives. The real-archive stable dry-run stops on a missing pinned archive.
-Production approval remains development-only, and publication still requires
-separate approval and a new CLI version.
+versions in both locks. These checks ran on Windows x64 without launching the
+native driver; OS/CPU selection tests do not establish operation on other hardware.
+Archive integrity and packaging are verified, but native signing, permission and
+input acceptance remain separate. Production approval is still development-only;
+publication requires separate approval and a new CLI version.
 
 The eight suites implicated by the prior CI annotations produce the same ten
 failures on this branch and an isolated build of master `b57c148`: three in
@@ -255,8 +257,8 @@ first-request checks passed with the regenerated supported-host fingerprint;
 removing only `computer_load` reproduced the unchanged unsupported-host baseline.
 Seven local dev tarballs passed relocated installation, OS/CPU payload selection,
 omitted-optional handling, and installer-lock checks. The dev publication workflow
-also passed. These results describe the dev integration, not a separate full
-verification of this master-targeted PR's stable packaging.
+also passed. These historical results describe the dev integration. The current branch's
+stable packaging checks are recorded above.
 
 The user reported testing the published dev build; specific applications and
 scenarios were not supplied. This does not establish full platform acceptance.
