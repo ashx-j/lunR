@@ -263,17 +263,33 @@ text and character count. The driver's outcome remained `unverifiable`; the
 image established the application effect. `computer_end` confirmed shutdown and
 released the desktop lease. No document was saved or installed CLI changed.
 This verifies basic launch, window capture and background text input only.
-A later Windows x64 test on a fresh scratch Notepad window confirmed a background
-Ctrl+A refusal and then reproduced the same XAML/UIA error on a fresh-token
-`foreground=true` retry. Pinned upstream source at `d8028a7943087ee258dc1b4d19dc12a7cd27669c`
+A later Windows x64 test on an owned scratch Notepad window found that background
+Ctrl+A failed with `tool_invocation_failed`; a fresh image showed no selection.
+A fresh-token `foreground=true` retry initially returned the same XAML/UIA error.
+Pinned upstream source at `d8028a7943087ee258dc1b4d19dc12a7cd27669c`
 routes `hotkey` for a XAML window through UIA before checking `delivery_mode`.
+This native refusal was not a `background_unavailable` code. The unchanged
+screenshot established that the background shortcut had not selected the text.
+
 The Windows workflow now sends foreground modifier shortcuts without x/y through
 that pin's `press_key` with `modifiers`, whose foreground branch uses verified
 window focus and SendInput. Background shortcuts, keys with image coordinates,
-and non-Windows dispatch remain unchanged. This is an offline dispatch repair,
-not a live recovery pass: the parent must verify the new compiled route and
-post-action image before accepting foreground recovery. Held-input cancellation
-and broader platform acceptance remain unverified.
+and non-Windows dispatch remain unchanged. On a subsequent parent-run test,
+foreground Ctrl+A selected all 39 characters in the same owned Notepad scratch;
+its post-action image showed the selection. Foreground Ctrl+N then opened a
+blank unsaved tab in that window, leaving the earlier scratch tab intact.
+
+The parent next cancelled a 2048-character `computer_text` call 86 ms after the
+real SDK call began, while it was still pending. The result reported
+`input_dispatch_failed`, `input:uncertain` and `cleanup:confirmed`. The native
+runtime exited and its desktop lease was absent before a fresh workflow captured
+the same owned window. That image showed exactly six characters in the new tab.
+This verifies partial text input followed by in-flight cancellation, cleanup and
+reacquisition, not a pre-dispatch cancellation or complete text delivery.
+`computer_end` shut down the new runtime and released its lease. Both tabs
+remained unsaved; other user documents were untouched. No global CLI changed.
+The complete-gesture tool API did not exercise held modifier or mouse-button
+release under abort, which remains unverified.
 
 The dev integration passed all five offline package builds, the Node bundle,
 265 focused tests across 23 suites, and eight archive/package tests. A real
@@ -287,12 +303,14 @@ stable packaging checks are recorded above.
 
 The user reported testing the published dev build; specific applications and
 scenarios were not supplied. This does not establish full platform acceptance.
-Native gates remain Windows locked/UAC/integrity states, Electron/native apps,
-display scaling and moved/resized windows, Unicode, held-input cancellation, and
-macOS TCC/LaunchServices/FIFO/shutdown on hardware. Cursor/runtime changes need
-a separate scoped decision before implementation. Provider token savings remain
-unmeasured. An offline fake-driver discovery comparison finds a named app at row
-118 of 139 synthetic apps in one query instead of three unfiltered pages. It
+Native gates remain Windows locked/UAC/integrity states, other Electron/native
+apps, display scaling and moved/resized windows, Unicode, held modifier/button
+release under abort, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
+Provider-driven computer tool choice has not been live-qualified. Cursor/runtime
+changes need a separate scoped decision before implementation. Provider token
+savings remain unmeasured. An offline fake-driver discovery comparison finds a
+named app at row 118 of 139 synthetic apps in one query instead of three
+unfiltered pages. It
 returns one identity instead of 139 and 147 result-text characters instead of
 8699. The loaded computer-tool definitions grow by 230 serialized characters;
 the first-request definitions are unchanged because detailed tools load on demand.
