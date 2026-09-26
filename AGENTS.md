@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **CI baseline repairs (`fix/ci-baseline-fixtures`):** extension loading now resolves AI catalog subpaths before the root compatibility alias. Tests cover the legacy gateway inference cutoff, current shutdown cleanup, current Kimi/OpenCode metadata, API-key tool-name casing, and fail-closed Anthropic OAuth. Generated catalogs and subscription routing are unchanged.
+
 Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.24:** PR #112 merged #106, #107, #109, #110, and #111 with merge ancestry; release PR #113 and tag `v0.2.24` shipped the four public npm packages. #77 remains open; #108 was closed separately without merging. Both are excluded. Live Anthropic subscription qualification remains unrun; the owner approved shipping without it.
@@ -150,6 +152,8 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- CI baseline repairs, 2026-09-26: 152 focused tests across ten files pass after reproducing fourteen annotated failures. All five offline builds, Node bundle, and browser-on/off first-request checks pass. Full AI passes 623 tests with 760 credential-gated skips. A broader isolated Windows diagnostic remains red in coding-agent, TUI, and Agent; its offline environment also suppresses mocked catalog/update requests. It is not evidence of clean full CI. No live provider or installed CLI was used.
+
 - v0.2.24 release (2026-09-24): five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with both browser fixtures. Vendor verifier, catalog, shrinkwrap, installer lock, pinned deps, relative imports, browser smoke, workflow policy, `git diff --check`, and all four npm 10 package dry-runs pass. Publication workflow `36066384313` succeeded from tag `v0.2.24` at `8a5bfb4`; all four public npm packages resolve as latest. A fresh isolated install reports 0.2.24 for the CLI and all four packages. The full CI test job retains the documented 11 TUI and 101 coding-agent baseline failures. No installed global CLI or live Anthropic subscription was used.
 - v0.2.24 integration (2026-09-24): five offline package builds and coding-agent Node bundle pass. Focused AI tests pass 36/36; TUI pinned-scroll passes 24/24; coding-agent focused tests pass 207/212 with five pre-existing Windows `.pi` settings fixtures failing. First-paint and first-turn subagent/MCP/LSP/fetch checks pass after refreshing the combined browser-on/off tool payload hashes. Vendor provenance verification passes. No installed CLI or live subscription was used.
 - Three permission modes (2026-09-24): five offline tsgo builds and the coding-agent Node bundle pass in the isolated worktree. Focused permission, child, gateway, browser, handoff, runtime-event, and UI suites pass 206 tests across 15 suites (6 Chromium-gated skips). The saved-default migration test passes. The full settings-manager suite retains five existing Windows `.pi` fixture failures. First-paint plus first-turn subagent/MCP/LSP/fetch checks pass with refreshed enabled/disabled browser hashes `4db97581…` / `ff476e57…`. The isolated async child question smoke passes and records a local tool inventory under `.artifacts/`. No installed CLI, live credentials, or original checkout build changed.
@@ -239,6 +243,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Extension aliases match prefixes. Keep the AI catalog directory ahead of its root compatibility-file alias so `catalog/codex` does not resolve beneath `compat.js`.
+
 - The v0.2.24 Anthropic bridge shipped with offline fixtures and vendor provenance verification; no live subscription qualification was possible. Keep account access and prerequisite installation behind explicit owner consent.
 - npm accepted all four v0.2.24 publishes before the CLI package metadata and tarball became available. Verify the tarball and a fresh isolated install before declaring a tag shipment complete.
 - Read-only blocks unclassified extension tools, including direct MCP tools. The `mcp` proxy still permits status, search, describe, and ui-messages. Saved `defaultPermissionMode` and session `.leaf.json` can still contain `manual` or `plan`; read them as yolo or read-only without rewriting files. Gateway session switches to a saved writable mode pause in read-only until the owner confirms. Read-only does not revoke full-access background children already running when the mode changes.
@@ -327,6 +333,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: repair catalog-subpath resolution and version-dependent fixtures without changing generated metadata or reviving direct Anthropic OAuth, because the failing tests mixed a real alias bug with retired contracts.
 
 - 2026-09-24: merge PRs #106, #107, #109, #110, and #111 without #77 or #108; keep additive AGENTS.md entries and refresh the combined first-request schema fixture.
 - 2026-09-24: prepare v0.2.24 on a release branch after integration; publish after offline checks when the owner explicitly chooses to ship without unavailable live Anthropic qualification.

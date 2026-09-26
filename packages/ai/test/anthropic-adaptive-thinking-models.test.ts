@@ -7,11 +7,6 @@ const EXPECTED_CURRENT_ADAPTIVE_THINKING_MODELS = [
 	"anthropic/claude-opus-4-8",
 	"anthropic/claude-sonnet-5",
 	"cloudflare-ai-gateway/claude-fable-5",
-	"kimi-coding/k2p7",
-	"kimi-coding/k3",
-	"kimi-coding/kimi-for-coding",
-	"kimi-coding/kimi-for-coding-highspeed",
-	"kimi-coding/kimi-k2-thinking",
 	"opencode/claude-opus-4-8",
 	"vercel-ai-gateway/anthropic/claude-opus-4.8",
 	"vercel-ai-gateway/anthropic/claude-sonnet-5",
@@ -22,6 +17,15 @@ function getAllModels(): Model<Api>[] {
 }
 
 describe("Anthropic adaptive thinking model metadata", () => {
+	it("marks every currently bundled Kimi Coding model as adaptive", () => {
+		const models = getModels("kimi-coding");
+		expect(models.length).toBeGreaterThan(0);
+		for (const model of models) {
+			expect(model.api, model.id).toBe("anthropic-messages");
+			expect(model.compat?.forceAdaptiveThinking, model.id).toBe(true);
+		}
+	});
+
 	it("marks built-in Anthropic Messages models that use adaptive thinking", () => {
 		const flaggedModels = getAllModels()
 			.filter((model): model is Model<"anthropic-messages"> => model.api === "anthropic-messages")

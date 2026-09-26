@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel, streamSimple } from "../src/compat.ts";
+import { getModels, streamSimple } from "../src/compat.ts";
 import type { AssistantMessage, Context, Model } from "../src/types.ts";
 
 interface AnthropicPayload {
@@ -82,7 +82,9 @@ describe("Anthropic empty thinking signature compat", () => {
 	it("converts empty-signature thinking to text by default", async () => {
 		const payload = await capturePayload(makeModel(), makeContext(""));
 		const assistant = payload.messages?.find((message) => message.role === "assistant");
-		expect(assistant?.content).toEqual([{ type: "text", text: "internal reasoning" }]);
+		expect(assistant?.content).toEqual([
+			{ type: "text", text: "internal reasoning", cache_control: { type: "ephemeral" } },
+		]);
 	});
 
 	it("preserves empty thinking text when the signature is present", async () => {
@@ -97,12 +99,18 @@ describe("Anthropic empty thinking signature compat", () => {
 		expect(assistant?.content).toEqual([{ type: "thinking", thinking: "internal reasoning", signature: "" }]);
 	});
 
-	it.each(["k3", "kimi-for-coding"] as const)("allows empty signatures for Kimi Coding %s", async (modelId) => {
-		const model = getModel("kimi-coding", modelId);
-		expect(model.compat?.allowEmptySignature).toBe(true);
-
-		const payload = await capturePayload(model, makeContext(" ", "internal reasoning", "kimi-coding", modelId));
-		const assistant = payload.messages?.find((message) => message.role === "assistant");
-		expect(assistant?.content).toEqual([{ type: "thinking", thinking: "internal reasoning", signature: "" }]);
-	});
+	it.each(getModels("kimi-coding").map((model) => [model.id, model] as const))(
+		"honors empty-signature metadata for currently bundled Kimi Coding %s",
+		async (modelId, model) => {
+			const allowEmptySignature = modelId === "k3" || modelId === "kimi-for-coding";
+			expect(model.compat?.allowEmptySignature ?? false).toBe(allowEmptySignature);
+			const payload = await capturePayload(model, makeContext(" ", "internal reasoning", "kimi-coding", modelId));
+			const assistant = payload.messages?.find((message) => message.role === "assistant");
+			expect(assistant?.content).toEqual(
+				allowEmptySignature
+					? [{ type: "thinking", thinking: "internal reasoning", signature: "" }]
+					: [{ type: "text", text: "internal reasoning", cache_control: { type: "ephemeral" } }],
+			);
+		},
+	);
 });
