@@ -57,7 +57,7 @@ const OutputModeOverride = Type.String({
 	description: "Return saved output inline (default) or only a concise file reference. file-only requires output to be a path.",
 });
 
-const TIER_SELECTION_DESCRIPTION = "Choose the lowest model tier that can reliably complete the task: 'light' for quick checks, fact gathering, and small code inspections; 'standard' for everyday coding, clearly described bugs, and focused reviews; 'heavy' for complex implementation, difficult debugging, architectural decisions, and large or high-risk reviews.";
+const TIER_SELECTION_DESCRIPTION = "Choose for the child's specific assignment: 'light' for bounded lookups and straightforward verification; 'standard' by default for implementation, debugging, testing, research synthesis, planning, and focused review, including multi-file work; 'heavy' only for a specific reasoning difficulty that makes standard insufficient, such as tightly coupled systems, conflicting architectural constraints, subtle concurrency/state bugs, or security-critical adversarial analysis. When uncertain, choose standard. Length, file count, unfamiliarity, and importance alone do not justify heavy. Heavy does not require a failed standard attempt; escalation should address a reasoning limitation, not missing context or tools.";
 
 // lunr: choose exactly one of tier or model per executable child.
 const TierOverride = Type.Optional(Type.String({

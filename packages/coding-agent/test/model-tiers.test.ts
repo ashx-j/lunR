@@ -178,18 +178,26 @@ describe("subagent tool description tier guidance", () => {
 		clearModelTiersBridge();
 	});
 
-	it("explains how to choose the lowest reliable tier in every built-in description", () => {
+	it("defaults to standard and requires a specific difficulty for heavy in every built-in description", () => {
 		for (const description of [
 			FULL_SUBAGENT_TOOL_DESCRIPTION,
 			COMPACT_SUBAGENT_TOOL_DESCRIPTION,
 			SUBAGENT_SAFETY_GUIDANCE,
 		]) {
 			expect(description).toContain(SUBAGENT_TIER_GUIDANCE);
-			expect(description).toContain("Choose the lowest tier that can reliably complete the task.");
-			expect(description).toContain("light: Use for simple, straightforward tasks");
-			expect(description).toContain("standard: Use for moderately difficult work");
-			expect(description).toContain("heavy: Use for complex or ambiguous tasks");
+			expect(description).toContain("Choose the tier for the child's specific assignment");
+			expect(description).toContain("light: Use for bounded lookups");
+			expect(description).toContain("standard: Default for implementation");
+			expect(description).toContain("heavy: Reserve for tasks whose central difficulty");
+			expect(description).toContain("identify the specific difficulty that makes standard insufficient");
+			expect(description).toContain("When uncertain between standard and heavy, choose standard.");
+			expect(description).toContain("do not require a failed standard attempt");
+			expect(description).toContain("Escalate for the reasoning limitation, passing along findings");
 		}
+	});
+
+	it("uses standard for the generic planning example", () => {
+		expect(FULL_SUBAGENT_TOOL_DESCRIPTION).toContain('description:"Draft plan", tier:"standard"');
 	});
 
 	it("requires tiers even when the bridge is absent", () => {

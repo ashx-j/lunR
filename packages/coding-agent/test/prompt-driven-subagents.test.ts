@@ -177,12 +177,14 @@ describe("prompt-driven subagent schema", () => {
 		}
 		expect((ParallelTaskSchema as { required?: string[] }).required ?? []).not.toContain("tier");
 		expect((DynamicParallelTemplateSchema as { required?: string[] }).required ?? []).not.toContain("tier");
-		for (const schema of [SubagentParams, ParallelTaskSchema]) {
+		for (const schema of [SubagentParams, ParallelTaskSchema, DynamicParallelTemplateSchema, ChainItem]) {
 			const description = nestedSchema(schema, ["properties", "tier"]).description as string;
-			expect(description).toContain("Choose the lowest model tier that can reliably complete the task");
-			expect(description).toContain("'light' for quick checks");
-			expect(description).toContain("'standard' for everyday coding");
-			expect(description).toContain("'heavy' for complex implementation");
+			expect(description).toContain("Choose for the child's specific assignment");
+			expect(description).toContain("'light' for bounded lookups");
+			expect(description).toContain("'standard' by default");
+			expect(description).toContain("'heavy' only for a specific reasoning difficulty");
+			expect(description).toContain("When uncertain, choose standard.");
+			expect(description).toContain("Heavy does not require a failed standard attempt");
 		}
 	});
 
