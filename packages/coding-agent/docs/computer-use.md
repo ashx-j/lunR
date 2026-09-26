@@ -263,8 +263,17 @@ text and character count. The driver's outcome remained `unverifiable`; the
 image established the application effect. `computer_end` confirmed shutdown and
 released the desktop lease. No document was saved or installed CLI changed.
 This verifies basic launch, window capture and background text input only.
-Foreground recovery, held-input cancellation and broader platform acceptance
-remain unverified.
+A later Windows x64 test on a fresh scratch Notepad window confirmed a background
+Ctrl+A refusal and then reproduced the same XAML/UIA error on a fresh-token
+`foreground=true` retry. Pinned upstream source at `d8028a7943087ee258dc1b4d19dc12a7cd27669c`
+routes `hotkey` for a XAML window through UIA before checking `delivery_mode`.
+The Windows workflow now sends foreground modifier shortcuts without x/y through
+that pin's `press_key` with `modifiers`, whose foreground branch uses verified
+window focus and SendInput. Background shortcuts, keys with image coordinates,
+and non-Windows dispatch remain unchanged. This is an offline dispatch repair,
+not a live recovery pass: the parent must verify the new compiled route and
+post-action image before accepting foreground recovery. Held-input cancellation
+and broader platform acceptance remain unverified.
 
 The dev integration passed all five offline package builds, the Node bundle,
 265 focused tests across 23 suites, and eight archive/package tests. A real

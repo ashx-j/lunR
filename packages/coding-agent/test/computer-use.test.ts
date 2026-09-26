@@ -8,6 +8,7 @@ import type { DriverReply } from "../src/core/computer-use/adapter.ts";
 import { DesktopLease } from "../src/core/computer-use/lease.ts";
 import { COMPUTER_TOOLS, computerRefusal } from "../src/core/computer-use/policy.ts";
 import { computerSchemas } from "../src/core/computer-use/schemas.ts";
+import { computerRelease } from "../src/core/computer-use/release.generated.ts";
 import { ComputerWorkflow, driverData, driverRefused } from "../src/core/computer-use/workflow.ts";
 import { createPermissionContext, deletePermissionContext, gateToolCall, registerApprovalHandler, resetPermissions } from "../src/core/permissions.ts";
 
@@ -357,6 +358,21 @@ describe("image-only workflow", () => {
 		await workflow.execute(name, { ...target, observation: observed.details.observation, ...input });
 		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", operation, "get_window_state"]);
 		await workflow.close();
+	});
+	it("routes Windows foreground modifier shortcuts through pinned press_key SendInput instead of XAML hotkey UIA", async () => {
+		expect(computerRelease.sourceCommit).toBe("d8028a7943087ee258dc1b4d19dc12a7cd27669c");
+		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+		try {
+			const { workflow, call } = await fixture();
+			const observed = await workflow.execute("computer_observe", target);
+			await workflow.execute("computer_key", { ...target, observation: observed.details.observation, keys: ["ctrl", "a"], foreground: true });
+			expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "press_key", "get_window_state"]);
+			expect(call.mock.calls[1]?.[1]).toEqual({ ...target, delivery_mode: "foreground", key: "a", modifiers: ["ctrl"] });
+			await workflow.close();
+		} finally {
+			Object.defineProperty(process, "platform", platform);
+		}
 	});
 	it.each(["apps", "windows"] as const)("retrieves omitted %s through bounded local pagination", async (kind) => {
 		const { workflow, call } = await fixture();

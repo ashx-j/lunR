@@ -220,11 +220,22 @@ export class ComputerWorkflow {
 				if (!["from_x", "from_y", "to_x", "to_y"].every((key) => typeof args[key] === "number")) throw new Error("Drag requires both endpoints.");
 				operation = "drag";
 				break;
-			case "computer_key":
+			case "computer_key": {
 				if ((input.key === undefined) === (input.keys === undefined)) throw new Error("Provide key OR keys.");
-				operation = input.keys === undefined ? "press_key" : "hotkey";
-				args[input.keys === undefined ? "key" : "keys"] = input.keys ?? input.key;
+				const keys: readonly unknown[] | undefined = Array.isArray(input.keys) ? input.keys : undefined;
+				const last = keys?.at(-1);
+				const modifiers = new Set(["ctrl", "control", "shift", "alt", "win", "windows", "cmd", "command"]);
+				const foregroundShortcut = process.platform === "win32" && input.foreground === true && input.x === undefined &&
+					keys !== undefined && keys.length >= 2 && keys.slice(0, -1).every((key) => typeof key === "string" && modifiers.has(key.toLowerCase())) &&
+					typeof last === "string" && !modifiers.has(last.toLowerCase());
+				// Pinned Windows hotkey routes XAML through UIA before honoring foreground; press_key honors SendInput.
+				operation = input.keys === undefined || foregroundShortcut ? "press_key" : "hotkey";
+				if (foregroundShortcut) {
+					args.key = last;
+					args.modifiers = keys.slice(0, -1);
+				} else args[input.keys === undefined ? "key" : "keys"] = input.keys ?? input.key;
 				break;
+			}
 			case "computer_text":
 				operation = "type_text";
 				args.text = input.text;
