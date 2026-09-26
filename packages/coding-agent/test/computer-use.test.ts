@@ -4,11 +4,11 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveChildExcludeTools } from "../src/builtin-extensions/pi-subagents/src/runs/shared/child-tools.ts";
-import type { DriverReply } from "../src/core/computer-use/adapter.ts";
+import { DriverCallError, type DriverReply } from "../src/core/computer-use/adapter.ts";
 import { DesktopLease } from "../src/core/computer-use/lease.ts";
 import { COMPUTER_TOOLS, computerRefusal } from "../src/core/computer-use/policy.ts";
-import { computerSchemas } from "../src/core/computer-use/schemas.ts";
 import { computerRelease } from "../src/core/computer-use/release.generated.ts";
+import { computerSchemas } from "../src/core/computer-use/schemas.ts";
 import { ComputerWorkflow, driverData, driverRefused } from "../src/core/computer-use/workflow.ts";
 import { createPermissionContext, deletePermissionContext, gateToolCall, registerApprovalHandler, resetPermissions } from "../src/core/permissions.ts";
 
@@ -101,14 +101,10 @@ describe("computer policy and discovery", () => {
 	});
 });
 
-async function rejectedData(pending: Promise<unknown>): Promise<Record<string, unknown>> {
-	try {
-		await pending;
-	} catch (error) {
-		if (!(error instanceof Error)) throw error;
-		return JSON.parse(error.message);
-	}
-	throw new Error("Expected workflow rejection");
+async function rejectedData(pending: ReturnType<ComputerWorkflow["execute"]>): Promise<Record<string, unknown>> {
+	const result = await pending;
+	expect(result.isError).toBe(true);
+	return JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
 }
 
 describe("image-only workflow", () => {
@@ -130,13 +126,54 @@ describe("image-only workflow", () => {
 		expect(data.guidance).toContain("including window focus");
 		expect(JSON.stringify(data)).not.toContain("Input may have taken effect");
 		expect(call).toHaveBeenCalledTimes(1);
-		expect(close).toHaveBeenCalledTimes(1);
+		expect(close).not.toHaveBeenCalled();
+		expect((await workflow.execute("computer_observe", target)).details.computer.workflow).toBe("ready");
+	});
+	it("uses a fresh token after expiry in the same owned workflow", async () => {
+		const { workflow, call, close } = await fixture();
+		const now = Date.now();
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const first = await workflow.execute("computer_observe", target);
+		vi.spyOn(Date, "now").mockReturnValue(now + 30001);
+		expect(await rejectedData(workflow.execute("computer_click", { ...target, observation: first.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "observation_expired", input: "not_dispatched" });
+		const second = await workflow.execute("computer_observe", target);
+		expect(second.details.observation).not.toBe(first.details.observation);
+		const action = await workflow.execute("computer_click", { ...target, observation: second.details.observation, x: 1, y: 1 });
+		expect(action.isError).toBe(false);
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "get_window_state", "click", "get_window_state"]);
+		expect(close).not.toHaveBeenCalled();
+		await workflow.close();
 	});
 	it("reports a missing active observation without inventing its cause", async () => {
 		const { workflow, call } = await fixture();
 		const data = await rejectedData(workflow.execute("computer_click", { ...target, observation: "unknown", x: 1, y: 1 }));
 		expect(data).toMatchObject({ code: "observation_unavailable", input: "not_dispatched" });
 		expect(call).not.toHaveBeenCalled();
+	});
+	it("cancels a pending action without a recovery capture or input retry", async () => {
+		const { workflow, call, close } = await fixture();
+		const observed = await workflow.execute("computer_observe", target);
+		call.mockImplementationOnce(() => new Promise<DriverReply>(() => undefined));
+		const controller = new AbortController();
+		const pending = workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 }, controller.signal);
+		await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+		controller.abort();
+		const result = await pending;
+		expect(result.details.computer).toEqual({ failed: true, workflow: "stopped" });
+		expect(result.content.filter((item) => item.type === "image")).toHaveLength(0);
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "click"]);
+		expect(close).toHaveBeenCalledTimes(1);
+	});
+	it("distinguishes adapter preflight rejection from a sent native request", async () => {
+		const { workflow, call, close } = await fixture();
+		const observed = await workflow.execute("computer_observe", target);
+		call.mockRejectedValueOnce(new DriverCallError("adapter_preflight", false));
+		const result = await workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 });
+		const data = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}");
+		expect(data).toMatchObject({ phase: "adapter_preflight", code: "adapter_preflight_failed", input: "not_dispatched" });
+		expect(result.details.computer).toEqual({ failed: true, workflow: "stopped" });
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "click"]);
+		expect(close).toHaveBeenCalledTimes(1);
 	});
 	it("keeps uncertainty after native dispatch throws and never forwards raw driver exception text", async () => {
 		const { workflow, call, close } = await fixture();
@@ -161,8 +198,8 @@ describe("image-only workflow", () => {
 		expect(data.guidance).toContain("background shortcut");
 		const consumed = await rejectedData(first.workflow.execute("computer_window", { ...target, observation: observed.details.observation, action: "focus" }));
 		expect(consumed.input).toBe("not_dispatched");
-		expect(consumed.guidance).toContain("does not prove foreground typing failed");
-		expect(first.call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text"]);
+		expect(consumed.code).toBe("observation_mismatch");
+		expect(first.call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text", "get_window_state"]);
 		const recovery = await fixture();
 		const fresh = await recovery.workflow.execute("computer_observe", target);
 		const result = await recovery.workflow.execute("computer_text", { ...target, observation: fresh.details.observation, foreground: true, text: "fixture" });
@@ -177,6 +214,7 @@ describe("image-only workflow", () => {
 		call.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text }] });
 		const result = await workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 });
 		expect(result.isError).toBe(true);
+		expect(result.content.filter((item) => item.type === "image")).toHaveLength(1);
 		expect(JSON.stringify(result)).not.toContain("RAW SECRET");
 		expect(JSON.stringify(result)).toContain("unverified");
 	});
@@ -201,6 +239,34 @@ describe("image-only workflow", () => {
 		expect(result.details.observation).not.toBe(observed.details.observation);
 		await workflow.close();
 	});
+	it("refuses hover on unsupported hosts and window targets without moving the pointer", async () => {
+		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		const schema = computerSchemas as Record<string, unknown>;
+		const prior = Object.getOwnPropertyDescriptor(schema, "computer_hover");
+		schema.computer_hover = { properties: { desktop: 1, foreground: 1, observation: 1, x: 1, y: 1 } };
+		const { workflow, call } = await fixture();
+		try {
+			const observed = await workflow.execute("computer_observe", { desktop: true });
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			expect(await rejectedData(workflow.execute("computer_hover", { desktop: true, foreground: true, observation: observed.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "invalid_arguments", input: "not_dispatched" });
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			const window = await workflow.execute("computer_observe", target);
+			expect(await rejectedData(workflow.execute("computer_hover", { ...target, foreground: true, observation: window.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "invalid_arguments", input: "not_dispatched" });
+			const desktop = await workflow.execute("computer_observe", { desktop: true });
+			const controller = new AbortController();
+			const pending = workflow.execute("computer_hover", { desktop: true, foreground: true, observation: desktop.details.observation, x: 1, y: 1 }, controller.signal);
+			await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(4));
+			controller.abort();
+			const cancelled = await pending;
+			expect(cancelled.details.computer.workflow).toBe("stopped");
+			expect(call.mock.calls.map(([name]) => name)).toEqual(["get_desktop_state", "get_window_state", "get_desktop_state", "move_cursor"]);
+		} finally {
+			Object.defineProperty(process, "platform", platform);
+			if (prior) Object.defineProperty(schema, "computer_hover", prior);
+			else delete schema.computer_hover;
+			await workflow.close();
+		}
+	});
 	it("maps desktop pixels once, without applying native scale_factor a second time", async () => {
 		const { workflow, call } = await fixture();
 		call.mockResolvedValueOnce(screenshot("desktop", { scale_factor: 2 }));
@@ -215,13 +281,13 @@ describe("image-only workflow", () => {
 	])("refuses conflicting or non-foreground desktop input before dispatch: %j", async (input) => {
 		const { workflow, call } = await fixture();
 		const observed = await workflow.execute("computer_observe", { desktop: true });
-		await expect(workflow.execute("computer_click", { desktop: true, observation: observed.details.observation, ...input })).rejects.toThrow();
+		expect(await rejectedData(workflow.execute("computer_click", { desktop: true, observation: observed.details.observation, ...input }))).toMatchObject({ code: "invalid_arguments", input: "not_dispatched" });
 		expect(call).toHaveBeenCalledTimes(1);
 	});
 	it("requires a separate grounded click to change desktop keyboard focus", async () => {
 		const { workflow, call } = await fixture();
 		const observed = await workflow.execute("computer_observe", { desktop: true });
-		await expect(workflow.execute("computer_text", { desktop: true, foreground: true, observation: observed.details.observation, text: "hello", x: 1, y: 1 })).rejects.toThrow("separate grounded click");
+		expect(await rejectedData(workflow.execute("computer_text", { desktop: true, foreground: true, observation: observed.details.observation, text: "hello", x: 1, y: 1 }))).toMatchObject({ code: "invalid_arguments" });
 		expect(call).toHaveBeenCalledTimes(1);
 	});
 	it("captures a useful crop from fresh pixels and maps its local coordinates back to full capture pixels", async () => {
@@ -239,12 +305,12 @@ describe("image-only workflow", () => {
 		call.mockResolvedValueOnce(screenshot("a", { window_bounds: { x: 0, y: 0, width: 2048, height: 1024 } }))
 			.mockResolvedValueOnce(screenshot("b", { window_bounds: { x: 10, y: 0, width: 2048, height: 1024 } }));
 		const observed = await workflow.execute("computer_observe", target);
-		await expect(workflow.execute("computer_observe", { ...target, observation: observed.details.observation, crop: { x: 1, y: 1, width: 20, height: 20 } })).rejects.toThrow("geometry changed");
+		expect(await rejectedData(workflow.execute("computer_observe", { ...target, observation: observed.details.observation, crop: { x: 1, y: 1, width: 20, height: 20 } }))).toMatchObject({ code: "target_geometry_changed" });
 	});
 	it.each([{ element_index: 1 }, { snapshot_id: "old" }, { x: 1024, y: 1 }, { x: -1, y: 1 }])("rejects ungrounded input before dispatch: %j", async (input) => {
 		const { workflow, call } = await fixture();
 		const observed = await workflow.execute("computer_observe", target);
-		await expect(workflow.execute("computer_click", { ...target, observation: observed.details.observation, ...input })).rejects.toThrow();
+		expect(await rejectedData(workflow.execute("computer_click", { ...target, observation: observed.details.observation, ...input }))).toMatchObject({ input: "not_dispatched" });
 		expect(call).toHaveBeenCalledTimes(1);
 	});
 	it("consumes the image token and rejects replay even after successful post-action capture", async () => {
@@ -252,25 +318,25 @@ describe("image-only workflow", () => {
 		const observed = await workflow.execute("computer_observe", target);
 		const input = { ...target, observation: observed.details.observation, x: 10, y: 20 };
 		await workflow.execute("computer_click", input);
-		await expect(workflow.execute("computer_click", input)).rejects.toThrow("Stale observation");
+		expect(await rejectedData(workflow.execute("computer_click", input))).toMatchObject({ code: "observation_mismatch" });
 		expect(call).toHaveBeenCalledTimes(3);
 	});
 	it.each(["pid", "window_id"])("rejects a changed %s target", async (field) => {
 		const { workflow, call } = await fixture();
 		const observed = await workflow.execute("computer_observe", target);
-		await expect(workflow.execute("computer_click", { ...target, [field]: 9, observation: observed.details.observation, x: 1, y: 1 })).rejects.toThrow("Stale observation");
+		expect(await rejectedData(workflow.execute("computer_click", { ...target, [field]: 9, observation: observed.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "observation_target_mismatch" });
 		expect(call).toHaveBeenCalledTimes(1);
 	});
 	it("rejects an expired observation", async () => {
 		const { workflow } = await fixture();
 		const observed = await workflow.execute("computer_observe", target);
 		vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31000);
-		await expect(workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 })).rejects.toThrow("Stale observation");
+		expect(await rejectedData(workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "observation_expired" });
 	});
 	it.each([{ screenshot_frame_valid: false }, { screenshot_error: { code: "px_frame_mismatch" } }, { screenshot_width: 999 }])("refuses invalid native capture metadata: %j", async (extra) => {
 		const { workflow, call } = await fixture();
 		call.mockResolvedValueOnce(screenshot("pixels", extra));
-		await expect(workflow.execute("computer_observe", target)).rejects.toThrow("could not be verified");
+		expect(await rejectedData(workflow.execute("computer_observe", target))).toMatchObject({ code: "image_frame_invalid" });
 	});
 	it("preserves uncertainty and stops after a failed post-action capture without retrying input", async () => {
 		const { workflow, call, close } = await fixture();
@@ -281,7 +347,7 @@ describe("image-only workflow", () => {
 		expect(result.details.observation).toBeUndefined();
 		expect(JSON.stringify(result.content)).toContain("partial");
 		expect(JSON.stringify(result.content)).toContain("Input may have taken effect");
-		expect(JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}")).toMatchObject({ input: "dispatched", applicationEffect: "unverified", observation: "unavailable" });
+		expect(JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}")).toMatchObject({ input: "uncertain", applicationEffect: "unverified", observation: "unavailable", code: "capture_transport_failed" });
 		expect(call).toHaveBeenCalledTimes(3);
 		expect(close).toHaveBeenCalledTimes(1);
 	});
@@ -302,19 +368,41 @@ describe("image-only workflow", () => {
 	it("retains the lease and no-dispatch reporting when cleanup cannot be confirmed", async () => {
 		const path = await directory();
 		const lease = new DesktopLease(path);
-		const call = vi.fn(async () => screenshot());
+		const call = vi.fn().mockResolvedValueOnce(screenshot()).mockRejectedValueOnce(new Error("native transport failed"));
 		const close = vi.fn(async () => { throw new Error("shutdown failed"); });
 		const workflow = new ComputerWorkflow({ call, close }, lease);
 		const next = new DesktopLease(path);
 		try {
-			await workflow.execute("computer_observe", target);
-			const data = await rejectedData(workflow.execute("computer_click", { ...target, observation: "bad", x: 1, y: 1 }));
-			expect(data).toMatchObject({ input: "not_dispatched", code: "observation_mismatch", cleanup: "unconfirmed" });
-			expect(call).toHaveBeenCalledTimes(1);
+			const observed = await workflow.execute("computer_observe", target);
+			const result = await workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 });
+			const data = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}");
+			expect(data).toMatchObject({ input: "uncertain", code: "input_dispatch_failed" });
+			expect(result.details.computer.workflow).toBe("cleanup_unconfirmed");
+			expect(call).toHaveBeenCalledTimes(2);
 			await expect(next.run(async () => undefined)).rejects.toThrow("busy");
 		} finally {
 			await lease.close();
 			await next.close();
+		}
+	});
+	it("keeps a partial native outcome separate from capture transport and unconfirmed shutdown", async () => {
+		const path = await directory();
+		const lease = new DesktopLease(path);
+		const call = vi.fn().mockResolvedValueOnce(screenshot("before")).mockResolvedValueOnce({ isError: true, content: [], structuredContent: {
+			code: "type_text_incomplete", effect: "partial", requested_chars: 3, delivered_chars: 2, retryable: true, retry_from_character: 2,
+		} }).mockRejectedValueOnce(new DriverCallError("native_request", true));
+		const workflow = new ComputerWorkflow({ call, close: async () => { throw new Error("shutdown unconfirmed"); } }, lease);
+		try {
+			const observed = await workflow.execute("computer_observe", target);
+			const result = await workflow.execute("computer_text", { ...target, observation: observed.details.observation, text: "A😀B" });
+			expect(result.details.computer).toEqual({ failed: true, workflow: "cleanup_unconfirmed" });
+			const data = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}");
+			expect(data).toMatchObject({ phase: "post_action_capture", code: "capture_transport_failed", input: "uncertain", capture_error: "capture_transport_failed",
+				action_outcome: { code: "type_text_incomplete", input: "partial", delivered_chars: 2, retry_from_character: 2 } });
+			expect(result.content[1]?.type === "text" && result.content[1].text).toContain("cleanup");
+			expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text", "get_window_state"]);
+		} finally {
+			await lease.close();
 		}
 	});
 	it("stops repeated unchanged polling and refuses an identical action after an unchanged result", async () => {
@@ -327,7 +415,7 @@ describe("image-only workflow", () => {
 		action.call.mockResolvedValue(screenshot());
 		const before = await action.workflow.execute("computer_observe", target);
 		const after = await action.workflow.execute("computer_click", { ...target, observation: before.details.observation, x: 1, y: 1 });
-		await expect(action.workflow.execute("computer_click", { ...target, observation: after.details.observation, x: 1, y: 1 })).rejects.toThrow("identical action");
+		expect(await rejectedData(action.workflow.execute("computer_click", { ...target, observation: after.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "invalid_arguments" });
 		expect(action.call).toHaveBeenCalledTimes(3);
 	});
 	it.each([
@@ -341,7 +429,7 @@ describe("image-only workflow", () => {
 		call.mockResolvedValue(screenshot());
 		const before = await workflow.execute("computer_observe", target);
 		const after = await workflow.execute("computer_click", { ...target, observation: before.details.observation, x: 1, y: 1, ...first });
-		await expect(workflow.execute("computer_click", { ...target, observation: after.details.observation, x: 1, y: 1, ...repeated })).rejects.toThrow("identical action");
+		expect(await rejectedData(workflow.execute("computer_click", { ...target, observation: after.details.observation, x: 1, y: 1, ...repeated }))).toMatchObject({ code: "invalid_arguments" });
 		expect(call).toHaveBeenCalledTimes(3);
 	});
 	it.each([
@@ -451,8 +539,8 @@ describe("image-only workflow", () => {
 	it.each([42, "", "   ", "x".repeat(241), "\u{1F600}".repeat(241)])("rejects invalid discovery query %j before native dispatch", async (query) => {
 		const { workflow, call } = await fixture();
 		const data = await rejectedData(workflow.execute("computer_apps", { query }));
-		expect(data).toMatchObject({ input: "not_dispatched", code: "invalid_arguments" });
-		expect(data.message).toContain("Discovery query");
+		expect(data).toMatchObject({ kind: "apps", code: "invalid_arguments" });
+		expect(data).not.toHaveProperty("input");
 		expect(call).not.toHaveBeenCalled();
 	});
 	it("preserves validated Unicode typing recovery without retrying or trusting completion", async () => {
@@ -471,7 +559,8 @@ describe("image-only workflow", () => {
 		expect(data.guidance).toContain("Unicode code-point");
 		expect(JSON.stringify(result)).not.toContain("SECRET");
 		expect(result.isError).toBe(true);
-		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text"]);
+		expect(result.content.filter((item) => item.type === "image")).toHaveLength(1);
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "type_text", "get_window_state"]);
 	});
 	it.each([
 		{ requested_chars: 4 },
@@ -495,7 +584,7 @@ describe("image-only workflow", () => {
 		expect(data).not.toHaveProperty("retry_from_character");
 		expect(data).not.toHaveProperty("retryable");
 		expect(data.applicationEffect).toBe("unverified");
-		expect(call).toHaveBeenCalledTimes(2);
+		expect(call).toHaveBeenCalledTimes(3);
 	});
 	it("returns capped allowlisted app/window metadata and bounded nested refusal codes", async () => {
 		const { workflow, call } = await fixture();
@@ -513,6 +602,91 @@ describe("image-only workflow", () => {
 		expect(refused.isError).toBe(true);
 		expect(JSON.stringify(refused.content)).toContain("background_uipi_blocked");
 		expect(JSON.stringify(refused.content)).not.toContain("SECRET");
+	});
+	it("keeps read-only discovery from refreshing the original token's 30-second age", async () => {
+		const { workflow, call } = await fixture();
+		const now = Date.now();
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const observed = await workflow.execute("computer_observe", target);
+		call.mockResolvedValueOnce({ content: [], structuredContent: { apps: [{ pid: 9, name: "Discord" }] } });
+		const apps = await workflow.execute("computer_apps", { query: "Discord" });
+		expect(apps.details.computer).toEqual({ failed: false, workflow: "ready" });
+		expect(JSON.parse(apps.content[0]?.type === "text" ? apps.content[0].text : "{}")).toMatchObject({ kind: "apps", items: [{ pid: 9 }] });
+		vi.spyOn(Date, "now").mockReturnValue(now + 30001);
+		expect(await rejectedData(workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 }))).toMatchObject({ code: "observation_expired", input: "not_dispatched" });
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "list_apps"]);
+	});
+	it("enriches named apps without replacing native window PID or off-primary bounds", async () => {
+		const properties = computerSchemas.computer_apps.properties as Record<string, unknown>;
+		const prior = Object.getOwnPropertyDescriptor(properties, "include_windows");
+		properties.include_windows = { type: "boolean" };
+		try {
+			const { workflow, call } = await fixture();
+			call.mockResolvedValueOnce({ content: [], structuredContent: { apps: [{ pid: 0, name: "Discord" }, { pid: 5, name: "Discord", running: true }] } })
+				.mockResolvedValueOnce({ content: [], structuredContent: { windows: [
+					{ pid: 77, window_id: 19, title: "Discord", bounds: { x: -1800, y: 80, width: 500, height: 700 } },
+				] } });
+			const result = await workflow.execute("computer_apps", { query: "Discord", include_windows: true });
+			const data = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}");
+			expect(data.windows_by_pid).toMatchObject([{ pid: 5, windows: [{ pid: 77, window_id: 19, bounds: { x: -1800 } }] }]);
+			expect(call.mock.calls.map(([name]) => name)).toEqual(["list_apps", "list_windows"]);
+			expect(call.mock.calls[1]?.[1]).toEqual({ pid: 5 });
+			await workflow.close();
+			const many = await fixture();
+			many.call.mockResolvedValueOnce({ content: [], structuredContent: { apps: Array.from({ length: 6 }, (_, i) => ({ pid: i + 1, name: "Discord" })) } });
+			const narrowed = await many.workflow.execute("computer_apps", { query: "Discord", include_windows: true });
+			expect(JSON.parse(narrowed.content[0]?.type === "text" ? narrowed.content[0].text : "{}").guidance).toContain("Narrow the query");
+			expect(many.call).toHaveBeenCalledTimes(1);
+			await many.workflow.close();
+			const capped = await fixture();
+			capped.call.mockResolvedValueOnce({ content: [], structuredContent: { apps: [{ pid: 4, name: "Discord" }, { pid: 5, name: "Discord" }] } })
+				.mockResolvedValueOnce({ content: [], structuredContent: { windows: Array.from({ length: 60 }, (_, i) => ({ pid: 4, window_id: i + 1, title: `Window ${i}` })) } })
+				.mockResolvedValueOnce({ content: [], structuredContent: { windows: [{ pid: 5, window_id: 1, title: "Other" }] } });
+			const bounded = await capped.workflow.execute("computer_apps", { query: "Discord", include_windows: true });
+			const boundedData = JSON.parse(bounded.content[0]?.type === "text" ? bounded.content[0].text : "{}");
+			expect(boundedData.windows_by_pid[0]).toMatchObject({ pid: 4, omitted: 10, next_offset: 50 });
+			expect(boundedData.windows_by_pid[0].windows).toHaveLength(50);
+			expect(boundedData.windows_by_pid[1]).toMatchObject({ pid: 5, omitted: 1, next_offset: 0, windows: [] });
+			expect(capped.call.mock.calls.map(([name]) => name)).toEqual(["list_apps", "list_windows", "list_windows"]);
+			await capped.workflow.close();
+		} finally {
+			if (prior) Object.defineProperty(properties, "include_windows", prior);
+			else delete properties.include_windows;
+		}
+	});
+	it("returns a safe launch result and valid discovery guidance without inventing PID zero window", async () => {
+		const { workflow, call } = await fixture();
+		call.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text: "SECRET RAW DIAGNOSTIC" }], structuredContent: { code: "tool_invocation_failed", pid: 0, error: { message: "SECRET TREE" } } });
+		const failed = await workflow.execute("computer_launch", { name: "Explorer" });
+		const data = JSON.parse(failed.content[0]?.type === "text" ? failed.content[0].text : "{}");
+		expect(data).toMatchObject({ kind: "launch", code: "tool_invocation_failed", input: "not_applicable" });
+		expect(data.guidance).toContain('computer_apps({query:"Explorer"})');
+		expect(failed.details.computer).toEqual({ failed: true, workflow: "ready" });
+		expect(JSON.stringify(failed)).not.toContain("SECRET");
+		call.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text: 'App name lookup for "Explorer" is temporarily unavailable: Windows did not respond to the shell:AppsFolder query within 4s. No app was launched; retry after the shell recovers.' }] });
+		const lookup = await workflow.execute("computer_launch", { name: "Explorer" });
+		expect(JSON.parse(lookup.content[0]?.type === "text" ? lookup.content[0].text : "{}")).toMatchObject({ code: "app_lookup_unavailable", launch: "not_started" });
+		expect(JSON.stringify(lookup)).not.toContain("shell:AppsFolder");
+		call.mockResolvedValueOnce({ content: [], structuredContent: { pid: 3, window_id: 8, activated: true } });
+		const launched = await workflow.execute("computer_launch", { name: "Explorer" });
+		expect(JSON.parse(launched.content[0]?.type === "text" ? launched.content[0].text : "{}").guidance).toContain("computer_observe({pid:3,window_id:8})");
+		await workflow.close();
+	});
+	it("returns known native reason with one recovery image and a new token, no repeated input", async () => {
+		const { workflow, call } = await fixture();
+		const observed = await workflow.execute("computer_observe", target);
+		call.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text: "SECRET RAW TREE" }], structuredContent: {
+			code: "background_unavailable", error: { message: "SECRET RAW TREE" }, effect: "unverifiable",
+		} });
+		const result = await workflow.execute("computer_click", { ...target, observation: observed.details.observation, x: 1, y: 1 });
+		const data = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}");
+		expect(data).toMatchObject({ code: "background_unavailable", native_code: "background_unavailable", input: "uncertain" });
+		expect(result.details.computer).toEqual({ failed: true, workflow: "ready" });
+		expect(result.details.observation).not.toBe(observed.details.observation);
+		expect(result.content.filter((item) => item.type === "image")).toHaveLength(1);
+		expect(JSON.stringify(result)).not.toContain("SECRET");
+		expect(call.mock.calls.map(([name]) => name)).toEqual(["get_window_state", "click", "get_window_state"]);
+		await workflow.close();
 	});
 });
 
