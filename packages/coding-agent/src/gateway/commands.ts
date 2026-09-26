@@ -16,9 +16,11 @@ import { runtimeScope } from "../core/runtime-scope.ts";
 import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
+import { isGatewayOwner } from "./authz.ts";
 import { createPicker, type PickerItem } from "./buttons.ts";
+import { defaultGatewayConfig, type GatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
-import { FORWARDED_COMMANDS, MOBILE_COMMANDS } from "./mobile-commands.ts";
+import { FORWARDED_COMMANDS, MOBILE_COMMANDS, resolveWithinRoots } from "./mobile-commands.ts";
 import type { BridgeLike } from "./router.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
@@ -92,6 +94,7 @@ export interface ChatCommandContext {
 	key: string;
 	adapter: PlatformAdapter;
 	bridge: BridgeLike;
+	cfg?: GatewayConfig;
 	session?: BridgeSession;
 	reply(text: string): Promise<void>;
 	args: string;
@@ -213,7 +216,22 @@ const newCommand: ChatCommand = {
 	needsSession: false,
 	async handler(ctx) {
 		await ctx.bridge.reset(ctx.key);
-		await ctx.reply("Session reset — next message starts a fresh session.");
+		const cfg = ctx.cfg ?? defaultGatewayConfig();
+		const owner = isGatewayOwner(ctx.event.source, cfg);
+		let ready = Boolean(conversationBinding(ctx.key)?.cwd);
+		if (!ready && owner && cfg.defaultProject) {
+			try {
+				resolveWithinRoots(cfg.defaultProject, cfg.projectRoots ?? []);
+				ready = true;
+			} catch {}
+		}
+		await ctx.reply(
+			ready
+				? "Session reset. Send a message to start fresh in the approved project."
+				: owner
+					? "Session reset. Use /project to choose an approved project before sending a message."
+					: "Session reset. Ask the computer's gateway owner to configure this chat's project access locally.",
+		);
 	},
 };
 
@@ -365,7 +383,7 @@ const modelCommand: ChatCommand = {
 						}
 						return {
 							done: true,
-							text: `☾ Model → ${exact.provider}/${exact.id} (thinking level re-clamped to ${session.thinkingLevel})`,
+							text: `Model → ${exact.provider}/${exact.id} (thinking level re-clamped to ${session.thinkingLevel})`,
 						};
 					},
 				},
@@ -425,14 +443,16 @@ const sessionsCommand: ChatCommand = {
 		const session = ctx.session!;
 		const arg = ctx.args.trim();
 		const currentFile = session.sessionManager?.getSessionFile();
+		const cwd = session.sessionManager?.getCwd() ?? conversationBinding(ctx.key)?.cwd;
+		if (!cwd) throw new Error("Select a project before listing sessions.");
 
 		if (!arg) {
-			const all = await SessionManager.list(process.cwd());
+			const all = await SessionManager.list(cwd);
 			all.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 			const sessions = all.slice(0, 10);
 			setCachedSessions(ctx.key, sessions);
 			const items: PickerItem[] = sessions.map((s) => ({
-				label: `${s.path === currentFile ? "☾ " : ""}${s.name ? truncate(s.name, 30) : truncate(s.firstMessage, 30) || "(empty)"}`,
+				label: `${s.path === currentFile ? "(current) " : ""}${s.name ? truncate(s.name, 30) : truncate(s.firstMessage, 30) || "(empty)"}`,
 				value: s.path,
 			}));
 			const result = await createPicker(
@@ -450,20 +470,18 @@ const sessionsCommand: ChatCommand = {
 						const switched = await ctx.bridge.getSession(ctx.key);
 						const name = switched?.sessionManager?.getSessionName() ?? "unnamed";
 						const count = switched?.sessionManager?.getEntries().length ?? 0;
-						return { done: true, text: `☾ Switched to "${name}" (${count} msgs). History continues here.` };
+						return { done: true, text: `Switched to "${name}" (${count} msgs). History continues here.` };
 					},
 				},
 				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
 			);
 			if (!result.success) {
 				const lines = sessions.map((s, i) => {
-					const marker = s.path === currentFile ? " ☾" : "";
+					const marker = s.path === currentFile ? " (current)" : "";
 					const label = s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)";
 					return `${i + 1}) ${label}${marker} · ${formatRelativeTime(s.modified)} · ${s.messageCount} msgs`;
 				});
-				await ctx.reply(
-					[`Sessions for ${process.cwd()}`, ...lines, "Use /sessions <n> or /sessions <id-prefix>"].join("\n"),
-				);
+				await ctx.reply([`Sessions for ${cwd}`, ...lines, "Use /sessions <n> or /sessions <id-prefix>"].join("\n"));
 			}
 			return;
 		}
@@ -478,7 +496,7 @@ const sessionsCommand: ChatCommand = {
 			}
 			path = cached[numeric - 1].path;
 		} else {
-			const pool = cached ?? (await SessionManager.list(process.cwd()));
+			const pool = cached ?? (await SessionManager.list(cwd));
 			const matches = pool.filter((s) => s.id.startsWith(arg) || s.path.startsWith(arg));
 			if (matches.length === 0) {
 				await ctx.reply(`No session matches "${arg}".`);
@@ -643,7 +661,7 @@ const thinkingCommand: ChatCommand = {
 					async resolve(item) {
 						const level = item.value as ThinkingLevel;
 						session.setThinkingLevel(level);
-						return { done: true, text: `☾ Thinking → ${level}` };
+						return { done: true, text: `Thinking → ${level}` };
 					},
 				},
 				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
@@ -682,16 +700,18 @@ export const CHAT_COMMANDS: ChatCommand[] = [
 export function botCommandSpecs(): { name: string; description: string }[] {
 	return [
 		...new Map(
-			[...CHAT_COMMANDS, ...MOBILE_COMMANDS, ...FORWARDED_COMMANDS].map((c) => [
-				c.name,
-				{ name: c.name, description: c.description },
-			]),
+			[
+				{ name: "start", description: "Check gateway readiness" },
+				...CHAT_COMMANDS,
+				...MOBILE_COMMANDS,
+				...FORWARDED_COMMANDS,
+			].map((c) => [c.name, { name: c.name, description: c.description }]),
 		).values(),
 	];
 }
 
 export function formatHelpText(): string {
-	const lines = ["lunR gateway commands:"];
+	const lines = ["lunR gateway commands:", "/start — check gateway readiness"];
 	for (const cmd of CHAT_COMMANDS) {
 		const names = [cmd.name, ...(cmd.aliases ?? [])].map((a) => `/${a}`).join(" | ");
 		lines.push(`${names} — ${cmd.description}`);
@@ -715,9 +735,9 @@ export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext):
 		return true;
 	}
 	if (cmd.needsSession) {
-		const session = await ctx.bridge.getSession(ctx.key);
+		const session = await ctx.bridge.getSession(ctx.key, cmd.name === "model");
 		if (!session) {
-			await ctx.reply("No session yet — send a message first.");
+			await ctx.reply("No session yet. Select an approved project with /project first.");
 			return true;
 		}
 		ctx.session = session;
@@ -743,7 +763,7 @@ export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext):
 
 /** Reply helper used by the router to build the ChatCommandContext. */
 export async function sendCommandReply(adapter: PlatformAdapter, event: MessageEvent, text: string): Promise<void> {
-	await adapter.send(event.source.chatId, prefixLines(text, "☾ "), {
+	await adapter.send(event.source.chatId, prefixLines(text, ""), {
 		replyTo: event.messageId,
 		threadId: event.source.threadId,
 	});

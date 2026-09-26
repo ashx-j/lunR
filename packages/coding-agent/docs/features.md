@@ -87,7 +87,7 @@ Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30
 
 ## Gateway for Telegram and Discord
 
-Run `lunr gateway setup` in your terminal. It explains bot creation and permissions, masks token entry, validates the bot identity, and asks for your user ID, project roots, saved model, and startup preference. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
+Run `lunr gateway setup` in your terminal. Use Up/Down and Enter to choose the platform, saved token and owner options, default project, startup preference, provider, and model. Long lists scroll; Escape cancels. Only a new bot token, user ID, or custom folder path needs typing. Token entry stays hidden. Setup explains bot creation, validates the bot identity, and asks before saving or starting the gateway. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
 
 Telegram uses BotFather and long polling. Discord needs the bot and `applications.commands` installation scopes. Enable Message Content Intent for ordinary text messages. GuildMembers intent is not required. Discord registers native slash commands; Telegram registers a command menu. Both platforms use buttons for selections and approvals.
 
@@ -127,11 +127,11 @@ lunr gateway pair approve discord <code> --owner
 lunr gateway pair list
 ```
 
-Owner access includes local projects and saved TUI conversation history. Ordinary pairing, group access, and Discord roles do not grant it. Project browsing, cross-project sessions, permission changes, and file downloads require an explicitly configured owner in a private DM. Removing owner access invalidates later owner actions and approvals.
+Owner access includes local projects and saved TUI conversation history. Ordinary `lunr gateway pair approve <platform> <code>` grants chat access only; add `--owner` locally to grant owner access. Ordinary pairing, group access, and Discord roles do not grant it. Project browsing, cross-project sessions, permission changes, and file downloads require an explicitly configured owner in a private DM. Removing owner access invalidates later owner actions and approvals.
 
 ### Projects and mobile controls
 
-Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
+The owner can send `/start` to check setup before the first task, `/model` to select an authenticated model before a task, and a normal message immediately when setup's default project remains approved. With multiple approved roots and no explicit default, choose `/project` first. A paired non-owner without a project must ask the local owner to configure access; `/project` and `/continue` are owner-only. Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
 
 **The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
 
@@ -145,7 +145,7 @@ Use `/project` to browse approved roots, open child folders, go back, select a f
 
 Upload images or documents in chat. Images reach the model as images; documents are saved under the project's `.lunr/uploads/` directory and passed to the model as paths. `/download <project-relative path>` sends a file back. Files are limited to 8 MB; common credential filenames are blocked from download. This filename check is not a content-based secret scanner. Only send files you intend to share with the chat platform.
 
-Extension notices and background results reach the originating conversation even after the foreground answer. Undelivered notices persist for retry. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
+Foreground replies, follow-up answers, errors, and extension notices enter a disk-backed outbox before sending. Successfully sent chunks are acknowledged in order; failed sends retry up to five times per destination without blocking other chats. A failed final preview edit falls back to a full reply. Permanently failed deliveries remain in `gateway-outbox.json` with `failed: true` and an error in gateway logs for diagnosis; they do not retry forever. A send can still reach the platform just before the process exits without recording its acknowledgement, so a restart can repeat that chunk. Existing outbox entries without the newer fields remain eligible for delivery. Session changes cancel stale interactive prompts and notices, but finished assistant results still reach their originating chat when authorized. Revoked access prevents delivery. Discord role-only authorization needs a fresh inbound role check after restart before it can authorize new sends; an old stored role assertion cannot authorize outbox replay. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
 
 ### Continue between desktop and phone
 
