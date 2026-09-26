@@ -79,6 +79,9 @@ function getAliases(): Record<string, string> {
 	// global API keep working at runtime until compat is removed.
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@earendil-works/pi-ai/compat");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@earendil-works/pi-ai/oauth");
+	const piAiCatalogDirectory = path.dirname(
+		resolveWorkspaceOrImport("ai/dist/catalog/codex.js", "@earendil-works/pi-ai/catalog/codex"),
+	);
 	const piAiProvidersEntry = resolveWorkspaceOrImport(
 		"ai/dist/providers/all.js",
 		"@earendil-works/pi-ai/providers/all",
@@ -89,6 +92,7 @@ function getAliases(): Record<string, string> {
 		"@earendil-works/pi-agent-core": piAgentCoreEntry,
 		"@earendil-works/pi-tui": piTuiEntry,
 		"@earendil-works/pi-ai/providers/all": piAiProvidersEntry,
+		"@earendil-works/pi-ai/catalog": piAiCatalogDirectory,
 		"@earendil-works/pi-ai/compat": piAiCompatEntry,
 		"@earendil-works/pi-ai/oauth": piAiOauthEntry,
 		"@earendil-works/pi-ai": piAiCompatEntry,
@@ -96,6 +100,7 @@ function getAliases(): Record<string, string> {
 		"@ashx-j/lunr-agent": piAgentCoreEntry,
 		"@ashx-j/lunr-tui": piTuiEntry,
 		"@ashx-j/lunr-ai/providers/all": piAiProvidersEntry,
+		"@ashx-j/lunr-ai/catalog": piAiCatalogDirectory,
 		"@ashx-j/lunr-ai/compat": piAiCompatEntry,
 		"@ashx-j/lunr-ai/oauth": piAiOauthEntry,
 		"@ashx-j/lunr-ai": piAiCompatEntry,
@@ -103,6 +108,7 @@ function getAliases(): Record<string, string> {
 		"@mariozechner/pi-agent-core": piAgentCoreEntry,
 		"@mariozechner/pi-tui": piTuiEntry,
 		"@mariozechner/pi-ai/providers/all": piAiProvidersEntry,
+		"@mariozechner/pi-ai/catalog": piAiCatalogDirectory,
 		"@mariozechner/pi-ai/compat": piAiCompatEntry,
 		"@mariozechner/pi-ai/oauth": piAiOauthEntry,
 		"@mariozechner/pi-ai": piAiCompatEntry,
