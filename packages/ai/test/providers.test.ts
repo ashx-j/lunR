@@ -56,16 +56,14 @@ describe("builtin providers", () => {
 		}
 	});
 
-	it("resolves anthropic auth from env with OAuth token precedence", async () => {
-		const models = createModels({
-			authContext: fakeAuthContext({ ANTHROPIC_API_KEY: "key", ANTHROPIC_OAUTH_TOKEN: "oauth-token" }),
-		});
-		models.setProvider(anthropicProvider());
-		const model = models.getModel("anthropic", "claude-haiku-4-5")!;
+	it("rejects ambient Anthropic OAuth tokens while preserving real API keys", async () => {
+		const oauth = createModels({ authContext: fakeAuthContext({ ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-old" }) });
+		oauth.setProvider(anthropicProvider());
+		await expect(oauth.getAuth("anthropic")).rejects.toThrow("requires Claude Code");
 
-		const result = await models.getAuth(model.provider);
-		expect(result?.auth.apiKey).toBe("oauth-token");
-		expect(result?.source).toBe("ANTHROPIC_OAUTH_TOKEN");
+		const apiKey = createModels({ authContext: fakeAuthContext({ ANTHROPIC_API_KEY: "key" }) });
+		apiKey.setProvider(anthropicProvider());
+		expect((await apiKey.getAuth("anthropic"))?.auth.apiKey).toBe("key");
 	});
 
 	it("runs provider-owned Bedrock bearer token and AWS profile login flows", async () => {

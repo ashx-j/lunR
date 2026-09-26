@@ -750,6 +750,7 @@ export interface Details {
 	state?: string;
 	/** Resolved UI label for management actions, persisted with the tool result. */
 	displayTitle?: string;
+	communication?: import("../intercom/communication.ts").SubagentCommunication;
 	answered?: boolean;
 	delivered?: boolean;
 }
@@ -1167,6 +1168,7 @@ export interface RunSyncOptions {
 	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
 	allowIntercomDetach?: boolean;
+	communicationEnabled?: boolean;
 	intercomEvents?: IntercomEventBus;
 	onUpdate?: (r: import("@earendil-works/pi-agent-core").AgentToolResult<Details>) => void;
 	onControlEvent?: (event: ControlEvent) => void;

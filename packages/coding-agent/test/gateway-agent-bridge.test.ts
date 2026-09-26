@@ -1,7 +1,24 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setPermissionMode } from "../src/core/permissions.ts";
+import { requestSessionTransfer } from "../src/core/session-handoff.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
+import { registerSubagentCancellation } from "../src/core/subagent-cancellation.ts";
+
+let profile: string;
+beforeEach(() => {
+	profile = mkdtempSync(join(tmpdir(), "lunr-bridge-"));
+	vi.stubEnv("PI_CODING_AGENT_DIR", profile);
+});
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
+	rmSync(profile, { recursive: true, force: true });
+});
+
 import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
 import { AgentBridge, QUEUED } from "../src/gateway/agent-bridge.ts";
 import type { MessageEvent, SessionSource } from "../src/gateway/types.ts";
@@ -177,6 +194,111 @@ describe("AgentBridge LRU eviction", () => {
 		await first;
 	});
 
+	it("discloses the dropped oldest message when the pending queue reaches its cap", async () => {
+		let release!: () => void;
+		const prompts: string[] = [];
+		const session = {
+			...fakeSession(),
+			prompt: vi.fn((text: string) => {
+				prompts.push(text);
+				return prompts.length === 1
+					? new Promise<void>((resolve) => {
+							release = resolve;
+						})
+					: Promise.resolve();
+			}),
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const first = bridge.runTurn("full", makeEvent("A"));
+		await vi.waitFor(() => expect(prompts).toHaveLength(1));
+		const onError = vi.fn();
+		for (const name of ["B", "C", "D", "E", "F", "G"]) await bridge.runTurn("full", makeEvent(name), { onError });
+		expect(onError).toHaveBeenCalledWith(expect.stringContaining("earlier message was dropped"));
+		expect(bridge.getStatus("full").queueDepth).toBe(5);
+		release();
+		await first;
+		await vi.waitFor(() => expect(prompts).toHaveLength(2));
+		expect(prompts[1]).not.toContain("hello B");
+		expect(prompts[1]).toContain("hello C");
+	});
+
+	it("drains queued input in order after a failed prompt", async () => {
+		let fail!: (reason: Error) => void;
+		const seen: string[] = [];
+		const session = {
+			...fakeSession(),
+			prompt: vi.fn((text: string) => {
+				seen.push(text);
+				return seen.length === 1
+					? new Promise<void>((_, reject) => {
+							fail = reject;
+						})
+					: Promise.resolve();
+			}),
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const followUp = vi.fn();
+		const first = bridge.runTurn("queue", makeEvent("A"), { onFollowUpResult: followUp });
+		await vi.waitFor(() => expect(seen).toHaveLength(1));
+		expect(await bridge.runTurn("queue", makeEvent("B"))).toBe(QUEUED);
+		fail(new Error("A failed"));
+		await expect(first).rejects.toThrow("A failed");
+		await vi.waitFor(() => expect(seen).toHaveLength(2));
+		await vi.waitFor(() => expect(bridge.getStatus("queue").busy).toBe(false));
+		await bridge.runTurn("queue", makeEvent("C"));
+		expect(seen).toEqual(["hello A", "hello B", "hello C"]);
+		expect(followUp).toHaveBeenCalledTimes(1);
+	});
+
+	it("bounds shutdown when a session factory never settles, without admitting its late prompt", async () => {
+		let release!: (session: BridgeSession) => void;
+		const factory = vi.fn(
+			() =>
+				new Promise<BridgeSession>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const bridge = new AgentBridge({ sessionFactory: factory });
+		const turn = bridge.runTurn("pending", makeEvent("pending"));
+		await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+		vi.useFakeTimers();
+		try {
+			const failure = expect(bridge.shutdown()).rejects.toThrow("initialization is still pending");
+			await vi.advanceTimersByTimeAsync(20_100);
+			await failure;
+		} finally {
+			vi.useRealTimers();
+		}
+		const session = fakeSession();
+		release(session);
+		await expect(turn).rejects.toThrow(/stopped/);
+		expect(session.prompt).not.toHaveBeenCalled();
+		expect(session.dispose).toHaveBeenCalled();
+	});
+
+	it("cancels pending initialization before prompt admission on /stop and /new", async () => {
+		for (const operation of ["abort", "reset"] as const) {
+			let release!: (session: BridgeSession) => void;
+			const pending = new Promise<BridgeSession>((resolve) => {
+				release = resolve;
+			});
+			const session = fakeSession();
+			const fresh = fakeSession();
+			const factory = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce(fresh);
+			const bridge = new AgentBridge({ sessionFactory: factory });
+			const turn = bridge.runTurn(operation, makeEvent(operation));
+			await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+			await bridge[operation](operation);
+			await bridge.runTurn(operation, makeEvent("retry"));
+			expect(fresh.prompt).toHaveBeenCalledTimes(1);
+			release(session);
+			await expect(turn).rejects.toThrow(/stopped/);
+			expect(session.prompt).not.toHaveBeenCalled();
+			expect(session.dispose).toHaveBeenCalled();
+			expect(bridge.peekSession(operation)).toBe(fresh);
+		}
+	});
+
 	it("reset aborts a busy session, emits shutdown, drops the queue, then disposes", async () => {
 		let release: (() => void) | undefined;
 		const lifecycle: string[] = [];
@@ -242,6 +364,103 @@ describe("AgentBridge LRU eviction", () => {
 		await expect(bridge.reset("k1")).resolves.toBeUndefined();
 		expect(dispose).toHaveBeenCalled();
 		expect(error).toHaveBeenCalled();
+	});
+});
+
+describe("gateway session transfer", () => {
+	it("keeps the existing session when replacement initialization fails", async () => {
+		const original = fakeSession();
+		const factory = vi.fn().mockResolvedValueOnce(original).mockRejectedValueOnce(new Error("initialization failed"));
+		const bridge = new AgentBridge({ sessionFactory: factory });
+		await bridge.runTurn("k1", makeEvent("k1"));
+		await expect(bridge.switchSession("k1", "bad.jsonl")).rejects.toThrow("initialization failed");
+		expect(await bridge.getSession("k1")).toBe(original);
+		expect(original.dispose).not.toHaveBeenCalled();
+		await bridge.shutdown();
+	});
+
+	it("retains every session when shutdown cannot stop attached work", async () => {
+		const firstManager = SessionManager.inMemory(profile);
+		const secondManager = SessionManager.inMemory(profile);
+		const first = { ...fakeSession(), sessionManager: firstManager, setTransferring: vi.fn() };
+		const second = { ...fakeSession(), sessionManager: secondManager, setTransferring: vi.fn() };
+		const bridge = new AgentBridge({ sessionFactory: async (key) => (key === "k1" ? first : second) });
+		await bridge.runTurn("k1", makeEvent("k1"));
+		await bridge.runTurn("k2", makeEvent("k2"));
+		const unregister = registerSubagentCancellation(secondManager.getSessionId(), {
+			hasActiveRuns: () => true,
+			stop: async () => ({ requested: 1, failed: 0 }),
+		});
+		try {
+			vi.useFakeTimers();
+			const failure = expect(bridge.shutdown()).rejects.toThrow("ownership was retained");
+			await vi.advanceTimersByTimeAsync(20_100);
+			await failure;
+			expect(first.dispose).not.toHaveBeenCalled();
+			expect(second.dispose).not.toHaveBeenCalled();
+			expect(first.setTransferring).toHaveBeenLastCalledWith(false);
+			expect(second.setTransferring).toHaveBeenLastCalledWith(false);
+		} finally {
+			vi.useRealTimers();
+			unregister();
+			await bridge.shutdown();
+			firstManager.dispose();
+			secondManager.dispose();
+		}
+	});
+
+	it("releases the phone writer and preserves its permission checkpoint", async () => {
+		const manager = SessionManager.create(profile, join(profile, "sessions"));
+		manager.appendMessage({ role: "user", content: "saved", timestamp: 1 });
+		manager.flush();
+		const file = manager.getSessionFile()!;
+		const session = {
+			...fakeSession(vi.fn(() => manager.dispose())),
+			sessionManager: manager,
+			setTransferring: vi.fn(),
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		try {
+			await bridge.runTurn("k1", makeEvent("k1"));
+			setPermissionMode("read-only", manager.getSessionId());
+			await requestSessionTransfer(file);
+			expect(session.setTransferring).toHaveBeenCalledWith(true);
+			expect(await bridge.getSession("k1")).toBeNull();
+			const desktop = SessionManager.open(file);
+			try {
+				expect(desktop.getPermissionMode()).toBe("read-only");
+			} finally {
+				desktop.dispose();
+			}
+		} finally {
+			await bridge.shutdown();
+			manager.dispose();
+		}
+	});
+
+	it("refuses transfer and replacement while children remain active", async () => {
+		const manager = SessionManager.create(profile, join(profile, "sessions"));
+		manager.appendMessage({ role: "user", content: "saved", timestamp: 1 });
+		manager.flush();
+		const session = { ...fakeSession(vi.fn(() => manager.dispose())), sessionManager: manager };
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const unregister = registerSubagentCancellation(manager.getSessionId(), {
+			hasActiveRuns: () => true,
+			stop: async () => ({ requested: 1, failed: 0 }),
+		});
+		try {
+			await bridge.runTurn("k1", makeEvent("k1"));
+			await expect(requestSessionTransfer(manager.getSessionFile()!, { stop: true })).rejects.toMatchObject({
+				code: "busy",
+			});
+			await expect(bridge.reset("k1")).rejects.toThrow("Background work");
+			await expect(bridge.switchSession("k1", "other.jsonl")).rejects.toThrow("busy");
+			expect(session.dispose).not.toHaveBeenCalled();
+		} finally {
+			unregister();
+			await bridge.shutdown();
+			manager.dispose();
+		}
 	});
 });
 

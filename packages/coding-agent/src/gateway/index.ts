@@ -28,10 +28,14 @@ import {
 	type PlatformConfig,
 	platformConfigFor,
 	resolvePlatformToken,
+	saveGatewayConfig,
 } from "./config.ts";
 import { startGatewayCron } from "./cron.ts";
 import { createPairingStore } from "./pairing.ts";
+import { startGatewayPresenter, stopGatewayPresenter } from "./presenter.ts";
 import { createRouter } from "./router.ts";
+import { claimGateway } from "./service.ts";
+import { buildSessionKey } from "./session-keys.ts";
 import { listSessions } from "./store.ts";
 import type { PlatformAdapter } from "./types.ts";
 
@@ -54,16 +58,8 @@ export const ADAPTER_FACTORIES: Record<string, (cfg: PlatformConfig) => Platform
 const KNOWN_PLATFORMS = ["telegram", "discord"] as const;
 
 const SETUP_INSTRUCTIONS: Record<string, string[]> = {
-	telegram: [
-		"Telegram: talk to @BotFather → /newbot → copy the token into",
-		"  <agentDir>/gateway.json (telegram.token) or export LUNR_TELEGRAM_BOT_TOKEN,",
-		"  then set telegram.enabled = true.",
-	],
-	discord: [
-		"Discord: discord.com/developers → New Application → Bot → copy the token into",
-		"  <agentDir>/gateway.json (discord.token) or export LUNR_DISCORD_BOT_TOKEN,",
-		"  enable the MESSAGE CONTENT intent, then set discord.enabled = true.",
-	],
+	telegram: ["Telegram: run lunr gateway setup locally to configure the bot token and owner ID."],
+	discord: ["Discord: run lunr gateway setup locally to configure the bot token and owner ID."],
 };
 
 function printSetupInstructions(enabledButUnrunnable: string[]): void {
@@ -78,9 +74,9 @@ function printSetupInstructions(enabledButUnrunnable: string[]): void {
 	}
 }
 
-async function runPairApprove(platform: string, code: string | undefined): Promise<number> {
+async function runPairApprove(platform: string, code: string | undefined, owner = false): Promise<number> {
 	if (!code) {
-		console.error("Usage: lunr gateway pair approve <platform> <code>");
+		console.error("Usage: lunr gateway pair approve <platform> <code> [--owner]");
 		return 1;
 	}
 	const pairing = createPairingStore();
@@ -90,12 +86,21 @@ async function runPairApprove(platform: string, code: string | undefined): Promi
 		return 1;
 	}
 	try {
-		addAllowedUser(platform, userId);
+		if (owner) {
+			const cfg = loadGatewayConfig();
+			if (platform !== "telegram" && platform !== "discord") throw new Error("Unknown platform.");
+			cfg.owners ??= { telegram: [], discord: [] };
+			cfg.owners[platform] = [...new Set([...cfg.owners[platform], userId])];
+			cfg[platform].allowedUsers = [...new Set([...cfg[platform].allowedUsers, userId])];
+			saveGatewayConfig(cfg);
+		} else addAllowedUser(platform, userId);
 	} catch (err) {
 		console.error(`Paired ${platform} user ${userId}, but could not persist allowedUsers: ${err}`);
 		return 1;
 	}
-	console.log(`Approved ${platform} user ${userId} (added to ${platform}.allowedUsers in gateway.json).`);
+	console.log(
+		`Approved ${platform} user ${userId}${owner ? " as owner with local project and TUI access" : " for chat only; owner access requires local --owner approval"}.`,
+	);
 	return 0;
 }
 
@@ -175,16 +180,63 @@ async function runDaemon(): Promise<number> {
 
 	const pairing = createPairingStore();
 	const bridge = new AgentBridge();
-	const router = createRouter({ adapters, cfg, pairing, bridge, reloadConfig: true });
+	for (const adapter of adapters.values())
+		adapter.setCommandSuggestions?.(async (source, command) => {
+			const session = bridge.peekSession(buildSessionKey(source, loadGatewayConfig()));
+			if (!session) return [];
+			if (command === "thinking") return session.getAvailableThinkingLevels();
+			if (command === "model")
+				return (await session.modelRuntime.getAvailable()).map((model) => `${model.provider}/${model.id}`);
+			return [];
+		});
+	const router = createRouter({ adapters, cfg, pairing, bridge, reloadConfig: true, remoteControls: true });
 
-	const connected: PlatformAdapter[] = [];
+	let finish!: () => void;
+	const stopped = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	let stopping = false;
+	let cron: ReturnType<typeof startGatewayCron> | undefined;
+	const platformStatus: Record<string, string> = {};
+	const retries = new Set<ReturnType<typeof setTimeout>>();
+	const shutdown = () => {
+		if (stopping) return;
+		stopping = true;
+		owner.update(platformStatus, "stopping");
+		cron?.stop();
+		for (const timer of retries) clearTimeout(timer);
+		stopButtonSweeper();
+		void (async () => {
+			await bridge.shutdown();
+			await Promise.all([...adapters.values()].map((adapter) => adapter.disconnect().catch(() => {})));
+			stopGatewayPresenter();
+			owner.release();
+			process.removeListener("SIGINT", shutdown);
+			process.removeListener("SIGTERM", shutdown);
+			finish();
+		})().catch((error) => {
+			console.error("Gateway shutdown failed:", error instanceof Error ? error.message : String(error));
+			stopping = false;
+			owner.update(platformStatus, Object.values(platformStatus).includes("connected") ? "ready" : "starting");
+			startButtonSweeper();
+			cron = startGatewayCron({ adapters, cfg });
+			for (const [platform, adapter] of adapters)
+				if (platformStatus[platform] !== "connected") void connect(platform, adapter);
+		});
+	};
+	const owner = claimGateway(shutdown);
+	process.on("SIGINT", shutdown);
+	process.on("SIGTERM", shutdown);
+	startGatewayPresenter(adapters);
 	startButtonSweeper();
-	for (const [platform, adapter] of adapters) {
+	const connect = async (platform: string, adapter: PlatformAdapter): Promise<void> => {
+		if (stopping) return;
 		try {
+			platformStatus[platform] = "connecting";
+			owner.update(platformStatus, Object.values(platformStatus).includes("connected") ? "ready" : "starting");
 			const ok = await adapter.connect();
 			if (!ok) {
-				console.error(`[gateway] ${platform}: connect() reported failure; skipping`);
-				continue;
+				throw new Error("Connection failed");
 			}
 			adapter.onMessage((event) => {
 				void router.handleEvent(event);
@@ -192,7 +244,7 @@ async function runDaemon(): Promise<number> {
 			adapter.onCallback(async (event) => {
 				const consumed = await handleApprovalCallback(event, adapter);
 				if (!consumed) {
-					void handleCallback(event, { adapters, cfg, pairing, bridge, adapter });
+					void handleCallback(event, { adapters, cfg: loadGatewayConfig(), pairing, bridge, adapter });
 				}
 			});
 			try {
@@ -202,47 +254,46 @@ async function runDaemon(): Promise<number> {
 					`[gateway] ${platform}: command menu registration failed: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
-			connected.push(adapter);
+			if (stopping) {
+				await adapter.disconnect();
+				return;
+			}
+			platformStatus[platform] = "connected";
 			console.log(`lunR gateway: ${platform} connected`);
-		} catch (err) {
-			console.error(`[gateway] ${platform}: connect failed: ${err instanceof Error ? err.message : String(err)}`);
+		} catch {
+			platformStatus[platform] = "disconnected, retrying (check gateway logs)";
+			await adapter.disconnect().catch(() => {});
+			if (!stopping) {
+				const retry = setTimeout(() => {
+					retries.delete(retry);
+					void connect(platform, adapter);
+				}, 5000);
+				retries.add(retry);
+			}
 		}
-	}
-
-	if (connected.length === 0) {
-		console.error("lunR gateway: every configured platform failed to connect.");
-		stopButtonSweeper();
-		return 1;
-	}
+		if (!stopping)
+			owner.update(platformStatus, Object.values(platformStatus).includes("connected") ? "ready" : "starting");
+	};
+	for (const [platform, adapter] of adapters) void connect(platform, adapter);
 
 	// Phase 4: cron jobs fire inside the daemon and deliver back to chats.
 	// Starts even with zero stored jobs — jobs can be created later from chats.
-	const cron = startGatewayCron({ adapters, cfg });
+	cron = startGatewayCron({ adapters, cfg });
 	console.log(`lunR gateway: cron scheduler started (${cron.intervalMs / 1000}s interval)`);
 
-	const shutdown = () => {
-		cron.stop();
-		stopButtonSweeper();
-		void Promise.all(connected.map((adapter) => adapter.disconnect().catch(() => {}))).finally(() => {
-			process.exit(0);
-		});
-	};
-	process.on("SIGINT", shutdown);
-	process.on("SIGTERM", shutdown);
-
-	await new Promise<void>(() => {
-		// Keep the process alive until SIGINT/SIGTERM.
-	});
+	owner.update(platformStatus, "starting");
+	await stopped;
 	return 0;
 }
 
 export async function runGateway(args: string[]): Promise<number> {
 	const [sub, ...rest] = args;
 	if (sub === "pair") {
-		const [action, platform, code] = rest;
-		if (action === "approve" && platform) return runPairApprove(platform, code);
+		const [action, platform, code, flag] = rest;
+		if (action === "approve" && platform && (flag === undefined || flag === "--owner"))
+			return runPairApprove(platform, code, flag === "--owner");
 		if (action === "list") return runPairList();
-		console.error("Usage: lunr gateway pair approve <platform> <code> | lunr gateway pair list");
+		console.error("Usage: lunr gateway pair approve <platform> <code> [--owner] | lunr gateway pair list");
 		return 1;
 	}
 	if (sub === "status") return runStatus();

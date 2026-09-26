@@ -229,6 +229,11 @@ async function runLoop(
 				context: currentContext,
 				newMessages,
 			};
+			if (await config.shouldStopAfterTurn?.(nextTurnContext)) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
+			}
+
 			const nextTurnSnapshot = await config.prepareNextTurn?.(nextTurnContext);
 			if (nextTurnSnapshot) {
 				currentContext = nextTurnSnapshot.context ?? currentContext;
@@ -242,18 +247,6 @@ async function runLoop(
 								? undefined
 								: nextTurnSnapshot.thinkingLevel,
 				};
-			}
-
-			if (
-				await config.shouldStopAfterTurn?.({
-					message,
-					toolResults,
-					context: currentContext,
-					newMessages,
-				})
-			) {
-				await emit({ type: "agent_end", messages: newMessages });
-				return;
 			}
 
 			pendingMessages = (await config.getSteeringMessages?.()) || [];

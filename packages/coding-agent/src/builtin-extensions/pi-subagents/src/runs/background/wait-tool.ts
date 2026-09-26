@@ -4,6 +4,34 @@ import { SubagentWaitParams } from "../../extension/schemas.ts";
 import type { Details, SubagentState } from "../../shared/types.ts";
 import { resolveWaitToolConfig, waitForSubagents } from "./subagent-wait.ts";
 
+const WAIT_INTERRUPTION_SYMBOL = Symbol.for("@lunr/subagent-wait-interruption");
+
+function registerWaitInterruption(sessionId: string | null | undefined) {
+	if (!sessionId) return undefined;
+	const bridge = (globalThis as Record<symbol, unknown>)[WAIT_INTERRUPTION_SYMBOL] as
+		| {
+				owners?: Map<
+					string,
+					{
+						register(): {
+							signal: AbortSignal;
+							wasInterrupted(): boolean;
+							unregister(): void;
+						};
+					}
+				>;
+		  }
+		| undefined;
+	return bridge?.owners?.get(sessionId)?.register();
+}
+
+function interruptedResult(): AgentToolResult<Details> {
+	return {
+		content: [{ type: "text", text: "Wait interrupted by user input; background work remains active." }],
+		details: { mode: "management", results: [] },
+	};
+}
+
 export function registerWaitTool(
 	pi: ExtensionAPI,
 	state: SubagentState,
@@ -27,9 +55,30 @@ Provider jobs are session-scoped and identified exactly, so replacing one job wi
 		parameters: SubagentWaitParams,
 		async execute(_id, params, signal) {
 			await Promise.resolve();
-			await waitForPendingLaunches?.(signal);
-			signal?.throwIfAborted();
-			return waitForSubagents(params, signal, { state, events: pi.events, enabled });
+			const interruption = registerWaitInterruption(state.currentSessionId);
+			const waitSignal = interruption
+				? signal
+					? AbortSignal.any([signal, interruption.signal])
+					: interruption.signal
+				: signal;
+			try {
+				try {
+					await waitForPendingLaunches?.(waitSignal);
+				} catch (error) {
+					if (interruption?.wasInterrupted()) return interruptedResult();
+					throw error;
+				}
+				if (interruption?.wasInterrupted()) return interruptedResult();
+				signal?.throwIfAborted();
+				return waitForSubagents(params, waitSignal, {
+					state,
+					events: pi.events,
+					enabled,
+					wasInterrupted: interruption?.wasInterrupted,
+				});
+			} finally {
+				interruption?.unregister();
+			}
 		},
 	};
 	pi.registerTool(tool);

@@ -460,6 +460,99 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("subagent_wait");
 	});
 
+	test("collapsed subagent waits show only elapsed time while expansion keeps the full result", () => {
+		const component = new ToolExecutionComponent(
+			"subagent_wait",
+			"wait-attention",
+			{ id: "run-123" },
+			{},
+			createBaseToolDefinition("subagent_wait"),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const output =
+			'Waited 8m13s for run "run-123"; attention required. 1 run(s) need attention: run-123 — inspect with subagent({ action: "status" }).\nCompletion/control events have been observed; inspect status if a notification is not visible yet.';
+		component.updateResult({ content: [{ type: "text", text: output }], isError: false }, false);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed.trim().split("\n").filter(Boolean)).toEqual([expect.stringContaining("subagent_wait 8m13s")]);
+		expect(collapsed).not.toContain("run-123");
+		expect(collapsed).not.toContain("attention required");
+
+		expect(component.handleClick(0, 120)).toBe(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("attention required");
+		expect(expanded).toContain("Completion/control events");
+		expect(expanded).toContain("run-123");
+	});
+
+	test("collapsed subagent waits keep timeout state and hide results without a duration", () => {
+		const component = new ToolExecutionComponent(
+			"subagent_wait",
+			"wait-timeout",
+			{ all: true },
+			{},
+			createBaseToolDefinition("subagent_wait"),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Wait timed out after 30s with 1 async run still active." }],
+				isError: true,
+			},
+			false,
+		);
+		let collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("subagent_wait 30s");
+		expect(collapsed).not.toContain("still active");
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Wait interrupted by user input; background work remains active." }],
+				isError: false,
+			},
+			false,
+		);
+		collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("subagent_wait");
+		expect(collapsed).not.toContain("Wait interrupted");
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Wait interrupted by user input");
+	});
+
+	test("collapsed successful steering keeps its receipt in the backend result only", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition("subagent"),
+			renderCall: renderSubagentCall,
+			renderResult: renderSubagentResult,
+		};
+		const component = new ToolExecutionComponent(
+			"subagent",
+			"subagent-steer",
+			{ action: "steer", id: "run-123", message: "Focus on the failing test" },
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Steering delivered for async run run-123 (request req-456)." }],
+				details: { mode: "management", results: [], displayTitle: "Inspect auth flow" },
+				isError: false,
+			},
+			false,
+		);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("subagent steer Inspect auth flow");
+		expect(collapsed).not.toContain("Steering delivered");
+
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Steering delivered for async run run-123");
+	});
+
 	test("collapsed management stop results still render the text", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition("subagent"),
@@ -1112,7 +1205,7 @@ describe("ToolExecutionComponent density", () => {
 		expect(rendered).toContain("line3");
 	});
 
-	test("errored bash calls keep the full output and Took footer", () => {
+	test("errored bash calls hide diagnostics until expanded", () => {
 		const component = new ToolExecutionComponent(
 			"bash",
 			"tool-bash-error",
@@ -1132,10 +1225,17 @@ describe("ToolExecutionComponent density", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("line2");
-		expect(rendered).not.toContain("— Took");
-		expect(rendered).toContain("Took");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("$ echo line1");
+		expect(collapsed).not.toContain("line2");
+		expect(collapsed).not.toContain("Command exited with code 1");
+		expect(collapsed).not.toContain("Took");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("line2");
+		expect(expanded).toContain("Command exited with code 1");
+		expect(expanded).toContain("Took");
 	});
 
 	test("slim bash header keeps only the first line of multi-line commands", () => {
@@ -1241,6 +1341,54 @@ describe("ToolExecutionComponent density", () => {
 		assertTreeGroup(lines, "$", ["echo one", "echo two"]);
 	});
 
+	test("wrapped bash headers keep text out of the tree gutter", () => {
+		const tools = [
+			compactBash(
+				"wrap-first",
+				'cd ../lunR-todo-toggle/packages/coding-agent && npx vitest --run test/settings-manager.test.ts -t "enabled"',
+			),
+			compactBash(
+				"wrap-last",
+				"cd ../lunR-todo-toggle/packages/coding-agent && npx vitest --run test/system-prompt.test.ts",
+			),
+		];
+		applySameToolGrouping(tools[0], tools[1]);
+		for (const width of [40, 80, 105]) {
+			for (const [index, tool] of tools.entries()) {
+				const lines = tool
+					.render(width)
+					.map((line) => stripAnsi(line).trimEnd())
+					.filter((line) => line.trim());
+				const leaf = lines.findIndex((line) => /[├└]─/.test(line));
+				expect(leaf).toBeGreaterThanOrEqual(0);
+				expect(lines.length).toBeGreaterThan(leaf + 1);
+				for (const line of lines.slice(leaf + 1)) {
+					expect(line.startsWith(index === 0 ? "   │  " : "      "), JSON.stringify(lines)).toBe(true);
+				}
+			}
+		}
+	});
+
+	test("long file and pattern headers preserve the tree gutter", () => {
+		const detail = "a-very-long-filename-or-search-pattern-that-wraps-across-several-lines.ts";
+		for (const create of [compactRead, compactWrite, compactEdit, compactGrep, compactFind, compactLs]) {
+			const first = create("wrap-first", detail);
+			const last = create("wrap-last", detail);
+			applySameToolGrouping(first, last);
+			const lines = first
+				.render(30)
+				.map((line) => stripAnsi(line).trimEnd())
+				.filter((line) => line.trim());
+			const leaf = lines.findIndex((line) => line.includes("├─"));
+			expect(leaf).toBeGreaterThanOrEqual(0);
+			expect(lines.length).toBeGreaterThan(leaf + 1);
+			expect(
+				lines.slice(leaf + 1).every((line) => line.startsWith("   │  ")),
+				JSON.stringify(lines),
+			).toBe(true);
+		}
+	});
+
 	test("consecutive compact writes print write once and hang files off a tree", () => {
 		const lines = renderGroupedTools(compactWrite("tool-write-a", "a.ts"), compactWrite("tool-write-b", "b.ts"));
 		assertTreeGroup(lines, "write", ["a.ts", "b.ts"]);
@@ -1294,7 +1442,7 @@ describe("ToolExecutionComponent density", () => {
 		expect(isBlank(lines[indexes[1]! + 1])).toBe(true);
 	});
 
-	test("errored grep calls render the full result", () => {
+	test("errored grep calls hide diagnostics until expanded", () => {
 		const component = new ToolExecutionComponent(
 			"grep",
 			"tool-grep-error",
@@ -1309,11 +1457,15 @@ describe("ToolExecutionComponent density", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("ripgrep exited with code 2");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("grep");
+		expect(collapsed).not.toContain("ripgrep exited with code 2");
+
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("ripgrep exited with code 2");
 	});
 
-	test("grouped read error keeps the file tree then prints the error under the last leaf", () => {
+	test("grouped read errors keep the file tree without dumping diagnostics", () => {
 		const error = "EISDIR: illegal operation on a directory, read";
 		const leaves = ["pi-web-access", "format-grouped-call.test.ts", "render-utils.ts"];
 		const lines = renderGroupedTools(
@@ -1329,21 +1481,21 @@ describe("ToolExecutionComponent density", () => {
 			expect(visible[titleIdx + 1 + i]?.trim().startsWith(branch)).toBe(true);
 			expect(visible[titleIdx + 1 + i]).toContain(leaves[i]);
 		}
-		const lastLeafIdx = titleIdx + leaves.length;
-		const errorIdx = visible.findIndex((line) => line.includes(error));
-		expect(errorIdx).toBeGreaterThan(lastLeafIdx);
-		expect(visible.filter((line) => line.includes(error))).toHaveLength(1);
+		expect(visible.some((line) => line.includes(error))).toBe(false);
 		expect(visible.filter((line) => line.trim() === "● read")).toHaveLength(1);
 	});
 
-	test("singleton read error still shows the body under its own header", () => {
+	test("singleton read errors hide the body until expanded", () => {
 		const error = "EISDIR: illegal operation on a directory, read";
 		const lines = renderGroupedTools(compactReadError("tool-read-lone-err", "pi-web-access", error));
 		const headerIdx = headerIndex(lines, "read pi-web-access");
-		const errorIdx = headerIndex(lines, error);
 		expect(headerIdx).toBeGreaterThan(0);
-		expect(errorIdx).toBeGreaterThan(headerIdx);
+		expect(headerIndex(lines, error)).toBe(-1);
 		expect(lines.map(visibleLine).some((line) => line.trim() === "● read")).toBe(false);
+
+		const component = compactReadError("tool-read-lone-expanded", "pi-web-access", error);
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain(error);
 	});
 
 	test("expanded grouped read error keeps its body on that card", () => {

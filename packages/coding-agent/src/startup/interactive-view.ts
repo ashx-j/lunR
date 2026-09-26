@@ -86,9 +86,13 @@ export class InteractiveView {
 
 	constructor() {
 		const settings = readDisplaySettings();
-		const permission = settings.defaultPermissionMode;
+		const permission: unknown = settings.defaultPermissionMode;
 		registerPermissionModeBridge(() =>
-			permission === "auto" || permission === "yolo" || permission === "plan" ? permission : "manual",
+			permission === "plan"
+				? "read-only"
+				: permission === "auto" || permission === "read-only"
+					? permission
+					: "yolo",
 		);
 		initTheme(typeof settings.theme === "string" ? settings.theme : undefined);
 		this.terminal = new StartupProcessTerminal();

@@ -22,7 +22,7 @@ import {
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
-	formatGroupedCall,
+	GroupedCallText,
 	renderToolFileName,
 	renderToolPath,
 	str,
@@ -201,12 +201,7 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 	return null;
 }
 
-function formatEditCall(
-	args: RenderableEditArgs | undefined,
-	theme: Theme,
-	cwd: string,
-	compact = false,
-): string {
+function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd: string, compact = false): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	return compact ? renderToolFileName(rawPath, theme, cwd) : renderToolPath(rawPath, theme, cwd);
 }
@@ -274,20 +269,16 @@ function buildEditCallComponent(
 	component.clear();
 	const grouped = tree && role !== "singleton";
 	const pathDisplay = formatEditCall(args, theme, cwd, compact || grouped);
-	component.addChild(
-		new Text(
-			formatGroupedCall({
-				role,
-				compact,
-				tree,
-				dot: toolStatusDot(dotState, theme),
-				title: theme.fg("toolTitle", theme.bold("edit")),
-				detail: pathDisplay,
-			}),
-			0,
-			0,
-		),
-	);
+	const header = new GroupedCallText("", 0, 0);
+	header.setCall({
+		role,
+		compact,
+		tree,
+		dot: toolStatusDot(dotState, theme),
+		title: theme.fg("toolTitle", theme.bold("edit")),
+		detail: pathDisplay,
+	});
+	component.addChild(header);
 
 	if (compact || grouped || !component.preview) {
 		return component;

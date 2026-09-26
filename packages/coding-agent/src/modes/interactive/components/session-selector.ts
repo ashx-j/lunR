@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
+import { SessionOwnership } from "../../../core/session-ownership.ts";
 import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -634,6 +635,22 @@ type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[
  * Delete a session file, trying the `trash` CLI first, then falling back to unlink
  */
 async function deleteSessionFile(
+	sessionPath: string,
+): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
+	let ownership: SessionOwnership;
+	try {
+		ownership = new SessionOwnership(sessionPath);
+	} catch (error) {
+		return { ok: false, method: "unlink", error: error instanceof Error ? error.message : String(error) };
+	}
+	try {
+		return await deleteOwnedSessionFile(sessionPath);
+	} finally {
+		ownership.release();
+	}
+}
+
+async function deleteOwnedSessionFile(
 	sessionPath: string,
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
 	// Try `trash` first (if installed)

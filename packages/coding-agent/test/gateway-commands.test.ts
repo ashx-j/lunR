@@ -264,7 +264,18 @@ describe("command registry", () => {
 
 	it("botCommandSpecs covers every command, aliases skipped, Telegram-safe names", () => {
 		const specs = botCommandSpecs();
-		expect(specs.map((s) => s.name)).toEqual(CHAT_COMMANDS.map((c) => c.name));
+		expect(specs.map((s) => s.name)).toEqual(
+			expect.arrayContaining([
+				...CHAT_COMMANDS.map((c) => c.name),
+				"project",
+				"continue",
+				"mode",
+				"goal",
+				"cron",
+				"stopall",
+			]),
+		);
+		expect(new Set(specs.map((s) => s.name)).size).toBe(specs.length);
 		expect(specs.map((s) => s.name)).toContain("thinking");
 		expect(specs.map((s) => s.name)).not.toContain("effort");
 		expect(specs.map((s) => s.name)).not.toContain("reasoning");
@@ -539,7 +550,7 @@ describe("/sessions", () => {
 		await runChatCommand(findCommand("sessions"), ctx);
 		expect(adapter.sent[0].text).toContain("Pick a session");
 		const labels = adapter.sent[0].buttons?.flat().map((b) => b.label);
-		expect(labels).toContain("☾ test-session");
+		expect(labels).toContain("(current) test-session");
 		expect(labels).toContain("other");
 	});
 

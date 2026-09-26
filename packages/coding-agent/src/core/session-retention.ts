@@ -6,6 +6,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { SessionOwnership } from "./session-ownership.ts";
 
 export interface PruneOldSessionsOptions {
 	/** Absolute path of the active session file; never deleted. */
@@ -47,8 +48,15 @@ async function pruneDir(
 		try {
 			const info = await stat(filePath);
 			if (info.mtimeMs < cutoffMs) {
-				await unlink(filePath);
-				deleted.push(filePath);
+				const ownership = new SessionOwnership(filePath);
+				try {
+					if ((await stat(filePath)).mtimeMs < cutoffMs) {
+						await unlink(filePath);
+						deleted.push(filePath);
+					}
+				} finally {
+					ownership.release();
+				}
 			}
 		} catch {
 			// Per-file errors (stat/unlink races, permissions) must never break startup.

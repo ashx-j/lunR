@@ -28,6 +28,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
+import {
+	TODOS_ENABLED_CHANGED_SYMBOL,
+	type TodosEnabledChangedHandler,
+} from "../core/todo-settings.ts";
 import { keyText } from "../modes/interactive/components/keybinding-hints.ts";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +158,17 @@ export default function (pi: ExtensionAPI): void {
 		refreshWidget();
 	}
 
+	const handleEnabledChanged: TodosEnabledChangedHandler = (enabled) => {
+		if (enabled) return;
+		todos = [];
+		refreshWidget();
+	};
+
+	function registerEnabledBridge(): void {
+		(globalThis as Record<symbol, unknown>)[TODOS_ENABLED_CHANGED_SYMBOL] = handleEnabledChanged;
+	}
+	registerEnabledBridge();
+
 	// --- Expansion bridge (interactive-mode setToolsExpanded invokes this) ---
 	function registerExpandedBridge(): void {
 		(globalThis as Record<symbol, unknown>)[EXPANDED_BRIDGE_SYMBOL] = (value: boolean) => {
@@ -169,6 +184,7 @@ export default function (pi: ExtensionAPI): void {
 		todos = [];
 		expanded = ctx.hasUI ? (ctx.ui.getToolsExpanded?.() ?? false) : false;
 		registerExpandedBridge();
+		registerEnabledBridge();
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 	});
 
@@ -184,6 +200,9 @@ export default function (pi: ExtensionAPI): void {
 		if (lastCtx?.hasUI) lastCtx.ui.setWidget(WIDGET_KEY, undefined);
 		lastCtx = null;
 		delete (globalThis as Record<symbol, unknown>)[EXPANDED_BRIDGE_SYMBOL];
+		if ((globalThis as Record<symbol, unknown>)[TODOS_ENABLED_CHANGED_SYMBOL] === handleEnabledChanged) {
+			delete (globalThis as Record<symbol, unknown>)[TODOS_ENABLED_CHANGED_SYMBOL];
+		}
 	});
 
 	// --- todo tool (agent-facing) ---

@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
-	"version": "0.2.21",
+	"version": "0.2.25",
 	"description": "lunR — terminal coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
@@ -25,12 +25,14 @@
 		"dist",
 		"docs",
 		"native/computer-use/LICENSE.md",
+		"scripts/install-browser.mjs",
 		"examples",
 		"CHANGELOG.md",
 		"npm-shrinkwrap.json",
 		"install-lock"
 	],
 	"scripts": {
+		"postinstall": "node scripts/install-browser.mjs",
 		"clean": "shx rm -rf dist",
 		"build": "node ../../scripts/generate-computer-use-manifest.mjs && tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js && npm run copy-assets && node ../../scripts/build-node-runtime.mjs",
 		"build:binary": "npm --prefix ../tui run build && tsgo -p ../ai/tsconfig.build.json && npm --prefix ../agent run build && npm run build && bun build --compile ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile dist/lunr && npm run copy-binary-assets",
@@ -41,9 +43,9 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run shrinkwrap"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "^0.2.21",
-		"@earendil-works/pi-ai": "^0.2.21",
-		"@earendil-works/pi-tui": "^0.2.21",
+		"@earendil-works/pi-agent-core": "^0.2.25",
+		"@earendil-works/pi-ai": "^0.2.25",
+		"@earendil-works/pi-tui": "^0.2.25",
 		"@modelcontextprotocol/ext-apps": "1.7.4",
 		"@modelcontextprotocol/sdk": "1.30.0",
 		"@mozilla/readability": "0.6.0",
@@ -63,6 +65,7 @@
 		"minimatch": "10.2.5",
 		"open": "10.2.0",
 		"p-limit": "6.2.0",
+		"playwright-core": "1.63.0",
 		"proper-lockfile": "4.1.2",
 		"recheck": "4.5.0",
 		"semver": "7.8.0",

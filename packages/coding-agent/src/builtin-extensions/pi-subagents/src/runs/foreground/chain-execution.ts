@@ -95,6 +95,7 @@ interface ChainExecutionDetailsInput {
 }
 
 interface ParallelChainRunInput {
+	communicationEnabled?: boolean;
 	step: ParallelStep;
 	parallelTemplates: string[];
 	parallelBehaviors: ResolvedStepBehavior[];
@@ -351,6 +352,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				onControlEvent: input.onControlEvent,
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
 				orchestratorIntercomTarget: input.orchestratorIntercomTarget,
+				communicationEnabled: input.communicationEnabled,
 				nestedRoute: input.nestedRoute,
 				modelOverride: effectiveModel,
 				availableModels: input.availableModels,
@@ -430,6 +432,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 }
 
 interface ChainExecutionParams {
+	communicationEnabled?: boolean;
 	chain: ChainStep[];
 	task?: string;
 	agents: ChildRuntimeConfig[];
@@ -522,6 +525,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		onDetachedExit,
 		childIntercomTarget,
 		orchestratorIntercomTarget,
+		communicationEnabled,
 		foregroundControl,
 		intercomEvents,
 		chainSkills: chainSkillsParam,
@@ -763,6 +767,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					onControlEvent,
 					childIntercomTarget,
 					orchestratorIntercomTarget,
+					communicationEnabled,
 					foregroundControl,
 					nestedRoute: params.nestedRoute,
 					worktreeSetup,
@@ -984,6 +989,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				onControlEvent,
 				childIntercomTarget,
 				orchestratorIntercomTarget,
+				communicationEnabled,
 				foregroundControl,
 				nestedRoute: params.nestedRoute,
 				maxSubagentDepth: params.maxSubagentDepth,
@@ -1234,6 +1240,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				onControlEvent,
 				intercomSessionName: childIntercomTarget?.(seqStep.agent, childIndex),
 				orchestratorIntercomTarget,
+				communicationEnabled,
 				nestedRoute: params.nestedRoute,
 				modelOverride: effectiveModel,
 				availableModels,

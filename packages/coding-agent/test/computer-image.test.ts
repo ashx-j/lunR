@@ -20,7 +20,7 @@ beforeEach(() => {
 describe("computer image preparation", () => {
 	it("caps both long edge and area while retaining explicit full-image mapping", async () => {
 		mocks.resize.mockImplementation(async (_bytes, _mime, options) => ({
-			data: "bounded", mimeType: "image/png", width: options.maxWidth, height: options.maxHeight,
+			data: "bounded", fingerprint: "pixels", mimeType: "image/png", width: options.maxWidth, height: options.maxHeight,
 			originalWidth: 4096, originalHeight: 2160,
 		}));
 		const result = await prepareComputerImage(png(4096, 2160));
@@ -32,7 +32,7 @@ describe("computer image preparation", () => {
 		expect(mocks.load).not.toHaveBeenCalled();
 	});
 	it("crops only the requested region and frees both native image allocations", async () => {
-		const original = { get_width: () => 200, get_height: () => 100, free: vi.fn() };
+		const original = { get_width: () => 200, get_height: () => 100, get_raw_pixels: () => new Uint8Array(200 * 100 * 4), free: vi.fn() };
 		const cropped = { get_bytes: () => Buffer.from("crop"), free: vi.fn() };
 		mocks.crop.mockReturnValue(cropped);
 		mocks.load.mockResolvedValue({ PhotonImage: { new_from_byteslice: () => original }, crop: mocks.crop });

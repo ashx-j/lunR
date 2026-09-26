@@ -19,7 +19,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { markExited as markProcessExited, register as registerProcess } from "../process-registry.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import {
-	formatGroupedCall,
+	GroupedCallText,
 	getTextOutput,
 	invalidArgText,
 	str,
@@ -474,17 +474,15 @@ export function createBashToolDefinition(
 			if (compact && state.startedAt !== undefined && state.endedAt !== undefined) {
 				detail += theme.fg("muted", ` — Took ${formatDuration(state.endedAt - state.startedAt)}`);
 			}
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(
-				formatGroupedCall({
-					role: context.groupRole ?? "singleton",
-					compact,
-					tree: toolGroupTree(context),
-					dot: toolStatusDotFromContext(context, theme),
-					title: theme.fg("toolTitle", theme.bold("$")),
-					detail,
-				}),
-			);
+			const text = (context.lastComponent as GroupedCallText | undefined) ?? new GroupedCallText("", 0, 0);
+			text.setCall({
+				role: context.groupRole ?? "singleton",
+				compact,
+				tree: toolGroupTree(context),
+				dot: toolStatusDotFromContext(context, theme),
+				title: theme.fg("toolTitle", theme.bold("$")),
+				detail,
+			});
 			return text;
 		},
 		renderResult(result, options, _theme, context) {

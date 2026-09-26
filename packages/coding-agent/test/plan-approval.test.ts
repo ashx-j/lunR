@@ -3,7 +3,8 @@ import { PRESENT_PLAN_WRONG_MODE_TEXT, runPresentPlan } from "../src/builtin-ext
 import {
 	type ApprovalRequest,
 	type ApprovalResponse,
-	isPlanModeActive,
+	createPermissionContext,
+	isReadOnlyModeActive,
 	NO_HANDLER_REASON,
 	PLAN_APPROVED_TEXT,
 	PLAN_DECLINED_TEXT,
@@ -100,21 +101,27 @@ describe("present_plan tool (runPresentPlan)", () => {
 	beforeEach(() => {
 		resetAllPermissionContexts();
 		registerApprovalHandler(undefined);
-		setPermissionMode("manual");
+		setPermissionMode("yolo");
 	});
 
-	it("errors outside plan mode", async () => {
-		expect(isPlanModeActive()).toBe(false);
+	it("errors outside read-only mode", async () => {
+		expect(isReadOnlyModeActive()).toBe(false);
 		expect(await runPresentPlan("anything")).toBe(PRESENT_PLAN_WRONG_MODE_TEXT);
 	});
 
-	it("passes through in plan mode without a handler", async () => {
-		setPermissionMode("plan");
+	it("passes through in read-only mode without a handler", async () => {
+		setPermissionMode("read-only");
 		expect(await runPresentPlan("my plan")).toBe(PLAN_PASS_THROUGH_TEXT);
 	});
 
-	it("returns the approval result text in plan mode with a handler", async () => {
-		setPermissionMode("plan");
+	it("uses the active session mode even when the default is writable", async () => {
+		createPermissionContext("phone", "read-only");
+		expect(await runPresentPlan("phone plan", "phone")).toBe(PLAN_PASS_THROUGH_TEXT);
+		expect(await runPresentPlan("phone plan")).toBe(PRESENT_PLAN_WRONG_MODE_TEXT);
+	});
+
+	it("returns the approval result text in read-only mode with a handler", async () => {
+		setPermissionMode("read-only");
 		registerApprovalHandler(async () => ({ decision: "approve" }));
 		expect(await runPresentPlan("my plan")).toBe(PLAN_APPROVED_TEXT);
 	});

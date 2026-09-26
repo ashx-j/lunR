@@ -119,16 +119,22 @@ describe("OpenCode Zen catalog", () => {
 		}
 	});
 
-	it("keeps Muse Spark contributor-free on the Responses API when present", () => {
-		const baked = OPENCODE_MODELS["muse-spark-1.2-contributor-free" as keyof typeof OPENCODE_MODELS] as
-			| Model
-			| undefined;
-		const catalog = loadOpencodeCatalog()["muse-spark-1.2-contributor-free"];
-		for (const model of [baked, catalog]) {
-			if (!model) continue;
-			expect(model.api).toBe("openai-responses");
-			expect(model.baseUrl).toBe("https://opencode.ai/zen/v1");
-			expect(isZeroCost(model.cost)).toBe(true);
+	it.each(["1.2", "1.3", "2.0"])("keeps versioned Muse Spark %s contributor-free on Responses", (version) => {
+		expect(opencodeFreeModelApi(`muse-spark-${version}-contributor-free`)).toBe("openai-responses");
+		expect(opencodeFreeModelApi(`other-${version}-contributor-free`)).toBe("openai-completions");
+	});
+
+	it("keeps all current Muse Spark contributor-free rows on Responses", () => {
+		for (const models of [OPENCODE_MODELS, loadOpencodeCatalog()]) {
+			const museModels = Object.values(models).filter(
+				(model) => model.id.startsWith("muse-spark-") && model.id.endsWith("-contributor-free"),
+			);
+			expect(museModels.length).toBeGreaterThan(0);
+			for (const model of museModels) {
+				expect(model.api).toBe("openai-responses");
+				expect(model.baseUrl).toBe("https://opencode.ai/zen/v1");
+				expect(isZeroCost(model.cost)).toBe(true);
+			}
 		}
 	});
 });

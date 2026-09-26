@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-ai",
-	"version": "0.2.21",
+	"version": "0.2.25",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -49,7 +49,20 @@
 	},
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"vendor/hermes-claude-subscription-directsdk/admission.py",
+		"vendor/hermes-claude-subscription-directsdk/directsdk.py",
+		"vendor/hermes-claude-subscription-directsdk/directsdk_setup.py",
+		"vendor/hermes-claude-subscription-directsdk/inert_mcp.py",
+		"vendor/hermes-claude-subscription-directsdk/model_catalog.py",
+		"vendor/hermes-claude-subscription-directsdk/lunr_bridge.py",
+		"vendor/hermes-claude-subscription-directsdk/lunr_setup_bridge.py",
+		"vendor/hermes-claude-subscription-directsdk/LICENSE",
+		"vendor/hermes-claude-subscription-directsdk/ATTRIBUTION.md",
+		"vendor/hermes-claude-subscription-directsdk/manifest.json",
+		"vendor/hermes-claude-subscription-directsdk/patches/*.patch",
+		"vendor/hermes-claude-subscription-directsdk/agent/*.py",
+		"vendor/hermes-claude-subscription-directsdk/tools/*.py"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

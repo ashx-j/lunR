@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { resizeImage } from "../../utils/image-resize.ts";
 import { loadPhoton } from "../../utils/photon.ts";
@@ -31,6 +32,7 @@ export async function prepareComputerImage(image: ImageContent, crop?: ImageRegi
 		region.x + region.width > source.width || region.y + region.height > source.height
 	) throw new Error("Crop is outside the captured image.");
 	let bytes: Uint8Array = Buffer.from(image.data, "base64");
+	let fingerprint: string | undefined;
 	if (crop) {
 		const photon = await loadPhoton();
 		if (!photon) throw new Error("Image processing is unavailable; crop refused.");
@@ -38,6 +40,7 @@ export async function prepareComputerImage(image: ImageContent, crop?: ImageRegi
 		try {
 			if (original.get_width() !== source.width || original.get_height() !== source.height)
 				throw new Error("Decoded screenshot dimensions changed.");
+			fingerprint = createHash("sha256").update(`${source.width}x${source.height}:`).update(original.get_raw_pixels()).digest("hex");
 			const cropped = photon.crop(original, region.x, region.y, region.x + region.width, region.y + region.height);
 			try {
 				bytes = cropped.get_bytes();
@@ -53,12 +56,16 @@ export async function prepareComputerImage(image: ImageContent, crop?: ImageRegi
 		maxWidth: Math.max(1, Math.floor(region.width * ratio)),
 		maxHeight: Math.max(1, Math.floor(region.height * ratio)),
 		maxBytes: 1.5 * 1024 * 1024,
+		includePixelFingerprint: !crop,
 	});
 	if (!resized || resized.originalWidth !== region.width || resized.originalHeight !== region.height ||
 		resized.width < 1 || resized.height < 1 || resized.width > 1280 || resized.height > 1280 ||
 		resized.width * resized.height > 1_000_000)
 		throw new Error("Screenshot could not be decoded within the image budget.");
+	fingerprint ??= resized.fingerprint;
+	if (!fingerprint) throw new Error("Screenshot pixel identity could not be verified.");
 	return {
+		fingerprint,
 		image: { type: "image", data: resized.data, mimeType: resized.mimeType } satisfies ImageContent,
 		width: resized.width,
 		height: resized.height,

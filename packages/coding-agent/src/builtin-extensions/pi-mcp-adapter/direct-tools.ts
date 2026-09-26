@@ -193,6 +193,7 @@ export function buildProxyDescription(
   desc += `  mcp({ action: "auth-start", server: "name" })      → Start manual OAuth and get a browser URL\n`;
   desc += `  mcp({ action: "auth-complete", server: "name", args: '{"redirectUrl":"..."}' }) → Complete manual OAuth\n`;
   desc += `\nMode: action > tool (call) > connect > describe > search > server (list) > nothing (status)`;
+  desc += `\nRead-only mode permits status, search, describe, and ui-messages only. Tool calls, connections, and authentication require yolo or auto; direct MCP tools are blocked in read-only.`;
 
   return desc;
 }

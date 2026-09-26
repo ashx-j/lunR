@@ -1065,6 +1065,7 @@ describe("agentLoop with AgentMessage", () => {
 
 		let steeringPolls = 0;
 		let followUpPolls = 0;
+		let nextTurnPreparations = 0;
 		let callbackToolResultIds: string[] = [];
 		let callbackContextRoles: string[] = [];
 		const config: AgentLoopConfig = {
@@ -1077,6 +1078,10 @@ describe("agentLoop with AgentMessage", () => {
 			getFollowUpMessages: async () => {
 				followUpPolls++;
 				return [createUserMessage("follow up should stay queued")];
+			},
+			prepareNextTurn: async () => {
+				nextTurnPreparations++;
+				return undefined;
 			},
 			shouldStopAfterTurn: async ({ message, toolResults, context }) => {
 				expect(message.role).toBe("assistant");
@@ -1118,6 +1123,7 @@ describe("agentLoop with AgentMessage", () => {
 		expect(executed).toEqual(["hello"]);
 		expect(steeringPolls).toBe(1);
 		expect(followUpPolls).toBe(0);
+		expect(nextTurnPreparations).toBe(0);
 		expect(callbackToolResultIds).toEqual(["tool-1"]);
 		expect(callbackContextRoles).toEqual(["user", "assistant", "toolResult"]);
 		expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);

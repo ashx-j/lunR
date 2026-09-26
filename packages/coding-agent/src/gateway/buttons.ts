@@ -31,7 +31,9 @@ export type PickerResolveResult =
 	| { done: false; items: PickerItem[]; title: string; breadcrumbs?: string };
 
 export interface PickerSpec {
-	kind: "model" | "thinking" | "sessions";
+	kind: "model" | "thinking" | "sessions" | "project" | "dialog";
+	validate?(): boolean;
+	onCancel?(): void;
 	sessionKey: string;
 	invokerId: string;
 	items: PickerItem[];
@@ -42,6 +44,8 @@ export interface PickerSpec {
 }
 
 interface PendingPicker extends PickerSpec {
+	resolving?: boolean;
+	completed?: string;
 	id: string;
 	chatId: string;
 	messageId: string;
@@ -206,7 +210,15 @@ export async function handleCallback(
 		return;
 	}
 
+	if (!picker.completed && picker.validate && !picker.validate()) {
+		registry.delete(parsed.id);
+		picker.onCancel?.();
+		await answerExpired(adapter, cb);
+		return;
+	}
+
 	if (Date.now() > picker.createdAt + PICKER_TTL_MS) {
+		if (!picker.completed) picker.onCancel?.();
 		registry.delete(parsed.id);
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, "⏱ Expired — run the command again.", []);
@@ -232,8 +244,14 @@ export async function handleCallback(
 		return;
 	}
 
+	if (picker.completed !== undefined) {
+		await adapter.answerCallback(cb.id, "Already completed.").catch(() => {});
+		return;
+	}
+
 	if (parsed.action === "cancel") {
 		registry.delete(parsed.id);
+		picker.onCancel?.();
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, "Cancelled.", []);
 		} catch {}
@@ -266,6 +284,12 @@ export async function handleCallback(
 		return;
 	}
 
+	if (picker.resolving) {
+		await adapter.answerCallback(cb.id, "Selection is still running.").catch(() => {});
+		return;
+	}
+	picker.resolving = true;
+	await adapter.answerCallback(cb.id).catch(() => {});
 	try {
 		const result = await picker.resolve(item);
 		if (!result.done) {
@@ -277,22 +301,28 @@ export async function handleCallback(
 			try {
 				await picker.adapter.editMessage(picker.chatId, picker.messageId, text, buttons);
 			} catch {}
-			await adapter.answerCallback(cb.id).catch(() => {});
 			return;
 		}
-		registry.delete(parsed.id);
-		try {
-			await picker.adapter.editMessage(picker.chatId, picker.messageId, result.text, []);
-		} catch {}
-		await adapter.answerCallback(cb.id).catch(() => {});
+		picker.completed = result.text;
+		await confirmPicker(picker, result.text);
 	} catch (err) {
-		registry.delete(parsed.id);
 		const message = err instanceof Error ? err.message : String(err);
-		try {
-			await picker.adapter.editMessage(picker.chatId, picker.messageId, `⚠ ${message}`, []);
-		} catch {}
-		await adapter.answerCallback(cb.id).catch(() => {});
+		picker.completed = `⚠ ${message}`;
+		await confirmPicker(picker, picker.completed);
+	} finally {
+		picker.resolving = false;
 	}
+}
+
+async function confirmPicker(picker: PendingPicker, text: string): Promise<void> {
+	const edited = await picker.adapter
+		.editMessage(picker.chatId, picker.messageId, text, [])
+		.catch(() => ({ success: false }));
+	if (edited.success) return;
+	const sent = await picker.adapter
+		.send(picker.chatId, text, { threadId: picker.source.threadId })
+		.catch(() => ({ success: false }));
+	if (!sent.success) console.error(`[gateway] picker confirmation failed on ${picker.adapter.platform}`);
 }
 
 /** Start the periodic TTL sweeper. Idempotent. */
@@ -303,11 +333,11 @@ export function startButtonSweeper(): void {
 		for (const [id, entry] of registry) {
 			if (entry.createdAt > cutoff) continue;
 			registry.delete(id);
-			try {
-				void entry.adapter.editMessage(entry.chatId, entry.messageId, "⏱ Expired — run the command again.", []);
-			} catch {
-				// best-effort expiry edit
-			}
+			if (entry.completed) continue;
+			entry.onCancel?.();
+			void entry.adapter
+				.editMessage(entry.chatId, entry.messageId, "⏱ Expired — run the command again.", [])
+				.catch(() => {});
 		}
 	}, SWEEP_INTERVAL_MS);
 	sweeper.unref?.();
@@ -329,5 +359,5 @@ export function resetButtonRegistry(): void {
 
 /** Test hook: expose active picker ids. */
 export function activePickerIds(): string[] {
-	return [...registry.keys()];
+	return [...registry].filter(([, picker]) => picker.completed === undefined).map(([id]) => id);
 }

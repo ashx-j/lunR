@@ -179,6 +179,35 @@ describe("in-app message selection", () => {
 		tui.stop();
 	});
 
+	it("routes click columns and scrolled rows to the rendered child", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const clicks: Array<{ x: number | undefined; y: number; width: number }> = [];
+		const clickable: Component = {
+			render: () => Array.from({ length: 10 }, (_, i) => `row ${i}`),
+			invalidate: () => {},
+			handleClick: (localY, width, localX) => {
+				clicks.push({ x: localX, y: localY, width });
+				return true;
+			},
+		};
+		tui.addChild(clickable);
+		tui.addChild(new StaticLines(["DOCK 1", "DOCK 2"]));
+		tui.pinFrom(tui.children[1]!);
+		tui.start();
+		await terminal.waitForRender();
+
+		tui.setChatScroll(3);
+		tui.requestRender();
+		await terminal.waitForRender();
+		terminal.sendInput("\x1b[<0;7;2M");
+		terminal.sendInput("\x1b[<0;7;2m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(clicks, [{ x: 6, y: 2, width: 19 }]);
+		tui.stop();
+	});
+
 	it("drag does not fire handleClick", async () => {
 		const terminal = new VirtualTerminal(20, 8);
 		const tui = new TUI(terminal);

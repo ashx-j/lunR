@@ -87,10 +87,11 @@ export interface Component {
 	selectable?: boolean;
 
 	/**
-	 * Optional click handler. `localY` is 0-based within this component's last render.
+	 * Optional click handler. `localY` and `localX` are 0-based within this component's last render.
+	 * `localX` is optional for compatibility with row-only handlers.
 	 * Return true if the click was handled.
 	 */
-	handleClick?(localY: number, width: number): boolean;
+	handleClick?(localY: number, width: number, localX?: number): boolean;
 
 	/**
 	 * Invalidate any cached rendering state.
@@ -323,13 +324,13 @@ export class Container implements Component {
 		return lines;
 	}
 
-	handleClick(localY: number, width: number): boolean {
+	handleClick(localY: number, width: number, localX?: number): boolean {
 		let y = 0;
 		for (const child of this.children) {
 			const h = child.render(width).length;
 			if (localY >= y && localY < y + h) {
 				if (typeof child.handleClick === "function") {
-					return child.handleClick(localY - y, width);
+					return child.handleClick(localY - y, width, localX);
 				}
 				return false;
 			}
@@ -687,6 +688,37 @@ export class TUI extends Container {
 		return start;
 	}
 
+	private findChatAnchor(previous: string[], next: string[], start: number, viewH: number): number | undefined {
+		for (let offset = 0; offset < Math.min(4, viewH, previous.length - start); offset++) {
+			const line = previous[start + offset];
+			if (!line || visibleWidth(line) === 0) continue;
+			const following = previous[start + offset + 1];
+			let best: number | undefined;
+			let bestScore = 0;
+			for (let match = next.indexOf(line); match !== -1; match = next.indexOf(line, match + 1)) {
+				if (following !== undefined && next[match + 1] !== following) continue;
+				const candidate = match - offset;
+				if (candidate < 0) continue;
+				let score = 1;
+				while (
+					score < 12 &&
+					start + offset + score < previous.length &&
+					previous[start + offset + score] === next[match + score]
+				)
+					score++;
+				if (
+					score > bestScore ||
+					(score === bestScore && (best === undefined || Math.abs(candidate - start) < Math.abs(best - start)))
+				) {
+					best = candidate;
+					bestScore = score;
+				}
+			}
+			if (best !== undefined) return best;
+		}
+		return undefined;
+	}
+
 	override render(width: number): string[] {
 		const pinIndex = this.getPinIndex();
 		if (pinIndex < 0) {
@@ -761,9 +793,23 @@ export class TUI extends Container {
 			chatSlice = scrollLines.slice();
 			this.lastChatStart = 0;
 		} else {
-			this.lastChatScrollMax = scrollLines.length - viewH;
-			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.lastChatScrollMax));
-			start = scrollLines.length - viewH - this.chatScrollOffset;
+			const scrollMax = scrollLines.length - viewH;
+			if (this.chatScrollOffset > 0) {
+				const anchor =
+					cache && !fromCache
+						? (this.findChatAnchor(
+								cache.scrollLines,
+								scrollLines,
+								this.lastChatStart,
+								this.lastChatViewportHeight,
+							) ?? this.lastChatStart)
+						: this.lastChatStart;
+				const pendingScroll = this.chatScrollOffset - (this.lastChatScrollMax - this.lastChatStart);
+				this.chatScrollOffset = scrollMax - anchor + pendingScroll;
+			}
+			this.lastChatScrollMax = scrollMax;
+			this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, scrollMax));
+			start = scrollMax - this.chatScrollOffset;
 			start = this.snapStartToKittyImageHeader(scrollLines, start);
 			start = Math.max(0, start);
 			this.lastChatStart = start;
@@ -1167,22 +1213,22 @@ export class TUI extends Container {
 			const pending = this.pendingClick;
 			this.pendingClick = undefined;
 			if (!pending) return;
-			if (this.dispatchChatClick(pending.y) || this.dispatchDockClick(pending.y)) {
+			if (this.dispatchChatClick(pending.x, pending.y) || this.dispatchDockClick(pending.x, pending.y)) {
 				this.requestRender();
 			}
 		}
 	}
 
-	private dispatchChatClick(mouseY: number): boolean {
+	private dispatchChatClick(mouseX: number, mouseY: number): boolean {
 		const cache = this.chatLayoutCache;
 		if (!cache || mouseY < 1 || mouseY > this.lastChatSliceHeight) return false;
 		const lineIndex = this.lastChatStart + (mouseY - 1);
 		const hit = cache.ranges.find((range) => lineIndex >= range.start && lineIndex < range.end);
 		if (!hit || typeof hit.component.handleClick !== "function") return false;
-		return hit.component.handleClick(lineIndex - hit.start, cache.chatWidth) === true;
+		return hit.component.handleClick(lineIndex - hit.start, cache.chatWidth, mouseX - 1) === true;
 	}
 
-	private dispatchDockClick(mouseY: number): boolean {
+	private dispatchDockClick(mouseX: number, mouseY: number): boolean {
 		if (mouseY <= this.lastChatSliceHeight) return false;
 		const pin = this.getPinIndex();
 		if (pin < 0) return false;
@@ -1195,10 +1241,10 @@ export class TUI extends Container {
 			const h = child.render(width).length;
 			if (local >= y && local < y + h) {
 				if (typeof child.handleClick === "function") {
-					return child.handleClick(local - y, width);
+					return child.handleClick(local - y, width, mouseX - 1);
 				}
 				if (child instanceof Container) {
-					return child.handleClick(local - y, width);
+					return child.handleClick(local - y, width, mouseX - 1);
 				}
 				return false;
 			}

@@ -115,7 +115,7 @@ import {
 	restorePermissionModeAfterPlan,
 	setPermissionMode,
 } from "../../core/permissions.ts";
-import { PLAN_MODE_ADDENDUM } from "../../core/plan-mode.ts";
+import { READ_ONLY_MODE_ADDENDUM } from "../../core/plan-mode.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
@@ -135,6 +135,13 @@ import {
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+import {
+	cancelSessionHandoff,
+	markSessionHandoff,
+	recordTuiActivity,
+	registerTransferHandler,
+	requestSessionTransfer,
+} from "../../core/session-handoff.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -142,6 +149,7 @@ import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/suba
 // lunr: multi-subscription API-key pools (stage 3 UI).
 import type { SubEntry } from "../../core/subscriptions.ts";
 import { time } from "../../core/timings.ts";
+import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
@@ -296,11 +304,11 @@ function isDeadTerminalError(error: unknown): boolean {
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
-	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage.";
+	"Claude Code handles Anthropic subscription authentication. lunR retains tool execution and conversation state. Check your Claude account for usage and any extra charges.";
 
 // lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
 const ANTHROPIC_TOS_DISCLAIMER =
-	"Connecting an Anthropic subscription (Claude Pro/Max) account to lunR may violate Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Third-party harness usage also draws from paid extra usage, not your plan limits. Continue?";
+	"Connecting an Anthropic subscription through Claude Code may be subject to Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Claude Code authenticates each lunR generation; lunR keeps its own tools and history. Continue?";
 
 const INIT_PROMPT = `Analyze this codebase and write a starter AGENTS.md in the project root.
 Scan: package manifests, directory layout, build/test/lint scripts, CI config,
@@ -495,9 +503,11 @@ export class InteractiveMode {
 	private streamingTargetMessage: AssistantMessage | undefined = undefined;
 	private streamingDisplayedLength = 0;
 	private smoothStreamingTimer: NodeJS.Timeout | undefined = undefined;
+	private thinkingAnimationTimer: NodeJS.Timeout | undefined;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private browserActivityComponent: ToolExecutionComponent | undefined;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -522,8 +532,7 @@ export class InteractiveMode {
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
 
-	// lunr: mode in effect before the current plan stretch. Used by approve / `/plan off`
-	// / `/plan <text>` to leave plan. Shift+Tab and `/mode` pick the destination themselves.
+	// Restore the previous mode after approving a plan or leaving read-only via /plan.
 	private previousPermissionMode: PermissionMode | undefined;
 
 	// lunr: mode in effect before `/goal` forced session auto. Dedicated so it cannot
@@ -625,7 +634,9 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
-			this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
+			const mode = this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode();
+			resetPermissions(mode);
+			this.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
 		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
@@ -637,8 +648,7 @@ export class InteractiveMode {
 			enterGoalAuto: () => this.enterGoalAuto(),
 			leaveGoalAuto: () => this.leaveGoalAuto(),
 		});
-		// lunr: reset permission mode to configured default on startup.
-		resetPermissions(this.settingsManager.getDefaultPermissionMode());
+		resetPermissions(this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode());
 		this.headerContainer = new Container();
 		if (options.startupView) {
 			this.headerContainer.addChild(new Spacer(1));
@@ -918,29 +928,30 @@ export class InteractiveMode {
 		void this.maybeNotifyCliUpdate();
 		this.startPlanUsagePolling();
 
-		// lunr: register the permission approval dialog handler so manual mode can prompt.
+		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
 			if (req.kind === "large-subagent-launch") {
 				return this.showLargeSubagentLaunchApprovalDialog(req);
 			}
-			// lunr: plan approval (present_plan tool). Any approve leaves plan mode —
-			// restore runs BEFORE resolving so the model's next tool call already
-			// has full access. Decline keeps plan mode active.
+			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
 				const resp = await this.showPlanApprovalDialog(req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
-					this.applyPermissionMode(this.restoreTargetAfterPlan());
+					const target = this.restoreTargetAfterPlan();
+					this.applyPermissionMode(target === "read-only" ? "yolo" : target);
 				}
 				return resp;
 			}
-			return this.showApprovalDialog(req);
+			return "reject";
 		});
 
 		// lunr: initialize rollback service for this session.
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
-		this.syncPermissionModeEffects(this.settingsManager.getDefaultPermissionMode());
+		this.syncPermissionModeEffects(
+			this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode(),
+		);
 
 		await this.themeController.applyFromSettings();
 
@@ -1859,7 +1870,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					this.clearChatContainer();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.restoreEditorFromTreeResult(result);
@@ -1933,8 +1944,26 @@ export class InteractiveMode {
 		return bootRows;
 	}
 
+	private unregisterSessionTransfer?: () => void;
+	private transferInProgress = false;
+	private detachedDraft = "";
+
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		await this.waitForDeferredBuiltins();
+		this.unregisterSessionTransfer?.();
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
+		this.unregisterSessionTransfer = registerTransferHandler(this.sessionManager, async ({ stop, signal }) => {
+			this.transferInProgress = true;
+			try {
+				this.detachedDraft = this.editor.getText();
+				await this.runtimeHost.releaseForTransfer({ stop, signal });
+				this.editor.setText(this.detachedDraft);
+				this.unregisterSessionTransfer?.();
+				this.showStatus("Session released for remote continuation. Draft retained. Use /reclaim to continue here.");
+			} finally {
+				this.transferInProgress = false;
+			}
+		});
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -1966,7 +1995,7 @@ export class InteractiveMode {
 	private renderCurrentSessionState(): void {
 		this.ui.setChatScroll(0);
 		this.loadedResourcesContainer.clear();
-		this.chatContainer.clear();
+		this.clearChatContainer();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.pendingCompactionRender = undefined;
@@ -2999,6 +3028,55 @@ export class InteractiveMode {
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
+			if (text === "/reclaim" || text === "/reclaim stop") {
+				const file = this.sessionManager.getSessionFile();
+				try {
+					if (!file) throw new Error("This session is not saved.");
+					if (!this.runtimeHost.isDetached) {
+						this.showStatus("This terminal already owns the session.");
+						return;
+					}
+					const draft = this.editor.getText();
+					await requestSessionTransfer(file, { stop: text === "/reclaim stop" });
+					await this.runtimeHost.switchSession(file);
+					this.editor.setText(draft === text ? this.detachedDraft : draft);
+					this.showStatus("Session reclaimed.");
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			if ((this.runtimeHost.isDetached || this.transferInProgress) && !["/quit", "/exit"].includes(text)) {
+				this.showError(
+					"Session is detached or transferring. Draft retained. Use /reclaim, /reclaim stop, or /quit.",
+				);
+				return;
+			}
+			if (text === "/handoff" || text === "/handoff cancel") {
+				try {
+					if (text === "/handoff cancel")
+						cancelSessionHandoff(this.sessionManager, this.runtimeHost.services.agentDir);
+					else markSessionHandoff(this.sessionManager, this.runtimeHost.services.agentDir);
+					this.showStatus(
+						text === "/handoff cancel"
+							? "Handoff mark cancelled."
+							: "Marked for phone continuation for 8 hours. Busy work must finish or be explicitly stopped before transfer.",
+					);
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			if (
+				text &&
+				!this.runtimeHost.isDetached &&
+				(!text.startsWith("/") ||
+					/^\/(?:model|thinking|effort|reasoning|off|minimal|low|medium|high|xhigh|max|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+						text,
+					))
+			) {
+				recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
+			}
 			if (!text) {
 				this.takeSubmittedImages(text);
 				return;
@@ -3124,9 +3202,9 @@ export class InteractiveMode {
 				this.handleModeCommand(text === "/mode" ? "" : text.slice(6).trim());
 				return;
 			}
-			if (text === "/manual" || text === "/yolo" || text === "/auto") {
+			if (text === "/read" || text === "/yolo" || text === "/auto") {
 				this.editor.setText("");
-				this.applyPermissionMode(text.slice(1) as PermissionMode);
+				this.applyPermissionMode(text === "/read" ? "read-only" : (text.slice(1) as PermissionMode));
 				return;
 			}
 			if (text === "/processes") {
@@ -3230,15 +3308,30 @@ export class InteractiveMode {
 				return;
 			}
 
-			// If streaming, use prompt() with steer behavior
-			// This handles extension commands (execute immediately), prompt template expansion, and queueing
-			if (this.session.isStreaming) {
-				this.editor.addToHistory?.(text);
-				this.editor.setText("");
-				await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer", images });
-				this.updatePendingMessagesDisplay();
-				this.ui.requestRender();
-				return;
+			// While streaming or settling a wait handoff, reserve normal Enter for subagent_wait when possible.
+			// Extension commands keep their existing path.
+			if (this.session.isStreaming || this.session.isWaitPromptHandoffActive) {
+				if (!this.isExtensionCommand(text)) {
+					await this.awaitDeferredBuiltinsForPrompt();
+					const handoff = await this.session.interruptSubagentWaitWithPrompt(text, { images });
+					if (handoff) {
+						this.editor.addToHistory?.(text);
+						this.editor.setText("");
+						void handoff.completion.catch((error) => {
+							this.showError(error instanceof Error ? error.message : String(error));
+						});
+						this.ui.requestRender();
+						return;
+					}
+				}
+				if (this.session.isStreaming) {
+					this.editor.addToHistory?.(text);
+					this.editor.setText("");
+					await this.promptAfterDeferredBuiltins(text, { streamingBehavior: "steer", images });
+					this.updatePendingMessagesDisplay();
+					this.ui.requestRender();
+					return;
+				}
 			}
 
 			// Normal message submission
@@ -3259,6 +3352,17 @@ export class InteractiveMode {
 
 	private getSmoothStreamingOptions(): SmoothStreamingOptions {
 		return { hideThinking: this.hideThinkingBlock };
+	}
+
+	private setThinkingAnimation(active: boolean): void {
+		if (!active) {
+			if (this.thinkingAnimationTimer) clearInterval(this.thinkingAnimationTimer);
+			this.thinkingAnimationTimer = undefined;
+			return;
+		}
+		if (this.thinkingAnimationTimer) return;
+		this.thinkingAnimationTimer = setInterval(() => this.ui.requestRender(), 33);
+		this.thinkingAnimationTimer.unref?.();
 	}
 
 	private clearSmoothStreamingTimer(): void {
@@ -3300,20 +3404,10 @@ export class InteractiveMode {
 		for (const content of target.content) {
 			if (content.type !== "toolCall" || !revealedIds.has(content.id)) continue;
 			if (!this.pendingTools.has(content.id)) {
-				const component = new ToolExecutionComponent(
-					content.name,
-					content.id,
-					content.arguments,
-					{
-						showImages: this.settingsManager.getShowImages(),
-						imageWidthCells: this.settingsManager.getImageWidthCells(),
-					},
-					this.getRegisteredToolDefinition(content.name),
-					this.ui,
-					this.sessionManager.getCwd(),
-				);
-				component.setExpanded(this.toolOutputExpanded);
-				this.addToolComponentToChat(component);
+				const component =
+					content.name === "browser" && this.browserActivityComponent
+						? this.browserActivityComponent
+						: this.createToolExecutionComponent(content.name, content.id, content.arguments);
 				this.pendingTools.set(content.id, component);
 			} else {
 				const component = this.pendingTools.get(content.id);
@@ -3349,6 +3443,7 @@ export class InteractiveMode {
 	}
 
 	private stopSmoothStreaming(): void {
+		this.setThinkingAnimation(false);
 		this.clearSmoothStreamingTimer();
 		this.streamingTargetMessage = undefined;
 		this.streamingDisplayedLength = 0;
@@ -3394,6 +3489,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
+				this.browserActivityComponent = undefined;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3461,6 +3557,11 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.thinkingCollapse,
+						{
+							requestRender: () => this.ui.requestRender(),
+							reasoningDisplay: this.settingsManager.getReasoningDisplay(),
+							onThinkingAnimationChange: (active) => this.setThinkingAnimation(active),
+						},
 					);
 					// lunr: collapsible reasoning — fresh timing array for this message.
 					this.thinkingRunTimings = [];
@@ -3570,21 +3671,10 @@ export class InteractiveMode {
 				}
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
-					component = new ToolExecutionComponent(
-						event.toolName,
-						event.toolCallId,
-						event.args,
-						{
-							showImages: this.settingsManager.getShowImages(),
-							imageWidthCells: this.settingsManager.getImageWidthCells(),
-						},
-						this.getRegisteredToolDefinition(event.toolName),
-						this.ui,
-						this.sessionManager.getCwd(),
-					);
-					component.setExpanded(this.toolOutputExpanded);
-					this.addToolComponentToChat(component);
+					component = this.createToolExecutionComponent(event.toolName, event.toolCallId, event.args);
 					this.pendingTools.set(event.toolCallId, component);
+				} else if (event.toolName === "browser" && !component.matchesToolCall(event.toolCallId)) {
+					component.beginNextExecution(event.toolCallId, event.args);
 				}
 				component.markExecutionStarted();
 				this.ui.requestRender();
@@ -3623,6 +3713,7 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				this.browserActivityComponent = undefined;
 
 				this.maybeAutoNameSession();
 
@@ -3881,6 +3972,10 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.thinkingCollapse,
+					{
+						requestRender: () => this.ui.requestRender(),
+						reasoningDisplay: this.settingsManager.getReasoningDisplay(),
+					},
 				);
 				// lunr: collapsible reasoning — re-attach live timings when this
 				// message was streamed in this session (undefined = history).
@@ -3905,6 +4000,7 @@ export class InteractiveMode {
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
+		let browserActivityComponent: ToolExecutionComponent | undefined;
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
 		// list and re-inject them after the assistant messages that paid for them.
@@ -3930,20 +4026,26 @@ export class InteractiveMode {
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
-							content.name,
-							content.id,
-							content.arguments,
-							{
-								showImages: this.settingsManager.getShowImages(),
-								imageWidthCells: this.settingsManager.getImageWidthCells(),
-							},
-							this.getRegisteredToolDefinition(content.name),
-							this.ui,
-							this.sessionManager.getCwd(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.addToolComponentToChat(component);
+						let component = content.name === "browser" ? browserActivityComponent : undefined;
+						if (component) {
+							component.beginNextExecution(content.id, content.arguments);
+						} else {
+							component = new ToolExecutionComponent(
+								content.name,
+								content.id,
+								content.arguments,
+								{
+									showImages: this.settingsManager.getShowImages(),
+									imageWidthCells: this.settingsManager.getImageWidthCells(),
+								},
+								this.getRegisteredToolDefinition(content.name),
+								this.ui,
+								this.sessionManager.getCwd(),
+							);
+							component.setExpanded(this.toolOutputExpanded);
+							this.addToolComponentToChat(component);
+							if (content.name === "browser") browserActivityComponent = component;
+						}
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -3974,6 +4076,7 @@ export class InteractiveMode {
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
+				if (message.role === "user") browserActivityComponent = undefined;
 				// All other messages use standard rendering
 				this.addMessageToChat(message, options);
 			}
@@ -4085,7 +4188,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		this.clearChatContainer();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
 
@@ -4118,6 +4221,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.unregisterSessionTransfer?.();
 		this.stopSmoothStreaming();
 		if (this.planUsageTimer) {
 			clearInterval(this.planUsageTimer);
@@ -4325,6 +4429,10 @@ export class InteractiveMode {
 	}
 
 	private async handleFollowUp(): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) {
+			this.showError("Use /reclaim before sending more work. Draft retained.");
+			return;
+		}
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
 
@@ -4380,6 +4488,8 @@ export class InteractiveMode {
 	}
 
 	private cycleThinkingLevel(): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const newLevel = this.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
 			this.showStatus("Current model does not support thinking");
@@ -4394,6 +4504,8 @@ export class InteractiveMode {
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		try {
 			const result = await this.session.cycleModel(direction);
 			if (result === undefined) {
@@ -4431,6 +4543,41 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private createToolExecutionComponent(toolName: string, toolCallId: string, args: unknown): ToolExecutionComponent {
+		if (toolName === "browser" && this.browserActivityComponent) {
+			this.browserActivityComponent.beginNextExecution(toolCallId, args);
+			return this.browserActivityComponent;
+		}
+		const component = new ToolExecutionComponent(
+			toolName,
+			toolCallId,
+			args,
+			{
+				showImages: this.settingsManager.getShowImages(),
+				imageWidthCells: this.settingsManager.getImageWidthCells(),
+			},
+			this.getRegisteredToolDefinition(toolName),
+			this.ui,
+			this.sessionManager.getCwd(),
+		);
+		component.setExpanded(this.toolOutputExpanded);
+		this.addToolComponentToChat(component);
+		if (toolName === "browser") this.browserActivityComponent = component;
+		return component;
+	}
+
+	private disposeChatToolComponents(): void {
+		for (const child of this.chatContainer.children) {
+			if (child instanceof ToolExecutionComponent) child.dispose();
+		}
+		this.browserActivityComponent = undefined;
+	}
+
+	private clearChatContainer(): void {
+		this.disposeChatToolComponents();
+		this.chatContainer.clear();
+	}
+
 	// lunr: consecutive same-tool grouping — a tool component appended right after
 	// another component for the SAME tool becomes a group continuation (no top
 	// spacer / top pad); the previous card drops its bottom pad. Mixed neighbors
@@ -4446,7 +4593,6 @@ export class InteractiveMode {
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
 		// Rebuild chat from session messages
-		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render.
@@ -4644,7 +4790,6 @@ export class InteractiveMode {
 	}
 
 	private renderCompactionResult(result: { summary: string; tokensBefore: number }): void {
-		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 		this.addMessageToChat(
 			createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString()),
@@ -4785,6 +4930,7 @@ export class InteractiveMode {
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					thinkingCollapse: this.thinkingCollapse,
+					reasoningDisplay: this.settingsManager.getReasoningDisplay(),
 					cacheRetention: this.settingsManager.getCacheRetention() ?? "short",
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
@@ -4810,8 +4956,12 @@ export class InteractiveMode {
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
 					computerUse: this.settingsManager.getComputerUse(),
 					computerForeground: this.settingsManager.getComputerForeground(),
+					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
+					automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
+					browserEnabled: this.settingsManager.getBrowserEnabled(),
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
+					todosEnabled: this.settingsManager.getTodosEnabled(),
 					searchCurator: getSearchCuratorSetting(),
 					// lunr: TUI customize settings
 					footerMcp: this.settingsManager.getFooterMcp(),
@@ -4902,7 +5052,6 @@ export class InteractiveMode {
 								child.setHideThinkingBlock(hidden);
 							}
 						}
-						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
 					},
 					onThinkingCollapseChange: (collapse) => {
@@ -4913,8 +5062,16 @@ export class InteractiveMode {
 								child.setThinkingCollapse(collapse);
 							}
 						}
-						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
+					},
+					onReasoningDisplayChange: (display) => {
+						this.settingsManager.setReasoningDisplay(display);
+						for (const child of this.chatContainer.children) {
+							if (child instanceof AssistantMessageComponent) {
+								child.setReasoningDisplay(this.settingsManager.getReasoningDisplay());
+							}
+						}
+						this.ui.requestRender();
 					},
 					onShowCacheMissNoticesChange: (shown) => {
 						this.settingsManager.setShowCacheMissNotices(shown);
@@ -5011,6 +5168,13 @@ export class InteractiveMode {
 					onConfirmLargeSubagentLaunchesChange: (enabled) => {
 						this.settingsManager.setConfirmLargeSubagentLaunches(enabled);
 					},
+					onSubagentCommunicationChange: (enabled) => {
+						this.settingsManager.setSubagentCommunicationEnabled(enabled);
+					},
+					onAutomaticSubagentDelegationChange: (enabled) => {
+						this.settingsManager.setAutomaticSubagentDelegation(enabled);
+						this.session.refreshToolRegistry();
+					},
 					getTierThinkingLevels: (tier) => {
 						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));
 						if (model) return getSupportedThinkingLevels(model);
@@ -5025,10 +5189,19 @@ export class InteractiveMode {
 					onComputerForegroundChange: (enabled) => {
 						this.settingsManager.setComputerForeground(enabled);
 					},
+					onBrowserEnabledChange: (enabled) => {
+						this.settingsManager.setBrowserEnabled(enabled);
+						this.session.refreshToolRegistry();
+					},
 					onMemoryEnabledChange: (enabled) => {
 						this.settingsManager.setMemoryEnabled(enabled);
 						this.session.refreshToolRegistry();
 						this.showStatus(`Agent memory: ${enabled ? "on" : "off"}`);
+					},
+					onTodosEnabledChange: (enabled) => {
+						this.settingsManager.setTodosEnabled(enabled);
+						notifyTodosEnabledChanged(enabled);
+						this.session.refreshToolRegistry();
 					},
 					onSearchCuratorChange: (setting) => {
 						if (!setSearchCuratorSetting(setting)) {
@@ -5068,6 +5241,39 @@ export class InteractiveMode {
 					},
 					onPlanUsageWindowChange: (window) => {
 						this.settingsManager.setPlanUsageWindow(window);
+					},
+					onGatewayAction: (action) => {
+						void (async () => {
+							if (this.session.isStreaming) {
+								this.showStatus("Wait for the current turn before managing the gateway.");
+								return;
+							}
+							if (action === "status") {
+								this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
+								return;
+							}
+							this.ui.stop();
+							try {
+								await new Promise<void>((resolve, reject) => {
+									const child = spawn(process.execPath, [process.argv[1], "gateway", ...action.split(" ")], {
+										stdio: "inherit",
+										env: process.env,
+									});
+									child.once("error", reject);
+									child.once("exit", (code) =>
+										code === 0
+											? resolve()
+											: reject(
+													new Error(`Gateway command exited with code ${code}. Run lunr gateway doctor.`),
+												),
+									);
+								});
+							} finally {
+								this.ui.start();
+								this.ui.requestRender(true);
+							}
+							this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
+						})().catch((error) => this.showStatus(error instanceof Error ? error.message : String(error)));
 					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);
@@ -5332,6 +5538,7 @@ export class InteractiveMode {
 	}
 
 	private async showModelSelector(initialSearchInput?: string): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		// lunr: prefetch active subscription names so row rendering stays synchronous.
 		const subscriptionNames = await this.getActiveSubscriptionNames();
 		this.showSelector((done) => {
@@ -5550,6 +5757,7 @@ export class InteractiveMode {
 	}
 
 	private showUserMessageSelector(): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		const userMessages = this.session.getUserMessagesForForking();
 
 		if (userMessages.length === 0) {
@@ -5609,6 +5817,7 @@ export class InteractiveMode {
 	}
 
 	private showTreeSelector(initialSelectedId?: string): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		const tree = this.sessionManager.getTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
@@ -5700,7 +5909,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						this.clearChatContainer();
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.restoreEditorFromTreeResult(result);
@@ -5768,8 +5977,16 @@ export class InteractiveMode {
 					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
 						const next = (nextName ?? "").trim();
 						if (!next) return;
+						if (sessionFilePath === this.sessionManager.getSessionFile() && !this.runtimeHost.isDetached) {
+							this.sessionManager.appendSessionInfo(next);
+							return;
+						}
 						const mgr = SessionManager.open(sessionFilePath);
-						mgr.appendSessionInfo(next);
+						try {
+							mgr.appendSessionInfo(next);
+						} finally {
+							mgr.dispose();
+						}
 					},
 					showRenameHint: true,
 					keybindings: this.keybindings,
@@ -5854,7 +6071,8 @@ export class InteractiveMode {
 		// lunr: providers with a multi-key pool list one entry per subscription plus an
 		// "all subscriptions" entry, encoding the target as "<providerId>#<subId|all>".
 		const options: AuthSelectorProvider[] = [];
-		for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
+		for (const { providerId, type: credentialType } of await this.session.modelRuntime.listCredentials()) {
+			const type = credentialType === "external_claude_code" ? "oauth" : credentialType;
 			const name = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
 			const status = { type, source: "stored credential" };
 			if (type === "api_key") {
@@ -6593,6 +6811,28 @@ export class InteractiveMode {
 			signal: dialog.signal,
 			prompt: (prompt) => this.showAuthPrompt(dialog, prompt),
 			notify: (event) => this.notifyAuthDialog(dialog, event),
+			handoff: async (command, args, env) => {
+				this.ui.stop();
+				try {
+					await new Promise<void>((resolve, reject) => {
+						const child = spawn(command, [...args], { stdio: "inherit", env, windowsHide: false });
+						const abort = () => child.kill();
+						dialog.signal.addEventListener("abort", abort, { once: true });
+						if (dialog.signal.aborted) abort();
+						child.once("error", (error) => {
+							dialog.signal.removeEventListener("abort", abort);
+							reject(error);
+						});
+						child.once("close", (code) => {
+							dialog.signal.removeEventListener("abort", abort);
+							if (code === 0) resolve();
+							else reject(new Error("Claude Code login did not complete"));
+						});
+					});
+				} finally {
+					this.ui.start();
+				}
+			},
 		});
 	}
 
@@ -6704,7 +6944,7 @@ export class InteractiveMode {
 			if (leafId) {
 				this.redoStack.push(leafId);
 			}
-			this.chatContainer.clear();
+			this.clearChatContainer();
 			this.renderInitialMessages();
 			void this.flushCompactionQueue({ willRetry: false });
 			return { editorText: result.editorText, editorImages: result.editorImages };
@@ -6749,7 +6989,7 @@ export class InteractiveMode {
 				this.showStatus("Navigation cancelled");
 				return;
 			}
-			this.chatContainer.clear();
+			this.clearChatContainer();
 			this.renderInitialMessages();
 			if (result.editorText && !this.editor.getText().trim()) {
 				this.restoreEditorFromTreeResult(result);
@@ -7313,81 +7553,65 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: /plan — shortcut onto the plan permission mode (not a second state machine).
+	// /plan is a shortcut into read-only mode for planning.
 	private async handlePlanCommand(args: string): Promise<void> {
 		const sub = args.toLowerCase();
-		const inPlan = getPermissionMode() === "plan";
+		const inReadOnly = getPermissionMode() === "read-only";
 
 		if (sub === "status") {
 			this.showStatus(
-				inPlan
-					? "Plan mode is active — edit/write and mutating bash are blocked. /plan off to implement."
-					: `Permission mode: ${getPermissionMode()}.`,
+				inReadOnly ? "Read mode is active. /plan off to leave it." : `Permission mode: ${getPermissionMode()}.`,
 			);
 			return;
 		}
 
-		// lunr: `/plan <text>` — any arg other than on/off/status is task text.
-		// While not in plan: enter plan and send. While in plan: restore previous
-		// mode and send with full tool access ("looks good, go implement it").
 		if (sub !== "" && sub !== "on" && sub !== "off") {
-			if (inPlan) {
-				this.applyPermissionMode(this.restoreTargetAfterPlan());
-			} else {
-				this.applyPermissionMode("plan");
-			}
-			await this.sendUserMessageAfterDeferredBuiltins(args);
+			if (!inReadOnly) this.applyPermissionMode("read-only");
+			await this.sendUserMessageAfterDeferredBuiltins(`Create a plan for: ${args}`);
 			return;
 		}
 
-		const next = sub === "" ? !inPlan : sub === "on";
-		if (next === inPlan) {
-			this.showStatus(next ? "Plan mode is already active." : "Plan mode is already off.");
+		const next = sub !== "off";
+		if (next === inReadOnly) {
+			this.showStatus(next ? "Read mode is already active." : "Read mode is already off.");
 			return;
 		}
 
-		if (next) {
-			this.applyPermissionMode("plan");
-		} else {
-			this.applyPermissionMode(this.restoreTargetAfterPlan());
-		}
+		this.applyPermissionMode(next ? "read-only" : this.restoreTargetAfterPlan());
 	}
 
-	// lunr: /mode — permission mode selector (manual / yolo / plan / auto). Per-session only.
 	private handleModeCommand(args: string): void {
 		const sub = args.toLowerCase();
 
 		if (sub === "status") {
-			this.showStatus(`Permission mode: ${getPermissionMode()}`);
+			this.showStatus(`Permission mode: ${getPermissionMode() === "read-only" ? "read" : getPermissionMode()}`);
 			return;
 		}
 
-		if (sub === "manual" || sub === "yolo" || sub === "plan" || sub === "auto") {
-			this.applyPermissionMode(sub);
+		if (sub === "yolo" || sub === "auto" || sub === "read-only" || sub === "read") {
+			this.applyPermissionMode(sub === "read" ? "read-only" : sub);
 			return;
 		}
 
 		if (sub !== "") {
-			this.showStatus("Usage: /mode [manual|yolo|plan|auto] — bare /mode opens the selector.");
+			this.showStatus("Usage: /mode [yolo|auto|read] — bare /mode opens the selector.");
 			return;
 		}
 
 		const options = [
-			"Manual — approve every action",
 			"YOLO — auto-approve tools, agent may still ask",
-			"Plan — read-only; present a plan for approval",
 			"Auto — fully autonomous, no questions",
+			"Read — inspect without making changes",
 		];
 		void this.showExtensionSelector("Permission mode", options).then((choice) => {
 			if (!choice) return;
-			if (choice.startsWith("Manual")) this.applyPermissionMode("manual");
-			else if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
-			else if (choice.startsWith("Plan")) this.applyPermissionMode("plan");
+			if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
 			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
+			else if (choice.startsWith("Read")) this.applyPermissionMode("read-only");
 		});
 	}
 
-	/** Destination when leaving plan via approve / `/plan off` / `/plan <text>`. */
+	/** Destination after plan approval or /plan off. */
 	private restoreTargetAfterPlan(): PermissionMode {
 		return restorePermissionModeAfterPlan(
 			this.previousPermissionMode,
@@ -7397,8 +7621,10 @@ export class InteractiveMode {
 
 	/** Apply addendum + auto-rollback for a mode without a status toast. */
 	private syncPermissionModeEffects(mode: PermissionMode): void {
-		if (mode === "plan") {
-			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		this.sessionManager.setPermissionMode(mode);
+		if (mode === "read-only") {
+			this.session.setSystemPromptAppend(READ_ONLY_MODE_ADDENDUM);
 		} else if (mode === "auto") {
 			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
 			enableRollbackForSession(this.sessionManager.getSessionId());
@@ -7425,15 +7651,18 @@ export class InteractiveMode {
 	}
 
 	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean }): void {
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		this.sessionManager.setPermissionMode(mode);
+		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const prev = getPermissionMode();
-		if (mode === "plan" && prev !== "plan") {
+		if (mode === "read-only" && prev !== "read-only") {
 			this.previousPermissionMode = prev;
 		}
 		setPermissionMode(mode);
 		this.ui.requestRender();
 
-		if (mode === "plan") {
-			this.session.setSystemPromptAppend(PLAN_MODE_ADDENDUM);
+		if (mode === "read-only") {
+			this.session.setSystemPromptAppend(READ_ONLY_MODE_ADDENDUM);
 		} else if (mode === "auto") {
 			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
 		} else {
@@ -7450,47 +7679,11 @@ export class InteractiveMode {
 
 		if (mode === "auto" && prev !== "auto") {
 			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
-		} else if (mode === "plan") {
-			this.showStatus("Plan mode active — edit/write and mutating bash are blocked. /plan off to implement.");
+		} else if (mode === "read-only") {
+			this.showStatus("Read mode active. Changes are blocked.");
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
 		}
-	}
-
-	// lunr: approval dialog for manual permission mode.
-	// lunr: adds "Switch to auto" / "Switch to yolo" at the bottom so users can
-	// escape manual approval mid-turn without a separate /mode round-trip.
-	private async showApprovalDialog(req: {
-		toolName: string;
-		action: string;
-		detail: string;
-	}): Promise<"once" | "session" | "reject"> {
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					`Approve ${req.action}?`,
-					["Approve once", "Approve for session", "Reject", "Switch to auto", "Switch to yolo"],
-					(option) => {
-						done();
-						if (option === "Approve once") resolve("once");
-						else if (option === "Approve for session") resolve("session");
-						else if (option === "Switch to auto") {
-							this.applyPermissionMode("auto");
-							resolve("once");
-						} else if (option === "Switch to yolo") {
-							this.applyPermissionMode("yolo");
-							resolve("once");
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-					{ message: req.detail.slice(0, 500) },
-				);
-				return { component: selector, focus: selector };
-			});
-		});
 	}
 
 	// Approval dialog for one subagent call launching more than two children.
@@ -7531,7 +7724,7 @@ export class InteractiveMode {
 		});
 	}
 
-	// lunr: approval dialog for present_plan (plan mode). The "with feedback"
+	// Approval dialog for present_plan (read-only mode). The "with feedback"
 	// options collect a one-line note via showExtensionInput that becomes part of
 	// the result text the model sees. Esc/close counts as Decline.
 	private showPlanInChat(summary: string): void {
@@ -7797,6 +7990,10 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 	}
 
 	private async handleClearCommand(): Promise<void> {
+		if (this.runtimeHost.isDetached || this.transferInProgress) {
+			this.showError("Use /reclaim first, or /quit to leave this terminal.");
+			return;
+		}
 		this.clearStatusIndicator();
 		this.ui.setChatScroll(0);
 		// Deferred factories must be on builtinRoster before /new rebuilds the runtime.
@@ -7969,6 +8166,7 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 	}
 
 	stop(): void {
+		this.setThinkingAnimation(false);
 		this.stopCatalogRefresh?.();
 		this.stopCatalogRefresh = undefined;
 		if (this.settingsManager.getShowTerminalProgress()) {
@@ -7979,6 +8177,7 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
+		this.disposeChatToolComponents();
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

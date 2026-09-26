@@ -124,7 +124,7 @@ const DescriptionField = Type.String({
 
 const PermissionsField = Type.Optional(Type.String({
 	enum: ["full", "read-only"],
-	description: "Child permission level. Omit or 'full' for coding tools (read/search/shell/edit/write/web/LSP/MCP). 'read-only' inspects without edit/write. Plan-mode parents must pass 'read-only'.",
+	description: "Child permission level. Omit or 'full' for coding tools (read/search/shell/edit/write/web/LSP/MCP). 'read-only' inspects without edit/write. Read-only parents must pass 'read-only'.",
 }));
 
 const TaskItem = Type.Object({

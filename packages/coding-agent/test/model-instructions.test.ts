@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveIntercomBridge } from "../src/builtin-extensions/pi-subagents/src/intercom/intercom-bridge.ts";
 import {
 	ensureModelInstructionDirs,
 	getGlobalInstructionsPath,
@@ -109,14 +110,29 @@ describe("model-specific user instructions", () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getModelInstructions()).toEqual({ enabled: false, mode: "both" });
 		expect(manager.getConfirmLargeSubagentLaunches()).toBe(true);
+		expect(manager.getSubagentCommunicationEnabled()).toBe(true);
+		expect(manager.getAutomaticSubagentDelegation()).toBe(true);
 		manager.setModelInstructionsEnabled(true);
 		manager.setModelInstructionsMode("model-only");
 		manager.setConfirmLargeSubagentLaunches(false);
+		manager.setSubagentCommunicationEnabled(false);
+		manager.setAutomaticSubagentDelegation(false);
 		await manager.flush();
 
 		const reloaded = SettingsManager.create(projectDir, agentDir);
 		expect(reloaded.getModelInstructions()).toEqual({ enabled: true, mode: "model-only" });
 		expect(reloaded.getConfirmLargeSubagentLaunches()).toBe(false);
+		expect(reloaded.getSubagentCommunicationEnabled()).toBe(false);
+		expect(reloaded.getAutomaticSubagentDelegation()).toBe(false);
+		expect(
+			resolveIntercomBridge({
+				config: { mode: "always" },
+				context: "fresh",
+				orchestratorTarget: "parent",
+				cwd: projectDir,
+				agentDir,
+			}).active,
+		).toBe(false);
 	});
 
 	it("backfills directories for the current, default, enabled, and tier models", () => {

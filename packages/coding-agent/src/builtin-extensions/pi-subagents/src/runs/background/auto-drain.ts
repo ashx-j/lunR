@@ -18,6 +18,7 @@ export interface AutoDrainDeps {
 		deps: SubagentWaitDeps,
 	) => Promise<AgentToolResult<Details>>;
 	hasWork?: (sessionId: string, nowMs: number) => boolean;
+	hasPendingMessages?: () => boolean;
 }
 
 function resultText(value: AgentToolResult<Details>): string {
@@ -45,7 +46,7 @@ export async function drainOutstandingWork(deps: AutoDrainDeps): Promise<void> {
 	const hasWork = deps.hasWork ?? hasOutstandingWork;
 	const wait = deps.wait ?? waitForSubagents;
 
-	while (hasWork(sessionId, now())) {
+	while (!deps.hasPendingMessages?.() && hasWork(sessionId, now())) {
 		const remainingMs = deadlineAt - now();
 		if (remainingMs <= 0) {
 			throw new Error(`Auto-drain timed out after ${timeoutMs}ms with background work still active in session '${sessionId}'.`);
@@ -58,6 +59,7 @@ export async function drainOutstandingWork(deps: AutoDrainDeps): Promise<void> {
 				events: deps.events,
 				now,
 				stopOnAttention: false,
+				shouldYield: deps.hasPendingMessages,
 				failOnFailedRuns: true,
 			},
 		);

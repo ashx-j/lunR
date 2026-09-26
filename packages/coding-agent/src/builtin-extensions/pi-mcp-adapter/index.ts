@@ -283,7 +283,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     (pi.registerTool as (tool: unknown) => unknown)({
       name: spec.prefixedName,
       label: `MCP: ${spec.originalName}`,
-      description: spec.description || "(no description)",
+      description: `${spec.description || "(no description)"}\nUnavailable in read-only mode; switch to yolo or auto to call.`,
       promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
       parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never),
       execute: createLazyDirectToolExecute(spec),

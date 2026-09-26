@@ -28,7 +28,23 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | Hidden shell command | `!!command` runs without sending output to the model |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
 
-See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`manual` → `yolo` → `plan` → `auto`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
+See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`yolo` → `auto` → `read`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
+
+### Copyable response blocks
+
+An assistant response can mark a reusable excerpt, prompt, or code fragment as click-to-copy. The marked section appears in a plain background box. Click anywhere in that box to copy it instead of the whole response.
+
+The assistant marks a block with the exact fenced Markdown info string `lunr-copy`:
+
+````markdown
+```lunr-copy
+Run the focused tests, then summarize failures.
+```
+````
+
+The copied payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR preserves its indentation, whitespace, and internal newlines without trimming, and does not copy either fence line. Use a longer backtick or tilde fence when the payload contains shorter fenced code.
+
+A streamed block stays readable while incomplete, but becomes clickable only after the closing fence is received and revealed. Reopened sessions reconstruct clickable sections from the saved assistant message. Print, JSON, RPC, and gateway modes leave the fences readable and never perform clipboard writes.
 
 ## Slash Commands
 
@@ -52,9 +68,9 @@ Built-in commands (from `slash-commands.ts`):
 | `/usage` | This-session token totals, context, and every stored subscription plan (no `/token-usage`) |
 | `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
-| `/plan` | Switch to plan permission mode, or `/plan <task>` to plan a task |
-| `/mode` | Set permission mode: `manual`, `yolo`, `plan`, or `auto` |
-| `/manual`, `/yolo`, `/auto` | Activate that permission mode |
+| `/plan` | Switch to read-only mode, or `/plan <task>` to plan a task |
+| `/mode` | Set permission mode: `yolo`, `auto`, or `read` |
+| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/processes` | View and manage background processes started this session |
 | `/rollback` | Undo the last turn's file changes and rewind the conversation |
 | `/hotkeys` | Show all keyboard shortcuts |
