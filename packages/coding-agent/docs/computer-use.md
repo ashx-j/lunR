@@ -249,8 +249,18 @@ those repairs records 101 coding-agent failures across 27 suites and 11 AI
 failures, more than the subset exposed by check annotations. Agent passes
 181/181 in that run. Clean full-suite CI still requires broader baseline work;
 local Windows-only diagnostics are not evidence of Ubuntu failures.
-These checks did not operate a desktop or launch CuaDriver. Foreground typing on
-hardware still requires separate approval.
+The automated checks did not operate a desktop or launch CuaDriver.
+
+A separately authorized Windows x64 smoke test used this branch's compiled
+computer tools with the real pinned runtime. It launched a new blank Notepad
+window, captured that exact window, and typed a fixed 39-character phrase using
+background delivery. The post-action screenshot showed the complete expected
+text and character count. The driver's outcome remained `unverifiable`; the
+image established the application effect. `computer_end` confirmed shutdown and
+released the desktop lease. No document was saved or installed CLI changed.
+This verifies basic launch, window capture and background text input only.
+Foreground recovery, held-input cancellation and broader platform acceptance
+remain unverified.
 
 The dev integration passed all five offline package builds, the Node bundle,
 265 focused tests across 23 suites, and eight archive/package tests. A real

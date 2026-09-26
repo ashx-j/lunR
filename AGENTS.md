@@ -24,7 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **CI baseline repairs (`fix/ci-baseline-fixtures`):** extension loading now resolves AI catalog subpaths before the root compatibility alias. Tests cover the legacy gateway inference cutoff, current shutdown cleanup, current Kimi/OpenCode metadata, API-key tool-name casing, and fail-closed Anthropic OAuth. Generated catalogs and subscription routing are unchanged.
 
-- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. Native hardware acceptance and production approval remain separate gates.
+- **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Native cursor work awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. Foreground recovery, cancellation, broader hardware acceptance and production approval remain separate gates.
 
 Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.24`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
@@ -153,6 +153,8 @@ Last updated: 2026-09-24 (v0.2.24 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- PR #77 live Windows smoke, 2026-09-26: the isolated compiled computer extension and real pinned CuaDriver launched a new blank Notepad, captured its exact window, and delivered a 39-character phrase through background text input. The post-action image matched the full text and count despite the driver's `unverifiable` outcome. `computer_end` confirmed shutdown and removal of the desktop lease. The document remained unsaved; installed CLI and other windows were untouched. Foreground fallback and held-input cancellation were not exercised. Screenshots and the local test runner remain private.
 
 - CI baseline repairs, 2026-09-26: 152 focused tests across ten files pass after reproducing fourteen annotated failures. All five offline builds, Node bundle, and browser-on/off first-request checks pass. Full AI passes 623 tests with 760 credential-gated skips. A broader isolated Windows diagnostic remains red in coding-agent, TUI, and Agent; its offline environment also suppresses mocked catalog/update requests. The complete Ubuntu log for PR #77 at `55e97bc` also records 101 coding-agent failures across 27 suites and 11 AI failures, beyond the subset exposed by annotations. Agent passes 181/181 there; local Windows TUI/Agent failures are not confirmed Ubuntu failures. This is not clean full CI. No live provider or installed CLI was used.
 
@@ -346,6 +348,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: verify the approved live Windows smoke in a new unsaved Notepad through the compiled computer tools, and use its post-action image rather than transport acknowledgment as evidence of typing success.
 
 - 2026-09-26: repair catalog-subpath resolution and version-dependent fixtures without changing generated metadata or reviving direct Anthropic OAuth, because the failing tests mixed a real alias bug with retired contracts.
 
