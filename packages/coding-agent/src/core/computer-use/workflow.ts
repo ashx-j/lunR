@@ -272,7 +272,7 @@ export class ComputerWorkflow {
 				this.observation = undefined;
 				if (name === "computer_apps" || name === "computer_launch") {
 					const operation = name === "computer_launch" ? "launch_app" : input.pid === undefined ? "list_apps" : "list_windows";
-					if (input.query !== undefined && (typeof input.query !== "string" || !input.query.trim() || input.query.length > 240))
+					if (input.query !== undefined && (typeof input.query !== "string" || !input.query.trim() || Array.from(input.query).length > 240))
 						throw new Error("Discovery query must be a nonblank string of at most 240 characters.");
 					const query = typeof input.query === "string" ? input.query.trim() : undefined;
 					const needle = query?.toLowerCase();

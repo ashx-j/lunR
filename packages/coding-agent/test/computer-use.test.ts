@@ -438,7 +438,17 @@ describe("image-only workflow", () => {
 		}
 		await workflow.close();
 	});
-	it.each([42, "", "   ", "x".repeat(241)])("rejects invalid discovery query %j before native dispatch", async (query) => {
+	it.each([121, 240])("accepts discovery queries with %i Unicode code points", async (length) => {
+		const { workflow, call } = await fixture();
+		const query = "\u{1F600}".repeat(length);
+		call.mockResolvedValue({ content: [], structuredContent: { apps: [{ pid: 1, name: query }] } });
+		const result = await workflow.execute("computer_apps", { query });
+		const data = JSON.parse(result.content.find((item) => item.type === "text")?.text ?? "{}");
+		expect(data).toMatchObject({ query, total: 1, items: [{ pid: 1 }] });
+		expect(call).toHaveBeenCalledExactlyOnceWith("list_apps", {}, expect.any(AbortSignal));
+		await workflow.close();
+	});
+	it.each([42, "", "   ", "x".repeat(241), "\u{1F600}".repeat(241)])("rejects invalid discovery query %j before native dispatch", async (query) => {
 		const { workflow, call } = await fixture();
 		const data = await rejectedData(workflow.execute("computer_apps", { query }));
 		expect(data).toMatchObject({ input: "not_dispatched", code: "invalid_arguments" });

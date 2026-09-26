@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Computer discovery filtering (`fix/computer-use-token-efficiency`):** `computer_apps.query` filters app names and window titles before bounded pagination. A synthetic 139-app lookup falls from three calls and 8699 result-text characters to one call and 147 characters. Loaded tool definitions add 230 characters; first-request definitions are unchanged. These are payload/call proxies, not measured provider tokens. Image quality, history, input safeguards and runtime approval are unchanged.
+- **Computer discovery filtering (`fix/computer-use-token-efficiency`):** `computer_apps.query` filters app names and window titles before bounded pagination. Its runtime 240-character limit counts Unicode code points to match the schema. A synthetic 139-app lookup falls from three calls and 8699 result-text characters to one call and 147 characters. Loaded tool definitions add 230 characters; first-request definitions are unchanged. These are payload/call proxies, not measured provider tokens. Image quality, history, input safeguards and runtime approval are unchanged.
 
 - **CI baseline repairs (`fix/ci-baseline-fixtures`):** extension loading now resolves AI catalog subpaths before the root compatibility alias. Tests cover the legacy gateway inference cutoff, current shutdown cleanup, current Kimi/OpenCode metadata, API-key tool-name casing, and fail-closed Anthropic OAuth. Generated catalogs and subscription routing are unchanged.
 
@@ -155,6 +155,8 @@ Last updated: 2026-09-26 (`master` remains v0.2.24). Public npm is `@ashx-j/lunr
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- PR #77 delta-review repair, 2026-09-26: independent heavy review found one low-severity Unicode query-length mismatch and no standards or foreground-dispatch findings. The 121- and 240-code-point cases failed before the runtime fix; all 109 focused computer tests across ten suites now pass, including rejection above the 240-code-point limit. Coding-agent build/Node bundle, touched-file lint and whitespace checks pass. No further live desktop test was needed for this discovery-only correction.
 
 - Computer discovery filtering, 2026-09-26: 98 focused tests across seven suites, all five offline package builds, the Node bundle, and browser-on/off first-paint plus first-turn checks pass. New query coverage failed before implementation, then passed. Changed TypeScript passes Biome with formatting disabled; these existing files retain formatting findings. Private fake-driver measurements and tool inventories stay under `.pi-subagents/`. No desktop, live provider, native driver, installed CLI or other worktree was used.
 
@@ -360,6 +362,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-26: count discovery-query limits in Unicode code points so runtime validation accepts the same strings as the declared JSON Schema limit.
 
 - 2026-09-26: accept the repaired Windows foreground shortcut and in-flight text cancellation only from fresh post-action/partial-field images plus runtime/lease evidence; neither a native acknowledgment nor an abort alone proves application effect or held-input release.
 
