@@ -103,6 +103,7 @@ import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudget
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
+import { createChildEventDecoder } from "../../../../../core/subagent-event-transport.ts";
 import { acquireSessionLease, type SessionLeaseRequest } from "../shared/session-lease.ts";
 import {
 	CHILD_WATCHDOG_CONFIG_ENV,
@@ -479,11 +480,14 @@ function runPiStreaming(
 			else transcriptWriter?.writeStderrLine(line);
 		};
 
+		const decodeChildEvent = createChildEventDecoder();
 		const processStdoutLine = (line: string) => {
 			if (!line.trim()) return;
 			let event: ChildEvent;
 			try {
-				event = JSON.parse(line) as ChildEvent;
+				const assembled = decodeChildEvent(line);
+				if (assembled === undefined) return;
+				event = JSON.parse(assembled) as ChildEvent;
 			} catch {
 				rawStdoutTail.push(`${line}\n`);
 				writeOutputLine(line);

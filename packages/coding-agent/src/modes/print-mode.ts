@@ -9,6 +9,7 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
+import { encodeChildEventLines } from "../core/subagent-event-transport.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
 /**
@@ -103,7 +104,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
 			if (mode === "json") {
-				writeRawStdout(`${JSON.stringify(event)}\n`);
+				const json = JSON.stringify(event);
+				if (process.env.PI_SUBAGENT_CHILD === "1") {
+					for (const line of encodeChildEventLines(json)) writeRawStdout(`${line}\n`);
+				} else {
+					writeRawStdout(`${json}\n`);
+				}
 			}
 		});
 	};
