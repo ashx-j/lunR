@@ -46,7 +46,6 @@ import {
 	TUI,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import { spawn, spawnSync } from "child_process";
 import {
 	APP_NAME,
@@ -176,7 +175,6 @@ import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
-import { buildExitCard, computeExitCardStats } from "./components/exit-card.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -330,28 +328,6 @@ function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 
 function isUnknownModel(model: Model<any> | undefined): boolean {
 	return !!model && model.provider === "unknown" && model.id === "unknown" && model.api === "unknown";
-}
-
-function quoteIfNeeded(value: string): string {
-	if (value.length > 0 && !/[^a-zA-Z0-9_\-./~:@]/.test(value)) {
-		return value;
-	}
-	return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-export function formatResumeCommand(sessionManager: SessionManager): string | undefined {
-	if (!process.stdout.isTTY) return undefined;
-	if (!sessionManager.isPersisted()) return undefined;
-
-	const sessionFile = sessionManager.getSessionFile();
-	if (!sessionFile || !fs.existsSync(sessionFile)) return undefined;
-
-	const args = [APP_NAME];
-	if (!sessionManager.usesDefaultSessionDir()) {
-		args.push("--session-dir", quoteIfNeeded(sessionManager.getSessionDir()));
-	}
-	args.push("--session", sessionManager.getSessionId());
-	return args.join(" ");
 }
 
 function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
@@ -4272,24 +4248,6 @@ export class InteractiveMode {
 
 		this.stop();
 		await this.runtimeHost.dispose();
-
-		// lunr: exit summary card — print a closing card for non-empty sessions,
-		// before the resume line. Fires on all interactive exits reaching shutdown
-		// (/quit, double ctrl+c, ctrl+d). Skipped for empty sessions (0 user msgs).
-		const entries = this.sessionManager?.getEntries?.();
-		const exitStats = entries ? computeExitCardStats(entries) : { turns: 0, tokens: 0, filesChanged: 0 };
-		const cardLines = buildExitCard(exitStats);
-		if (cardLines.length > 0) {
-			process.stdout.write(`${chalk.dim(cardLines.join("\n"))}\n`);
-		}
-
-		const resumeCommand =
-			this.sessionManager && typeof this.sessionManager.isPersisted === "function"
-				? formatResumeCommand(this.sessionManager)
-				: undefined;
-		if (resumeCommand) {
-			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
-		}
 
 		process.exit(0);
 	}
