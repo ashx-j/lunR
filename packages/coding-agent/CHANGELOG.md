@@ -1,6 +1,21 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.25`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.26`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.26] - 2026-09-27
+
+### Added
+
+- Image-only native computer control uses bounded screenshots, fresh observation tokens, one action with its post-action image, and explicit recovery details. It supports Windows x64/arm64 and Apple Silicon macOS with optional platform-specific runtime packages.
+
+### Changed
+
+- Paired and allowlisted gateway users can use approved projects, sessions, permissions, downloads, and Discord suggestions without a second owner grant.
+- Async chain rows show pending children and give the next chain step a clearer handoff. Everyday delegated work now defaults to standard-tier guidance.
+
+### Fixed
+
+- Large child image events are chunked and reconstructed without losing token accounting. Current CI fixtures match the merged provider and first-request schemas.
 
 ## [0.2.25] - 2026-09-26
 
