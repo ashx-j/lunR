@@ -91,7 +91,7 @@ beforeEach(() => {
 	answers = [
 		"Telegram",
 		"Keep the saved token",
-		"Keep the saved owners",
+		"Keep the approved users",
 		process.cwd(),
 		"Off. Start manually",
 		"fixture",
@@ -127,7 +127,7 @@ describe("gateway setup menus", () => {
 		expect(ui.stop).toHaveBeenCalledTimes(9);
 	});
 
-	it("keeps token entry private and permits explicit owner and custom folder entry", async () => {
+	it("keeps token entry private and permits user ID and custom folder entry", async () => {
 		answers = [
 			"Telegram",
 			"Enter a different token",
@@ -167,7 +167,7 @@ describe("gateway setup menus", () => {
 		expect(console.log).toHaveBeenCalledWith("Settings saved. Start the gateway with lunr gateway start.");
 	});
 
-	it("offers later pairing without silently granting owner access", async () => {
+	it("offers later pairing without approving anyone before local confirmation", async () => {
 		cfg.owners = { telegram: [], discord: [] };
 		answers[2] = "Approve a pairing code later on this computer";
 		await setupGateway();

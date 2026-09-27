@@ -5,7 +5,7 @@ import { getAgentDir } from "../config.ts";
 import { noOpUIContext } from "../core/extensions/runner.ts";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../core/extensions/types.ts";
 import { runWithApprovalContext } from "./approval.ts";
-import { isAuthorized, isGatewayOwner } from "./authz.ts";
+import { isAuthorized } from "./authz.ts";
 import { createPicker } from "./buttons.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
@@ -58,7 +58,7 @@ function canDeliver(key: string): boolean {
 	const binding = conversationBinding(key);
 	if (!binding) return false;
 	const cfg = loadGatewayConfig();
-	if (binding.owner && (binding.owner !== binding.source.userId || !isGatewayOwner(binding.source, cfg))) return false;
+	if (binding.owner && binding.owner !== binding.source.userId) return false;
 	return isAuthorized(sourceWithCurrentRole(key, binding.source), cfg, createPairingStore());
 }
 
@@ -198,7 +198,7 @@ async function drainKey(key: string): Promise<void> {
 					binding.source.userId !== source.userId ||
 					binding.source.threadId !== source.threadId)) ||
 			!isAuthorized(sourceWithCurrentRole(key, source), cfg, createPairingStore()) ||
-			(binding?.owner && (binding.owner !== source.userId || !isGatewayOwner(source, cfg)))
+			(binding?.owner && binding.owner !== source.userId)
 		) {
 			outbox = outbox.filter((v) => v.id !== item.id);
 			atomicJson(path(), outbox);

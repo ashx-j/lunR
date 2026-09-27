@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from "../core/permissions.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
-import { isGatewayOwner, requireGatewayOwner } from "./authz.ts";
+import { isAuthorized, requireAuthorized } from "./authz.ts";
 import { createPicker, type PickerItem, type PickerResolveResult } from "./buttons.ts";
 import { type GatewayConfig, loadGatewayConfig } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
@@ -129,9 +129,9 @@ async function browseProject(ctx: MobileContext, initialPath?: string): Promise<
 			sessionKey: key,
 			invokerId: event.source.userId,
 			...initial,
-			validate: () => isGatewayOwner(event.source, loadGatewayConfig()),
+			validate: () => isAuthorized(event.source, loadGatewayConfig()),
 			resolve: async (item): Promise<PickerResolveResult> => {
-				requireGatewayOwner(event.source);
+				requireAuthorized(event.source);
 				if (item.value === "use" && current) {
 					const cwd = resolveWithinRoots(current, loadGatewayConfig().projectRoots ?? []);
 					if (bridge.getStatus(key).busy)
@@ -171,7 +171,7 @@ async function continueSession(ctx: MobileContext, file: string): Promise<void> 
 }
 
 async function performContinue(ctx: MobileContext, file: string, signal: AbortSignal): Promise<void> {
-	requireGatewayOwner(ctx.event.source);
+	requireAuthorized(ctx.event.source);
 	const { requestSessionTransfer, SessionTransferError } = await import("../core/session-handoff.ts");
 	const { key, bridge } = ctx;
 	const current = bridge.peekSession?.(key);
@@ -196,7 +196,7 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 			const deadline = Date.now() + 120_000;
 			for (;;) {
 				signal.throwIfAborted();
-				requireGatewayOwner(ctx.event.source);
+				requireAuthorized(ctx.event.source);
 				try {
 					await requestSessionTransfer(file, { timeoutMs: 3000, signal });
 					break;
@@ -213,7 +213,7 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 		}
 	}
 	signal.throwIfAborted();
-	requireGatewayOwner(ctx.event.source);
+	requireAuthorized(ctx.event.source);
 	await bridge.switchSession(key, file);
 	const session = await bridge.getSession(key);
 	const cwd = session?.sessionManager?.getCwd();
@@ -304,7 +304,7 @@ async function sessionPicker(ctx: MobileContext, items: PickerItem[]): Promise<v
 			invokerId: ctx.event.source.userId,
 			title: "Choose a session. Use /sessions <search> to filter.",
 			items,
-			validate: () => isGatewayOwner(ctx.event.source, loadGatewayConfig()),
+			validate: () => isAuthorized(ctx.event.source, loadGatewayConfig()),
 			resolve: async (item) => {
 				await continueSession(ctx, item.value);
 				return { done: true, text: "Session selection finished." };
@@ -316,7 +316,7 @@ async function sessionPicker(ctx: MobileContext, items: PickerItem[]): Promise<v
 
 export async function handleMobileCommand(ctx: MobileContext, command: string, args: string): Promise<boolean> {
 	if (!MOBILE_COMMANDS.some((c) => c.name === command) && command !== "resume") return false;
-	requireGatewayOwner(ctx.event.source, ctx.cfg);
+	requireAuthorized(ctx.event.source, ctx.cfg);
 	bindConversation(ctx.key, ctx.event.source, { owner: ctx.event.source.userId });
 	if (command === "project") {
 		await browseProject(ctx, args.trim() || undefined);
