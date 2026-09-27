@@ -1,5 +1,6 @@
 /**
  * lunR: gateway authorization — fail-closed, layered:
+ *   0. legacy owners list (same access as allowedUsers)
  *   1. LUNR_GATEWAY_ALLOW_ALL_USERS=true env (escape hatch)
  *   2. chatId in the platform's allowedChats (chat-scoped grant)
  *   3. adapter-asserted roleAuthorized
@@ -10,7 +11,7 @@
  */
 
 import { type GatewayConfig, loadGatewayConfig, platformConfigFor, saveGatewayConfig } from "./config.ts";
-import type { PairingStore } from "./pairing.ts";
+import { createPairingStore, type PairingStore } from "./pairing.ts";
 import type { SessionSource } from "./types.ts";
 
 function envFlagEnabled(name: string): boolean {
@@ -28,21 +29,20 @@ function globalAllowedUsers(): string[] {
 		.filter((u) => u.length > 0);
 }
 
-export function isGatewayOwner(source: SessionSource, cfg: GatewayConfig): boolean {
-	if (source.chatType !== "dm") return false;
-	if (source.platform !== "telegram" && source.platform !== "discord") return false;
-	return cfg.owners?.[source.platform].includes(source.userId) ?? false;
+export function requireAuthorized(source: SessionSource, cfg = loadGatewayConfig()): void {
+	if (!isAuthorized(source, cfg)) throw new Error("Gateway access is not approved for this user or chat.");
 }
 
-export function requireGatewayOwner(source: SessionSource, cfg = loadGatewayConfig()): void {
-	if (!isGatewayOwner(source, cfg))
-		throw new Error(
-			"This command is available only to the configured owner in a private chat. Use lunr gateway setup to configure owner access.",
-		);
-}
-
-export function isAuthorized(source: SessionSource, cfg: GatewayConfig, pairing: PairingStore): boolean {
-	if (isGatewayOwner(source, cfg)) return true;
+export function isAuthorized(
+	source: SessionSource,
+	cfg: GatewayConfig,
+	pairing: PairingStore = createPairingStore(),
+): boolean {
+	if (
+		(source.platform === "telegram" || source.platform === "discord") &&
+		cfg.owners?.[source.platform].includes(source.userId)
+	)
+		return true;
 	if (envFlagEnabled("LUNR_GATEWAY_ALLOW_ALL_USERS")) return true;
 	const platformCfg = platformConfigFor(cfg, source.platform);
 	if (platformCfg?.allowedChats.includes(source.chatId)) return true;

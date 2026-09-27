@@ -168,6 +168,72 @@ describe("async widget, fleet, and status timing", () => {
 		expect(rendered).not.toContain("Press");
 	});
 
+	it("shows waiting on a pending chain child without borrowing the active child's stats", () => {
+		const job = {
+			asyncId: "chain-run",
+			asyncDir: "Z:/missing/chain-run",
+			status: "running",
+			mode: "chain",
+			agents: ["First child", "Second child"],
+			startedAt: 10_000,
+			updatedAt: 12_000,
+			totalTokens: { total: 81_000 },
+			steps: [
+				{
+					agent: "First child",
+					description: "First child",
+					status: "running",
+					startedAt: 10_000,
+					tokens: { total: 81_000 },
+				},
+				{
+					agent: "Second child",
+					description: "Second child",
+					status: "pending",
+					modelSelection: { kind: "tier", tier: "standard" },
+				},
+			],
+		};
+		const [first, second] = buildWidgetLines([job] as never, stubTheme as never, 120, false, 12_000);
+		expect(first).toContain("First child · 81k token · 2s");
+		expect(second).toContain("Second child · standard · waiting");
+		expect(second).not.toMatch(/token|\d+(?:ms|s|m)/);
+	});
+
+	it("keeps running steps with missing counters separate from job totals", () => {
+		const job = {
+			asyncId: "parallel-run",
+			asyncDir: "Z:/missing/parallel-run",
+			status: "running",
+			mode: "parallel",
+			agents: ["Known child", "Unknown child"],
+			startedAt: 10_000,
+			totalTokens: { total: 81_000 },
+			steps: [
+				{ agent: "Known child", status: "running", startedAt: 11_000, tokens: { total: 81_000 } },
+				{ agent: "Unknown child", status: "running" },
+			],
+		};
+		const [known, unknown] = buildWidgetLines([job] as never, stubTheme as never, 120, false, 12_000);
+		expect(known).toContain("81k token · 1s");
+		expect(unknown).toContain("Unknown child · 0 token · 0ms");
+	});
+
+	it("keeps whole-job stats when a single async child has no step snapshot", () => {
+		const job = {
+			asyncId: "single-run",
+			asyncDir: "Z:/missing/single-run",
+			status: "running",
+			mode: "single",
+			agents: ["Only child"],
+			startedAt: 10_000,
+			totalTokens: { total: 81_000 },
+		};
+		expect(buildWidgetLines([job] as never, stubTheme as never, 120, false, 12_000)[0]).toContain(
+			"Only child · 81k token · 2s",
+		);
+	});
+
 	it("renders mixed async jobs as flat compact rows without an aggregate tree", () => {
 		const jobs = [
 			{

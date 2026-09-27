@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markSessionHandoff } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
-import { isGatewayOwner } from "../src/gateway/authz.ts";
+import { isAuthorized, requireAuthorized } from "../src/gateway/authz.ts";
 import { handleCallback, resetButtonRegistry } from "../src/gateway/buttons.ts";
 import { defaultGatewayConfig, loadGatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 import { bindConversation } from "../src/gateway/conversations.ts";
@@ -60,7 +60,7 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "lunr-gateway-remote-"));
 	vi.stubEnv("PI_CODING_AGENT_DIR", dir);
 	const cfg = defaultGatewayConfig();
-	cfg.owners = { telegram: ["1"], discord: [] };
+	cfg.telegram.allowedUsers = ["1"];
 	cfg.projectRoots = [dir];
 	saveGatewayConfig(cfg);
 	bindConversation(key, source, { owner: "1", cwd: dir });
@@ -157,52 +157,67 @@ describe("gateway startup", () => {
 });
 
 describe("first chat readiness", () => {
-	it("lets an owner use the approved default project for /start, /model and the first task", async () => {
-		const cfg = loadGatewayConfig();
-		cfg.defaultProject = dir;
-		saveGatewayConfig(cfg);
-		const owner: SessionSource = { ...source, chatId: "fresh", userId: "1" };
-		const transport = adapter();
-		const model = { id: "test", provider: "local", name: "test" };
-		const session = {
-			model,
-			thinkingLevel: "off",
-			modelRuntime: { refresh: vi.fn(), getAvailable: vi.fn(async () => [model]) },
-			setModel: vi.fn(),
-		} as unknown as BridgeSession;
-		const active: BridgeLike = {
-			...bridge,
-			runTurn: vi.fn(async () => "hello back"),
-			getSession: vi.fn(async (_key, create) => (create ? session : null)),
-		};
-		const router = createRouter({
-			adapters: new Map([["telegram", transport]]),
-			cfg,
-			bridge: active,
-			pairing: createPairingStore(),
-			remoteControls: true,
-		});
-		const inbound = (text: string) => ({ text, messageId: "m", source: owner });
-		await router.handleEvent(inbound("/start"));
-		expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("Ready");
-		vi.mocked(session.modelRuntime.getAvailable).mockResolvedValueOnce([]);
-		await router.handleEvent(inbound("/start"));
-		expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("/login on your computer");
-		await router.handleEvent(inbound("/model"));
-		expect(active.getSession).toHaveBeenCalledWith("agent:main:telegram:dm:fresh", true);
-		await router.handleEvent(inbound("hi"));
-		expect(active.runTurn).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toBe("hello back");
-		const { conversationBinding } = await import("../src/gateway/conversations.ts");
-		expect(conversationBinding("agent:main:telegram:dm:fresh")?.cwd).toBe(dir);
-		await router.handleEvent(inbound("/new"));
-		await router.handleEvent(inbound("hi again"));
-		expect(active.runTurn).toHaveBeenCalledTimes(2);
-	});
-	it("does not promote paired non-owners or guess a root when several are approved", async () => {
+	it.each(["allowlist", "pairing", "legacy owner", "chat", "role"])(
+		"lets an approved %s user start, choose a model and send tasks",
+		async (grant) => {
+			const cfg = loadGatewayConfig();
+			cfg.defaultProject = dir;
+			cfg.telegram.allowedUsers = grant === "allowlist" ? ["1"] : [];
+			if (grant === "legacy owner") cfg.owners = { telegram: ["1"], discord: [] };
+			if (grant === "chat") cfg.telegram.allowedChats = ["fresh"];
+			if (grant === "pairing") {
+				const pairing = createPairingStore();
+				pairing.approve("telegram", pairing.issueCode("telegram", "1")!);
+			}
+			saveGatewayConfig(cfg);
+			const owner: SessionSource = {
+				...source,
+				chatId: "fresh",
+				userId: "1",
+				roleAuthorized: grant === "role",
+			};
+			const transport = adapter();
+			const model = { id: "test", provider: "local", name: "test" };
+			const session = {
+				model,
+				thinkingLevel: "off",
+				modelRuntime: { refresh: vi.fn(), getAvailable: vi.fn(async () => [model]) },
+				setModel: vi.fn(),
+			} as unknown as BridgeSession;
+			const active: BridgeLike = {
+				...bridge,
+				runTurn: vi.fn(async () => "hello back"),
+				getSession: vi.fn(async (_key, create) => (create ? session : null)),
+			};
+			const router = createRouter({
+				adapters: new Map([["telegram", transport]]),
+				cfg,
+				bridge: active,
+				pairing: createPairingStore(),
+				remoteControls: true,
+			});
+			const inbound = (text: string) => ({ text, messageId: "m", source: owner });
+			await router.handleEvent(inbound("/start"));
+			expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("Ready");
+			vi.mocked(session.modelRuntime.getAvailable).mockResolvedValueOnce([]);
+			await router.handleEvent(inbound("/start"));
+			expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("/login on your computer");
+			await router.handleEvent(inbound("/model"));
+			expect(active.getSession).toHaveBeenCalledWith("agent:main:telegram:dm:fresh", true);
+			await router.handleEvent(inbound("hi"));
+			expect(active.runTurn).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toBe("hello back");
+			const { conversationBinding } = await import("../src/gateway/conversations.ts");
+			expect(conversationBinding("agent:main:telegram:dm:fresh")?.cwd).toBe(dir);
+			await router.handleEvent(inbound("/new"));
+			await router.handleEvent(inbound("hi again"));
+			expect(active.runTurn).toHaveBeenCalledTimes(2);
+		},
+	);
+	it("directs approved users to /project instead of guessing between roots", async () => {
 		const cfg = loadGatewayConfig();
 		cfg.projectRoots = [dir, join(dir, "another")];
-		cfg.telegram.allowedUsers = ["2"];
+		cfg.telegram.allowedUsers = ["1", "2"];
 		const transport = adapter();
 		const active = { ...bridge, runTurn: vi.fn(async () => "unexpected") };
 		const router = createRouter({
@@ -213,7 +228,7 @@ describe("first chat readiness", () => {
 			remoteControls: true,
 		});
 		await router.handleEvent({ text: "/start", messageId: "m", source: { ...source, chatId: "2", userId: "2" } });
-		expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("paired but has no project");
+		expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("Use /project");
 		expect(active.runTurn).not.toHaveBeenCalled();
 		await router.handleEvent({ text: "hi", messageId: "m", source: { ...source, chatId: "3" } });
 		expect(vi.mocked(transport.send).mock.calls.at(-1)?.[1]).toContain("No default project selected");
@@ -221,7 +236,34 @@ describe("first chat readiness", () => {
 	});
 });
 
-describe("projects and owner access", () => {
+describe("projects and approved access", () => {
+	it.each([false, true])("checks current approval when selecting a project, revoked: %s", async (revoked) => {
+		const transport = adapter();
+		const active = { ...bridge, reset: vi.fn(async () => {}) };
+		const cfg = loadGatewayConfig();
+		await handleMobileCommand(
+			{ key, event: { source, text: "/project", messageId: "m" }, adapter: transport, bridge: active, cfg },
+			"project",
+			dir,
+		);
+		const rows = vi.mocked(transport.sendButtons).mock.calls[0][2] as ButtonSpec[][];
+		const use = rows.flat().find((button) => button.label === "Use this folder")!;
+		if (revoked) {
+			cfg.telegram.allowedUsers = [];
+			saveGatewayConfig(cfg);
+		}
+		await handleCallback(
+			{ id: "choose", chatId: source.chatId, messageId: "2", userId: source.userId, data: use.data },
+			{
+				adapter: transport,
+				adapters: new Map([["telegram", transport]]),
+				cfg,
+				pairing: createPairingStore(),
+				bridge: active,
+			},
+		);
+		expect(active.reset).toHaveBeenCalledTimes(revoked ? 0 : 1);
+	});
 	it("continues a stale phone binding without trying to reopen it before transfer", async () => {
 		const manager = SessionManager.create(dir, join(dir, "sessions"));
 		manager.appendMessage({ role: "user", content: "saved", timestamp: Date.now() });
@@ -299,12 +341,13 @@ describe("projects and owner access", () => {
 			manager.dispose();
 		}
 	});
-	it("grants owner status only when local pairing explicitly requests --owner", async () => {
+	it("grants full access with ordinary pairing and accepts the legacy --owner flag", async () => {
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 		try {
 			const ordinary = createPairingStore().issueCode("telegram", "2")!;
 			expect(await runGateway(["pair", "approve", "telegram", ordinary])).toBe(0);
 			expect(loadGatewayConfig().owners?.telegram).not.toContain("2");
+			expect(() => requireAuthorized({ ...source, userId: "2" })).not.toThrow();
 			const ownerCode = createPairingStore().issueCode("telegram", "3")!;
 			expect(await runGateway(["pair", "approve", "telegram", ownerCode, "--owner"])).toBe(0);
 			expect(loadGatewayConfig().owners?.telegram).toContain("3");
@@ -312,12 +355,13 @@ describe("projects and owner access", () => {
 			log.mockRestore();
 		}
 	});
-	it("does not grant owner capabilities through a group or another user", () => {
+	it("uses the same authorization for commands as for chat", () => {
 		const cfg = defaultGatewayConfig();
-		cfg.owners = { telegram: ["1"], discord: [] };
-		expect(isGatewayOwner(source, cfg)).toBe(true);
-		expect(isGatewayOwner({ ...source, chatType: "group" }, cfg)).toBe(false);
-		expect(isGatewayOwner({ ...source, userId: "2", roleAuthorized: true }, cfg)).toBe(false);
+		cfg.telegram.allowedUsers = ["1"];
+		expect(isAuthorized(source, cfg)).toBe(true);
+		expect(() => requireAuthorized({ ...source, chatType: "group" }, cfg)).not.toThrow();
+		expect(() => requireAuthorized({ ...source, userId: "2", roleAuthorized: true }, cfg)).not.toThrow();
+		expect(() => requireAuthorized({ ...source, userId: "2" }, cfg)).toThrow("not approved");
 	});
 	it("creates a folder only beneath an approved root", () => {
 		const root = join(dir, "projects");

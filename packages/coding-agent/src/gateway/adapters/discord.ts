@@ -76,7 +76,7 @@ import {
 	GatewayIntentBits,
 	type Interaction,
 } from "discord.js";
-import { isAuthorized, isGatewayOwner } from "../authz.ts";
+import { isAuthorized } from "../authz.ts";
 import { type DiscordConfig, loadGatewayConfig } from "../config.ts";
 import { downloadAttachment } from "../download.ts";
 import { createPairingStore } from "../pairing.ts";
@@ -611,7 +611,7 @@ export class DiscordAdapter implements PlatformAdapter {
 		const cfg = loadGatewayConfig();
 		const authorized = isAuthorized(source, cfg, createPairingStore());
 		if (interaction.isAutocomplete()) {
-			if (!authorized || !isGatewayOwner(source, cfg)) {
+			if (!authorized) {
 				await interaction.respond([]);
 				return true;
 			}

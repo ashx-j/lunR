@@ -10,7 +10,7 @@ export function renderCommunicationBody(communication: SubagentCommunication, th
 
 export function renderCommunicationCard(communication: SubagentCommunication, expanded: boolean, theme: Theme): Box {
 	const box = new Box(1, 1, (text) => theme.bg("toolSuccessBg", text));
-	box.addChild(new Text(theme.fg("toolTitle", theme.bold(`● subagent ${communication.kind}`)), 0, 0));
+	box.addChild(new Text(theme.fg("toolTitle", theme.bold(`● subagent ${communication.kind === "handoff" ? "progress" : communication.kind}`)), 0, 0));
 	if (expanded) {
 		box.addChild(renderCommunicationBody(communication, theme));
 	}

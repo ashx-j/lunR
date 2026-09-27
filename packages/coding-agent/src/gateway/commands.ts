@@ -16,7 +16,6 @@ import { runtimeScope } from "../core/runtime-scope.ts";
 import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
-import { isGatewayOwner } from "./authz.ts";
 import { createPicker, type PickerItem } from "./buttons.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
@@ -217,9 +216,8 @@ const newCommand: ChatCommand = {
 	async handler(ctx) {
 		await ctx.bridge.reset(ctx.key);
 		const cfg = ctx.cfg ?? defaultGatewayConfig();
-		const owner = isGatewayOwner(ctx.event.source, cfg);
 		let ready = Boolean(conversationBinding(ctx.key)?.cwd);
-		if (!ready && owner && cfg.defaultProject) {
+		if (!ready && cfg.defaultProject) {
 			try {
 				resolveWithinRoots(cfg.defaultProject, cfg.projectRoots ?? []);
 				ready = true;
@@ -228,9 +226,7 @@ const newCommand: ChatCommand = {
 		await ctx.reply(
 			ready
 				? "Session reset. Send a message to start fresh in the approved project."
-				: owner
-					? "Session reset. Use /project to choose an approved project before sending a message."
-					: "Session reset. Ask the computer's gateway owner to configure this chat's project access locally.",
+				: "Session reset. Use /project to choose an approved project before sending a message.",
 		);
 	},
 };

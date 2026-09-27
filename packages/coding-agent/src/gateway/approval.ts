@@ -12,7 +12,7 @@ import {
 	registerApprovalHandler,
 	setPermissionMode,
 } from "../core/permissions.ts";
-import { isAuthorized, isGatewayOwner } from "./authz.ts";
+import { isAuthorized } from "./authz.ts";
 import { loadGatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
 import { createPairingStore } from "./pairing.ts";
@@ -190,9 +190,9 @@ export async function handleApprovalCallback(event: CallbackEvent, adapter?: Pla
 	const response: ApprovalResponse =
 		parsed.action === "reject" || parsed.action === "cancel" ? "reject" : parsed.action;
 	const binding = entry.key ? conversationBinding(entry.key) : undefined;
-	if (binding?.owner && (!isGatewayOwner(entry.source, loadGatewayConfig()) || binding.owner !== event.userId)) {
+	if (binding?.owner && binding.owner !== event.userId) {
 		entry.resolve("reject");
-		await entry.adapter.answerCallback(event.id, "Owner access was removed.").catch(() => {});
+		await entry.adapter.answerCallback(event.id, "This session belongs to a different user.").catch(() => {});
 		return true;
 	}
 	if (binding && !isAuthorized(entry.source, loadGatewayConfig(), createPairingStore())) {

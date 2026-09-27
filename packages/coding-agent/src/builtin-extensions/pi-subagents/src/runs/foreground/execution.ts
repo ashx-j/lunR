@@ -80,6 +80,7 @@ import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudget
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
+import { createChildEventDecoder } from "../../../../../core/subagent-event-transport.ts";
 import {
 	acceptChildWatchdogEvent,
 	childWatchdogIsActive,
@@ -678,10 +679,21 @@ async function runSingleAttempt(
 			emitUpdateSnapshot(output || "(running...)");
 		};
 
+		const decodeChildEvent = createChildEventDecoder();
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
-			jsonlWriter.writeLine(line);
 			let evt: { type?: string; message?: Message; toolName?: string; args?: unknown; willRetry?: unknown };
+			let assembled: string | undefined;
+			try {
+				assembled = decodeChildEvent(line);
+			} catch {
+				jsonlWriter.writeLine(line);
+				shared.transcriptWriter?.writeStdoutLine(line);
+				return;
+			}
+			if (assembled === undefined) return;
+			line = assembled;
+			jsonlWriter.writeLine(line);
 			try {
 				evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown; willRetry?: unknown };
 			} catch {
