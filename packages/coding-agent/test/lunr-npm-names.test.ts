@@ -29,7 +29,7 @@ describe("lunR npm publish names", () => {
 		expect(rewritten.dependencies["@ashx-j/lunr-tui"]).toBeDefined();
 		expect(rewritten.dependencies["@ashx-j/lunr-agent"]).toBeDefined();
 		expect(rewritten.dependencies["@earendil-works/pi-ai"]).toBeUndefined();
-		expect(rewritten.files).not.toContain("npm-shrinkwrap.json");
+		expect(rewritten.files).toContain("npm-shrinkwrap.json");
 		expect(rewritten.scripts.prepublishOnly).toBeUndefined();
 		assertNoEarendil(rewritten);
 	});

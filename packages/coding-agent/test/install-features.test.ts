@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import {
 	applyFeatureFlags,
@@ -18,6 +18,17 @@ import {
 } from "../src/core/install-features.ts";
 import { defaultGatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 
+const version = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock("../src/config.ts", async (original) => {
+	const config = await original<typeof import("../src/config.ts")>();
+	return {
+		...config,
+		get VERSION() {
+			return version.value ?? config.VERSION;
+		},
+	};
+});
+
 let dir: string;
 let prevAgentDir: string | undefined;
 
@@ -28,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	version.value = undefined;
 	if (prevAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
 	else process.env[ENV_AGENT_DIR] = prevAgentDir;
 	rmSync(dir, { recursive: true, force: true });
@@ -121,21 +133,43 @@ describe("applyFeatureFlags", () => {
 });
 
 describe("isFeatureEnabled / infer", () => {
+	beforeEach(() => {
+		version.value = "0.1.9";
+	});
+
 	it("defaults chat-platforms off when the file is missing", () => {
 		expect(isFeatureEnabled("chat-platforms")).toBe(false);
 	});
 
-	it("infers enabled + autostart false from gateway.json file token", () => {
-		const cfg = defaultGatewayConfig();
-		cfg.telegram.enabled = true;
-		cfg.telegram.token = "file-token";
-		saveGatewayConfig(cfg);
-		expect(isFeatureEnabled("chat-platforms")).toBe(true);
-		const file = loadInstallFeatures();
-		expect(file.features["chat-platforms"]?.options.autostart).toBe(false);
-		expect(file.inferUntil).toBe(CHAT_PLATFORMS_INFER_UNTIL);
-		expect(existsSync(join(dir, "install-features.json"))).toBe(true);
-	});
+	it.each(["0.1.9", "0.80.1"])(
+		"infers enabled + autostart false from a file token on legacy version %s",
+		(legacyVersion) => {
+			version.value = legacyVersion;
+			const cfg = defaultGatewayConfig();
+			cfg.telegram.enabled = true;
+			cfg.telegram.token = "file-token";
+			saveGatewayConfig(cfg);
+			expect(isFeatureEnabled("chat-platforms")).toBe(true);
+			const file = loadInstallFeatures();
+			expect(file.features["chat-platforms"]?.options.autostart).toBe(false);
+			expect(file.inferUntil).toBe(CHAT_PLATFORMS_INFER_UNTIL);
+			expect(existsSync(join(dir, "install-features.json"))).toBe(true);
+		},
+	);
+
+	it.each(["0.2.0", "1.0.0", undefined])(
+		"does not infer from file tokens after the cutoff on version %s",
+		(currentVersion) => {
+			version.value = currentVersion;
+			const cfg = defaultGatewayConfig();
+			cfg.telegram.enabled = true;
+			cfg.telegram.token = "file-token";
+			saveGatewayConfig(cfg);
+			expect(isFeatureEnabled("chat-platforms")).toBe(false);
+			expect(loadInstallFeatures().features).toEqual({});
+			expect(existsSync(join(dir, "install-features.json"))).toBe(false);
+		},
+	);
 
 	it("does not infer from env-only tokens", () => {
 		const cfg = defaultGatewayConfig();

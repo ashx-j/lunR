@@ -31,6 +31,9 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
+      - name: Check computer-use production approval
+        run: node scripts/check-computer-use-release.mjs --production
+
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
@@ -41,6 +44,16 @@ jobs:
           npx tsgo -p packages/ai/tsconfig.build.json
           npx tsgo -p packages/agent/tsconfig.build.json
           npm --prefix packages/coding-agent run build
+
+      - name: Prepare pinned computer-use payloads
+        run: |
+          node scripts/download-computer-use-release.mjs "$RUNNER_TEMP/cua-release"
+          node scripts/bundle-computer-use.mjs "$RUNNER_TEMP/cua-release"
+
+      - name: Validate pinned payload staging
+        run: |
+          node scripts/generate-computer-use-manifest.mjs --check
+          node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs
 
       - name: Publish @ashx-j/lunr*
         run: node scripts/publish.mjs

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { applyExifOrientation } from "./exif-orientation.ts";
 import { loadPhoton } from "./photon.ts";
 
@@ -6,6 +7,7 @@ export interface ImageResizeOptions {
 	maxHeight?: number; // Default: 2000
 	maxBytes?: number; // Default: 4.5MB of base64 payload (below Anthropic's 5MB limit)
 	jpegQuality?: number; // Default: 80
+	includePixelFingerprint?: boolean;
 }
 
 export interface ResizedImage {
@@ -16,6 +18,7 @@ export interface ResizedImage {
 	width: number;
 	height: number;
 	wasResized: boolean;
+	fingerprint?: string;
 }
 
 // 4.5MB of base64 payload. Provides headroom below Anthropic's 5MB limit.
@@ -26,6 +29,7 @@ const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
 	maxHeight: 2000,
 	maxBytes: DEFAULT_MAX_BYTES,
 	jpegQuality: 80,
+	includePixelFingerprint: false,
 };
 
 interface EncodedCandidate {
@@ -78,6 +82,12 @@ export async function resizeImageInProcess(
 		const originalWidth = image.get_width();
 		const originalHeight = image.get_height();
 		const format = mimeType.split("/")[1] ?? "png";
+		const fingerprint = opts.includePixelFingerprint
+			? createHash("sha256")
+					.update(`${originalWidth}x${originalHeight}:`)
+					.update(image.get_raw_pixels())
+					.digest("hex")
+			: undefined;
 
 		// Check if already within all limits (dimensions AND encoded size)
 		if (originalWidth <= opts.maxWidth && originalHeight <= opts.maxHeight && inputBase64Size < opts.maxBytes) {
@@ -89,6 +99,7 @@ export async function resizeImageInProcess(
 				width: originalWidth,
 				height: originalHeight,
 				wasResized: false,
+				...(fingerprint ? { fingerprint } : {}),
 			};
 		}
 
@@ -135,6 +146,7 @@ export async function resizeImageInProcess(
 						width: currentWidth,
 						height: currentHeight,
 						wasResized: true,
+						...(fingerprint ? { fingerprint } : {}),
 					};
 				}
 			}

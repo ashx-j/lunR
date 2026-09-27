@@ -1,0 +1,34 @@
+{
+  "version": "0.28.1",
+  "tag": "cua-driver-rs-v0.28.1",
+  "sourceCommit": "d8028a7943087ee258dc1b4d19dc12a7cd27669c",
+  "repository": "https://github.com/trycua/cua",
+  "prerelease": true,
+  "approval": "development-only; production release not approved",
+  "artifacts": [
+    {
+      "platform": "win32",
+      "arch": "x64",
+      "packageName": "@ashx-j/lunr-computer-win32-x64",
+      "name": "cua-driver-rs-0.28.1-windows-x86_64-binary.zip",
+      "bytes": 28930759,
+      "sha256": "ab90418a54f84102f549cde4537daef3a0e20ba8254b7e24524a50fc5f4174d3"
+    },
+    {
+      "platform": "win32",
+      "arch": "arm64",
+      "packageName": "@ashx-j/lunr-computer-win32-arm64",
+      "name": "cua-driver-rs-0.28.1-windows-arm64-binary.zip",
+      "bytes": 27246194,
+      "sha256": "d260e6110e029680d543d317f3c3c09569475f8d65855fcedda202e2ee989bf0"
+    },
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "packageName": "@ashx-j/lunr-computer-darwin-arm64",
+      "name": "cua-driver-rs-0.28.1-darwin-arm64.tar.gz",
+      "bytes": 70074352,
+      "sha256": "b3cb3781feb9855dfcdd616bc5c9c8e627453e3e16a073c1446326691a549b24"
+    }
+  ]
+}

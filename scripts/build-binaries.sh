@@ -144,6 +144,7 @@ echo "==> Creating release archives..."
 
 # Copy shared files to each platform directory
 for platform in "${PLATFORMS[@]}"; do
+    node ../../scripts/computer-use-packages.mjs standalone "$OUTPUT_DIR/$platform" "${platform%-*}" "${platform##*-}"
     cp package.json "$OUTPUT_DIR/$platform/"
     cp README.md "$OUTPUT_DIR/$platform/"
     cp CHANGELOG.md "$OUTPUT_DIR/$platform/"

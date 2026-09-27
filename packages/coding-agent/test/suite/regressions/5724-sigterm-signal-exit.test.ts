@@ -10,6 +10,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
+	stopSmoothStreaming: () => void;
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
@@ -58,6 +59,9 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const dispose = deferred();
 		const context: ShutdownThis = {
 			isShuttingDown: false,
+			stopSmoothStreaming: vi.fn(() => {
+				order.push("stopSmoothStreaming");
+			}),
 			unregisterSignalHandlers: vi.fn(() => {
 				order.push("unregister");
 			}),
@@ -83,12 +87,13 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const shutdownPromise = callShutdown(context, { fromSignal: true });
 		await Promise.resolve();
 
-		expect(order).toEqual(["dispose"]);
+		expect(order).toEqual(["stopSmoothStreaming", "dispose"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 
 		dispose.resolve();
 		await shutdownPromise;
 
-		expect(order).toEqual(["dispose", "drainInput", "stop"]);
+		expect(order).toEqual(["stopSmoothStreaming", "dispose", "drainInput", "stop"]);
+		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 	});
 });

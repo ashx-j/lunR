@@ -32,6 +32,18 @@ export function rewriteWorkspaceSpecifiers(text) {
 	return out;
 }
 
+export function rewritePackageLockForNpm(lock) {
+	const rewritten = JSON.parse(rewriteWorkspaceSpecifiers(JSON.stringify(lock)));
+	const publicNames = new Set(Object.values(WORKSPACE_TO_NPM));
+	for (const [path, entry] of Object.entries(rewritten.packages ?? {})) {
+		const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+		if (!publicNames.has(name)) continue;
+		entry.resolved = `https://registry.npmjs.org/${name}/-/${name.split("/")[1]}-${entry.version}.tgz`;
+		delete entry.integrity;
+	}
+	return rewritten;
+}
+
 export function assertNoEarendil(value, label = "package") {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
 	if (text.includes("@earendil-works/")) {
@@ -106,9 +118,6 @@ export function rewritePackageJsonForNpm(pkg) {
 		out[field] = next;
 	}
 
-	if (Array.isArray(out.files)) {
-		out.files = out.files.filter((f) => f !== "npm-shrinkwrap.json");
-	}
 	if (out.scripts) {
 		const scripts = { ...out.scripts };
 		delete scripts.prepublishOnly;

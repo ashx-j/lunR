@@ -199,10 +199,15 @@ registerHooks({load(url, context, nextLoad) {
 		]) {
 			assert(request.tools.includes(name), `First request is missing ${name}`);
 		}
+		const computerHost = (process.platform === "win32" && ["x64", "arm64"].includes(process.arch)) || (process.platform === "darwin" && process.arch === "arm64");
+		assert.equal(request.tools.includes("computer_load"), computerHost);
+		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
 		assert.equal(request.tools.includes("browser"), browserEnabled);
 		assert.equal(
 			request.toolSchemaHash,
-			browserEnabled ? "c7a60ad06073297d688a4ec1b5c7056ae9ff6df1738123b0d471f20aa0a85bbf" : "3693bff47d556206b75ccf61c3c6de2cd53f81e0a40c441fe6210993972287fa",
+			computerHost
+				? browserEnabled ? "4f547e94fdd1fb78d45e490ef3d404099ecaa1f901f0503de15ad2c7852078b7" : "aba751625ec0818459909c85225b592e2854a4ff908cf77df64cbc35a7b247db"
+				: browserEnabled ? "c7a60ad06073297d688a4ec1b5c7056ae9ff6df1738123b0d471f20aa0a85bbf" : "3693bff47d556206b75ccf61c3c6de2cd53f81e0a40c441fe6210993972287fa",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);

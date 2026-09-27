@@ -87,6 +87,6 @@ export function isZeroCost(cost: { input?: number; output?: number } | undefined
 
 /** Free / contributor-free rows that Zen serves on the Responses API. */
 export function opencodeFreeModelApi(modelId: string): OpencodeApi {
-	if (modelId === "muse-spark-1.2-contributor-free") return "openai-responses";
+	if (modelId.startsWith("muse-spark-") && modelId.endsWith("-contributor-free")) return "openai-responses";
 	return "openai-completions";
 }

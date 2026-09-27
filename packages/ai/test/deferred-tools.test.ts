@@ -252,50 +252,36 @@ describe("deferred tools", () => {
 		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
 	});
 
-	it("normalizes OAuth names before checking prior tool usage", async () => {
+	it("keeps API-key tool names case-sensitive when checking prior usage", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["read"]);
 		const assistant = context.messages[1] as AssistantMessage;
 		assistant.content = [{ type: "toolCall", id: "call_1", name: "Read", arguments: {} }];
-		const payload = await capturePayload<AnthropicPayload>(
-			getModel("anthropic", "claude-opus-4-6"),
-			context,
-			"sk-ant-oat-fake",
-		);
+		const payload = await capturePayload<AnthropicPayload>(getModel("anthropic", "claude-opus-4-6"), context);
 
-		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "Read"]);
-		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
-		const content = findAnthropicToolResult(payload).content;
-		expect(Array.isArray(content) && content.some((block) => block.type === "tool_reference")).toBe(false);
+		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "read", defer_loading: true }]);
+		expect(findAnthropicToolResult(payload).content).toEqual([{ type: "tool_reference", tool_name: "read" }]);
 	});
 
-	it("matches OAuth-canonicalized markers to active tools", async () => {
+	it("does not match differently cased API-key markers to active tools", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("read")], ["Read"]);
-		const payload = await capturePayload<AnthropicPayload>(
-			getModel("anthropic", "claude-opus-4-6"),
-			context,
-			"sk-ant-oat-fake",
-		);
+		const payload = await capturePayload<AnthropicPayload>(getModel("anthropic", "claude-opus-4-6"), context);
 
-		expect(payload.tools).toMatchObject([{ name: "base_tool" }, { name: "Read", defer_loading: true }]);
-		const content = findAnthropicToolResult(payload).content;
-		expect(
-			Array.isArray(content) &&
-				content.some((block) => block.type === "tool_reference" && block.tool_name === "Read"),
-		).toBe(true);
+		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "read"]);
+		expect(payload.tools?.every((tool) => !tool.defer_loading)).toBe(true);
+		expect(findAnthropicToolResult(payload).content).toBe("done");
 	});
 
-	it("deduplicates active tools after OAuth canonicalization", async () => {
+	it("preserves distinct API-key tool definitions that differ in case", async () => {
 		const context: Context = {
 			messages: [makeUserMessage(1)],
-			tools: [makeTool("read"), { ...makeTool("Read"), description: "Canonical definition" }],
+			tools: [makeTool("read"), { ...makeTool("Read"), description: "Uppercase definition" }],
 		};
-		const payload = await capturePayload<AnthropicPayload>(
-			getModel("anthropic", "claude-opus-4-6"),
-			context,
-			"sk-ant-oat-fake",
-		);
+		const payload = await capturePayload<AnthropicPayload>(getModel("anthropic", "claude-opus-4-6"), context);
 
-		expect(payload.tools).toMatchObject([{ name: "Read", description: "Canonical definition" }]);
+		expect(payload.tools).toMatchObject([
+			{ name: "read", description: "The read tool" },
+			{ name: "Read", description: "Uppercase definition" },
+		]);
 	});
 
 	it("uses the normal tool list when Anthropic tool references are unsupported", async () => {

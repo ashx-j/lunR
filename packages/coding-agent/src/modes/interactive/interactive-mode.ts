@@ -4954,6 +4954,8 @@ export class InteractiveMode {
 						this.session.model?.id ?? "no-model-selected",
 					),
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
+					computerUse: this.settingsManager.getComputerUse(),
+					computerForeground: this.settingsManager.getComputerForeground(),
 					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
 					automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
 					browserEnabled: this.settingsManager.getBrowserEnabled(),
@@ -5180,6 +5182,12 @@ export class InteractiveMode {
 					},
 					onMemoryCharCapChange: (cap) => {
 						this.settingsManager.setMemoryCharCap(cap);
+					},
+					onComputerUseChange: (enabled) => {
+						this.settingsManager.setComputerUse(enabled);
+					},
+					onComputerForegroundChange: (enabled) => {
+						this.settingsManager.setComputerForeground(enabled);
 					},
 					onBrowserEnabledChange: (enabled) => {
 						this.settingsManager.setBrowserEnabled(enabled);

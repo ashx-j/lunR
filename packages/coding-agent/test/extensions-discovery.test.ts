@@ -65,9 +65,29 @@ describe("extensions discovery", () => {
 
 		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 
-		expect(result.errors).toHaveLength(0);
+		expect(result.errors).toEqual([]);
 		expect(result.extensions).toHaveLength(1);
 	});
+
+	it.each(["@earendil-works/pi-ai", "@ashx-j/lunr-ai", "@mariozechner/pi-ai"])(
+		"resolves catalog subpaths before the %s root compatibility alias",
+		async (packageName) => {
+			fs.writeFileSync(
+				path.join(extensionsDir, "catalog-import.ts"),
+				`
+				import { parseCodexCatalog } from "${packageName}/catalog/codex";
+				export default function(pi) {
+					if (typeof parseCodexCatalog !== "function") throw new Error("Missing catalog export");
+					pi.registerCommand("catalog", { handler: async () => {} });
+				}
+			`,
+			);
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			expect(result.errors).toEqual([]);
+			expect(result.extensions).toHaveLength(1);
+			expect(result.extensions[0].commands.has("catalog")).toBe(true);
+		},
+	);
 
 	it("keeps the type-only pi-ai OAuth compatibility barrel resolvable", async () => {
 		fs.writeFileSync(
