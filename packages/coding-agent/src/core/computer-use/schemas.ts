@@ -21,7 +21,8 @@ export const computerSchemas = {
 	computer_load: Type.Object({}, { additionalProperties: false }),
 	computer_apps: Type.Object({
 		pid: Type.Optional(target.pid),
-		query: Type.Optional(Type.String({ minLength: 1, maxLength: 240, description: "Case-insensitive literal substring in name, app_name or title, before pagination. Omit to list all." })),
+		query: Type.Optional(Type.String({ minLength: 1, maxLength: 240, description: "Case-insensitive literal substring in the requested app or window collection before pagination. Omit to list all. Required with include_windows." })),
+		include_windows: Type.Optional(Type.Boolean({ description: "With a named app query and no pid, include windows for matching running PIDs (at most 5 PIDs and 50 window rows). Narrow the query or use pid if more match." })),
 		offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Zero-based row offset, default 0. Pass the result's next_offset to retrieve the next 50 apps or windows." })),
 	}, { additionalProperties: false }),
 	computer_observe: Type.Object(
@@ -46,6 +47,15 @@ export const computerSchemas = {
 			button: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right")])),
 			count: Type.Optional(Type.Integer({ minimum: 1, maximum: 2 })),
 			modifier: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 4 })),
+		},
+		{ additionalProperties: false },
+	),
+	computer_hover: Type.Object(
+		{
+			desktop: Type.Literal(true, { description: "Primary desktop only; no window/PID hover." }),
+			foreground: Type.Literal(true, { description: "Moves the real pointer to the visible desktop target; foreground control must be allowed." }),
+			observation,
+			...pixels,
 		},
 		{ additionalProperties: false },
 	),

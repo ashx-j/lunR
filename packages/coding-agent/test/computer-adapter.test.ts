@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CuaAdapter } from "../src/core/computer-use/adapter.ts";
+import { CuaAdapter, DriverCallError } from "../src/core/computer-use/adapter.ts";
 
 vi.mock("../src/core/computer-use/windows-desktop.ts", () => ({ assertInteractiveDesktop: async () => undefined }));
 
@@ -48,7 +48,7 @@ describe("computer adapter lifecycle", () => {
 	it("refuses dispatch when initialization omits the runtime PID", async () => {
 		mocks.install.mockResolvedValue({ command: "fixture.exe" });
 		const adapter = new CuaAdapter();
-		await expect(adapter.call("click", {})).rejects.toThrow("process identity is missing");
+		await expect(adapter.call("click", {})).rejects.toMatchObject({ phase: "adapter_preflight", dispatched: false });
 		expect(mocks.call).not.toHaveBeenCalled();
 		expect(mocks.closeTransport).toHaveBeenCalled();
 	});
@@ -63,7 +63,7 @@ describe("computer adapter lifecycle", () => {
 		});
 		const adapter = new CuaAdapter();
 		adapter.setProcessObserver(record);
-		await expect(adapter.call("click", {})).rejects.toThrow("ownership record failed");
+		await expect(adapter.call("click", {})).rejects.toMatchObject({ phase: "adapter_preflight", dispatched: false });
 		expect(record).toHaveBeenCalledWith(4242);
 		expect(mocks.call).not.toHaveBeenCalled();
 		expect(mocks.closeTransport).toHaveBeenCalled();
@@ -126,5 +126,53 @@ describe("computer adapter lifecycle", () => {
 		);
 		await adapter.close();
 		await expect(adapter.call("list_apps", {})).rejects.toThrow();
+	});
+	it("uses a launch-specific 45-second RPC budget without retrying a reply after 15 seconds", async () => {
+		mocks.install.mockResolvedValue({ command: "fixture.exe" });
+		mocks.pid = 4242;
+		vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("exited"), { code: "ESRCH" }); });
+		mocks.call.mockResolvedValueOnce({ content: [] }).mockImplementationOnce(() =>
+			new Promise((resolve) => setTimeout(() => resolve({ content: [], structuredContent: { activated: true } }), 16000)));
+		const adapter = new CuaAdapter();
+		await adapter.call("list_apps", {});
+		vi.useFakeTimers();
+		try {
+			const result = adapter.call("launch_app", { name: "fixture" });
+			await vi.advanceTimersByTimeAsync(16001);
+			expect(await result).toMatchObject({ structuredContent: { activated: true } });
+			expect(mocks.call.mock.calls[1]?.[2]).toMatchObject({ timeout: 45000 });
+			expect(mocks.call).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+			await adapter.close();
+		}
+	});
+	it("does not retry a launch when its 45-second RPC budget expires", async () => {
+		mocks.install.mockResolvedValue({ command: "fixture.exe" });
+		mocks.pid = 4242;
+		vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("exited"), { code: "ESRCH" }); });
+		mocks.call.mockResolvedValueOnce({ content: [] }).mockImplementationOnce(() => new Promise((_resolve, reject) => setTimeout(() => reject(new Error("PRIVATE timeout text")), 45000)));
+		const adapter = new CuaAdapter();
+		await adapter.call("list_apps", {});
+		vi.useFakeTimers();
+		try {
+			const pending = expect(adapter.call("launch_app", { name: "fixture" })).rejects.toMatchObject({ phase: "native_request", dispatched: true });
+			await vi.advanceTimersByTimeAsync(45001);
+			await pending;
+			expect(mocks.call).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+			await adapter.close();
+		}
+	});
+	it("marks a request-boundary transport error uncertain without forwarding private exception text", async () => {
+		mocks.install.mockResolvedValue({ command: "fixture.exe" });
+		mocks.pid = 4242;
+		vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("exited"), { code: "ESRCH" }); });
+		mocks.call.mockRejectedValue(new Error("RAW PRIVATE STDERR"));
+		const adapter = new CuaAdapter();
+		await expect(adapter.call("click", {})).rejects.toMatchObject({ phase: "native_request", dispatched: true });
+		expect(DriverCallError.name).toBe("DriverCallError");
+		expect(mocks.call).toHaveBeenCalledTimes(1);
 	});
 });

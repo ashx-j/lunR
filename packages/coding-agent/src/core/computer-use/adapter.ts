@@ -9,6 +9,15 @@ import { CUA_VERSION, installRuntime, runtimeEnvironment } from "./runtime.ts";
 import { assertInteractiveDesktop } from "./windows-desktop.ts";
 
 export type DriverReply = Awaited<ReturnType<Client["callTool"]>>;
+export class DriverCallError extends Error {
+	readonly phase: "adapter_preflight" | "native_request";
+	readonly dispatched: boolean;
+	constructor(phase: "adapter_preflight" | "native_request", dispatched: boolean) {
+		super(phase === "adapter_preflight" ? "Computer adapter preflight failed." : "Computer native request failed.");
+		this.phase = phase;
+		this.dispatched = dispatched;
+	}
+}
 export interface ComputerDriver {
 	call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<DriverReply>;
 	close(): Promise<void>;
@@ -75,6 +84,7 @@ export class CuaAdapter implements ComputerDriver {
 	async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<DriverReply> {
 		const combined = AbortSignal.any([this.abort.signal, ...(signal ? [signal] : [])]);
 		combined.throwIfAborted();
+		let dispatched = false;
 		try {
 			await assertInteractiveDesktop(combined);
 			combined.throwIfAborted();
@@ -82,10 +92,13 @@ export class CuaAdapter implements ComputerDriver {
 			await this.connecting;
 			combined.throwIfAborted();
 			if (!this.client) throw new Error("Computer connection closed.");
-			return await this.client.callTool({ name, arguments: args }, undefined, { timeout: 15000, signal: combined });
+			dispatched = true;
+			return await this.client.callTool({ name, arguments: args }, undefined, { timeout: name === "launch_app" ? 45000 : 15000, signal: combined });
 		} catch (error) {
-			await this.close();
-			throw error;
+			const wasCancelled = combined.aborted;
+			try { await this.close(); } catch { /* The workflow retains the lease if shutdown is unconfirmed. */ }
+			if (wasCancelled) throw error;
+			throw new DriverCallError(dispatched ? "native_request" : "adapter_preflight", dispatched);
 		}
 	}
 
