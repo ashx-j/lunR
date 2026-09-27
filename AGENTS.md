@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Open-PR integration (2026-09-27):** #125 merged into #77, then #77 merged to master and #118 closed through its ancestry. `release/v0.2.26-integration` combines #116, #117, #124, and #122 with merge commits; only documentation and the first-request schema fingerprint conflicted. Publication remains gated by `scripts/computer-use-release.json` until separate native production approval.
+
 - **Computer recovery (`fix/computer-use-recovery`):** settled native failures retain a safe post-image and structured outcome; local validation mistakes permit fresh observation without restarting a healthy workflow. Discovery preserves token age, optional `include_windows` returns bounded named-app windows, and launch has phase-specific guidance plus a 45-second request budget. Windows-only `computer_hover` moves the foreground desktop pointer, waits 700 ms, then captures once. Native binary, exact-token checks, permissions, and ownership remain unchanged. No live qualification of the original taskbar failure or hover yet.
 
 - **Computer discovery filtering (`fix/computer-use-token-efficiency`):** `computer_apps.query` filters app names and window titles before bounded pagination. Its runtime 240-character limit counts Unicode code points to match the schema. A synthetic 139-app lookup falls from three calls and 8699 result-text characters to one call and 147 characters. Loaded tool definitions add 230 characters; first-request definitions are unchanged. These are payload/call proxies, not measured provider tokens. Image quality, history, input safeguards and runtime approval are unchanged.
@@ -161,6 +163,8 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- Open-PR integration (2026-09-27): five offline package builds and the coding-agent Node bundle pass. The 21 focused coding-agent suites pass 375/375. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass with refreshed computer-host tool fingerprints. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog and whitespace checks pass. Linux first-request hashes and the native production release gate remain to verify.
 
 - Computer recovery, 2026-09-26: 128 tests across ten focused computer suites pass after integrating both implementation branches. All five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged initial tool fingerprints. An isolated compiled CLI turn against a local scripted provider loads the new tools and verifies the Windows hover and window-enrichment schemas; initial/loaded inventories and prompts remain private under `.artifacts/computer-recovery/`. Touched-file Biome with formatting disabled, relative imports, shrinkwrap, installer lock, and whitespace checks pass. No native driver, desktop operation, remote model, installed CLI update, or release.
 
@@ -388,6 +392,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-27: merge reviewed PR ancestry on an isolated integration branch and refresh only its conflicting first-request schema fingerprints, keeping the user's dirty checkout and native production approval gate untouched.
 
 - 2026-09-26: preserve uncertain native outcomes with one recovery image and keep healthy workflows available, because an error after delivered input must not invite blind replay; expose only the pinned driver's real Windows desktop hover.
 
