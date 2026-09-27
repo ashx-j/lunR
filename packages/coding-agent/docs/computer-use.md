@@ -2,9 +2,8 @@
 
 The image-only implementation shipped on `lunr-dev` as `0.2.21-dev.12.1`
 and received user testing. Automated validation passed on the dev integration.
-This PR builds on that implementation without dev-channel naming or update
-changes, and repairs failure reporting and unchanged-image detection. Smooth cursor animation is not implemented. Production
-publication remains blocked pending the native runtime's separate approval.
+The stable implementation builds on that work without dev-channel naming or update
+changes, and repairs failure reporting and unchanged-image detection. Smooth cursor animation is not implemented. CuaDriver 0.28.1 has production approval for lunR 0.2.26; broader hardware acceptance remains unverified.
 
 ## Setup and permissions
 
@@ -247,8 +246,9 @@ private PID-bound endpoint and waits for the app to exit. No re-signing occurs.
 Release staging creates exact-version host-specific optional payload packages.
 They contain unchanged archives and no install scripts. Workspace manifests keep
 unpublished payload dependencies out. Standalone asset copying selects one
-opaque archive. Stable publication remains gated on production approval and a
-new CLI version. Dev-channel update/publication changes were not ported here.
+opaque archive. The v0.2.26 release records production approval for the pinned
+runtime; the publish workflow checks that approval before building. Dev-channel
+update/publication changes were not ported here.
 
 ## Verification and remaining acceptance
 
@@ -278,8 +278,8 @@ Staging validates rewritten JavaScript and declaration imports and exact payload
 versions in both locks. These checks ran on Windows x64 without launching the
 native driver; OS/CPU selection tests do not establish operation on other hardware.
 Archive integrity and packaging are verified, but native signing, permission and
-input acceptance remain separate. Production approval is still development-only;
-publication requires separate approval and a new CLI version.
+input acceptance remain separate. The owner approved production publication of
+CuaDriver 0.28.1 with lunR 0.2.26; this does not establish operation on other hardware.
 
 The PR also incorporates the separately tracked baseline repairs from PR #118.
 That work fixes AI catalog subpath resolution in extension loading and updates
