@@ -70,7 +70,7 @@ import { captureModelSelection, resolveExecutableChildModel } from "../shared/mo
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
-import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
+import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings, withChainHandoff } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
 import { acceptanceFailureMessage, aggregateAcceptanceReport, evaluateAcceptance, resolveEffectiveAcceptance } from "../shared/acceptance.ts";
@@ -295,7 +295,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(input.chainDir, behavior.output))
 				: undefined;
-			taskStr = injectSingleOutputInstruction(taskStr, outputPath, taskChildConfig);
+			taskStr = withChainHandoff(injectSingleOutputInstruction(taskStr, outputPath, taskChildConfig), input.stepIndex < input.totalSteps - 1);
 			const interruptController = new AbortController();
 			if (input.foregroundControl) {
 				input.foregroundControl.currentAgent = task.description || task.agent;
@@ -1160,7 +1160,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 				: undefined;
-			stepTask = injectSingleOutputInstruction(stepTask, outputPath, agentConfig);
+			stepTask = withChainHandoff(injectSingleOutputInstruction(stepTask, outputPath, agentConfig), stepIndex < totalSteps - 1);
 			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`);
 			if (validationError) {
 				return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex }));
