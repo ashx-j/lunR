@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **v0.2.26 release preparation (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. No open PRs remain. `release/v0.2.26` bumps the workspace and generated locks; the owner approved CuaDriver 0.28.1 for production npm publication, and its manifest now records `production-approved`. Tag and publication still require validation.
+- **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
 
 - **Computer recovery (`fix/computer-use-recovery`):** settled native failures retain a safe post-image and structured outcome; local validation mistakes permit fresh observation without restarting a healthy workflow. Discovery preserves token age, optional `include_windows` returns bounded named-app windows, and launch has phase-specific guidance plus a 45-second request budget. Windows-only `computer_hover` moves the foreground desktop pointer, waits 700 ms, then captures once. Native binary, exact-token checks, permissions, and ownership remain unchanged. No live qualification of the original taskbar failure or hover yet.
 
@@ -33,7 +33,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.25`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.26`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -150,7 +150,7 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.24**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.26**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -164,7 +164,7 @@ Last updated: 2026-09-26 (v0.2.25 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- v0.2.26 preparation (2026-09-27): five offline package builds and coding-agent Node bundle pass before and after version bump; rebuilt CLI reports 0.2.26. The 21 focused coding-agent suites pass 375/375. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass; Linux integration CI build, first-request, and Check pass. CI Test retains 98 failures across 24 known baseline fixture suites, versus the earlier 101 across 27 in #77's Ubuntu log; AI 623 and Agent 181 pass. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog, pinned dependencies and whitespace checks pass. All three pinned archives pass size/SHA-256 verification and seven staged package dry-run packs pass at 0.2.26. The native production gate is approved and passes its check; npm publication remains outstanding.
+- v0.2.26 release (2026-09-27): five offline package builds and coding-agent Node bundle pass; 21 focused coding-agent suites pass 375/375, with the ten computer suites rerun after approval passing 128/128. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass; Linux integration CI build, first-request, and Check pass. Full CI retains 98 baseline fixture failures across 24 suites, versus 101 across 27 in #77's earlier Ubuntu log; AI 623 and Agent 181 pass. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog, pinned dependencies and whitespace checks pass. All three pinned archives pass byte/SHA-256 verification and seven staged package dry-run packs pass. Production gate passes. Tag publication workflow `36312684171` succeeded at `c3d6e31`; all seven 0.2.26 versions expose npm tarballs, `npm view` reports 0.2.26 latest, and a fresh isolated public install reports 0.2.26 for the CLI, three dependencies, and Windows x64 payload. First-paint and first-turn subagent/MCP/LSP/fetch checks pass against that installed CLI. No global install, Mac/ARM desktop operation, or live provider test.
 
 - Computer recovery, 2026-09-26: 128 tests across ten focused computer suites pass after integrating both implementation branches. All five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged initial tool fingerprints. An isolated compiled CLI turn against a local scripted provider loads the new tools and verifies the Windows hover and window-enrichment schemas; initial/loaded inventories and prompts remain private under `.artifacts/computer-recovery/`. Touched-file Biome with formatting disabled, relative imports, shrinkwrap, installer lock, and whitespace checks pass. No native driver, desktop operation, remote model, installed CLI update, or release.
 
@@ -281,6 +281,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- npm published all seven 0.2.26 packages before the CLI's registry metadata propagated. Verify the exact tarball and a fresh isolated install before treating tag publication as complete.
+
 - On npm 10 and 12, `npm run version:patch` rejects the existing `-ws` shortcut; use `npm version patch --workspaces --no-git-tag-version`, then `scripts/sync-versions.js` and the normal lock generators until the script is corrected in a separate change.
 
 - Computer results carry `details.computer` through the extension and use its scoped `tool_result` hook for the error flag; throwing a text exception would discard recovery images. Keep input evidence independent of cleanup failure. The pinned Windows `move_cursor` moves the real pointer only for desktop scope; window scope is overlay-only and must not be exposed as application hover.
@@ -394,6 +396,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-09-27: tag the merged 0.2.26 release commit after production approval and confirm seven public npm tarballs plus a fresh install, because workflow success preceded registry propagation.
 
 - 2026-09-27: mark only pinned CuaDriver 0.28.1 as production-approved after the owner's explicit confirmation, keeping byte integrity, runtime acceptance, and published-version verification separate.
 - 2026-09-27: merge reviewed PR ancestry on an isolated integration branch, refresh conflicting tool-schema fingerprints, and prepare a separate patch-release PR; keep the user's dirty checkout untouched.
