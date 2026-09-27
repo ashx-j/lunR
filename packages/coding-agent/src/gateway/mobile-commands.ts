@@ -174,7 +174,7 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 	requireGatewayOwner(ctx.event.source);
 	const { requestSessionTransfer, SessionTransferError } = await import("../core/session-handoff.ts");
 	const { key, bridge } = ctx;
-	const current = await bridge.getSession(key);
+	const current = bridge.peekSession?.(key);
 	if (current?.sessionManager?.getSessionFile() === file) {
 		await ctx.adapter.send(ctx.event.source.chatId, "This session is already open here.");
 		return;
@@ -183,7 +183,7 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 	try {
 		await requestSessionTransfer(file, { timeoutMs: 3000, signal });
 	} catch (error) {
-		if (!(error instanceof SessionTransferError) || error.code !== "busy") throw error;
+		if (!(error instanceof SessionTransferError) || !["busy", "timeout"].includes(error.code)) throw error;
 		const choice = await gatewaySelect(
 			key,
 			`${error instanceof Error ? error.message : "Session is in use"}\nHow should lunR continue?`,
@@ -203,7 +203,7 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 				} catch (retryError) {
 					if (
 						!(retryError instanceof SessionTransferError) ||
-						retryError.code !== "busy" ||
+						!["busy", "timeout"].includes(retryError.code) ||
 						Date.now() >= deadline
 					)
 						throw retryError;

@@ -177,6 +177,32 @@ describe("button registry", () => {
 		expect(adapter.edits[0].buttons).toEqual([]);
 	});
 
+	it("confirms a completed mutation by new message if the edit reports failure, without rerunning it", async () => {
+		const adapter = new FakeAdapter();
+		const resolve = vi.fn(async () => ({ done: true as const, text: "Model changed." }));
+		await createPicker(adapter, makeSource(), {
+			kind: "model",
+			sessionKey: "k1",
+			invokerId: "u1",
+			title: "Model",
+			items: [{ label: "Choose", value: "v" }],
+			resolve,
+		});
+		vi.spyOn(adapter, "editMessage").mockResolvedValue({ success: false, error: "lost edit" });
+		const click = {
+			id: "cb1",
+			chatId: "chat1",
+			messageId: "m1",
+			userId: "u1",
+			data: adapter.sent[0].buttons![0][0].data,
+		};
+		await handleCallback(click, makeDeps({ adapter }));
+		expect(adapter.sent[1].text).toBe("Model changed.");
+		await handleCallback({ ...click, id: "cb2" }, makeDeps({ adapter }));
+		expect(resolve).toHaveBeenCalledTimes(1);
+		expect(adapter.callbackAnswers.at(-1)?.text).toBe("Already completed.");
+	});
+
 	it("handleCallback pages prev/next", async () => {
 		const adapter = new FakeAdapter();
 		const items: PickerItem[] = Array.from({ length: 10 }, (_, i) => ({ value: `i${i}`, label: `Item ${i}` }));
@@ -564,7 +590,7 @@ describe("command picker integration", () => {
 			},
 			makeDeps({ adapter }),
 		);
-		expect(adapter.edits[1].text).toContain("☾ Model → ollama-cloud/qwen-2.5-72b");
+		expect(adapter.edits[1].text).toContain("Model → ollama-cloud/qwen-2.5-72b");
 		expect(adapter.edits[1].buttons).toEqual([]);
 	});
 
@@ -615,7 +641,7 @@ describe("command picker integration", () => {
 			},
 			makeDeps({ adapter }),
 		);
-		expect(adapter.edits[0].text).toBe("☾ Thinking → high");
+		expect(adapter.edits[0].text).toBe("Thinking → high");
 	});
 });
 

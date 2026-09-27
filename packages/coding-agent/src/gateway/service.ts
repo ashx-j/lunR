@@ -156,6 +156,12 @@ export function claimGateway(onStop: () => void): {
 	}, 500);
 	return {
 		update(platforms, state = "ready") {
+			if (stopping && state !== "stopping") {
+				stopping = false;
+				const control = readJson(controlPath());
+				if (control && typeof control === "object" && "instance" in control && control.instance === status.instance)
+					rmSync(controlPath(), { force: true });
+			}
 			status.platforms = { ...platforms };
 			status.state = state;
 			save();
@@ -180,7 +186,12 @@ function cliPath(): string {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export async function startGatewayService(): Promise<string> {
-	if (gatewayIsRunning()) return "Gateway is already running.";
+	if (gatewayIsRunning()) {
+		if (readGatewayStatus()?.state === "ready") return "Gateway is already running.";
+		throw new Error(
+			`Gateway process is running but no bot is connected. ${serviceStatusText()}\nInspect ${gatewayLogPath()}`,
+		);
+	}
 	mkdirSync(serviceDirectory(), { recursive: true, mode: 0o700 });
 	const startup = loadServiceSettings().startup;
 	if (startup !== "off") {
@@ -198,7 +209,9 @@ export async function startGatewayService(): Promise<string> {
 			if (readGatewayStatus()?.state === "ready" && gatewayIsRunning()) return "Gateway started.";
 			await sleep(200);
 		}
-		throw new Error(`Startup service did not become ready. Run lunr gateway doctor and inspect ${gatewayLogPath()}`);
+		throw new Error(
+			`Startup service did not connect within 20 seconds. ${serviceStatusText()}\nRun lunr gateway doctor and inspect ${gatewayLogPath()}`,
+		);
 	}
 	const { openSync, closeSync } = await import("node:fs");
 	const log = openSync(gatewayLogPath(), "a", 0o600);
@@ -223,7 +236,9 @@ export async function startGatewayService(): Promise<string> {
 			throw new Error(`Gateway exited with code ${child.exitCode}. See ${gatewayLogPath()}`);
 		await sleep(200);
 	}
-	throw new Error(`Gateway did not become ready within 20 seconds. Check lunr gateway status and ${gatewayLogPath()}`);
+	throw new Error(
+		`Gateway did not connect within 20 seconds. ${serviceStatusText()}\nCheck lunr gateway status and ${gatewayLogPath()}`,
+	);
 }
 
 export async function stopGatewayService(): Promise<string> {

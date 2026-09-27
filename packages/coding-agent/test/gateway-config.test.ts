@@ -64,11 +64,14 @@ describe("loadGatewayConfig", () => {
 		const cfg = defaultGatewayConfig();
 		cfg.telegram.enabled = true;
 		cfg.telegram.allowedUsers = ["u1"];
+		cfg.projectRoots = [dir];
+		cfg.defaultProject = dir;
 		cfg.streaming.editIntervalMs = 500;
 		saveGatewayConfig(cfg);
 		const loaded = loadGatewayConfig();
 		expect(loaded.telegram.enabled).toBe(true);
 		expect(loaded.telegram.allowedUsers).toEqual(["u1"]);
+		expect(loaded.defaultProject).toBe(dir);
 		expect(loaded.streaming.editIntervalMs).toBe(500);
 	});
 

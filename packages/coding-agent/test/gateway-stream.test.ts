@@ -63,12 +63,40 @@ describe("StreamConsumer", () => {
 		expect(edits[0].text).toBe(`${"a".repeat(30)}${"b".repeat(30)}${"c".repeat(30)}`);
 	});
 
-	it("finalize forces a flush of everything and returns the full text", async () => {
+	it("finalize leaves the unsent tail for durable final delivery", async () => {
 		const { consumer, sent } = makeConsumer({ t: 10_000 });
 		consumer.push("small");
 		const full = await consumer.finalize();
 		expect(full).toBe("small");
-		expect(sent).toEqual(["small"]);
+		expect(sent).toEqual([]);
+	});
+
+	it("never previews standalone markers or their partial prefixes", async () => {
+		for (const [start, end] of [
+			["[SIL", "ENT]"],
+			["NO_RE", "PLY"],
+		]) {
+			const { consumer, sent } = makeConsumer({ t: 10_000 }, { threshold: 1 });
+			consumer.push(start);
+			await tick();
+			consumer.push(end);
+			await consumer.finalize();
+			expect(sent).toEqual([]);
+		}
+	});
+
+	it("holds trailing marker fragments but retains markers used in prose", async () => {
+		const { consumer, sent, edits } = makeConsumer({ t: 10_000 }, { threshold: 1, intervalMs: 0 });
+		consumer.push("Answer\nNO_RE");
+		await tick();
+		expect(sent).toEqual(["Answer"]);
+		consumer.push("PLY");
+		await consumer.finalize();
+		expect(edits).toEqual([]);
+		const prose = makeConsumer({ t: 10_000 }, { threshold: 1 });
+		prose.consumer.push("The token [SILENT] is literal.");
+		await prose.consumer.finalize();
+		expect(prose.sent).toEqual(["The token [SILENT] is literal."]);
 	});
 
 	it("truncates the streaming preview to maxPreview-3 + ellipsis but returns full text", async () => {

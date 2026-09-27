@@ -194,6 +194,111 @@ describe("AgentBridge LRU eviction", () => {
 		await first;
 	});
 
+	it("discloses the dropped oldest message when the pending queue reaches its cap", async () => {
+		let release!: () => void;
+		const prompts: string[] = [];
+		const session = {
+			...fakeSession(),
+			prompt: vi.fn((text: string) => {
+				prompts.push(text);
+				return prompts.length === 1
+					? new Promise<void>((resolve) => {
+							release = resolve;
+						})
+					: Promise.resolve();
+			}),
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const first = bridge.runTurn("full", makeEvent("A"));
+		await vi.waitFor(() => expect(prompts).toHaveLength(1));
+		const onError = vi.fn();
+		for (const name of ["B", "C", "D", "E", "F", "G"]) await bridge.runTurn("full", makeEvent(name), { onError });
+		expect(onError).toHaveBeenCalledWith(expect.stringContaining("earlier message was dropped"));
+		expect(bridge.getStatus("full").queueDepth).toBe(5);
+		release();
+		await first;
+		await vi.waitFor(() => expect(prompts).toHaveLength(2));
+		expect(prompts[1]).not.toContain("hello B");
+		expect(prompts[1]).toContain("hello C");
+	});
+
+	it("drains queued input in order after a failed prompt", async () => {
+		let fail!: (reason: Error) => void;
+		const seen: string[] = [];
+		const session = {
+			...fakeSession(),
+			prompt: vi.fn((text: string) => {
+				seen.push(text);
+				return seen.length === 1
+					? new Promise<void>((_, reject) => {
+							fail = reject;
+						})
+					: Promise.resolve();
+			}),
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const followUp = vi.fn();
+		const first = bridge.runTurn("queue", makeEvent("A"), { onFollowUpResult: followUp });
+		await vi.waitFor(() => expect(seen).toHaveLength(1));
+		expect(await bridge.runTurn("queue", makeEvent("B"))).toBe(QUEUED);
+		fail(new Error("A failed"));
+		await expect(first).rejects.toThrow("A failed");
+		await vi.waitFor(() => expect(seen).toHaveLength(2));
+		await vi.waitFor(() => expect(bridge.getStatus("queue").busy).toBe(false));
+		await bridge.runTurn("queue", makeEvent("C"));
+		expect(seen).toEqual(["hello A", "hello B", "hello C"]);
+		expect(followUp).toHaveBeenCalledTimes(1);
+	});
+
+	it("bounds shutdown when a session factory never settles, without admitting its late prompt", async () => {
+		let release!: (session: BridgeSession) => void;
+		const factory = vi.fn(
+			() =>
+				new Promise<BridgeSession>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const bridge = new AgentBridge({ sessionFactory: factory });
+		const turn = bridge.runTurn("pending", makeEvent("pending"));
+		await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+		vi.useFakeTimers();
+		try {
+			const failure = expect(bridge.shutdown()).rejects.toThrow("initialization is still pending");
+			await vi.advanceTimersByTimeAsync(20_100);
+			await failure;
+		} finally {
+			vi.useRealTimers();
+		}
+		const session = fakeSession();
+		release(session);
+		await expect(turn).rejects.toThrow(/stopped/);
+		expect(session.prompt).not.toHaveBeenCalled();
+		expect(session.dispose).toHaveBeenCalled();
+	});
+
+	it("cancels pending initialization before prompt admission on /stop and /new", async () => {
+		for (const operation of ["abort", "reset"] as const) {
+			let release!: (session: BridgeSession) => void;
+			const pending = new Promise<BridgeSession>((resolve) => {
+				release = resolve;
+			});
+			const session = fakeSession();
+			const fresh = fakeSession();
+			const factory = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce(fresh);
+			const bridge = new AgentBridge({ sessionFactory: factory });
+			const turn = bridge.runTurn(operation, makeEvent(operation));
+			await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+			await bridge[operation](operation);
+			await bridge.runTurn(operation, makeEvent("retry"));
+			expect(fresh.prompt).toHaveBeenCalledTimes(1);
+			release(session);
+			await expect(turn).rejects.toThrow(/stopped/);
+			expect(session.prompt).not.toHaveBeenCalled();
+			expect(session.dispose).toHaveBeenCalled();
+			expect(bridge.peekSession(operation)).toBe(fresh);
+		}
+	});
+
 	it("reset aborts a busy session, emits shutdown, drops the queue, then disposes", async () => {
 		let release: (() => void) | undefined;
 		const lifecycle: string[] = [];

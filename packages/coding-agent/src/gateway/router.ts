@@ -10,24 +10,30 @@
  *      /context, /compact, /thinking, /stop, /status, /help, /whoami)
  *   4. normal path: bridge.runTurn with a StreamConsumer when streaming is
  *      enabled and the adapter supports edit; the final text is
- *      silence-filtered and folded INTO the streaming preview (edit, plus
- *      continuation chunks when the preview was truncated) — no preview +
- *      final double-send. Without streaming it is split (text.ts) and sent
- *      sequentially, the first chunk replying to the triggering message.
+ *      silence-filtered and folded into a successful streaming preview edit.
+ *      Failed final edits and ordinary answers enter the durable outbox, which
+ *      acknowledges chunks in order and retries by destination.
  * Errors surface as a compact "⚠ <one-line>" — never a stack trace.
  */
 
 import { existsSync } from "node:fs";
-
 import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
 import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
-import { isAuthorized, requireGatewayOwner } from "./authz.ts";
+import { isAuthorized, isGatewayOwner, requireGatewayOwner } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
+import { resolveWithinRoots } from "./mobile-commands.ts";
 import type { PairingStore } from "./pairing.ts";
-import { acceptGatewayInput, invalidateGatewayDialogs } from "./presenter.ts";
+import {
+	acceptGatewayInput,
+	gatewayEpoch,
+	invalidateGatewayDialogs,
+	queueGatewayText,
+	rememberGatewayRole,
+} from "./presenter.ts";
 import { buildSessionKey } from "./session-keys.ts";
+import { getSession as getStoredSession } from "./store.ts";
 import { applySilenceFilter, StreamConsumer } from "./stream.ts";
 import { splitMessage } from "./text.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
@@ -38,7 +44,8 @@ export interface BridgeLike {
 	abort(key: string): Promise<void> | void;
 	reset(key: string): void | Promise<void>;
 	getStatus(key: string): BridgeSessionStatus;
-	getSession(key: string): Promise<BridgeSession | null>;
+	getSession(key: string, create?: boolean): Promise<BridgeSession | null>;
+	peekSession?(key: string): BridgeSession | undefined;
 	switchSession(key: string, sessionFile: string): Promise<void>;
 	undo(key: string): Promise<{ userText: string }>;
 	redo(key: string): Promise<void>;
@@ -89,10 +96,19 @@ export function createRouter(deps: RouterDeps): Router {
 		return initialCfg;
 	}
 
-	async function sendError(adapter: PlatformAdapter, event: MessageEvent, message: string): Promise<void> {
-		await adapter.send(event.source.chatId, `⚠ ${oneLine(message)}`, {
+	async function sendError(
+		adapter: PlatformAdapter,
+		event: MessageEvent,
+		key: string,
+		cfg: GatewayConfig,
+		message: string,
+		epoch: number,
+	): Promise<void> {
+		await queueGatewayText(key, event.source, adapter, `⚠ ${oneLine(message)}`, {
+			kind: "notice",
 			replyTo: event.messageId,
-			threadId: event.source.threadId,
+			cfg,
+			epoch,
 		});
 	}
 
@@ -127,10 +143,25 @@ export function createRouter(deps: RouterDeps): Router {
 		if (code === null) return true; // rate-limited or pending list full: stay silent
 		await adapter.send(
 			source.chatId,
-			`Your lunR pairing code: ${formatPairingCode(code)} — ask the owner to run: lunr gateway pair approve ${source.platform} ${formatPairingCode(code)}`,
+			`Your lunR pairing code: ${formatPairingCode(code)}. Ask the computer's owner to run lunr gateway pair approve ${source.platform} ${formatPairingCode(code)} --owner if this is their account. Approval without --owner grants chat access only.`,
 			{ replyTo: event.messageId, threadId: source.threadId },
 		);
 		return true;
+	}
+
+	function workspaceReadiness(event: MessageEvent, key: string, cfg: GatewayConfig): string | undefined {
+		if (getStoredSession(key) || conversationBinding(key)?.cwd) return undefined;
+		if (!isGatewayOwner(event.source, cfg))
+			return "This chat is paired but has no project. Ask the computer's gateway owner to configure your access locally. /project and /continue require owner access.";
+		const root = cfg.defaultProject;
+		if (!root) return "No default project selected. Use /project in this private chat to choose an approved folder.";
+		try {
+			const cwd = resolveWithinRoots(root, cfg.projectRoots ?? []);
+			bindConversation(key, event.source, { cwd, owner: event.source.userId });
+			return undefined;
+		} catch {
+			return "Default project is no longer an approved folder. Use /project to choose an approved folder.";
+		}
 	}
 
 	/** Step 3: command registry. Returns true when the event was consumed. */
@@ -156,6 +187,48 @@ export function createRouter(deps: RouterDeps): Router {
 			if (consumed) return true;
 			if (!event.text.startsWith("/")) return false;
 		}
+		if (commandWord === "start") {
+			const issue = deps.remoteControls ? workspaceReadiness(event, key, freshCfg()) : undefined;
+			if (issue) {
+				await sendCommandReply(adapter, event, issue);
+				return true;
+			}
+			try {
+				const session = await bridge.getSession(key, true);
+				const models = await session?.modelRuntime.getAvailable();
+				if (!models?.length)
+					await sendCommandReply(
+						adapter,
+						event,
+						"No authenticated model available. Use /login on your computer, then try /start again.",
+					);
+				else if (
+					!session?.model ||
+					!models.some((model) => model.id === session.model?.id && model.provider === session.model.provider)
+				)
+					await sendCommandReply(adapter, event, "No available model selected. Use /model here to choose one.");
+				else
+					await sendCommandReply(
+						adapter,
+						event,
+						"Ready. Send a message to begin, or use /model to choose a model.",
+					);
+			} catch {
+				await sendCommandReply(
+					adapter,
+					event,
+					"Session setup failed. Run lunr gateway doctor on your computer, then try /start again.",
+				);
+			}
+			return true;
+		}
+		if (deps.remoteControls && commandWord === "model") {
+			const issue = workspaceReadiness(event, key, freshCfg());
+			if (issue) {
+				await sendCommandReply(adapter, event, issue);
+				return true;
+			}
+		}
 		const cmd = CHAT_COMMANDS.find((c) => c.name === commandWord || c.aliases?.includes(commandWord));
 		if (!cmd) {
 			return event.source.chatType !== "dm";
@@ -165,48 +238,44 @@ export function createRouter(deps: RouterDeps): Router {
 			key,
 			adapter,
 			bridge,
+			cfg: freshCfg(),
 			args,
 			reply: (message: string) => sendCommandReply(adapter, event, message),
 		};
 		return runWithApprovalContext({ key, adapter, source: event.source }, () => runChatCommand(cmd, ctx));
 	}
 
-	/** Step 4 delivery: silence filter → split → sequential send.
-	 *
-	 * When a streaming preview message exists (editMessageId), the final text
-	 * is folded INTO it instead of sent as a duplicate: non-truncated previews
-	 * get a final edit (covers silence-marker stripping), truncated previews
-	 * are edited to chunk 1 and the remaining chunks are sent as follow-ups. */
+	/** A successful preview is finalized by edit; failed edits fall back to a durable full reply. */
 	async function deliver(
 		adapter: PlatformAdapter,
 		event: MessageEvent,
 		text: string,
+		key: string,
+		cfg: GatewayConfig,
 		opts: { reply: boolean; editMessageId?: string; previewTruncated?: boolean },
 	): Promise<void> {
 		const filtered = applySilenceFilter(text);
 		if (filtered === null) return;
-		const chunks = splitMessage(filtered, adapter.maxMessageLength);
-		let startIndex = 0;
 		if (opts.editMessageId) {
-			if (!opts.previewTruncated) {
-				// Preview already holds the whole text: one final edit, no new message.
-				await adapter.editMessage(event.source.chatId, opts.editMessageId, filtered);
-				return;
-			}
-			// Preview was truncated: upgrade it to the first full chunk.
-			await adapter.editMessage(event.source.chatId, opts.editMessageId, chunks[0]);
-			startIndex = 1;
-		}
-		for (let index = startIndex; index < chunks.length; index++) {
-			const result = await adapter.send(event.source.chatId, chunks[index], {
-				replyTo: opts.reply && index === 0 ? event.messageId : undefined,
-				threadId: event.source.threadId,
-			});
-			if (!result.success) {
-				console.error(`[gateway] send failed on ${adapter.platform}: ${result.error ?? "unknown error"}`);
+			const chunks = splitMessage(filtered, adapter.maxMessageLength);
+			const edit = await adapter
+				.editMessage(event.source.chatId, opts.editMessageId, opts.previewTruncated ? chunks[0] : filtered)
+				.catch(() => ({ success: false }));
+			if (edit.success) {
+				if (!opts.previewTruncated) return;
+				await queueGatewayText(key, event.source, adapter, chunks.slice(1).join(""), {
+					kind: "result",
+					cfg,
+					chunks: chunks.slice(1),
+				});
 				return;
 			}
 		}
+		await queueGatewayText(key, event.source, adapter, filtered, {
+			kind: "result",
+			replyTo: opts.reply ? event.messageId : undefined,
+			cfg,
+		});
 	}
 
 	async function runTurn(
@@ -215,6 +284,7 @@ export function createRouter(deps: RouterDeps): Router {
 		key: string,
 		cfg: GatewayConfig,
 	): Promise<void> {
+		const epoch = gatewayEpoch(key);
 		const streaming = cfg.streaming.enabled && typeof adapter.editMessage === "function";
 		let consumer: StreamConsumer | undefined;
 		if (streaming) {
@@ -227,7 +297,8 @@ export function createRouter(deps: RouterDeps): Router {
 					return result.success ? (result.messageId ?? null) : null;
 				},
 				edit: async (messageId, text) => {
-					await adapter.editMessage(event.source.chatId, messageId, text);
+					const result = await adapter.editMessage(event.source.chatId, messageId, text);
+					if (!result.success) throw new Error(result.error ?? "Preview edit failed");
 				},
 				intervalMs: cfg.streaming.editIntervalMs,
 				threshold: cfg.streaming.bufferThreshold,
@@ -238,10 +309,14 @@ export function createRouter(deps: RouterDeps): Router {
 		const callbacks: TurnCallbacks = {
 			onDelta: consumer ? (delta) => consumer.push(delta) : undefined,
 			onFollowUpResult: (text) => {
-				void deliver(adapter, event, text, { reply: false });
+				void deliver(adapter, event, text, key, cfg, { reply: false }).catch((error) =>
+					console.error("[gateway] follow-up delivery failed:", error),
+				);
 			},
 			onError: (message) => {
-				void sendError(adapter, event, message);
+				void sendError(adapter, event, key, cfg, message, epoch).catch((error) =>
+					console.error("[gateway] error delivery failed:", error),
+				);
 			},
 		};
 
@@ -250,7 +325,7 @@ export function createRouter(deps: RouterDeps): Router {
 		);
 		if (result === QUEUED) return; // queued behind a running turn: no reply
 		if (consumer) await consumer.finalize();
-		await deliver(adapter, event, result, {
+		await deliver(adapter, event, result, key, cfg, {
 			reply: !consumer,
 			editMessageId: consumer?.sentMessageId ?? undefined,
 			previewTruncated: consumer?.truncated ?? false,
@@ -262,10 +337,12 @@ export function createRouter(deps: RouterDeps): Router {
 			const adapter = adapters.get(event.source.platform);
 			if (!adapter) return;
 			const cfg = freshCfg();
+			const key = buildSessionKey(event.source, { groupSessionsPerUser: cfg.groupSessionsPerUser });
+			const epoch = gatewayEpoch(key);
 			try {
 				if (isGroupGated(event, cfg)) return;
+				rememberGatewayRole(key, event.source);
 				if (await isDenied(adapter, event, cfg)) return;
-				const key = buildSessionKey(event.source, { groupSessionsPerUser: cfg.groupSessionsPerUser });
 				if (deps.remoteControls) {
 					const binding = conversationBinding(key);
 					if (binding?.owner) {
@@ -277,10 +354,17 @@ export function createRouter(deps: RouterDeps): Router {
 					if (acceptGatewayInput(key, event)) return;
 				}
 				if (await handleSlash(adapter, event, key)) return;
+				const issue = deps.remoteControls ? workspaceReadiness(event, key, cfg) : undefined;
+				if (issue) {
+					await sendCommandReply(adapter, event, issue);
+					return;
+				}
 				await adapter.sendTyping(event.source.chatId, event.source.threadId).catch(() => {});
 				await runTurn(adapter, event, key, cfg);
 			} catch (err) {
-				await sendError(adapter, event, err instanceof Error ? err.message : String(err)).catch(() => {});
+				await sendError(adapter, event, key, cfg, err instanceof Error ? err.message : String(err), epoch).catch(
+					() => {},
+				);
 			}
 		},
 	};

@@ -672,6 +672,15 @@ export class TelegramAdapter implements PlatformAdapter {
 			const result = (await this.callApi("sendMessage", body)) as { message_id: number };
 			return { success: true, messageId: String(result.message_id) };
 		} catch (err) {
+			if (
+				err instanceof TelegramApiError &&
+				err.status === 400 &&
+				body.reply_parameters !== undefined &&
+				/message to be replied not found/i.test(err.message)
+			) {
+				const { reply_parameters: _dropped, ...plain } = body;
+				return this.callSend(plain);
+			}
 			if (err instanceof TelegramApiError && err.status === 400 && body.parse_mode !== undefined) {
 				if (MARKDOWN_PARSE_ERROR_RE.test(err.message)) {
 					// Telegram rejected our markup: retry once as plain text.

@@ -445,7 +445,7 @@ export class DiscordAdapter implements PlatformAdapter {
 	private callbackHandler?: (event: CallbackEvent) => void;
 	private readonly pending = new Map<string, PendingEntry>();
 	private readonly typing = new Map<string, TypingEntry>();
-	private readonly channelCache = new Map<string, DiscordChannelLike | null>();
+	private readonly channelCache = new Map<string, DiscordChannelLike>();
 	/** Threads the bot has spoken in (session memory only; hermes persists this). */
 	private readonly participatingThreads = new Set<string>();
 	/** messageId → channel it was sent to, so editMessage finds thread messages. */
@@ -771,18 +771,13 @@ export class DiscordAdapter implements PlatformAdapter {
 		if (!this.client) return null;
 		try {
 			const channel = await this.client.channels.fetch(id);
-			this.channelCache.set(id, channel);
+			if (channel) this.channelCache.set(id, channel);
 			if (this.channelCache.size > CHANNEL_CACHE_CAP) {
 				const oldest = this.channelCache.keys().next().value;
 				if (oldest !== undefined) this.channelCache.delete(oldest);
 			}
 			return channel;
 		} catch {
-			this.channelCache.set(id, null);
-			if (this.channelCache.size > CHANNEL_CACHE_CAP) {
-				const oldest = this.channelCache.keys().next().value;
-				if (oldest !== undefined) this.channelCache.delete(oldest);
-			}
 			return null;
 		}
 	}

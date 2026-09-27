@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QUEUED, type TurnCallbacks } from "../src/gateway/agent-bridge.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
 import { createPairingStore } from "../src/gateway/pairing.ts";
+import { flushGatewayOutbox, startGatewayPresenter, stopGatewayPresenter } from "../src/gateway/presenter.ts";
 import { type BridgeLike, createRouter } from "../src/gateway/router.ts";
 import type { ButtonSpec, MessageEvent, PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
 
@@ -80,9 +81,13 @@ let dir: string;
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "lunr-gw-router-"));
+	vi.stubEnv("PI_CODING_AGENT_DIR", dir);
+	startGatewayPresenter(new Map());
 });
 
 afterEach(() => {
+	stopGatewayPresenter();
+	vi.unstubAllEnvs();
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -217,6 +222,63 @@ describe("router: normal path", () => {
 		expect(adapter.typing).toEqual(["chat1"]);
 	});
 
+	it("persists remaining chunks on send failure and retries in order", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		bridge.results = ["x".repeat(230)];
+		const original = adapter.send.bind(adapter);
+		let failed = false;
+		vi.spyOn(adapter, "send").mockImplementation(async (chat, text, opts) => {
+			if (!failed && adapter.sent.length === 1) {
+				failed = true;
+				return { success: false, retryable: true };
+			}
+			return original(chat, text, opts);
+		});
+		await router.handleEvent(dmEvent("go"));
+		const pending = JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"));
+		expect(pending).toHaveLength(2);
+		expect(adapter.sent).toHaveLength(1);
+		vi.spyOn(Date, "now").mockReturnValue(pending[0].nextAttempt + 1);
+		await flushGatewayOutbox();
+		vi.restoreAllMocks();
+		expect(adapter.sent).toHaveLength(3);
+		expect(JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"))).toEqual([]);
+	});
+
+	it("falls back to a complete durable reply when final preview edit reports failure", async () => {
+		const { adapter, bridge, router } = makeDeps(
+			makeConfig((cfg) => {
+				cfg.streaming.enabled = true;
+				cfg.streaming.bufferThreshold = 1;
+				cfg.streaming.editIntervalMs = 0;
+			}),
+		);
+		bridge.onRunTurn = (callbacks) => {
+			callbacks.onDelta?.("Starting...");
+		};
+		bridge.results = ["Complete answer"];
+		vi.spyOn(adapter, "editMessage").mockResolvedValue({ success: false, error: "edit failed" });
+		await router.handleEvent(dmEvent("go"));
+		expect(adapter.sent.map((entry) => entry.text)).toEqual(["Starting...", "Complete answer"]);
+		expect(JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"))).toEqual([]);
+	});
+
+	it("does not stream standalone silence markers", async () => {
+		const { adapter, bridge, router } = makeDeps(
+			makeConfig((cfg) => {
+				cfg.streaming.enabled = true;
+				cfg.streaming.bufferThreshold = 1;
+				cfg.streaming.editIntervalMs = 0;
+			}),
+		);
+		bridge.onRunTurn = (callbacks) => {
+			callbacks.onDelta?.("[SILENT]");
+		};
+		bridge.results = ["[SILENT]"];
+		await router.handleEvent(dmEvent("go"));
+		expect(adapter.sent).toEqual([]);
+	});
+
 	it("silence marker suppresses delivery", async () => {
 		const { adapter, bridge, router } = makeDeps(makeConfig());
 		bridge.results = ["[SILENT]"];
@@ -313,11 +375,7 @@ describe("router: slash subset (bypasses the busy guard)", () => {
 		const { adapter, bridge, router } = makeDeps(makeConfig());
 		await router.handleEvent(dmEvent("/new"));
 		expect(bridge.resets).toHaveLength(1);
-		expect(
-			adapter.sent
-				.map((m) => m.text)
-				.some((t) => t.includes("Session reset — next message starts a fresh session.")),
-		).toBe(true);
+		expect(adapter.sent.map((m) => m.text).some((t) => t.includes("Session reset."))).toBe(true);
 	});
 
 	it("/new resets even while busy", async () => {
@@ -325,11 +383,7 @@ describe("router: slash subset (bypasses the busy guard)", () => {
 		bridge.status.busy = true;
 		await router.handleEvent(dmEvent("/new"));
 		expect(bridge.resets).toHaveLength(1);
-		expect(
-			adapter.sent
-				.map((m) => m.text)
-				.some((t) => t.includes("Session reset — next message starts a fresh session.")),
-		).toBe(true);
+		expect(adapter.sent.map((m) => m.text).some((t) => t.includes("Session reset."))).toBe(true);
 		expect(adapter.sent.map((m) => m.text).some((t) => t.includes("busy"))).toBe(false);
 		expect(bridge.calls).toEqual([]);
 	});
