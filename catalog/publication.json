@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-fc7d5b459592262fe9577df74981bd7a16062e0567239d560bc9e7938bf97dbb",
+  "revision": "sha256-78966bfef1d08e33468cd88b09fbeda0b46e1aba4b1b28122b21db85ec1a1bff",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -68,7 +68,7 @@
     "openai-codex": "7170b6e16b16930b259ba3ae46f42c6ed2af778ffddf126be2fa9ca731f34366",
     "opencode": "b772fe553593cd0a2586334b741fe65741565fff8f3fcfb9504062683ee67f81",
     "opencode-go": "8ae892bac854bcff29ccdb118ac37b4a219c16f0da0f3bf8377c65709050794e",
-    "openrouter": "ce0f9a9e8658b1837b6932470c33d7c2df5b4c42aed6a9bbef68f400cda2b885",
+    "openrouter": "be101ffafcc87a8b20c28b8bf8aa19ff2896d7e1e44c68730c306c0f4191b896",
     "qwen-cloud": "fe88d6387ffab4a09d18eb0189a054526036a5003029f9a5ac42b5926880395d",
     "qwen-cloud-cn": "3a3ece652c9b3f7baad1320155587945e5b95efee86bff3b439d580198a329a1",
     "qwen-token-plan": "c6bc53c40ab2e9fcb84b2ad5dff28ee78dbf586e57ee9a94481998a72ebccffc",
@@ -87,14 +87,14 @@
     {
       "url": "https://ai-gateway.vercel.sh/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-28T06:59:15.933Z",
-      "digest": "cc51119f1ba02f33ee9234e24a3ce207c061dee2aad2a67eb3a7f258ed45f9f2"
+      "fetchedAt": "2026-09-28T15:33:07.260Z",
+      "digest": "6a372c0df7bcf8e2d93de8e96caf600cf756b7c0010d71087a0ce6295edf62b4"
     },
     {
       "url": "https://integrate.api.nvidia.com/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-28T06:59:17.138Z",
-      "digest": "aeba15012c95cc1f81e56ce51c1a247a4b8220d5c9921f120894e1ade1b392ff"
+      "fetchedAt": "2026-09-28T15:33:08.465Z",
+      "digest": "cac1662e97ac5cbecd7bc4a6044a0922563afe1e9610f439b026a50be0f53c84"
     },
     {
       "url": "https://models.dev/api.json",
@@ -106,29 +106,29 @@
     {
       "url": "https://opencode.ai/zen/go/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-28T06:59:17.201Z",
-      "digest": "71857761075a97b10b97472ff0fd8ef29aafab6b87b75c04d18f8e2e61a07349"
+      "fetchedAt": "2026-09-28T15:33:08.638Z",
+      "digest": "62ab5b769328989f7383506f24078f62591b3ff7bd758fd319920796135bf2b4"
     },
     {
       "url": "https://opencode.ai/zen/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-28T06:59:17.200Z",
-      "digest": "d907bad097fbb7788ebecac0d00582bacc55823ada0ff8899054a6620f00ea1d"
+      "fetchedAt": "2026-09-28T15:33:08.618Z",
+      "digest": "ea6a419e8b96203cd8d20708959ef2293e72a4ce85d2ed45bdb6ef24f89b2a0c"
     },
     {
       "url": "https://openrouter.ai/api/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-09-28T06:59:15.890Z",
-      "digest": "6dec14f573a71f6f9d1b9a37ba1f7389adcab5fab059c77aab9966c7a4c6f692"
+      "fetchedAt": "2026-09-28T15:33:07.082Z",
+      "digest": "10f0529df4cfeb9b0450c82b34a5a5b68ac104dbe60495059a5c1dd0d4a59ff2"
     },
     {
       "url": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "status": "fresh",
-      "fetchedAt": "2026-09-28T06:59:15.875Z",
+      "fetchedAt": "2026-09-28T15:33:07.182Z",
       "digest": "d3c243f84fe6bfd04aac5593976ce6bac6c613428886d9619eb867eb8c9f84ff"
     }
   ],
-  "generatedAt": "2026-09-28T06:59:30.455Z",
+  "generatedAt": "2026-09-28T15:33:22.371Z",
   "sourceCommit": "2269cc0caf2909aef0ac1074f173a8c13c330b71",
   "providerCount": 39,
   "modelCount": 1509
