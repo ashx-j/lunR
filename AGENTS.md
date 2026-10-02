@@ -22,6 +22,9 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Hosted T3 runtime (`feat/t3-hosted-rpc`, 2026-10-02):** opt-in protocol 1 initializes before workspace resources, isolates session ownership and a core host permission gate, exports approvals/dialogs/child lifecycle and owned controls, and injects ephemeral thread MCP into permitted children. Discovery resolves installed model/skill resources without inference or extension imports. Tool-free title/Git helpers and compaction write a separate usage ledger. Ordinary RPC stays compatible. Baseline is master `2269cc0` (0.2.26); no installed CLI or release changed.
+- **Hosted validation:** all five offline tsgo package builds and Node bundle pass. Real scripted model fixture (`node scripts/check-hosted-rpc.mjs`) passes approved/denied writes, streaming, images, cancellation, plan policy restoration, slash settlement, durable resume/replay rejection, async child wake/stop and child MCP. The same fixture passes from a fresh temporary install of public-name tarballs staged with `publish.mjs --dry-run --pack-dir`. Focused RPC/permissions/compaction/cancellation/ledger tests: 46; auth storage: 12; deferred roster/dynamic tool/prompt semantics: 14 (some overlap). Native desktop/live-account acceptance remains separate.
+
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
 
 - **Computer recovery (`fix/computer-use-recovery`):** settled native failures retain a safe post-image and structured outcome; local validation mistakes permit fresh observation without restarting a healthy workflow. Discovery preserves token age, optional `include_windows` returns bounded named-app windows, and launch has phase-specific guidance plus a 45-second request budget. Windows-only `computer_hover` moves the foreground desktop pointer, waits 700 ms, then captures once. Native binary, exact-token checks, permissions, and ownership remain unchanged. No live qualification of the original taskbar failure or hover yet.
@@ -281,6 +284,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Hosted credentials belong only to the worker process tree; never log or persist the MCP overlay. One hosted session per process is required because permission/UI bridges are process-scoped. A lost prompt acknowledgment must be reconciled from native history, never replayed automatically.
+- Hosted custom terminal screens fail explicitly. Task clarification uses semantic confirmation; fleet/intercom/MCP administration pickers remain terminal operations. Native hosted child controls are exported; the T3 fork's existing Agents surface has no dedicated per-child action buttons.
+
 - npm published all seven 0.2.26 packages before the CLI's registry metadata propagated. Verify the exact tarball and a fresh isolated install before treating tag publication as complete.
 
 - On npm 10 and 12, `npm run version:patch` rejects the existing `-ws` shortcut; use `npm version patch --workspaces --no-git-tag-version`, then `scripts/sync-versions.js` and the normal lock generators until the script is corrected in a separate change.
@@ -396,6 +402,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-02: use an opt-in hosted protocol around the real lunR bootstrap and an independent core tool gate so GUI policy cannot be widened by runtime Auto/goal transitions.
+- 2026-10-02: keep auxiliary inference usage in a separate hosted ledger so compaction requests cannot become conversation or context anchors.
 
 - 2026-09-27: tag the merged 0.2.26 release commit after production approval and confirm seven public npm tarballs plus a fresh install, because workflow success preceded registry propagation.
 

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { confirmHostedTasks } from "./chain-clarify.ts";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -2763,7 +2764,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		);
 		const availableSkills = discoverAvailableSkills(effectiveCwd);
 
-		const result = await ctx.ui.custom<ChainClarifyResult>(
+		const result = process.env.LUNR_HOSTED_USAGE === "1" ? await confirmHostedTasks(ctx, taskTexts) : await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
 				new ChainClarifyComponent(
 					tui, theme,
@@ -3124,7 +3125,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		const behavior = resolveStepBehavior({ output: effectiveOutput, skills: skillOverride });
 		const availableSkills = discoverAvailableSkills(effectiveCwd);
 
-		const result = await ctx.ui.custom<ChainClarifyResult>(
+		const result = process.env.LUNR_HOSTED_USAGE === "1" ? await confirmHostedTasks(ctx, [task]) : await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
 				new ChainClarifyComponent(
 					tui, theme,

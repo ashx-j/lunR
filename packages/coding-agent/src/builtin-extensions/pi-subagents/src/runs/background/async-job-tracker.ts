@@ -250,6 +250,20 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 	};
 
+	const emitHostedProgress = (job: AsyncJobState) => {
+		if (process.env.LUNR_HOSTED_USAGE !== "1" || (job.status !== "running" && job.status !== "queued")) return;
+		pi.events.emit("subagent:progress", {
+			runId: job.asyncId, sessionId: job.sessionId, state: job.status,
+			results: (job.steps?.length ? job.steps : [{ agent: job.agents?.[0], startedAt: job.startedAt, totalTokens: job.totalTokens }]).map((step, index) => ({
+				index: step.index ?? index, agent: step.description ?? step.agent, model: step.model,
+				status: step.status ?? job.status,
+				elapsedMs: Math.max(0, (step.endedAt ?? Date.now()) - (step.startedAt ?? job.startedAt)),
+				// Native progress excludes caches. Never promote this to complete billing usage.
+				partialUsage: step.totalTokens,
+			})),
+		});
+	};
+
 	const ensurePoller = () => {
 		if (state.poller) return;
 		state.poller = setInterval(() => {
@@ -357,7 +371,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 								scheduleCleanup(job.asyncId);
 							}
 						}
-						if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
+						if (widgetRenderKey(job) !== widgetStateBefore) { widgetChanged = true; emitHostedProgress(job); }
 						continue;
 					}
 					if (job.status === "queued") {
@@ -375,7 +389,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						scheduleCleanup(job.asyncId);
 					}
 				}
-				if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
+				if (widgetRenderKey(job) !== widgetStateBefore) { widgetChanged = true; emitHostedProgress(job); }
 			}
 
 			if (widgetChanged && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);

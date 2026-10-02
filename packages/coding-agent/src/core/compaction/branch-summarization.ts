@@ -1,3 +1,4 @@
+import { recordHostedUsage } from "../hosted-usage.ts";
 /**
  * Branch summarization for tree navigation.
  *
@@ -342,6 +343,8 @@ export async function generateBranchSummary(
 	const response = streamFn
 		? await (await streamFn(model, context, requestOptions)).result()
 		: await completeSimple(model, context, requestOptions);
+
+	await recordHostedUsage(response, "branch-summary");
 
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {

@@ -17,6 +17,18 @@ Common options:
 - `--no-session`: Disable session persistence
 - `--session-dir <path>`: Custom session storage directory
 
+## Hosted clients
+
+`lunr --version --host-protocol` reports `{version, hostedProtocol:1}` without loading workspace resources. Older builds print only their version and are incompatible with hosted clients.
+
+`lunr --mode rpc --hosted` waits for `host_initialize` before loading settings or resources. It requires `version:1`, a correlation `id`, and `intent`: `discovery`, `session`, or `text-generation`. Session initialization requires absolute `cwd` and `sessionDir`, explicit `projectTrusted`, and a policy (`approval-required`, `full-access`, or `read-only`). Optional `profile` and `sessionFile` are absolute paths. Exact model selection uses separate `provider` and `modelId` fields. Discovery returns authenticated model capabilities and conventional skill metadata without project code or inference. Text generation requires `provider`, `modelId`, and `prompt`; it has no workspace resources or tools.
+
+Session initialization and `host_state` return persisted identity, turn boundaries, pending requests, and known child state. Prompts require unique IDs; reusing a recorded ID fails instead of replaying. `host_set_policy` changes policy while idle. Core decisions arrive as `host_approval_request`; reply with `host_approval_response`, its `requestId`, and `once`, `session`, or `reject`. Approval IDs belong to one live worker. Plan approval restores its prior execution policy. Extension select/input/editor/confirm requests use normal RPC UI responses; terminal-only custom screens fail explicitly.
+
+`host_turn_started` identifies autonomous wake-ups. `host_turn_settled` is the terminal boundary; ordinary `agent_end` can precede retries or queued work. `host_usage` separates estimated context occupancy from recorded session totals. Hosted helper/compaction usage is saved under the profile's `sessions/_helpers`, outside conversation replay. `host_child_event` carries public lifecycle data without internal control tokens. `host_child_control` requires an owned `runId` and `status`, `stop`, `interrupt`, or `steer` (with `message` and optional `index`). Existing subagent tools retain richer launch/question/continuation behavior.
+
+Optional `mcp:{endpoint,authorization}` supplies an ephemeral `t3-code` overlay. Children inherit it through their environment, subject to native permissions; it is never written to MCP configuration or transcripts. Stop/abort cancels owned children; `host_shutdown` tears down the session. Hosted mode disallows session-switch/fork/clone and raw shell ownership escapes. Reopen the same session file after loss and reconcile history before explicit continuation. Never automatically replay an uncertain mutating prompt.
+
 ## Protocol Overview
 
 - **Commands**: JSON objects sent to stdin, one per line

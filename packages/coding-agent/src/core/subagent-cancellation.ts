@@ -1,6 +1,6 @@
 export interface SubagentCancellation {
 	hasActiveRuns(): boolean;
-	stop(): Promise<{ requested: number; failed: number }>;
+	stop(runId?: string): Promise<{ requested: number; failed: number }>;
 }
 
 const key = Symbol.for("@lunr/subagent-cancellation");
@@ -26,15 +26,22 @@ export function createSubagentCancellation(options: {
 	stopRun(id: string): Promise<boolean>;
 }): SubagentCancellation {
 	let stopping: Promise<{ requested: number; failed: number }> | undefined;
+	let stoppingRunId: string | undefined;
 	return {
 		hasActiveRuns: () =>
 			options.isCurrent() && (options.pendingLaunches.size > 0 || options.getActiveRunIds().length > 0),
-		stop() {
-			if (stopping) return stopping;
+		stop(runId) {
+			if (stopping) return runId === stoppingRunId ? stopping : stopping.then(() => this.stop(runId));
+			stoppingRunId = runId;
 			stopping = (async () => {
 				await Promise.allSettled([...options.pendingLaunches]);
 				if (!options.isCurrent()) return { requested: 0, failed: 0 };
-				const results = await Promise.allSettled(options.getActiveRunIds().map((id) => options.stopRun(id)));
+				const results = await Promise.allSettled(
+					options
+						.getActiveRunIds()
+						.filter((id) => runId === undefined || id === runId)
+						.map((id) => options.stopRun(id)),
+				);
 				return {
 					requested: results.filter((result) => result.status === "fulfilled" && result.value).length,
 					failed: results.filter((result) => result.status === "rejected" || !result.value).length,

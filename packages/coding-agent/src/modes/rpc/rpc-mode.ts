@@ -12,7 +12,9 @@
  */
 
 import * as crypto from "node:crypto";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import type { EventBus } from "../../core/event-bus.ts";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -27,6 +29,8 @@ import {
 } from "../../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
+import type { HostInitialize } from "./hosted.ts";
+import { HostedSession } from "./hosted-session.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
 	RpcCommand,
@@ -50,9 +54,14 @@ export type {
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<never> {
+export async function runRpcMode(
+	runtimeHost: AgentSessionRuntime,
+	initialization?: HostInitialize,
+	hostedEvents?: EventBus,
+): Promise<never> {
 	takeOverStdout();
 	let session = runtimeHost.session;
+	const hosted = initialization ? new HostedSession(initialization, session, hostedEvents) : undefined;
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
 
@@ -103,6 +112,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				if (timeoutId) clearTimeout(timeoutId);
 				opts?.signal?.removeEventListener("abort", onAbort);
 				pendingExtensionRequests.delete(id);
+				if (hosted) output({ type: "host_request_resolved", requestId: id, status: "resolved" });
 			};
 
 			const onAbort = () => {
@@ -225,7 +235,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		},
 
 		async custom() {
-			// Custom UI not supported in RPC mode
+			if (hosted)
+				throw new Error(
+					"This lunR command requires the terminal UI. Use lunr in a terminal to configure this feature.",
+				);
+			// Custom UI not supported in ordinary RPC mode
 			return undefined as never;
 		},
 
@@ -250,27 +264,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			return "";
 		},
 
-		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = crypto.randomUUID();
-			return new Promise((resolve, reject) => {
-				pendingExtensionRequests.set(id, {
-					resolve: (response: RpcExtensionUIResponse) => {
-						if ("cancelled" in response && response.cancelled) {
-							resolve(undefined);
-						} else if ("value" in response) {
-							resolve(response.value);
-						} else {
-							resolve(undefined);
-						}
-					},
-					reject,
-				});
-				output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
-			});
-		},
+		editor: (title, prefill) =>
+			createDialogPromise(undefined, undefined, { method: "editor", title, prefill }, (r) =>
+				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
+			),
 
 		addAutocompleteProvider(): void {
-			// Autocomplete provider composition is not supported in RPC mode
+			/* No editor in hosted RPC. */
 		},
 
 		setEditorComponent(): void {
@@ -353,6 +353,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		unsubscribeBackpressure?.();
 		unsubscribe = session.subscribe((event) => {
 			output(event);
+			hosted?.event(event);
 			if (event.type === "agent_settled") {
 				void checkShutdownRequested();
 			}
@@ -384,6 +385,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
 		const id = command.id;
+		if (hosted && command.type.startsWith("host_")) {
+			if (command.type === "host_shutdown") {
+				hosted.cancelRequests();
+				for (const [requestId, pending] of pendingExtensionRequests)
+					pending.resolve({ type: "extension_ui_response", id: requestId, cancelled: true });
+				await hosted.stopChildren();
+				await session.abort();
+				shutdownRequested = true;
+				return { id, type: "response", command: command.type, success: true } as RpcResponse;
+			}
+			const data = await hosted.command(command as unknown as Record<string, unknown>);
+			return { id, type: "response", command: command.type, success: true, data } as RpcResponse;
+		}
+		if (hosted && ["new_session", "switch_session", "fork", "clone", "bash"].includes(command.type))
+			throw new Error("Hosted session ownership forbids this command");
 
 		switch (command.type) {
 			// =================================================================
@@ -391,6 +407,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "prompt": {
+				if (hosted && command.images?.length && !session.model?.input.includes("image"))
+					return error(id, command.type, "This model does not support image input");
+				if (hosted) hosted.beginTurn(command.id ?? "");
 				// Start prompt handling immediately, but emit the authoritative response only after
 				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
 				let preflightSucceeded = false;
@@ -406,10 +425,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 							}
 						},
 					})
+					.then(() => hosted?.promptFinished(command.id ?? ""))
 					.catch((e) => {
 						if (!preflightSucceeded) {
+							hosted?.rejectTurn();
 							output(error(id, "prompt", e.message));
-						}
+						} else hosted?.promptFinished(command.id ?? "", e.message);
 					});
 				return undefined;
 			}
@@ -425,6 +446,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "abort": {
+				hosted?.cancelRequests();
+				if (hosted)
+					for (const [requestId, pending] of pendingExtensionRequests)
+						pending.resolve({ type: "extension_ui_response", id: requestId, cancelled: true });
+				await hosted?.stopChildren();
 				await session.abort();
 				return success(id, "abort");
 			}
@@ -492,6 +518,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "set_thinking_level": {
+				if (hosted && session.model && !getSupportedThinkingLevels(session.model).includes(command.level))
+					return error(id, command.type, "Thinking level is unsupported by this model");
 				session.setThinkingLevel(command.level);
 				return success(id, "set_thinking_level");
 			}
@@ -704,11 +732,19 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
+		if (hosted) {
+			hosted.cancelRequests();
+			for (const [requestId, pending] of pendingExtensionRequests)
+				pending.resolve({ type: "extension_ui_response", id: requestId, cancelled: true });
+			await hosted.stopChildren().catch((error) => console.error(String(error)));
+			await session.abort();
+		}
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
+		hosted?.dispose();
 		await runtimeHost.dispose();
 		detachInput();
 		process.stdin.pause();
@@ -789,6 +825,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			process.stdin.off("end", onInputEnd);
 		};
 	})();
+
+	hosted?.ready();
+	process.stdin.resume();
 
 	// Keep process alive forever
 	return new Promise(() => {});

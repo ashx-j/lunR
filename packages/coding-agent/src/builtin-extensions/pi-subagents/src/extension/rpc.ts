@@ -17,7 +17,7 @@ export const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
 export const SUBAGENT_RPC_READY_EVENT = "subagents:rpc:v1:ready";
 export const SUBAGENT_RPC_REPLY_EVENT_PREFIX = "subagents:rpc:v1:reply:";
 
-export const SUBAGENT_RPC_METHODS = ["ping", "status", "spawn", "interrupt", "stop"] as const;
+export const SUBAGENT_RPC_METHODS = ["ping", "status", "spawn", "interrupt", "stop", "steer"] as const;
 export type SubagentRpcMethod = typeof SUBAGENT_RPC_METHODS[number];
 
 export interface SubagentRpcRequestEnvelope {
@@ -232,7 +232,7 @@ function stopAsyncRun(
 		throw new SubagentRpcError("not_found", "Async run not found or already completed; stop requires a live async run directory.");
 	}
 
-	const currentSessionId = ctx.sessionManager.getSessionId();
+	const currentSessionId = ctx.sessionManager.getSessionFile() ?? ctx.sessionManager.getSessionId();
 	const initialStatus = readStatus(location.asyncDir);
 	const initialRunId = initialStatus?.runId ?? location.resolvedId ?? path.basename(location.asyncDir);
 	if (!initialStatus) throw new SubagentRpcError("not_found", `Status file not found for async run '${initialRunId}'.`);
@@ -293,6 +293,11 @@ async function handleRequest(
 	if (request.method === "interrupt") {
 		return executeChecked(options, ctx, request.requestId, request.method, { action: "interrupt", ...normalizeTargetParams(request.params, "interrupt") });
 	}
+    if (request.method === "steer") {
+        const input = assertRecordParams(request.params, "steer");
+        if (typeof input.message !== "string" || !input.message.trim()) throw new SubagentRpcError("invalid_params", "Steering requires a message");
+        return executeChecked(options, ctx, request.requestId, request.method, { action: "steer", ...normalizeTargetParams(request.params, "steer"), message: input.message });
+    }
 	if (request.method === "stop") {
 		return stopAsyncRun(request.params, options, ctx);
 	}

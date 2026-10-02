@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { confirmHostedTasks } from "./chain-clarify.ts";
 /**
  * Chain execution logic for subagent tool
  */
@@ -624,7 +625,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		);
 		const flatTemplates = templates as string[];
 
-		const result = await ctx.ui.custom<ChainClarifyResult>(
+		const result = process.env.LUNR_HOSTED_USAGE === "1" ? await confirmHostedTasks(ctx, flatTemplates) : await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
 				new ChainClarifyComponent(
 					tui,

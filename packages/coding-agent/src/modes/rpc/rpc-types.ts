@@ -18,6 +18,17 @@ import type { SourceInfo } from "../../core/source-info.ts";
 // ============================================================================
 
 export type RpcCommand =
+	| {
+			id?: string;
+			type: "host_child_control";
+			method: "status" | "stop" | "interrupt" | "steer";
+			runId: string;
+			message?: string;
+			index?: number;
+	  }
+	| { id?: string; type: "host_state" | "host_shutdown" }
+	| { id?: string; type: "host_set_policy"; policy: string }
+	| { id?: string; type: "host_approval_response"; requestId: string; decision: string; reason?: string }
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
@@ -112,6 +123,13 @@ export interface RpcSessionState {
 
 // Success responses with data
 export type RpcResponse =
+	| {
+			id?: string;
+			type: "response";
+			command: "host_state" | "host_shutdown" | "host_set_policy" | "host_approval_response";
+			success: true;
+			data?: unknown;
+	  }
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }

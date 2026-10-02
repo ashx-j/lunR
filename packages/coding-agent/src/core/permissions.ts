@@ -116,6 +116,14 @@ interface PermissionContext {
 const contexts = new Map<string, PermissionContext>();
 let defaultContext: PermissionContext = { mode: "yolo", approvals: new Set() };
 let approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalResponse>) | undefined;
+/** Hosting policy is independent of user mode changes, including /goal. */
+let hostedToolGate:
+	| ((toolName: string, input: Record<string, unknown>) => Promise<{ block: true; reason: string } | undefined>)
+	| undefined;
+export function registerHostedToolGate(gate: typeof hostedToolGate): void {
+	hostedToolGate = gate;
+}
+
 /** One aggregate prompt covers every sibling SINGLE `subagent` on the same assistant message. */
 const turnLargeLaunchDecisions = new WeakMap<object, { decision: ApprovalDecision; feedback?: string }>();
 
@@ -202,6 +210,7 @@ export function resetAllPermissionContexts(): void {
 	contexts.clear();
 	defaultContext = { mode: "yolo", approvals: new Set() };
 	approvalHandler = undefined;
+	hostedToolGate = undefined;
 }
 
 /** Appended to the system prompt while auto mode is active. */
@@ -419,6 +428,8 @@ export async function gateToolCall(
 	sessionId?: string,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
+	const hostedResult = await hostedToolGate?.(toolName, input);
+	if (hostedResult) return hostedResult;
 	const ctx = getContext(sessionId);
 	if (toolName.startsWith("computer_")) {
 		try {

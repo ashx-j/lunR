@@ -44,6 +44,27 @@ function fixture(active = true) {
 }
 
 describe("Escape with async children", () => {
+	it("targets one owned child while preserving a concurrent stop-all request", async () => {
+		const active = new Set(["one", "two"]);
+		const stopped: string[] = [];
+		const cancellation = createSubagentCancellation({
+			pendingLaunches: new Set(),
+			getActiveRunIds: () => [...active],
+			isCurrent: () => true,
+			stopRun: async (id) => {
+				stopped.push(id);
+				active.delete(id);
+				return true;
+			},
+		});
+		expect(await cancellation.stop("foreign")).toEqual({ requested: 0, failed: 0 });
+		const one = cancellation.stop("one");
+		const all = cancellation.stop();
+		expect(await one).toEqual({ requested: 1, failed: 0 });
+		expect(await all).toEqual({ requested: 1, failed: 0 });
+		expect(stopped).toEqual(["one", "two"]);
+	});
+
 	it("waits for pending launch registration and coalesces overlapping stop requests", async () => {
 		let release!: () => void;
 		const pending = new Promise<void>((resolve) => {

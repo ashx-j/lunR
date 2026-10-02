@@ -1311,3 +1311,8 @@ export class ChainClarifyComponent implements Component {
 		this.noticeMessageTimer = null;
 	}
 }
+
+/** Hosted clients review the full task list through their native confirmation UI. */
+export async function confirmHostedTasks(ctx: { ui: { confirm(title: string, message: string): Promise<boolean> } }, templates: string[]): Promise<ChainClarifyResult> {
+    return { confirmed: await ctx.ui.confirm("Review subagent tasks", templates.map((task,index) => `${index+1}. ${task}`).join("\n\n")), templates, behaviorOverrides: templates.map(() => undefined) };
+}

@@ -80,6 +80,8 @@ export function parseArgs(args: string[]): Args {
 			if (mode === "text" || mode === "json" || mode === "rpc") {
 				result.mode = mode;
 			}
+		} else if (arg === "--hosted") {
+			// Handled before runtime bootstrap.
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {

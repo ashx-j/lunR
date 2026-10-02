@@ -552,7 +552,40 @@ export interface MainOptions {
 }
 
 export async function main(args: string[], options?: MainOptions) {
+	const hosted = args.includes("--hosted")
+		? await (await import("./modes/rpc/hosted.ts")).readHostInitialize()
+		: undefined;
+	if (hosted) {
+		if (!args.some((arg, index) => arg === "--mode" && args[index + 1] === "rpc"))
+			throw new Error("--hosted requires --mode rpc");
+		if (hosted.intent !== "session") {
+			await (await import("./modes/rpc/hosted.ts")).runHostedHelper(hosted);
+			await (await import("./core/output-guard.ts")).flushRawStdout();
+			process.exit(0);
+		}
+		process.chdir(hosted.cwd!);
+	}
 	resetTimings();
+	const hostedEvents = hosted ? (await import("./core/event-bus.ts")).createEventBus() : undefined;
+	const inheritedHostMcp =
+		process.env.PI_SUBAGENT_CHILD === "1" && process.env.LUNR_HOST_MCP
+			? (JSON.parse(process.env.LUNR_HOST_MCP) as { endpoint: string; authorization: string })
+			: undefined;
+	const hostMcp = hosted?.mcp ?? inheritedHostMcp;
+	if (hostMcp) {
+		// Ephemeral process-tree credential. Never written into profiles or run artifacts.
+		process.env.LUNR_HOST_MCP = JSON.stringify(hostMcp);
+		(globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/host-mcp")] = {
+			mcpServers: {
+				"t3-code": {
+					url: hostMcp.endpoint,
+					headers: { Authorization: hostMcp.authorization },
+					auth: false,
+					lifecycle: "lazy",
+				},
+			},
+		};
+	}
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
@@ -589,6 +622,14 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	const parsed = parseArgs(args);
+	if (hosted) {
+		parsed.sessionDir = hosted.sessionDir;
+		parsed.session = hosted.sessionFile;
+		parsed.projectTrustOverride = hosted.projectTrusted;
+		parsed.provider = hosted.provider;
+		parsed.model = hosted.modelId;
+		parsed.appendSystemPrompt = hosted.instructions ? [hosted.instructions] : undefined;
+	}
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -601,7 +642,7 @@ export async function main(args: string[], options?: MainOptions) {
 	time("parseArgs");
 
 	if (parsed.version) {
-		console.log(VERSION);
+		console.log(args.includes("--host-protocol") ? JSON.stringify({ version: VERSION, hostedProtocol: 1 }) : VERSION);
 		process.exit(0);
 	}
 
@@ -641,10 +682,16 @@ export async function main(args: string[], options?: MainOptions) {
 	validateSessionIdFlags(parsed);
 
 	// Run migrations (pass cwd for project-local migrations)
-	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
+	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = hosted
+		? { migratedAuthProviders: [], deprecationWarnings: [] }
+		: runMigrations(cwd);
 	time("runMigrations");
 
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
+	const startupSettingsManager = SettingsManager.create(
+		cwd,
+		agentDir,
+		hosted ? { projectTrusted: hosted.projectTrusted } : {},
+	);
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
 	// Register the model-tier bridge before extensions load so pi-subagents can read
@@ -808,6 +855,7 @@ export async function main(args: string[], options?: MainOptions) {
 					? { skipMissingPackageInstall }
 					: undefined,
 			resourceLoaderOptions: {
+				eventBus: hostedEvents,
 				additionalExtensionPaths: resolvedExtensionPaths,
 				additionalSkillPaths: resolvedSkillPaths,
 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
@@ -910,7 +958,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	markStartupMilestone("runtime_hydrated");
 	time("createAgentSessionRuntime");
-	if (appMode !== "interactive") await runSessionRetention();
+	if (appMode !== "interactive" && !hosted) await runSessionRetention();
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
@@ -988,7 +1036,7 @@ export async function main(args: string[], options?: MainOptions) {
 	if (appMode === "rpc") {
 		const { runRpcMode } = await import("./modes/rpc/rpc-mode.ts");
 		printTimings();
-		await runRpcMode(runtime);
+		await runRpcMode(runtime, hosted, hostedEvents);
 	} else if (appMode === "interactive") {
 		const [{ InteractiveMode }, { loadDeferredBuiltinExtensions }] = await Promise.all([
 			interactiveModeImport!,

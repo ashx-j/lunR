@@ -203,7 +203,9 @@ export function loadMcpConfig(overridePath?: string, cwd = process.cwd()): McpCo
     config = mergeConfigs(config, expandImports(loaded, cwd));
   }
 
-  return config;
+  // Hosted credentials are process-local and never written to a config file.
+  const overlay = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/host-mcp")] as McpConfig | undefined;
+  return overlay ? mergeConfigs(config, overlay) : config;
 }
 
 function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSourceSpec[] {

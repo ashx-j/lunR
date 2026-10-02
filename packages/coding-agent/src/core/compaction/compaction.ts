@@ -1,3 +1,4 @@
+import { recordHostedUsage } from "../hosted-usage.ts";
 /**
  * Context compaction for long sessions.
  *
@@ -544,11 +545,11 @@ async function completeSummarization(
 	options: SimpleStreamOptions,
 	streamFn?: StreamFn,
 ): Promise<AssistantMessage> {
-	if (!streamFn) {
-		return completeSimple(model, context, options);
-	}
-	const stream = await streamFn(model, context, options);
-	return stream.result();
+	const response = streamFn
+		? await (await streamFn(model, context, options)).result()
+		: await completeSimple(model, context, options);
+	await recordHostedUsage(response, "compaction");
+	return response;
 }
 
 /**
