@@ -4,6 +4,9 @@ hermes-agent/
 kimi-cli/
 extension-repos/
 
+# Separate T3 Code checkout for lunR desktop integration
+t3code/
+
 # Dependencies
 node_modules/
 

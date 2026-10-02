@@ -202,6 +202,25 @@ const NVIDIA_OPENAI_COMPAT: OpenAICompletionsCompat = {
 	supportsStrictMode: false,
 	supportsLongCacheRetention: false,
 };
+const NVIDIA_KIMI_K3: Model<"openai-completions"> = {
+	id: "moonshotai/kimi-k3",
+	name: "Kimi K3",
+	api: "openai-completions",
+	provider: "nvidia",
+	baseUrl: NVIDIA_BASE_URL,
+	headers: { ...NVIDIA_HEADERS },
+	compat: {
+		...NVIDIA_OPENAI_COMPAT,
+		supportsReasoningEffort: true,
+		requiresReasoningContentOnAssistantMessages: true,
+	},
+	reasoning: true,
+	thinkingLevelMap: { off: null, minimal: null, medium: null, xhigh: null, max: "max" },
+	input: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1048576,
+	maxTokens: 65536,
+};
 const NVIDIA_NIM_UNSUPPORTED_MODELS = new Set([
 	"abacusai/dracarys-llama-3.1-70b-instruct",
 	"bytedance/seed-oss-36b-instruct",
@@ -289,6 +308,8 @@ const OPENAI_TOOL_SEARCH_MODEL_IDS = new Set([
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
 	"gpt-6-astra",
+	"gpt-6-luna",
+	"gpt-6-sol",
 ]);
 const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272000;
 const OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS = new Set([
@@ -324,6 +345,7 @@ function withOpenAiLongContextPricing(cost: Model<Api>["cost"]): Model<Api>["cos
 	};
 }
 
+const OPENAI_GPT6_NONE_REASONING_MODEL_IDS = new Set(["gpt-6-luna", "gpt-6-sol"]);
 const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.1",
 	"gpt-5.2",
@@ -711,6 +733,12 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	}
 	if (gptVersion !== undefined && gptVersion.major >= 6 && isDirectOpenAiEffortModel(model)) {
 		mergeThinkingLevelMap(model, OPENAI_GPT6_THINKING_LEVEL_MAP);
+		if (
+			(model.api === "openai-responses" || model.api === "azure-openai-responses") &&
+			OPENAI_GPT6_NONE_REASONING_MODEL_IDS.has(model.id)
+		) {
+			mergeThinkingLevelMap(model, { off: "none" });
+		}
 	}
 	if (
 		(model.provider === "moonshotai" || model.provider === "moonshotai-cn") &&
@@ -1504,6 +1532,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		// Process NVIDIA NIM models
 		if (data.nvidia?.models) {
 			for (const [modelId, model] of Object.entries(data.nvidia.models)) {
+				if (modelId === NVIDIA_KIMI_K3.id) continue;
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
 				if (!m.modalities?.input?.includes("text")) continue;
@@ -2024,7 +2053,7 @@ async function generateModels() {
 	]);
 
 	// Combine models (models.dev has priority)
-	const allModels = [...modelsDevModels, ...openRouterModels, ...aiGatewayModels].filter(
+	const allModels = [...modelsDevModels, ...openRouterModels, ...aiGatewayModels, NVIDIA_KIMI_K3].filter(
 		(model) =>
 			!(model.provider === "xai" && XAI_BUILTIN_EXCLUDED_MODEL_IDS.has(model.id)) &&
 			!((model.provider === "opencode" || model.provider === "opencode-go") && model.id === "gpt-5.3-codex-spark"),
@@ -2122,6 +2151,30 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: withOpenAiLongContextPricing({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }),
+			contextWindow: 1050000,
+			maxTokens: 128000,
+		},
+		{
+			id: "gpt-6-luna",
+			name: "GPT-6 Luna",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			provider: "openai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: withOpenAiLongContextPricing({ input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }),
+			contextWindow: 1050000,
+			maxTokens: 128000,
+		},
+		{
+			id: "gpt-6-sol",
+			name: "GPT-6 Sol",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			provider: "openai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: withOpenAiLongContextPricing({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }),
 			contextWindow: 1050000,
 			maxTokens: 128000,
 		},
@@ -2314,7 +2367,14 @@ async function generateModels() {
 	// Public Codex metadata is the offline seed; account availability is discovered at runtime.
 	const codexModels = parseCodexCatalog(codexSource, "https://chatgpt.com/backend-api");
 	for (const model of codexModels) {
-		const metadata = allModels.find((candidate) => candidate.provider === "openai" && candidate.id === model.id);
+		const metadata =
+			allModels.find((candidate) => candidate.provider === "openai" && candidate.id === model.id) ??
+			(model.id === "gpt-6.1-sol"
+				? {
+						cost: withOpenAiLongContextPricing({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }),
+						maxTokens: 128000,
+					}
+				: undefined);
 		if (metadata) {
 			model.cost = metadata.cost;
 			if (!model.catalog!.supplied.includes("maxTokens")) model.maxTokens = metadata.maxTokens;
@@ -2402,6 +2462,8 @@ async function generateModels() {
 		"gpt-5.6-sol": 1050000,
 		"gpt-5.6-terra": 1050000,
 		"gpt-6-astra": 1050000,
+		"gpt-6-luna": 1050000,
+		"gpt-6-sol": 1050000,
 	};
 	const azureOpenAiModels: Model<Api>[] = allModels
 		.filter((model) => model.provider === "openai" && model.api === "openai-responses")

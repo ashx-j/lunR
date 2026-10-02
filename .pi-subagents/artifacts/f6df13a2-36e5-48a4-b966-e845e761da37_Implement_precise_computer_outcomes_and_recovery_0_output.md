@@ -1,0 +1,3 @@
+Implemented the workflow and adapter changes in commits `c690cf9` and `feae61e`. The worktree is clean.
+
+Focused tests pass, 100/100. The coding-agent no-emit typecheck, touched-file Biome check, and `git diff --check` pass. I did not launch the native driver or use the desktop. The sibling’s schema and extension changes are still needed for the registered tools; the cause of the user’s native failure remains unknown.

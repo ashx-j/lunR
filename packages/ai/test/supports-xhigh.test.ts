@@ -45,19 +45,31 @@ describe("getSupportedThinkingLevels", () => {
 		expect(getSupportedThinkingLevels(model!)).not.toContain("max");
 	});
 
-	it.each(["gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"] as const)(
-		"includes xhigh for openai-codex %s models",
-		(modelId) => {
-			const model = getModel("openai-codex", modelId);
-			expect(model).toBeDefined();
-			expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
-		},
-	);
+	it.each([
+		"gpt-5.4",
+		"gpt-5.5",
+		"gpt-5.6-sol",
+		"gpt-5.6-terra",
+		"gpt-5.6-luna",
+		"gpt-6-astra",
+		"gpt-6-luna",
+		"gpt-6-sol",
+	] as const)("includes xhigh for openai-codex %s models", (modelId) => {
+		const model = getModel("openai-codex", modelId);
+		expect(model).toBeDefined();
+		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
+	});
 
 	it("includes xhigh and max without off/minimal for OpenAI GPT-6 Astra", () => {
 		const model = getModel("openai", "gpt-6-astra");
 		expect(model).toBeDefined();
 		expect(getSupportedThinkingLevels(model!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+	});
+
+	it.each(["gpt-6-luna", "gpt-6-sol"] as const)("includes none through max for OpenAI %s", (modelId) => {
+		const model = getModel("openai", modelId);
+		expect(model).toBeDefined();
+		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
 	});
 
 	it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const)(

@@ -1,0 +1,108 @@
+{
+  "runId": "c9eaef76-9ef5-41c3-84c4-4c0c95c49e38",
+  "agent": "Review PR77 correctness and requirements",
+  "task": "Review PR #77 for correctness, safety, and spec compliance. READ ONLY, no file edits, builds, installations, native driver launch, screen capture or desktop input. You own the spec/correctness axis only; another reviewer owns standards. Existing worktree HEAD a87b3782015cd2c99a21c0065defacd26d75d257 matches GitHub PR head. Fixed base merge-base 92caf64f28bf9514545f85869984375de063cc0b. Exact diff: git diff 92caf64f28bf9514545f85869984375de063cc0b...a87b3782015cd2c99a21c0065defacd26d75d257. Commits: a87b378 carry dev-verified image-only repairs; c5a9327 bounded discovery/recovery; 3bb9839 ancestry merge; d3182e4 image-only observations; afea9dc atomic ownership; 290658d/6f5d8cd native CuaDriver implementation. Read AGENTS.md fully and packages/coding-agent/docs/computer-use.md fully. These docs plus current PR description are spec. PR promises bounded image-grounded Windows/Apple Silicon input; no tree/raw JSON; crops/mapping; one-use 30-second tokens; one action plus post-image; repeat guards; paginated discovery; validated partial typing; permission modes, exclusive ownership, cancellation and uncertainty; verified bundled local setup. Explicitly deferred, not bugs by themselves: cursor animation, screenshot history pruning, comprehensive hardware acceptance, stable packaging validation, production pin approval. Also read C:/Users/ash/Desktop/PROJECTS/lunR/COMPUTER_USE_RECOVERY_PLAN.md fully: later plan only, confirmed validation errors falsely warn input may have happened; check current source still has issue. Investigate independently for other actionable runtime/security/correctness issues in workflow, adapter, lease, platform runtime, permissions/integration, and release packaging. Prioritize actual bugs over speculative edge cases. Report missing/partial requirements, unrequested behavior, and wrong implementations, each with quoted spec requirement, severity, exact file/line, trigger and consequence. Avoid merely repeating acknowledged deferred scope as defect. Can run focused fake-driver/unit tests if no native GUI or build modifications; no changes or production interaction. Final report under 400 words, strongest confirmed findings first, state tests run/limits, and distinguish preexisting documented recovery issue from new discoveries. No need to upload artifacts.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 111311,
+        "output": 7064,
+        "cacheRead": 1812352,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 22
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Three findings above identify severity, source lines, trigger, consequence, and applicable spec."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git diff --stat 92caf64f28bf9514545f85869984375de063cc0b...a87b3782015cd2c99a21c0065defacd26d75d257",
+          "result": "passed",
+          "summary": "Inspected the specified PR range."
+        },
+        {
+          "command": "vitest --run test/computer-use.test.ts test/computer-adapter.test.ts test/computer-extension.test.ts",
+          "result": "not-run",
+          "summary": "Read-only tool policy blocked execution."
+        }
+      ],
+      "validationOutput": [
+        "Source review only; no driver or desktop interaction."
+      ],
+      "residualRisks": [
+        "Native behavior, PNG encoder variability, and stable packaging remain unverified here."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Reviewed image-only workflow, ownership, permissions, platform runtime, and release integration without edits.",
+      "reviewFindings": [
+        "medium, documented: workflow.ts:319 falsely warns of possible input after pre-dispatch rejection.",
+        "medium, conditional: workflow.ts:65-70 can forward unparseable raw driver text.",
+        "low, conditional: workflow.ts:156,290 compares PNG bytes rather than captured pixels."
+      ]
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\c9eaef76-9ef5-41c3-84c4-4c0c95c49e38_Review_PR77_correctness_and_requirements_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790417734128
+}

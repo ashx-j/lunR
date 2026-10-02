@@ -1,0 +1,269 @@
+{
+  "runId": "912d2efe-a677-499c-963b-6cf5edbb2a68",
+  "agent": "Integrate PR77 and repair computer-use behavior",
+  "task": "User authorizes making PR https://github.com/ashx-j/lunR/pull/77 mergeable using exactly two GPT-6 Astra high reasoning agents, then report and await next steps. You are first of two sequential full-access writers in C:/Users/ash/Desktop/PROJECTS/lunR-image-only. You own current-master integration and computer-use behavior repairs, focused tests, docs, and local commits. Second agent will take over only after you finish, owning verification and any necessary remaining build/package/test repairs. No nested agents. Do not review unrelated code or redesign. DO NOT MERGE PR, PUSH, PUBLISH, install/update daily-driver CLI, change user settings/credentials, operate desktop, launch real CuaDriver, or transmit private artifacts to public services. Local safe fake-driver tests and isolated builds permitted; not original C:/Users/ash/Desktop/PROJECTS/lunR builds. Keep untracked .pi-subagents and all private plans out of commits.\n\nInitial HEAD a87b3782015cd2c99a21c0065defacd26d75d257 on feat/image-only-computer-use equals PR head feat/native-computer-use. Original merge base 92caf64f28bf9514545f85869984375de063cc0b. Latest observed origin/master b57c14889a045e95a15a6a52c6cd39345f4c0f64, 0.2.24, PR reports conflicts. Verify working tree, fetch origin master and PR branch narrowly. Preserve PR ancestry with a normal merge of current master into this branch, no rebase/force push. If PR remote moved unexpectedly, stop and report rather than overwrite others. Resolve integration conflicts preserving current master's unrelated features plus native computer use. Root checkout has unrelated dirty work: never edit it.\n\nRead worktree AGENTS.md completely and packages/coding-agent/docs/computer-use.md fully, plus C:/Users/ash/Desktop/PROJECTS/lunR/COMPUTER_USE_RECOVERY_PLAN.md fully as PRIVATE spec. Read writing-for-agents skill at C:/Users/ash/.agents/skills/writing-for-agents/SKILL.md before updating worktree AGENTS.md. Read related startup docs completely before startup/build adjustments. Tool changes must update structured descriptions, conditional recovery guidance, coverage and applicable fingerprint/inventory; private effective prompt snapshots stay local.\n\nRequired confirmed fix: src/core/computer-use/workflow.ts execute catch currently always warns 'Input may have taken effect' at old line 319 even if bad/expired/wrong-target token or argument validation failed before driver dispatch. Implement accurate structured pre-dispatch failure (input:'not_dispatched', no input sent by THIS call) versus post-dispatch uncertainty, preserve cleanup/lease and conservative uncertain/partial outcomes. Do not imply earlier calls had no effect. Distinguish token causes only as state supports. Preserve exact target binding, 30sec lifetime, single-use token, invalidation on failed action/new observation; no fuzzy tokens, retries, escalation or persistent token registry. Conditional guidance: copy token exactly; failed call consumes token; fresh capture before next action including focus; background_unavailable recovery = fresh capture then foreground candidate, not another background shortcut; token rejection does not prove foreground typing failed. Native foreground tests require separate approval, so use fake driver sequence only.\n\nTwo review findings require focused reproduction before scoped repair: (1) workflow outcome() old lines65-70 copies unparseable driver text up to240 chars, potentially letting raw JSON/accessibility fragments into model output despite allowlisted contract. Show with safe fake reply then eliminate raw fallback leakage while preserving useful bounded structured refusal codes/recovery. (2) workflow old156/290 hashes base64 PNG encoding rather than decoded pixel values; identical pixels with differing PNG encoding can evade identical-captured-pixels repeat rule. Establish a real PNG fixture test without driver; if confirmed use existing image processing dependencies for stable pixel identity without unnecessary abstraction or costly duplicate decoding. Preserve crop/resize coordinate mapping and bounds. Do not broaden into cursor animation/history pruning/token format redesign. Standards review found only optional type-erasure and repeated-registration smells: fix only if naturally necessary, no cleanup campaign.\n\nWrite focused tests first where practical covering malformed/expired/wrong-target/consumed token zero native dispatch, post-dispatch and post-image uncertainty, background refusal fresh-capture foreground recovery, and confirmed conditional findings. Follow repo offline tsgo rules, never npm run build in packages/ai. Check dependency/worktree isolation before running tools because npm shims may point to original checkout. Commit only intended tracked source/test/docs/integration changes; never git add -A. Do not stage private artifacts, runtime binaries, credentials, generated catalogs, or unrelated files. Update AGENTS current state/build evidence/one-line decision, keeping claims honest and public-safe. Finish with exact commits/HEAD, changed files, commands/results, remaining risks and precise handoff to second agent. Save succinct handoff to C:\\Users\\ash\\Desktop\\PROJECTS\\lunR/implementation-handoff.md using permitted file tools. No push; parent handles PR update after second agent.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-astra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-astra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-astra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 166821,
+        "output": 28898,
+        "cacheRead": 6891392,
+        "cacheWrite": 0,
+        "cost": 10.004502,
+        "turns": 58
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "checked",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Merged current master preserving ancestry and implemented scoped dispatch reporting, token recovery, raw-text filtering, and decoded-pixel identity fixes."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Committed focused tests, recorded red-before-green reproductions, builds and first-request checks, and supplied an actionable verification handoff."
+        }
+      ],
+      "changedFiles": [
+        "AGENTS.md",
+        "packages/coding-agent/package.json",
+        "packages/coding-agent/docs/computer-use.md",
+        "packages/coding-agent/src/builtin-extensions/lunr-computer-use.ts",
+        "packages/coding-agent/src/core/permissions.ts",
+        "packages/coding-agent/src/core/plan-mode.ts",
+        "packages/coding-agent/src/core/settings-manager.ts",
+        "packages/coding-agent/src/core/computer-use/workflow.ts",
+        "packages/coding-agent/src/core/computer-use/image.ts",
+        "packages/coding-agent/src/core/computer-use/schemas.ts",
+        "packages/coding-agent/src/utils/image-resize-core.ts",
+        "packages/coding-agent/src/modes/interactive/components/settings-selector.ts",
+        "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+        "packages/coding-agent/test/computer-cron-factory.test.ts",
+        "packages/coding-agent/test/computer-extension.test.ts",
+        "packages/coding-agent/test/computer-image-photon.test.ts",
+        "packages/coding-agent/test/computer-image.test.ts",
+        "packages/coding-agent/test/computer-use.test.ts",
+        "scripts/check-interactive-first-paint.mjs"
+      ],
+      "testsAddedOrUpdated": [
+        "computer-use: malformed, expired, wrong-target and unavailable tokens; zero dispatch; background-to-foreground recovery; raw-text leakage; partial outcomes; unconfirmed cleanup",
+        "computer-image-photon: real PNG encoding-independent fingerprints and repeated-action rejection",
+        "computer-image: pixel-fingerprint fixture compatibility",
+        "computer-extension: current permission guidance and exact-token recovery",
+        "computer-cron-factory: current read-only permission integration",
+        "check-interactive-first-paint: refreshed supported-host browser-on/off fingerprints"
+      ],
+      "commandsRun": [
+        {
+          "command": "git fetch origin master feat/native-computer-use; git merge --no-commit --no-ff origin/master",
+          "result": "passed",
+          "summary": "Remote PR head matched expected HEAD; resolved eight conflicts and committed normal merge."
+        },
+        {
+          "command": "npm ci --ignore-scripts --no-audit --no-fund",
+          "result": "passed",
+          "summary": "Installed isolated worktree dependencies; verified local workspace links."
+        },
+        {
+          "command": "Offline tsgo builds in tui, ai, agent, coding-agent, orchestrator order",
+          "result": "passed",
+          "summary": "All five builds passed."
+        },
+        {
+          "command": "npm --prefix packages/coding-agent run build",
+          "result": "passed",
+          "summary": "Coding-agent build and Node bundle passed."
+        },
+        {
+          "command": "Focused computer workflow, image, extension and cron Vitest suites",
+          "result": "passed",
+          "summary": "Final result 82/82 across five suites."
+        },
+        {
+          "command": "Expanded computer, permissions and image-processing Vitest suites",
+          "result": "failed",
+          "summary": "138/139 passed. Installation fixture lacks its expected native payload."
+        },
+        {
+          "command": "node scripts/check-interactive-first-paint.mjs",
+          "result": "passed",
+          "summary": "Both browser settings and first-turn subagent status, MCP, LSP and local fetch passed."
+        },
+        {
+          "command": "Changed-file correctness lint; image-resize-core full Biome; git diff --check; ancestry and empty-index checks",
+          "result": "passed",
+          "summary": "Correctness checks passed; existing dense computer files retain formatter findings."
+        }
+      ],
+      "validationOutput": [
+        "Initial regression run reproduced 14 failures before repair.",
+        "Malformed fake driver text leaked before repair; real PNG compression differences bypassed unchanged detection before repair.",
+        "Removing computer_load from captured inventories exactly reproduces both current-master fingerprints.",
+        "Logs, isolated prompt snapshots and complete merge changed-path inventory remain private under .pi-subagents/."
+      ],
+      "residualRisks": [
+        "Second writer must resolve computer-install.test.ts missing-payload fixture and complete independent/package verification.",
+        "Native foreground typing and platform acceptance remain unverified and require separate approval.",
+        "No production approval, cursor animation or measured token-savings claim.",
+        "Remote PR remains unchanged until parent pushes."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Normal master integration plus a 12-file recovery repair commit with 300 insertions and 35 deletions. Other merge changes originate from master.",
+      "reviewFindings": [
+        "Remaining verification blocker: computer-install.test.ts expects a native payload absent from the fresh source installation."
+      ],
+      "manualNotes": "Only untracked .pi-subagents remains. No native driver, desktop, installed CLI, settings, credentials, publication or external model was used. Independent reviewed acceptance belongs to the second writer."
+    },
+    "reviewResult": {
+      "status": "needs-parent-decision",
+      "findings": [
+        {
+          "severity": "non-blocking",
+          "issue": "Reviewed acceptance requires an independent reviewer result.",
+          "rationale": "The run cannot be marked reviewed from child evidence alone."
+        }
+      ]
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\912d2efe-a677-499c-963b-6cf5edbb2a68_Integrate_PR77_and_repair_computer-use_behavior_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790419049171
+}

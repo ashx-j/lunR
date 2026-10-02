@@ -1,0 +1,227 @@
+{
+  "runId": "f6df13a2-36e5-48a4-b966-e845e761da37",
+  "agent": "Implement rich tool results and desktop hover contracts",
+  "task": "Implement computer-use tool contract/lifecycle and Windows desktop-hover exposure. You are second of exactly two heavy implementation children, isolated worktree C:/Users/ash/Desktop/PROJECTS/lunR-computer-recovery-tools branch work/computer-recovery-tools base b216d44. Read C:/Users/ash/Desktop/PROJECTS/lunR/COMPUTER_USE_RECOVERY_PLAN.md and checkout packages/coding-agent/docs/computer-use.md fully. Original investigator finished. No native driver launch/GUI/provider calls/native payload changes/releases/installations/push/PR. Shared node_modules junction goes to fresh integration checkout, do not change dependencies or build shared packages.\n\nExclusive ownership: packages/coding-agent/src/core/computer-use/{schemas.ts,policy.ts}; packages/coding-agent/src/builtin-extensions/lunr-computer-use.ts; packages/coding-agent/test/computer-extension.test.ts and new focused extension agent-loop test only if needed; packages/coding-agent/docs/computer-use.md. May update directly relevant permission/child-tool coverage files only where hover registration requires it, tell parent exact paths. DO NOT edit workflow.ts, adapter.ts, computer-use.test.ts, computer-adapter.test.ts, computer-image-photon.test.ts, AGENTS, manifests, first-paint snapshot. Sibling owns runtime/workflow/tests. Parent integrates, builds, first-request inventory, AGENTS. Commit locally only your files in focused commits and report ids/tests/limits.\n\nPREAGREED cross-child contract:\n1. Workflow execute Result retains content/internal isError/details.observation and adds details.computer:{failed:boolean,workflow:'ready'|'stopped'|'cleanup_unconfirmed'} to all workflow results. Recoverable failures return structured result, not throw. Your extension should return content/details intact even when failed; use existing tool_result hook scoped to computer tools and safe detail marker to return {isError:true}. Current agent loop ignores result-level isError, so simply returning workflow isError isn't sufficient. MCP adapter error-signal.ts uses analogous existing hook. Do not redesign agent API. Keep a ready workflow through recoverable failures. Stop/discard only non-ready workflow; preserve original outcome if cleanup is unconfirmed rather than replacing evidence with another exception. Unexpected throws still safely close. Session/settings/agent_end shutdown, generation guards, startup laziness, child exclusion, image model requirements remain.\n2. New computer_hover schema WINDOWS ONLY desktop-only {desktop:true,foreground:true,observation:string,x:number,y:number}. Mutation, blocked in read-only and when foreground disallowed, parent-only. Native pinned move_cursor desktop uses SetCursorPos, no real window/background hover (window scope is synthetic overlay, --no-overlay active). Sibling implements mapping, 700ms cancellable dwell and one full desktop post-image. Your schema/description/register/active roster must expose hover only on Windows supported host, no PID/window_id/dwell params, explain real cursor foreground movement/no click. Ensure stable existing tool coverage OTHER_PLATFORMS and lifecycle allowlist/child exclusion accurately reflect conditional registration. Do not expose unsupported hover merely hidden then activatable. Existing computerSchemas/COMPUTER_TOOLS may list all capabilities but registration and loaded roster select actual supported tools; preserve equality tests sibling will integrate. Discuss any shared contract adjustment via supervisor.\n3. computer_apps optional include_windows:boolean. Requires query and no pid if true. Description: bounded window enrichment for named app lookup, max5 running matched PIDs/max50 window rows, >5 asks narrow/PID rather than arbitrary selection; ordinary query just app discovery stays cheap. Sibling implements nested windows plus explicit partial/truncation metadata and native PID preservation for UWP. New schema should describe query collection scope honestly. Launch remains {name} no observation token. Launch description no longer promises a returned window; outcomes guide apps/query/pid then observe.\n\nImplement extension-level recovery and rich error propagation tests, INCLUDING an actual agent-loop or AgentSession seam so model-facing failed result retains image+details+isError. Workflow-only fake asserts miss current text-only throw loss. You can mock workflow imported module to agreed result contract since sibling not integrated yet. Test no automatic extra computer_load, no native initialization for read-only/local validation where relevant, loaded roster across recoverable error, shutdown/settings/permission changes/cancellation and no unsupported hover, child policy. Do not operate real desktop. Describe API behavior/docs grounded in implemented contract, mark live acceptance unverified and do not claim original click cause fixed. Document preserved 30-second token/target rules, safe recovery without retry, launch timeout intent (sibling e.g45s inside90s), optional discovery enrichment and desktop hover limitation/side effects. Do not overwrite historical qualification logs with invented results; concise current change section if needed.\n\nParent will baseline-build integration checkout dependencies for workspace import availability; tests may use shared vitest binary. Follow project style and no unnecessary comments/any. Report local commits and exact verification, remaining integration needs. No independent code-review request.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 107384,
+        "output": 13561,
+        "cacheRead": 3328896,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 43
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "checked",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Commit 99e58ec changes only the five owned files and implements conditional hover registration, schemas, policy, extension recovery lifecycle, and documentation."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Focused tests include an actual agent-loop fixture proving that a failed result retains its image, details, and error flag. Typecheck and whitespace checks pass."
+        }
+      ],
+      "changedFiles": [
+        "packages/coding-agent/src/core/computer-use/schemas.ts",
+        "packages/coding-agent/src/core/computer-use/policy.ts",
+        "packages/coding-agent/src/builtin-extensions/lunr-computer-use.ts",
+        "packages/coding-agent/test/computer-extension.test.ts",
+        "packages/coding-agent/docs/computer-use.md"
+      ],
+      "testsAddedOrUpdated": [
+        "packages/coding-agent/test/computer-extension.test.ts"
+      ],
+      "commandsRun": [
+        {
+          "command": "cd packages/coding-agent && node node_modules/vitest/vitest.mjs --run test/computer-extension.test.ts",
+          "result": "passed",
+          "summary": "12/12 tests passed."
+        },
+        {
+          "command": "cd packages/coding-agent && node node_modules/vitest/vitest.mjs --run test/computer-use.test.ts",
+          "result": "passed",
+          "summary": "79/79 tests passed against the pre-integration workflow."
+        },
+        {
+          "command": "node node_modules/@typescript/native-preview/bin/tsgo.js -p packages/coding-agent/tsconfig.build.json --noEmit",
+          "result": "passed",
+          "summary": "Coding-agent production typecheck passed."
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        }
+      ],
+      "validationOutput": [
+        "Agent-loop test confirms failed computer result content, image, details, and isError reach the recorded tool result.",
+        "Working tree is clean; no files are staged."
+      ],
+      "residualRisks": [
+        "Integration requires the sibling workflow to supply details.computer on every workflow result.",
+        "Desktop hover, native failure behavior, and the original click cause have not been live-qualified.",
+        "schemas.ts retains pre-existing Biome formatting findings."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Added bounded discovery and Windows hover contracts, preserved structured failure results through extension lifecycle and agent-loop error handling, and updated computer-use documentation.",
+      "reviewFindings": [
+        "No blockers found in the owned-file checks; combined workflow integration remains to be verified."
+      ],
+      "manualNotes": "Commit: 99e58ec. No native driver, GUI, provider, installation, release, push, or PR action was performed."
+    },
+    "reviewResult": {
+      "status": "needs-parent-decision",
+      "findings": [
+        {
+          "severity": "non-blocking",
+          "issue": "Reviewed acceptance requires an independent reviewer result.",
+          "rationale": "The run cannot be marked reviewed from child evidence alone."
+        }
+      ]
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\f6df13a2-36e5-48a4-b966-e845e761da37_Implement_rich_tool_results_and_desktop_hover_contracts_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790452361358
+}

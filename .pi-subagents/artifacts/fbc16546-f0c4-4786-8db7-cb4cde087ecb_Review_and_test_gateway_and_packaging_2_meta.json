@@ -1,0 +1,218 @@
+{
+  "runId": "fbc16546-f0c4-4786-8db7-cb4cde087ecb",
+  "agent": "Review and test gateway and packaging",
+  "task": "Review/test current lunR gateway/session handoff, packaging/releases/dependency and shipped docs changes from qualified PRs #1-35,#37,#38,#47,#51-64,#66-70,#72,#86,#87,#97,#98,#104,#105,#112-115 plus #96 outstanding gateway scenarios. Full PR specs in C:/Users/ash/AppData/Local/Temp/lunr-bash-08c99fbe8321da42.log read chunks. Exclude Anthropic subscriptions completely including release-contained changes. Own gateway/packaging only. Run focused fixture tests for ownership, handoff, approval, cron authorization, service lifecycle logic and package contracts. No actual bot messages, service installs/start/stop/reboots, credentials, real providers, publication or GitHub writes. No product edits or daily-driver builds. Scratch outside repo permitted. Report concrete severity/file/line/reproduction, test commands/results, baseline failures, untestable live gaps, qualified PR disposition. Include separate pi remnants. Parent writes final report; other agents handle UI/executor/providers/pi. No nested agents.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 126584,
+        "output": 9124,
+        "cacheRead": 3012096,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 37
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "failed",
+        "message": "Required criterion 'criterion-1' was reported as not-applicable."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "not-applicable",
+        "message": "changed-files evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "not-applicable",
+        "message": "tests-added evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-applicable",
+          "evidence": "This was a read-only review and test assignment; no product change was requested."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Findings include file locations and a local reproduction; focused test counts, package checks, and unverified live scenarios are reported."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "npx vitest --run test/gateway-*.test.ts test/cron-jobs.test.ts test/cron-scheduler.test.ts test/permissions.test.ts test/interactive-session-handoff.test.ts test/session-handoff.test.ts",
+          "result": "passed",
+          "summary": "22 files, 328 tests passed."
+        },
+        {
+          "command": "npx vitest --run test/install-cli.test.ts test/lunr-npm-names.test.ts test/browser-install.test.ts",
+          "result": "passed",
+          "summary": "3 files, 23 tests passed."
+        },
+        {
+          "command": "node scripts/generate-coding-agent-shrinkwrap.mjs --check && node scripts/generate-coding-agent-install-lock.mjs --check && node scripts/check-no-workflow-npm-publish.mjs && node scripts/check-ts-relative-imports.mjs && node scripts/check-lockfile-commit.mjs",
+          "result": "passed",
+          "summary": "Locks are current; policy checks exited successfully."
+        },
+        {
+          "command": "Local fake-adapter reproduction of queued gateway notice retry after invalidateGatewayDialogs and conversation rebind",
+          "result": "passed",
+          "summary": "Retry delivered OLD SESSION result after the conversation changed."
+        },
+        {
+          "command": "npm pack --dry-run --ignore-scripts --json --workspace=@earendil-works/pi-coding-agent",
+          "result": "passed",
+          "summary": "Listed 169 source/doc/example files in the unbuilt worktree; this does not validate a compiled release tarball."
+        }
+      ],
+      "validationOutput": [
+        "Gateway/session/cron/permission fixtures: 328 passed, 0 failed.",
+        "Install/name/browser fixtures: 23 passed, 0 failed.",
+        "Fake adapter: pending [{epoch:0,text:'OLD SESSION result'}]; after rebind, attempts=2 and delivered=['OLD SESSION result'].",
+        "Five workspace packages are version 0.2.24."
+      ],
+      "residualRisks": [
+        "Live Telegram and Discord behavior, native service installation and reboot, and compiled-current packaging were not tested.",
+        "Workspace imports may use older linked dist outputs; no isolated build was permitted.",
+        "Local npm 12 pack output differs from the npm 10 shape expected by the publication script."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No changes.",
+      "reviewFindings": [
+        "medium: packages/coding-agent/src/gateway/presenter.ts:81-109,116-118 - queued notices can retry into a replacement conversation because flush ignores their stored epoch.",
+        "low: packages/coding-agent/docs/features.md:146 - documented upload path disagrees with agent-bridge.ts:572.",
+        "low, separate pi remnants: shipped example comments such as examples/sdk/06-extensions.ts:8-9 instruct users to use retired .pi directories."
+      ],
+      "manualNotes": "Review target b57c148. No bot messages, service changes, credentials, publication, GitHub writes, or daily-driver builds."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\fbc16546-f0c4-4786-8db7-cb4cde087ecb_Review_and_test_gateway_and_packaging_2_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790428819414
+}

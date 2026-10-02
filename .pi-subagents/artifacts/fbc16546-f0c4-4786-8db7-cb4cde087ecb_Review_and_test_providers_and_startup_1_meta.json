@@ -1,0 +1,147 @@
+{
+  "runId": "fbc16546-f0c4-4786-8db7-cb4cde087ecb",
+  "agent": "Review and test providers and startup",
+  "task": "Review/test current lunR provider/catalog/auth/usage/startup behavior from qualified closed PRs #1-35,#37,#38,#47,#51-64,#66-70,#72,#86,#87,#97,#98,#104,#105,#112-115. PR body specs in C:/Users/ash/AppData/Local/Temp/lunr-bash-08c99fbe8321da42.log read chunks. EXCLUDE Anthropic subscription work entirely. Own providers, Codex Fast, multi-plan usage, catalogs and cold-start only. Inspect requirements vs implementation and repo standards; run focused fixture tests, no real credentials or live providers. Report severity/file/line/evidence, commands/results, baseline vs new failures, coverage/disposition for applicable PRs. Separate pi remnants. No product edits, daily-driver dist builds, installs, network auth, services, publication or GitHub writes. Scratch repro outside repo permitted. Parent writes report; UI/subagent/gateway/pi agents separate. No nested agents.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 113315,
+        "output": 7775,
+        "cacheRead": 1772800,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 22
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Three file-and-line findings above, including a mocked reproduction of the provider-only usage cache defect on b57c148."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "coding-agent Vitest provider/catalog/auth/startup primary set",
+          "result": "failed",
+          "summary": "115 passed, 1 existing stale xAI fixture failed."
+        },
+        {
+          "command": "AI Vitest xAI/OpenCode/Codex provider primary set",
+          "result": "failed",
+          "summary": "114 passed, 1 existing stale OpenCode fixture failed."
+        },
+        {
+          "command": "coding-agent additional startup/auth/catalog Vitest set",
+          "result": "passed",
+          "summary": "32 passed."
+        },
+        {
+          "command": "AI Codex OAuth/cache-affinity/error Vitest set",
+          "result": "passed",
+          "summary": "9 passed, 1 skipped."
+        },
+        {
+          "command": "coding-agent slash/usage/Grok Vitest set",
+          "result": "passed",
+          "summary": "53 passed."
+        },
+        {
+          "command": "AI focused service-tier Vitest set",
+          "result": "passed",
+          "summary": "8 passed, 58 filtered out."
+        },
+        {
+          "command": "node --import tsx source-only mocked usage-cache reproduction",
+          "result": "passed",
+          "summary": "Account B reused A's 10% without a fetch; an old in-flight A result overwrote B's fresh 30% after cache clear."
+        },
+        {
+          "command": "Vitest --reporter=basic exploratory invocations",
+          "result": "failed",
+          "summary": "Installed Vitest has no basic reporter; no tests executed in these attempts. Corrected invocations passed."
+        },
+        {
+          "command": "git status --short in lunR-review-audit",
+          "result": "passed",
+          "summary": "Clean worktree."
+        }
+      ],
+      "validationOutput": [
+        "Primary fixture failures reproduce at clean b57c148 and are baseline failures, not changes from this review.",
+        "The scratch repro used mocked HTTP responses and imported worktree TypeScript source."
+      ],
+      "residualRisks": [
+        "No built-current CLI, live-provider, or real credential verification.",
+        "The OpenCode Responses mapping was not checked against a live endpoint.",
+        "Junctioned dependencies prevent treating these source tests as compiled-current verification."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff.",
+      "reviewFindings": [
+        "medium: packages/coding-agent/src/core/usage-service.ts:119-153,182-185 - provider-only cache crosses accounts, and cleared in-flight requests can restore stale quota.",
+        "low: packages/coding-agent/test/model-runtime-catalog-auth.test.ts:205 - stale Grok 4.7 compat assertion fails on baseline.",
+        "low: packages/ai/test/opencode-catalog.test.ts:107-117 - free-model API assertion omits Muse Spark 1.3 Responses and fails on baseline."
+      ],
+      "manualNotes": "Parent owns the combined report. Original dirty checkout results were discarded after switching to the clean b57c148 worktree."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\fbc16546-f0c4-4786-8db7-cb4cde087ecb_Review_and_test_providers_and_startup_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790428761574
+}

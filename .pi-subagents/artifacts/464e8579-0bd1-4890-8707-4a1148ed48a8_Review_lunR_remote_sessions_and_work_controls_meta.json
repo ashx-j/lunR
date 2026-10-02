@@ -1,0 +1,107 @@
+{
+  "runId": "464e8579-0bd1-4890-8707-4a1148ed48a8",
+  "agent": "Review lunR remote sessions and work controls",
+  "task": "Read-only architecture/correctness review of lunR gateway for user wanting full remote coding from phone. Cwd C:/Users/ash/Desktop/PROJECTS/lunR. Own inspection only of packages/coding-agent/src/gateway/{agent-bridge,router,approval,store,commands,cron}.ts and relevant core integration/tests. Parent inspects CLI/service/settings/platform adapters, another child inspects Hermes. Do not edit files or start gateway/live services/access credentials. Read applicable AGENTS and relevant docs completely. Trace remote parity and reliability: loaded tools/extensions, permission/plan approval, subagent lifecycle and questions/notifications, goal/cron, persistent sessions/resume/project switching, concurrent phone/local session, busy stop/new handling, cold first turn. Identify confirmed gaps or bugs with file:line evidence, distinguish unverified concerns. Recommend smallest coherent changes for genuine away-from-home work. Run only focused safe tests if useful; avoid broad suite. Report <=1100 words, code references and residual uncertainty.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-terra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 208762,
+        "output": 12882,
+        "cacheRead": 4898816,
+        "cacheWrite": 0,
+        "cost": 1.5518712000000006,
+        "turns": 39
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Five concrete findings include path/line evidence and severity."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "npx vitest --run test/gateway-agent-bridge.test.ts test/gateway-router.test.ts test/gateway-approval.test.ts test/gateway-commands.test.ts test/gateway-cron.test.ts test/gateway-store.test.ts",
+          "result": "not-run",
+          "summary": "The active plan-mode guard blocked the read-only test command."
+        }
+      ],
+      "validationOutput": [
+        "Read-only static trace across gateway, core session/permission/extension integration, built-in cron, subagent lifecycle, and focused gateway tests."
+      ],
+      "residualRisks": [
+        "Cold first-turn latency was not live-tested.",
+        "Concurrent session-file loss was not reproduced, though no locking or reload protocol exists."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed.",
+      "reviewFindings": [
+        "P1: extension-command UI/custom-message feedback is not delivered to gateway chats.",
+        "P1: gateway ignores configured defaultPermissionMode and has no remote mode control.",
+        "P1: gateway cannot switch projects or rebuild cwd-bound services from a phone.",
+        "P2: local and gateway processes can concurrently mutate the same session file.",
+        "P2: headless subagent auto-drain removes practical async mobile behavior."
+      ],
+      "manualNotes": "No services, credentials, adapters, or gateway processes were started."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\464e8579-0bd1-4890-8707-4a1148ed48a8_Review_lunR_remote_sessions_and_work_controls_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1789914919956
+}

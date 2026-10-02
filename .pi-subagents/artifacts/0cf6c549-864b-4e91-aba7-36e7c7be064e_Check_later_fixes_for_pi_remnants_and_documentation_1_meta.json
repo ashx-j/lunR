@@ -1,0 +1,121 @@
+{
+  "runId": "0cf6c549-864b-4e91-aba7-36e7c7be064e",
+  "agent": "Check later fixes for pi remnants and documentation",
+  "task": "Reconcile existing review findings with later PRs, user requests exactly two standard agents and parent edits final report. Own P1-P6, all intentional/unresolved pi remnants (including originator header) and D1 in C:/Users/ash/Desktop/PROJECTS/lunR/LUNR_REVIEW_FINDINGS.md. Do not edit. Read report, inspect relevant current source and git/PR history. Prior target was b57c148 through PR115; original cwd older dirty e36432c. For EACH assigned finding and each distinct subitem where outcomes differ determine whether later PRs already fixed, partially fixed, superseded, or left it current. Check latest public GitHub closed/merged and open PR metadata via API GET (node fetch through bash if gh absent), not only cached historical dataset. Verify actual code/diff, branch and merge status. Distinguish open fix from stable merged fix and intentionally retained compatibility. No broad testing necessary. Return exhaustive matrix with PR/commit links, branch/status, evidence locations and recommended report edits. No edits, builds, installs, credentials, services, remote mutations or nested agents. Parent owns report edits and other standard agent owns R1-R4, T1-T3 and packaging. Preserve uncertainty for unsupported attribution.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:low",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:low"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:low",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 51555,
+        "output": 3642,
+        "cacheRead": 420608,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 11
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Matrix identifies P1-P6 and D1 by severity, current source locations, merged baseline, open PR status, and recommended report treatment."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short --branch; git log --all --oneline -35; git show origin/master:<relevant paths>",
+          "result": "passed",
+          "summary": "Confirmed dirty working checkout, merged b57c148 baseline, and retained source behavior."
+        },
+        {
+          "command": "GitHub REST GET /repos/ashx-j/lunR/pulls?state=all and /pulls/{116,117,118,119,77}/files via node fetch",
+          "result": "passed",
+          "summary": "API returned 200; PRs 116-119 and 77 are open, and their file lists were checked."
+        },
+        {
+          "command": "rg and git diff b57c148..origin/fix/gateway-usability-and-recovery on assigned source and docs",
+          "result": "passed",
+          "summary": "Confirmed surviving Pi references and that open PR119 does not correct the D1 path."
+        }
+      ],
+      "validationOutput": [
+        "No later merged fix verified for P1-P6 or D1.",
+        "PR119 retains .lunr/uploads/ in docs while gateway source writes .lunr/gateway-uploads/."
+      ],
+      "residualRisks": [
+        "P1's process-wide exception behavior remains high severity.",
+        "P3 was not live OAuth-qualified; the Codex originator header's protocol requirement remains unverified.",
+        "Open PRs can change before merge; findings describe the API metadata and inspected heads at review time."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed.",
+      "reviewFindings": [
+        "high: packages/coding-agent/src/builtin-extensions/pi-lsp-extension/src/index.ts:147-156 - P1 uncaught-exception handler persists after shutdown.",
+        "medium: packages/coding-agent/src/builtin-extensions/pi-subagents/src/slash/prompt-workflows.ts:298 - P2 duplicate /chain-prompts registration persists.",
+        "medium: packages/coding-agent/src/builtin-extensions/pi-mcp-adapter/mcp-oauth-provider.ts:119-135 - P3 external Pi OAuth identity persists.",
+        "low: packages/coding-agent/src/builtin-extensions/pi-mcp-adapter/direct-tools.ts:146 - P4 branding remains across the listed tool and UI locations.",
+        "low: packages/coding-agent/docs/security.md:41 - P5 upstream invocation and path guidance remains across the listed docs, examples, and migration links.",
+        "low: packages/coding-agent/src/builtin-extensions/pi-ollama-cloud/index.ts:8 - P6 dormant installation comments remain.",
+        "low: packages/coding-agent/docs/features.md:146 - D1 upload path differs from src/gateway/agent-bridge.ts:572."
+      ],
+      "manualNotes": "Parent owns report edits. Retain intentional compatibility separately from visible branding defects; do not assert that an open PR is a merged fix."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\0cf6c549-864b-4e91-aba7-36e7c7be064e_Check_later_fixes_for_pi_remnants_and_documentation_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790429395377
+}

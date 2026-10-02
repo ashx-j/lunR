@@ -1,0 +1,106 @@
+{
+  "runId": "d40f51c1-6d34-4ff3-b4c3-7faaf214b1ea",
+  "agent": "Research optional headless browser for lunR",
+  "task": "Research the best way to add an optional headless browser capability to lunR so agents can interact with websites, beyond the existing web_search and fetch_content tools. This is research only: do not modify files, install anything, or change settings. User explicitly wants browser automation as an additional option, not a replacement for search/fetch. Inspect relevant lunR architecture and existing web/MCP capabilities, read relevant docs completely, and use current web research with citations to official sources. Compare practical options such as Playwright directly, a browser MCP integration, and other credible agent-oriented approaches, focusing on a simple maintainable TypeScript integration, Windows support, lazy loading/startup impact, browser installation/lifecycle, accessibility/DOM snapshots versus screenshots, session state, security and permissions, and token/runtime costs. Recommend a concrete MVP tool design and routing guidance that keeps search for discovery and fetch for ordinary readable pages, reserving browser actions for interaction/JS-dependent tasks. Distinguish what exists today from proposed work, explain tradeoffs and rough implementation scope, and identify any decisions Ash needs to make. Do not perform a general code review. Return a concise plain-English recommendation with enough technical detail to guide a later implementation and source links. All file ownership is read-only; no implementation is authorized.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-terra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 216972,
+        "output": 7281,
+        "cacheRead": 2575872,
+        "cacheWrite": 0,
+        "cost": 1.0364904000000001,
+        "turns": 22
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete architecture findings include packages/coding-agent/src/builtin-extensions/pi-web-access/index.ts, extract.ts, pi-mcp-adapter/index.ts, direct-tool-executor.ts, core/permissions.ts, and builtin-extensions/index.ts. A high-severity MCP permission-routing risk and residual risks are documented."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short && git diff --check",
+          "result": "passed",
+          "summary": "No changes made by this research; diff check passed. Existing unrelated boot-ascii.md deletion and untracked local files were present."
+        }
+      ],
+      "validationOutput": [
+        "Read relevant lunR docs and source architecture.",
+        "Used current official Playwright, Playwright MCP, Playwright CLI, Chrome DevTools MCP, Stagehand, and MCP security sources."
+      ],
+      "residualRisks": [
+        "Browser automation can submit forms, expose authenticated state, execute untrusted page content, and access internal network targets without explicit policy controls.",
+        "Playwright browser binaries add hundreds of MB and browser startup cost.",
+        "Existing generic/direct MCP actions are not classified by lunR's builtin manual permission gate."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Research only. No files modified.",
+      "reviewFindings": [
+        "high: packages/coding-agent/src/core/permissions.ts and packages/coding-agent/src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts - MCP and generated direct MCP tools are not classified as mutating by lunR's manual permission gate, so a browser MCP integration must not be treated as permission-equivalent to a first-party browser tool.",
+        "info: packages/coding-agent/src/builtin-extensions/pi-web-access/extract.ts - ordinary extraction detects JavaScript-rendered pages but cannot interact with them, which is the concrete gap an optional browser capability would cover."
+      ],
+      "manualNotes": "No implementation, installation, or settings changes were performed."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\d40f51c1-6d34-4ff3-b4c3-7faaf214b1ea_Research_optional_headless_browser_for_lunR_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1789913429509
+}

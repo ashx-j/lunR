@@ -109,6 +109,18 @@ describe("openai-completions tool_choice", () => {
 		mockState.chunks = undefined;
 	});
 
+	it("sends NVIDIA Kimi K3's supported reasoning effort", async () => {
+		const model = getModel("nvidia", "moonshotai/kimi-k3");
+		expect(model).toBeDefined();
+		if (!model) return;
+
+		const payload = await captureSimpleParams(model, "max");
+		expect(payload.reasoning_effort).toBe("max");
+
+		const lowPayload = await captureSimpleParams(model, "low");
+		expect(lowPayload.reasoning_effort).toBe("low");
+	});
+
 	it("forwards toolChoice from simple options to payload", async () => {
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;

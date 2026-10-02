@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added GPT-6 Sol and GPT-6 Luna to OpenAI, OpenAI Codex, and Azure OpenAI Responses with current context limits, pricing tiers, and reasoning levels.
+
 ## [0.2.21] - 2026-09-13
 
 ## [0.2.19] - 2026-09-12

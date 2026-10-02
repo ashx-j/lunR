@@ -1,0 +1,117 @@
+{
+  "runId": "c350bdab-18b5-4839-9428-fe73afbede97",
+  "agent": "Review OAuth bridge security and routing",
+  "task": "Read-only security review of branch feat/anthropic-claude-code-oauth in C:/Users/ash/Desktop/PROJECTS/lunR-anthropic-oauth against ANTHROPIC_OAUTH_CLAUDE_CODE_PLAN.md. Inspect diff and specifically auth routing, legacy OAuth leaks, worker protocol, cancellation, replay. Report confirmed bugs with file:line and minimal fixes, no edits.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 96532,
+        "output": 10371,
+        "cacheRead": 3150464,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 48
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Five concrete findings above include severity, file:line, mechanism, and minimal fix."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short; git branch --show-current; git diff --stat master...HEAD; git diff --name-only master...HEAD",
+          "result": "passed",
+          "summary": "Confirmed feat/anthropic-claude-code-oauth and unstaged implementation files."
+        },
+        {
+          "command": "git diff --check",
+          "result": "failed",
+          "summary": "Trailing whitespace at packages/ai/src/auth/oauth/anthropic.ts:107."
+        },
+        {
+          "command": "cd packages/ai && npx vitest --run test/anthropic-oauth.test.ts test/oauth-auth.test.ts test/providers.test.ts",
+          "result": "not-run",
+          "summary": "Blocked by the read-only plan-mode command gate."
+        }
+      ],
+      "validationOutput": [
+        "Traced auth resolution, direct Messages authentication, external route selection, worker records, cancellation, and carrier replay against ANTHROPIC_OAUTH_CLAUDE_CODE_PLAN.md."
+      ],
+      "residualRisks": [
+        "Vendored native tests and cross-platform subprocess cleanup were not executed in this read-only review.",
+        "No user-authorized Claude Code subscription qualification was performed."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "The unstaged branch work replaces direct Anthropic OAuth with an external Claude Code credential, a lazy Node/Python bridge, vendored transport, setup flow, and catalog routing.",
+      "reviewFindings": [
+        "high: packages/ai/src/api/anthropic-messages.ts:510 - OAuth-shaped authentication headers bypass the legacy-token rejection and can be forwarded to direct Anthropic HTTP.",
+        "high: packages/ai/src/api/anthropic-claude-code-bridge.ts:49-58 - replay carrier matching ignores edited or removed thinking and connection identity.",
+        "medium: packages/ai/src/providers/anthropic.ts:28-30 - stored subscription routes restrict the model list even when a genuine ambient API key takes precedence.",
+        "medium: packages/ai/src/api/anthropic-claude-code-bridge.ts:186-189 - direct stream thinkingEnabled and effort options are silently ignored.",
+        "medium: packages/ai/src/api/anthropic-claude-code-bridge.ts:195-200 - idle timeout force-kills without the required cancel record and cannot observe replay acknowledgment progress."
+      ],
+      "manualNotes": "Read-only review; no files edited or staged."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\c350bdab-18b5-4839-9428-fe73afbede97_Review_OAuth_bridge_security_and_routing_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790182797209
+}

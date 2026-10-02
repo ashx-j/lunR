@@ -1,0 +1,11 @@
+Review pinned to clean `origin/master` at `b57c148`. I made no repository changes. The focused gateway, session, approval, cron, and permission tests passed **328/328**. Packaging fixture tests passed **23/23**, and the lock and publication-policy checks passed.
+
+### Findings
+
+- **Medium, stale gateway notification:** `packages/coding-agent/src/gateway/presenter.ts:81-109,116-118` stores an epoch with each queued notice but never checks it when retrying delivery. I reproduced this with a local fake adapter: the first send failed, the conversation changed, and the retry delivered `"OLD SESSION result"` to the new conversation. No bot or network was used.
+- **Low, incorrect shipped path:** `packages/coding-agent/docs/features.md:146` says documents go to `.lunr/uploads/`; `src/gateway/agent-bridge.ts:572` writes them to `.lunr/gateway-uploads/`.
+- **Separate pi remnants:** Shipped example instructions still direct users to `~/.pi/agent`, including `examples/sdk/06-extensions.ts:8-9` and `examples/extensions/commands.ts:8`. The documented `pi.dev` default for `/share`, `PI_*` names, and workspace package names are intentional compatibility, not findings.
+
+Scoped disposition: the available fixtures support the gateway and release-package contracts, including PR #96's ownership and handoff logic, but **PR #96 is not fully qualified for live use** until its Telegram/Discord and native startup scenarios are verified. The stale-notification finding needs a fix. The shipped-doc findings warrant correction. I found no failure in the tested lock or publication-policy checks.
+
+No compiled-current package claim is possible: this isolated worktree has no `dist`, and linked workspace dependencies may resolve builds from the older checkout. Local npm 12 also returns a keyed `npm pack --json` result that `scripts/publish.mjs:182` cannot parse; the documented Node 22 publication workflow uses npm 10. I did not run a build, publication, bot interaction, service operation, credential flow, or live provider check. The repository's documented broader Windows fixture failures were not exercised in this focused run.

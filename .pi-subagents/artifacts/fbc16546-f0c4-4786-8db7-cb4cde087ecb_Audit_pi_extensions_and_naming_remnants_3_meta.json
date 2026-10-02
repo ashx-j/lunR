@@ -1,0 +1,115 @@
+{
+  "runId": "fbc16546-f0c4-4786-8db7-cb4cde087ecb",
+  "agent": "Audit pi extensions and naming remnants",
+  "task": "Dedicated audit of pi-imported/vendored extensions and pi naming remnants in current lunR. User specifically requests own report category. Inventory active builtin extensions, upstream origins/imports, pi paths (~/.pi), endpoints pi.dev, stale branding/docs/tool schemas, duplicates, lifecycle cleanup, intentional compatibility names @earendil-works/pi-*, ExtensionAPI pi, PI_* vs actual bugs. Inspect only tracked product not gitignored study repos. Use focused tests where valuable without overlapping bulk suites other agents run. Qualified historical PR specs in C:/Users/ash/AppData/Local/Temp/lunr-bash-08c99fbe8321da42.log; qualifiers #1-35,#37,#38,#47,#51-64,#66-70,#72,#86,#87,#97,#98,#104,#105,#112-115 and #96. Exclude Anthropic. Report inventory, severity/file/line evidence, intentional vs stale vs uncertain, tests/results and limits. No edits, builds, installs, credentials, services, GitHub writes or nested agents. Scratch outside repo allowed. Parent owns root findings doc, other agents own functional subsystems. Read repo instructions.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 117133,
+        "output": 8748,
+        "cacheRead": 2834176,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 38
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Severity and line-specific findings above, including pi-lsp-extension/src/index.ts:143-156 and duplicate /chain-prompts registrations."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git rev-parse --short HEAD; git status --short in lunR-review-audit",
+          "result": "passed",
+          "summary": "Pinned clean review worktree to b57c148."
+        },
+        {
+          "command": "npx --no-install vitest --run test/lsp-extension-startup.test.ts test/prompt-templates.test.ts",
+          "result": "passed",
+          "summary": "2 files, 104 tests passed."
+        }
+      ],
+      "validationOutput": [
+        "Tracked built-in roster has 9 light and 10 deferred registrations.",
+        "No source edits or builds; review worktree remained clean."
+      ],
+      "residualRisks": [
+        "No live verification of OAuth identity, MCP client identity, Codex originator header, or /share viewer behavior.",
+        "The focused tests do not cover process listener accumulation or the duplicate slash-command names.",
+        "Linked workspace dependencies can resolve the original checkout's compiled dist; results are source-test evidence, not compiled-current verification.",
+        "Exact external upstream revisions and the trust implications of the deliberate legacy project .pi/mcp.json fallback remain unverified."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff.",
+      "reviewFindings": [
+        "high: packages/coding-agent/src/builtin-extensions/pi-lsp-extension/src/index.ts:143-156,616-622 - uncaughtException handler suppresses default fatal handling and survives extension shutdown.",
+        "medium: packages/coding-agent/src/builtin-extensions/pi-prompt-template-model/index.ts:1778 and pi-subagents/src/slash/prompt-workflows.ts:298 - duplicate /chain-prompts becomes two suffixed commands.",
+        "medium: packages/coding-agent/src/builtin-extensions/pi-mcp-adapter/mcp-oauth-provider.ts:119-135 - default externally registered client still identifies as Pi Coding Agent.",
+        "low: packages/coding-agent/src/builtin-extensions/pi-mcp-adapter/direct-tools.ts:146 and pi-intercom/index.ts:1444-1458 - agent-facing tool descriptions retain Pi branding.",
+        "low: packages/coding-agent/docs/security.md:35-47 and examples/sdk/06-extensions.ts:8-9 - shipped instructions direct lunR users to pi and .pi paths."
+      ],
+      "manualNotes": "Audit confined to tracked product at b57c148; gitignored study repositories and Anthropic work excluded."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\fbc16546-f0c4-4786-8db7-cb4cde087ecb_Audit_pi_extensions_and_naming_remnants_3_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790428844274
+}

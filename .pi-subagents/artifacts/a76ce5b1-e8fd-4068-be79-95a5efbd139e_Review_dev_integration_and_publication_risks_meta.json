@@ -1,0 +1,107 @@
+{
+  "runId": "a76ce5b1-e8fd-4068-be79-95a5efbd139e",
+  "agent": "Review dev integration and publication risks",
+  "task": "Read-only analyze safest merge plan for @ashx-j/lunr-dev release based on stable v0.2.25 plus PR #77 head b216d44, preserving dev/tui identity. Inspect git ancestry/current branches and existing release workflow; identify likely conflicts, pitfalls, minimal verification, and PR/publish path. Do not edit or push. Return concise actionable findings.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 246019,
+        "output": 5705,
+        "cacheRead": 4126336,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 26
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete severity-ranked findings identify release, identity, integration, and verification paths; local integration ancestry comes from .git/logs/refs/heads/integrate/pr77-v0.2.25-dev."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status/log/branch inspection",
+          "result": "not-run",
+          "summary": "Read-only tool policy blocked bash; no Git command or test ran."
+        }
+      ],
+      "validationOutput": [
+        "Read local Git refs and integration reflog, release workflow and publisher sources; checked public GitHub tag, branch comparison, and PR #77 metadata.",
+        "v0.2.25 tag resolves to 1f323a34; dev/tui is 8183b0a; local integration tip is 0ed39780."
+      ],
+      "residualRisks": [
+        "Could not inspect the local integration tree, merge parents, working-tree status, or actual conflict resolutions.",
+        "No build, test, package dry-run, native hardware qualification, or publication was performed."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No changes made; pre-existing staged state could not be checked.",
+      "reviewFindings": [
+        "high: scripts/publish.mjs, scripts/lunr-npm-names.mjs, packages/coding-agent/src/config.ts - preserve dev package, bin, dependency, and update identities when reviewing the existing merge.",
+        "high: .github/workflows/publish-npm.yml, scripts/computer-use-release.json - a v* tag routes to stable publication while the native runtime remains development-only.",
+        "medium: .github/workflows/publish-npm-dev.yml - merging to dev/tui automatically starts dev publication; verify before merging.",
+        "medium: packages/coding-agent/src/core/computer-use/, scripts/check-interactive-first-paint.mjs - earlier dev port and later PR #77 changes need behavioral comparison; resolved conflicts were not inspected."
+      ],
+      "manualNotes": "Use existing local candidate 0ed39780 for review. Do not overwrite it or publish from this read-only assessment."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\a76ce5b1-e8fd-4068-be79-95a5efbd139e_Review_dev_integration_and_publication_risks_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790448431265
+}

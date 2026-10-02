@@ -87,18 +87,11 @@ describe("withOpenAiEffortMetadata", () => {
 	});
 });
 
-describe("GPT-6 Astra catalogs", () => {
-	it("is baked in for openai and openai-codex with every supported effort", () => {
-		for (const provider of ["openai", "openai-codex"] as const) {
-			const model = getModel(provider, "gpt-6-astra");
-			expect(model).toBeDefined();
-			expect(model?.name).toBe("GPT-6 Astra");
-			expect(model?.reasoning).toBe(true);
-			// OpenAI API advertises 1.05M; Codex OAuth's default context_window is 272k.
-			expect(model?.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
-			expect(getSupportedThinkingLevels(model!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-		}
-	});
+describe("GPT-6 catalogs", () => {
+	const newModels = {
+		"gpt-6-luna": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+		"gpt-6-sol": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+	} as const;
 
 	it("keeps every baked Codex model on its audited default window", () => {
 		expect(Object.fromEntries(getModels("openai-codex").map((model) => [model.id, model.contextWindow]))).toEqual({
@@ -110,7 +103,34 @@ describe("GPT-6 Astra catalogs", () => {
 			"gpt-5.6-sol": 272000,
 			"gpt-5.6-terra": 272000,
 			"gpt-6-astra": 272000,
+			"gpt-6-luna": 272000,
+			"gpt-6-sol": 272000,
+			"gpt-6.1-sol": 272000,
 		});
+	});
+
+	it("keeps GPT-6.1 Sol's Codex limits, prices, and supported efforts current", () => {
+		const model = getModel("openai-codex", "gpt-6.1-sol");
+		expect(model).toMatchObject({
+			api: "openai-codex-responses",
+			reasoning: true,
+			contextWindow: 272000,
+			maxTokens: 128000,
+			input: ["text", "image"],
+			compat: { supportsToolSearch: true },
+			cost: {
+				input: 2,
+				output: 10,
+				cacheRead: 0.1,
+				cacheWrite: 2.5,
+				tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }],
+			},
+			thinkingLevelMap: { off: null, minimal: null },
+			catalog: { hidden: false, reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+		});
+		expect(model?.catalog?.pricing).toBeUndefined();
+		expect(getSupportedThinkingLevels(model!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		expect(loadCatalogProvider("openai-codex")["gpt-6.1-sol"]).toEqual(model);
 	});
 
 	it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
@@ -121,18 +141,54 @@ describe("GPT-6 Astra catalogs", () => {
 		},
 	);
 
-	it("publishes GPT-6 Astra in every official catalog shard used by refresh", () => {
-		for (const provider of ["openai", "openai-codex", "azure-openai-responses"]) {
-			const model = loadCatalogProvider(provider)["gpt-6-astra"];
-			expect(model).toBeDefined();
-			expect(model.provider).toBe(provider);
-			// Codex's default conversation limit is not the OpenAI API's maximum window.
-			expect(model.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
-			expect(model.maxTokens).toBe(128000);
-			if (provider !== "azure-openai-responses") {
-				expect(model.compat).toMatchObject({ supportsToolSearch: true });
-			}
-			expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-		}
+	it.each(Object.entries(newModels))("matches official specs for %s", (modelId, baseCost) => {
+		const direct = getModel("openai", modelId)!;
+		const codex = getModel("openai-codex", modelId)!;
+		const expectedCost = {
+			...baseCost,
+			tiers: [
+				{
+					inputTokensAbove: 272000,
+					input: baseCost.input * 2,
+					output: baseCost.output * 1.5,
+					cacheRead: baseCost.cacheRead * 2,
+					cacheWrite: baseCost.cacheWrite * 2,
+				},
+			],
+		};
+
+		expect(direct).toMatchObject({ reasoning: true, contextWindow: 1050000, maxTokens: 128000, cost: expectedCost });
+		expect(codex).toMatchObject({ reasoning: true, contextWindow: 272000, maxTokens: 128000, cost: expectedCost });
+		expect(loadCatalogProvider("openai")[modelId]).toMatchObject(direct);
+		expect(loadCatalogProvider("openai-codex")[modelId]).toMatchObject(codex);
+		expect(loadCatalogProvider("azure-openai-responses")[modelId]).toMatchObject({
+			contextWindow: 1050000,
+			maxTokens: 128000,
+			cost: baseCost,
+		});
+		expect(getSupportedThinkingLevels(direct)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+		expect(getSupportedThinkingLevels(codex)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
+
+	it.each(["gpt-6-astra", ...Object.keys(newModels)])(
+		"publishes %s in every official catalog shard used by refresh",
+		(modelId) => {
+			for (const provider of ["openai", "openai-codex", "azure-openai-responses"]) {
+				const model = loadCatalogProvider(provider)[modelId];
+				expect(model).toBeDefined();
+				expect(model.provider).toBe(provider);
+				expect(model.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
+				expect(model.maxTokens).toBe(128000);
+				if (provider !== "azure-openai-responses") {
+					expect(model.compat).toMatchObject({ supportsToolSearch: true });
+				}
+				const supportsNone = modelId !== "gpt-6-astra" && provider !== "openai-codex";
+				expect(getSupportedThinkingLevels(model)).toEqual(
+					supportsNone
+						? ["off", "low", "medium", "high", "xhigh", "max"]
+						: ["low", "medium", "high", "xhigh", "max"],
+				);
+			}
+		},
+	);
 });

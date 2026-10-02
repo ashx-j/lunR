@@ -22,7 +22,25 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **T3 provider implementation (2026-10-02):** public fork `https://github.com/ashx-j/t3code-lunr` created; `t3code/` is on pushed branch `feat/lunr-provider` at initial base `54084ae1e6`. `origin` is the fork and `upstream` is `pingdotgg/t3code`. User requested a heavy implementation subagent; `/root/implement_lunr_provider` (GPT-6 Astra, high) launched with local `plans/T3CODE_LUNR_INTEGRATION_PLAN.md`. Required lunR hosted-RPC changes must use a separate worktree/branch; preserve this dirty checkout. No merge, PR, or release requested.
+
+- **T3 Code checkout (2026-10-02):** `t3code/` is a separate, gitignored repository for lunR integration and UI customizations, retaining T3's upstream history. Read its own `AGENTS.md` before working there.
+
+- **GPT-6.1 Sol Codex catalog (2026-10-02):** `openai-codex/gpt-6.1-sol` now has a baked-in entry and bundled shard with 272K default context, 128K output metadata, text/image input, low-through-max thinking, and current pricing including 5% cached input and >272K tiers. The generator retains documented output/pricing when models.dev falls back to an older source. Codex's 872K maximum remains non-default; `ultra` stays metadata-only. Installed CLI and account caches unchanged.
+
+- **Computer-use recovery (2026-09-26):** private `COMPUTER_USE_RECOVERY_PLAN.md` records the taskbar report, diagnosis, implementation, and remaining live acceptance. Two heavy children implemented in isolated worktrees after investigation finished. `../lunR-computer-recovery` at `fa14743`, branch `fix/computer-use-recovery`, is PR #125 targeting PR #77's `feat/native-computer-use`. It adds precise outcomes/recovery images, healthy-workflow token recovery, launch guidance/budget, bounded window discovery, and Windows desktop hover. Installed CLIs/native binary unchanged; no real desktop test.
+
+- **Qualified-PR audit (2026-09-26):** local `LUNR_REVIEW_FINDINGS.md` records five heavy reviewers' source-test results against clean `origin/master` at `b57c148`, all 69 scoped PR dispositions, runtime findings, and a separate pi-extension/remnant inventory. Anthropic subscriptions excluded. No fixes, production builds, live-account checks, or release. Read that report before follow-up testing to avoid duplicating passing coverage. Two standard reviewers reconciled all findings with later PRs: no later merged fix; open #118 proposes the OpenCode generation fix and open #119 partially addresses stale gateway notices while retaining completed results.
+
+- **Desktop specification (2026-09-25):** before desktop implementation, read local `LUNR_DESKTOP_IMPLEMENTATION_PLAN.md` and `LUNR_DESKTOP_REFERENCE.png`. The brief preserves the original prompt, agreed Windows/Electron/React UX, full built-in graphical coverage, thread-state rules, managed CLI installation, and Sol/Astra work allocation. Planning only; remote remains deferred. Keep both artifacts private and out of release payloads.
+
+- **Desktop/remote handoff (2026-09-24):** read local `REMOTE_DESKTOP_HANDOFF.md` before desktop or remote work. Latest direction: finish the TUI, then build the desktop app on the existing runtime, then add a separately downloaded remote host. Evaluate T3 Code reuse; a browser terminal is not the intended client. Remote implementation remains paused. The handoff records PR #108, the isolated worktree, passing experiments, research, and limits; it supersedes the old plan's immediate Windows-host milestone. Keep private handoff/plan artifacts out of public commits.
+
 Last updated: 2026-09-20 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.21`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+
+- **Anthropic OAuth Claude Code plan:** planning only. The pinned MIT Hermes plugin was inspected outside the repository at `f1c1220778c7864fe4c1494baf9b1566e7c95bd2`. The plan now recommends vendoring its proven Python transport plus a thin Node bridge, not recreating its protocol in TypeScript. No code, dependencies, credentials, installation, or runtime build changed. User approved Python 3.10+ as an OAuth-only prerequisite with separately confirmed installation if missing. Implementation and local installation have not started.
+- **NVIDIA Kimi K3:** `nvidia/moonshotai/kimi-k3` is in the built-in and bundled catalogs. NVIDIA's chat-completions trial endpoint supports image input, tool use, a 1,048,576-token context, at most 65,536 output tokens, and low/high/max reasoning. Existing NVIDIA authentication handles the key; no credential is committed.
+- **GPT-6 Sol + Luna:** both models are baked into OpenAI, OpenAI Codex, and Azure OpenAI Responses. Direct API entries use the documented 1.05M context window and support `none` through `max`; Codex uses its public 272K operating window and supports `low` through `max`. Pricing and >272K tiers match OpenAI's current docs. Public catalog shards are current.
 
 - **Codex thought formatting (`fix/codex-thinking-formatting`):** collapsed `openai-codex` thought snippets remove double-asterisk bold markers before plain-text rendering. Stored reasoning, live and expanded Markdown, and other providers are unchanged. Focused Vitest passes 56/56 across four suites; all five offline package builds and touched-file Biome pass.
 - **v0.2.21:** ships #82 Windows intercom startup, #83 subagent UI polish, #84 question/resume delivery, and #85 async-by-default. The combined call renderer keeps #83 title lookup and persisted `displayTitle` with #85 argument normalization and omitted-async default. Native computer use #77 stays open.
@@ -133,6 +151,26 @@ Last updated: 2026-09-20 (v0.2.21 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- T3 fork setup (2026-10-02): GitHub confirms the public fork's parent is `pingdotgg/t3code`; feature branch push/tracking verified and checkout clean at worker launch. Implementation validation is delegated to the heavy worker; no build/run claim yet.
+
+- T3 provider plan (2026-10-02): checked against the local T3/lunR source; document links and whitespace verified. No builds or runtime tests run for this documentation-only step.
+
+- T3 Code checkout: source-only acquisition; no dependency installation, build, or runtime tests required for this step.
+
+- GPT-6.1 Sol Codex catalog (2026-10-02): AI production-config no-emit check and isolated offline emitted build pass. Focused AI and Codex discovery Vitest passes 60/60; the new catalog assertions failed before the update. Generator output, compiled model, bundled row, manifest revision, all 39 shard hashes, and preservation of every existing catalog entry pass. Changed test Biome and `git diff --check` pass; the generator is Biome-excluded. Generation/verification artifacts stay under `.artifacts/gpt61-catalog-generator/`. No workspace CLI rebuild, installed CLI update, live inference, publication, or release.
+
+- Computer-use recovery (2026-09-26): the initial installed-code fake-driver probe reproduced skipped images, failed-launch guidance, discovery token loss, and fatal expiry. Implementation validation passes 128 tests across ten suites, five offline package builds/Node bundle, first-paint/first-turn checks, and a compiled local-provider tool-loading turn. Private initial/loaded tool inventories and prompt snapshots are under `../lunR-computer-recovery/.artifacts/computer-recovery/`. Touched-file Biome with formatting disabled, imports, locks, and whitespace checks pass. No native launch, live desktop operation, installed CLI update, or release.
+
+- Qualified-PR audit (2026-09-26): clean detached `../lunR-review-audit` at `b57c148`; focused source suites ran across subagents, UI, providers, gateway and imported extensions. Results include reproduced runtime defects and stale/broken fixtures, not a green full suite. Dependency junctions can resolve older compiled workspace artifacts; no compiled-current qualification. Exact per-area counts and limits are in `LUNR_REVIEW_FINDINGS.md`.
+
+- Desktop specification (2026-09-25): original prompt verified verbatim against this conversation; reference PNG verified byte-identical at 2048 × 1327; local Markdown links, fences, and authored-text whitespace checks pass. Read-only source research only; no application builds/tests, installs, runtime changes, or releases.
+
+- Remote pause checkpoint (2026-09-24): full validation run `36053877314` passed 12/12 jobs at `5aa58d4`, covering six native targets on Node 22.19 and Node 24 plus isolated compiled-artifact checks. No diagnostic bypass, merge, or release. This validates prerequisite experiments, not a production remote feature.
+
+- Remote lunR planning (2026-09-23): repo/documentation inspection only; no builds, tests, VPN installation, service changes, or live remote verification. Plan whitespace validation passes.
+
+- NVIDIA Kimi K3: AI offline tsgo and two focused Vitest checks pass. The wider OpenAI Completions tool-choice suite passes 43/44, with an unrelated OpenCode `maxTokensField` assertion failing. Catalog JSON/manifest hashes and `git diff --check` pass. No live NVIDIA request, key installation, or CLI rebuild.
+- GPT-6 Sol + Luna (2026-09-23): AI offline tsgo passes. Focused openai-thinking, max-thinking, and supports-xhigh Vitest passes 55/55. Changed non-generated AI files pass Biome; catalog validation and `git diff --check` pass.
 - Codex thought formatting (2026-09-20): tui → ai → agent → coding-agent → orchestrator offline builds pass. Focused assistant-message, thinking-summary, smooth-streaming, and thinking-tail Vitest passes 56/56. Touched source and test files pass Biome.
 - v0.2.21 release (2026-09-13): offline tui → ai → agent → coding-agent → orchestrator tsgo and the coding-agent Node bundle pass. Focused Vitest passes 185/185 across 11 suites. The first-paint checker passes stalled/failing runtime plus first-turn subagent, MCP, LSP, and fetch paths with hash `5325fdc0…`. Shrinkwrap, installer lock, relative-import, workflow-publish, browser smoke, and `git diff --check` pass. All four public npm package dry-run packs pass; generated shrinkwrap and installer locks are current. Rebuilt CLI `--version` reports 0.2.21. Publication workflow `34766302131` succeeded from tag `v0.2.21` at `833b964`; all four public packages resolve as npm latest. A fresh isolated npm install reports 0.2.21 and passes first-paint plus first-turn subagent/MCP/LSP/fetch checks. The global CLI was not changed. Native computer use #77 stays open.
 - Combined #82/#83/#84/#85 merge (2026-09-13): focused Vitest passes 185/185 across 11 suites covering intercom startup, question/resume delivery, compact UI, spinner/widget order, and async-by-default. #83 title lookup and #85 async default both remain on `renderSubagentCall`. First-paint keeps Windows broker cleanup plus isolated `PI_*` scrubbing and hash `5325fdc0…`. Native computer use #77 stays open. No release or installed CLI update.
@@ -206,7 +244,17 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Ordinary lunR RPC does not register the core TUI approval handler, and the subagent extension RPC bridge is not a stdin API. The T3 integration plan explicitly covers both gaps.
+
+- For T3 Code work, use `t3code/` as the Git root and read its own `AGENTS.md`; its history and commits are separate from lunR.
+
+- Review fixtures must scrub inherited `PI_SUBAGENT_*` and `PI_INTERCOM_*` variables. An audit continuation test routed a synthetic question to its real parent before environment isolation; clean isolated reruns passed.
+
+- NVIDIA Kimi K3: trial chat completions accepts only low/high/max reasoning effort, caps `max_tokens` at 65,536, and needs prior assistant `reasoning_content` plus tool calls replayed for multi-turn work. Keep the built-in model and public catalog aligned when regenerating.
+- Remote-session planning: current RPC EOF shuts down its runtime; reopening JSONL restores history, not live work. The bot gateway and recorded chat autostart option are not a remote TUI host or installed login service. Proposed PTY packaging and terminal handoff require a cross-platform feasibility gate.
+
 - Collapsed Codex thought snippets render as plain text after summary extraction. Remove `**` at that display boundary only; keep stored reasoning and Markdown views unchanged.
+- The Anthropic OAuth reuse plan is source-grounded: preserve upstream `admission.py`, `inert_mcp.py`, and `model_catalog.py` unchanged; record every required `directsdk.py` bridge patch. Python is an on-demand OAuth prerequisite, not a lunR installation or startup dependency.
 - Windows intercom: `cmd.exe` cannot redirect into `broker.stderr.log` while the parent holds it open. Keep Windows redirection and direct-launch fd inheritance separate. The hidden launcher waits for an exit code during startup only; release it when the health check settles. Startup fixtures must stop their isolated broker before removing its profile because a healthy broker outlives the CLI.
 
 - Isolated worktrees can share an npm bin shim with the original checkout. Verify the worktree's built CLI with `node packages/coding-agent/dist/cli.js`; `npx lunr --version` alone does not prove which checkout ran.
@@ -278,6 +326,32 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-02: Created the public `ashx-j/t3code-lunr` fork and launched the user-requested heavy worker on `feat/lunr-provider` to keep application changes independent from lunR's runtime history.
+
+- 2026-10-02: Plan a native T3 lunR driver over hosted RPC so the fork reuses lunR's pi-derived runtime and extensions while isolating each thread's process state.
+
+- 2026-10-02: Keep T3 Code in a separate nested checkout so UI/provider changes can track upstream without vendoring its history into lunR.
+
+- 2026-10-02: update only GPT-6.1 Sol's Codex catalog row and retain documented pricing/output as a generator fallback, because stale models.dev recovery otherwise produces unknown prices and an 8K placeholder while Codex's default context remains 272K.
+
+- 2026-09-26: preserve uncertain computer outcomes with one recovery image and healthy-workflow recovery before native changes, because a returned error can follow real input; keep PR #125 stacked on #77 and real-desktop acceptance separate.
+
+- 2026-09-26: review qualified historical PRs against isolated current master, classify superseded work instead of retesting it, and exclude Anthropic/live-service qualification to preserve the user's working checkout and avoid unauthorized account operations.
+
+- 2026-09-25: pin NVIDIA Kimi K3's documented trial endpoint limits and reasoning controls in the generator, built-in catalog, and offline bundle because the published K3 row omitted reasoning controls and the built-in list lacked it.
+- 2026-09-25: specify Windows desktop around Electron/React and the existing runtime, with a private matching CLI and attention-first thread organization, so the graphical product preserves lunR behavior without replacing the user's CLI or implementing remote hosting early.
+
+- 2026-09-24: defer remote implementation until after TUI completion and the desktop app, then use a separate host download sharing lunR's runtime; evaluate T3 reuse to avoid duplicating useful components.
+
+- 2026-09-24: pause remote work and narrow the next delivery to Windows/npm manual hosting and local live-session handoff, because cross-platform packaging investigation delayed the useful core.
+
+- 2026-09-23: plan remote hosting inside the normal lunR package with host-owned sessions and the existing TUI, because uninterrupted handoff needs persistent process ownership and RPC alone omits custom terminal UI.
+
+- 2026-09-23: expose GPT-6 Sol and Luna with OpenAI's 1.05M direct limit and Codex's public 272K `context_window`; map direct `none` to off while preserving Codex's low-through-max list.
+- 2026-09-22: user approved Python 3.10+ for OAuth-only setup with separate installation consent, enabling direct reuse of the Hermes transport.
+
+- 2026-09-21: plan Anthropic OAuth around vendored upstream Python transport plus a thin Node bridge, because a TypeScript port would recreate the qualified admission, replay, and cancellation protocol rather than reuse it.
 
 - 2026-09-20: strip Codex double-asterisk markers only from collapsed thought snippets so formatting syntax stays out of plain text without mutating reasoning content.
 - 2026-09-13: ship #82, #83, #84, and #85 as 0.2.21; keep native computer use #77 open.

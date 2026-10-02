@@ -1,0 +1,305 @@
+{
+  "runId": "4f0f423c",
+  "agent": "Implement optional browser and file PR from master",
+  "task": "You are reviving a previous subagent conversation.\n\nOriginal run: 8d1a4cf3-acd1-40df-9fff-ad47d95b0e09\nOriginal agent: Implement optional browser and file PR from master\nOriginal session file: C:\\Users\\ash\\.lunr\\agent\\sessions\\--C--Users-ash-Desktop-PROJECTS-lunR--\\2026-09-20T14-03-29-075Z_01a0bf21-0bb3-7803-b70e-560e3fac1aaa\\9a046632\\run-0\\session.jsonl\n\nUse the stored session context as background. Answer the orchestrator's follow-up below. Do not assume the original child process is still alive.\n\nFollow-up:\nUser requests changing PR #93: 'i dont like the way it is optional in the pr. I want to change it so it is automatically installed but can be disabled in settings.' Implement this changed requirement in your existing isolated worktree/branch and update same PR. You remain sole writer. Browser should be enabled by default and matching Chromium installed automatically as part of normal supported installation/update flows, with a Browser toggle in /settings to disable it. Replace opt-in setup requirement; preserve lazy runtime loading/no browser process at startup and preserve search/fetch preference. Respect --ignore-scripts/offline installs: diagnose missing binaries clearly, do not silently install on model tool calls; document such exceptional recovery. Inspect packaging/public-name rewriting, npm lifecycle/shrinkwrap/standalone setup and pick simple reliable automatic install integration compatible with workspace vs published packages, Windows, existing browser caches. Avoid downloading browsers during every startup or ordinary build. Disabling should hide tool and close active browser safely; no deletion of cached binaries required. Ensure existing users' settings migrate/default appropriately, explain how legacy explicit disabled optional-feature setting is handled rather than accidentally overriding user intent. Update tests/schema fingerprints/docs/AGENTS and PR title/body to reflect built-in default-on capability. No unrelated changes, no merge/publish/global install/original-dist modifications. Validate targeted install behavior in isolated profiles/package staging, setting toggle/cleanup/default inventories, focused browser flows/build/startup. Commit/push updates to same PR and report evidence and limitations. Read applicable skills as before. No independent review requested.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-astra:medium",
+  "attemptedModels": [
+    "openai-codex/gpt-6-astra:medium"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-astra:medium",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 248543,
+        "output": 31662,
+        "cacheRead": 18293376,
+        "cacheWrite": 0,
+        "cost": 22.361905999999994,
+        "turns": 93
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "checked",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Updated the existing branch and PR with default-on browser availability, automatic installation, a live settings toggle, and legacy-disable compatibility. No merge, publication or global installation changes."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Added installation/settings tests, updated lifecycle and registry coverage, regenerated fingerprints and documentation, and completed isolated build/browser/CLI validation."
+        }
+      ],
+      "changedFiles": [
+        "AGENTS.md",
+        "package-lock.json",
+        "packages/coding-agent/README.md",
+        "packages/coding-agent/docs/browser.md",
+        "packages/coding-agent/docs/features.md",
+        "packages/coding-agent/docs/interactive-startup.md",
+        "packages/coding-agent/install-lock/package-lock.json",
+        "packages/coding-agent/npm-shrinkwrap.json",
+        "packages/coding-agent/package.json",
+        "packages/coding-agent/scripts/install-browser.mjs",
+        "packages/coding-agent/src/builtin-extensions/lunr-browser.ts",
+        "packages/coding-agent/src/builtin-extensions/pi-web-access/index.ts",
+        "packages/coding-agent/src/cli/args.ts",
+        "packages/coding-agent/src/cli/install-cli.ts",
+        "packages/coding-agent/src/core/agent-session.ts",
+        "packages/coding-agent/src/core/browser/runtime.ts",
+        "packages/coding-agent/src/core/browser/schema.ts",
+        "packages/coding-agent/src/core/browser/settings.ts",
+        "packages/coding-agent/src/core/browser/setup.ts",
+        "packages/coding-agent/src/core/install-features.ts",
+        "packages/coding-agent/src/core/permissions.ts",
+        "packages/coding-agent/src/core/settings-manager.ts",
+        "packages/coding-agent/src/main.ts",
+        "packages/coding-agent/src/modes/interactive/components/settings-selector.ts",
+        "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+        "packages/coding-agent/test/agent-session-dynamic-tools.test.ts",
+        "packages/coding-agent/test/browser-install.test.ts",
+        "packages/coding-agent/test/browser-lifecycle.test.ts",
+        "packages/coding-agent/test/browser-settings.test.ts",
+        "packages/coding-agent/test/install-cli.test.ts",
+        "packages/coding-agent/test/install-features.test.ts",
+        "scripts/check-browser.mjs",
+        "scripts/check-interactive-first-paint.mjs",
+        "scripts/generate-coding-agent-install-lock.mjs",
+        "scripts/generate-coding-agent-shrinkwrap.mjs"
+      ],
+      "testsAddedOrUpdated": [
+        "browser-install.test.ts: staged public-name npm lifecycle, ignored scripts, offline/skip-download behavior and failure recovery",
+        "browser-settings.test.ts: default-on behavior, persistence, legacy disable precedence and network configuration",
+        "browser-lifecycle.test.ts: active browser closure and pending initialization cancellation when disabled",
+        "agent-session-dynamic-tools.test.ts: immediate tool hiding and restoration",
+        "install-cli.test.ts: automatic setup and explicit repair dispatch without real downloads",
+        "install-features.test.ts: removed obsolete opt-in browser expectation",
+        "check-browser.mjs: default-on CLI flows and updated recovery guidance",
+        "check-interactive-first-paint.mjs: default-on and disabled fingerprints"
+      ],
+      "commandsRun": [
+        {
+          "command": "npx tsgo -p packages/tui/tsconfig.build.json && npx tsgo -p packages/ai/tsconfig.build.json && npx tsgo -p packages/agent/tsconfig.build.json && npm --prefix packages/coding-agent run build && npx tsgo -p packages/orchestrator/tsconfig.build.json",
+          "result": "passed",
+          "summary": "Five offline builds and coding-agent Node bundle."
+        },
+        {
+          "command": "PLAYWRIGHT_BROWSERS_PATH=<isolated-cache> npx vitest --run test/browser.test.ts test/browser-lifecycle.test.ts test/browser-settings.test.ts test/browser-install.test.ts test/agent-session-dynamic-tools.test.ts test/permissions.test.ts test/deferred-builtin-extensions.test.ts test/prompt-driven-subagents.test.ts test/install-cli.test.ts",
+          "result": "passed",
+          "summary": "139/139 tests across nine suites."
+        },
+        {
+          "command": "node packages/coding-agent/scripts/install-browser.mjs",
+          "result": "passed",
+          "summary": "Automatic installer reused matching Chromium in the isolated cache."
+        },
+        {
+          "command": "node packages/coding-agent/dist/cli.js browser install",
+          "result": "passed",
+          "summary": "Explicit recovery worked with the isolated cache."
+        },
+        {
+          "command": "node packages/coding-agent/dist/cli.js setup --yes",
+          "result": "passed",
+          "summary": "Automatic setup completed with an isolated profile/cache."
+        },
+        {
+          "command": "PLAYWRIGHT_BROWSERS_PATH=<isolated-cache> node scripts/check-browser.mjs",
+          "result": "passed",
+          "summary": "Actual Windows browser CLI auto, Plan and missing-binary flows passed."
+        },
+        {
+          "command": "node scripts/check-interactive-first-paint.mjs",
+          "result": "passed",
+          "summary": "Default-on and disabled inventories passed with implementation imports stalled; existing first-use checks passed."
+        },
+        {
+          "command": "npm pack --dry-run --ignore-scripts --json --workspace=@earendil-works/pi-coding-agent",
+          "result": "passed",
+          "summary": "Confirmed scripts/install-browser.mjs is packaged."
+        },
+        {
+          "command": "node scripts/generate-coding-agent-shrinkwrap.mjs --check && node scripts/generate-coding-agent-install-lock.mjs --check",
+          "result": "passed",
+          "summary": "Both locks are current and retain install-script metadata."
+        },
+        {
+          "command": "npx biome check <13 changed core/UI/test files>; node scripts/check-ts-relative-imports.mjs; git diff --check",
+          "result": "passed",
+          "summary": "No findings."
+        },
+        {
+          "command": "git diff --cached --name-only",
+          "result": "passed",
+          "summary": "Empty after commit."
+        }
+      ],
+      "validationOutput": [
+        "PR #93 updated, not replaced.",
+        "Commit: 6a04227b09876337ba21fe67c32a937d2fd1e612",
+        "Default-on fingerprint: 51122f78b814c19aa5ade8d5cf7d1a89c3cc1c9be65d3c77851572983bf18abf",
+        "Disabled fingerprint: 190c33422c7a3f73863da90f7190d03262f276b8bd4f244c4fe1ca5d6d0684cb",
+        "CLI auto produced exactly one fixture POST; Plan produced zero.",
+        "Staged changes excluded credentials, profiles, binaries, dist and prompt artifacts."
+      ],
+      "residualRisks": [
+        "Linux/macOS browser launches and compiled Bun installation remain unvalidated.",
+        "Staged npm lifecycle tests use a local fake Playwright CLI; real installation was verified against the existing matching Chromium cache.",
+        "Full repository tests were not rerun; the previously reproduced baseline gateway-inference failure remains documented.",
+        "Existing headless fixture processes still require forced-exit cleanup.",
+        "Browser network restrictions remain defense in depth, not an OS sandbox."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Follow-up changes span 35 files, replacing opt-in setup with automatic installation and default-on browser settings.",
+      "reviewFindings": [
+        "No independent review requested or performed."
+      ],
+      "manualNotes": "Original checkout and global CLI remain unchanged. The isolated worktree contains only an untracked generated LUNR_SYSTEM_INJECTION.md snapshot beyond committed changes. No merge or publication."
+    },
+    "reviewResult": {
+      "status": "needs-parent-decision",
+      "findings": [
+        {
+          "severity": "non-blocking",
+          "issue": "Reviewed acceptance requires an independent reviewer result.",
+          "rationale": "The run cannot be marked reviewed from child evidence alone."
+        }
+      ]
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\4f0f423c_Implement_optional_browser_and_file_PR_from_master_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1789917075134
+}

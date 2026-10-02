@@ -1,0 +1,113 @@
+{
+  "runId": "77b97007-0410-43b4-bd9e-5e46cf534824",
+  "agent": "Map built-in features and desktop adapters",
+  "task": "Documentation-only feature mapping for upcoming lunR Windows desktop plan. Read AGENTS.md and relevant feature/extension docs fully. Inspect current builtins/bridges/settings enough to create exhaustive but concise built-in capability inventory with exact existing source paths and required graphical desktop adaptations. Cover providers/OAuth/model thinking/Fast, permissions/plan/goal, subagents including questions/cancellation, cron vs existing bot gateway ownership, tools web/LSP/MCP/browser with user interactions, skills/commands/memory, rollback/undo/edit, tool/thinking/spinner/todos/usage. Desktop supports ALL built-in features graphically, no third-party custom interfaces, no interactive terminal, steer only, remote-device gateway is placeholder but existing bot gateway not removed. Identify TUI dependencies and known missing structured APIs, don't assume RPC enough. No edits or code review, no reading personal credentials/config/session transcripts. Return paths, adaptations, gaps, focused tests and critical product ambiguities if any. No file ownership; read-only research.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 144850,
+        "output": 5824,
+        "cacheRead": 3440000,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 35
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Capability map names concrete source paths and graphical adaptations; integration findings identify blocker/high/medium gaps and residual risks."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short; rg --files and rg -n source/test inventory",
+          "result": "passed",
+          "summary": "Read-only inventory and source-location checks; existing unrelated working-tree changes were left untouched."
+        },
+        {
+          "command": "build or test suite",
+          "result": "not-run",
+          "summary": "Documentation-only research; focused future tests are listed above."
+        }
+      ],
+      "validationOutput": [
+        "Read AGENTS.md, REMOTE_DESKTOP_HANDOFF.md, and the relevant built-in features, extensions, settings, skills and usage documentation; inspected RPC, built-in registration, permission, cron and graphical-interaction source."
+      ],
+      "residualRisks": [
+        "Desktop process lifetime and reconnect semantics remain undecided.",
+        "Shared cron storage requires an explicit single-scheduler ownership rule.",
+        "Browser automation is not established by the inspected first-party tool roster.",
+        "No runtime or graphical integration test was performed."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed.",
+      "reviewFindings": [
+        "blocker: src/modes/rpc/rpc-mode.ts; src/core/slash-commands.ts - RPC lacks typed actions/state for many built-ins and cannot execute built-in TUI commands through prompt.",
+        "high: src/core/permissions.ts; src/modes/rpc/rpc-mode.ts - graphical approval and disconnect behavior needs an explicit owner and fail-closed policy.",
+        "high: src/builtin-extensions/lunr-cron.ts; src/gateway/cron.ts - desktop and gateway must not independently fire the same persisted jobs.",
+        "medium: src/builtin-extensions/pi-web-access/index.ts; pi-mcp-adapter/ui-session.ts - browser-hosted interactions exist, but first-party browser automation is not established."
+      ],
+      "manualNotes": "Research only. No personal credential, configuration or session transcript files were opened."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\77b97007-0410-43b4-bd9e-5e46cf534824_Map_built-in_features_and_desktop_adapters_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790335691616
+}

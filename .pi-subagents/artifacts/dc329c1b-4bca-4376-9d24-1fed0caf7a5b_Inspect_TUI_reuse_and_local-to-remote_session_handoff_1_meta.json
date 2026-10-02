@@ -1,0 +1,113 @@
+{
+  "runId": "dc329c1b-4bca-4376-9d24-1fed0caf7a5b",
+  "agent": "Inspect TUI reuse and local-to-remote session handoff",
+  "task": "Read-only architecture investigation for implementation PLAN. Cwd C:/Users/ash/Desktop/PROJECTS/lunR. Own TUI/client boundary, rendering, extension UI, commands, terminal compatibility, future app reuse. User requires ONE normal lunR installation Windows/macOS/Linux that can host and connect, automatic login background host, exact running sessions move between local PC TUI and laptop TUI without cancelling. Preserve current TUI first. Future app wraps/manages CLI and supports terminal plus graphical view. Inspect relevant source/docs fully, identify concrete coupling to local AgentSession/files/settings/auth/terminal and propose minimum well-designed reusable local/remote client contract. Does transparent handoff require host-owned local sessions from birth? Account for custom extensions, permission/plan dialogs, subagent widgets, clipboard/image/file paths, local vs host settings, shortcuts, smooth streaming, multiple attached clients, app terminal embedding vs structured API. Give concrete paths, sequence of changes, meaningful acceptance tests, complexity risks. Not a code review, no edits/builds/services/secrets. Other agents own runtime/protocol and setup/networking.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 173320,
+        "output": 8981,
+        "cacheRead": 4519040,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 40
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Severity-ranked, path-specific findings above cover TUI lifecycle, RPC limitations, extension UI, terminal compatibility, permissions, and local assets; residual risks are stated below."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "rg --files packages/coding-agent packages/tui",
+          "result": "passed",
+          "summary": "Located relevant TUI, RPC, extension, terminal, documentation, and test files."
+        },
+        {
+          "command": "rg -n on targeted source files",
+          "result": "passed",
+          "summary": "Located lifecycle, command, rendering, clipboard, and approval boundaries."
+        }
+      ],
+      "validationOutput": [
+        "Read-only source and documentation investigation; no builds, tests, services, or credentials used."
+      ],
+      "residualRisks": [
+        "Full graphical parity for arbitrary executable extension UI requires a terminal fallback or a separately designed extension UI API.",
+        "PTY/ConPTY reconnect, capability negotiation, and multiple-client control need cross-platform implementation and tests.",
+        "A host that stops or sleeps cannot continue an in-flight session without a separate execution-migration design."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed or staged by this investigation.",
+      "reviewFindings": [
+        "blocker: packages/coding-agent/src/modes/interactive/interactive-mode.ts:445-685,4096-4192 - TUI owns runtime and quitting disposes it; detach must be separate.",
+        "blocker: packages/coding-agent/src/modes/rpc/rpc-mode.ts:122-308 - RPC degrades or omits TUI-only extension UI.",
+        "high: packages/tui/src/terminal-image.ts:66-129 - cached host terminal capabilities cannot describe a different attached client.",
+        "high: packages/coding-agent/src/modes/interactive/interactive-mode.ts:2879-2998 - clipboard and image attachments use local temp paths.",
+        "high: packages/coding-agent/src/modes/interactive/interactive-mode.ts:922-938,7455-7590 - approval dialogs need persistent single-responder ownership."
+      ],
+      "manualNotes": "These severities describe planning constraints, not newly discovered regressions. No implementation or live connection was attempted."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\dc329c1b-4bca-4376-9d24-1fed0caf7a5b_Inspect_TUI_reuse_and_local-to-remote_session_handoff_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790184024402
+}

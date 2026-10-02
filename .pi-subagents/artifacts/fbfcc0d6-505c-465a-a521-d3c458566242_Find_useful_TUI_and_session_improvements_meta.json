@@ -1,0 +1,105 @@
+{
+  "runId": "fbfcc0d6-505c-465a-a521-d3c458566242",
+  "agent": "Find useful TUI and session improvements",
+  "task": "Read-only exploration for product recommendations, not a diff review. User asks what to change/add in latest lunR based on codebase. Own exploration of TUI/session browsing/message queue/context UX only. Inspect actual source, identify 2-3 useful concrete additions or changes not already present. Cite file paths and line ranges proving current behavior, explain user benefit and approximate size. Do not edit, run builds or touch installed CLI. Read relevant markdown completely if opened. Avoid desktop/remote work. Parent explores diagnostics, rollback/change inspection, and subagent controls.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:low",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:low"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:low",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 42424,
+        "output": 1088,
+        "cacheRead": 285312,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 9
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Three concrete product recommendations cite source paths and line ranges; no blocker or confirmed defect is claimed."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Source-only rg and file reads",
+          "result": "passed",
+          "summary": "Inspected session selector, queue handling, and /context behavior."
+        }
+      ],
+      "validationOutput": [
+        "No builds or tests run; read-only exploration."
+      ],
+      "residualRisks": [
+        "Queue entries may contain images, so selective editing needs image-preserving behavior.",
+        "Recommendations were not checked in a live TUI."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No changes.",
+      "reviewFindings": [
+        "medium opportunity: packages/coding-agent/src/modes/interactive/interactive-mode.ts:4553-4629 - queued-message editing currently restores all items as one draft.",
+        "medium opportunity: packages/coding-agent/src/modes/interactive/components/session-selector.ts:417-505 - session results have no conversation preview.",
+        "low opportunity: packages/coding-agent/src/modes/interactive/interactive-mode.ts:7284-7307 - /context appends a static snapshot."
+      ],
+      "manualNotes": "These are UX opportunities, not a diff review or verified regressions."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\fbfcc0d6-505c-465a-a521-d3c458566242_Find_useful_TUI_and_session_improvements_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790329819994
+}

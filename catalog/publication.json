@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-e4f0493be0ddc4665131268d7cd9eeee0ece7b68a438edd4e06eb392b1b77fcf",
+  "revision": "sha256-1cc5b043de7202258347a124983ac5ad5b40f3bc4fa0cddf4691e452f95294a4",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -46,7 +46,7 @@
     "amazon-bedrock": "efb2ece675233c7e358cac47817e2cc8dd7e0f09f24f0e2217c7c5a5851fe360",
     "ant-ling": "85d35f44183c9558dc86c7698700a48a3b7b7c119a615fa684bd00ca56f6062f",
     "anthropic": "a416ba1ae04a43a10c20e3df915990c3b49d36246ce416e9e2789d2e608c3f19",
-    "azure-openai-responses": "84c84a33d01e4484c79e2871e03361a7e884a8e6f99022b6f3aefc0e5057203f",
+    "azure-openai-responses": "6fdbc8d4089442ca102604b1faf1142fd97863ddf584c8de15f0aab43df1308d",
     "cerebras": "a462bf870090b76280d83116e3731c076d5972ad3f41b2ca7dc882b575ce8f98",
     "cloudflare-ai-gateway": "bbd5da35bbdfca1910da32e6c9a2fbf202ccceec37d50fb0203433941b73db74",
     "cloudflare-workers-ai": "a0b371e234fecad108e3247da2808c0dca78ccf9d7ca932bfbf8853bf5d7bee1",
@@ -63,9 +63,9 @@
     "mistral": "20ab53b7dcdf97f8d30e4ece80512bb4c026888eb915ae9286daf62683f5f663",
     "moonshotai": "774a389bc8b6e29554da5f7129b3b6b462ccc903398740917557f29cb0ff77cb",
     "moonshotai-cn": "8eda731eb0bc505102e4ceb2e2e465d71a87b1dfdde2af672284906fad9bbfb0",
-    "nvidia": "e88cdbd97cab570f0cb0b56e9aa3740da8ef5da659625e3b9f3b6762c21abed8",
-    "openai": "43b40fc0d8136483cbc96c0bf2959e640ae4e685fc34afe86fd98f2f4deb5445",
-    "openai-codex": "a958bf6c271e35ac83ad57aca795d251ee4cc791fb815631468a34041c1c69ce",
+    "nvidia": "5a970f22d51f169e8db1a82b690c0c011fdb078db167461d2cec3fd02e3ae7bc",
+    "openai": "a5970f5db1c53f59ffe6373da58794ce565928d155bc29a3c95a3c3563c38315",
+    "openai-codex": "006ab703f06347930732ef5ec817603c0112066e2d2a24642977486785f29a62",
     "opencode": "f3d17fdac9b2b3a144b252f15bda9e8934152090aeb5bd8773cf776187717e9b",
     "opencode-go": "a1ad132f63237c70ee501307102e21520c97c7b8d0817449293c83585aa46392",
     "openrouter": "af3c0ab4b3253d71b907a2eee3f49f3bd57682f70ded9a8c06fffb66ae08b6d4",
@@ -99,8 +99,8 @@
     {
       "url": "https://models.dev/api.json",
       "status": "fresh",
-      "fetchedAt": "2026-09-05T10:38:35.643Z",
-      "digest": "5ca22a6997fae0d44f6ae8eed27d22214a1d0e7387f45aa040f550eb8f43de61"
+      "fetchedAt": "2026-09-23T16:14:19.196Z",
+      "digest": "9ae55393e3711189a9fe8b32bd22d218319de11c5c25fb27768ba8273f915eb7"
     },
     {
       "url": "https://opencode.ai/zen/go/v1/models",
@@ -123,12 +123,12 @@
     {
       "url": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "status": "fresh",
-      "fetchedAt": "2026-09-05T10:38:35.718Z",
-      "digest": "8f454d185afd210f9d8cc71b7053d6165f7fccb679546eca4ac02fe960f4cff8"
+      "fetchedAt": "2026-10-02T15:36:20.262Z",
+      "digest": "1037e0da191cee0e90a861652836931743678b21841a7e01bf5b69ab02dcd073"
     }
   ],
-  "generatedAt": "2026-09-05T10:38:36.535Z",
-  "sourceCommit": "8a08e872fb3d61b9b62e2958d9ca84b4821f17a5",
+  "generatedAt": "2026-10-02T15:37:39.256Z",
+  "sourceCommit": "e36432caaaa632c1ddb79417153b7b3ae19c7d79",
   "providerCount": 39,
-  "modelCount": 1457
+  "modelCount": 1464
 }

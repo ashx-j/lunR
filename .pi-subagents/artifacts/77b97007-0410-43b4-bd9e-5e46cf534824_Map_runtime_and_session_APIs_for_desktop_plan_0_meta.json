@@ -1,0 +1,117 @@
+{
+  "runId": "77b97007-0410-43b4-bd9e-5e46cf534824",
+  "agent": "Map runtime and session APIs for desktop plan",
+  "task": "Documentation-only architecture research for a Windows Electron + React + TypeScript desktop around lunR. Read AGENTS.md and relevant sdk/rpc/session docs fully. Inspect existing SDK, AgentSession, SessionManager, resource loader, permissions and settings enough to identify exact reusable APIs and missing desktop adapters. No code review or edits. Need concise report with file paths/symbols and critical constraints: multi-thread runtime ownership separate from view, steering only, full builtin graphical UI no third-party custom terminal UI, shared credentials/settings and TUI history, preventing simultaneous TUI/desktop control, JSONL source of truth plus UI metadata, replay/reconnect snapshot and typed local protocol future remote. Existing remote work paused. Desktop uses app-managed matching CLI dependency; never modifies existing global CLI. Research public/source code only, not user secrets/settings/session transcripts. Return architecture recommendation, missing contracts, focused acceptance tests. You own no files; read-only.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 152688,
+        "output": 5764,
+        "cacheRead": 1829248,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 19
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete severity-ranked findings cite core permissions, SDK, runtime, SessionManager, resource loader, settings, RPC, and CLI paths above."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "Read AGENTS.md, REMOTE_DESKTOP_HANDOFF.md, and complete sdk.md, rpc.md, sessions.md, session-format.md, settings.md",
+          "result": "passed",
+          "summary": "Read project direction and relevant documentation."
+        },
+        {
+          "command": "Read targeted source and search symbols with rg",
+          "result": "passed",
+          "summary": "Verified reusable APIs, permission and trust wiring, persistence, builtin roster, and RPC lifecycle."
+        },
+        {
+          "command": "git diff --cached --name-only; git status --short",
+          "result": "passed",
+          "summary": "No staged files; existing unrelated working-tree changes were left untouched."
+        }
+      ],
+      "validationOutput": [
+        "Documentation and source inspection only; no builds or tests run."
+      ],
+      "residualRisks": [
+        "No running desktop prototype validates extension compatibility or reconnect behavior.",
+        "Exact branch-leaf recovery and host lifetime after full application exit require a product decision and focused tests."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No edits.",
+      "reviewFindings": [
+        "blocker: packages/coding-agent/src/core/permissions.ts:437 - manual mutations fail closed without a desktop approval handler.",
+        "blocker: packages/coding-agent/src/core/settings-manager.ts:380 - direct SDK defaults trust project settings unless host reproduces CLI trust checks.",
+        "high: packages/coding-agent/src/core/session-manager.ts:946 - JSONL session writes have no exclusive controller ownership.",
+        "high: packages/coding-agent/src/modes/rpc/rpc-mode.ts:778 - stdin disconnect shuts down the runtime.",
+        "high: packages/coding-agent/src/core/session-manager.ts:889 - reopened leaf defaults to last appended entry, not necessarily the live branch."
+      ],
+      "manualNotes": "Remote work remains paused. This report did not inspect personal credentials, settings files, or session transcripts."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\77b97007-0410-43b4-bd9e-5e46cf534824_Map_runtime_and_session_APIs_for_desktop_plan_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790335629269
+}

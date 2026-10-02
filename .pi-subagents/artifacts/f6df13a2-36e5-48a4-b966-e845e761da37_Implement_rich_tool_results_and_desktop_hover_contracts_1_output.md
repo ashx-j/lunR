@@ -1,0 +1,3 @@
+Implemented and committed the extension-side recovery contract as `99e58ec`. Windows desktop hover is registered only on supported Windows hosts. Recoverable results retain their image and details, and the computer-specific `tool_result` hook marks failures in the agent loop without discarding that evidence.
+
+Focused tests pass: 12 extension tests and 79 existing computer-use tests. The coding-agent no-emit typecheck and `git diff --check` pass. I did not launch the native driver or operate the desktop. Integration still needs the sibling workflow’s `details.computer` marker on every workflow result; live hover and the original click failure remain unverified.

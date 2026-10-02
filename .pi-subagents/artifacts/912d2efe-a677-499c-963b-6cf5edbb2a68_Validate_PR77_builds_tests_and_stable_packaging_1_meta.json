@@ -1,0 +1,241 @@
+{
+  "runId": "912d2efe-a677-499c-963b-6cf5edbb2a68",
+  "agent": "Validate PR77 builds tests and stable packaging",
+  "task": "User wants PR77 in mergeable state, then report and await next steps. You are second of exactly two sequential GPT-6 Astra high reasoning workers. First worker handoff: Ready for the second writer. No push or merge.\n\nCommits:\n- Integration: `990742a571978749f49979eb20cb32c67ca3fa52`\n- Repairs/HEAD: `6263c85d94069c58df9955157a40d63ec5a7c14f`\n\nHandoff saved to `C:/Users/ash/Desktop/PROJECTS/lunR/implementation-handoff.md`.\nRead C:\\Users\\ash\\Desktop\\PROJECTS\\lunR/implementation-handoff.md if present. You are now sole writer of C:/Users/ash/Desktop/PROJECTS/lunR-image-only. Your job is validation and fixing necessary remaining integration/build/test/packaging failures, NOT an independent code review or broad cleanup. No nested subagents. No PR merge, push, publication, global/daily-driver installation, user settings or credential changes, live desktop control, actual CuaDriver launch, or upload of private files. Root C:/Users/ash/Desktop/PROJECTS/lunR is unrelated dirty checkout, never edit or rebuild there. Local isolated test package installations with fake payloads/appropriate sandbox allowed, no real native runtime invocation.\n\nRead worktree AGENTS.md fully, packages/coding-agent/docs/computer-use.md fully, related interactive-startup docs fully, and C:/Users/ash/.agents/skills/writing-for-agents/SKILL.md before AGENTS edits. Verify handoff commit and working tree; if first agent left unresolved merge/failed integration, complete it safely preserving PR ancestry. Confirm latest fetched master is ancestor; normal merges only, no force/rebase. Original PR remote feat/native-computer-use head a87b3782015cd2c99a21c0065defacd26d75d257, current known master b57c14889a045e95a15a6a52c6cd39345f4c0f64. Preserve feature permissions and latest master behavior.\n\nRun meaningful focused computer workflow, adapter, extension, image/Photon, runtime, lease, platform fake-driver, cron, permissions and packaging tests as appropriate. Run five offline package tsgo builds in order tui->ai->agent->coding-agent->orchestrator, then coding-agent Node bundle. NEVER npm run build in packages/ai. Confirm worktree dependency and npm-bin isolation; do not let build/test commands run original checkout. Run first-paint/first-request tool coverage with clean inherited PI_* runtime env, update supported/unsupported host fixture only for intentional tool changes. Regenerate affected local prompt/tool inventory without committing private snapshot. Validate stable public package staging/dry-run and relocated isolated install with host optional payload selection, omitted optional payload recovery, exact lockfiles and rewritten JS/d.ts names using existing safe scripts. Production CuaDriver approval must stay false/development-only: user request does not authorize production pin approval or release. Do not disable approval gate merely to make packaging test green. Prefer existing fake archive tests and offline cached artifacts; if full stable staged packaging requires unavailable archives or production approval, precisely report blocker instead of manufacturing evidence.\n\nPR's last GitHub CI a87b378 run35516076841 job106092132879 passed offline build, first-request, check but failed Test. API annotations include preexisting-looking install-features gateway token inference, extensions-discovery entrypoint, sigterm fixture stopSmoothStreaming missing, OpenCode/catalog and Anthropic metadata fixtures. Determine baseline vs introduced failures using an isolated base comparison where needed, not assumptions. Fix introduced failures and feature-related stale expectations. Don't silently relabel failing CI merge-ready. If unrelated baseline failures prevent clean CI, identify exact evidence and smallest necessary next decision rather than broad unrelated rewrite. No fresh live provider requests needed.\n\nRun changed-file checks and git diff --check. Update public-safe computer-use docs/AGENTS with exactly verified results and remaining native hardware acceptance limitations. Existing dev claim265 tests is historical, not fresh evidence. Cursor animation and screenshot history remain explicitly deferred. No live desktop test allowed; fake foreground recovery verification only. Keep original runtime pin and stable publication approval gate intact. Commit intended validation repairs/docs only, no git add -A, no secrets/private artifacts/unrelated catalogs/binaries. Finish with exact HEAD/commit list, current master ancestry, tests counts/results, packaging evidence, any failures/blockers, public-safe suggested PR update, and whether safe to push the PR branch without merge/release. Save final handoff at C:\\Users\\ash\\Desktop\\PROJECTS\\lunR/validation-handoff.md. Parent will inspect your report and update PR only if justified; do not push.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-astra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-astra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-astra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 133125,
+        "output": 17058,
+        "cacheRead": 4673408,
+        "cacheWrite": 0,
+        "cost": 6.857557999999998,
+        "turns": 47
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "failed",
+        "message": "Required criterion 'criterion-1' was reported as not-satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-satisfied",
+          "evidence": "Scoped validation repairs are committed, but merge-ready acceptance remains blocked by ten reproduced master CI failures. No unrelated cleanup was attempted."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Handoff includes exact commits, commands, structured test reports, isolated baseline comparison, packaging evidence, and remaining gates."
+        }
+      ],
+      "changedFiles": [
+        "AGENTS.md",
+        "packages/coding-agent/docs/computer-use.md",
+        "packages/coding-agent/test/computer-install.test.ts",
+        "scripts/computer-use-packages.test.mjs"
+      ],
+      "testsAddedOrUpdated": [
+        "computer-install.test.ts now extracts inert local fixtures while retaining locking and tamper assertions.",
+        "computer-use-packages.test.mjs now stages verified inert fixtures without requiring native release archives."
+      ],
+      "commandsRun": [
+        {
+          "command": "Five ordered offline tsgo builds, then npm --prefix packages/coding-agent run build",
+          "result": "passed",
+          "summary": "All package builds and Node bundle pass; worktree CLI reports 0.2.24."
+        },
+        {
+          "command": "Focused Vitest run with clean environment and --maxWorkers=4",
+          "result": "passed",
+          "summary": "239 tests across 21 files; zero failures or skips."
+        },
+        {
+          "command": "node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs",
+          "result": "passed",
+          "summary": "8/8 tests."
+        },
+        {
+          "command": "node scripts/check-interactive-first-paint.mjs",
+          "result": "passed",
+          "summary": "Browser-on/off startup and first-turn tool checks pass. Private inventories regenerated."
+        },
+        {
+          "command": "Isolated fixture publish --dry-run --pack-dir and check-computer-use-install.mjs",
+          "result": "passed",
+          "summary": "Seven public-name tarballs pass relocation, platform selection, omitted-payload recovery, and installer npm ci."
+        },
+        {
+          "command": "node scripts/publish.mjs --dry-run",
+          "result": "failed",
+          "summary": "Real stable staging stops at the absent pinned native archive."
+        },
+        {
+          "command": "Eight CI-annotated suites on HEAD and isolated master b57c148",
+          "result": "failed",
+          "summary": "Identical ten failures and 108 passes on both revisions."
+        },
+        {
+          "command": "Lockfile, import, pinned-dependency, workflow, vendor, changed-test lint, and git diff checks",
+          "result": "passed",
+          "summary": "Exact locks and production gate unchanged; index empty."
+        }
+      ],
+      "validationOutput": [
+        "HEAD: 55e97bc8cc43424351baa5d9db6aacd9b5b843a6",
+        "Commits: 990742a571978749f49979eb20cb32c67ca3fa52, 6263c85d94069c58df9955157a40d63ec5a7c14f, 55e97bc8cc43424351baa5d9db6aacd9b5b843a6.",
+        "Fetched master b57c14889a045e95a15a6a52c6cd39345f4c0f64 and original PR head a87b3782015cd2c99a21c0065defacd26d75d257 remain ancestors.",
+        "Evidence is under worktree .pi-subagents/ and indexed in validation-handoff.md."
+      ],
+      "residualRisks": [
+        "Baseline CI failures need separate repair or explicit acceptance before declaring merge-ready.",
+        "Fixture packaging does not qualify real native archives or hardware behavior.",
+        "Production approval remains development-only; publication requires separate approval and a new version.",
+        "Cursor animation and screenshot-history changes remain deferred."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Four files changed, 88 insertions and 14 deletions. Only test fixtures and verified-result documentation changed in this worker.",
+      "reviewFindings": [
+        "blocker: Ten historical CI failures reproduce on current master.",
+        "blocker: Real native archive staging remains unverified because pinned archives are absent."
+      ],
+      "manualNotes": "No push, merge, publication, desktop control, CuaDriver launch, live provider request, or daily-driver changes. Safe to push only as an explicitly qualified PR update. Private artifacts and fake payload tarballs must remain unpublished."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\912d2efe-a677-499c-963b-6cf5edbb2a68_Validate_PR77_builds_tests_and_stable_packaging_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790419983811
+}

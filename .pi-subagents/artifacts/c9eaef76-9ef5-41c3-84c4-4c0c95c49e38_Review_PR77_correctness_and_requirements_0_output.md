@@ -1,0 +1,7 @@
+Review of PR #77 found one confirmed recovery error and two conditional contract gaps. I made no changes.
+
+- **Medium, previously documented:** `packages/coding-agent/src/core/computer-use/workflow.ts:319` says "Input may have taken effect" after *every* exception, including invalid or expired tokens rejected before native dispatch. The recovery plan requires pre-dispatch failures to say no input was sent by that call. This can mislead recovery after a typo in the token.
+- **Medium:** `workflow.ts:65-70` forwards up to 240 characters of unparseable driver text in `outcome()`. If an action or discovery reply contains raw JSON or accessibility text without a parseable structured record, that text reaches the model. This conflicts with "Neither native accessibility trees nor duplicate raw JSON reach the model." The capture path itself discards that text.
+- **Low, conditional:** `workflow.ts:156,290` hashes encoded PNG data, not decoded pixels. Pixel-identical captures with different PNG encoding can evade the promised guard against repeating an action on "identical captured pixels." Native encoder variability was not verified.
+
+No native acceptance or packaging conclusion follows from this read-only review. The focused fake-driver test command was blocked by the read-only tool policy.

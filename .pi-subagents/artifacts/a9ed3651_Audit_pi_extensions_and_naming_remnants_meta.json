@@ -1,0 +1,126 @@
+{
+  "runId": "a9ed3651",
+  "agent": "Audit pi extensions and naming remnants",
+  "task": "You are reviving a previous subagent conversation.\n\nOriginal run: fbc16546-f0c4-4786-8db7-cb4cde087ecb\nOriginal agent: Audit pi extensions and naming remnants\nOriginal session file: C:\\Users\\ash\\.lunr\\agent\\sessions\\--C--Users-ash-Desktop-PROJECTS-lunR--\\2026-09-26T12-56-04-246Z_01a0ddc9-7b96-768b-a332-e370d859d46d\\fddec4f8\\run-3\\session.jsonl\n\nUse the stored session context as background. Answer the orchestrator's follow-up below. Do not assume the original child process is still alive.\n\nFollow-up:\nFinish evidence for two concrete pi-extension findings with safe isolated source/mock reproductions, if feasible: accumulating uncaughtException listeners and /chain-prompts collision. Never throw uncaught errors in parent process; use isolated subprocess only. Provide exact commands and observed output or clearly classify static-only. Also provide exact focused test command(s) already used. No fixes or builds. Target remains clean b57c148.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return a concise result and residual risks when applicable\n\nRequired evidence: manual-notes, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 8627,
+        "output": 4309,
+        "cacheRead": 1272704,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 11
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "default lightweight attestation"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return a concise result and residual risks when applicable",
+          "evidence": [
+            "manual-notes",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "manual-notes",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "default lightweight attestation"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return a concise result and residual risks when applicable",
+        "evidence": [
+          "manual-notes",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Source mocks measured LSP listener counts 0/1/1/2; an isolated child survived the sentinel exception with exit 0; the actual command resolver returned two suffixed chain-prompts names and no plain-name match."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "node --import tsx --input-type=module -e '<LSP factory and shutdown listener-count mock shown above>'",
+          "result": "passed",
+          "summary": "{\"before\":0,\"afterFactory\":1}; {\"afterShutdown\":1}; {\"afterSecondFactory\":2}"
+        },
+        {
+          "command": "node --input-type=module -e '<spawnSync isolated LSP uncaught-sentinel child shown above>'",
+          "result": "passed",
+          "summary": "Child status 0, stdout survived-uncaught, stderr logged Error: isolated sentinel."
+        },
+        {
+          "command": "PI_CODING_AGENT_DIR='C:/Users/ash/AppData/Local/Temp/lunr-audit-nonexistent-profile' node --import tsx --input-type=module -e '<source registration and ExtensionRunner mock shown above>'",
+          "result": "passed",
+          "summary": "Resolved chain-prompts:1 and chain-prompts:2; plainLookup null."
+        },
+        {
+          "command": "npx --no-install vitest --run test/lsp-extension-startup.test.ts test/prompt-templates.test.ts",
+          "result": "passed",
+          "summary": "Previously run from packages/coding-agent: 2 files, 104 tests passed."
+        },
+        {
+          "command": "git rev-parse --short HEAD && git status --porcelain && git diff --name-only",
+          "result": "passed",
+          "summary": "b57c148; clean worktree."
+        }
+      ],
+      "validationOutput": [
+        "LSP listener counts: 0 before; 1 after factory; 1 after shutdown; 2 after second factory.",
+        "Isolated sentinel child: exit status 0; stdout survived-uncaught; stderr [LSP] Uncaught exception: Error: isolated sentinel.",
+        "Registered names included chain-prompts twice; resolved names chain-prompts:1 and chain-prompts:2; plain lookup null."
+      ],
+      "residualRisks": [
+        "Source mocks do not prove a compiled-current CLI run; linked workspace dependencies may resolve the original checkout's dist.",
+        "The sentinel test exercised only a spawned child process, not other application-level exception handlers."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff.",
+      "reviewFindings": [
+        "high: packages/coding-agent/src/builtin-extensions/pi-lsp-extension/src/index.ts:143-156,616-622 - uncaughtException handler accumulates and can suppress default fatal exit.",
+        "medium: packages/coding-agent/src/builtin-extensions/pi-prompt-template-model/index.ts:1778 and pi-subagents/src/slash/prompt-workflows.ts:298 - duplicate registration makes plain /chain-prompts unresolved."
+      ],
+      "manualNotes": "All reproductions targeted clean b57c148. The only uncaught sentinel ran in a spawnSync child; no fixes, builds, installs, credentials, or services were involved."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\a9ed3651_Audit_pi_extensions_and_naming_remnants_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790429046692
+}

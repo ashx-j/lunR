@@ -1,0 +1,80 @@
+{
+  "runId": "bf82fb9f-b4ee-448c-8e6f-4aa81b9ed931",
+  "agent": "Review default browser PR 93",
+  "task": "Read-only release review. Review PR #93 branch feat/optional-headless-browser against origin/master. Spec is the PR body: default-on built-in browser, settings toggle, install-time Chromium setup only, offline/ignore-scripts resilience, recovery command, ephemeral sessions, bounded tabs/output, permissions, checked-IP routing, private-network opt-in. Inspect the full diff and tests. Identify concrete correctness, security, packaging, install, or release-blocking failures only. Also flag likely conflicts with PRs #88, #91, #92, #94, #95, #96. Do not edit. Report file/line references, or explicitly say none. Under 700 words.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 1,
+  "model": "openai-codex/gpt-6-astra:medium",
+  "attemptedModels": [
+    "openai-codex/gpt-6-astra:medium"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-astra:medium",
+      "success": false,
+      "exitCode": 1,
+      "error": "Subagent stopped by user.",
+      "usage": {
+        "input": 30159,
+        "output": 133,
+        "cacheRead": 57728,
+        "cacheWrite": 0,
+        "cost": 0.365968,
+        "turns": 3
+      }
+    }
+  ],
+  "error": "Subagent stopped by user.",
+  "acceptance": {
+    "status": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "stopped",
+        "status": "failed",
+        "message": "Acceptance was not evaluated because the subagent was stopped."
+      }
+    ],
+    "verifyRuns": []
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\bf82fb9f-b4ee-448c-8e6f-4aa81b9ed931_Review_default_browser_PR_93_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1789921148293
+}

@@ -1,0 +1,122 @@
+{
+  "runId": "ff358328-a894-4969-a1af-8bab64680c6f",
+  "agent": "Map vendored transport and bridge contract",
+  "task": "Read-only inspect upstream pinned plugin /c/Users/ash/AppData/Local/Temp/lunr-hermes-claude-subscription-f1c1220 and clean worktree /c/Users/ash/Desktop/PROJECTS/lunR-anthropic-oauth. Map Client API/chunks, setup API, dependencies, upstream test execution, packaging and realistic bridge integration. Do not edit. Return concrete contracts and hazards.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 117108,
+        "output": 6936,
+        "cacheRead": 2439424,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Reviewed pinned upstream f1c1220 and lunR provider, auth, stream, packaging, and test contracts; findings above cite exact files and severity."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git -C /c/Users/ash/AppData/Local/Temp/lunr-hermes-claude-subscription-f1c1220 rev-parse --short HEAD",
+          "result": "passed",
+          "summary": "Confirmed pinned revision f1c1220."
+        },
+        {
+          "command": "rg -n '^def test_|^    def test_|^async def test_|^    async def test_' /c/Users/ash/AppData/Local/Temp/lunr-hermes-claude-subscription-f1c1220/tests | wc -l",
+          "result": "passed",
+          "summary": "Found 18 named upstream test functions."
+        },
+        {
+          "command": "git diff --stat; git diff --cached --stat; git status --short",
+          "result": "passed",
+          "summary": "No tracked or staged changes; untracked ANTHROPIC_OAUTH_CLAUDE_CODE_PLAN.md and packages/ai/vendor/ were present."
+        },
+        {
+          "command": "python -m pytest --version",
+          "result": "not-run",
+          "summary": "Read-only Plan-mode command gate blocked Python execution."
+        }
+      ],
+      "validationOutput": [
+        "Upstream checkout clean at f1c1220; no tracked or staged worktree diff."
+      ],
+      "residualRisks": [
+        "No upstream pytest execution or live Claude Code verification; tests require a compatible Hermes checkout.",
+        "Claude Code stream-json and replay acknowledgments are version-sensitive; upstream documents qualification against native 2.1.263.",
+        "Subscription entitlement, extra-usage billing, and cross-model signed replay cannot be established from this read-only inspection."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files edited.",
+      "reviewFindings": [
+        "blocker: upstream __init__.py:5-6 and directsdk.py:364-437 versus packages/coding-agent/src/core/provider-composer.ts:43-61 - Hermes Python client cannot register as lunR's TypeScript stream provider.",
+        "high: packages/coding-agent/src/core/provider-composer.ts:222-247 and model-runtime.ts:321-345 - token-based extension auth does not represent Claude CLI-owned login and picker availability.",
+        "high: upstream admission.py:134-198 and directsdk.py:551-621 - losing first-request admission or completion checks risks additional native generations or incomplete host tool batches.",
+        "high: upstream directsdk.py:58-135 versus packages/ai/src/types.ts:390-407 - signed native replay carrier needs explicit lossless persistence and edited-history fallback."
+      ],
+      "manualNotes": "The two untracked lunR paths were observed, not created or modified by this inspection."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\ff358328-a894-4969-a1af-8bab64680c6f_Map_vendored_transport_and_bridge_contract_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790180930590
+}

@@ -1,0 +1,124 @@
+{
+  "runId": "0cf6c549-864b-4e91-aba7-36e7c7be064e",
+  "agent": "Check later fixes for runtime and test findings",
+  "task": "Reconcile existing review findings with later PRs, user requests exactly two standard agents and report edits by parent. Own findings R1-R4 plus T1-T3 and packaging limitation in C:/Users/ash/Desktop/PROJECTS/lunR/LUNR_REVIEW_FINDINGS.md ONLY as analysis; do not edit files. Read report and relevant code. Review target was b57c148 through PR115; original cwd is older dirty branch e36432c. Determine for EACH assigned issue whether any later PR after originating change or after b57c148 already fixes it, partially addresses it, supersedes it, or leaves it current. Use local refs/git history plus public GitHub API GET (node fetch through bash if gh unavailable) to discover latest closed/merged AND open PRs. Do not confuse open fix with merged fix, merge into dev branch with stable, or pre-b57c148 fix with current reproduced defect. Verify actual changed code and test assertions where needed; no broad reruns. Include source/commit/PR links, target branch, merge status, exact evidence, and recommended report correction per issue. If latest remote exceeds local refs inspect public diff/raw source read-only; no checkout switch/fetch required. No edits, builds, installs, credentials or GitHub writes; no subagents. Parent writes report, other standard agent owns all P1-P6 and D1 findings. Output exhaustive issue-by-issue matrix and evidence limits. This is follow-up review reconciliation, not implementation.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:low",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:low"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:low",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 71143,
+        "output": 4148,
+        "cacheRead": 685056,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 14
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Issue-by-issue matrix identifies R1-R4, T1-T3 and packaging limitation, with paths, severity where applicable, PR links, merge state and recommended report corrections."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short; git rev-parse origin/master; git show/diff/log for b57c148 and open PR heads",
+          "result": "passed",
+          "summary": "Confirmed dirty original checkout, clean target commit identity, and relevant source and test differences without changing files."
+        },
+        {
+          "command": "GitHub public REST API GET /repos/ashx-j/lunR/pulls and /pulls/{118,119}/files via node fetch",
+          "result": "passed",
+          "summary": "Confirmed #118 and #119 are open against master and inspected their changed-file lists."
+        },
+        {
+          "command": "gh pr list",
+          "result": "failed",
+          "summary": "gh was unavailable; public read-only API GET was used instead."
+        }
+      ],
+      "validationOutput": [
+        "origin/master is b57c14889a045e95a15a6a52c6cd39345f4c0f64.",
+        "#118 is open and changes the OpenCode production classifier plus tests, but not the xAI fixture.",
+        "#119 is open and drops stale notices while retaining completed results after session changes."
+      ],
+      "residualRisks": [
+        "Open PR code was inspected, not executed; neither PR is merged into the reviewed master target.",
+        "R4 result delivery across same-chat session or project rebinding needs an explicit intended-behavior decision.",
+        "No fresh npm 12 packing or npm 10 publication validation was performed."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No edits.",
+      "reviewFindings": [
+        "high: packages/coding-agent/src/core/plan-mode.ts:149-160,354-369 - R1 remains current.",
+        "medium: packages/coding-agent/src/core/large-subagent-launch.ts:13-15,33-35 - R2 remains current.",
+        "medium: packages/coding-agent/src/core/usage-service.ts:119-153,182-185 - R3 remains current.",
+        "medium: packages/coding-agent/src/gateway/presenter.ts:81-118 - R4 remains current on master; open #119 only partially addresses it.",
+        "medium: packages/coding-agent/test/image-paste-markers.test.ts:120-121,151-152 - T1 remains broken coverage.",
+        "low: packages/coding-agent/test/model-runtime-catalog-auth.test.ts:205 - T2 xAI assertion remains stale.",
+        "packages/ai/scripts/opencode-catalog.ts:89-92 - T2 OpenCode issue includes a production classification defect, provisionally fixed only by open #118.",
+        "packages/coding-agent/test/settings-manager.test.ts; packages/coding-agent/test/interactive-mode-status.test.ts; packages/coding-agent/test/footer-width.test.ts; packages/coding-agent/test/model-instructions.test.ts - T3 remains current or unresolved.",
+        "scripts/publish.mjs:182 - npm 12 local packaging limitation remains; no release failure established."
+      ],
+      "manualNotes": "Parent owns report edits. No files were edited."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\0cf6c549-864b-4e91-aba7-36e7c7be064e_Check_later_fixes_for_runtime_and_test_findings_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790429419508
+}

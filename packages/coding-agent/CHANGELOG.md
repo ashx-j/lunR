@@ -4,6 +4,10 @@ lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.21`**.
 
 ## [Unreleased]
 
+### Added
+
+- Added GPT-6 Sol and GPT-6 Luna for OpenAI API and Codex subscriptions with current pricing, context limits, and reasoning levels.
+
 ## [0.2.21] - 2026-09-13
 
 ### Changed

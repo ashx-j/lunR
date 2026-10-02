@@ -1,0 +1,215 @@
+{
+  "runId": "3f05683b-cfd6-4d69-9fb4-c7fc34849261",
+  "agent": "Review and test subagent lifecycle and permissions",
+  "task": "Audit and test current lunR subagent execution, permissions, lifecycle, intercom and approvals corresponding to qualified closed PRs #1-35,#37,#38,#47,#51-64,#66-70,#72,#86,#87,#97,#98,#104,#105,#112-115. Exclude all Anthropic subscription work. User approved heavy swarm review/testing. Own this subsystem only. Read repo instructions and code-review/diagnosing skills as applicable. Run focused source tests, inspect actual assertions and implementation, report concrete severity/file/line/reproduction evidence; distinguish baseline failures. Include pi naming/import/path remnants in a separate section. Do not edit product files, build daily-driver dist, access credentials, install, publish, use live providers/services or modify GitHub. Temporary isolated test artifacts permitted outside repo. No nested agents. Return tests/commands results, gaps, qualified PR coverage and superseded dispositions. Other agents own UI, providers/startup, gateway/packaging, and pi inventory. Parent writes root report.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 141172,
+        "output": 10932,
+        "cacheRead": 4922496,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 53
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "failed",
+        "message": "Required criterion 'criterion-1' was reported as not-applicable."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "not-applicable",
+        "message": "changed-files evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "not-applicable",
+        "message": "tests-added evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-applicable",
+          "evidence": "This was a read-only audit; the task prohibited product edits."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Source locations, isolated gate reproductions, focused test results, and validation limits are reported above."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "vitest --run [12 focused permissions, plan, subagent, intercom and continuation suites] with PI_SUBAGENT_*/PI_INTERCOM_* unset",
+          "result": "passed",
+          "summary": "154/154 tests on clean b57c148"
+        },
+        {
+          "command": "vitest --run [8 additional watchdog, concurrency, control, plan and wait-input suites] with PI_SUBAGENT_*/PI_INTERCOM_* unset",
+          "result": "passed",
+          "summary": "77/77 tests"
+        },
+        {
+          "command": "vitest --run test/supervisor-questions.test.ts test/supervisor-question-lifecycle.test.ts test/model-tiers.test.ts with PI_SUBAGENT_*/PI_INTERCOM_* unset",
+          "result": "passed",
+          "summary": "61/61 tests"
+        },
+        {
+          "command": "tsx source-only gate probes for explicit async siblings and read-only Bash classification",
+          "result": "passed",
+          "summary": "Reproduced both reported allowed-call defects without spawning children or executing the classified shell commands"
+        },
+        {
+          "command": "git status --porcelain=v1; git diff --cached --name-only; git rev-parse --short HEAD",
+          "result": "passed",
+          "summary": "Clean worktree, no staged files, b57c148"
+        }
+      ],
+      "validationOutput": [
+        "Clean-worktree focused Vitest total: 292 passed, 0 failed across 23 suites.",
+        "Explicit-async reproduction: count=0, three allowed gate results, prompts=0.",
+        "Read-only reproduction: gate allowed node --eval=0 and package-manager run/exec forms."
+      ],
+      "residualRisks": [
+        "No fresh compiled CLI or live child/provider run; junctioned node_modules may resolve older compiled dependencies.",
+        "The earlier wrong-checkout test emitted a fixture supervisor request to the parent; the parent was notified to ignore it."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff; read-only audit.",
+      "reviewFindings": [
+        "high: packages/coding-agent/src/core/plan-mode.ts:361-369 - read-only Bash classifier allows executable Node flags and package scripts.",
+        "medium: packages/coding-agent/src/core/large-subagent-launch.ts:13-15,33-35 - explicit async:true same-turn singles bypass aggregate approval."
+      ],
+      "manualNotes": "PR specifications came from the supplied local dataset. The initial contaminated failure was rerun successfully in the corrected clean worktree."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\3f05683b-cfd6-4d69-9fb4-c7fc34849261_Review_and_test_subagent_lifecycle_and_permissions_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790428889125
+}

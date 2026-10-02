@@ -1,0 +1,110 @@
+{
+  "runId": "c9eaef76-9ef5-41c3-84c4-4c0c95c49e38",
+  "agent": "Review PR77 repository standards",
+  "task": "READ ONLY review of PR77 standards axis. No edits/builds/installations/native driver or desktop interaction. You own standards; other heavy reviewer owns correctness/spec. HEAD a87b3782015cd2c99a21c0065defacd26d75d257 matches live PR. Confirm fixed base 92caf64f28bf9514545f85869984375de063cc0b. Exact diff: git diff 92caf64f28bf9514545f85869984375de063cc0b...a87b3782015cd2c99a21c0065defacd26d75d257. Commits: a87b378 carry dev-verified image-only repairs; c5a9327 bounded discovery/recovery; 3bb9839 ancestry merge; d3182e4 image-only observations; afea9dc atomic ownership; 290658d/6f5d8cd native CuaDriver implementation. Standards sources: read worktree AGENTS.md completely, discover any further applicable tracked standards; packages/coding-agent/docs/computer-use.md full for contract context. User standards: scope narrowly, simple typesafe TS, avoid any and casting-wrapper helpers, reuse existing deps. Focus on all 50 diff files including packaging, tests, descriptions/coverage, architecture. Report every substantive documented-standard violation with standard file+rule and code file/line, plus judgement-call smells. Skip tooling-enforced formatting/lint issues. Smell baseline: Mysterious Name = name hides purpose, rename or clarify design. Duplicated Code = repeated logic shape across changes, share implementation. Feature Envy = reaches into another object's data more than own, move behavior. Data Clumps = same fields travel together, bundle as type. Primitive Obsession = primitive/string deserves domain type, introduce one. Repeated Switches = repeated same-type cascades, use shared map/polymorphism. Shotgun Surgery = one change scattered across files, centralize responsibility. Divergent Change = one module edited for unrelated reasons, split. Speculative Generality = abstractions/hooks unneeded by spec, remove. Message Chains = long navigation caller shouldn't know, encapsulate. Middle Man = mostly delegating class/function, inline delegation. Refused Bequest = ignores inherited behavior, prefer composition. Each baseline smell is ONLY a judgement call; documented repo rules override baseline; do not add abstractions just to satisfy smells. Distinguish hard violation vs possible smell; concrete evidence and impact, not generic style complaints. Under 400 words final. State inspection/test limits. No artifact upload.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 116884,
+        "output": 5713,
+        "cacheRead": 1598592,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 22
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Two severity-labelled judgement-call findings with source locations; no confirmed documented-standard violation."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git rev-parse HEAD; git merge-base 92caf64f28bf9514545f85869984375de063cc0b a87b3782015cd2c99a21c0065defacd26d75d257",
+          "result": "passed",
+          "summary": "HEAD and fixed merge base matched the requested hashes."
+        },
+        {
+          "command": "git diff --name-only 92caf64f28bf9514545f85869984375de063cc0b...a87b3782015cd2c99a21c0065defacd26d75d257",
+          "result": "passed",
+          "summary": "Confirmed 50 changed files for read-only inspection."
+        }
+      ],
+      "validationOutput": [
+        "Read the applicable AGENTS.md, computer-use contract, startup guidance, and PR source, packaging, and test changes."
+      ],
+      "residualRisks": [
+        "No tests or native platform acceptance performed in this review.",
+        "Stable packaging remains separately unverified, as documented in AGENTS.md."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Reviewed PR77 image-only computer-use implementation and distribution changes without editing.",
+      "reviewFindings": [
+        "medium, possible smell: packages/coding-agent/src/builtin-extensions/lunr-computer-use.ts:116 and src/core/computer-use/workflow.ts:241 erase schema-inferred action types.",
+        "low, possible smell: packages/coding-agent/src/builtin-extensions/lunr-computer-use.ts:29,42,166 duplicate active-tool roster updates.",
+        "No confirmed documented-standard violations."
+      ],
+      "manualNotes": "Existing untracked .pi-subagents/ was not changed."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\c9eaef76-9ef5-41c3-84c4-4c0c95c49e38_Review_PR77_repository_standards_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790417645169
+}

@@ -1,0 +1,124 @@
+{
+  "runId": "dcc89117-b143-4446-8d12-d65f68434643",
+  "agent": "Find closed PRs with testing or model-attribution gaps",
+  "task": "Read-only research of this lunR repository's CLOSED GitHub PRs, including merged PRs. User wants a scoped future review to avoid spending tokens re-testing well-tested work. Identify PRs likely lacking sufficient test execution evidence. Also automatically include any PR filed by a Grok model or with no model slug attached in PR comments (user wrote 'commet'; inspect PR body/comments and commit attribution where useful, explain interpretation). Use local git remote and GitHub CLI read operations to discover repository and closed PRs, inspect test evidence, CI conclusions, descriptions/comments, model attribution. Do not edit files, post comments, run tests/builds, or change GitHub state. Never upload private local data. Be economical: list all closed PR metadata first, then inspect details needed to classify; exclude clearly superseded/duplicate unmerged work from active code risk but report separately if it qualifies. Distinguish missing evidence from tests actually not run. Record scope/count/date bounds and limitations. Return a prioritized shortlist with PR numbers, titles, links, merged vs unmerged, concrete reason, model slug/evidence or missing, test evidence, and recommended narrow review/test focus. Include a brief well-tested exclusion summary and account for later PRs testing the same code so user avoids duplicated testing. You own research only, no files. Read repository instructions as needed. This is a historical PR test-evidence audit, not a full code review and not permission to run tests.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:low",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:low"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:low",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 78296,
+        "output": 5411,
+        "cacheRead": 2657664,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 49
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only child permission"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only child permission"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete historical evidence gaps and narrow review recommendations are linked to PR #107 and #96; no code defect is asserted."
+        },
+        {
+          "id": "complete-grok-and-missing-slug-inventory",
+          "status": "not-satisfied",
+          "evidence": "Not every comment and commit attribution across 114 closed PRs was inspected."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git remote -v",
+          "result": "passed",
+          "summary": "origin points to https://github.com/ashx-j/lunR.git"
+        },
+        {
+          "command": "gh repo view; gh pr list",
+          "result": "failed",
+          "summary": "gh executable unavailable"
+        },
+        {
+          "command": "tests and builds",
+          "result": "not-run",
+          "summary": "Historical read-only evidence audit"
+        }
+      ],
+      "validationOutput": [
+        "GitHub closed-PR listing showed 114 closed PRs.",
+        "PR #107 explicitly reports offline validation but no live subscription qualification.",
+        "PR #96 reports 398 passing tests but no live bot or native service verification.",
+        "PR #108 cites 12/12 validation jobs and closed without merging."
+      ],
+      "residualRisks": [
+        "Grok-filed and missing-slug PR coverage is incomplete; the shortlist is not an exhaustive mandatory-inclusion inventory.",
+        "PR-body test claims were not independently reconciled against every CI run.",
+        "Missing recorded test evidence does not prove tests were not run."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed.",
+      "reviewFindings": [
+        "high evidence gap: PR #107, Claude Code subscription routing: live subscription qualification explicitly absent.",
+        "high evidence gap: PR #96, gateway continuation: live Telegram/Discord and native service lifecycle explicitly unverified.",
+        "medium documentation gap: PRs #1, #20, #60: inspected conversation text gives neither a model slug nor concrete test result; later changes reduce their current-code relevance."
+      ],
+      "manualNotes": "No repository file path is implicated by a confirmed code defect. The priority findings concern PR-level execution evidence, not a source-code review."
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\dcc89117-b143-4446-8d12-d65f68434643_Find_closed_PRs_with_testing_or_model-attribution_gaps_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790427802059
+}

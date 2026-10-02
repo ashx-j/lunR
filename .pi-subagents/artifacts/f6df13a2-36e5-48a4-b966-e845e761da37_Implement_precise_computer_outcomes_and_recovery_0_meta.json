@@ -1,0 +1,227 @@
+{
+  "runId": "f6df13a2-36e5-48a4-b966-e845e761da37",
+  "agent": "Implement precise computer outcomes and recovery",
+  "task": "Implement computer-use workflow/adapter reliability changes. You are one of exactly two heavy implementation children, isolated worktree C:/Users/ash/Desktop/PROJECTS/lunR-computer-recovery-workflow branch work/computer-recovery-workflow base b216d44. Read C:/Users/ash/Desktop/PROJECTS/lunR/COMPUTER_USE_RECOVERY_PLAN.md fully and your checkout packages/coding-agent/docs/computer-use.md fully. Original investigator is finished. No native driver launch, GUI interaction, provider calls, native payload/pin changes, release, install, push, or PR. Dependencies junction points to parent's new isolated integration worktree, NOT daily driver. Do not alter dependencies or run builds into shared deps. Parent will baseline-build integration deps and do final builds/tests. You may run own focused source tests with shared vitest runner once available.\n\nExclusive ownership: packages/coding-agent/src/core/computer-use/{workflow.ts,adapter.ts}; tests computer-use.test.ts, computer-adapter.test.ts, computer-image-photon.test.ts; can add one focused contract/helper file in core/computer-use or test if genuinely necessary. Do not edit schemas.ts, policy.ts, extension, docs, AGENTS, package manifests, snapshots. Sibling owns schemas/policy/extension/docs and extension tests. Parent owns integration inventory/AGENTS. Commit your files locally with focused message(s); report commit ids, tests, remaining limits. No review task; implement and verify.\n\nShared contract agreed BEFORE parallel work:\n1. Workflow Result retains content, internal isError, details.observation; adds details.computer:{failed:boolean,workflow:'ready'|'stopped'|'cleanup_unconfirmed'} on all workflow results. Return structured failure results for recoverable validation/native failures, not exceptions; fatal outcomes should preferably also preserve result evidence via this contract. Sibling's extension will RETURN content/details intact, set final isError using computer-scoped tool_result hook, and close only non-ready workflows. Unexpected thrown errors still close. Preserve cleanup uncertainty and original action outcome.\n2. computer_hover is WINDOWS ONLY desktop-only schema {desktop:true,foreground:true,observation:string,x:number,y:number}. Workflow maps returned desktop/crop pixels once to native move_cursor {scope:'desktop',x,y}; no delivery_mode unless pinned native schema needs it. Pinned Windows scope window moves overlay only, never real app hover. Refuse non-Windows and window-target calls inside workflow too. Move without button events/focus, fixed ~700ms cancellable dwell, one full desktop post-image, same token/permission invariants and outcomes. No native binary changes. Relevant upstream MoveCursorTool at pinned https://raw.githubusercontent.com/trycua/cua/d8028a7943087ee258dc1b4d19dc12a7cd27669c/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs . Sibling adds schema/tools/policy.\n3. computer_apps gains optional include_windows:boolean. Only enable enrichment for query + no pid with include_windows:true; validate other combinations coherently with sibling instructions. Ordinary discovery stays cheap and preserves observation age/token. For enriched named-app matches, at most 5 positive matching PIDs and 50 total windows; if >5 return bounded app identities and narrowing/PID guidance without arbitrary first-PID selection. Nested window metadata per app and explicit truncation/partial-error guidance; preserve native returned PID/owner for UWP host windows, never pretend pid0 is observable. Native list_windows args pid; use existing pagination followup. Sibling schema description will state this. No global unbounded enumeration/fanout.\n\nImplement plan steps 1-5 plus workflow hover from step6: typed precise phase/input/outcome contract, normalize known safe native error codes and recognized plain-text launch error patterns without leaking raw stderr/tree/text; preserve unknown as unknown. Separate adapter preflight from actual MCP request boundary with typed failure evidence (no false no-input for native RPC error). Launch RPC gets bounded operation-specific timeout e.g. 45s within 90s workflow, cancellation immediate; test >15s reply fake timers. Unknown native errors remain uncertain. Settled native refused/partial replies get ONE safe recovery capture if lease/runtime healthy and not aborted; no input retry, no hidden foreground escalation. If image valid issue fresh token and ready; retain outcome+capture failure separately. Fatal cancellation/transport/lease loss closes confirms lease; no recovery capture on these. Local invalid token/coordinates/args leaves healthy workflow ready for fresh observation, old token invalid. Observe attempt invalidates prior; apps does not; launch/input does. Keep 30-second exact target single-use, bounded expiry metadata, partial Unicode counts, repeated-input and unchanged-polling safeguards. Do not have recovery clear repeat/polling history to bypass protections. Launch split from discovery outcome and real callable guidance; pid0 shell reuse handled. Preserve operation evidence on close failure, keep owner on unconfirmed cleanup.\n\nEvidence: installed dev source matches base in owned files; fake-driver confirmed refusal skip image + closes, apps silently clears token, fatal expiry, unconditional failed-launch guidance. Native finish_pixel_uia_attempt can emit background_unavailable effect unverifiable AFTER attempt. Actual user's tool_invocation_failed root cause is unknown; do not claim live native fix. Pure plain native text must not pass unchecked; use stable reasons, known pattern mapping only if grounded.\n\nTests should exercise actual paths, update existing expectations for intended recovery contract. Child's schemas lack sibling modifications until integration: do not modify owned-by-sibling files to make tests pass; use test-local mocks for new schema where appropriate or report that integration is required. Can coordinate exceptions with supervisor. All tests must scrub inherited PI_SUBAGENT_*/PI_INTERCOM_* if spawning. No new broad framework, no arbitrary comments, no any. Return concise handoff and commits when implemented.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 178284,
+        "output": 46822,
+        "cacheRead": 13484544,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 117
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "checked",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Committed scoped workflow and adapter changes as c690cf9 and feae61e."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "100 focused tests pass; no-emit typecheck, touched-file Biome, and diff checks pass."
+        }
+      ],
+      "changedFiles": [
+        "packages/coding-agent/src/core/computer-use/workflow.ts",
+        "packages/coding-agent/src/core/computer-use/adapter.ts",
+        "packages/coding-agent/test/computer-use.test.ts",
+        "packages/coding-agent/test/computer-adapter.test.ts",
+        "packages/coding-agent/test/computer-image-photon.test.ts"
+      ],
+      "testsAddedOrUpdated": [
+        "packages/coding-agent/test/computer-use.test.ts",
+        "packages/coding-agent/test/computer-adapter.test.ts",
+        "packages/coding-agent/test/computer-image-photon.test.ts"
+      ],
+      "commandsRun": [
+        {
+          "command": "node node_modules/vitest/vitest.mjs --run test/computer-use.test.ts test/computer-adapter.test.ts test/computer-image-photon.test.ts",
+          "result": "passed",
+          "summary": "100/100 tests passed."
+        },
+        {
+          "command": "npx tsgo -p packages/coding-agent/tsconfig.build.json --noEmit",
+          "result": "passed",
+          "summary": "No type errors."
+        },
+        {
+          "command": "npx biome check --formatter-enabled=false <five changed files>",
+          "result": "passed",
+          "summary": "No findings."
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        }
+      ],
+      "validationOutput": [
+        "Focused suites: 3 passed, 100 tests passed.",
+        "Worktree clean after both commits."
+      ],
+      "residualRisks": [
+        "Sibling schema and extension changes must be integrated before registered-tool validation.",
+        "The user's native failure cause and hover behavior on Windows hardware remain unverified."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Separates adapter preflight from request uncertainty, preserves native outcomes and safe recovery images, keeps healthy workflows usable, bounds named-app window lookup, and adds Windows desktop hover dispatch.",
+      "reviewFindings": [
+        "No blockers found in focused validation."
+      ]
+    },
+    "reviewResult": {
+      "status": "needs-parent-decision",
+      "findings": [
+        {
+          "severity": "non-blocking",
+          "issue": "Reviewed acceptance requires an independent reviewer result.",
+          "rationale": "The run cannot be marked reviewed from child evidence alone."
+        }
+      ]
+    }
+  },
+  "transcriptPath": "C:\\Users\\ash\\Desktop\\PROJECTS\\lunR\\.pi-subagents\\artifacts\\f6df13a2-36e5-48a4-b966-e845e761da37_Implement_precise_computer_outcomes_and_recovery_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1790453319405
+}

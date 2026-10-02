@@ -1,0 +1,9 @@
+I’d prioritize these TUI changes. They are product recommendations from source inspection, not confirmed bugs.
+
+1. **Edit one queued message without disturbing the others.** The queue display shows each steering and follow-up message, but its edit action clears both queues and joins every message into one editor draft. That loses the distinction between “send during this turn” and “send afterward” until the user requeues them. Add selection, edit, and removal for individual queued items. Medium-sized change. `packages/coding-agent/src/modes/interactive/interactive-mode.ts:4553-4629`
+
+2. **Preview a session before resuming it.** The selector supports search, scope, sorting, naming, and deletion, but each result is a single row containing its name or first message, message count, and age. A preview of the last few exchanges would make it much easier to distinguish sessions that began with similar prompts. Medium-sized TUI change. `packages/coding-agent/src/modes/interactive/components/session-selector.ts:367-386,417-505,676-705`
+
+3. **Make `/context` refreshable rather than leaving a static card in chat.** The command calculates a current breakdown and appends rendered text to the chat container. After another turn or compaction, that card remains a snapshot. An explicitly labeled snapshot timestamp would be a small fix; a refreshable context view would be medium-sized. `packages/coding-agent/src/modes/interactive/interactive-mode.ts:7284-7307`
+
+I only inspected source. I did not edit files, run builds, or touch the installed CLI. The size estimates need implementation scoping, especially for queue entries that include images.
