@@ -59,7 +59,7 @@ jobs:
           node scripts/bundle-computer-use.mjs "$RUNNER_TEMP/cua-release"
 
       - name: Build binaries
-        run: ./scripts/build-binaries.sh
+        run: bash scripts/build-binaries.sh
 
       - name: Prepare GitHub release payload
         run: |
