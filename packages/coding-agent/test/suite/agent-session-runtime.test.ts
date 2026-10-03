@@ -525,6 +525,7 @@ describe("AgentSessionRuntime characterization", () => {
 		});
 		await otherRuntime.session.prompt("other");
 		const otherSessionFile = otherRuntime.session.sessionFile!;
+		await otherRuntime.dispose();
 
 		await runtime.switchSession(otherSessionFile);
 
@@ -600,6 +601,7 @@ describe("AgentSessionRuntime characterization", () => {
 		otherRuntime.session.setThinkingLevel("off");
 		await otherRuntime.session.prompt("hello");
 		const targetSessionFile = otherRuntime.session.sessionFile!;
+		await otherRuntime.dispose();
 
 		await runtime.switchSession(targetSessionFile);
 

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
@@ -77,12 +78,12 @@ function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
 
 describe("formatCwdForFooter", () => {
 	it("does not abbreviate sibling paths that share the home prefix", () => {
-		expect(formatCwdForFooter("/home/user2", "/home/user")).toBe("/home/user2");
+		expect(formatCwdForFooter(join("/home", "user2"), join("/home", "user"))).toBe(join("/home", "user2"));
 	});
 
 	it("abbreviates the home directory and descendants", () => {
-		expect(formatCwdForFooter("/home/user", "/home/user")).toBe("~");
-		expect(formatCwdForFooter("/home/user/project", "/home/user")).toBe("~/project");
+		expect(formatCwdForFooter(join("/home", "user"), join("/home", "user"))).toBe("~");
+		expect(formatCwdForFooter(join("/home", "user", "project"), join("/home", "user"))).toBe(join("~", "project"));
 	});
 });
 

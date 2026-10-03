@@ -25,9 +25,11 @@ type UndoEditContext = {
 	};
 	runtimeHost: { fork: ReturnType<typeof vi.fn> };
 	redoStack: string[];
-	editor: { setText: ReturnType<typeof vi.fn>; getText: () => string };
+	editor: { setText(text: string): void; getText: () => string };
 	chatContainer: { clear: ReturnType<typeof vi.fn> };
 	renderInitialMessages: ReturnType<typeof vi.fn>;
+	clearChatContainer(): void;
+	disposeChatToolComponents(): void;
 	showWarning: ReturnType<typeof vi.fn>;
 	showStatus: ReturnType<typeof vi.fn>;
 	showError: ReturnType<typeof vi.fn>;
@@ -35,6 +37,7 @@ type UndoEditContext = {
 };
 
 type InteractiveModePrivate = {
+	clearChatContainer(this: UndoEditContext): void;
 	handleUndoCommand(this: UndoEditContext): Promise<void>;
 	handleEditCommand(this: UndoEditContext): Promise<void>;
 	handleRedoCommand(this: UndoEditContext): Promise<void>;
@@ -54,7 +57,7 @@ function userBranch(): BranchEntry[] {
 }
 
 function createContext(overrides: Partial<UndoEditContext> = {}): UndoEditContext & InteractiveModePrivate {
-	const context = {
+	const context: UndoEditContext = {
 		session: {
 			isStreaming: false,
 			navigateTree: vi.fn(async () => ({ cancelled: false, editorText: "please undo me" })),
@@ -68,20 +71,23 @@ function createContext(overrides: Partial<UndoEditContext> = {}): UndoEditContex
 		editor: { setText: vi.fn(), getText: () => "" },
 		chatContainer: { clear: vi.fn() },
 		renderInitialMessages: vi.fn(),
+		disposeChatToolComponents: vi.fn(),
+		clearChatContainer: proto.clearChatContainer,
 		showWarning: vi.fn(),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		flushCompactionQueue: vi.fn(),
 		...overrides,
-	} as UndoEditContext & InteractiveModePrivate;
-	context.rewindLastTurn = proto.rewindLastTurn;
-	context.handleUndoCommand = proto.handleUndoCommand;
-	context.handleEditCommand = proto.handleEditCommand;
-	context.handleRedoCommand = proto.handleRedoCommand;
-	context.restoreEditorFromTreeResult = (result) => {
-		context.editor.setText(result.editorText ?? "");
 	};
-	return context;
+	return Object.assign(context, {
+		rewindLastTurn: proto.rewindLastTurn,
+		handleUndoCommand: proto.handleUndoCommand,
+		handleEditCommand: proto.handleEditCommand,
+		handleRedoCommand: proto.handleRedoCommand,
+		restoreEditorFromTreeResult(result: { editorText?: string; editorImages?: unknown[] }) {
+			context.editor.setText(result.editorText ?? "");
+		},
+	});
 }
 
 describe("InteractiveMode /undo and /edit", () => {

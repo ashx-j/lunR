@@ -23,6 +23,7 @@ type ShutdownThis = {
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
 	themeController: { disableAutoSync: () => void };
 	stop: () => void;
+	stopSmoothStreaming: () => void;
 	sessionManager: SessionManager;
 };
 
@@ -69,6 +70,7 @@ function restoreStdoutIsTTY(): void {
 function createContext(order: string[], sessionManager = createSessionManager()): ShutdownThis {
 	return {
 		isShuttingDown: false,
+		stopSmoothStreaming: vi.fn(),
 		unregisterSignalHandlers: vi.fn(),
 		runtimeHost: {
 			dispose: vi.fn(async () => {

@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CONFIG_DIR_NAME } from "../src/config.ts";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir } from "../src/config.ts";
 import type { SettingsManager } from "../src/core/settings-manager.ts";
 
 // We test the rollback module directly with a mock settings manager.
@@ -32,6 +32,11 @@ describe("rollback", () => {
 		testDir = join(tmpdir(), `rollback-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(testDir, { recursive: true });
 
+		const home = join(testDir, "home");
+		vi.stubEnv("HOME", home);
+		vi.stubEnv("USERPROFILE", home);
+		vi.stubEnv(ENV_AGENT_DIR, join(home, CONFIG_DIR_NAME, "agent"));
+
 		mockSM = {
 			getRollbackEnabled: () => true,
 			getRollbackTurns: () => 2,
@@ -40,8 +45,8 @@ describe("rollback", () => {
 		};
 
 		const rollback = await import("../src/core/rollback.ts");
-		rollback.initRollback(mockSM as SettingsManager, "test-session");
 		rollback.clearRollback();
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
 		rollback.enableRollbackForSession();
 	});
 
@@ -49,6 +54,7 @@ describe("rollback", () => {
 		const rollback = await import("../src/core/rollback.ts");
 		rollback.clearRollback();
 		if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("snapshots and restores file content", async () => {
@@ -301,8 +307,8 @@ describe("rollback", () => {
 	it("restores snapshots under the lunR config dir and the memory dir", async () => {
 		const rollback = await import("../src/core/rollback.ts");
 		const suffix = `rollback-b1-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-		const agentDir = join(homedir(), CONFIG_DIR_NAME, "agent");
-		const memoryDir = join(homedir(), ".pi", "simple-memory");
+		const agentDir = getAgentDir();
+		const memoryDir = join(dirname(agentDir), "simple-memory");
 		const behaviorFile = join(agentDir, `behavior-${suffix}.md`);
 		const jobsFile = join(agentDir, "cron", `jobs-${suffix}.json`);
 		const memoryFile = join(memoryDir, `memory-${suffix}.md`);
