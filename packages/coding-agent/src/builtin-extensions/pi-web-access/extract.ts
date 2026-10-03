@@ -3,6 +3,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import pLimit from "p-limit";
+import { readBoundedBody } from "./bounded-body.ts";
 import { activityMonitor } from "./activity.ts";
 import { extractRSCContent } from "./rsc-extract.ts";
 import {
@@ -596,6 +597,7 @@ async function extractViaHttp(
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
 	const onAbort = () => controller.abort();
+	if (signal?.aborted) controller.abort();
 	signal?.addEventListener("abort", onAbort);
 
 	try {
@@ -635,6 +637,7 @@ async function extractViaHttp(
 		if (contentLengthHeader) {
 			const contentLength = parseInt(contentLengthHeader, 10);
 			if (contentLength > maxResponseSize) {
+				await response.body?.cancel();
 				activityMonitor.logComplete(activityId, response.status);
 				return {
 					url,
@@ -646,8 +649,9 @@ async function extractViaHttp(
 		}
 
 		if (isPDFContent) {
+			const bytes = await readBoundedBody(response, maxResponseSize, controller.signal);
 			try {
-				const buffer = await response.arrayBuffer();
+				const buffer = bytes.buffer;
 				const { extractPDFToMarkdown } = await loadPdfExtract();
 				const result = await extractPDFToMarkdown(buffer, url);
 				activityMonitor.logComplete(activityId, response.status);
@@ -678,7 +682,7 @@ async function extractViaHttp(
 			};
 		}
 
-		const text = await response.text();
+		const text = new TextDecoder().decode(await readBoundedBody(response, maxResponseSize, controller.signal));
 		const isHTML = contentType.includes("text/html") || contentType.includes("application/xhtml+xml");
 
 		if (!isHTML) {

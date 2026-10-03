@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Web session bounds (`fix/review-web-session-bounds`):** each web factory owns its result store and activity monitor; shared GitHub clones use session leases and final-owner teardown waits for pending output. IDs, persisted records and the one-hour restoration TTL stay unchanged. Direct HTTP text/PDF reads enforce decoded 5/20 MiB caps before parsing. `get_search_content` pages every text form at 50 KiB/2,000 lines with UTF-8 offsets, continuation metadata and bounded details. No provider API changes.
+
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
 
 - **Computer recovery (`fix/computer-use-recovery`):** settled native failures retain a safe post-image and structured outcome; local validation mistakes permit fresh observation without restarting a healthy workflow. Discovery preserves token age, optional `include_windows` returns bounded named-app windows, and launch has phase-specific guidance plus a 45-second request budget. Windows-only `computer_hover` moves the foreground desktop pointer, waits 700 ms, then captures once. Native binary, exact-token checks, permissions, and ownership remain unchanged. No live qualification of the original taskbar failure or hover yet.
@@ -164,6 +166,8 @@ Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Web session bounds, 2026-10-03: 50 focused tests across web startup/lifecycle, clone leases, decoded body limits, paging and system prompt pass. Five isolated tsgo package builds and the coding-agent Node bundle pass. Compiled first-paint, browser-on/off first-request and local first-turn subagent/MCP/LSP/fetch checks pass. Four tool payload fingerprints and private prompt/inventory captures are regenerated; restoring only the old retrieval description/schema reproduces all baseline hashes. Touched non-vendored Biome, relative imports and whitespace checks pass. Full-suite baseline failures remain outside this focused claim. No remote provider, browser, native UI or live service test.
+
 - v0.2.26 release (2026-09-27): five offline package builds and coding-agent Node bundle pass; 21 focused coding-agent suites pass 375/375, with the ten computer suites rerun after approval passing 128/128. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass; Linux integration CI build, first-request, and Check pass. Full CI retains 98 baseline fixture failures across 24 suites, versus 101 across 27 in #77's earlier Ubuntu log; AI 623 and Agent 181 pass. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog, pinned dependencies and whitespace checks pass. All three pinned archives pass byte/SHA-256 verification and seven staged package dry-run packs pass. Production gate passes. Tag publication workflow `36312684171` succeeded at `c3d6e31`; all seven 0.2.26 versions expose npm tarballs, `npm view` reports 0.2.26 latest, and a fresh isolated public install reports 0.2.26 for the CLI, three dependencies, and Windows x64 payload. First-paint and first-turn subagent/MCP/LSP/fetch checks pass against that installed CLI. No global install, Mac/ARM desktop operation, or live provider test.
 
 - Computer recovery, 2026-09-26: 128 tests across ten focused computer suites pass after integrating both implementation branches. All five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged initial tool fingerprints. An isolated compiled CLI turn against a local scripted provider loads the new tools and verifies the Windows hover and window-enrichment schemas; initial/loaded inventories and prompts remain private under `.artifacts/computer-recovery/`. Touched-file Biome with formatting disabled, relative imports, shrinkwrap, installer lock, and whitespace checks pass. No native driver, desktop operation, remote model, installed CLI update, or release.
@@ -281,6 +285,10 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Web retrieval offsets count UTF-8 bytes in the complete formatted response, including its heading. Continue with the same responseId and selectors. A long single line may split at a UTF-8 boundary so pagination always advances. Details retain only short metadata, not another copy of the stored body.
+- Web clone cancellation stops one caller's wait; session teardown releases its lease and cancels/deletes only after the final owner leaves. Shutdown awaits pending clone completion to remove late files.
+- This Linux validation tree has a non-executable shared `shx` launcher. Package typechecks and Node bundling passed using a local Python copy of the declared asset-copy steps without changing shared dependencies.
+
 - npm published all seven 0.2.26 packages before the CLI's registry metadata propagated. Verify the exact tarball and a fresh isolated install before treating tag publication as complete.
 
 - On npm 10 and 12, `npm run version:patch` rejects the existing `-ws` shortcut; use `npm version patch --workspaces --no-git-tag-version`, then `scripts/sync-versions.js` and the normal lock generators until the script is corrected in a separate change.
@@ -396,6 +404,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-03: keep web result maps factory-local and route provider activity through async session scope, so concurrent sessions remain isolated without changing provider request APIs.
+- 2026-10-03: lease shared clones until the final owner departs and page stored text using UTF-8 byte offsets, so teardown preserves other sessions and oversized single lines remain retrievable.
 
 - 2026-09-27: tag the merged 0.2.26 release commit after production approval and confirm seven public npm tarballs plus a fresh install, because workflow success preceded registry propagation.
 
