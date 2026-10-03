@@ -15,18 +15,24 @@ describe("browser installer dispatch", () => {
 	afterEach(() => {
 		mocks.compiled = false;
 		mocks.spawn.mockReset();
+		vi.restoreAllMocks();
 	});
 
-	it.each([true, false])(
-		"refuses compiled setup without launching the product executable, explicit=%s",
-		async (explicit) => {
-			mocks.compiled = true;
-			await expect(installBrowser(explicit)).rejects.toThrow(
-				/same lunR version through npm.*PLAYWRIGHT_BROWSERS_PATH/,
-			);
-			expect(mocks.spawn).not.toHaveBeenCalled();
-		},
-	);
+	it("refuses explicit compiled installation without launching the product executable", async () => {
+		mocks.compiled = true;
+		await expect(installBrowser()).rejects.toThrow(/same lunR version through npm.*PLAYWRIGHT_BROWSERS_PATH/);
+		expect(mocks.spawn).not.toHaveBeenCalled();
+	});
+
+	it("warns and lets implicit compiled setup continue without claiming Chromium installation", async () => {
+		mocks.compiled = true;
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await expect(installBrowser(false)).resolves.toBeUndefined();
+		expect(warn).toHaveBeenCalledExactlyOnceWith(
+			expect.stringMatching(/installation is unavailable.*same lunR version through npm.*PLAYWRIGHT_BROWSERS_PATH/),
+		);
+		expect(mocks.spawn).not.toHaveBeenCalled();
+	});
 
 	it.each([true, false])("runs the script with the Node interpreter, explicit=%s", async (explicit) => {
 		mocks.spawn.mockImplementation(() => {
