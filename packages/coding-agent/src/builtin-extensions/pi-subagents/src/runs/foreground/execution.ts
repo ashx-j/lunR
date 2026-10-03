@@ -53,7 +53,7 @@ import { normalizeSkillInput } from "../../agents/skills.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
-import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
+import { attachPostExitStdioGuard } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { READ_ONLY_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
@@ -354,6 +354,8 @@ async function runSingleAttempt(
 			windowsHide: true,
 		});
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
+		let spawned = typeof proc.pid === "number" && proc.pid > 0;
+		proc.once("spawn", () => { spawned = true; });
 		let processClosed = false;
 		let settled = false;
 		let detached = false;
@@ -371,17 +373,59 @@ async function runSingleAttempt(
 		let protocolHardKillTimer: NodeJS.Timeout | undefined;
 		let cancellationHardKillTimer: NodeJS.Timeout | undefined;
 		let interruptTerminationTimer: NodeJS.Timeout | undefined;
+		let terminationCheckTimer: NodeJS.Timeout | undefined;
+		let terminationUnconfirmedReported = false;
 		const clearCancellationTimers = () => {
+			if (terminationCheckTimer) clearTimeout(terminationCheckTimer);
+			terminationCheckTimer = undefined;
 			if (cancellationHardKillTimer) clearTimeout(cancellationHardKillTimer);
 			if (interruptTerminationTimer) clearTimeout(interruptTerminationTimer);
 			cancellationHardKillTimer = undefined;
 			interruptTerminationTimer = undefined;
 		};
+		const recordProcessError = (error: unknown) => {
+			if (!result.error) result.error = error instanceof Error ? error.message : String(error);
+			progress.error = result.error;
+			if (!childExited && !processClosed && !settled && !detached) {
+				progress.status = "running";
+				fireUpdate();
+			}
+		};
+		// A delivered signal is not an exit acknowledgement. Keep this attempt owned
+		// until close, including when the OS refuses every termination signal.
+		const signalChild = (signal: NodeJS.Signals): boolean => {
+			if (childExited || processClosed || settled || detached) return false;
+			let sent = false;
+			try {
+				sent = proc.kill(signal);
+			} catch (error) {
+				recordProcessError(error);
+			}
+			if (!sent && !childExited && !processClosed && !settled && !detached) {
+				recordProcessError(`Subagent ${signal} could not be delivered; child exit is not confirmed.`);
+			}
+			if (signal === "SIGKILL" && !childExited && !processClosed && !settled && !detached && !terminationCheckTimer && !terminationUnconfirmedReported) {
+				terminationCheckTimer = setTimeout(() => {
+					terminationCheckTimer = undefined;
+					if (childExited || processClosed || settled || detached) return;
+					terminationUnconfirmedReported = true;
+					const message = `Subagent termination unconfirmed after SIGKILL${proc.pid ? ` (diagnostic PID ${proc.pid})` : ""}. This foreground call still owns the child and waits for its exit. Verify the child process before starting replacement work.`;
+					progress.status = "running";
+					progress.error = message;
+					progress.activityState = "needs_attention";
+					progress.durationMs = Date.now() - startTime;
+					appendRecentOutput(progress, [message]);
+					emitUpdateSnapshot(message);
+				}, 2000);
+				terminationCheckTimer.unref?.();
+			}
+			return sent;
+		};
 		const scheduleCancellationHardKill = (delayMs: number) => {
 			if (cancellationHardKillTimer || childExited || processClosed || settled || detached) return;
 			cancellationHardKillTimer = setTimeout(() => {
 				cancellationHardKillTimer = undefined;
-				if (!childExited && !processClosed && !settled && !detached) trySignalChild(proc, "SIGKILL");
+				if (!childExited && !processClosed && !settled && !detached) signalChild("SIGKILL");
 			}, delayMs);
 			cancellationHardKillTimer.unref?.();
 		};
@@ -466,15 +510,14 @@ async function runSingleAttempt(
 			if (childExited || finalDrainTimer || settled || processClosed || detached) return;
 			finalDrainTimer = setTimeout(() => {
 				if (settled || processClosed || detached) return;
-				const termSent = trySignalChild(proc, "SIGTERM");
-				if (!termSent) return;
-				forcedTerminationSignal = true;
+				const termSent = signalChild("SIGTERM");
+				forcedTerminationSignal = termSent || forcedTerminationSignal;
 				if (!cleanTerminalAssistantStopReceived && !agentSettledReceived && !assistantError) {
 					result.error = result.error ?? `Subagent process did not exit within ${FINAL_STOP_GRACE_MS}ms after its terminal event. Forcing termination.`;
 				}
 				finalHardKillTimer = setTimeout(() => {
 					if (settled || processClosed || detached) return;
-					forcedTerminationSignal = trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
+					forcedTerminationSignal = signalChild("SIGKILL") || forcedTerminationSignal;
 				}, HARD_KILL_MS);
 				finalHardKillTimer.unref?.();
 			}, FINAL_STOP_GRACE_MS);
@@ -621,15 +664,15 @@ async function runSingleAttempt(
 			progress.error = message;
 			progress.durationMs = Date.now() - startTime;
 			fireUpdate();
-			trySignalChild(proc, "SIGINT");
+			signalChild("SIGINT");
 			turnBudgetTerminationTimer = setTimeout(() => {
 				if (processClosed || settled || detached || result.timedOut) return;
-				trySignalChild(proc, "SIGTERM");
+				signalChild("SIGTERM");
 			}, 1000);
 			turnBudgetTerminationTimer.unref?.();
 			turnBudgetHardKillTimer = setTimeout(() => {
 				if (processClosed || settled || detached || result.timedOut) return;
-				trySignalChild(proc, "SIGKILL");
+				signalChild("SIGKILL");
 			}, 4000);
 			turnBudgetHardKillTimer.unref?.();
 		};
@@ -893,15 +936,15 @@ async function runSingleAttempt(
 				progress.error = attemptTimeout.message;
 				progress.durationMs = Date.now() - startTime;
 				fireUpdate();
-				trySignalChild(proc, "SIGINT");
+				signalChild("SIGINT");
 				timeoutTerminationTimer = setTimeout(() => {
 					if (processClosed || settled || detached) return;
-					trySignalChild(proc, "SIGTERM");
+					signalChild("SIGTERM");
 				}, 1000);
 				timeoutTerminationTimer.unref?.();
 				timeoutHardKillTimer = setTimeout(() => {
 					if (processClosed || settled || detached) return;
-					trySignalChild(proc, "SIGKILL");
+					signalChild("SIGKILL");
 				}, 4000);
 				timeoutHardKillTimer.unref?.();
 			}, attemptTimeout.remainingMs);
@@ -918,9 +961,9 @@ async function runSingleAttempt(
 			progress.durationMs = Date.now() - startTime;
 			fireUpdate();
 			if (!childExited) {
-				trySignalChild(proc, "SIGTERM");
+				signalChild("SIGTERM");
 				protocolHardKillTimer = setTimeout(() => {
-					if (!childExited) trySignalChild(proc, "SIGKILL");
+					if (!childExited) signalChild("SIGKILL");
 				}, 3000);
 				protocolHardKillTimer.unref?.();
 			}
@@ -939,12 +982,18 @@ async function runSingleAttempt(
 			stderrTail.push(chunk);
 			stderrReader.push(chunk);
 		});
-		proc.on("exit", () => {
+		const confirmChildExit = () => {
 			childExited = true;
+			if (terminationUnconfirmedReported) {
+				progress.error = result.error;
+				progress.activityState = undefined;
+			}
 			clearCancellationTimers();
 			clearFinalDrainTimers();
-		});
+		};
+		proc.on("exit", confirmChildExit);
 		proc.on("close", (code, signal) => {
+			confirmChildExit();
 			clearFinalDrainTimers();
 			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
@@ -1015,6 +1064,11 @@ async function runSingleAttempt(
 			finish(finalCode);
 		});
 		proc.on("error", (error) => {
+			// kill/send errors after spawn do not prove exit and must not discard escalation.
+			if (spawned) {
+				recordProcessError(error);
+				return;
+			}
 			clearFinalDrainTimers();
 			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
@@ -1032,7 +1086,7 @@ async function runSingleAttempt(
 		if (options.signal) {
 			const kill = () => {
 				if (childExited || processClosed || settled || detached) return;
-				trySignalChild(proc, "SIGTERM");
+				signalChild("SIGTERM");
 				scheduleCancellationHardKill(3000);
 			};
 			if (options.signal.aborted) kill();
@@ -1054,10 +1108,10 @@ async function runSingleAttempt(
 				result.finalOutput = "Interrupted. Waiting for explicit next action.";
 				progress.activityState = undefined;
 				fireUpdate();
-				trySignalChild(proc, "SIGINT");
+				signalChild("SIGINT");
 				interruptTerminationTimer = setTimeout(() => {
 					if (childExited || settled || processClosed || detached) return;
-					trySignalChild(proc, "SIGTERM");
+					signalChild("SIGTERM");
 				}, 1000);
 				interruptTerminationTimer.unref?.();
 				scheduleCancellationHardKill(4000);
