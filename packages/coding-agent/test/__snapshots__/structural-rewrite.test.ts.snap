@@ -1,0 +1,38 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`code_rewrite tool guidance and destination checks > documents stale/protected rejection and partial results in the registered contract 1`] = `
+{
+  "description": "Transform code matching a structural pattern into a replacement. Use $NAME to capture and reuse single nodes, $$$NAME for sequences. Defaults to dry-run mode (preview only). Set dry_run=false to apply changes. Apply rejects protected targets and stale source snapshots. Files apply sequentially; a later failure leaves earlier changes in place and reports skipped files. Search again after a stale-source failure. Inspect failed writes before retrying. For symbol renames, prefer lsp_rename instead (semantically correct).",
+  "name": "code_rewrite",
+  "parameters": {
+    "properties": {
+      "dry_run": {
+        "description": "Preview changes without applying (default: true)",
+        "type": "boolean",
+      },
+      "language": {
+        "description": "Target language (typescript, python, rust, java, etc.)",
+        "type": "string",
+      },
+      "path": {
+        "description": "File or directory scope (default: workspace root)",
+        "type": "string",
+      },
+      "pattern": {
+        "description": "Structural pattern to match (with $NAME / $$$NAME metavariables)",
+        "type": "string",
+      },
+      "replacement": {
+        "description": "Replacement template using the same metavariables",
+        "type": "string",
+      },
+    },
+    "required": [
+      "pattern",
+      "replacement",
+      "language",
+    ],
+    "type": "object",
+  },
+}
+`;
