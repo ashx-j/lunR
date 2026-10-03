@@ -1,13 +1,20 @@
 import { mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type { ExtensionUIDialogOptions } from "../core/extensions/types.ts";
 import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from "../core/permissions.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
 import { isAuthorized, requireAuthorized } from "./authz.ts";
-import { createPicker, type PickerItem, type PickerResolveResult } from "./buttons.ts";
+import {
+	createPicker,
+	GatewayPickerCancelled,
+	gatewayPickerGeneration,
+	type PickerItem,
+	type PickerResolveResult,
+} from "./buttons.ts";
 import { type GatewayConfig, loadGatewayConfig } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
-import { gatewayInput, gatewaySelect } from "./presenter.ts";
+import { gatewayInput, gatewaySelect, invalidateGatewayDialogs } from "./presenter.ts";
 import type { BridgeLike } from "./router.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
@@ -72,11 +79,24 @@ export function createProjectFolder(parent: string, name: string, roots: string[
 }
 
 interface MobileContext {
+	pickerGeneration?: number;
 	key: string;
 	event: MessageEvent;
 	adapter: PlatformAdapter;
 	bridge: BridgeLike;
 	cfg: GatewayConfig;
+}
+
+function commandRequest(ctx: MobileContext) {
+	return { generation: ctx.pickerGeneration ?? gatewayPickerGeneration(ctx.key), source: ctx.event.source };
+}
+
+function selectForCommand(ctx: MobileContext, title: string, options: string[], opts?: ExtensionUIDialogOptions) {
+	return gatewaySelect(ctx.key, title, options, opts, commandRequest(ctx));
+}
+
+function inputForCommand(ctx: MobileContext, title: string) {
+	return gatewayInput(ctx.key, title, undefined, undefined, commandRequest(ctx));
 }
 
 async function browseProject(ctx: MobileContext, initialPath?: string): Promise<void> {
@@ -127,6 +147,7 @@ async function browseProject(ctx: MobileContext, initialPath?: string): Promise<
 		{
 			kind: "project",
 			sessionKey: key,
+			generation: ctx.pickerGeneration,
 			invokerId: event.source.userId,
 			...initial,
 			validate: () => isAuthorized(event.source, loadGatewayConfig()),
@@ -136,15 +157,38 @@ async function browseProject(ctx: MobileContext, initialPath?: string): Promise<
 					const cwd = resolveWithinRoots(current, loadGatewayConfig().projectRoots ?? []);
 					if (bridge.getStatus(key).busy)
 						throw new Error("Stop the current turn or wait before switching projects.");
-					await bridge.reset(key);
-					bindConversation(key, event.source, { cwd, owner: event.source.userId });
+					let committed = false;
+					await bridge.reset(key, {
+						validate: () => {
+							requireAuthorized(event.source);
+							const binding = conversationBinding(key);
+							if (
+								!binding ||
+								binding.owner !== event.source.userId ||
+								binding.source.userId !== event.source.userId ||
+								binding.source.platform !== event.source.platform ||
+								binding.source.chatId !== event.source.chatId ||
+								binding.source.threadId !== event.source.threadId
+							)
+								throw new GatewayPickerCancelled("Project requester changed before selection completed.");
+							resolveWithinRoots(cwd, loadGatewayConfig().projectRoots ?? []);
+						},
+						commit: () => {
+							bindConversation(key, event.source, { cwd, owner: event.source.userId });
+							committed = true;
+						},
+					});
+					if (!committed)
+						throw new Error("The gateway did not commit project replacement. Retry with an updated gateway.");
 					return {
 						done: true,
 						text: `Project selected: ${cwd}\nSend a task to begin. Existing sessions are still available through /sessions.`,
 					};
 				}
 				if (item.value === "new" && current) {
-					const name = await gatewayInput(key, "New folder name");
+					const name = await inputForCommand(ctx, "New folder name");
+					if (ctx.pickerGeneration !== gatewayPickerGeneration(key))
+						return { done: true, text: "Selection cancelled." };
 					if (name) current = createProjectFolder(current, name, loadGatewayConfig().projectRoots ?? []);
 				} else current = item.value === "roots" ? undefined : item.value;
 				return { done: false, ...view() };
@@ -184,8 +228,8 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 		await requestSessionTransfer(file, { timeoutMs: 3000, signal });
 	} catch (error) {
 		if (!(error instanceof SessionTransferError) || !["busy", "timeout"].includes(error.code)) throw error;
-		const choice = await gatewaySelect(
-			key,
+		const choice = await selectForCommand(
+			ctx,
 			`${error instanceof Error ? error.message : "Session is in use"}\nHow should lunR continue?`,
 			["Wait until idle", "Stop and continue", "Cancel"],
 			{ signal },
@@ -214,7 +258,9 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 	}
 	signal.throwIfAborted();
 	requireAuthorized(ctx.event.source);
+	if (ctx.pickerGeneration !== gatewayPickerGeneration(key)) return;
 	await bridge.switchSession(key, file);
+	ctx.pickerGeneration = gatewayPickerGeneration(key);
 	const session = await bridge.getSession(key);
 	const cwd = session?.sessionManager?.getCwd();
 	bindConversation(key, ctx.event.source, { cwd, owner: ctx.event.source.userId });
@@ -224,8 +270,8 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 		setPermissionMode("read-only", id);
 		session?.sessionManager?.setPermissionMode?.("read-only");
 		if (
-			(await gatewaySelect(
-				key,
+			(await selectForCommand(
+				ctx,
 				`Continue with ${requested} permissions? Tools can change files and run commands without individual approval.`,
 				["Keep read-only", `Use ${requested}`],
 			)) === `Use ${requested}`
@@ -301,6 +347,7 @@ async function sessionPicker(ctx: MobileContext, items: PickerItem[]): Promise<v
 		{
 			kind: "sessions",
 			sessionKey: ctx.key,
+			generation: ctx.pickerGeneration,
 			invokerId: ctx.event.source.userId,
 			title: "Choose a session. Use /sessions <search> to filter.",
 			items,
@@ -317,6 +364,8 @@ async function sessionPicker(ctx: MobileContext, items: PickerItem[]): Promise<v
 export async function handleMobileCommand(ctx: MobileContext, command: string, args: string): Promise<boolean> {
 	if (!MOBILE_COMMANDS.some((c) => c.name === command) && command !== "resume") return false;
 	requireAuthorized(ctx.event.source, ctx.cfg);
+	if (command === "project") invalidateGatewayDialogs(ctx.key);
+	ctx.pickerGeneration = gatewayPickerGeneration(ctx.key);
 	bindConversation(ctx.key, ctx.event.source, { owner: ctx.event.source.userId });
 	if (command === "project") {
 		await browseProject(ctx, args.trim() || undefined);
@@ -328,6 +377,7 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	}
 	const session = await ctx.bridge.getSession(ctx.key);
 	if (!session) throw new Error("Select a project and send a task, or use /continue first.");
+	if (ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 	const id = session.sessionManager?.getSessionId();
 	if (command === "usage") {
 		const stats = session.getSessionStats();
@@ -403,11 +453,11 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	if (command === "skill") {
 		const names = session.resourceLoader?.getSkills().skills.map((s) => s.name) ?? [];
 		const [name, ...task] = args.split(/\s+/).filter(Boolean);
-		const chosen = name || (await gatewaySelect(ctx.key, "Choose a skill", names));
-		if (!chosen) return true;
+		const chosen = name || (await selectForCommand(ctx, "Choose a skill", names));
+		if (!chosen || ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 		if (!names.includes(chosen)) throw new Error("That skill is not loaded for this project.");
-		ctx.event.text = `/skill:${chosen} ${task.join(" ") || (await gatewayInput(ctx.key, "What should this skill do?")) || ""}`;
-		return false;
+		ctx.event.text = `/skill:${chosen} ${task.join(" ") || (await inputForCommand(ctx, "What should this skill do?")) || ""}`;
+		return ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key);
 	}
 	if (command === "download") {
 		if (!ctx.adapter.sendFile) throw new Error("This platform cannot send files.");
@@ -428,9 +478,10 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 		return true;
 	}
 	if (command === "settings") {
-		const choice = await gatewaySelect(ctx.key, "Session settings", ["Model", "Thinking", "Permissions"]);
+		const choice = await selectForCommand(ctx, "Session settings", ["Model", "Thinking", "Permissions"]);
 		if (choice === "Model" || choice === "Thinking") {
 			const { CHAT_COMMANDS, runChatCommand } = await import("./commands.ts");
+			if (ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 			const cmd = CHAT_COMMANDS.find((c) => c.name === choice.toLowerCase());
 			if (cmd)
 				await runChatCommand(cmd, {
@@ -447,8 +498,8 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	const requested =
 		command === "plan"
 			? "read-only"
-			: args || (await gatewaySelect(ctx.key, `Permission mode: ${getPermissionMode(id)}`, [...PERMISSION_MODES]));
-	if (!requested) return true;
+			: args || (await selectForCommand(ctx, `Permission mode: ${getPermissionMode(id)}`, [...PERMISSION_MODES]));
+	if (!requested || ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 	const mode = requested === "read" ? "read-only" : requested;
 	if (!PERMISSION_MODES.includes(mode as (typeof PERMISSION_MODES)[number]))
 		throw new Error("Choose yolo, auto, or read-only.");

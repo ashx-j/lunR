@@ -16,7 +16,7 @@ import { runtimeScope } from "../core/runtime-scope.ts";
 import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
-import { createPicker, type PickerItem } from "./buttons.ts";
+import { createPicker, gatewayPickerGeneration, type PickerItem } from "./buttons.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
 import { FORWARDED_COMMANDS, MOBILE_COMMANDS, resolveWithinRoots } from "./mobile-commands.ts";
@@ -95,6 +95,7 @@ export interface ChatCommandContext {
 	bridge: BridgeLike;
 	cfg?: GatewayConfig;
 	session?: BridgeSession;
+	pickerGeneration?: number;
 	reply(text: string): Promise<void>;
 	args: string;
 }
@@ -332,6 +333,7 @@ const modelCommand: ChatCommand = {
 				{
 					kind: "model",
 					sessionKey: ctx.key,
+					generation: ctx.pickerGeneration,
 					invokerId: ctx.event.source.userId,
 					items: providerItems,
 					perPage: PROVIDER_PER_PAGE,
@@ -385,7 +387,7 @@ const modelCommand: ChatCommand = {
 				},
 				pickerOpts,
 			);
-			if (!result.success) {
+			if (!result.success && ctx.pickerGeneration === gatewayPickerGeneration(ctx.key)) {
 				const currentText = `${current?.provider ?? "none"}/${current?.id ?? "none"}`;
 				const lines = formatModelList(models);
 				await ctx.reply([`Current: ${currentText}`, ...lines, "Use /model <n> or /model <provider/id>"].join("\n"));
@@ -457,6 +459,7 @@ const sessionsCommand: ChatCommand = {
 				{
 					kind: "sessions",
 					sessionKey: ctx.key,
+					generation: ctx.pickerGeneration,
 					invokerId: ctx.event.source.userId,
 					items,
 					perPage: 8,
@@ -471,7 +474,7 @@ const sessionsCommand: ChatCommand = {
 				},
 				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
 			);
-			if (!result.success) {
+			if (!result.success && ctx.pickerGeneration === gatewayPickerGeneration(ctx.key)) {
 				const lines = sessions.map((s, i) => {
 					const marker = s.path === currentFile ? " (current)" : "";
 					const label = s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)";
@@ -650,6 +653,7 @@ const thinkingCommand: ChatCommand = {
 				{
 					kind: "thinking",
 					sessionKey: ctx.key,
+					generation: ctx.pickerGeneration,
 					invokerId: ctx.event.source.userId,
 					items,
 					perPage: levels.length,
@@ -662,7 +666,7 @@ const thinkingCommand: ChatCommand = {
 				},
 				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
 			);
-			if (!result.success) {
+			if (!result.success && ctx.pickerGeneration === gatewayPickerGeneration(ctx.key)) {
 				await ctx.reply(`Level: ${current} — available: ${levels.join(", ")}`);
 			}
 			return;
@@ -726,6 +730,7 @@ export function formatHelpText(): string {
  * router should continue when a command mutates the event and wants a normal turn.
  */
 export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext): Promise<boolean> {
+	ctx.pickerGeneration ??= gatewayPickerGeneration(ctx.key);
 	if (!cmd.bypassBusy && ctx.bridge.getStatus(ctx.key).busy) {
 		await ctx.reply("⏳ busy — /stop first or wait");
 		return true;
@@ -738,6 +743,7 @@ export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext):
 		}
 		ctx.session = session;
 	}
+	if (ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 	try {
 		const settingsManager = ctx.session?.settingsManager;
 		const consumed = settingsManager
