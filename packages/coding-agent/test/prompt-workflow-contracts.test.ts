@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as deterministicStep from "../src/builtin-extensions/pi-prompt-template-model/deterministic-step.ts";
 import promptModelExtension from "../src/builtin-extensions/pi-prompt-template-model/index.ts";
-import { loadPromptsWithModel } from "../src/builtin-extensions/pi-prompt-template-model/prompt-loader.ts";
 import { createToolManager } from "../src/builtin-extensions/pi-prompt-template-model/tool-manager.ts";
 import {
 	discoverPromptWorkflows,
 	registerPromptWorkflowCommands,
 } from "../src/builtin-extensions/pi-subagents/src/slash/prompt-workflows.ts";
 import type { ExtensionCommandContext } from "../src/core/extensions/types.ts";
+import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createHarnessWithExtensions, type Harness } from "./test-harness.ts";
 
 let profile: string;
@@ -104,9 +104,13 @@ describe("builtin prompt command routing", () => {
 			writeFileSync(join(promptsDir, `${name}.md`), `---\nrun: inert-${name}\nhandoff: never\n---\nTemplate body`);
 		}
 		const run = vi.fn();
-		harness = await createHarnessWithExtensions({
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: profile,
+			agentDir: profile,
 			extensionFactories: [promptModelExtension, (pi) => registerPromptWorkflowCommands({ pi, run })],
 		});
+		await resourceLoader.reload();
+		harness = await createHarnessWithExtensions({ resourceLoader });
 		await harness.session.extensionRunner!.emit({ type: "session_start", reason: "startup" });
 		await harness.session.prompt("/chain-prompts analyze -> fix");
 		expect(execute.mock.calls.map(([prompt]) => prompt.filePath)).toEqual([
@@ -127,18 +131,24 @@ describe("builtin prompt command routing", () => {
 		expect(discoverPromptWorkflows(profile).map((workflow) => workflow.name)).not.toContain("chain-prompts");
 	});
 
-	it("keeps template discovery from replacing the native workflow commands", () => {
+	it("keeps template discovery from replacing the native workflow commands", async () => {
 		const promptsDir = join(profile, "prompts");
 		mkdirSync(promptsDir);
 		for (const name of ["chain-workflows", "prompt-workflow", "allowed-template"]) {
 			writeFileSync(join(promptsDir, `${name}.md`), "---\nmodel: faux/faux-1\n---\nTemplate body");
 		}
-		const result = loadPromptsWithModel(profile);
-		expect([...result.prompts.keys()]).toEqual(["allowed-template"]);
-		expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
-			"reserved-command-name",
-			"reserved-command-name",
-		]);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: profile,
+			agentDir: profile,
+			extensionFactories: [promptModelExtension],
+		});
+		await resourceLoader.reload();
+		harness = await createHarnessWithExtensions({ resourceLoader });
+		const runner = harness.session.extensionRunner!;
+		await runner.emit({ type: "session_start", reason: "startup" });
+		expect(runner.getCommand("allowed-template")).toBeDefined();
+		expect(runner.getCommand("chain-workflows")).toBeUndefined();
+		expect(runner.getCommand("prompt-workflow")).toBeUndefined();
 	});
 });
 

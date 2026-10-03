@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- Prompt routing integration checks use the real resource loader so approved discovery also works with the project-trust repair. All 10 routing/result tests pass both independently and in the combined validation checkout.
+
 - **Prompt workflow contracts (`fix/review-prompt-workflow-contracts`):** `/chain-prompts` retains the prompt-template engine; native subagent chains use `/chain-workflows`. Help, examples, and reserved template names match. Rejected `run-prompt` requests throw through the core tool error path; accepted commands retain deferred execution and duplicate requests preserve the first queue entry. Focused source tests and the enabled tool-contract snapshot cover both engines together and third-party command suffixes.
 
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
