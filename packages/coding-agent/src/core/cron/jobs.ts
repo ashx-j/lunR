@@ -4,7 +4,7 @@
  * Jobs persist at `<agentDir>/cron/jobs.json` (`{ jobs: [...], updated_at }`),
  * agentDir resolved via getAgentDir() (honors PI_CODING_AGENT_DIR, defaults
  * ~/.lunr/agent). Writes are atomic (tmp file in the same dir + rename) and
- * serialized through an in-process promise queue — single-process, no locks.
+ * serialized with a cross-process read-modify-write lock over fresh data.
  *
  * Per-run output goes to `<agentDir>/cron/output/<jobId>/<YYYY-MM-DD_HH-MM-SS>.md`
  * with a retention cap of the newest 50 files per job.
@@ -13,11 +13,22 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { Cron } from "croner";
+import lockfile from "proper-lockfile";
 import { getAgentDir } from "../../config.ts";
+import { loadGatewayConfig } from "../../gateway/config.ts";
 import {
 	chatPlatformDeliverBlockedMessage,
 	deliverMentionsChatPlatform,
@@ -41,6 +52,8 @@ export interface CronSchedule {
 }
 
 export interface CronJobOrigin {
+	/** Requester identity, absent on legacy jobs. Never persist adapter role grants. */
+	userId?: string;
 	platform: string;
 	chatId: string;
 	threadId?: string;
@@ -71,6 +84,10 @@ export interface CronJob {
 	/** Job IDs whose latest output (8K chars cap each) is prepended to the prompt. */
 	contextFrom?: string[];
 	workdir?: string;
+	/** Unknown interrupted effects require an explicit run, rather than ordinary resume. */
+	interrupted?: boolean;
+	/** Durable claim written before dispatch. Interrupted claims require explicit retry. */
+	activeRun?: { id: string; scheduledAt: string | null; startedAt: string; advancedTo?: string | null };
 }
 
 export interface CreateJobInput {
@@ -108,9 +125,6 @@ export interface JobPatch {
 
 /** Flat recovery grace for one-shots: fire up to 120s late. */
 export const ONE_SHOT_GRACE_MS = 120_000;
-/** Recurring grace window clamps: at least 120s, at most 2h. */
-const MIN_GRACE_MS = 120_000;
-const MAX_GRACE_MS = 7_200_000;
 /** Per-job output retention. */
 export const OUTPUT_RETENTION = 50;
 /** Cap per upstream job output injected via contextFrom. */
@@ -123,16 +137,16 @@ const MAX_NAME_LEN = 50;
 // ---------------------------------------------------------------------------
 
 let baseDirOverride: string | undefined;
-let cache: CronJob[] | undefined;
+let transactionJobs: CronJob[] | undefined;
 let writeQueue: Promise<void> = Promise.resolve();
 
 /**
  * Override the base dir (defaults to the agent dir) and reset the in-memory
- * cache + write queue. Passing undefined restores the default. For tests.
+ * transaction queue. Passing undefined restores the default. For tests.
  */
 export function setCronBaseDir(dir: string | undefined): void {
 	baseDirOverride = dir;
-	cache = undefined;
+	transactionJobs = undefined;
 	writeQueue = Promise.resolve();
 }
 
@@ -149,35 +163,85 @@ function outputDir(jobId: string): string {
 }
 
 function loadJobs(): CronJob[] {
-	if (cache) return cache;
+	if (transactionJobs) return transactionJobs;
 	const file = jobsFile();
-	if (!existsSync(file)) {
-		cache = [];
-		return cache;
-	}
-	try {
-		const parsed = JSON.parse(readFileSync(file, "utf-8"));
-		cache = Array.isArray(parsed?.jobs) ? (parsed.jobs as CronJob[]) : [];
-	} catch {
-		cache = [];
-	}
-	return cache;
+	if (!existsSync(file)) return [];
+	const parsed = JSON.parse(readFileSync(file, "utf-8"));
+	if (!Array.isArray(parsed?.jobs)) throw new Error("invalid cron job store");
+	return parsed.jobs as CronJob[];
 }
 
-/** Queue an atomic write of the in-memory store. Rejects only for the caller; the chain self-heals. */
-function persist(): Promise<void> {
-	const snapshot = JSON.stringify({ jobs: cache ?? [], updated_at: new Date().toISOString() }, null, 2);
-	const p = writeQueue.then(() => {
-		mkdirSync(cronDir(), { recursive: true });
-		const tmp = join(cronDir(), `.jobs.json.${process.pid}.${Date.now()}.tmp`);
-		writeFileSync(tmp, snapshot, "utf-8");
-		renameSync(tmp, jobsFile());
+/** Each mutation reads the latest snapshot while holding the profile store lock. */
+function mutateJobs<T>(fn: () => T): Promise<T> {
+	const dir = cronDir();
+	const file = join(dir, "jobs.json");
+	const operation = writeQueue.then(async () => {
+		mkdirSync(dir, { recursive: true });
+		const release = await lockfile.lock(file, {
+			realpath: false,
+			retries: { retries: 100, minTimeout: 10, maxTimeout: 100 },
+		});
+		try {
+			transactionJobs = loadJobs();
+			const result = fn();
+			const tmp = join(dir, `.jobs.json.${randomUUID()}.tmp`);
+			try {
+				writeFileSync(
+					tmp,
+					JSON.stringify({ jobs: transactionJobs, updated_at: new Date().toISOString() }, null, 2),
+				);
+				renameSync(tmp, file);
+			} finally {
+				rmSync(tmp, { force: true });
+			}
+			return structuredClone(result);
+		} finally {
+			transactionJobs = undefined;
+			await release();
+		}
 	});
-	writeQueue = p.then(
+	writeQueue = operation.then(
 		() => undefined,
 		() => undefined,
 	);
-	return p;
+	return operation;
+}
+
+/** Acquire the non-preemptive profile scheduler lease. A live PID is never displaced. */
+export async function acquireSchedulerLease(): Promise<(() => Promise<void>) | null> {
+	const dir = cronDir();
+	mkdirSync(dir, { recursive: true });
+	const file = join(dir, "scheduler");
+	const ownerFile = `${file}.owner.json`;
+	if (existsSync(`${file}.lock`) && existsSync(ownerFile)) {
+		const owner = JSON.parse(readFileSync(ownerFile, "utf-8")) as { pid: number };
+		try {
+			process.kill(owner.pid, 0);
+			return null;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") return null;
+		}
+	}
+	let release: () => Promise<void>;
+	try {
+		release = await lockfile.lock(file, { realpath: false, stale: 120_000 });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ELOCKED") return null;
+		throw error;
+	}
+	try {
+		writeFileSync(ownerFile, JSON.stringify({ pid: process.pid }));
+	} catch (error) {
+		await release();
+		throw error;
+	}
+	return async () => {
+		try {
+			rmSync(ownerFile, { force: true });
+		} finally {
+			await release();
+		}
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -276,20 +340,6 @@ export function computeNextRun(job: CronJob, now: Date = new Date()): Date | nul
 	return cron.nextRun(job.lastRunAt ? new Date(job.lastRunAt) : now);
 }
 
-/** Approximate schedule period in ms (recurring jobs only) for grace-window sizing. */
-function periodMs(job: CronJob, now: Date): number {
-	if (job.schedule.kind === "interval") return (job.schedule.minutes ?? 0) * 60_000;
-	if (job.schedule.kind === "cron") {
-		const cron = new Cron(job.schedule.expr!);
-		const a = cron.nextRun(now);
-		if (!a) return MAX_GRACE_MS;
-		const b = cron.nextRun(a);
-		if (!b) return MAX_GRACE_MS;
-		return Math.max(b.getTime() - a.getTime(), 1);
-	}
-	return 0;
-}
-
 /** Next slot strictly after `after` for a recurring job. */
 function nextSlotAfter(job: CronJob, after: Date): Date | null {
 	if (job.schedule.kind === "interval") {
@@ -340,17 +390,25 @@ export function resetCronValidators(): void {
 }
 
 function isPathUnderRoot(absPath: string, root: string): boolean {
-	const normRoot = normalize(root).replace(/\\$/g, "");
-	const normPath = normalize(absPath).replace(/\\$/g, "");
-	return normPath === normRoot || normPath.startsWith(`${normRoot}/`) || normPath.startsWith(`${normRoot}\\`);
+	const rel = relative(root, absPath);
+	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-function validateWorkdir(workdir: string): string | undefined {
-	const candidate = resolve(workdir);
-	if (isAbsolute(workdir) && !workdirRoots.some((root) => isPathUnderRoot(candidate, root))) {
+function validateWorkdir(workdir: string, origin?: CronJobOrigin | null): string | undefined {
+	const candidate = origin ? realpathSync(resolve(workdir)) : resolve(workdir);
+	const roots = origin
+		? (loadGatewayConfig().projectRoots ?? []).flatMap((root) => {
+				try {
+					return [realpathSync(root)];
+				} catch {
+					return [];
+				}
+			})
+		: workdirRoots;
+	if (isAbsolute(workdir) && !roots.some((root) => isPathUnderRoot(candidate, root))) {
 		return `workdir ${workdir} is outside allowed roots`;
 	}
-	if (!workdirRoots.some((root) => isPathUnderRoot(candidate, root))) {
+	if (!roots.some((root) => isPathUnderRoot(candidate, root))) {
 		return `workdir ${workdir} resolves outside allowed roots`;
 	}
 	return undefined;
@@ -369,47 +427,48 @@ function deriveName(prompt: string): string {
 }
 
 export async function createJob(input: CreateJobInput): Promise<CronJob> {
-	const prompt = input.prompt.trim();
-	if (!prompt) throw new Error("createJob: prompt is empty");
-	if (input.workdir) {
-		const err = validateWorkdir(input.workdir);
-		if (err) throw new Error(`createJob: ${err}`);
-	}
-	if (input.deliver) {
-		const err = runDeliverValidation(input.deliver, input.origin);
-		if (err) throw new Error(`createJob: ${err}`);
-	}
-	const now = new Date();
-	const parsed = parseSchedule(input.schedule, now);
-	const isOneShot = parsed.schedule.kind === "once";
-	const times = isOneShot ? 1 : (input.times ?? null);
-	if (times !== null && (!Number.isInteger(times) || times < 1)) {
-		throw new Error(`createJob: times must be a positive integer or null, got ${times}`);
-	}
-	const job: CronJob = {
-		id: randomUUID().replaceAll("-", "").slice(0, 12),
-		name: (input.name?.trim() || deriveName(prompt)).slice(0, MAX_NAME_LEN),
-		prompt,
-		schedule: parsed.schedule,
-		scheduleDisplay: parsed.scheduleDisplay,
-		repeat: { times, completed: 0 },
-		enabled: true,
-		state: "scheduled",
-		createdAt: now.toISOString(),
-		nextRunAt: null,
-		lastRunAt: null,
-		lastStatus: null,
-		lastError: null,
-		lastDeliveryError: null,
-		deliver: input.deliver?.trim() || "local",
-		origin: input.origin ?? null,
-		contextFrom: input.contextFrom,
-		workdir: input.workdir,
-	};
-	job.nextRunAt = computeNextRun(job, now)?.toISOString() ?? null;
-	loadJobs().push(job);
-	await persist();
-	return job;
+	return mutateJobs(() => {
+		const prompt = input.prompt.trim();
+		if (!prompt) throw new Error("createJob: prompt is empty");
+		if (input.workdir) {
+			const err = validateWorkdir(input.workdir, input.origin);
+			if (err) throw new Error(`createJob: ${err}`);
+		}
+		if (input.deliver) {
+			const err = runDeliverValidation(input.deliver, input.origin);
+			if (err) throw new Error(`createJob: ${err}`);
+		}
+		const now = new Date();
+		const parsed = parseSchedule(input.schedule, now);
+		const isOneShot = parsed.schedule.kind === "once";
+		const times = isOneShot ? 1 : (input.times ?? null);
+		if (times !== null && (!Number.isInteger(times) || times < 1)) {
+			throw new Error(`createJob: times must be a positive integer or null, got ${times}`);
+		}
+		const job: CronJob = {
+			id: randomUUID().replaceAll("-", "").slice(0, 12),
+			name: (input.name?.trim() || deriveName(prompt)).slice(0, MAX_NAME_LEN),
+			prompt,
+			schedule: parsed.schedule,
+			scheduleDisplay: parsed.scheduleDisplay,
+			repeat: { times, completed: 0 },
+			enabled: true,
+			state: "scheduled",
+			createdAt: now.toISOString(),
+			nextRunAt: null,
+			lastRunAt: null,
+			lastStatus: null,
+			lastError: null,
+			lastDeliveryError: null,
+			deliver: input.deliver?.trim() || "local",
+			origin: input.origin ?? null,
+			contextFrom: input.contextFrom,
+			workdir: input.workdir,
+		};
+		job.nextRunAt = computeNextRun(job, now)?.toISOString() ?? null;
+		loadJobs().push(job);
+		return job;
+	});
 }
 
 /** Look up a job by id, then by unique name. Throws when not found or when the name is ambiguous. */
@@ -432,70 +491,76 @@ export function listJobs(): CronJob[] {
 }
 
 export async function updateJob(idOrName: string, patch: JobPatch): Promise<CronJob> {
-	const job = getJob(idOrName);
-	if (patch.name !== undefined) job.name = patch.name.trim().slice(0, MAX_NAME_LEN) || job.name;
-	if (patch.workdir !== undefined) {
-		if (patch.workdir) {
-			const err = validateWorkdir(patch.workdir);
+	return mutateJobs(() => {
+		const job = getJob(idOrName);
+		if (patch.name !== undefined) job.name = patch.name.trim().slice(0, MAX_NAME_LEN) || job.name;
+		if (patch.workdir !== undefined) {
+			if (patch.workdir) {
+				const err = validateWorkdir(patch.workdir, patch.origin ?? job.origin);
+				if (err) throw new Error(`updateJob: ${err}`);
+			}
+			job.workdir = patch.workdir;
+		}
+		if (patch.deliver !== undefined) {
+			const err = runDeliverValidation(patch.deliver, patch.origin ?? job.origin);
 			if (err) throw new Error(`updateJob: ${err}`);
+			job.deliver = patch.deliver.trim() || "local";
 		}
-		job.workdir = patch.workdir;
-	}
-	if (patch.deliver !== undefined) {
-		const err = runDeliverValidation(patch.deliver, patch.origin ?? job.origin);
-		if (err) throw new Error(`updateJob: ${err}`);
-		job.deliver = patch.deliver.trim() || "local";
-	}
-	if (patch.prompt !== undefined) {
-		const prompt = patch.prompt.trim();
-		if (!prompt) throw new Error("updateJob: prompt is empty");
-		job.prompt = prompt;
-	}
-	if (patch.schedule !== undefined) {
-		const parsed = parseSchedule(patch.schedule);
-		job.schedule = parsed.schedule;
-		job.scheduleDisplay = parsed.scheduleDisplay;
-		if (parsed.schedule.kind === "once") job.repeat.times = 1;
-		job.nextRunAt = computeNextRun(job)?.toISOString() ?? null;
-	}
-	if (patch.enabled !== undefined) job.enabled = patch.enabled;
-	if (patch.times !== undefined) {
-		if (patch.times !== null && (!Number.isInteger(patch.times) || patch.times < 1)) {
-			throw new Error(`updateJob: times must be a positive integer or null, got ${patch.times}`);
+		if (patch.prompt !== undefined) {
+			const prompt = patch.prompt.trim();
+			if (!prompt) throw new Error("updateJob: prompt is empty");
+			job.prompt = prompt;
 		}
-		if (job.schedule.kind !== "once") job.repeat.times = patch.times;
-	}
-	if (patch.contextFrom !== undefined) job.contextFrom = patch.contextFrom;
-	if (patch.origin !== undefined) job.origin = patch.origin;
-	if (patch.nextRunAt !== undefined) job.nextRunAt = patch.nextRunAt;
-	if (patch.lastDeliveryError !== undefined) job.lastDeliveryError = patch.lastDeliveryError;
-	await persist();
-	return job;
+		if (patch.schedule !== undefined) {
+			const parsed = parseSchedule(patch.schedule);
+			job.schedule = parsed.schedule;
+			job.scheduleDisplay = parsed.scheduleDisplay;
+			if (parsed.schedule.kind === "once") job.repeat.times = 1;
+			job.nextRunAt = computeNextRun(job)?.toISOString() ?? null;
+		}
+		if (patch.enabled !== undefined) job.enabled = patch.enabled;
+		if (patch.times !== undefined) {
+			if (patch.times !== null && (!Number.isInteger(patch.times) || patch.times < 1)) {
+				throw new Error(`updateJob: times must be a positive integer or null, got ${patch.times}`);
+			}
+			if (job.schedule.kind !== "once") job.repeat.times = patch.times;
+		}
+		if (patch.contextFrom !== undefined) job.contextFrom = patch.contextFrom;
+		if (patch.origin !== undefined) job.origin = patch.origin;
+		if (patch.nextRunAt !== undefined) job.nextRunAt = patch.nextRunAt;
+		if (patch.lastDeliveryError !== undefined) job.lastDeliveryError = patch.lastDeliveryError;
+		return job;
+	});
 }
 
 export async function pauseJob(idOrName: string): Promise<CronJob> {
-	const job = getJob(idOrName);
-	if (job.state !== "completed") job.state = "paused";
-	await persist();
-	return job;
+	return mutateJobs(() => {
+		const job = getJob(idOrName);
+		if (job.state !== "completed") job.state = "paused";
+		return job;
+	});
 }
 
 export async function resumeJob(idOrName: string): Promise<CronJob> {
-	const job = getJob(idOrName);
-	if (job.state === "paused") {
-		job.state = "scheduled";
-		job.nextRunAt = computeNextRun(job)?.toISOString() ?? null;
-	}
-	await persist();
-	return job;
+	return mutateJobs(() => {
+		const job = getJob(idOrName);
+		if (job.interrupted)
+			throw new Error("interrupted run has unknown effects; inspect them and use cron run for a deliberate retry");
+		if (job.state === "paused") {
+			job.state = "scheduled";
+			job.nextRunAt = computeNextRun(job)?.toISOString() ?? null;
+		}
+		return job;
+	});
 }
 
 export async function removeJob(idOrName: string): Promise<CronJob> {
-	const job = getJob(idOrName);
-	const jobs = loadJobs();
-	jobs.splice(jobs.indexOf(job), 1);
-	await persist();
-	return job;
+	return mutateJobs(() => {
+		const job = getJob(idOrName);
+		const jobs = loadJobs();
+		jobs.splice(jobs.indexOf(job), 1);
+		return job;
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -505,56 +570,50 @@ export async function removeJob(idOrName: string): Promise<CronJob> {
 /**
  * Jobs due to fire now. Skips disabled/paused/completed jobs and jobs without a
  * nextRunAt. One-shots fire up to 120s late (flat recovery grace); beyond that
- * they are marked state "error" and skipped. Recurring jobs whose nextRunAt is
- * older than the grace window — min(max(period/2, 120s), 2h) — are fast-forwarded
- * to their next future slot but still fire ONCE now (collapse backlog, no burst).
+ * they are marked state "error" and skipped. Recurring backlog fires once;
+ * claiming the occurrence advances it to the next future slot without a burst.
  */
 export async function getDueJobs(now: Date = new Date()): Promise<CronJob[]> {
-	const due: CronJob[] = [];
-	let changed = false;
-	for (const job of loadJobs()) {
-		if (!job.enabled || job.state === "paused" || job.state === "completed") continue;
-		if (!job.nextRunAt) continue;
-		const next = new Date(job.nextRunAt).getTime();
-		if (Number.isNaN(next) || now.getTime() < next) continue;
+	return mutateJobs(() => {
+		const due: CronJob[] = [];
+		for (const job of loadJobs()) {
+			if (!job.enabled || job.state !== "scheduled" || job.activeRun) continue;
+			if (!job.nextRunAt) continue;
+			const next = new Date(job.nextRunAt).getTime();
+			if (Number.isNaN(next) || now.getTime() < next) continue;
 
-		if (job.schedule.kind === "once") {
-			if (now.getTime() - next <= ONE_SHOT_GRACE_MS) {
-				due.push(job);
-			} else {
-				job.state = "error";
-				job.lastStatus = "error";
-				job.lastError = "missed one-shot schedule beyond the 120s recovery grace";
-				job.nextRunAt = null;
-				changed = true;
+			if (job.schedule.kind === "once") {
+				if (now.getTime() - next <= ONE_SHOT_GRACE_MS) {
+					due.push(job);
+				} else {
+					job.state = "error";
+					job.lastStatus = "error";
+					job.lastError = "missed one-shot schedule beyond the 120s recovery grace";
+					job.nextRunAt = null;
+				}
+				continue;
 			}
-			continue;
-		}
 
-		const grace = Math.min(Math.max(periodMs(job, now) / 2, MIN_GRACE_MS), MAX_GRACE_MS);
-		if (now.getTime() - next > grace) {
-			job.nextRunAt = nextSlotAfter(job, now)?.toISOString() ?? null;
-			changed = true;
+			due.push(job);
 		}
-		due.push(job);
-	}
-	if (changed) await persist();
-	return due;
+		return due;
+	});
 }
 
 /**
- * Advance a recurring job to its next slot. Called by the scheduler BEFORE
- * execution so a crash mid-run loses at most that run (at-most-once).
+ * Advance a recurring job to its next slot. Scheduler dispatch uses claimJobRun
+ * instead so one-shots and recurring work both retain a durable claim.
  */
 export async function advanceNextRun(jobId: string): Promise<CronJob> {
-	const job = getJob(jobId);
-	if (job.schedule.kind !== "once") {
-		// Advance to the first slot strictly after NOW: the job fires once for the
-		// current slot, and the next fire is the next future slot (no catch-up burst).
-		job.nextRunAt = nextSlotAfter(job, new Date())?.toISOString() ?? computeNextRun(job)?.toISOString() ?? null;
-		await persist();
-	}
-	return job;
+	return mutateJobs(() => {
+		const job = getJob(jobId);
+		if (job.schedule.kind !== "once") {
+			// Advance to the first slot strictly after NOW: the job fires once for the
+			// current slot, and the next fire is the next future slot (no catch-up burst).
+			job.nextRunAt = nextSlotAfter(job, new Date())?.toISOString() ?? computeNextRun(job)?.toISOString() ?? null;
+		}
+		return job;
+	});
 }
 
 /**
@@ -562,32 +621,76 @@ export async function advanceNextRun(jobId: string): Promise<CronJob> {
  * then either complete the job (finite repeats exhausted, one-shots included)
  * or re-anchor nextRunAt off the previous scheduled slot (no drift).
  */
-export async function markJobRun(jobId: string, result: { status: CronJobStatus; error?: string }): Promise<CronJob> {
-	const job = getJob(jobId);
-	const now = new Date();
-	job.lastRunAt = now.toISOString();
-	job.lastStatus = result.status;
-	job.lastError = result.error ?? null;
-	job.repeat.completed += 1;
-	if (job.repeat.times !== null && job.repeat.completed >= job.repeat.times) {
-		job.state = "completed";
-		job.nextRunAt = null;
-	} else if (job.schedule.kind === "interval") {
-		// Anchor to the previous scheduled slot + period to avoid cumulative drift.
-		// If advanceNextRun already moved nextRunAt into the future (scheduler path),
-		// keep it; otherwise (manual run) step forward from now.
-		const current = job.nextRunAt ? new Date(job.nextRunAt) : now;
-		if (current.getTime() > now.getTime()) {
-			// Already advanced by the scheduler — keep the scheduled slot.
-			job.nextRunAt = current.toISOString();
-		} else {
-			job.nextRunAt = nextSlotAfter(job, now)?.toISOString() ?? null;
+export async function markJobRun(
+	jobId: string,
+	result: { status: CronJobStatus; error?: string; runId?: string },
+): Promise<CronJob | null> {
+	return mutateJobs(() => {
+		const job = loadJobs().find((job) => job.id === jobId);
+		if (!job || (result.runId && job.activeRun?.id !== result.runId)) return null;
+		delete job.activeRun;
+		delete job.interrupted;
+		const now = new Date();
+		job.lastRunAt = now.toISOString();
+		job.lastStatus = result.status;
+		job.lastError = result.error ?? null;
+		job.repeat.completed += 1;
+		if (job.repeat.times !== null && job.repeat.completed >= job.repeat.times) {
+			job.state = "completed";
+			job.nextRunAt = null;
+		} else if (!result.runId && job.schedule.kind === "interval") {
+			// Anchor to the previous scheduled slot + period to avoid cumulative drift.
+			// If advanceNextRun already moved nextRunAt into the future (scheduler path),
+			// keep it; otherwise (manual run) step forward from now.
+			const current = job.nextRunAt ? new Date(job.nextRunAt) : now;
+			if (current.getTime() > now.getTime()) {
+				// Already advanced by the scheduler — keep the scheduled slot.
+				job.nextRunAt = current.toISOString();
+			} else {
+				job.nextRunAt = nextSlotAfter(job, now)?.toISOString() ?? null;
+			}
+		} else if (!result.runId && job.schedule.kind === "cron") {
+			job.nextRunAt = new Cron(job.schedule.expr!).nextRun(now)?.toISOString() ?? null;
 		}
-	} else if (job.schedule.kind === "cron") {
-		job.nextRunAt = new Cron(job.schedule.expr!).nextRun(now)?.toISOString() ?? null;
-	}
-	await persist();
-	return job;
+		return job;
+	});
+}
+
+/** Claim only a still-due, enabled occurrence from the fresh store. */
+export async function claimJobRun(jobId: string, now: Date, manual = false): Promise<CronJob | null> {
+	return mutateJobs(() => {
+		const job = loadJobs().find((job) => job.id === jobId);
+		if (!job || job.activeRun) return null;
+		if (!manual && (!job.enabled || job.state !== "scheduled" || !job.nextRunAt || new Date(job.nextRunAt) > now))
+			return null;
+		job.activeRun = { id: randomUUID(), scheduledAt: job.nextRunAt, startedAt: now.toISOString() };
+		job.nextRunAt = job.schedule.kind === "once" ? null : (nextSlotAfter(job, now)?.toISOString() ?? null);
+		job.activeRun.advancedTo = job.nextRunAt;
+		return job;
+	});
+}
+
+/** Recover uncertain interrupted work without replaying its external effects. */
+export async function recoverInterruptedRuns(): Promise<void> {
+	await mutateJobs(() => {
+		for (const job of loadJobs()) {
+			if (!job.activeRun) continue;
+			job.state = "paused";
+			job.lastStatus = "error";
+			job.lastError = "interrupted run has unknown effects; use cron run to retry deliberately";
+			job.interrupted = true;
+			delete job.activeRun;
+		}
+	});
+}
+
+export async function deferJobRun(jobId: string, runId: string): Promise<void> {
+	await mutateJobs(() => {
+		const job = loadJobs().find((job) => job.id === jobId);
+		if (job?.activeRun?.id !== runId) return;
+		if (job.nextRunAt === job.activeRun.advancedTo) job.nextRunAt = job.activeRun.scheduledAt;
+		delete job.activeRun;
+	});
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../src/core/cron/jobs.ts";
 import {
 	gateToolCall,
@@ -11,10 +14,11 @@ import type { GatewayConfig } from "../src/gateway/config.ts";
 import { startGatewayCron } from "../src/gateway/cron.ts";
 
 const state = vi.hoisted(() => ({
-	run: undefined as undefined | ((prompt: string, job: CronJob) => Promise<string>),
+	run: undefined as undefined | ((prompt: string, job: CronJob, signal: AbortSignal) => Promise<string>),
 	sessions: [] as Array<{ id: string; order: string[] }>,
 	bindFailure: false,
 	next: 0,
+	cwds: [] as string[],
 }));
 vi.mock("../src/core/cron/scheduler.ts", () => ({
 	startScheduler: (options: { runJob: typeof state.run }) => {
@@ -39,7 +43,10 @@ vi.mock("../src/core/session-manager.ts", () => ({
 	},
 }));
 vi.mock("../src/core/agent-session-services.ts", () => ({
-	createAgentSessionServices: async () => ({}),
+	createAgentSessionServices: async ({ cwd }: { cwd: string }) => {
+		state.cwds.push(cwd);
+		return {};
+	},
 	createAgentSessionFromServices: async ({ sessionManager }: { sessionManager: { getSessionId(): string } }) => {
 		const record = { id: sessionManager.getSessionId(), order: [] as string[] };
 		state.sessions.push(record);
@@ -50,10 +57,14 @@ vi.mock("../src/core/agent-session-services.ts", () => ({
 					record.order.push(`bind:${getPermissionMode(record.id)}`);
 					if (state.bindFailure) throw new Error("partial bind");
 				},
-				prompt: async () => {
+				drain: async () => {
+					record.order.push("drain");
+				},
+				promptWithCompletion: async () => {
 					record.order.push(
 						`prompt:${Boolean((await gateToolCall("computer_click", {}, ".", record.id))?.block)}`,
 					);
+					return { messages: [{ role: "assistant", content: [{ type: "text", text: "blocked" }] }] };
 				},
 				extensionRunner: {
 					hasHandlers: () => true,
@@ -69,7 +80,17 @@ vi.mock("../src/core/agent-session-services.ts", () => ({
 	},
 }));
 
+let dir: string;
+beforeEach(() => {
+	dir = mkdtempSync(join(tmpdir(), "lunr-cron-factory-"));
+	vi.stubEnv("PI_CODING_AGENT_DIR", dir);
+	for (const key of Object.keys(process.env))
+		if (/^PI_(SUBAGENT|SUBAGENTS|INTERCOM)_/.test(key)) vi.stubEnv(key, undefined);
+});
 afterEach(() => {
+	vi.unstubAllEnvs();
+	rmSync(dir, { recursive: true, force: true });
+	state.cwds.length = 0;
 	resetAllPermissionContexts();
 	registerApprovalHandler(undefined);
 	state.sessions.length = 0;
@@ -83,20 +104,33 @@ describe("native computer gateway cron factory", () => {
 		registerApprovalHandler(approve);
 		const scheduler = startGatewayCron({ adapters: new Map(), cfg: {} as GatewayConfig, fallbackModels: [] });
 		for (let index = 0; index < 2; index++)
-			await state.run?.("observe relevant GUI", { id: `job-${index}` } as CronJob);
+			await state.run?.(
+				"observe relevant GUI",
+				{ id: `job-${index}`, workdir: dir } as CronJob,
+				new AbortController().signal,
+			);
 		expect(state.sessions).toHaveLength(2);
 		expect(state.sessions[0].id).not.toBe(state.sessions[1].id);
 		for (const session of state.sessions)
-			expect(session.order).toEqual(["bind:read-only", "prompt:true", "shutdown:read-only", "dispose:auto"]);
+			expect(session.order).toEqual([
+				"bind:read-only",
+				"prompt:true",
+				"drain",
+				"shutdown:read-only",
+				"dispose:auto",
+			]);
 		expect(approve).not.toHaveBeenCalled();
-		scheduler.stop();
+		expect(state.cwds).toEqual([dir, dir]);
+		await scheduler.stop();
 	});
 	it("shuts down partially bound extensions before deleting the failed session context", async () => {
 		resetPermissions("auto");
 		state.bindFailure = true;
 		const scheduler = startGatewayCron({ adapters: new Map(), cfg: {} as GatewayConfig, fallbackModels: [] });
-		await expect(state.run?.("task", { id: "job-failed" } as CronJob)).rejects.toThrow("partial bind");
+		await expect(
+			state.run?.("task", { id: "job-failed", workdir: dir } as CronJob, new AbortController().signal),
+		).rejects.toThrow("partial bind");
 		expect(state.sessions[0].order).toEqual(["bind:read-only", "shutdown:read-only", "dispose:auto"]);
-		scheduler.stop();
+		await scheduler.stop();
 	});
 });

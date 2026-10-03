@@ -274,6 +274,7 @@ export class ExtensionRunner {
 	private modelRegistry: ModelRegistry;
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
 	private getModel: () => Model<any> | undefined = () => undefined;
+	private promptWithCompletionFn: ExtensionContext["promptWithCompletion"];
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
@@ -336,6 +337,7 @@ export class ExtensionRunner {
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
 		this.isIdleFn = contextActions.isIdle;
+		this.promptWithCompletionFn = contextActions.promptWithCompletion;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
@@ -681,6 +683,11 @@ export class ExtensionRunner {
 			get model() {
 				runner.assertActive();
 				return getModel();
+			},
+			promptWithCompletion: (text, options) => {
+				runner.assertActive();
+				if (!runner.promptWithCompletionFn) return Promise.reject(new Error("owned prompt admission unavailable"));
+				return runner.promptWithCompletionFn(text, options);
 			},
 			isIdle: () => {
 				runner.assertActive();

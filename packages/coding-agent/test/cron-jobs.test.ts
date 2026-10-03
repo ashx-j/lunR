@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	advanceNextRun,
 	type CronJob,
+	claimJobRun,
 	computeNextRun,
 	createJob,
 	getDueJobs,
@@ -220,9 +221,9 @@ describe("getDueJobs", () => {
 		const before = Date.now();
 		const due = await getDueJobs();
 		expect(due.map((j) => j.id)).toEqual([job.id]);
-		const after = getJob(job.id);
-		expect(after.nextRunAt).not.toBeNull();
-		expect(new Date(after.nextRunAt!).getTime()).toBeGreaterThan(before);
+		const after = await claimJobRun(job.id, new Date());
+		expect(after!.nextRunAt).not.toBeNull();
+		expect(new Date(after!.nextRunAt!).getTime()).toBeGreaterThan(before);
 	});
 
 	it("one-shots recover within 120s and error beyond it", async () => {
@@ -244,10 +245,10 @@ describe("advanceNextRun / markJobRun", () => {
 	it("advanceNextRun moves a recurring job to the next future slot", async () => {
 		const job = await createJob({ prompt: "p", schedule: "every 30m" });
 		await updateJob(job.id, { nextRunAt: new Date(Date.now() - 5 * 60_000).toISOString() });
+		const original = new Date(getJob(job.id).nextRunAt!).getTime();
 		const advanced = await advanceNextRun(job.id);
 		expect(new Date(advanced.nextRunAt!).getTime()).toBeGreaterThan(Date.now());
 		// Interval anchor is preserved (multiples of 30m from the original slot).
-		const original = new Date(job.nextRunAt!).getTime();
 		expect((new Date(advanced.nextRunAt!).getTime() - original) % (30 * 60_000)).toBe(0);
 	});
 

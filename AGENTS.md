@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Cron ownership and settlement (`fix/review-cron-execution`):** one live operator holds a profile lease; store mutations read fresh data under a lock and persist occurrence claims before dispatch. Interrupted claims pause for deliberate retry. TUI fires await their exact admitted request, timeout/stop settle owned cancellation, and gateway shutdown awaits cron cleanup. Command/tool creation retains requester, origin and approved workdir. Every platform chunk checks current grants; legacy origins report delivery failure until explicit `/cron rebind`, while TUI owners report external delivery unavailable. Includes runtime prerequisite #132.
+
 - **Session lifecycle (`fix/review-session-lifecycle`):** prompts reserve admission before preparation; only their owner settles the run. Awaitable drain/shutdown retain persistence through cancellation before runtime replacement releases ownership. Manual compaction keeps late tool results; overlapping direct bash operations retain separate cancellation owners. Shared session initialization preserves caller permission contexts, approval flags and grants through constructor and gateway setup; explicit SDK mode overrides change mode only. Absent contexts honor child inheritance, saved checkpoints and defaults before headless tools run; interactive switches update the same context. `promptWithCompletion` settles the admitted request before queued follow-ups, keeps steering/retries/compaction in its result, and accepts a request-owned cancellation signal. Cron wiring remains separate.
 
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
@@ -166,6 +168,8 @@ Last updated: 2026-10-03 (session lifecycle branch based on v0.2.26 `master`). P
 
 ## Build & run
 
+- Cron branch: 136 focused Vitest tests pass across eight suites, including two-process fixtures and real TUI queued-user isolation. All five isolated package TypeScript builds, touched-file Biome, and relative-import validation pass. Cron tool inventory snapshot updated. No bundled CLI, live platform, service or real-job acceptance.
+
 - Scheduled completion follow-up, 2026-10-03: 129 focused session/permission tests across 12 suites and 40 core agent tests across two suites pass. Held-tool/identical-text output contamination and both permission initialization orders fail against the prior implementation. Coverage includes early completion, cancellation persistence, cancelled retries, late timeout isolation, steering, overflow recovery, successful-response compaction, agent-end queues, caller approval flags and grants. Five isolated offline package builds, the Node bundle and compiled SDK declarations with request cancellation pass. Touched-file Biome and whitespace checks pass. The stale SIGTERM fixture now supplies and checks admission shutdown before cleanup. No live services or installed CLI changes.
 - Session lifecycle, 2026-10-03: 128 focused tests across 14 suites pass, including inert delayed preflight/tool/bash cases, saved print/JSON/RPC permissions, child inheritance and interactive mode changes; the final affected suites pass 26/26. Five isolated offline package builds, the coding-agent Node bundle, compiled SDK declaration consumption, touched-file Biome and whitespace checks pass. Desired-behavior reproductions fail on the unchanged session source for preflight ownership, late compaction results and overlapping bash. Two additional fixture suites retain 14 failures reproduced on baseline, 12 resource-list assertions and two unclosed destination-owner fixtures. No live provider, desktop, gateway, account or release operation.
 
@@ -286,6 +290,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Cron cancellation is cooperative. Keep scheduler ownership until ignored cancellation and session cleanup settle. A dead operator lease becomes recoverable after the 120-second stale window; a live PID is never preempted. Gateway fallback models apply only to setup failures before prompt admission.
+
 - `AgentSession.dispose()` remains a synchronous compatibility wrapper and releases idle sessions immediately. Await `shutdown()` when active cancellation and ownership release must finish; runtime hosts drain work before extension shutdown, then await session shutdown. Extension lifecycle commands bypass prompt-run admission so they cannot wait on their own replacement.
 - Scheduled hosts await `runtimeHost.promptWithCompletion(text, { ...options, signal })` for the admitted request, including steering and recovery, before later follow-ups. A dedicated AbortController cancels only that request; await its rejection for owned persistence. Do not use session-wide `abort()` or `waitForIdle()` for a scheduled timeout. Cancellation remains cooperative. Busy/detached/changing runtimes and extension commands reject instead of queueing; cron wiring remains separate.
 
@@ -404,6 +410,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-03: Cron uses first-owner scheduling, durable started claims and request-owned cancellation to avoid duplicate effects or unrelated user output; legacy origin delivery requires an explicit identity rebind.
 
 - 2026-10-03: leave follow-ups queued through correlated prompt recovery and detach cancellation at completion so scheduled output and timeouts cannot own later user work; preserve caller permission contexts at both initialization orders instead of resetting their approval policy.
 

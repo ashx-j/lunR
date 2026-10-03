@@ -3,8 +3,8 @@
  *
  * startScheduler() runs an unref'd, self-rescheduling setTimeout loop (default
  * 60s tick). Tick errors are caught — the loop never dies. Each tick collects
- * due jobs and runs them SEQUENTIALLY; recurring jobs are advanceNextRun()'d
- * BEFORE execution (at-most-once: a crash mid-run never double-fires).
+ * due jobs and runs them sequentially under a profile lease and durable occurrence
+ * claims. Interrupted work pauses for deliberate retry.
  *
  * Per due job: build the prompt (cron-hint prefix + contextFrom upstream
  * outputs at an 8K cap each + job.prompt) → runJob → saveJobOutput →
@@ -13,27 +13,30 @@
  * compact one-line error. Delivery errors land in job.lastDeliveryError.
  *
  * The scheduler knows nothing about delivery channels: runJob/deliverResult
- * are injected (the lunr-cron builtin extension wires the TUI + the
- * @lunr/cron-delivery bridge; the Phase 4 gateway replaces that bridge).
+ * are injected by the TUI extension or gateway operator.
  */
 
 import type { CronJob } from "./jobs.ts";
 import {
-	advanceNextRun,
+	acquireSchedulerLease,
 	CONTEXT_OUTPUT_CAP,
+	claimJobRun,
+	deferJobRun,
 	getDueJobs,
-	getJob,
 	getLatestJobOutput,
 	markJobRun,
+	recoverInterruptedRuns,
 	saveJobOutput,
 	updateJob,
 } from "./jobs.ts";
 
 export interface SchedulerDeps {
-	/** Run one job turn; resolves with the final assistant text. */
-	runJob: (prompt: string, job: CronJob) => Promise<string>;
+	/** Run one admitted turn. Await owned cancellation cleanup before resolving or rejecting. */
+	runJob: (prompt: string, job: CronJob, signal: AbortSignal) => Promise<string>;
 	/** Deliver a result (or failure notice) to the job's targets. Throws on failure. */
 	deliverResult: (job: CronJob, content: string) => Promise<void>;
+	/** Idle check before claiming; atomic admission must still be enforced by runJob. */
+	canRun?: () => boolean;
 	/** Tick interval; default 60s. */
 	intervalMs?: number;
 	/** Per-job wall-clock timeout; default 5 minutes. */
@@ -78,7 +81,11 @@ function oneLine(text: string): string {
 
 async function recordDeliveryError(jobId: string, error: string | null, previous: string | null): Promise<void> {
 	if (error === null && previous === null) return; // avoid a pointless write
-	await updateJob(jobId, { lastDeliveryError: error });
+	try {
+		await updateJob(jobId, { lastDeliveryError: error });
+	} catch (err) {
+		if (!String(err).includes("no cron job matches")) throw err;
+	}
 }
 
 /** Failures always attempt delivery of a compact one-line error. */
@@ -91,101 +98,156 @@ async function deliverFailure(job: CronJob, deps: SchedulerDeps, message: string
 	}
 }
 
-/**
- * Execute one due job through the full pipeline. Never throws — run errors,
- * empty responses and delivery errors are recorded on the job.
- */
-export async function executeJob(job: CronJob, deps: SchedulerDeps): Promise<void> {
-	let text: string;
+/** Admission failed before dispatch. Keep the occurrence due instead of recording a run. */
+export class CronAdmissionDeferred extends Error {}
+
+/** One owned execution, including cooperative cancellation settlement and its terminal result. */
+export async function executeJob(job: CronJob, deps: SchedulerDeps, stopSignal?: AbortSignal): Promise<void> {
+	const controller = new AbortController();
+	const cancel = () => controller.abort(stopSignal?.reason ?? new Error("scheduler stopped"));
+	stopSignal?.addEventListener("abort", cancel, { once: true });
+	if (stopSignal?.aborted) cancel();
+	const timeoutMs = deps.jobTimeoutMs ?? 5 * 60 * 1000;
+	const timer = setTimeout(() => controller.abort(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+	timer.unref?.();
+	let text = "";
+	let failure: string | undefined;
 	try {
-		text = await deps.runJob(buildJobPrompt(job), job);
-	} catch (err) {
-		const message = errorMessage(err);
-		await markJobRun(job.id, { status: "error", error: message });
-		await deliverFailure(job, deps, message);
+		controller.signal.throwIfAborted();
+		text = await deps.runJob(buildJobPrompt(job), job, controller.signal);
+		controller.signal.throwIfAborted();
+		if (!text.trim()) throw new Error("empty response");
+	} catch (error) {
+		if (error instanceof CronAdmissionDeferred && !controller.signal.aborted && job.activeRun) {
+			await deferJobRun(job.id, job.activeRun.id);
+			return;
+		}
+		failure = errorMessage(controller.signal.aborted ? controller.signal.reason : error);
+	} finally {
+		clearTimeout(timer);
+		stopSignal?.removeEventListener("abort", cancel);
+	}
+	if (failure) {
+		await markJobRun(job.id, { status: "error", error: failure, runId: job.activeRun?.id });
+		await deliverFailure(job, deps, failure);
 		return;
 	}
-
-	if (!text.trim()) {
-		// Empty response = soft failure.
-		await markJobRun(job.id, { status: "error", error: "empty response" });
-		await deliverFailure(job, deps, "empty response");
-		return;
-	}
-
 	await saveJobOutput(job.id, text);
-	if (isSilent(text)) {
-		// Output is saved; delivery is suppressed.
-		await markJobRun(job.id, { status: "ok" });
-		return;
-	}
-
 	let deliveryError: string | null = null;
-	try {
-		await deps.deliverResult(job, text);
-	} catch (err) {
-		deliveryError = errorMessage(err);
+	if (!isSilent(text)) {
+		try {
+			await deps.deliverResult(job, text);
+		} catch (error) {
+			deliveryError = errorMessage(error);
+		}
 	}
-	await markJobRun(job.id, { status: "ok" });
+	await markJobRun(job.id, { status: "ok", runId: job.activeRun?.id });
 	await recordDeliveryError(job.id, deliveryError, job.lastDeliveryError);
 }
 
-/** One scheduler tick: run every due job sequentially. Exported for tests. */
-export async function runSchedulerTick(deps: SchedulerDeps, now: Date = new Date()): Promise<void> {
+async function tick(deps: SchedulerDeps, now: Date, signal: AbortSignal): Promise<void> {
 	const due = await getDueJobs(now);
-	const jobTimeoutMs = deps.jobTimeoutMs ?? 5 * 60 * 1000;
 	for (const dueJob of due) {
-		if (dueJob.schedule.kind !== "once") await advanceNextRun(dueJob.id);
-		const job = getJob(dueJob.id);
-		let timedOut = false;
-		const executePromise = executeJob(job, deps);
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			const timer = setTimeout(() => {
-				timedOut = true;
-				reject(new Error(`timed out after ${jobTimeoutMs}ms`));
-			}, jobTimeoutMs);
-			// If executeJob finishes, this promise is discarded; the timer must not keep the process alive.
-			timer.unref?.();
-		});
-		try {
-			await Promise.race([executePromise, timeoutPromise]);
-		} catch (err) {
-			if (!timedOut) throw err;
-			const message = err instanceof Error ? err.message : String(err);
-			await markJobRun(job.id, { status: "error", error: message });
-			await deliverFailure(job, deps, message);
+		if (signal.aborted || deps.canRun?.() === false) break;
+		const job = await claimJobRun(dueJob.id, now);
+		if (job) {
+			if (signal.aborted) {
+				await deferJobRun(job.id, job.activeRun!.id);
+				break;
+			}
+			await executeJob(job, deps, signal);
 		}
 	}
 }
 
-/**
- * Start the scheduler loop. Unref'd so it never keeps the process alive;
- * tick errors are swallowed so the loop never dies.
- */
-export function startScheduler(deps: SchedulerDeps): { stop(): void } {
+/** A standalone tick owns the same lease as the long-lived operators. */
+export async function runSchedulerTick(deps: SchedulerDeps, now: Date = new Date()): Promise<void> {
+	const release = await acquireSchedulerLease();
+	if (!release) return;
+	try {
+		await recoverInterruptedRuns();
+		await tick(deps, now, new AbortController().signal);
+	} finally {
+		await release();
+	}
+}
+
+/** First healthy operator retains ownership until all admitted work and delivery settle. */
+export function startScheduler(deps: SchedulerDeps) {
+	const controller = new AbortController();
 	const intervalMs = deps.intervalMs ?? 60_000;
-	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
-
-	const loop = async (): Promise<void> => {
-		if (stopped) return;
-		try {
-			await runSchedulerTick(deps);
-		} catch {
-			// never kill the loop
+	let release: (() => Promise<void>) | null = null;
+	let active: Promise<void> | undefined;
+	let stopping: Promise<void> | undefined;
+	const ready = acquireSchedulerLease().then(async (lease) => {
+		release = lease;
+		if (lease) {
+			try {
+				await recoverInterruptedRuns();
+			} catch (error) {
+				await lease();
+				release = null;
+				throw error;
+			}
 		}
-		if (stopped) return;
-		timer = setTimeout(loop, intervalMs);
-		timer.unref?.();
+	});
+	// Attach a rejection handler immediately; the first timer may be a minute away.
+	void ready.catch(() => {});
+	const loop = async (): Promise<void> => {
+		if (controller.signal.aborted) return;
+		try {
+			await ready;
+			if (release && !controller.signal.aborted && !active) {
+				active = tick(deps, new Date(), controller.signal);
+				try {
+					await active;
+				} finally {
+					active = undefined;
+				}
+			}
+		} catch (error) {
+			console.error("[cron] scheduler tick failed", error);
+		}
+		if (!controller.signal.aborted) {
+			timer = setTimeout(loop, intervalMs);
+			timer.unref?.();
+		}
 	};
-
 	timer = setTimeout(loop, intervalMs);
 	timer.unref?.();
-
 	return {
-		stop(): void {
-			stopped = true;
+		isOwner: () => release !== null && !controller.signal.aborted,
+		async run(jobId: string): Promise<void> {
+			await ready;
+			if (!release) throw new Error("another process owns the cron scheduler; run the job from that operator");
+			if (controller.signal.aborted) throw new Error("cron scheduler is stopping");
+			if (active || deps.canRun?.() === false) throw new Error("cron operator is busy; retry when idle");
+			active = (async () => {
+				const job = await claimJobRun(jobId, new Date(), true);
+				if (!job) throw new Error("cron job is missing or already running");
+				await executeJob(job, deps, controller.signal);
+			})();
+			try {
+				await active;
+			} finally {
+				active = undefined;
+			}
+		},
+		stop(): Promise<void> {
+			if (stopping) return stopping;
+			controller.abort(new Error("scheduler stopped"));
 			if (timer) clearTimeout(timer);
+			stopping = (async () => {
+				await ready;
+				try {
+					await active;
+				} finally {
+					if (release) await release();
+					release = null;
+				}
+			})();
+			return stopping;
 		},
 	};
 }

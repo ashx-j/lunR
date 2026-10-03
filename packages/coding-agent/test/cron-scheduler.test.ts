@@ -156,21 +156,42 @@ describe("runSchedulerTick", () => {
 		expect(after.nextRunAt).toBe(advancedNextRunAt);
 	});
 
-	it("times out a hanging job and records the error", async () => {
+	it("waits for timed-out work to settle and records only one failure", async () => {
 		const job = await createJob({ prompt: "p", schedule: "every 30m", name: "hangjob" });
 		await dueNow(job.id);
-		const { deps, calls } = makeDeps({
-			runJob: async () => {
-				await new Promise((resolve) => setTimeout(resolve, 10_000));
-				return "late";
-			},
+		let finish!: () => void;
+		let cancelled!: () => void;
+		const aborted = new Promise<void>((resolve) => {
+			cancelled = resolve;
 		});
-		await runSchedulerTick({ ...deps, jobTimeoutMs: 50 });
-		expect(calls.run).toHaveLength(0);
-		const after = getJob(job.id);
-		expect(after.lastStatus).toBe("error");
-		expect(after.lastError).toContain("timed out");
-		expect(calls.delivered[0]).toContain("Cron job 'hangjob' failed");
+		const delivered: string[] = [];
+		let settled = false;
+		const tick = runSchedulerTick({
+			jobTimeoutMs: 20,
+			runJob: async (_prompt, _job, signal) => {
+				signal.addEventListener("abort", cancelled, { once: true });
+				await new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+				return "late success";
+			},
+			deliverResult: async (_job, text) => {
+				delivered.push(text);
+			},
+		}).then(() => {
+			settled = true;
+		});
+		await aborted;
+		expect(settled).toBe(false);
+		expect(delivered).toEqual([]);
+		finish();
+		await tick;
+		expect(getJob(job.id).lastStatus).toBe("error");
+		expect(getJob(job.id).lastError).toContain("timed out");
+		expect(getJob(job.id).repeat.completed).toBe(1);
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toContain("failed");
+		expect(getLatestJobOutput(job.id)).toBeNull();
 	});
 
 	it("completes one-shots after firing", async () => {
@@ -221,7 +242,7 @@ describe("startScheduler", () => {
 			expect(runs).toBe(1);
 			expect(getJob(job.id).state).toBe("completed");
 		} finally {
-			scheduler.stop();
+			await scheduler.stop();
 		}
 	});
 });

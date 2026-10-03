@@ -100,6 +100,8 @@ export interface BridgeSessionStatus {
  * fakeable in tests. Expanded to support gateway slash commands.
  */
 export interface BridgeSession {
+	promptWithCompletion?: AgentSession["promptWithCompletion"];
+	drain?: AgentSession["drain"];
 	prompt(text: string, options?: { source?: "extension"; images?: ImageContent[] }): Promise<void>;
 	abort(): Promise<void> | void;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -642,6 +644,7 @@ export class AgentBridge {
 			await runWithOrigin(
 				{
 					platform: source.platform,
+					userId: source.userId,
 					chatId: source.chatId,
 					threadId: source.threadId,
 					chatType: source.chatType,

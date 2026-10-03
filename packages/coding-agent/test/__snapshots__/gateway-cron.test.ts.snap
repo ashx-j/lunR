@@ -1,0 +1,71 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`cron tool inventory explains the operator and delivery requirements 1`] = `
+{
+  "description": "Manage profile-wide scheduled jobs. One operator owns execution; busy sessions defer scheduled work.
+Actions: create (needs prompt + schedule), list, update (id + fields), pause, resume, remove, run (trigger on the owning TUI operator; otherwise returns an owner error).
+Schedule formats: 'every 30m' / 'every 2h' / 'every 1d' (recurring), '30m'/'2h' or an ISO timestamp (one-shot), or a 5-field cron expression.
+Job output is saved locally; platform delivery requires the gateway operator and current grants. Legacy origin jobs need rebind from an approved gateway chat. The prompt can answer [SILENT] to suppress delivery.",
+  "name": "cron",
+  "parameters": {
+    "properties": {
+      "action": {
+        "anyOf": [
+          {
+            "const": "create",
+            "type": "string",
+          },
+          {
+            "const": "list",
+            "type": "string",
+          },
+          {
+            "const": "update",
+            "type": "string",
+          },
+          {
+            "const": "pause",
+            "type": "string",
+          },
+          {
+            "const": "resume",
+            "type": "string",
+          },
+          {
+            "const": "remove",
+            "type": "string",
+          },
+          {
+            "const": "run",
+            "type": "string",
+          },
+        ],
+      },
+      "deliver": {
+        "description": "Delivery target(s), comma-separated: 'local' (output file only), 'origin' (the chat that created the job), 'telegram'/'discord' (platform home channel), or 'telegram:<chatId>[:<threadId>]' / 'discord:<chatId>[:<threadId>]'. Defaults to 'origin' when created from a gateway chat, else 'local'.",
+        "type": "string",
+      },
+      "id": {
+        "description": "Job id or unique name (all actions except create/list).",
+        "type": "string",
+      },
+      "name": {
+        "description": "Display name (<=50 chars); derived from the prompt when omitted.",
+        "type": "string",
+      },
+      "prompt": {
+        "description": "The prompt the job runs (create/update).",
+        "type": "string",
+      },
+      "schedule": {
+        "description": "Schedule input (create/update).",
+        "type": "string",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "object",
+  },
+}
+`;

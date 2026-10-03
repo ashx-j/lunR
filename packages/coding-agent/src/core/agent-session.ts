@@ -3124,6 +3124,7 @@ export class AgentSession {
 			{
 				getModel: () => this.resolvedCatalogModel(),
 				isIdle: () => this.isIdle,
+				promptWithCompletion: (text, options) => this.promptWithCompletion(text, options),
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,
 				abort: () => {
