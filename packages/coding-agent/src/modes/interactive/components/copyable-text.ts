@@ -1,4 +1,5 @@
 import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "../../../utils/sanitize-terminal-text.ts";
 import { theme } from "../theme/theme.ts";
 
 export type CopyableTextSegment =
@@ -154,7 +155,7 @@ export class CopyableTextBlockComponent implements Component {
 			return theme.bg("userMessageBg", `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`);
 		};
 		const lines = [paint("")];
-		const payloadLines = this.payload.replace(/\t/g, "   ").split("\n");
+		const payloadLines = sanitizeTerminalText(this.payload).replace(/\t/g, "   ").split("\n");
 
 		for (const payloadLine of payloadLines) {
 			for (const wrappedLine of wrapTextWithAnsi(payloadLine, contentWidth)) {
@@ -163,7 +164,10 @@ export class CopyableTextBlockComponent implements Component {
 		}
 
 		if (typeof this.status === "object") {
-			for (const wrappedLine of wrapTextWithAnsi(`Copy failed: ${this.status.error}`, contentWidth)) {
+			for (const wrappedLine of wrapTextWithAnsi(
+				`Copy failed: ${sanitizeTerminalText(this.status.error)}`,
+				contentWidth,
+			)) {
 				lines.push(paint(theme.fg("error", wrappedLine)));
 			}
 		}
