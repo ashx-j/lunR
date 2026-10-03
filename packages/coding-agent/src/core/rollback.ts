@@ -42,6 +42,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { writeSessionJson } from "./session-ownership.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 export interface Snapshot {
@@ -50,10 +51,18 @@ export interface Snapshot {
 	createdByTool: boolean;
 }
 
+interface RecoveryProgress {
+	targetUserId?: string;
+	turnsToConsume: number;
+	completed: string[];
+	pending?: string;
+}
+
 interface TurnSnapshots {
 	turnIndex: number;
 	cwd?: string;
 	files: Map<string, Snapshot>;
+	recovery?: RecoveryProgress;
 }
 
 interface ManifestEntry {
@@ -64,6 +73,7 @@ interface ManifestEntry {
 
 interface TurnManifest {
 	cwd?: string;
+	recovery?: RecoveryProgress;
 	files: Record<string, ManifestEntry>;
 }
 
@@ -142,9 +152,12 @@ export function disableRollbackForSession(sessionId?: string): void {
 
 function pruneTurns(ctx: RollbackContext): void {
 	const maxTurns = ctx.settingsManager?.getRollbackTurns() ?? 2;
-	while (ctx.turns.length > maxTurns) {
-		const old = ctx.turns.shift();
-		if (old) cleanupTurnFiles(ctx, old);
+	while (ctx.turns.filter((turn) => !turn.recovery).length > maxTurns) {
+		// An attempted recovery stays available until it is completed or explicitly cleared.
+		const index = ctx.turns.findIndex((turn) => !turn.recovery);
+		if (index < 0) break;
+		const [old] = ctx.turns.splice(index, 1);
+		cleanupTurnFiles(ctx, old);
 	}
 }
 
@@ -369,6 +382,7 @@ function readManifest(path: string): TurnManifest {
 			const files = (parsed as Record<string, unknown>).files;
 			return {
 				cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
+				recovery: parseRecoveryProgress(parsed.recovery),
 				files:
 					files && typeof files === "object" && !Array.isArray(files)
 						? (files as Record<string, ManifestEntry>)
@@ -379,6 +393,37 @@ function readManifest(path: string): TurnManifest {
 	} catch {
 		return { files: {} };
 	}
+}
+
+function parseRecoveryProgress(value: unknown): RecoveryProgress | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const progress = value as Record<string, unknown>;
+	if (
+		typeof progress.turnsToConsume !== "number" ||
+		!Number.isInteger(progress.turnsToConsume) || progress.turnsToConsume < 1 ||
+		!Array.isArray(progress.completed) || !progress.completed.every((path) => typeof path === "string")
+	) return undefined;
+	return {
+		targetUserId: typeof progress.targetUserId === "string" ? progress.targetUserId : undefined,
+		turnsToConsume: progress.turnsToConsume,
+		completed: progress.completed,
+		pending: typeof progress.pending === "string" ? progress.pending : undefined,
+	};
+}
+
+/** Commit progress separately from payloads so failed restores retain all recovery material. */
+function persistRecoveryProgress(ctx: RollbackContext, turn: TurnSnapshots): void {
+	const turnDir = getTurnDir(ctx, turn.turnIndex);
+	mkdirSync(turnDir, { recursive: true });
+	const manifest: TurnManifest = { cwd: turn.cwd, recovery: turn.recovery, files: {} };
+	for (const [path, snap] of turn.files) {
+		manifest.files[path] = {
+			existed: snap.existed,
+			createdByTool: snap.createdByTool,
+			snapFile: snap.existed ? snapFileName(path) : undefined,
+		};
+	}
+	writeSessionJson(join(turnDir, "manifest.json"), manifest);
 }
 
 /** Reload persisted turns from disk (called by initRollback) so rollback survives restarts. */
@@ -405,7 +450,7 @@ function loadPersistedTurns(ctx: RollbackContext): void {
 				}
 				files.set(absPath, { existed: meta.existed, content, createdByTool: meta.createdByTool });
 			}
-			loaded.push({ turnIndex, cwd: manifest.cwd, files });
+			loaded.push({ turnIndex, cwd: manifest.cwd, files, recovery: manifest.recovery });
 		}
 		loaded.sort((a, b) => a.turnIndex - b.turnIndex);
 		ctx.turns = loaded;
@@ -432,16 +477,13 @@ function cleanupTurnFiles(ctx: RollbackContext, turn: TurnSnapshots): void {
 export interface RollbackResult {
 	restored: string[];
 	deleted: string[];
-	/** Number of turns consumed: the restored turn plus any empty turns skipped above it. */
+	failed: Array<{ path: string; error: string }>;
+	complete: boolean;
+	turnIndex?: number;
+	/** Committed turns, including skipped empty turns. Zero while recovery remains pending. */
 	turnsConsumed: number;
 }
 
-/**
- * Restore the newest NON-EMPTY turn's snapshots, drop it (and any empty turns
- * on top of it), and return what actually happened. Files the agent created
- * with edit/write are deleted in every capture mode; files created outside
- * tools (tree scope) are deleted only under hybrid/shadow-git.
- */
 function isPathUnderRoot(absPath: string, root: string): boolean {
 	let normRoot = normalize(root).replace(/\\$/g, "");
 	let normPath = normalize(absPath).replace(/\\$/g, "");
@@ -476,78 +518,135 @@ function warnExternalModification(ctx: RollbackContext, message: string): void {
 	}
 }
 
-/** Count how many turns a rollback would consume (trailing empty turns + the newest non-empty one). */
+function recoveryTurn(ctx: RollbackContext): TurnSnapshots | undefined {
+	return ctx.turns.find((turn) => turn.recovery) ?? [...ctx.turns].reverse().find((turn) => turn.files.size > 0);
+}
+
+/** Keep the conversation target stable across partial restoration and fork retries. */
+export function getRollbackTargetUserId(sessionId?: string): string | undefined {
+	return recoveryTurn(getContext(sessionId))?.recovery?.targetUserId;
+}
+
+/** Count trailing empty turns and the newest non-empty turn, or retain the pending recovery count. */
 export function peekRollbackTurnsConsumed(sessionId?: string): number {
 	const ctx = getContext(sessionId);
 	if (!isRollbackEnabled(ctx.sessionId)) return 0;
-	if (ctx.turns.length === 0) return 0;
-	let consumed = 0;
-	for (let i = ctx.turns.length - 1; i >= 0; i--) {
-		consumed++;
-		if (ctx.turns[i].files.size > 0) break;
-	}
-	return consumed;
+	const turn = recoveryTurn(ctx);
+	return turn?.recovery?.turnsToConsume ?? (turn ? ctx.turns.length - ctx.turns.indexOf(turn) : ctx.turns.length);
 }
 
-export function rollbackLastTurn(sessionId?: string): RollbackResult {
+/** Release a successfully restored turn only after its coordinated chat rewind succeeds. */
+export function commitRollbackTurn(sessionId: string, turnIndex: number): void {
 	const ctx = getContext(sessionId);
-	const empty: RollbackResult = { restored: [], deleted: [], turnsConsumed: 0 };
-	if (!isRollbackEnabled(ctx.sessionId)) return empty;
-
-	let turnsConsumed = 0;
-	while (ctx.turns.length > 0 && ctx.turns[ctx.turns.length - 1].files.size === 0) {
-		const skipped = ctx.turns.pop();
-		if (skipped) {
-			cleanupTurnFiles(ctx, skipped);
-			turnsConsumed++;
-		}
+	const index = ctx.turns.findIndex((turn) => turn.turnIndex === turnIndex);
+	if (index < 0) return;
+	const turn = ctx.turns[index];
+	if (!turn.recovery || [...turn.files.keys()].some((path) => !turn.recovery?.completed.includes(path))) {
+		throw new Error("Rollback still has unrestored files.");
 	}
-	if (ctx.turns.length === 0) return empty;
-	turnsConsumed++;
+	let count = 1;
+	while (index + count < ctx.turns.length && ctx.turns[index + count].files.size === 0) count++;
+	for (const removed of ctx.turns.splice(index, count)) cleanupTurnFiles(ctx, removed);
+}
 
-	const turn = ctx.turns[ctx.turns.length - 1];
+/** Restore only unfinished paths. Failed paths and completed-path receipts survive retries and restarts. */
+export function rollbackLastTurn(
+	sessionId?: string,
+	options: { deferCommit?: boolean; targetUserId?: string } = {},
+): RollbackResult {
+	const ctx = getContext(sessionId);
+	const result: RollbackResult = { restored: [], deleted: [], failed: [], complete: true, turnsConsumed: 0 };
+	if (!isRollbackEnabled(ctx.sessionId)) return result;
+	const turn = recoveryTurn(ctx) ?? (options.deferCommit ? ctx.turns[0] : undefined);
+	if (!turn) {
+		for (const empty of ctx.turns.splice(0)) cleanupTurnFiles(ctx, empty);
+		return result;
+	}
+	result.turnIndex = turn.turnIndex;
+	turn.recovery ??= {
+		turnsToConsume: peekRollbackTurnsConsumed(ctx.sessionId),
+		completed: [],
+		targetUserId: options.targetUserId,
+	};
+	turn.recovery.targetUserId ??= options.targetUserId;
+	// Before touching destinations, make the selected turn and rewind target persistent.
+	persistRecoveryProgress(ctx, turn);
 	const capture = ctx.settingsManager?.getRollbackCapture() ?? "copies";
-	const restored: string[] = [];
-	const deleted: string[] = [];
 
 	for (const [absPath, snap] of turn.files) {
+		if (turn.recovery.completed.includes(absPath)) continue;
+		const wasPending = turn.recovery.pending === absPath;
 		try {
+			// A restart between the destination operation and its receipt leaves an
+			// uncertain path. Never replay it over a newer edit. Matching recovered
+			// content, or an already deleted created file, confirms completion.
+			if (turn.recovery.pending === absPath) {
+				const recovered = snap.existed
+					? snap.content && existsSync(absPath) && readFileSync(absPath).equals(snap.content)
+					: !existsSync(absPath);
+				if (!recovered) {
+					result.failed.push({
+						path: absPath,
+						error: "Previous recovery outcome is uncertain. Restore this path from its retained snapshot before retrying.",
+					});
+					continue;
+				}
+				turn.recovery.completed.push(absPath);
+				turn.recovery.pending = undefined;
+				persistRecoveryProgress(ctx, turn);
+				continue;
+			}
 			if (!isWithinAllowedRoots(absPath, turn)) {
 				warnExternalModification(
 					ctx,
 					`Rollback skipped ${absPath}: outside the session working directory or lunR config dir.`,
 				);
+				throw new Error("Outside the allowed rollback roots.");
+			}
+			if (turn.recovery.pending) {
+				result.failed.push({ path: absPath, error: "Resolve the uncertain recovery path before continuing this turn." });
 				continue;
 			}
-
+			if (snap.existed && !snap.content) throw new Error("Snapshot content is unavailable.");
+			turn.recovery.pending = absPath;
+			persistRecoveryProgress(ctx, turn);
 			if (snap.existed && snap.content) {
-				// For tree-scope baseline snapshots, skip the write if the file is
-				// already identical to the snapshot (no actual change occurred during the
-				// turn). Tool snapshots are always written so /rollback reports them.
-				if (!snap.createdByTool && existsSync(absPath)) {
-					const current = readFileSync(absPath);
-					if (current.equals(snap.content)) continue;
+				const unchanged = !snap.createdByTool && existsSync(absPath) && readFileSync(absPath).equals(snap.content);
+				if (!unchanged) {
+					mkdirSync(dirname(absPath), { recursive: true });
+					writeFileSync(absPath, snap.content);
+					result.restored.push(absPath);
 				}
-				mkdirSync(dirname(absPath), { recursive: true });
-				writeFileSync(absPath, snap.content);
-				restored.push(absPath);
-			} else if (!snap.existed) {
+			} else {
 				const shouldDelete = snap.createdByTool || capture === "hybrid" || capture === "shadow-git";
 				if (shouldDelete && existsSync(absPath)) {
 					unlinkSync(absPath);
-					deleted.push(absPath);
+					result.deleted.push(absPath);
 				}
 			}
-			// existed but content unreadable — skip
-		} catch {
-			// individual file restore failures are non-fatal
+			turn.recovery.completed.push(absPath);
+			turn.recovery.pending = undefined;
+			persistRecoveryProgress(ctx, turn);
+		} catch (error) {
+			// A known failure is retryable. If this receipt also fails to persist,
+			// the on-disk pending marker keeps restart recovery from repeating an uncertain restore.
+			if (!wasPending && turn.recovery.pending === absPath) {
+				turn.recovery.pending = undefined;
+				try {
+						persistRecoveryProgress(ctx, turn);
+					} catch {
+						// Retain the prior manifest and snapshots.
+					}
+			}
+			result.failed.push({ path: absPath, error: error instanceof Error ? error.message : String(error) });
 		}
 	}
-
-	cleanupTurnFiles(ctx, turn);
-	ctx.turns.pop();
-
-	return { restored, deleted, turnsConsumed };
+	result.complete = result.failed.length === 0;
+	if (result.complete && !options.deferCommit) {
+		result.turnsConsumed = turn.recovery.turnsToConsume;
+		commitRollbackTurn(ctx.sessionId, turn.turnIndex);
+	}
+	return result;
 }
 
 export function getRollbackStatus(sessionId?: string): { enabled: boolean; turns: number; files: number } {

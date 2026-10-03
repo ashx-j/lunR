@@ -6,12 +6,16 @@ import {
 	closeSync,
 	createReadStream,
 	existsSync,
+	fchmodSync,
+	fsyncSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
 	readSync,
+	renameSync,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
@@ -803,6 +807,7 @@ export class SessionManager {
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
+	private needsAppendSeparator = false;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
@@ -952,6 +957,16 @@ export class SessionManager {
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
 			this.fileEntries = loadEntriesFromFile(this.sessionFile);
+			// Preserve accepted unterminated records and isolate truncated tails. The
+			// loader continues to skip malformed lines under its existing recovery policy.
+			const fd = openSync(this.sessionFile, "r");
+			try {
+				const size = statSync(this.sessionFile).size;
+				const lastByte = Buffer.alloc(1);
+				this.needsAppendSeparator = size > 0 && readSync(fd, lastByte, 0, 1, size - 1) === 1 && lastByte[0] !== 10;
+			} finally {
+				closeSync(fd);
+			}
 
 			// If file was empty, initialize it with a valid session header. If it was
 			// non-empty but did not parse as a pi session, fail without modifying it.
@@ -1014,6 +1029,7 @@ export class SessionManager {
 		this.labelTimestampsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this.needsAppendSeparator = false;
 		this.permissionMode = undefined;
 
 		if (this.persist) {
@@ -1044,17 +1060,38 @@ export class SessionManager {
 		}
 	}
 
+	/** Replace only after the sibling log is written, synced and closed.
+	 * Rename protects the previous log on write failure, not against every power-loss scenario.
+	 */
 	private _rewriteFile(): void {
 		this.assertWritable();
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
+		const file = this.ownership?.owner.file ?? this.sessionFile;
+		const mode = existsSync(file) ? statSync(file).mode & 0o777 : 0o600;
+		const temp = `${file}.${randomUUID()}.tmp`;
+		const fd = openSync(temp, "wx", mode);
 		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			try {
+				fchmodSync(fd, mode);
+				for (const entry of this.fileEntries) {
+					writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+				}
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
 			}
+			renameSync(temp, file);
+			this.needsAppendSeparator = false;
 		} finally {
-			closeSync(fd);
+			// Only this invocation's successfully created temporary file is owned.
+			if (existsSync(temp)) unlinkSync(temp);
 		}
+	}
+
+	private _appendToFile(entry: SessionEntry): void {
+		if (!this.sessionFile) return;
+		appendFileSync(this.sessionFile, `${this.needsAppendSeparator ? "\n" : ""}${JSON.stringify(entry)}\n`);
+		this.needsAppendSeparator = false;
 	}
 
 	isPersisted(): boolean {
@@ -1088,7 +1125,7 @@ export class SessionManager {
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
 			if (this.flushed) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+				this._appendToFile(entry);
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
@@ -1107,7 +1144,7 @@ export class SessionManager {
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			this._appendToFile(entry);
 		}
 	}
 
