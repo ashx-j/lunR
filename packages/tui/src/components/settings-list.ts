@@ -1,6 +1,6 @@
 import { fuzzyFilter } from "../fuzzy.ts";
 import { getKeybindings } from "../keybindings.ts";
-import type { Component } from "../tui.ts";
+import { type Component, Container, type Focusable, isFocusable } from "../tui.ts";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 import { Input } from "./input.ts";
 
@@ -34,7 +34,19 @@ export interface SettingsListOptions {
 	enableSearch?: boolean;
 }
 
-export class SettingsList implements Component {
+export class SettingsList implements Component, Focusable {
+	private hasFocus = false;
+	private focusedChildren = new Set<Focusable>();
+
+	get focused(): boolean {
+		return this.hasFocus;
+	}
+
+	set focused(value: boolean) {
+		this.hasFocus = value;
+		this.syncChildFocus();
+	}
+
 	private items: SettingItem[];
 	private filteredItems: SettingItem[];
 	private theme: SettingsListTheme;
@@ -69,6 +81,21 @@ export class SettingsList implements Component {
 		}
 	}
 
+	private syncChildFocus(): void {
+		const children = new Set<Focusable>();
+		const collect = (component: Component): void => {
+			if (isFocusable(component)) children.add(component);
+			else if (component instanceof Container) component.children.forEach(collect);
+		};
+		if (this.submenuComponent) collect(this.submenuComponent);
+		else if (this.searchInput) children.add(this.searchInput);
+		for (const child of this.focusedChildren) {
+			if (!children.has(child)) child.focused = false;
+		}
+		for (const child of children) child.focused = this.hasFocus;
+		this.focusedChildren = children;
+	}
+
 	/** Update an item's currentValue */
 	updateValue(id: string, newValue: string): void {
 		const item = this.items.find((i) => i.id === id);
@@ -82,6 +109,8 @@ export class SettingsList implements Component {
 	}
 
 	render(width: number): string[] {
+		// Container submenus can replace their input while open.
+		this.syncChildFocus();
 		// If submenu is active, render it instead
 		if (this.submenuComponent) {
 			return this.submenuComponent.render(width);
@@ -217,6 +246,7 @@ export class SettingsList implements Component {
 				}
 				this.closeSubmenu();
 			});
+			this.focused = this.hasFocus;
 		} else if (item.values && item.values.length > 0) {
 			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
@@ -228,7 +258,9 @@ export class SettingsList implements Component {
 	}
 
 	private closeSubmenu(): void {
+		if (isFocusable(this.submenuComponent)) this.submenuComponent.focused = false;
 		this.submenuComponent = null;
+		this.focused = this.hasFocus;
 		// Restore selection to the item that opened the submenu
 		if (this.submenuItemIndex !== null) {
 			this.selectedIndex = this.submenuItemIndex;

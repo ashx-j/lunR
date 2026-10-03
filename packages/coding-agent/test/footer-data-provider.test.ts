@@ -5,6 +5,7 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let resolvedBranch = "main";
+let resolvedDiff = "3\t1\tfoo.ts\n";
 
 vi.mock("child_process", () => ({
 	execFile: vi.fn(
@@ -27,7 +28,7 @@ vi.mock("child_process", () => ({
 				return;
 			}
 			if (args.includes("diff") && args.includes("--numstat")) {
-				setTimeout(() => callback(null, "3\t1\tfoo.ts\n", ""), 0);
+				setTimeout(() => callback(null, resolvedDiff, ""), 0);
 				return;
 			}
 			setTimeout(() => callback(new Error("unsupported"), "", ""), 0);
@@ -116,6 +117,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		originalCwd = process.cwd();
 		tempDir = mkdtempSync(join(tmpdir(), "footer-data-provider-"));
 		resolvedBranch = "main";
+		resolvedDiff = "3\t1\tfoo.ts\n";
 		vi.mocked(execFile).mockClear();
 	});
 
@@ -123,6 +125,53 @@ describe("FooterDataProvider reftable branch detection", () => {
 		process.chdir(originalCwd);
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("lazily refreshes visible unstaged totals with bounded work and stops after disposal", async () => {
+		vi.useFakeTimers();
+		const provider = new FooterDataProvider(createPlainRepo(tempDir));
+		try {
+			await vi.waitFor(() => expect(provider.getGitDiffstat()?.added).toBe(3));
+			vi.mocked(execFile).mockClear();
+			// Model a visible footer: invalidation requests a render, which reads the totals.
+			const render = vi.fn(() => provider.getGitDiffstat());
+			provider.onBranchChange(render);
+			resolvedDiff = "7\t2\tfoo.ts\n";
+			for (let i = 0; i < 100; i++) provider.getGitDiffstat();
+			expect(execFile).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(2000);
+			await vi.waitFor(() => expect(provider.getGitDiffstat()).toEqual({ added: 7, removed: 2 }));
+			expect(vi.mocked(execFile).mock.calls.filter((call) => call[1]?.includes("diff"))).toHaveLength(1);
+			provider.dispose();
+			vi.mocked(execFile).mockClear();
+			await vi.advanceTimersByTimeAsync(10000);
+			provider.getGitDiffstat();
+			expect(execFile).not.toHaveBeenCalled();
+		} finally {
+			provider.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("does no periodic git work while totals are hidden", async () => {
+		vi.useFakeTimers();
+		const provider = new FooterDataProvider(createPlainRepo(tempDir));
+		try {
+			await vi.waitFor(() => expect(provider.getGitBranch()).toBe("main"));
+			vi.mocked(execFile).mockClear();
+			await vi.advanceTimersByTimeAsync(10000);
+			expect(execFile).not.toHaveBeenCalled();
+			provider.getGitDiffstat();
+			const requestRender = vi.fn();
+			provider.onBranchChange(requestRender);
+			// A hidden footer does not read totals after its last invalidation.
+			await vi.advanceTimersByTimeAsync(10000);
+			expect(requestRender).toHaveBeenCalledTimes(1);
+			expect(execFile).not.toHaveBeenCalled();
+		} finally {
+			provider.dispose();
+			vi.useRealTimers();
 		}
 	});
 
