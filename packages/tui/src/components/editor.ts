@@ -132,7 +132,8 @@ function segmentWithMarkers(
 
 /**
  * Represents a chunk of text for word-wrap layout.
- * Tracks both the text content and its position in the original line.
+ * Tracks display text and its position in the original line. An indivisible
+ * grapheme that cannot fit uses a placeholder with the original source range.
  */
 export interface TextChunk {
 	text: string;
@@ -153,7 +154,7 @@ export interface TextChunk {
  */
 export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl.SegmentData[]): TextChunk[] {
 	if (!line || maxWidth <= 0) {
-		return [{ text: "", startIndex: 0, endIndex: 0 }];
+		return [{ text: "", startIndex: 0, endIndex: line.length }];
 	}
 
 	const lineWidth = visibleWidth(line);
@@ -201,12 +202,17 @@ export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl
 		}
 
 		if (gWidth > maxWidth) {
-			// Single atomic segment wider than maxWidth (e.g. paste marker
-			// in a narrow terminal). Re-wrap it at grapheme granularity.
-
-			// The segment remains logically atomic for cursor
-			// movement / editing — the split is purely visual for word-wrap layout.
-			const subChunks = wordWrapLine(grapheme, maxWidth);
+			const subSegments = [...graphemeSegmenter.segment(grapheme)];
+			if (subSegments.length === 1) {
+				// Keep the source range even when this grapheme cannot occupy its two cells.
+				chunks.push({ text: "�", startIndex: charIndex, endIndex: charIndex + grapheme.length });
+				chunkStart = charIndex + grapheme.length;
+				currentWidth = 0;
+				wrapOppIndex = -1;
+				continue;
+			}
+			// Split a multi-grapheme atomic marker visually, while keeping editing atomic.
+			const subChunks = wordWrapLine(grapheme, maxWidth, subSegments);
 			for (let j = 0; j < subChunks.length - 1; j++) {
 				const sc = subChunks[j]!;
 				chunks.push({ text: sc.text, startIndex: charIndex + sc.startIndex, endIndex: charIndex + sc.endIndex });
@@ -240,7 +246,9 @@ export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl
 	}
 
 	// Push final chunk.
-	chunks.push({ text: line.slice(chunkStart), startIndex: chunkStart, endIndex: line.length });
+	if (chunkStart < line.length || chunks.length === 0) {
+		chunks.push({ text: line.slice(chunkStart), startIndex: chunkStart, endIndex: line.length });
+	}
 
 	return chunks;
 }
@@ -250,6 +258,11 @@ interface EditorState {
 	lines: string[];
 	cursorLine: number;
 	cursorCol: number;
+}
+
+interface EditorSnapshot {
+	state: EditorState;
+	images: ReadonlyMap<number, EditorImageAttachment>;
 }
 
 interface LayoutLine {
@@ -332,7 +345,7 @@ export class Editor implements Component, Focusable {
 	private pasteCounter: number = 0;
 
 	// Clipboard image chips: `[image_n]` stays in the editor; bytes live off-screen.
-	private images: Map<number, EditorImageAttachment> = new Map();
+	private images: ReadonlyMap<number, EditorImageAttachment> = new Map();
 	private imageCounter: number = 0;
 	private submittedImages: EditorImageAttachment[] = [];
 
@@ -363,7 +376,11 @@ export class Editor implements Component, Focusable {
 	private snappedFromCursorCol: number | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<EditorState>();
+	// Attachment maps are copied only when membership changes; snapshots share file metadata.
+	private undoStack = new UndoStack<EditorSnapshot>((snapshot) => ({
+		state: structuredClone(snapshot.state),
+		images: snapshot.images,
+	}));
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
@@ -519,6 +536,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		if (width <= 0) return [];
 		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
 		const paddingX = Math.min(this.paddingX, maxPadding);
 		const contentWidth = Math.max(1, width - paddingX * 2);
@@ -627,7 +645,7 @@ export class Editor implements Component, Focusable {
 		if (linesBelow > 0) {
 			const indicator = `─── ↓ ${linesBelow} more `;
 			const remaining = width - visibleWidth(indicator);
-			result.push(this.borderColor(indicator + "─".repeat(Math.max(0, remaining))));
+			result.push(this.borderColor(truncateToWidth(indicator + "─".repeat(Math.max(0, remaining)), width, "")));
 		} else {
 			result.push(horizontal.repeat(width));
 		}
@@ -989,17 +1007,13 @@ export class Editor implements Component, Focusable {
 						if (isLastChunk) {
 							// Last chunk: cursor belongs here if >= startIndex
 							hasCursorInChunk = cursorPos >= chunk.startIndex;
-							adjustedCursorPos = cursorPos - chunk.startIndex;
+							adjustedCursorPos = Math.min(cursorPos - chunk.startIndex, chunk.text.length);
 						} else {
 							// Non-last chunk: cursor belongs here if in range [startIndex, endIndex)
 							// But we need to handle the visual position in the trimmed text
 							hasCursorInChunk = cursorPos >= chunk.startIndex && cursorPos < chunk.endIndex;
 							if (hasCursorInChunk) {
-								adjustedCursorPos = cursorPos - chunk.startIndex;
-								// Clamp to text length (in case cursor was in trimmed whitespace)
-								if (adjustedCursorPos > chunk.text.length) {
-									adjustedCursorPos = chunk.text.length;
-								}
+								adjustedCursorPos = Math.min(cursorPos - chunk.startIndex, chunk.text.length);
 							}
 						}
 					}
@@ -1017,6 +1031,15 @@ export class Editor implements Component, Focusable {
 						});
 					}
 				}
+			}
+		}
+
+		// At one column there is no spare cell for an end cursor.
+		if (contentWidth === 1) {
+			const cursorLine = layoutLines.find((line) => line.hasCursor);
+			if (cursorLine?.text && cursorLine.cursorPos === cursorLine.text.length) {
+				cursorLine.hasCursor = false;
+				layoutLines.splice(layoutLines.indexOf(cursorLine) + 1, 0, { text: "", hasCursor: true, cursorPos: 0 });
 			}
 		}
 
@@ -1056,16 +1079,14 @@ export class Editor implements Component, Focusable {
 		this.cancelAutocomplete();
 		this.lastAction = null;
 		this.exitHistoryBrowsing();
-		this.pastes.clear();
-		this.pasteCounter = 0;
-		this.images.clear();
-		this.imageCounter = 0;
-		// Keep submittedImages: submitValue() snapshots chips, then setText("") runs.
 		const normalized = this.normalizeText(text);
-		// Push undo snapshot if content differs (makes programmatic changes undoable)
 		if (this.getText() !== normalized) {
 			this.pushUndoSnapshot();
 		}
+		this.pastes.clear();
+		this.pasteCounter = 0;
+		this.images = new Map();
+		// Keep submittedImages: submitValue() snapshots chips, then setText("") runs.
 		this.setTextInternal(normalized);
 	}
 
@@ -1094,7 +1115,9 @@ export class Editor implements Component, Focusable {
 		this.exitHistoryBrowsing();
 		this.imageCounter++;
 		const id = this.imageCounter;
-		this.images.set(id, { id, path: attachment.path, mimeType: attachment.mimeType });
+		const images = new Map(this.images);
+		images.set(id, { id, path: attachment.path, mimeType: attachment.mimeType });
+		this.images = images;
 		this.insertTextAtCursorInternal(formatImageMarker(id));
 		return id;
 	}
@@ -1104,12 +1127,13 @@ export class Editor implements Component, Focusable {
 	 * Used by /edit so `[image_n]` stays a chip instead of becoming a path.
 	 */
 	restoreImageMarkers(attachments: EditorImageAttachment[]): void {
-		this.images.clear();
+		const images = new Map<number, EditorImageAttachment>();
 		this.imageCounter = 0;
 		for (const attachment of attachments) {
-			this.images.set(attachment.id, { ...attachment });
+			images.set(attachment.id, { ...attachment });
 			if (attachment.id > this.imageCounter) this.imageCounter = attachment.id;
 		}
+		this.images = images;
 	}
 
 	/** Pending image chips still in the editor, in first-appearance order. */
@@ -1127,7 +1151,7 @@ export class Editor implements Component, Focusable {
 	takePendingImages(): EditorImageAttachment[] {
 		const pending = this.submittedImages.length > 0 ? this.submittedImages : this.getPendingImages();
 		this.submittedImages = [];
-		this.images.clear();
+		this.images = new Map();
 		this.imageCounter = 0;
 		return pending;
 	}
@@ -1363,7 +1387,7 @@ export class Editor implements Component, Focusable {
 		this.state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.pastes.clear();
 		this.pasteCounter = 0;
-		this.images.clear();
+		this.images = new Map();
 		this.imageCounter = 0;
 		this.exitHistoryBrowsing();
 		this.scrollOffset = 0;
@@ -1413,7 +1437,9 @@ export class Editor implements Component, Focusable {
 				);
 			} else if (isImageSegmented) {
 				const targetId = Number(isImageSegmented[1]);
-				this.images.delete(targetId);
+				const images = new Map(this.images);
+				images.delete(targetId);
+				this.images = images;
 			}
 
 			line = this.state.lines[this.state.cursorLine] || "";
@@ -1791,7 +1817,9 @@ export class Editor implements Component, Focusable {
 			const graphemeLength = firstGrapheme ? firstGrapheme.segment.length : 1;
 			const deletedImage = firstGrapheme ? IMAGE_MARKER_SINGLE.exec(firstGrapheme.segment) : null;
 			if (deletedImage) {
-				this.images.delete(Number(deletedImage[1]));
+				const images = new Map(this.images);
+				images.delete(Number(deletedImage[1]));
+				this.images = images;
 			}
 
 			const before = currentLine.slice(0, this.state.cursorCol);
@@ -2115,14 +2143,16 @@ export class Editor implements Component, Focusable {
 	}
 
 	private pushUndoSnapshot(): void {
-		this.undoStack.push(this.state);
+		this.undoStack.push({ state: this.state, images: this.images });
 	}
 
 	private undo(): void {
 		this.exitHistoryBrowsing();
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
-		Object.assign(this.state, snapshot);
+		Object.assign(this.state, snapshot.state);
+		this.images = snapshot.images;
+		for (const id of this.images.keys()) this.imageCounter = Math.max(this.imageCounter, id);
 		this.lastAction = null;
 		this.preferredVisualCol = null;
 		if (this.onChange) {

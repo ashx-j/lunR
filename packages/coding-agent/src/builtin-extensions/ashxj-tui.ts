@@ -588,14 +588,14 @@ export class ChatboxEditor extends CustomEditor {
 	}
 
 	override render(width: number): string[] {
-		// Too narrow to draw a box — defer to the base editor, clamped.
-		if (width <= 4) {
+		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
+		const glyphW = displayWidth(glyph);
+		// Leave at least one column after the rails and prompt gutter.
+		if (width <= 4 + glyphW) {
 			return clampLines(super.render(width), width);
 		}
 
 		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
-		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
-		const glyphW = displayWidth(glyph);
 		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
