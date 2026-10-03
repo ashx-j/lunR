@@ -1,5 +1,14 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -204,6 +213,7 @@ it("releases an acquired lease if writing owner metadata fails", async () => {
 	mkdirSync(owner, { recursive: true });
 	await expect(acquireSchedulerLease()).rejects.toThrow();
 	expect(existsSync(join(dir, "cron", "scheduler.lock"))).toBe(false);
+	expect(readdirSync(join(dir, "cron"))).toEqual(["scheduler.owner.json"]);
 	rmSync(owner, { recursive: true });
 	const release = await acquireSchedulerLease();
 	expect(release).not.toBeNull();
@@ -217,4 +227,103 @@ it("attempts lease release even when metadata removal fails", async () => {
 	mkdirSync(owner);
 	await expect(release!()).rejects.toThrow();
 	expect(existsSync(join(dir, "cron", "scheduler.lock"))).toBe(false);
+});
+
+function expiredLease() {
+	const old = new Date(Date.now() - 600_000);
+	utimesSync(join(dir, "cron", "scheduler.lock"), old, old);
+}
+
+async function crashOwner(stage: string): Promise<number> {
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(([key]) => !/^PI_(SUBAGENT|SUBAGENTS|INTERCOM)_/.test(key)),
+	);
+	env.PI_CODING_AGENT_DIR = dir;
+	return new Promise((resolve, reject) => {
+		const child = spawn(
+			process.execPath,
+			[
+				"--experimental-strip-types",
+				fileURLToPath(new URL("./fixtures/cron-owner-crash.ts", import.meta.url)),
+				dir,
+				stage,
+			],
+			{ env, stdio: ["ignore", "ignore", "pipe"] },
+		);
+		let stderr = "";
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk;
+		});
+		child.on("error", reject);
+		child.on("exit", (_code, signal) => {
+			if (signal !== "SIGKILL" || !child.pid)
+				reject(new Error(stderr || "fixture did not crash at the owner boundary"));
+			else resolve(child.pid);
+		});
+	});
+}
+
+it.each(["write", "publish"])("recovers after an owner crashes during atomic metadata %s", async (stage) => {
+	const previousPid = await crashOwner("published");
+	const owner = join(dir, "cron", "scheduler.owner.json");
+	expect(JSON.parse(readFileSync(owner, "utf8"))).toEqual({ pid: previousPid });
+	expiredLease();
+	await crashOwner(stage);
+	expect(JSON.parse(readFileSync(owner, "utf8"))).toEqual({ pid: previousPid });
+	expiredLease();
+	const release = await acquireSchedulerLease();
+	expect(release).not.toBeNull();
+	await release!();
+});
+
+it.each(["", '{"pid":', "{}", '{"pid":0}', '{"pid":-1}', '{"pid":1.5}'])(
+	"preserves unknown scheduler ownership and explains safe repair for %j",
+	async (metadata) => {
+		mkdirSync(join(dir, "cron", "scheduler.lock"), { recursive: true });
+		const owner = join(dir, "cron", "scheduler.owner.json");
+		writeFileSync(owner, metadata);
+		expiredLease();
+		await expect(acquireSchedulerLease()).rejects.toThrow("confirm every operator using this profile has stopped");
+		expect(readFileSync(owner, "utf8")).toBe(metadata);
+		expect(existsSync(join(dir, "cron", "scheduler.lock"))).toBe(true);
+		// This fixture has no live operator; simulate the instructed deliberate repair.
+		rmSync(join(dir, "cron", "scheduler.lock"), { recursive: true });
+		rmSync(owner);
+		const release = await acquireSchedulerLease();
+		expect(release).not.toBeNull();
+		await release!();
+	},
+);
+
+it("keeps an expired ownerless lease closed until deliberate repair", async () => {
+	await crashOwner("write");
+	expect(existsSync(join(dir, "cron", "scheduler.owner.json"))).toBe(false);
+	expiredLease();
+	await expect(acquireSchedulerLease()).rejects.toThrow("confirm every operator using this profile has stopped");
+	expect(existsSync(join(dir, "cron", "scheduler.lock"))).toBe(true);
+});
+
+it("retries when a competing operator releases its lease before the metadata check stats it", async () => {
+	expect(await worker("lease-release-stat-race")).toBe("reacquired");
+	expect(existsSync(join(dir, "cron", "scheduler.lock"))).toBe(false);
+});
+
+it("manual runs report a pre-dispatch deferral instead of claiming completion", async () => {
+	const job = await createJob({ prompt: "saved project task", schedule: "30m" });
+	const scheduler = startScheduler({
+		runJob: async () => {
+			throw new CronAdmissionDeferred("saved project does not match");
+		},
+		deliverResult: async () => {
+			throw new Error("must not deliver");
+		},
+	});
+	try {
+		await expect(scheduler.run(job.id)).rejects.toThrow("Cron job was not admitted: saved project does not match");
+		expect(getJob(job.id).repeat.completed).toBe(0);
+		expect(getJob(job.id).nextRunAt).toBe(job.nextRunAt);
+		expect(getJob(job.id).activeRun).toBeUndefined();
+	} finally {
+		await scheduler.stop();
+	}
 });

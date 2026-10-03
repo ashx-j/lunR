@@ -21,6 +21,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -213,8 +214,38 @@ export async function acquireSchedulerLease(): Promise<(() => Promise<void>) | n
 	mkdirSync(dir, { recursive: true });
 	const file = join(dir, "scheduler");
 	const ownerFile = `${file}.owner.json`;
-	if (existsSync(`${file}.lock`) && existsSync(ownerFile)) {
-		const owner = JSON.parse(readFileSync(ownerFile, "utf-8")) as { pid: number };
+	const staleMs = 120_000;
+	if (existsSync(`${file}.lock`)) {
+		let owner: unknown;
+		try {
+			owner = JSON.parse(readFileSync(ownerFile, "utf-8"));
+			if (
+				!owner ||
+				typeof owner !== "object" ||
+				!("pid" in owner) ||
+				typeof owner.pid !== "number" ||
+				!Number.isInteger(owner.pid) ||
+				owner.pid <= 0 ||
+				owner.pid > 2_147_483_647
+			)
+				throw new Error("invalid scheduler owner PID");
+		} catch (error) {
+			// A competing operator may still be publishing its owner record. Missing
+			// or malformed metadata never proves that an existing owner is dead.
+			if (!existsSync(`${file}.lock`)) return acquireSchedulerLease();
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				try {
+					if (Date.now() - statSync(`${file}.lock`).mtimeMs < staleMs) return null;
+				} catch (lockError) {
+					if ((lockError as NodeJS.ErrnoException).code === "ENOENT") return acquireSchedulerLease();
+				}
+			}
+			throw new Error(
+				`Cron scheduler ownership cannot be verified. Before repairing it, confirm every operator using this profile has stopped. ` +
+					`Then remove ${file}.lock and ${ownerFile}, and restart scheduling. Never remove them while an operator may be running.`,
+				{ cause: error },
+			);
+		}
 		try {
 			process.kill(owner.pid, 0);
 			return null;
@@ -224,16 +255,20 @@ export async function acquireSchedulerLease(): Promise<(() => Promise<void>) | n
 	}
 	let release: () => Promise<void>;
 	try {
-		release = await lockfile.lock(file, { realpath: false, stale: 120_000 });
+		release = await lockfile.lock(file, { realpath: false, stale: staleMs });
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ELOCKED") return null;
 		throw error;
 	}
+	const ownerTmp = join(dir, `.scheduler.owner.json.${randomUUID()}.tmp`);
 	try {
-		writeFileSync(ownerFile, JSON.stringify({ pid: process.pid }));
+		writeFileSync(ownerTmp, JSON.stringify({ pid: process.pid }));
+		renameSync(ownerTmp, ownerFile);
 	} catch (error) {
 		await release();
 		throw error;
+	} finally {
+		rmSync(ownerTmp, { force: true });
 	}
 	return async () => {
 		try {

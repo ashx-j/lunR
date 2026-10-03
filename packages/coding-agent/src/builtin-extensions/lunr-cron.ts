@@ -22,6 +22,8 @@
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
 
+import { realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { beginCronFire, endCronFire, isCronFire } from "../core/cron/fire-guard.ts";
@@ -63,6 +65,23 @@ function createInContext(input: CreateJobInput, ctx: ExtensionContext) {
 	const origin = currentOrigin();
 	const workdir = origin ? resolveWithinRoots(ctx.cwd, loadGatewayConfig().projectRoots ?? []) : ctx.cwd;
 	return createJob({ ...input, workdir, origin: origin ? { ...origin } : null, deliver: input.deliver ?? (origin ? "origin" : "local") });
+}
+
+/** A TUI owns its current project; it must not silently execute another project's job. */
+function requireTuiJobWorkdir(job: CronJob, ctx: ExtensionContext): void {
+	if (!job.workdir || !isAbsolute(job.workdir))
+		throw new CronAdmissionDeferred("The job has no saved absolute project directory. Recreate it from the intended project before running it in a TUI.");
+	let saved: string;
+	let current: string;
+	try {
+		saved = realpathSync(job.workdir);
+		current = realpathSync(ctx.cwd);
+	} catch {
+		throw new CronAdmissionDeferred("The saved or current project directory is unavailable. Restore it before running this job.");
+	}
+	const matches = process.platform === "win32" ? saved.toLowerCase() === current.toLowerCase() : saved === current;
+	if (!matches)
+		throw new CronAdmissionDeferred("The job belongs to another project. Run it from a TUI in its saved project, or stop this scheduler so the gateway can own execution.");
 }
 
 // ---------------------------------------------------------------------------
@@ -116,9 +135,10 @@ export default function (pi: ExtensionAPI): void {
 		}
 		lastCtx?.ui.notify(`Cron job '${job.name}' finished`, "info");
 	};
-	const runJob = async (prompt: string, _job: CronJob, signal: AbortSignal): Promise<string> => {
+	const runJob = async (prompt: string, job: CronJob, signal: AbortSignal): Promise<string> => {
 		const ctx = lastCtx;
 		if (!ctx?.isIdle() || ctx.hasPendingMessages()) throw new CronAdmissionDeferred("session is busy");
+		requireTuiJobWorkdir(job, ctx);
 		if (!ctx.promptWithCompletion) throw new Error("owned cron admission unavailable");
 		beginCronFire();
 		try {
@@ -240,6 +260,7 @@ export default function (pi: ExtensionAPI): void {
 		label: "Cron",
 		description: [
 			"Manage profile-wide scheduled jobs. One operator owns execution; busy sessions defer scheduled work.",
+			"TUI execution requires the job's saved project to match the current project. Recreate jobs without a saved project from the intended project.",
 			"Actions: create (needs prompt + schedule), list, update (id + fields), pause, resume, remove, run (trigger on the owning TUI operator; otherwise returns an owner error).",
 			"Schedule formats: 'every 30m' / 'every 2h' / 'every 1d' (recurring), '30m'/'2h' or an ISO timestamp (one-shot), or a 5-field cron expression.",
 			"Job output is saved locally; platform delivery requires the gateway operator and current grants. Legacy origin jobs need rebind from an approved gateway chat. The prompt can answer [SILENT] to suppress delivery.",

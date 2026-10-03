@@ -3,6 +3,7 @@
 exports[`cron tool inventory explains the operator and delivery requirements 1`] = `
 {
   "description": "Manage profile-wide scheduled jobs. One operator owns execution; busy sessions defer scheduled work.
+TUI execution requires the job's saved project to match the current project. Recreate jobs without a saved project from the intended project.
 Actions: create (needs prompt + schedule), list, update (id + fields), pause, resume, remove, run (trigger on the owning TUI operator; otherwise returns an owner error).
 Schedule formats: 'every 30m' / 'every 2h' / 'every 1d' (recurring), '30m'/'2h' or an ISO timestamp (one-shot), or a 5-field cron expression.
 Job output is saved locally; platform delivery requires the gateway operator and current grants. Legacy origin jobs need rebind from an approved gateway chat. The prompt can answer [SILENT] to suppress delivery.",

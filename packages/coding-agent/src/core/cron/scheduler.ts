@@ -102,7 +102,11 @@ async function deliverFailure(job: CronJob, deps: SchedulerDeps, message: string
 export class CronAdmissionDeferred extends Error {}
 
 /** One owned execution, including cooperative cancellation settlement and its terminal result. */
-export async function executeJob(job: CronJob, deps: SchedulerDeps, stopSignal?: AbortSignal): Promise<void> {
+export async function executeJob(
+	job: CronJob,
+	deps: SchedulerDeps,
+	stopSignal?: AbortSignal,
+): Promise<{ status: "settled" } | { status: "deferred"; reason: string }> {
 	const controller = new AbortController();
 	const cancel = () => controller.abort(stopSignal?.reason ?? new Error("scheduler stopped"));
 	stopSignal?.addEventListener("abort", cancel, { once: true });
@@ -120,7 +124,7 @@ export async function executeJob(job: CronJob, deps: SchedulerDeps, stopSignal?:
 	} catch (error) {
 		if (error instanceof CronAdmissionDeferred && !controller.signal.aborted && job.activeRun) {
 			await deferJobRun(job.id, job.activeRun.id);
-			return;
+			return { status: "deferred", reason: error.message };
 		}
 		failure = errorMessage(controller.signal.aborted ? controller.signal.reason : error);
 	} finally {
@@ -130,7 +134,7 @@ export async function executeJob(job: CronJob, deps: SchedulerDeps, stopSignal?:
 	if (failure) {
 		await markJobRun(job.id, { status: "error", error: failure, runId: job.activeRun?.id });
 		await deliverFailure(job, deps, failure);
-		return;
+		return { status: "settled" };
 	}
 	await saveJobOutput(job.id, text);
 	let deliveryError: string | null = null;
@@ -143,6 +147,7 @@ export async function executeJob(job: CronJob, deps: SchedulerDeps, stopSignal?:
 	}
 	await markJobRun(job.id, { status: "ok", runId: job.activeRun?.id });
 	await recordDeliveryError(job.id, deliveryError, job.lastDeliveryError);
+	return { status: "settled" };
 }
 
 async function tick(deps: SchedulerDeps, now: Date, signal: AbortSignal): Promise<void> {
@@ -226,7 +231,9 @@ export function startScheduler(deps: SchedulerDeps) {
 			active = (async () => {
 				const job = await claimJobRun(jobId, new Date(), true);
 				if (!job) throw new Error("cron job is missing or already running");
-				await executeJob(job, deps, controller.signal);
+				const result = await executeJob(job, deps, controller.signal);
+				if (result.status === "deferred")
+					throw new CronAdmissionDeferred(`Cron job was not admitted: ${result.reason}`);
 			})();
 			try {
 				await active;
