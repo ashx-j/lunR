@@ -14,6 +14,9 @@ function createFakeMode(isIdle: boolean) {
 	const fakeThis = {
 		isInitialized: true,
 		session: { isIdle },
+		sessionManager: { buildContextEntries: () => [] },
+		disposeChatToolComponents: vi.fn(),
+		renderSessionEntries: vi.fn(),
 		footer: { invalidate: vi.fn() },
 		autoCompactionEscapeHandler: undefined as (() => void) | undefined,
 		autoCompactionLoader: undefined,
@@ -21,7 +24,6 @@ function createFakeMode(isIdle: boolean) {
 		defaultEditor: {},
 		statusContainer: { clear: vi.fn() },
 		chatContainer: { clear: vi.fn() },
-		rebuildChatFromMessages: vi.fn(),
 		addMessageToChat: vi.fn(),
 		showError: vi.fn(),
 		showStatus: vi.fn(),
@@ -32,7 +34,11 @@ function createFakeMode(isIdle: boolean) {
 		ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 	};
 	Object.setPrototypeOf(fakeThis, InteractiveMode.prototype);
-	return fakeThis;
+	const rebuild = vi.spyOn(
+		fakeThis as typeof fakeThis & { rebuildChatFromMessages(): void },
+		"rebuildChatFromMessages",
+	);
+	return Object.assign(fakeThis, { rebuildChatFromMessages: rebuild });
 }
 
 const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (

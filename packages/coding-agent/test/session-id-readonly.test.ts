@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
+const tsxLoader = import.meta.resolve("tsx");
 const cliPath = resolve(__dirname, "../src/cli.ts");
 const tempDirs: string[] = [];
 
@@ -73,7 +74,7 @@ async function runCli(
 
 	let stderr = "";
 	const code = await new Promise<number | null>((resolvePromise, reject) => {
-		const child = spawn(process.execPath, [cliPath, ...resolvedArgs], {
+		const child = spawn(process.execPath, ["--import", tsxLoader, cliPath, ...resolvedArgs], {
 			cwd: dirs.projectDir,
 			env: {
 				...process.env,

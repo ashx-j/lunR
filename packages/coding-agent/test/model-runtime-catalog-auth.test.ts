@@ -202,7 +202,7 @@ describe("ModelRuntime official shard fetch", () => {
 		expect(officialUrls.some((href) => href.endsWith("/providers.json"))).toBe(true);
 		expect(officialUrls.some((href) => href.endsWith("/providers/xai.json"))).toBe(true);
 		expect(officialUrls.some((href) => href.includes("/providers/openrouter.json"))).toBe(false);
-		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ thinkingFormat: "openrouter" });
+		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ supportsLongCacheRetention: false });
 	});
 
 	it("applies official overlay to a non-live-list provider when a stored cred exists", async () => {

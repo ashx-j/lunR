@@ -325,7 +325,9 @@ describe("mcp cold-start dependency split", () => {
 		expect(pi.commands.has("mcp-auth")).toBe(true);
 
 		const direct = pi.tools.find((tool) => tool.name === "playwright_click");
-		expect(direct?.description).toBe("Click a selector");
+		expect(direct?.description).toBe(
+			"Click a selector\nUnavailable in read-only mode; switch to yolo or auto to call.",
+		);
 		expect(direct?.parameters).toBeTruthy();
 
 		const proxy = pi.tools.find((tool) => tool.name === "mcp");

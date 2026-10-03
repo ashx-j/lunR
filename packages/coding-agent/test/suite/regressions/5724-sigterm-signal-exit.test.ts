@@ -57,6 +57,7 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 
 		const order: string[] = [];
 		const dispose = deferred();
+		const disposeStarted = deferred();
 		const context: ShutdownThis = {
 			isShuttingDown: false,
 			stopSmoothStreaming: vi.fn(() => {
@@ -68,6 +69,7 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 			runtimeHost: {
 				dispose: vi.fn(() => {
 					order.push("dispose");
+					disposeStarted.resolve();
 					return dispose.promise;
 				}),
 			},
@@ -85,7 +87,7 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		};
 
 		const shutdownPromise = callShutdown(context, { fromSignal: true });
-		await Promise.resolve();
+		await disposeStarted.promise;
 
 		expect(order).toEqual(["stopSmoothStreaming", "dispose"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
