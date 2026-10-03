@@ -16,6 +16,7 @@ import { join } from "path";
 import { getAgentDir } from "../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend, InMemoryAuthStorageBackend } from "./auth-storage.ts";
 import { parseResetTimeMs } from "./usage-limit.ts";
+import { clearPlanUsageCache } from "./usage-service.ts";
 
 export interface SubEntry {
 	id: string;
@@ -35,7 +36,6 @@ type SubscriptionData = Record<string, ProviderPool>;
 
 export class SubscriptionManager {
 	private data: SubscriptionData = {};
-	private loaded = false;
 	private storage: AuthStorageBackend;
 	private authStorage: CredentialStore;
 	// In-process write queue so mutations serialize even before the file lock.
@@ -67,38 +67,59 @@ export class SubscriptionManager {
 	}
 
 	private parseStorageData(content: string | undefined): SubscriptionData {
-		if (!content) {
-			return {};
-		}
-		return JSON.parse(content) as SubscriptionData;
-	}
-
-	private ensureLoaded(): void {
-		if (this.loaded) return;
-		this.loaded = true;
-		let content: string | undefined;
+		if (content === undefined) return {};
 		try {
-			this.storage.withLock((current) => {
-				content = current;
-				return { result: undefined };
-			});
-			this.data = this.parseStorageData(content);
+			const parsed: unknown = JSON.parse(content);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+			for (const value of Object.values(parsed as Record<string, unknown>)) {
+				if (!value || typeof value !== "object") throw new Error();
+				const pool = value as Record<string, unknown>;
+				if (typeof pool.active !== "string" || !Array.isArray(pool.keys))
+					throw new Error();
+				const ids = new Set<string>();
+				for (const value of pool.keys as unknown[]) {
+					if (!value || typeof value !== "object") throw new Error();
+					const entry = value as Record<string, unknown>;
+					if (
+						typeof entry.id !== "string" ||
+						ids.has(entry.id) ||
+						typeof entry.name !== "string" ||
+						typeof entry.key !== "string" ||
+						typeof entry.addedAt !== "number" ||
+						!Number.isFinite(entry.addedAt) ||
+						(entry.exhaustedUntil !== undefined &&
+							(typeof entry.exhaustedUntil !== "number" || !Number.isFinite(entry.exhaustedUntil))) ||
+						(entry.lastError !== undefined && typeof entry.lastError !== "string")
+					)
+						throw new Error();
+					ids.add(entry.id);
+				}
+				if (!ids.has(pool.active)) throw new Error();
+			}
+			return parsed as SubscriptionData;
 		} catch {
-			// Preserve the empty snapshot; a malformed file is never overwritten by a load.
+			throw new Error("Subscription storage is malformed. Repair it before changing subscriptions.");
 		}
 	}
 
+	/**
+	 * Lock order is subscriptions then auth. Keep selection and its auth mirror
+	 * under the subscription lock so later selectors cannot overtake a mirror.
+	 * These files are not an atomic commit: a failed mirror aborts the pool write;
+	 * a later pool write failure can leave auth ahead and a repeated selection repairs it.
+	 */
 	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-		const next = this.queue.then(fn);
+		const next = this.queue.then(() =>
+			this.storage.withLockAsync(async (current) => {
+				this.data = this.parseStorageData(current);
+				const before = JSON.stringify(this.data, null, 2);
+				const result = await fn();
+				const after = JSON.stringify(this.data, null, 2);
+				return { result, next: before === after ? undefined : after };
+			}),
+		);
 		this.queue = next.catch(() => {});
 		return next;
-	}
-
-	private persist(): Promise<void> {
-		return this.storage.withLockAsync(async () => ({
-			result: undefined,
-			next: JSON.stringify(this.data, null, 2),
-		}));
 	}
 
 	/** Raw stored credential read via the modify path (returning undefined leaves it unchanged). */
@@ -116,7 +137,6 @@ export class SubscriptionManager {
 	 * as "Sub 1" on first access. OAuth credentials are not imported.
 	 */
 	private async ensurePool(providerId: string): Promise<ProviderPool | undefined> {
-		this.ensureLoaded();
 		const existing = this.data[providerId];
 		if (existing) return existing;
 
@@ -128,7 +148,6 @@ export class SubscriptionManager {
 			keys: [{ id: "1", name: "Sub 1", key: credential.key, addedAt: Date.now() }],
 		};
 		this.data = { ...this.data, [providerId]: pool };
-		await this.persist();
 		return pool;
 	}
 
@@ -142,7 +161,16 @@ export class SubscriptionManager {
 	}
 
 	private async mirrorActive(providerId: string, key: string): Promise<void> {
-		await this.authStorage.modify(providerId, async () => ({ type: "api_key", key }));
+		clearPlanUsageCache();
+		try {
+			await this.authStorage.modify(providerId, async (current) => ({
+				type: "api_key",
+				key,
+				...(current?.type === "api_key" && current.env ? { env: current.env } : {}),
+			}));
+		} finally {
+			clearPlanUsageCache();
+		}
 	}
 
 	async list(providerId: string): Promise<SubEntry[]> {
@@ -161,13 +189,11 @@ export class SubscriptionManager {
 
 	async addKey(providerId: string, key: string, name?: string): Promise<SubEntry> {
 		return this.enqueue(async () => {
-			this.ensureLoaded();
 			const pool = await this.ensurePool(providerId);
 			const id = pool ? this.nextId(pool) : "1";
 			const entry: SubEntry = { id, name: name ?? `Sub ${id}`, key, addedAt: Date.now() };
 			const keys = [...(pool?.keys ?? []), entry];
 			this.data = { ...this.data, [providerId]: { active: id, keys } };
-			await this.persist();
 			await this.mirrorActive(providerId, key);
 			return entry;
 		});
@@ -185,8 +211,12 @@ export class SubscriptionManager {
 				const data = { ...this.data };
 				delete data[providerId];
 				this.data = data;
-				await this.persist();
-				await this.authStorage.delete(providerId);
+				clearPlanUsageCache();
+				try {
+					await this.authStorage.delete(providerId);
+				} finally {
+					clearPlanUsageCache();
+				}
 				return;
 			}
 
@@ -194,14 +224,12 @@ export class SubscriptionManager {
 			if (active === id) {
 				active = keys[0]?.id ?? active;
 				this.data = { ...this.data, [providerId]: { active, keys } };
-				await this.persist();
 				const promoted = keys.find((entry) => entry.id === active);
 				if (promoted) await this.mirrorActive(providerId, promoted.key);
 				return;
 			}
 
 			this.data = { ...this.data, [providerId]: { active, keys } };
-			await this.persist();
 		});
 	}
 
@@ -211,7 +239,6 @@ export class SubscriptionManager {
 			if (!pool) return;
 			const keys = pool.keys.map((entry) => (entry.id === id ? { ...entry, name } : entry));
 			this.data = { ...this.data, [providerId]: { ...pool, keys } };
-			await this.persist();
 		});
 	}
 
@@ -221,7 +248,6 @@ export class SubscriptionManager {
 			const entry = pool?.keys.find((candidate) => candidate.id === id);
 			if (!pool || !entry) return;
 			this.data = { ...this.data, [providerId]: { ...pool, active: id } };
-			await this.persist();
 			await this.mirrorActive(providerId, entry.key);
 		});
 	}
@@ -261,7 +287,6 @@ export class SubscriptionManager {
 				const candidate = keys[(currentIndex + offset) % keys.length];
 				if (!candidate || isExhausted(candidate)) continue;
 				this.data = { ...this.data, [providerId]: { active: candidate.id, keys } };
-				await this.persist();
 				await this.mirrorActive(providerId, candidate.key);
 				return candidate;
 			}
@@ -270,7 +295,6 @@ export class SubscriptionManager {
 			// persist its exhaustion state when a reset time was recorded.
 			if (keys !== pool.keys) {
 				this.data = { ...this.data, [providerId]: { ...pool, keys } };
-				await this.persist();
 			}
 			return null;
 		});
@@ -290,7 +314,6 @@ export class SubscriptionManager {
 				return rest;
 			});
 			this.data = { ...this.data, [providerId]: { ...pool, keys } };
-			await this.persist();
 		});
 	}
 }

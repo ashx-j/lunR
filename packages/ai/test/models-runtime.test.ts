@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
+import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { ApiKeyAuth, CredentialStore, OAuthAuth, ProviderAuth } from "../src/auth/types.ts";
 import { calculateCost, createModels, createProvider, hasApi, type Provider } from "../src/models.ts";
 import { InMemoryModelsStore } from "../src/models-store.ts";
@@ -685,5 +686,23 @@ describe("Models runtime", () => {
 		expect(events).toEqual(["start", "done"]);
 		const message = await stream.result();
 		expect(message.stopReason).toBe("stop");
+	});
+});
+
+
+describe("standard API-key environment", () => {
+	it("returns credential env and forwards it to model requests with request overrides", async () => {
+		const credentials = new InMemoryCredentialStore();
+		const env = { CACHE_RETENTION: "long", MODEL_HEADER: "fake-stored" };
+		await credentials.modify("test-standard", async () => ({ type: "api_key", key: "fake-key", env }));
+		const calls: ProviderCall[] = [];
+		const models = createModels({ credentials });
+		models.setProvider(
+			testProvider({ id: "test-standard", auth: { apiKey: envApiKeyAuth("Fake key", ["FAKE_API_KEY"]) }, calls }),
+		);
+		expect(await models.getAuth("test-standard")).toMatchObject({ auth: { apiKey: "fake-key" }, env });
+		const model = models.getModel("test-standard", "model-a")!;
+		await models.streamSimple(model, context, { env: { CACHE_RETENTION: "short" } }).result();
+		expect(calls[0]?.options?.env).toEqual({ ...env, CACHE_RETENTION: "short" });
 	});
 });

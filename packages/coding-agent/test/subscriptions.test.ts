@@ -1,4 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SubscriptionManager } from "../src/core/subscriptions.ts";
 
@@ -135,5 +138,114 @@ describe("SubscriptionManager", () => {
 
 		// Rotating 2 can now fall back to the reactivated 1.
 		expect((await manager.rotateOnFailure("openai", "quota exceeded"))?.id).toBe("1");
+	});
+});
+
+
+describe("subscription transactions", () => {
+	test("preserves interleaved changes from independent managers and allocates current IDs", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "lunr-subscriptions-"));
+		try {
+			const auth = AuthStorage.create(join(dir, "auth.json"));
+			const path = join(dir, "subscriptions.json");
+			const first = SubscriptionManager.create(auth, path);
+			const second = SubscriptionManager.create(auth, path);
+			await first.list("openai");
+			await second.list("openai");
+			await first.addKey("openai", "fake-a");
+			await second.addKey("google", "fake-g");
+			await second.addKey("openai", "fake-b");
+			await first.renameKey("openai", "1", "Renamed");
+			await second.rotateOnFailure("openai", "quota exceeded, reset in 2h");
+			const third = SubscriptionManager.create(auth, path);
+			expect(await third.list("openai")).toMatchObject([
+				{ id: "1", name: "Renamed" },
+				{ id: "2", lastError: "quota exceeded, reset in 2h" },
+			]);
+			expect(await third.list("google")).toHaveLength(1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps the pool locked until its mirror settles, preserving selection order", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "lunr-subscriptions-"));
+		try {
+			const auth = AuthStorage.inMemory();
+			const path = join(dir, "subscriptions.json");
+			const first = SubscriptionManager.create(auth, path);
+			const second = SubscriptionManager.create(auth, path);
+			await first.addKey("openai", "fake-a");
+			await first.addKey("openai", "fake-b");
+			let release: (() => void) | undefined;
+			const modify = auth.modify.bind(auth);
+			vi.spyOn(auth, "modify").mockImplementation(async (provider, fn) => {
+				if (!release)
+					await new Promise<void>((resolve) => {
+						release = resolve;
+					});
+				return modify(provider, fn);
+			});
+			const old = first.setActive("openai", "1");
+			await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+			const newer = second.setActive("openai", "2");
+			release!();
+			await Promise.all([old, newer]);
+			expect(await auth.read("openai")).toMatchObject({
+				type: "api_key",
+				key: "fake-b",
+			});
+			expect((await first.getActive("openai"))?.id).toBe("2");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("preserves provider env through add, select, and rotation", async () => {
+		const env = { CLOUDFLARE_ACCOUNT_ID: "fake-account", CLOUDFLARE_GATEWAY_ID: "fake-gateway" };
+		const { manager, authStorage } = makeManager({
+			"cloudflare-ai-gateway": { type: "api_key", key: "fake-a", env },
+		});
+		await manager.addKey("cloudflare-ai-gateway", "fake-b");
+		expect(await authStorage.read("cloudflare-ai-gateway")).toMatchObject({ key: "fake-b", env });
+		await manager.setActive("cloudflare-ai-gateway", "1");
+		expect(await authStorage.read("cloudflare-ai-gateway")).toMatchObject({ key: "fake-a", env });
+		await manager.rotateOnFailure("cloudflare-ai-gateway", "quota exceeded, reset in 2h");
+		expect(await authStorage.read("cloudflare-ai-gateway")).toMatchObject({ key: "fake-b", env });
+	});
+
+	test.each(["{broken", "[]", '{"openai":{"active":"1","keys":[]}}'])(
+		"refuses mutations of malformed storage %s",
+		async (content) => {
+			const dir = mkdtempSync(join(tmpdir(), "lunr-subscriptions-"));
+			try {
+				const path = join(dir, "subscriptions.json");
+				writeFileSync(path, content);
+				const auth = AuthStorage.inMemory();
+				await expect(SubscriptionManager.create(auth, path).addKey("openai", "fake-key")).rejects.toThrow(
+					"malformed",
+				);
+				expect(readFileSync(path, "utf8")).toBe(content);
+				expect(await auth.read("openai")).toBeUndefined();
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
+
+	test("rejects a failed mirror without committing the changed selection", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "lunr-subscriptions-"));
+		try {
+			const auth = AuthStorage.inMemory();
+			const path = join(dir, "subscriptions.json");
+			const manager = SubscriptionManager.create(auth, path);
+			await manager.addKey("openai", "fake-a");
+			await manager.addKey("openai", "fake-b");
+			vi.spyOn(auth, "modify").mockRejectedValueOnce(new Error("fake persistence failure"));
+			await expect(manager.setActive("openai", "1")).rejects.toThrow("fake persistence failure");
+			expect((await manager.getActive("openai"))?.id).toBe("2");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

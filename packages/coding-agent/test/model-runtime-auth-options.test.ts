@@ -281,3 +281,31 @@ describe("ModelRuntime auth options", () => {
 		});
 	});
 });
+
+
+describe("stored API-key environment propagation", () => {
+	it("uses stored env for model headers and stream options and allows explicit overrides", async () => {
+		const env = { STORED_MODEL_HEADER: "fake-stored", CACHE_RETENTION: "long" };
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory({ openai: { type: "api_key", key: "fake-key", env } }),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		let captured: { env?: Record<string, string>; headers?: Record<string, string | null> } | undefined;
+		runtime.registerProvider("openai", {
+			baseUrl: "https://example.test/v1",
+			api: "openai-completions",
+			models: [{ ...testModel("fake-env-model"), headers: { "x-model": "$STORED_MODEL_HEADER" } }],
+			streamSimple: (_model, _context, options) => {
+				captured = options;
+				throw new Error("fake captured transport");
+			},
+		});
+		const model = runtime.getModel("openai", "fake-env-model")!;
+		expect((await runtime.getAuth(model))?.env).toEqual(env);
+		expect((await runtime.getAuth(model))?.auth.headers).toMatchObject({ "x-model": "fake-stored" });
+		await runtime.completeSimple(model, { messages: [] }, { env: { STORED_MODEL_HEADER: "fake-request" } });
+		expect(captured?.env).toEqual({ ...env, STORED_MODEL_HEADER: "fake-request" });
+		expect(captured?.headers).toMatchObject({ "x-model": "fake-request" });
+	});
+});
