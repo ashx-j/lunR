@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- The runtime rebind fixture now selects the usage bridge by its owning runtime. All seven lifecycle-event tests pass.
+
 - **Provider state isolation (`fix/review-provider-state`, 2026-10-03):** plan usage and footer reads bind to the owning runtime and effective auth, with generation-safe invalidation and polling cleanup on session rebind. Subscription mutations reload current storage under lock through auth mirroring and preserve provider environment. Standard API-key auth forwards environment to model headers and requests. Ollama cloud discovery uses canonical runtime auth; cancelled local discovery never retries. The lunR-owned Claude worker and TS adapter retain safe recovery categories without exposing raw exceptions; pinned upstream vendor files are unchanged.
 
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
