@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- Shutdown fixture integration: the plain-object InteractiveMode fixture supplies session admission cleanup required by the runtime repair. Five ordering/resume tests pass independently; combined validation also retains provider polling cleanup.
+
 - **Isolated test profiles (`fix/review-isolated-test-profiles`):** `test.sh` runs with disposable home/profile/cache/temp directories and an allowlisted environment. Sentinel auth and backup files survive success/failure; unused real-credential helpers are removed. Ordinary settings/resources use current lunR paths, source CLI fixtures load through tsx, UI fixtures exercise current runtime/render contracts, and session fixtures release destination ownership. Application behavior is unchanged.
 
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.

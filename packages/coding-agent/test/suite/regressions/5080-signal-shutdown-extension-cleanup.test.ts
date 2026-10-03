@@ -18,6 +18,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
+	session: { stopAdmission(): void };
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
@@ -70,6 +71,7 @@ function restoreStdoutIsTTY(): void {
 function createContext(order: string[], sessionManager = createSessionManager()): ShutdownThis {
 	return {
 		isShuttingDown: false,
+		session: { stopAdmission: vi.fn() },
 		stopSmoothStreaming: vi.fn(),
 		unregisterSignalHandlers: vi.fn(),
 		runtimeHost: {
