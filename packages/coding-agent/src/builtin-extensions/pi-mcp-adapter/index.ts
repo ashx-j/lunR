@@ -15,7 +15,6 @@ import { abortable, throwIfAborted } from "./abort.ts";
 
 type McpHeavyModules = {
   init: typeof import("./init.ts");
-  authFlow: typeof import("./mcp-auth-flow.ts");
   commands: typeof import("./commands.ts");
   proxyModes: typeof import("./proxy-modes.ts");
   directToolExecutor: typeof import("./direct-tool-executor.ts");
@@ -51,14 +50,13 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     if (heavyModules) return Promise.resolve(heavyModules);
     if (!heavyModulesPromise) {
       heavyModulesPromise = (async () => {
-        const [init, authFlow, commands, proxyModes, directToolExecutor] = await Promise.all([
+        const [init, commands, proxyModes, directToolExecutor] = await Promise.all([
           import("./init.ts"),
-          import("./mcp-auth-flow.ts"),
           import("./commands.ts"),
           import("./proxy-modes.ts"),
           import("./direct-tool-executor.ts"),
         ]);
-        const loaded: McpHeavyModules = { init, authFlow, commands, proxyModes, directToolExecutor };
+        const loaded: McpHeavyModules = { init, commands, proxyModes, directToolExecutor };
         heavyModules = loaded;
         return loaded;
       })().catch((error) => {
@@ -75,6 +73,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     if (existing) return existing;
 
     const shutdown = (async () => {
+      await currentState.authFlow.shutdown();
       if (currentState.uiServer) {
         currentState.uiServer.close(reason);
         currentState.uiServer = null;
@@ -113,11 +112,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     await Promise.all(pending.map((entry) => shutdownState(entry, "initialization_cancelled")));
   }
 
-  async function shutdownLoadedRuntime(): Promise<void> {
-    if (!heavyModules) return;
-    await heavyModules.authFlow.shutdownOAuth();
-  }
-
   async function runInitialize(
     generation: number,
     sessionPi: ExtensionAPI,
@@ -126,14 +120,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     const signal = sessionAbort.signal;
     const heavy = await loadHeavyModules();
     throwIfAborted(signal);
-    if (generation !== lifecycleGeneration) {
-      throw new Error("MCP initialization aborted (session changed)");
-    }
-
-    await heavy.authFlow.initializeOAuth().catch(err => {
-      console.error("MCP OAuth initialization failed:", err);
-    });
-
     if (generation !== lifecycleGeneration) {
       throw new Error("MCP initialization aborted (session changed)");
     }
@@ -312,7 +298,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       await Promise.all([
         shutdownState(previousState, "session_restart"),
         shutdownInitializingStates(),
-        shutdownLoadedRuntime(),
       ]);
     } catch (error) {
       console.error("MCP: failed to shut down previous session state", error);
@@ -345,7 +330,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       await Promise.all([
         shutdownState(currentState, "session_shutdown"),
         shutdownInitializingStates(),
-        shutdownLoadedRuntime(),
       ]);
     } catch (error) {
       console.error("MCP: session shutdown cleanup failed", error);
@@ -440,7 +424,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         return;
       }
 
-      await heavy.commands.authenticateServer(serverName, currentState.config, ctx);
+      await heavy.commands.authenticateServer(serverName, currentState.config, ctx, currentState.authFlow);
     },
   });
 

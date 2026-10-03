@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { McpAuthFlow } from "./mcp-auth-flow.ts";
 import type { ConsentManager } from "./consent-manager.ts";
 import type { McpLifecycleManager } from "./lifecycle.ts";
 import type { McpServerManager } from "./server-manager.ts";
@@ -27,6 +28,7 @@ export type SendMessageFn = (
 ) => void;
 
 export interface McpExtensionState {
+  authFlow: McpAuthFlow;
   manager: McpServerManager;
   lifecycle: McpLifecycleManager;
   toolMetadata: Map<string, ToolMetadata[]>;

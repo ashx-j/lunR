@@ -11,12 +11,13 @@ import {
 } from "@modelcontextprotocol/sdk/client/auth.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import open from "open"
-import { McpOAuthProvider, type McpOAuthConfig } from "./mcp-oauth-provider.ts"
+import { McpOAuthProvider, type McpOAuthConfig, type McpOAuthFlowState } from "./mcp-oauth-provider.ts"
 import {
   ensureCallbackServer,
   waitForCallback,
   cancelPendingCallback,
-  stopCallbackServer,
+  acquireCallbackServerOwner,
+  releaseCallbackServerOwner,
   releaseCallbackServer,
 } from "./mcp-callback-server.ts"
 import {
@@ -24,14 +25,9 @@ import {
   isTokenExpired,
   hasStoredTokens,
   clearAllCredentials,
-  clearClientInfo,
-  clearTokens,
-  clearCodeVerifier,
-  updateOAuthState,
-  getOAuthState,
-  clearOAuthState,
   type StoredTokens,
 } from "./mcp-auth.ts"
+import { abortable, throwIfAborted } from "./abort.ts"
 import type { ServerEntry } from "./types.ts"
 
 /** Auth status for a server */
@@ -40,14 +36,6 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
 export interface AuthenticateOptions {
   onAuthorizationUrl?: (authorizationUrl: string) => void | Promise<void>
 }
-
-// Track pending transports for auth completion
-const pendingTransports = new Map<string, StreamableHTTPClientTransport>()
-const pendingAuthStates = new Map<string, string>()
-const pendingAuthCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-// Deduplicate concurrent authenticate() calls per server.
-const pendingAuthentications = new Map<string, Promise<AuthStatus>>()
 
 /** Timeout for manual auth completion (5 minutes) */
 const MANUAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000
@@ -142,138 +130,6 @@ function parseOAuthRedirectUri(redirectUri: string): { port: number; callbackHos
   return { port, callbackHost, callbackPath: url.pathname }
 }
 
-/**
- * Start OAuth authentication flow for a server.
- * Returns the authorization URL when browser authorization is required.
- */
-export async function startAuth(
-  serverName: string,
-  serverUrl: string,
-  definition?: ServerEntry
-): Promise<{ authorizationUrl: string }> {
-  const config = definition ? extractOAuthConfig(definition) : {}
-
-  if (config.grantType === "client_credentials") {
-    const storedAuth = await getAuthForUrl(serverName, serverUrl)
-    if (storedAuth?.clientInfo && !storedAuth.tokens && !config.clientId) {
-      clearClientInfo(serverName)
-      clearCodeVerifier(serverName)
-      await clearOAuthState(serverName)
-    }
-
-    const authProvider = new McpOAuthProvider(serverName, serverUrl, config, {
-      onRedirect: async () => {
-        throw new Error("Browser redirect is not used for client_credentials flow")
-      },
-    })
-    const result = await runSdkAuth(authProvider, { serverUrl })
-    if (result !== "AUTHORIZED") {
-      throw new UnauthorizedError("Failed to authorize")
-    }
-    return { authorizationUrl: "" }
-  }
-
-  const redirectCallback = config.redirectUri !== undefined ? parseOAuthRedirectUri(config.redirectUri) : undefined
-  const oauthState = generateState()
-
-  try {
-    await ensureCallbackServer({
-      strictPort: Boolean(config.clientId) || config.redirectUri !== undefined,
-      oauthState,
-      reserveState: true,
-      ...(redirectCallback ? { port: redirectCallback.port, callbackHost: redirectCallback.callbackHost, callbackPath: redirectCallback.callbackPath } : {}),
-    })
-  } catch (error) {
-    await clearOAuthState(serverName)
-    throw error
-  }
-
-  let capturedUrl: URL | undefined
-  const authProvider = new McpOAuthProvider(serverName, serverUrl, config, {
-    onRedirect: async (url) => {
-      capturedUrl = url
-    },
-  })
-
-  try {
-    const storedAuth = await getAuthForUrl(serverName, serverUrl)
-    if (storedAuth?.clientInfo && !config.clientId) {
-      if (!storedAuth.tokens) {
-        clearClientInfo(serverName)
-        clearCodeVerifier(serverName)
-        await clearOAuthState(serverName)
-      } else {
-        const redirectUris = storedAuth.clientInfo.redirectUris
-        if (!Array.isArray(redirectUris) || !redirectUris.includes(authProvider.redirectUrl ?? "")) {
-          clearClientInfo(serverName)
-          clearTokens(serverName)
-          clearCodeVerifier(serverName)
-          await clearOAuthState(serverName)
-        }
-      }
-    }
-
-    await updateOAuthState(serverName, oauthState, serverUrl)
-
-    const result = await runSdkAuth(authProvider, { serverUrl })
-    if (result === "AUTHORIZED") {
-      releaseCallbackServer(oauthState)
-      await clearOAuthState(serverName)
-      return { authorizationUrl: "" }
-    }
-    if (!capturedUrl) {
-      throw new UnauthorizedError("OAuth authorization URL was not provided")
-    }
-    const pendingTransport = new StreamableHTTPClientTransport(new URL(serverUrl), { authProvider })
-    await setPendingTransport(serverName, pendingTransport, oauthState)
-    return { authorizationUrl: capturedUrl.toString() }
-  } catch (error) {
-    await clearPendingAuth(serverName, oauthState)
-    throw error
-  }
-}
-
-async function setPendingTransport(
-  serverName: string,
-  transport: StreamableHTTPClientTransport,
-  oauthState: string,
-): Promise<void> {
-  await clearPendingAuth(serverName)
-  pendingTransports.set(serverName, transport)
-  pendingAuthStates.set(serverName, oauthState)
-  const cleanupTimer = setTimeout(() => {
-    void clearPendingAuth(serverName, oauthState)
-  }, MANUAL_AUTH_TIMEOUT_MS)
-  cleanupTimer.unref?.()
-  pendingAuthCleanupTimers.set(serverName, cleanupTimer)
-}
-
-async function clearPendingAuth(serverName: string, oauthState?: string): Promise<void> {
-  const pendingState = pendingAuthStates.get(serverName)
-  if (oauthState && pendingState && pendingState !== oauthState) return
-
-  const timer = pendingAuthCleanupTimers.get(serverName)
-  if (timer) {
-    clearTimeout(timer)
-    pendingAuthCleanupTimers.delete(serverName)
-  }
-
-  const transport = pendingTransports.get(serverName)
-  pendingTransports.delete(serverName)
-  pendingAuthStates.delete(serverName)
-  const stateToRelease = pendingState ?? oauthState
-  if (stateToRelease) {
-    releaseCallbackServer(stateToRelease)
-    const storedState = await getOAuthState(serverName)
-    if (storedState === stateToRelease) {
-      await clearOAuthState(serverName)
-    }
-  }
-  if (transport) {
-    await transport.close().catch(() => {})
-  }
-}
-
 function getSearchParamsFromInput(input: string): URLSearchParams | undefined {
   try {
     const url = new URL(input)
@@ -330,122 +186,189 @@ export function parseAuthorizationCodeInput(input: string, expectedState?: strin
   throw new Error("Could not find an OAuth authorization code in the provided input")
 }
 
-/**
- * Complete OAuth authentication from manual user input.
- */
-export async function completeAuthFromInput(
-  serverName: string,
-  input: string,
-): Promise<AuthStatus> {
-  const oauthState = await getOAuthState(serverName)
-  const code = parseAuthorizationCodeInput(input, oauthState)
-  return completeAuth(serverName, code)
+interface PendingAuthFlow {
+  state: McpOAuthFlowState
+  controller: AbortController
+  transport?: StreamableHTTPClientTransport
+  timer?: ReturnType<typeof setTimeout>
+  cleanup?: Promise<void>
 }
 
-/**
- * Complete OAuth authentication with the authorization code.
- */
-export async function completeAuth(
-  serverName: string,
-  authorizationCode: string
-): Promise<AuthStatus> {
-  const transport = pendingTransports.get(serverName)
-  if (!transport) {
-    throw new Error(`No pending OAuth flow for server: ${serverName}`)
+/** Each session owns its flows; only the callback listener is shared. */
+export function createMcpAuthFlow() {
+  const owner = acquireCallbackServerOwner()
+  const flows = new Map<string, PendingAuthFlow>()
+  const authenticating = new Map<string, Promise<AuthStatus>>()
+  let shutdownPromise: Promise<void> | undefined
+  let closed = false
+
+  function assertOpen(): void {
+    if (closed) throw new Error("MCP OAuth session closed")
   }
 
-  const oauthState = await getOAuthState(serverName)
-
-  try {
-    // Complete the auth using the transport's finishAuth method
-    await transport.finishAuth(authorizationCode)
-    return "authenticated"
-  } finally {
-    await clearPendingAuth(serverName, oauthState)
-  }
-}
-
-/**
- * Perform the complete OAuth authentication flow for a server.
- * 
- * @param serverName - The name of the MCP server
- * @param serverUrl - The URL of the MCP server  
- * @param definition - The server definition (optional)
- * @returns The final auth status
- */
-export async function authenticate(
-  serverName: string,
-  serverUrl: string,
-  definition?: ServerEntry,
-  options: AuthenticateOptions = {},
-): Promise<AuthStatus> {
-  const inFlight = pendingAuthentications.get(serverName)
-  if (inFlight) {
-    return inFlight
-  }
-
-  const operation = (async (): Promise<AuthStatus> => {
-    // Start auth flow
-    const { authorizationUrl } = await startAuth(serverName, serverUrl, definition)
-
-    // If no auth URL needed, already authenticated
-    if (!authorizationUrl) {
-      return "authenticated"
+  async function clearPendingAuth(serverName: string, flow = flows.get(serverName)): Promise<void> {
+    if (!flow) return
+    if (!flow.cleanup) {
+      flow.cleanup = (async () => {
+        if (flows.get(serverName) === flow) flows.delete(serverName)
+        if (flow.timer) clearTimeout(flow.timer)
+        flow.controller.abort(new Error("Authorization cancelled"))
+        cancelPendingCallback(flow.state.oauthState)
+        releaseCallbackServer(flow.state.oauthState)
+        await flow.transport?.close().catch(() => {})
+      })()
     }
+    await flow.cleanup
+  }
 
-    // Get the state that was already generated and stored in startAuth()
-    const oauthState = await getOAuthState(serverName)
-    if (!oauthState) {
-      throw new Error("OAuth state not found - this should not happen")
-    }
-
-    // Register the callback BEFORE opening the browser
-    const callbackPromise = waitForCallback(oauthState)
-
+  async function startAuth(
+    serverName: string,
+    serverUrl: string,
+    definition?: ServerEntry,
+  ): Promise<{ authorizationUrl: string }> {
+    assertOpen()
+    const previous = flows.get(serverName)
+    if (previous) await clearPendingAuth(serverName, previous)
+    assertOpen()
+    if (flows.has(serverName)) throw new Error(`OAuth flow already pending for server: ${serverName}`)
+    const controller = new AbortController()
+    const flow: PendingAuthFlow = { controller, state: { oauthState: generateState(), signal: controller.signal } }
+    flows.set(serverName, flow)
+    const signal = controller.signal
+    const fetchFn: typeof fetch = (input, init) => fetch(input, {
+      ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+    })
     try {
-      // Open browser. Always surface the URL first so remote/headless users can copy it
-      // even when the OS browser handoff is unavailable or invisible.
-      if (options.onAuthorizationUrl) {
-        await options.onAuthorizationUrl(authorizationUrl)
-      } else {
-        console.log(`MCP Auth: Open this URL to authenticate ${serverName}:\n${authorizationUrl}`)
+      const config = definition ? extractOAuthConfig(definition) : {}
+      const storedAuth = await getAuthForUrl(serverName, serverUrl)
+      throwIfAborted(signal)
+      flow.state.clientInfo = storedAuth?.clientInfo
+      // Reuse the registered redirect endpoint and client ID, including clients
+      // without tokens. Display metadata changes never invalidate registrations.
+      if (config.grantType !== "client_credentials") {
+        if (!config.redirectUri && !config.clientId) {
+          const registeredRedirect = storedAuth?.clientInfo?.redirectUris?.[0]
+          if (registeredRedirect) config.redirectUri = registeredRedirect
+        }
+        const redirect = config.redirectUri ? parseOAuthRedirectUri(config.redirectUri) : undefined
+        await ensureCallbackServer({
+          owner,
+          strictPort: Boolean(config.clientId || storedAuth?.clientInfo) || config.redirectUri !== undefined,
+          oauthState: flow.state.oauthState,
+          reserveState: true,
+          ...(redirect ? { port: redirect.port, callbackHost: redirect.callbackHost, callbackPath: redirect.callbackPath } : {}),
+        })
+        throwIfAborted(signal)
       }
-      try {
-        await open(authorizationUrl)
-      } catch (error) {
-        console.warn(`MCP Auth: Failed to open browser for ${serverName}; waiting for manual callback`, { error })
+      let capturedUrl: URL | undefined
+      const authProvider = new McpOAuthProvider(serverName, serverUrl, config, {
+        onRedirect: (url) => { throwIfAborted(signal); capturedUrl = url },
+      }, flow.state)
+      const result = await abortable(runSdkAuth(authProvider, { serverUrl, fetchFn }), signal)
+      throwIfAborted(signal)
+      if (result === "AUTHORIZED") {
+        await clearPendingAuth(serverName, flow)
+        return { authorizationUrl: "" }
       }
-
-      // Wait for callback
-      const code = await callbackPromise
-
-      // Validate state
-      const storedState = await getOAuthState(serverName)
-      if (storedState !== oauthState) {
-        await clearOAuthState(serverName)
-        throw new Error("OAuth state mismatch - potential CSRF attack")
+      if (config.grantType === "client_credentials" || !capturedUrl) {
+        throw new UnauthorizedError("OAuth authorization URL was not provided")
       }
-      await clearOAuthState(serverName)
-
-      // Complete the auth
-      return await completeAuth(serverName, code)
+      flow.transport = new StreamableHTTPClientTransport(new URL(serverUrl), { authProvider, fetch: fetchFn })
+      flow.timer = setTimeout(() => { void clearPendingAuth(serverName, flow) }, MANUAL_AUTH_TIMEOUT_MS)
+      flow.timer.unref?.()
+      return { authorizationUrl: capturedUrl.toString() }
     } catch (error) {
-      cancelPendingCallback(oauthState)
-      await clearPendingAuth(serverName, oauthState)
+      await clearPendingAuth(serverName, flow)
       throw error
     }
-  })()
+  }
 
-  pendingAuthentications.set(serverName, operation)
+  async function completeAuthFromInput(serverName: string, input: string): Promise<AuthStatus> {
+    assertOpen()
+    const flow = flows.get(serverName)
+    if (!flow) throw new Error(`No pending OAuth flow for server: ${serverName}`)
+    return completeAuth(serverName, parseAuthorizationCodeInput(input, flow.state.oauthState))
+  }
 
-  try {
-    return await operation
-  } finally {
-    if (pendingAuthentications.get(serverName) === operation) {
-      pendingAuthentications.delete(serverName)
+  async function completeAuth(serverName: string, code: string): Promise<AuthStatus> {
+    assertOpen()
+    const flow = flows.get(serverName)
+    if (!flow?.transport) throw new Error(`No pending OAuth flow for server: ${serverName}`)
+    try {
+      await abortable(flow.transport.finishAuth(code), flow.state.signal)
+      throwIfAborted(flow.state.signal)
+      return "authenticated"
+    } finally {
+      await clearPendingAuth(serverName, flow)
     }
   }
+
+  async function authenticate(
+    serverName: string,
+    serverUrl: string,
+    definition?: ServerEntry,
+    options: AuthenticateOptions = {},
+  ): Promise<AuthStatus> {
+    assertOpen()
+    const pending = authenticating.get(serverName)
+    if (pending) return pending
+    const operation = (async (): Promise<AuthStatus> => {
+      const { authorizationUrl } = await startAuth(serverName, serverUrl, definition)
+      if (!authorizationUrl) return "authenticated"
+      assertOpen()
+      const flow = flows.get(serverName)
+      if (!flow) throw new Error(`No pending OAuth flow for server: ${serverName}`)
+      const callback = waitForCallback(flow.state.oauthState)
+      // Attach a rejection handler before asynchronous UI/browser handoffs.
+      void callback.catch(() => {})
+      try {
+        if (options.onAuthorizationUrl) {
+          await abortable(Promise.resolve(options.onAuthorizationUrl(authorizationUrl)), flow.state.signal)
+        } else {
+          console.log(`MCP Auth: Open this URL to authenticate ${serverName}:\n${authorizationUrl}`)
+        }
+        throwIfAborted(flow.state.signal)
+        try {
+          await abortable(open(authorizationUrl), flow.state.signal)
+        } catch (error) {
+          throwIfAborted(flow.state.signal)
+          console.warn(`MCP Auth: Failed to open browser for ${serverName}; waiting for manual callback`, { error })
+        }
+        const code = await callback
+        return await completeAuth(serverName, code)
+      } catch (error) {
+        await clearPendingAuth(serverName, flow)
+        throw error
+      }
+    })()
+    authenticating.set(serverName, operation)
+    try { return await operation } finally {
+      if (authenticating.get(serverName) === operation) authenticating.delete(serverName)
+    }
+  }
+
+  async function removeAuth(serverName: string): Promise<void> {
+    assertOpen()
+    await clearPendingAuth(serverName)
+    clearAllCredentials(serverName)
+  }
+
+  function shutdown(): Promise<void> {
+    if (!shutdownPromise) {
+      // Mark closed before cleanup can yield, so stale callers cannot start work.
+      closed = true
+      shutdownPromise = (async () => {
+        await Promise.all([...flows].map(([name, flow]) => clearPendingAuth(name, flow)))
+        await releaseCallbackServerOwner(owner)
+      })()
+    }
+    return shutdownPromise
+  }
+
+  return { startAuth, completeAuth, completeAuthFromInput, authenticate, removeAuth, shutdown }
 }
+
+export type McpAuthFlow = ReturnType<typeof createMcpAuthFlow>
 
 /**
  * Get a valid access token for a server, refreshing if necessary.
@@ -517,22 +440,6 @@ export async function getAuthStatus(serverName: string): Promise<AuthStatus> {
 }
 
 /**
- * Remove all OAuth credentials for a server.
- * 
- * @param serverName - The name of the MCP server
- */
-export async function removeAuth(serverName: string): Promise<void> {
-  const oauthState = await getOAuthState(serverName)
-  if (oauthState) {
-    cancelPendingCallback(oauthState)
-  }
-  await clearPendingAuth(serverName, oauthState)
-  clearAllCredentials(serverName)
-  await clearOAuthState(serverName)
-  console.log(`MCP Auth: Removed credentials for ${serverName}`)
-}
-
-/**
  * Check if OAuth is supported for a server configuration.
  * OAuth is supported for HTTP servers unless explicitly disabled.
  * 
@@ -553,21 +460,4 @@ export function supportsOAuth(definition: ServerEntry): boolean {
 
   // OAuth is enabled when auth is not specified (auto-detect)
   return definition.auth === undefined
-}
-
-/**
- * Initialize the OAuth system on startup.
- * OAuth callback binding is lazy and starts from startAuth() only.
- */
-export async function initializeOAuth(): Promise<void> {}
-
-/**
- * Shutdown the OAuth system.
- * Stops the callback server and cancels pending auths.
- */
-export async function shutdownOAuth(): Promise<void> {
-  for (const serverName of Array.from(pendingTransports.keys())) {
-    await clearPendingAuth(serverName)
-  }
-  await stopCallbackServer()
 }

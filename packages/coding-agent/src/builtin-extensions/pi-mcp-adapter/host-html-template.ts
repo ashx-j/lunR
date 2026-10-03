@@ -166,7 +166,7 @@ export function buildHostHtmlTemplate(input: HostHtmlTemplateInput): string {
 
     const bridge = new AppBridge(
       null,
-      { name: "pi", version: "1.0.0" },
+      { name: "lunR", version: "1.0.0" },
       { serverTools: {}, openLinks: {}, logging: {}, updateModelContext: {}, message: {} },
       { hostContext: HOST_CONTEXT }
     );
