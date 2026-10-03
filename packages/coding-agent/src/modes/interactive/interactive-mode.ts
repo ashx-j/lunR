@@ -5396,11 +5396,24 @@ export class InteractiveMode {
 		let ollama: string | undefined;
 		const runner = this.session.extensionRunner;
 		const cloudRefresh = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] as
-			| ((ctx: { ui: unknown }) => Promise<unknown>)
+			| ((ctx: { ui: unknown; auth?: { apiKey?: string; headers?: Record<string, string> } }) => Promise<unknown>)
 			| undefined;
 		if (cloudRefresh && allowNetwork) {
 			try {
-				await cloudRefresh({ ui: runner.createCommandContext().ui });
+				const resolution = await runtime.getAuth("ollama-cloud");
+				await cloudRefresh({
+					ui: runner.createCommandContext().ui,
+					auth: resolution
+						? {
+								apiKey: resolution.auth.apiKey,
+								headers: Object.fromEntries(
+									Object.entries(resolution.auth.headers ?? {}).filter(
+										(entry): entry is [string, string] => entry[1] !== null,
+									),
+								),
+							}
+						: undefined,
+				});
 			} catch (error) {
 				ollama = `ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 			}
