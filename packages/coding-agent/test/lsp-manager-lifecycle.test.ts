@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LspClientOptions } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.js";
-import { LspManager } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-manager.js";
-import { DefaultWorkspaceProvider } from "../src/builtin-extensions/pi-lsp-extension/src/workspace-provider.js";
+import type { LspClientOptions } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.ts";
+import { LspManager } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-manager.ts";
+import { DefaultWorkspaceProvider } from "../src/builtin-extensions/pi-lsp-extension/src/workspace-provider.ts";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -24,7 +24,7 @@ const clients = vi.hoisted(() => ({
 	start: vi.fn<() => Promise<void>>(),
 	shutdown: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("../src/builtin-extensions/pi-lsp-extension/src/lsp-client.js", () => ({
+vi.mock("../src/builtin-extensions/pi-lsp-extension/src/lsp-client.ts", () => ({
 	LspClient: class {
 		initialized = false;
 		disposed = false;

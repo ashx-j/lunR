@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LspClient } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.js";
+import { LspClient } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.ts";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
