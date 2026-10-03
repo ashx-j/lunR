@@ -13,7 +13,13 @@ function write(path: string, value: unknown) {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, typeof value === "string" ? value : JSON.stringify(value));
 }
-async function startup(options: { trusted: boolean; foreign?: boolean; explicit?: boolean }) {
+async function startup(options: {
+	trusted: boolean;
+	foreign?: boolean;
+	explicit?: boolean;
+	selection?: "prefix" | "fork" | "resume";
+	globalHistory?: boolean;
+}) {
 	const root = mkdtempSync(join(tmpdir(), "lunr-main-trust-"));
 	roots.push(root);
 	const cwd = join(root, "project");
@@ -31,16 +37,18 @@ async function startup(options: { trusted: boolean; foreign?: boolean; explicit?
 	});
 	write(join(cwd, ".lunr/settings.json"), { sessionDir: projectSessions, sessionRetentionDays: 1 });
 	const id = "11111111-1111-4111-8111-111111111111";
-	if (options.foreign)
+	if (options.foreign || options.selection)
 		write(
-			join(projectSessions, "foreign.jsonl"),
-			`${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: foreign })}\n`,
+			join(options.globalHistory ? globalSessions : projectSessions, "saved.jsonl"),
+			`${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: options.foreign ? foreign : cwd })}\n`,
 		);
 	const observed = join(root, "observed.json");
+	const decision = join(root, "decision.json");
+	const picker = join(root, "picker.json");
 	const extension = join(root, "probe.ts");
 	write(
 		extension,
-		`import {writeFileSync} from 'node:fs'; export default pi => { ${options.trusted ? "pi.on('project_trust', () => ({trusted:'yes', remember:false}));" : ""} pi.on('session_start', (_,ctx) => { writeFileSync(${JSON.stringify(observed)}, JSON.stringify({cwd:ctx.cwd, directory:ctx.sessionManager.getSessionDir(), trusted:ctx.isProjectTrusted()})); }); };`,
+		`import {writeFileSync} from 'node:fs'; export default pi => { pi.on('project_trust', () => { writeFileSync(${JSON.stringify(decision)}, JSON.stringify(${options.trusted})); console.error('TRUST_DECISION:${options.trusted}'); return {trusted:${JSON.stringify(options.trusted ? "yes" : "no")}, remember:false}; }); pi.on('session_start', (_,ctx) => { writeFileSync(${JSON.stringify(observed)}, JSON.stringify({cwd:ctx.cwd, directory:ctx.sessionManager.getSessionDir(), id:ctx.sessionManager.getSessionId(), trusted:ctx.isProjectTrusted()})); }); };`,
 	);
 	const args = [
 		"--mode",
@@ -58,10 +66,19 @@ async function startup(options: { trusted: boolean; foreign?: boolean; explicit?
 		"-e",
 		extension,
 	];
-	if (options.foreign) args.push("--session-id", id);
+	if (options.selection === "prefix") args.push("--session", id.slice(0, 8));
+	else if (options.selection === "fork") args.push("--fork", id.slice(0, 8));
+	else if (options.selection === "resume") args.push("--resume");
+	else if (options.foreign) args.push("--session-id", id);
 	if (options.explicit) args.push("--session-dir", join(root, "explicit-sessions"));
 	const main = pathToFileURL(resolve(__dirname, "../src/main.ts")).href;
-	const script = `import {main} from ${JSON.stringify(main)}; await main(${JSON.stringify(args)});`;
+	// Replace only the picker UI. Its actual session loaders and the rest of main run normally.
+	const pickerSource = `import {readFileSync,writeFileSync} from 'node:fs'; export async function selectSession(current, all) { const sessions = await current(); const allSessions = await all(); writeFileSync(${JSON.stringify(picker)}, JSON.stringify({trusted:JSON.parse(readFileSync(${JSON.stringify(decision)},'utf8')), ids:sessions.map(session=>session.id), allIds:allSessions.map(session=>session.id)})); return sessions[0]?.path ?? null; }`;
+	const pickerHook =
+		options.selection === "resume"
+			? `import {registerHooks} from 'node:module'; registerHooks({load(url,context,nextLoad) { if (url.split('?')[0].endsWith('/cli/session-picker.ts')) return {format:'module',shortCircuit:true,source:${JSON.stringify(pickerSource)}}; return nextLoad(url,context); }});`
+			: "";
+	const script = `${pickerHook} const {main} = await import(${JSON.stringify(main)}); await main(${JSON.stringify(args)});`;
 	const environment: Record<string, string> = {};
 	for (const key of ["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TEMP", "TMP"]) {
 		if (process.env[key]) environment[key] = process.env[key]!;
@@ -110,7 +127,17 @@ async function startup(options: { trusted: boolean; foreign?: boolean; explicit?
 		foreign,
 		globalSessions,
 		projectSessions,
-		observed: JSON.parse(readFileSync(observed, "utf8")) as { cwd: string; directory: string; trusted: boolean },
+		id,
+		picker:
+			options.selection === "resume"
+				? (JSON.parse(readFileSync(picker, "utf8")) as { trusted: boolean; ids: string[]; allIds: string[] })
+				: undefined,
+		observed: JSON.parse(readFileSync(observed, "utf8")) as {
+			cwd: string;
+			directory: string;
+			id: string;
+			trusted: boolean;
+		},
 	};
 }
 
@@ -129,5 +156,34 @@ describe("startup project session paths", () => {
 		const result = await startup({ trusted: true, foreign: true });
 		expect(result.observed.cwd).toBe(result.foreign);
 		expect(result.observed.directory).toBe(result.globalSessions);
+	});
+	it("opens an existing custom session prefix after its first approval", async () => {
+		const result = await startup({ trusted: true, selection: "prefix" });
+		expect(result.observed.id).toBe(result.id);
+		expect(result.observed.directory).toBe(result.projectSessions);
+		expect(result.observed.trusted).toBe(true);
+	});
+	it("reports a missing custom prefix only after denial", async () => {
+		await expect(startup({ trusted: false, selection: "prefix" })).rejects.toThrow(
+			/TRUST_DECISION:false[\s\S]*No session found matching '11111111'/,
+		);
+	});
+	it("rebuilds services for a foreign cwd opened by a newly approved prefix", async () => {
+		const result = await startup({ trusted: true, foreign: true, selection: "prefix" });
+		expect(result.observed.id).toBe(result.id);
+		expect(result.observed.cwd).toBe(result.foreign);
+		expect(result.observed.directory).toBe(result.globalSessions);
+	});
+	it("forks a custom session prefix after its first approval", async () => {
+		const result = await startup({ trusted: true, selection: "fork" });
+		expect(result.observed.id).not.toBe(result.id);
+		expect(result.observed.cwd).toBe(result.cwd);
+		expect(result.observed.directory).toBe(result.projectSessions);
+	});
+	it.each([true, false])("opens the resume picker after trust=%s with only its allowed storage", async (trusted) => {
+		const result = await startup({ trusted, selection: "resume", globalHistory: !trusted });
+		expect(result.picker).toEqual({ trusted, ids: [result.id], allIds: [result.id] });
+		expect(result.observed.id).toBe(result.id);
+		expect(result.observed.directory).toBe(trusted ? result.projectSessions : result.globalSessions);
 	});
 });

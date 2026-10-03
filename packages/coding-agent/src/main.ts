@@ -317,6 +317,7 @@ async function createSessionManager(
 	sessionDir: string | undefined,
 	settingsManager: SettingsManager,
 	startupView?: InteractiveView,
+	deferSelection?: () => SessionManager,
 ): Promise<SessionManager> {
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -340,6 +341,7 @@ async function createSessionManager(
 				return forkSessionOrExit(resolved.path, cwd, sessionDir, parsed.sessionId);
 
 			case "not_found":
+				if (deferSelection) return deferSelection();
 				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
 				process.exit(1);
 		}
@@ -364,12 +366,14 @@ async function createSessionManager(
 			}
 
 			case "not_found":
+				if (deferSelection) return deferSelection();
 				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
 				process.exit(1);
 		}
 	}
 
 	if (parsed.resume) {
+		if (deferSelection) return deferSelection();
 		try {
 			const currentSessionsLoader = (onProgress?: Parameters<typeof SessionManager.list>[2]) =>
 				SessionManager.list(cwd, sessionDir, onProgress);
@@ -681,9 +685,26 @@ export async function main(args: string[], options?: MainOptions) {
 		? SettingsManager.create(cwd, agentDir, { projectTrusted: true })
 		: startupSettingsManager;
 	let sessionDir = explicitSessionDir ?? lookupSettings.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager, startupView);
-	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
-	if (missingSessionCwdIssue) {
+	let startupSelectionDeferred = false;
+	// A missing ID or the picker may need storage that the pending trust decision enables.
+	const deferSelection =
+		!lookupTrusted && !explicitSessionDir && hasTrustRequiringProjectResources(cwd)
+			? () => {
+					startupSelectionDeferred = true;
+					return SessionManager.create(cwd, sessionDir);
+				}
+			: undefined;
+	let sessionManager = await createSessionManager(
+		parsed,
+		cwd,
+		sessionDir,
+		startupSettingsManager,
+		startupView,
+		deferSelection,
+	);
+	const resolveStartupSessionCwd = async (manager: SessionManager): Promise<SessionManager> => {
+		const missingSessionCwdIssue = getMissingSessionCwdIssue(manager, cwd);
+		if (!missingSessionCwdIssue) return manager;
 		if (appMode === "interactive") {
 			const selectedCwd = await promptForMissingSessionCwd(
 				missingSessionCwdIssue,
@@ -693,13 +714,14 @@ export async function main(args: string[], options?: MainOptions) {
 			if (!selectedCwd) {
 				process.exit(0);
 			}
-			sessionManager.dispose();
-			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
+			manager.dispose();
+			return SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
 			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
 			process.exit(1);
 		}
-	}
+	};
+	sessionManager = await resolveStartupSessionCwd(sessionManager);
 	time("createSessionManager");
 
 	const runSessionRetention = async () => {
@@ -823,9 +845,11 @@ export async function main(args: string[], options?: MainOptions) {
 			const maySelectAgain = !startupDirectoryResolved;
 			startupDirectoryResolved = true;
 			const approvedSessionDir = explicitSessionDir ?? settingsManager.getSessionDir();
-			if (approvedSessionDir !== sessionDir) {
+			if (startupSelectionDeferred || approvedSessionDir !== sessionDir) {
 				const selectCurrentProject =
-					maySelectAgain && !parsed.session && !parsed.resume && !parsed.fork && cwd === sessionCwd;
+					maySelectAgain &&
+					(startupSelectionDeferred || (!parsed.session && !parsed.resume && !parsed.fork)) &&
+					cwd === sessionCwd;
 				const provisionalManager = sessionManager;
 				sessionManager = await selectApprovedStartupSession(
 					sessionManager,
@@ -835,6 +859,8 @@ export async function main(args: string[], options?: MainOptions) {
 						: undefined,
 				);
 				sessionDir = approvedSessionDir;
+				startupSelectionDeferred = false;
+				sessionManager = await resolveStartupSessionCwd(sessionManager);
 				if (sessionManager.getCwd() !== cwd) {
 					// No turn has started. Shut down bootstrap hooks before resolving the selected cwd once.
 					const extensions = resourceLoader.getExtensions();

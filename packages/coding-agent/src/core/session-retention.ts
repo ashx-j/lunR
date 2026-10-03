@@ -4,8 +4,8 @@
 // configured retention window. The active session file is always excluded.
 
 import type { Dirent } from "node:fs";
-import { readdir, stat, unlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readdir, realpath, stat, unlink } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { SessionOwnership } from "./session-ownership.ts";
 
 export interface PruneOldSessionsOptions {
@@ -22,11 +22,19 @@ export interface PruneOldSessionsResult {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function sameFile(a: string, b: string): boolean {
-	const ra = resolve(a);
-	const rb = resolve(b);
+async function sameFile(a: string, b: string): Promise<boolean> {
+	const normalize = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
+	const ra = normalize(a);
+	const rb = normalize(b);
 	// Windows paths are case-insensitive.
-	return process.platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+	if (ra === rb) return true;
+	if (basename(ra) !== basename(rb)) return false;
+	try {
+		const [canonicalA, canonicalB] = await Promise.all([realpath(a), realpath(b)]);
+		return normalize(canonicalA) === normalize(canonicalB);
+	} catch {
+		return false;
+	}
 }
 
 async function pruneDir(
@@ -44,7 +52,7 @@ async function pruneDir(
 	for (const entry of entries) {
 		if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
 		const filePath = join(dir, entry.name);
-		if (excludeFile && sameFile(filePath, excludeFile)) continue;
+		if (excludeFile && (await sameFile(filePath, excludeFile))) continue;
 		try {
 			const info = await stat(filePath);
 			if (info.mtimeMs < cutoffMs) {

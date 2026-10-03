@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +17,7 @@ import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import { getPromptResources } from "../src/core/prompt-resource-bridge.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
+import { pruneOldSessions } from "../src/core/session-retention.ts";
 import { getSessionRetentionTargets } from "../src/core/session-startup-settings.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { hasTrustRequiringProjectResources } from "../src/core/trust-manager.ts";
@@ -27,6 +37,7 @@ beforeEach(() => {
 	mkdirSync(agentDir);
 	vi.stubEnv("HOME", root);
 	vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+	mkdirSync(getSessionsDir(), { recursive: true });
 });
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -168,6 +179,7 @@ describe("project integration trust", () => {
 		"keeps global maintenance separate from project paths and retention with trust=%s",
 		(trusted) => {
 			const custom = join(root, "project-sessions");
+			mkdirSync(custom);
 			write(join(agentDir, "settings.json"), { sessionRetentionDays: 30 });
 			write(join(cwd, ".lunr/settings.json"), { sessionRetentionDays: 1, sessionDir: custom });
 			const global = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
@@ -189,4 +201,84 @@ describe("project integration trust", () => {
 			]);
 		},
 	);
+
+	it.each([30, 0])(
+		"keeps global history when an approved project aliases its root, global retention=%s",
+		async (days) => {
+			const alias = join(root, "global-alias");
+			symlinkSync(getSessionsDir(), alias, process.platform === "win32" ? "junction" : "dir");
+			write(join(agentDir, "settings.json"), { sessionRetentionDays: days });
+			write(join(cwd, ".lunr/settings.json"), { sessionRetentionDays: 1, sessionDir: alias });
+			const historical = join(getSessionsDir(), "other-project.jsonl");
+			write(historical, "saved history");
+			const now = Date.now();
+			const past = new Date(now - 10 * 86400000);
+			utimesSync(historical, past, past);
+			const targets = getSessionRetentionTargets(
+				SettingsManager.create(cwd, agentDir, { projectTrusted: false }),
+				SettingsManager.create(cwd, agentDir, { projectTrusted: true }),
+			);
+			expect(targets).toEqual(days > 0 ? [{ directory: realpathSync(getSessionsDir()), days }] : []);
+			for (const target of targets) await pruneOldSessions(target.directory, target.days, { now });
+			expect(existsSync(historical)).toBe(true);
+		},
+	);
+
+	it.each(["ancestor", "descendant"])("uses global policy for an overlapping %s alias", async (overlap) => {
+		const globalDirectory = getSessionsDir();
+		const otherProject = join(globalDirectory, "--other-project--");
+		mkdirSync(otherProject);
+		const destination = overlap === "ancestor" ? agentDir : otherProject;
+		const alias = join(root, "overlap-alias");
+		symlinkSync(destination, alias, process.platform === "win32" ? "junction" : "dir");
+		write(join(agentDir, "settings.json"), { sessionRetentionDays: 0 });
+		write(join(cwd, ".lunr/settings.json"), { sessionRetentionDays: 1, sessionDir: alias });
+		const historical = join(otherProject, "history.jsonl");
+		write(historical, "saved history");
+		utimesSync(historical, new Date(0), new Date(0));
+		const targets = getSessionRetentionTargets(
+			SettingsManager.create(cwd, agentDir, { projectTrusted: false }),
+			SettingsManager.create(cwd, agentDir, { projectTrusted: true }),
+		);
+		expect(targets).toEqual([]);
+		for (const target of targets) await pruneOldSessions(target.directory, target.days);
+		expect(existsSync(historical)).toBe(true);
+	});
+
+	it("skips dangling aliases while retaining policy for an independent canonical project tree", async () => {
+		const custom = join(root, "project-sessions");
+		mkdirSync(custom);
+		const alias = join(root, "custom-alias");
+		symlinkSync(custom, alias, process.platform === "win32" ? "junction" : "dir");
+		write(join(agentDir, "settings.json"), { sessionRetentionDays: 30 });
+		write(join(cwd, ".lunr/settings.json"), { sessionRetentionDays: 1, sessionDir: alias });
+		const global = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+		const runtime = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
+		expect(getSessionRetentionTargets(global, runtime)).toEqual([
+			{ directory: realpathSync(getSessionsDir()), days: 30 },
+			{ directory: realpathSync(custom), days: 1 },
+		]);
+		const historical = join(custom, "project-history.jsonl");
+		write(historical, "saved history");
+		const now = Date.now();
+		const past = new Date(now - 10 * 86400000);
+		utimesSync(historical, past, past);
+		for (const target of getSessionRetentionTargets(global, runtime)) {
+			await pruneOldSessions(target.directory, target.days, { now });
+		}
+		expect(existsSync(historical)).toBe(false);
+		rmSync(getSessionsDir(), { recursive: true });
+		expect(getSessionRetentionTargets(global, runtime)).toEqual([
+			{ directory: join(realpathSync(agentDir), "sessions"), days: 30 },
+			{ directory: realpathSync(custom), days: 1 },
+		]);
+		mkdirSync(getSessionsDir());
+		rmSync(custom, { recursive: true });
+		expect(getSessionRetentionTargets(global, runtime)).toEqual([
+			{ directory: realpathSync(getSessionsDir()), days: 30 },
+		]);
+		rmSync(getSessionsDir(), { recursive: true });
+		symlinkSync(custom, getSessionsDir(), process.platform === "win32" ? "junction" : "dir");
+		expect(getSessionRetentionTargets(global, runtime)).toEqual([]);
+	});
 });
