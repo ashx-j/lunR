@@ -63,6 +63,10 @@ export class LspClient {
   /** True if connected to a daemon socket (server init handled by daemon) */
   private _isDaemonClient = false;
 
+  private readonly stop = new AbortController();
+  private startPromise: Promise<void> | null = null;
+  private shutdownPromise: Promise<void> | null = null;
+
   readonly languageId: string;
   readonly command: string;
   readonly rootDir: string;
@@ -96,14 +100,27 @@ export class LspClient {
   }
 
   /** Start the LSP server and perform the initialize handshake */
-  async start(): Promise<void> {
-    if (this._initialized || this._disposed) return;
+  start(): Promise<void> {
+    if (this._disposed) return Promise.reject(new Error("LSP client shut down"));
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (this.options.socketPath
+      ? this.connectToSocket(this.options.socketPath)
+      : this.spawnDirect()).catch(async (error: unknown) => {
+        await this.shutdown();
+        throw error;
+      });
+    return this.startPromise;
+  }
 
-    if (this.options.socketPath) {
-      await this.connectToSocket(this.options.socketPath);
-    } else {
-      await this.spawnDirect();
-    }
+  /** Cancel an owned handshake without waiting for the remote server. */
+  private waitForStart<T>(pending: Promise<T>): Promise<T> {
+    const signal = this.stop.signal;
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener("abort", aborted, { once: true });
+      pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+    });
   }
 
   /** Register shared connection handlers (diagnostics, workspace/configuration, errors) */
@@ -152,46 +169,55 @@ export class LspClient {
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      const settle = (fn: () => void) => {
-        if (!settled) { settled = true; fn(); }
+      let connected = false;
+      let timeout: ReturnType<typeof setTimeout>;
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        this.stop.signal.removeEventListener("abort", aborted);
+        if (error) reject(error);
+        else resolve();
       };
-
+      const aborted = () => {
+        settle(new Error("LSP client shut down"));
+        socket.destroy();
+      };
       const socket = netConnect(socketPath, () => {
-        this.socket = socket;
-
-        const reader = new SocketMessageReader(socket);
-        const writer = new SocketMessageWriter(socket);
-        this.connection = createMessageConnection(reader, writer);
-
-        this.registerConnectionHandlers();
-
-        this.connection.listen();
-        this._initialized = true;
-        settle(() => resolve());
-      });
-
-      socket.on("error", (err) => {
-        if (!this._initialized) {
-          settle(() => reject(new Error(`Failed to connect to LSP daemon: ${err.message}`)));
-        } else {
-          this._initialized = false;
+        if (this._disposed || settled) { socket.destroy(); return; }
+        try {
+          const reader = new SocketMessageReader(socket);
+          const writer = new SocketMessageWriter(socket);
+          this.connection = createMessageConnection(reader, writer);
+          this.registerConnectionHandlers();
+          this.connection.listen();
+          this._initialized = true;
+          connected = true;
+          settle();
+        } catch (error) {
+          settle(error instanceof Error ? error : new Error(String(error)));
+          socket.destroy();
         }
       });
-
+      // Capture even a connecting socket so shutdown can close it.
+      this.socket = socket;
+      socket.on("error", (err) => {
+        settle(new Error(`Failed to connect to LSP daemon: ${err.message}`));
+        this._initialized = false;
+      });
       socket.on("close", () => {
+        settle(new Error("LSP daemon socket closed during startup"));
         if (!this._disposed) {
           this._initialized = false;
-          this.options.onUnexpectedExit?.(null);
+          if (connected) this.options.onUnexpectedExit?.(null);
         }
       });
-
-      // Timeout
-      setTimeout(() => {
-        if (!settled) {
-          socket.destroy();
-          settle(() => reject(new Error("Timeout connecting to LSP daemon socket")));
-        }
+      timeout = setTimeout(() => {
+        settle(new Error("Timeout connecting to LSP daemon socket"));
+        socket.destroy();
       }, 10_000);
+      this.stop.signal.addEventListener("abort", aborted, { once: true });
+      if (this.stop.signal.aborted) aborted();
     });
   }
 
@@ -205,81 +231,51 @@ export class LspClient {
       cwd: this.rootDir,
     });
 
-    if (!this.process.stdout || !this.process.stdin) {
+    const child = this.process;
+    // Error listeners belong to this child and its streams, never the host process.
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream?.on("error", (err: Error) => {
+        if (!this._disposed) console.error(`[LSP ${this.languageId}] Transport error: ${err.message}`);
+      });
+    }
+    child.on("error", (err) => {
+      if (!this._disposed) console.error(`[LSP ${this.languageId}] Process error: ${err.message}`);
+      this._initialized = false;
+      this.disposeConnection();
+    });
+    let wasInitialized = false;
+    child.on("exit", (code) => {
+      if (!this._disposed) {
+        this._initialized = false;
+        this.disposeConnection();
+        // A failed handshake is handled by the pending start, not auto-restart.
+        if (wasInitialized) this.options.onUnexpectedExit?.(code);
+      }
+    });
+    if (!child.stdout || !child.stdin) {
       throw new Error(`Failed to spawn LSP server: ${this.options.command}`);
     }
 
-    // Wait for the process to successfully spawn before setting up the connection.
-    // spawn() is async — ENOENT and other errors arrive on the 'error' event.
-    // If we don't wait, we'll try to write to a destroyed stdin and crash.
-    await new Promise<void>((resolve, reject) => {
+    await this.waitForStart(new Promise<void>((resolve, reject) => {
       const onSpawn = () => { cleanup(); resolve(); };
       const onError = (err: Error) => {
         cleanup();
         reject(new Error(`Failed to spawn LSP server "${this.options.command}": ${err.message}`));
       };
       const cleanup = () => {
-        this.process?.removeListener("spawn", onSpawn);
-        this.process?.removeListener("error", onError);
+        child.removeListener("spawn", onSpawn);
+        child.removeListener("error", onError);
+        this.stop.signal.removeEventListener("abort", cleanup);
       };
-      this.process!.on("spawn", onSpawn);
-      this.process!.on("error", onError);
-    });
+      child.once("spawn", onSpawn);
+      child.once("error", onError);
+      this.stop.signal.addEventListener("abort", cleanup, { once: true });
+    }));
+    this.stop.signal.throwIfAborted();
+    child.stderr?.resume();
 
-    // Discard stderr to prevent blocking
-    this.process.stderr?.resume();
-
-    // Patch stdin.write to silently drop writes when the stream is destroyed.
-    // StreamMessageWriter wraps stdin and calls write() which returns a Promise.
-    // If the stream is destroyed (process exited), write() throws ERR_STREAM_DESTROYED
-    // inside the Promise constructor, creating a rejection that propagates through
-    // the writer's semaphore and becomes unhandled (notifications are fire-and-forget).
-    // No amount of error handlers on the stream or connection can catch this.
-    const stdin = this.process.stdin!;
-    const originalWrite = stdin.write;
-    stdin.write = function (this: typeof stdin, ...args: any[]): boolean {
-      if (this.destroyed || this.writableEnded || this.writableFinished) {
-        // Call the callback (last arg) so the Promise resolves instead of rejecting
-        const cb = args[args.length - 1];
-        if (typeof cb === "function") process.nextTick(cb);
-        return false;
-      }
-      try {
-        return originalWrite.apply(this, args as any);
-      } catch (err: any) {
-        // Catch EPIPE synchronously — process exited between our check and the write
-        if (err?.code === "EPIPE" || err?.code === "ERR_STREAM_DESTROYED") {
-          const cb = args[args.length - 1];
-          if (typeof cb === "function") process.nextTick(cb);
-          return false;
-        }
-        throw err;
-      }
-    } as any;
-
-    // Catch EPIPE on the stdin stream itself to prevent unhandled error events
-    stdin.on("error", (err: any) => {
-      if (err?.code === "EPIPE") return; // expected when server exits
-      console.error(`[LSP ${this.languageId}] stdin error: ${err.message}`);
-    });
-
-    this.process.on("error", (err) => {
-      console.error(`[LSP ${this.languageId}] Process error: ${err.message}`);
-      this._initialized = false;
-      this.disposeConnection();
-    });
-
-    this.process.on("exit", (code) => {
-      if (!this._disposed) {
-        console.error(`[LSP ${this.languageId}] Server exited with code ${code}`);
-        this._initialized = false;
-        this.disposeConnection();
-        this.options.onUnexpectedExit?.(code);
-      }
-    });
-
-    const reader = new StreamMessageReader(this.process.stdout);
-    const writer = new StreamMessageWriter(this.process.stdin);
+    const reader = new StreamMessageReader(child.stdout);
+    const writer = new StreamMessageWriter(child.stdin);
     this.connection = createMessageConnection(reader, writer);
 
     this.registerConnectionHandlers();
@@ -336,15 +332,18 @@ export class LspClient {
         : {}),
     };
 
-    const result: InitializeResult = await this.connection.sendRequest(
+    const result: InitializeResult = await this.waitForStart(this.connection.sendRequest(
       "initialize",
       initParams
-    );
+    ));
+    this.stop.signal.throwIfAborted();
     this._serverCapabilities = result.capabilities;
 
     // Send initialized notification
-    this.connection.sendNotification("initialized", {});
+    await this.waitForStart(this.connection.sendNotification("initialized", {}));
+    this.stop.signal.throwIfAborted();
     this._initialized = true;
+    wasInitialized = true;
   }
 
   /** Safely dispose the connection without throwing */
@@ -370,7 +369,15 @@ export class LspClient {
   /** Send a notification to the LSP server */
   sendNotification(method: string, params: unknown): void {
     if (!this.connection || !this._initialized) return;
-    this.connection.sendNotification(method, params);
+    const report = (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!this._disposed) console.error(`[LSP ${this.languageId}] Notification failed: ${message}`);
+    };
+    try {
+      void this.connection.sendNotification(method, params).catch(report);
+    } catch (error) {
+      report(error);
+    }
   }
 
   /** Notify server of a newly opened document */
@@ -396,49 +403,72 @@ export class LspClient {
   }
 
   /** Gracefully shut down or disconnect from the server */
-  async shutdown(): Promise<void> {
-    if (this._disposed) return;
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    const initialized = this._initialized;
     this._disposed = true;
     this._initialized = false;
+    this.stop.abort(new Error("LSP client shut down"));
+    this.shutdownPromise = this.shutdownOwnedTransport(initialized);
+    return this.shutdownPromise;
+  }
 
+  private async shutdownOwnedTransport(initialized: boolean): Promise<void> {
+    const child = this.process;
+    const connection = this.connection;
+    this.process = null;
     if (this._isDaemonClient) {
-      // Socket client: just disconnect — daemon keeps the server alive
+      // Shared daemon ownership ends at this session's socket.
       this.disposeConnection();
-      if (this.socket) {
-        this.socket.destroy();
-      }
+      this.socket?.destroy();
       this.socket = null;
       return;
     }
 
-    // Direct mode: shut down the server we own
-    try {
-      if (this.connection) {
-        // Race shutdown request against a timeout. Catch the request separately
-        // so if the timeout wins, the abandoned sendRequest rejection doesn't
-        // become an unhandled promise rejection.
-        const shutdownReq = this.connection.sendRequest("shutdown").catch(() => {});
+    if (connection && initialized) {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const graceful = async () => {
+          await connection.sendRequest("shutdown").catch(() => {});
+          await connection.sendNotification("exit").catch(() => {});
+        };
         await Promise.race([
-          shutdownReq,
-          new Promise((resolve) => setTimeout(resolve, 3000)),
+          graceful().catch(() => {}),
+          new Promise<void>((resolve) => { timeout = setTimeout(resolve, 3000); }),
         ]);
-        try { this.connection.sendNotification("exit"); } catch {}
+      } catch {
+        // The owned transport may have closed during shutdown.
+      } finally {
+        clearTimeout(timeout);
       }
-    } catch {
-      // Server may already be dead
     }
     this.disposeConnection();
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
 
-    if (this.process) {
-      this.process.kill("SIGTERM");
-      // Force kill after 2s
-      setTimeout(() => {
-        if (this.process && !this.process.killed) {
-          this.process.kill("SIGKILL");
-        }
+    // Signal delivery does not mean exit. Keep the captured child through escalation.
+    await new Promise<void>((resolve, reject) => {
+      let forceTimer: ReturnType<typeof setTimeout>;
+      let exitTimer: ReturnType<typeof setTimeout>;
+      const cleanup = () => {
+        clearTimeout(forceTimer);
+        clearTimeout(exitTimer);
+        child.removeListener("exit", exited);
+      };
+      const exited = () => { cleanup(); resolve(); };
+      const signalChild = (signal: NodeJS.Signals) => {
+        try { child.kill(signal); }
+        catch (error) { cleanup(); reject(error); }
+      };
+      child.once("exit", exited);
+      forceTimer = setTimeout(() => {
+        if (child.exitCode !== null || child.signalCode !== null) { exited(); return; }
+        exitTimer = setTimeout(() => {
+          cleanup();
+          reject(new Error(`LSP ${this.languageId} process did not exit after SIGKILL`));
+        }, 1000);
+        signalChild("SIGKILL");
       }, 2000);
-    }
-
-    this.process = null;
+      signalChild("SIGTERM");
+    });
   }
 }

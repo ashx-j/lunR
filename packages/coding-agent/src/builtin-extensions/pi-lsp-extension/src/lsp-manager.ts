@@ -9,6 +9,7 @@
 import { resolve, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { spawn as spawnChild } from "node:child_process";
 import { LspClient } from "./lsp-client.js";
 import { type WorkspaceProvider, DefaultWorkspaceProvider } from "./workspace-provider.js";
@@ -70,6 +71,10 @@ export class LspManager {
   private _sessionId: string;
   private _lombokJarPath: string | null = null;
   private _shuttingDown = false;
+  private readonly stop = new AbortController();
+  private readonly pendingClients = new Set<LspClient>();
+  private readonly restartTimers = new Set<ReturnType<typeof setTimeout>>();
+  private shutdownPromise: Promise<void> | null = null;
   private _restartAttempts: Map<string, number> = new Map();
   private _restartBackoff: Map<string, number> = new Map();
 
@@ -272,6 +277,7 @@ export class LspManager {
    * Returns null if no server is configured for this language.
    */
   async getClientForLanguage(languageId: string): Promise<LspClient | null> {
+    if (this._shuttingDown) return null;
     // Already running?
     const existing = this.clients.get(languageId);
     if (existing && existing.initialized && !existing.disposed) {
@@ -286,12 +292,11 @@ export class LspManager {
     if (!config) return null;
 
     // Kick off server start in the background — don't await
-    const startPromise = this.startServer(languageId, config);
-    this.startingServers.set(languageId, startPromise);
+    const startPromise = this.trackStart(languageId, config);
 
     // Fire-and-forget: clean up on completion or failure
     startPromise.catch((err) => {
-      this.startingServers.delete(languageId);
+      if (this._shuttingDown) return;
       const message = `Failed to start LSP server for ${languageId}: ${err.message}`;
       this._callbacks.onServerError?.(languageId, message);
     });
@@ -312,6 +317,7 @@ export class LspManager {
    * is fire-and-forget — intended for session_start auto-start.
    */
   startEagerly(languageIds: string[]): void {
+    if (this._shuttingDown) return;
     for (const languageId of languageIds) {
       // Skip if already running or starting
       const existing = this.clients.get(languageId);
@@ -321,11 +327,10 @@ export class LspManager {
       const config = this.serverConfigs.get(languageId);
       if (!config) continue;
 
-      const startPromise = this.startServer(languageId, config);
-      this.startingServers.set(languageId, startPromise);
+      const startPromise = this.trackStart(languageId, config);
 
       startPromise.catch((err) => {
-        this.startingServers.delete(languageId);
+        if (this._shuttingDown) return;
         this._callbacks.onServerError?.(languageId, `Auto-start failed: ${err.message}`);
       });
     }
@@ -338,14 +343,15 @@ export class LspManager {
   private async ensureWorkspace(): Promise<void> {
     if (this._workspaceReady) return;
     if (this._workspaceReadying) {
-      await this._workspaceReadying;
+      await this.waitForStart(this._workspaceReadying);
       return;
     }
     this._callbacks.onWorkspaceSetupStart?.();
+    this.stop.signal.throwIfAborted();
     const start = Date.now();
     this._workspaceReadying = this._workspace.ensureReady(this._sessionId);
     try {
-      const success = await this._workspaceReadying;
+      const success = await this.waitForStart(this._workspaceReadying);
       this._callbacks.onWorkspaceSetupEnd?.(success, Date.now() - start);
     } finally {
       this._workspaceReady = true;
@@ -353,9 +359,32 @@ export class LspManager {
     }
   }
 
+  /** Keep starts registered until their owned clients have either attached or closed. */
+  private trackStart(languageId: string, config: ServerConfig): Promise<LspClient> {
+    this.stop.signal.throwIfAborted();
+    const existing = this.startingServers.get(languageId);
+    if (existing) return existing;
+    const pending = Promise.resolve().then(() => this.startServer(languageId, config)).finally(() => {
+      if (this.startingServers.get(languageId) === pending) this.startingServers.delete(languageId);
+    });
+    this.startingServers.set(languageId, pending);
+    return pending;
+  }
+
+  private waitForStart<T>(pending: Promise<T>): Promise<T> {
+    const signal = this.stop.signal;
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener("abort", aborted, { once: true });
+      pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+    });
+  }
+
   private async startServer(languageId: string, config: ServerConfig): Promise<LspClient> {
-    // Ensure workspace provider is ready (one-time setup)
+    this.stop.signal.throwIfAborted();
     await this.ensureWorkspace();
+    this.stop.signal.throwIfAborted();
 
     const stateDir = this._workspace.stateDir;
     const folders = this._workspace.getWorkspaceFolders();
@@ -375,116 +404,78 @@ export class LspManager {
       }
     }
 
-    // Callback for auto-restart on unexpected exit
     const onUnexpectedExit = (code: number | null) => this.handleUnexpectedExit(languageId, code);
-    // Try connecting to an existing daemon socket first
-    const socketPath = this.getSocketPath(languageId);
-    if (socketPath && this.isDaemonAlive(languageId)) {
-      this._callbacks.onServerStart?.(languageId, `${config.command} (shared)`);
+    const connectClient = async (socketPath?: string): Promise<LspClient> => {
+      this.stop.signal.throwIfAborted();
+      const client = new LspClient({
+        command: config.command,
+        args: effectiveArgs,
+        rootDir: this.rootDir,
+        languageId,
+        socketPath,
+        env: config.env,
+        workspaceFolders,
+        initializationOptions,
+        settings: config.settings,
+        onUnexpectedExit,
+      });
+      this.pendingClients.add(client);
       try {
-        const client = new LspClient({
-          command: config.command,
-          args: effectiveArgs,
-          rootDir: this.rootDir,
-          languageId,
-          socketPath,
-          initializationOptions,
-          settings: config.settings,
-          onUnexpectedExit,
-        });
-        await client.start();
+        await this.waitForStart(client.start());
+        this.stop.signal.throwIfAborted();
+        if (!client.initialized || client.disposed) throw new Error("LSP client closed during startup");
         this.clients.set(languageId, client);
-        this.startingServers.delete(languageId);
         this._callbacks.onServerReady?.(languageId);
         this._restartAttempts.delete(languageId);
         this._restartBackoff.delete(languageId);
         this.triggerPostInit(languageId, client);
         return client;
+      } catch (error) {
+        await client.shutdown();
+        throw error;
+      } finally {
+        this.pendingClients.delete(client);
+      }
+    };
+
+    const socketPath = this.getSocketPath(languageId);
+    if (socketPath && this.isDaemonAlive(languageId)) {
+      this._callbacks.onServerStart?.(languageId, `${config.command} (shared)`);
+      try {
+        return await connectClient(socketPath);
       } catch {
-        // Daemon may be stale — fall through to spawn new one
+        // A stale daemon can fall back, but session cancellation cannot.
+        this.stop.signal.throwIfAborted();
       }
     }
 
-    // No existing daemon — spawn one (or start direct if no state directory)
+    this.stop.signal.throwIfAborted();
     this._callbacks.onServerStart?.(languageId, config.command);
-
     if (stateDir) {
-      // Spawn daemon and connect via socket
       try {
         await this.spawnDaemon(languageId, config, effectiveArgs, workspaceFolders, initializationOptions);
-        // Small delay to let daemon start listening
-        await new Promise((r) => setTimeout(r, DAEMON_SOCKET_READY_DELAY_MS));
-
+        await delay(DAEMON_SOCKET_READY_DELAY_MS, undefined, { signal: this.stop.signal });
         const daemonSocket = this.getSocketPath(languageId)!;
-
-        // Retry connection (daemon may still be initializing jdtls which can take minutes)
-        let lastErr: Error | null = null;
+        let lastErr: unknown;
         for (let attempt = 0; attempt < DAEMON_MAX_RETRIES; attempt++) {
+          this.stop.signal.throwIfAborted();
           try {
-            const client = new LspClient({
-              command: config.command,
-              args: effectiveArgs,
-              rootDir: this.rootDir,
-              languageId,
-              socketPath: daemonSocket,
-              initializationOptions,
-              settings: config.settings,
-              onUnexpectedExit,
-            });
-            await client.start();
-            this.clients.set(languageId, client);
-            this.startingServers.delete(languageId);
-            this._callbacks.onServerReady?.(languageId);
-            this._restartAttempts.delete(languageId);
-            this._restartBackoff.delete(languageId);
-            this.triggerPostInit(languageId, client);
-            return client;
-          } catch (err: any) {
-            lastErr = err;
-            // Check if daemon is still alive before retrying
-            if (!this.isDaemonAlive(languageId)) {
-              throw new Error(`Daemon for ${languageId} died during startup: ${err.message}`);
-            }
-            await new Promise((r) => setTimeout(r, DAEMON_RETRY_INTERVAL_MS));
+            return await connectClient(daemonSocket);
+          } catch (error) {
+            this.stop.signal.throwIfAborted();
+            lastErr = error;
+            if (!this.isDaemonAlive(languageId)) throw error;
+            await delay(DAEMON_RETRY_INTERVAL_MS, undefined, { signal: this.stop.signal });
           }
         }
         throw lastErr ?? new Error("Failed to connect to daemon");
-      } catch (err: any) {
-        // Fall back to direct mode — log the daemon failure
-        this._callbacks.onServerError?.(languageId, `Daemon mode failed, falling back to direct: ${err.message}`);
-        this.startingServers.delete(languageId);
-        // Don't throw — try direct mode below
+      } catch (error) {
+        this.stop.signal.throwIfAborted();
+        const message = error instanceof Error ? error.message : String(error);
+        this._callbacks.onServerError?.(languageId, `Daemon mode failed, falling back to direct: ${message}`);
       }
     }
-
-    // Direct mode (no state directory for daemon, or daemon failed)
-    const client = new LspClient({
-      command: config.command,
-      args: effectiveArgs,
-      rootDir: this.rootDir,
-      languageId,
-      env: config.env,
-      workspaceFolders,
-      initializationOptions,
-      settings: config.settings,
-      onUnexpectedExit,
-    });
-
-    try {
-      await client.start();
-      this.clients.set(languageId, client);
-      this.startingServers.delete(languageId);
-      this._callbacks.onServerReady?.(languageId);
-      this._restartAttempts.delete(languageId);
-      this._restartBackoff.delete(languageId);
-      this.triggerPostInit(languageId, client);
-      return client;
-    } catch (err: any) {
-      this.startingServers.delete(languageId);
-      const message = `Failed to start LSP server for ${languageId} (${config.command}): ${err.message}`;
-      this._callbacks.onServerError?.(languageId, message);
-      throw new Error(message);
-    }
+    return connectClient();
   }
 
   /**
@@ -533,6 +524,7 @@ export class LspManager {
     workspaceFolders?: { uri: string; name: string }[],
     initializationOptions?: Record<string, unknown>,
   ): Promise<void> {
+    this.stop.signal.throwIfAborted();
     const socketPath = this.getSocketPath(languageId)!;
     const daemonScript = new URL("./lsp-daemon.ts", import.meta.url).pathname;
     const launcherScript = new URL("./lsp-daemon-launcher.cjs", import.meta.url).pathname;
@@ -579,7 +571,16 @@ export class LspManager {
       },
     );
 
+    // The launcher becomes shared infrastructure after spawn. Own its startup
+    // error event, but do not kill a daemon when this session disconnects.
     child.unref(); // let daemon outlive this process
+    await this.waitForStart(new Promise<void>((resolve, reject) => {
+      child.on("error", (error) => {
+        reject(error);
+        if (!this._shuttingDown) this._callbacks.onServerError?.(languageId, error.message);
+      });
+      child.once("spawn", resolve);
+    }));
   }
 
   /** Get status of all configured/running servers */
@@ -614,7 +615,6 @@ export class LspManager {
 
     // Clean up the dead client
     this.clients.delete(languageId);
-    this.startingServers.delete(languageId);
 
     const attempts = this._restartAttempts.get(languageId) ?? 0;
     if (attempts >= LspManager.MAX_RESTART_ATTEMPTS) {
@@ -629,32 +629,44 @@ export class LspManager {
 
     this._callbacks.onServerCrash?.(languageId, true, attempts + 1);
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      this.restartTimers.delete(timer);
       if (this._shuttingDown) return;
       const config = this.serverConfigs.get(languageId);
       if (!config) return;
 
-      const startPromise = this.startServer(languageId, config);
-      this.startingServers.set(languageId, startPromise);
+      const startPromise = this.trackStart(languageId, config);
       startPromise.catch((err) => {
-        this.startingServers.delete(languageId);
+        if (this._shuttingDown) return;
         this._callbacks.onServerError?.(languageId, `Auto-restart failed for ${languageId}: ${err.message}`);
         // Trigger another restart attempt (recursive backoff)
         this.handleUnexpectedExit(languageId, null);
       });
     }, backoff);
+    this.restartTimers.add(timer);
   }
 
   /** Shut down all clients (disconnect from daemons, kill direct servers) */
-  async shutdownAll(): Promise<void> {
-    this._workspace.shutdown();
+  shutdownAll(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
     this._shuttingDown = true;
-    const shutdowns = [...this.clients.values()].map((client) =>
-      client.shutdown().catch(() => {})
-    );
-    await Promise.all(shutdowns);
-    this.clients.clear();
-    this.startingServers.clear();
+    this.stop.abort(new Error("LSP manager shut down"));
+    for (const timer of this.restartTimers) clearTimeout(timer);
+    this.restartTimers.clear();
+    this.shutdownPromise = this.shutdownClients();
+    return this.shutdownPromise;
+  }
+
+  private async shutdownClients(): Promise<void> {
+    try {
+      this._workspace.shutdown();
+    } finally {
+      const clients = new Set([...this.clients.values(), ...this.pendingClients]);
+      await Promise.allSettled([...clients].map((client) => client.shutdown()));
+      await Promise.allSettled([...this.startingServers.values()]);
+      this.clients.clear();
+      this.startingServers.clear();
+    }
   }
 
   /**
@@ -663,28 +675,27 @@ export class LspManager {
    * Returns once the new server is initialized, or throws on failure.
    */
   async restartServer(languageId: string): Promise<void> {
-    // Shut down existing client
+    this.stop.signal.throwIfAborted();
+    // A pending start can attach while we wait. Close that client before replacement.
+    const pending = this.startingServers.get(languageId);
+    if (pending) await pending.catch(() => {});
+    this.stop.signal.throwIfAborted();
+
     const existing = this.clients.get(languageId);
     if (existing) {
       await existing.shutdown().catch(() => {});
-      this.clients.delete(languageId);
+      if (this.clients.get(languageId) === existing) this.clients.delete(languageId);
     }
+    this.stop.signal.throwIfAborted();
 
-    // Kill the daemon if one is running (so we get a fresh server with new config)
+    // Explicit restart retains its existing daemon replacement behavior.
     this.killDaemon(languageId);
-
-    // Wait for pending starts to clear
-    const pending = this.startingServers.get(languageId);
-    if (pending) {
-      await pending.catch(() => {});
-      this.startingServers.delete(languageId);
-    }
 
     // Start fresh
     const config = this.serverConfigs.get(languageId);
     if (!config) throw new Error(`No server configured for ${languageId}`);
 
-    await this.startServer(languageId, config);
+    await this.trackStart(languageId, config);
   }
 
   /** Kill a running daemon for a language (if any) */
