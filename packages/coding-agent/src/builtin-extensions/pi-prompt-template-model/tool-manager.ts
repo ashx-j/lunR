@@ -58,7 +58,8 @@ export function createToolManager(pi: ExtensionAPI, deps: ToolManagerDeps) {
 			name: "run-prompt",
 			label: "Run Prompt",
 			description:
-				"Run a prompt template command. Pass the template name and any arguments. " +
+				"Queue a prompt template command to execute when the current turn ends. Pass the template name and any arguments. " +
+				"A queued result confirms acceptance, not completion. Rejected requests fail without changing the queue; wait for queued or running work to finish before retrying. " +
 				"Supports --loop for loops (e.g. 'deslop --loop 5', 'deslop --loop=5', 'deslop --loop' for unlimited until convergence with a 999-iteration cap), " +
 				"--fresh for context collapse between iterations, and --no-converge to disable early stopping for bounded loops. " +
 				"Supports runtime delegation override via --subagent, --subagent=<name>, or --subagent:<name>. " +
@@ -72,40 +73,22 @@ export function createToolManager(pi: ExtensionAPI, deps: ToolManagerDeps) {
 			}),
 			execute: async (_id, params) => {
 				if (!toolEnabled) {
-					return {
-						content: [{ type: "text", text: "run-prompt tool is disabled. User must run `/prompt-tool on` to enable." }],
-						details: {},
-					};
+					throw new Error("run-prompt tool is disabled. User must run `/prompt-tool on` to enable.");
 				}
 				if (deps.isActive()) {
-					return {
-						content: [{ type: "text", text: "A prompt command is already running. Wait for it to complete." }],
-						details: {},
-					};
+					throw new Error("A prompt command is already running. Wait for it to complete.");
 				}
 				if (!deps.getStoredCtx()) {
-					return {
-						content: [{ type: "text", text: "No command context. Run any prompt command first to initialize." }],
-						details: {},
-						isError: true,
-					};
+					throw new Error("No command context. Run any prompt command first to initialize.");
 				}
 
 				const commandParam = (params as { command?: unknown }).command;
 				const command = typeof commandParam === "string" ? commandParam.trim() : "";
 				if (!command) {
-					return {
-						content: [{ type: "text", text: "No command specified." }],
-						details: {},
-						isError: true,
-					};
+					throw new Error("No command specified.");
 				}
 				if (toolQueuedCommand) {
-					return {
-						content: [{ type: "text", text: "A prompt command is already queued. Wait for it to execute." }],
-						details: {},
-						isError: true,
-					};
+					throw new Error("A prompt command is already queued. Wait for it to execute.");
 				}
 
 				toolQueuedCommand = command;

@@ -26,6 +26,7 @@ type PromptWorkflowRunner = (params: SubagentParamsLike, ctx: ExtensionContext) 
 
 const RESERVED_COMMAND_NAMES = new Set([
 	"chain-prompts",
+	"chain-workflows",
 	"prompt-workflow",
 	"run",
 	"chain",
@@ -295,8 +296,8 @@ export function registerPromptWorkflowCommands(input: {
 		},
 	});
 
-	pi.registerCommand("chain-prompts", {
-		description: "Run prompt templates as a native subagent chain: /chain-prompts analyze -> fix -- args",
+	pi.registerCommand("chain-workflows", {
+		description: "Run prompt workflows as a native subagent chain: /chain-workflows analyze -> fix -- args",
 		handler: async (rawArgs, ctx) => {
 			const { declaration, argsText } = splitChainDeclaration(rawArgs);
 			const workflows = discoverPromptWorkflows(ctx.cwd);
@@ -307,7 +308,7 @@ export function registerPromptWorkflowCommands(input: {
 			const runtime = parseRuntimeOptions(shellWords(argsText));
 			const names = splitPromptChain(declaration);
 			if (names.length === 0) {
-				ctx.ui.notify("Usage: /chain-prompts prompt-a -> prompt-b -- args", "error");
+				ctx.ui.notify("Usage: /chain-workflows prompt-a -> prompt-b -- args", "error");
 				return;
 			}
 			try {

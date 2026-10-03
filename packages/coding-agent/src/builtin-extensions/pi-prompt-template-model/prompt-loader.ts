@@ -11,6 +11,8 @@ import { parseChainDeclaration } from "./chain-parser.ts";
 const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const RESERVED_COMMAND_NAMES = new Set([
 	"chain-prompts",
+	"chain-workflows",
+	"prompt-workflow",
 	"prompt-tool",
 	"settings",
 	"model",
