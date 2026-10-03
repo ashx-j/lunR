@@ -208,6 +208,7 @@ describe("isMutatingBashCommand", () => {
 
 describe("read-only execution spellings", () => {
 	it.each([
+		"sort \\\n-ooutput.txt input.txt",
 		"node --eval=0",
 		'node "--eval=0"',
 		'sort "-ooutput.txt" input.txt',

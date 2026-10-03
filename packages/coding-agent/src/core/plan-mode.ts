@@ -292,6 +292,7 @@ function shellWords(segment: string): string[] | undefined {
 		if (ch === "\\" && quote !== "'") {
 			const next = segment[++i];
 			if (next === undefined) return undefined;
+			if (next === "\n") continue;
 			// Inside double quotes, only these characters lose their backslash.
 			if (quote === '"' && !["$", "`", '"', "\\", "\n"].includes(next)) word += "\\";
 			word += next;
