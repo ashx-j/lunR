@@ -77,11 +77,13 @@ Compare the same task, models, thinking levels, and starting checkout before and
 
 ## Cron
 
-`/cron list | create <schedule> <prompt> | pause|resume|run|remove <id-or-name> | status`
+`/cron list | create <schedule> <prompt> | pause|resume|run|remove|rebind <id-or-name> | status`
 
-Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). Interactive TUI cron runs in the live session. `lunr gateway` runs the same scheduler with a fresh headless session. TUI cron uses the same deliver allowlist as the gateway.
+Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). One process owns scheduling for a profile until its work and shutdown settle. Interactive TUI cron admits a turn only when its live session is idle. `lunr gateway` uses fresh headless sessions and can deliver to platforms. A TUI owner saves output locally and records platform delivery as unavailable. Stop that operator before starting the gateway to move scheduling there. A nonowner manual run returns an owner conflict.
 
-`cronFallbackModels` in settings is a hand-edited list of `provider/modelId` entries tried in order when a gateway cron fire fails.
+Gateway creation preserves the requester, chat and approved project directory. Delivery checks current grants before every chunk. Legacy origin jobs keep local output but report a delivery error until an approved gateway requester uses `/cron rebind <id-or-name>`. Explicit approved destinations follow their own current grants. After a crash during started work, the next owner pauses that job with an unknown-effects error. Inspect its effects before using `/cron run` to retry deliberately. Timeout and stop cancel the owned request and wait for cleanup before recording one terminal result or releasing ownership.
+
+`cronFallbackModels` in settings is a hand-edited list of `provider/modelId` entries tried in order when gateway session setup fails before prompt dispatch. Failures after admission never replay the prompt through a fallback model.
 
 Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30m`), an ISO timestamp, or a 5-field cron expression.
 

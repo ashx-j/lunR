@@ -6,7 +6,7 @@
  * lunR: this file is lunR-native (not an absorbed upstream extension). It wires
  * core/cron (jobs store + scheduler) into the interactive session:
  *
- *  - `/cron list|create|pause|resume|run|remove|status` command.
+ *  - `/cron list|create|pause|resume|run|remove|rebind|status` command.
  *  - One `cron` tool (TypeBox) so the agent can manage jobs. The shared
  *    core/cron/fire-guard depth counter refuses the tool while a cron-fired
  *    turn is in flight — TUI-fired OR gateway-fired (jobs cannot schedule
@@ -14,20 +14,23 @@
  *  - Jobs created inside a gateway chat turn are stamped with that chat as
  *    their origin and default deliver to "origin" (core/cron/origin-context).
  *  - Scheduler starts on session_start only in "tui" mode, stops on
- *    session_shutdown. runJob = sendUserMessage + wait for agent_end;
- *    deliverResult reads the `@lunr/cron-delivery` bridge on globalThis
- *    (registered here as the local notify; the Phase 4 gateway replaces
- *    it — core/cron/scheduler.ts never touches the bridge itself).
+ *    session_shutdown. runJob admits and awaits one owned prompt;
+ *    TUI delivery notifies locally and records external delivery as unavailable;
+ *    the gateway operator performs platform delivery with current grants.
  *
  * `// @ts-nocheck` matches the builtin-extension convention.
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
 
+import { realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { beginCronFire, endCronFire, isCronFire } from "../core/cron/fire-guard.ts";
 import {
 	createJob,
+	type CreateJobInput,
+	type CronJob,
 	getJob,
 	listJobs,
 	parseSchedule,
@@ -38,38 +41,47 @@ import {
 	updateJob,
 } from "../core/cron/jobs.ts";
 import { currentOrigin } from "../core/cron/origin-context.ts";
-import { executeJob, startScheduler } from "../core/cron/scheduler.ts";
+import { CronAdmissionDeferred, startScheduler } from "../core/cron/scheduler.ts";
 import { loadGatewayConfig } from "../gateway/config.ts";
 import { createDeliverValidator } from "../gateway/cron.ts";
+import { resolveWithinRoots } from "../gateway/mobile-commands.ts";
 
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
-/** The cron-fired turn currently waiting for agent_end. */
-let pendingRun: { resolve: (text: string) => void; reject: (err: Error) => void } | null = null;
-let scheduler: { stop(): void } | null = null;
-let lastCtx: ExtensionContext | null = null;
-
-const DELIVERY_BRIDGE_SYMBOL = Symbol.for("@lunr/cron-delivery");
-
-// ---------------------------------------------------------------------------
-// Turn plumbing
-// ---------------------------------------------------------------------------
-
-/** Final assistant text from an agent_end messages array (last assistant message, text blocks only). */
+/** Last assistant message of this admitted request only. */
 function extractAssistantText(messages: unknown[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i] as any;
+		const msg = messages[i] as { role?: string; stopReason?: string; errorMessage?: string; content?: Array<{ type: string; text?: string }> };
 		if (msg?.role !== "assistant") continue;
-		const parts = Array.isArray(msg.content) ? msg.content : [];
-		const text = parts
-			.filter((p: any) => p?.type === "text")
-			.map((p: any) => String(p.text ?? ""))
-			.join("")
-			.trim();
-		if (text) return text;
+		if (msg.stopReason === "error" || msg.stopReason === "aborted") throw new Error(msg.errorMessage || `Request ${msg.stopReason}`);
+		return (msg.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("").trim();
 	}
 	return "";
+}
+
+/** Both creation routes keep the current project, requester and explicit delivery choice. */
+function createInContext(input: CreateJobInput, ctx: ExtensionContext) {
+	const origin = currentOrigin();
+	const workdir = origin ? resolveWithinRoots(ctx.cwd, loadGatewayConfig().projectRoots ?? []) : ctx.cwd;
+	return createJob({ ...input, workdir, origin: origin ? { ...origin } : null, deliver: input.deliver ?? (origin ? "origin" : "local") });
+}
+
+/** A TUI owns its current project; it must not silently execute another project's job. */
+function requireTuiJobWorkdir(job: CronJob, ctx: ExtensionContext): void {
+	if (!job.workdir || !isAbsolute(job.workdir))
+		throw new CronAdmissionDeferred("The job has no saved absolute project directory. Recreate it from the intended project before running it in a TUI.");
+	let saved: string;
+	let current: string;
+	try {
+		saved = realpathSync(job.workdir);
+		current = realpathSync(ctx.cwd);
+	} catch {
+		throw new CronAdmissionDeferred("The saved or current project directory is unavailable. Restore it before running this job.");
+	}
+	const matches = process.platform === "win32" ? saved.toLowerCase() === current.toLowerCase() : saved === current;
+	if (!matches)
+		throw new CronAdmissionDeferred("The job belongs to another project. Run it from a TUI in its saved project, or stop this scheduler so the gateway can own execution.");
 }
 
 // ---------------------------------------------------------------------------
@@ -90,19 +102,19 @@ function formatJobList(): string {
 	if (jobs.length === 0) return "No cron jobs. Create one with /cron create <schedule> <prompt>.";
 	const lines = jobs.map(
 		(j) =>
-			`${j.id}  ${j.state}${j.enabled ? "" : " (disabled)"}  ${j.scheduleDisplay}  next=${fmtTime(j.nextRunAt)}  last=${j.lastStatus ?? "-"}${j.lastError ? ` (${j.lastError})` : ""}  ${j.name}`,
+			`${j.id}  ${j.state}${j.enabled ? "" : " (disabled)"}  ${j.scheduleDisplay}  next=${fmtTime(j.nextRunAt)}  last=${j.lastStatus ?? "-"}${j.lastError ? ` (${j.lastError})` : ""}${j.lastDeliveryError ? ` delivery-error=${j.lastDeliveryError}` : ""}  ${j.name}`,
 	);
 	return `Cron jobs (${jobs.length}):\n${lines.join("\n")}`;
 }
 
-function formatStatus(): string {
+function formatStatus(running: boolean): string {
 	const jobs = listJobs();
 	const count = (s: string) => jobs.filter((j) => j.state === s).length;
 	const next = jobs
 		.filter((j) => j.enabled && j.state === "scheduled" && j.nextRunAt)
 		.sort((a, b) => String(a.nextRunAt).localeCompare(String(b.nextRunAt)))[0];
 	return (
-		`Cron: scheduler ${scheduler ? "running" : "stopped"}; ${jobs.length} job(s) — ` +
+		`Cron: scheduler ${running ? "owner" : "not owner"}; ${jobs.length} job(s) — ` +
 		`${count("scheduled")} scheduled, ${count("paused")} paused, ${count("completed")} completed, ${count("error")} error.` +
 		(next ? ` Next: '${next.name}' at ${fmtTime(next.nextRunAt)}.` : "")
 	);
@@ -113,88 +125,55 @@ function formatStatus(): string {
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI): void {
-	// Same allowlist the gateway uses, so a TUI session cannot persist a job
-	// that later posts to a chat the bot can reach but is not allowed.
-	setCronDeliverValidator(createDeliverValidator(loadGatewayConfig()));
+	let scheduler: ReturnType<typeof startScheduler> | null = null;
+	let lastCtx: ExtensionContext | null = null;
+	setCronDeliverValidator((deliver, origin) => createDeliverValidator(loadGatewayConfig())(deliver, origin));
 
-	// --- Local delivery bridge (Phase 4 gateway replaces this) ---
-	(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = async (job: { name: string }, _content: string) => {
+	const deliverResult = async (job: CronJob, _content: string): Promise<void> => {
+		if (job.deliver.split(",").some((target) => target.trim() !== "local")) {
+			throw new Error("platform delivery unavailable from this TUI operator; restart scheduling in the gateway after stopping this operator");
+		}
+		lastCtx?.ui.notify(`Cron job '${job.name}' finished`, "info");
+	};
+	const runJob = async (prompt: string, job: CronJob, signal: AbortSignal): Promise<string> => {
+		const ctx = lastCtx;
+		if (!ctx?.isIdle() || ctx.hasPendingMessages()) throw new CronAdmissionDeferred("session is busy");
+		requireTuiJobWorkdir(job, ctx);
+		if (!ctx.promptWithCompletion) throw new Error("owned cron admission unavailable");
+		beginCronFire();
 		try {
-			lastCtx?.ui.notify(`Cron job '${job.name}' finished`, "info");
-			return null;
-		} catch (err) {
-			return String((err as Error)?.message ?? err);
-		}
+			const result = await ctx.promptWithCompletion(prompt, { source: "extension", signal }).catch((error: unknown) => {
+				// Only the runtime's pre-dispatch admission rejection permits a deferred retry.
+				if (error instanceof Error && /^Session is busy\. Retry the scheduled prompt after its work settles\.$/.test(error.message)) {
+					throw new CronAdmissionDeferred(error.message);
+				}
+				throw error;
+			});
+			return extractAssistantText(result.messages);
+		} finally { endCronFire(); }
 	};
-
-	// --- Scheduler deps (TUI) ---
-	const runJob = (prompt: string, _job: unknown): Promise<string> => {
-		if (pendingRun) return Promise.reject(new Error("another cron job turn is already in flight"));
-		return new Promise<string>((resolve, reject) => {
-			beginCronFire();
-			pendingRun = { resolve, reject };
-			try {
-				pi.sendUserMessage(prompt);
-			} catch (err) {
-				pendingRun = null;
-				endCronFire();
-				reject(err as Error);
-			}
-		});
+	const schedulerDeps = { runJob, deliverResult, canRun: () => !!lastCtx?.isIdle() && !lastCtx.hasPendingMessages() };
+	const triggerRun = async (job: CronJob, _ctx: ExtensionContext): Promise<string> => {
+		if (!scheduler) throw new Error("cron runs require the owning TUI operator; use cron run there, or wait for the gateway schedule");
+		await scheduler.run(job.id);
+		return `Cron job '${job.name}' (${job.id}) finished. Check cron list for run or delivery errors.`;
 	};
-
-	const deliverResult = async (job: any, content: string): Promise<void> => {
-		const bridge = (globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] as
-			| ((job: unknown, content: string) => Promise<string | null>)
-			| undefined;
-		if (!bridge) throw new Error("no cron delivery bridge registered");
-		const err = await bridge(job, content);
-		if (err) throw new Error(String(err));
-	};
-
-	const schedulerDeps = { runJob, deliverResult };
-
-	/** Manual trigger: run inline when idle, otherwise make the job due for the next tick. */
-	const triggerRun = async (job: any, ctx: ExtensionContext): Promise<string> => {
-		if (ctx.isIdle()) {
-			try {
-				await executeJob(getJob(job.id), schedulerDeps);
-				return `Cron job '${job.name}' (${job.id}) finished.`;
-			} catch (err) {
-				return `Cron job '${job.name}' (${job.id}) failed: ${String((err as Error)?.message ?? err)}`;
-			}
-		}
-		await updateJob(job.id, { nextRunAt: new Date().toISOString() });
-		return `Cron job '${job.name}' (${job.id}) queued for the next scheduler tick.`;
-	};
-
-	// --- Resolve the cron-fired turn when the agent turn ends ---
-	pi.on("agent_end", (event) => {
-		if (!pendingRun) return;
-		const pending = pendingRun;
-		pendingRun = null;
-		endCronFire();
-		pending.resolve(extractAssistantText(event.messages ?? []));
-	});
-
-	// --- Scheduler lifecycle: TUI sessions only ---
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		lastCtx = ctx;
 		if (ctx.mode !== "tui") return;
-		scheduler?.stop();
+		await scheduler?.stop();
 		scheduler = startScheduler(schedulerDeps);
 	});
-
-	pi.on("session_shutdown", () => {
-		scheduler?.stop();
+	pi.on("session_shutdown", async () => {
+		await scheduler?.stop();
 		scheduler = null;
 	});
 
 	// --- /cron command ---
 	pi.registerCommand("cron", {
-		description: "Manage cron jobs: /cron list | create <schedule> <prompt> | pause|resume|run|remove <id-or-name> | status",
+		description: "Manage cron jobs: /cron list | create <schedule> <prompt> | pause|resume|run|remove|rebind <id-or-name> | status",
 		getArgumentCompletions: (prefix: string) => {
-			const subs = ["list", "create", "pause", "resume", "run", "remove", "status"];
+			const subs = ["list", "create", "pause", "resume", "run", "remove", "status", "rebind"];
 			const lower = prefix.toLowerCase();
 			return subs
 				.filter((s) => s.startsWith(lower))
@@ -211,7 +190,7 @@ export default function (pi: ExtensionAPI): void {
 						return;
 					}
 					case "status": {
-						ctx.ui.notify(formatStatus(), "info");
+						ctx.ui.notify(formatStatus(scheduler?.isOwner() ?? false), "info");
 						return;
 					}
 					case "create": {
@@ -231,10 +210,11 @@ export default function (pi: ExtensionAPI): void {
 							ctx.ui.notify("Usage: /cron create <schedule> <prompt> — e.g. /cron create every 30m check the deploy", "error");
 							return;
 						}
-						const job = await createJob({ prompt, schedule: tokens.slice(0, used).join(" ") });
+						const job = await createInContext({ prompt, schedule: tokens.slice(0, used).join(" ") }, ctx);
 						ctx.ui.notify(`Created cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${fmtTime(job.nextRunAt)}.`, "info");
 						return;
 					}
+					case "rebind":
 					case "pause":
 					case "resume":
 					case "remove":
@@ -244,7 +224,12 @@ export default function (pi: ExtensionAPI): void {
 							ctx.ui.notify(`Usage: /cron ${sub} <id-or-name>`, "error");
 							return;
 						}
-						if (sub === "pause") {
+						if (sub === "rebind") {
+							const origin = currentOrigin();
+							if (!origin?.userId) throw new Error("cron rebind requires an approved gateway requester");
+							await updateJob(idOrName, { origin: { ...origin } });
+							ctx.ui.notify("Cron requester rebound to this gateway chat.", "info");
+						} else if (sub === "pause") {
 							const job = await pauseJob(idOrName);
 							ctx.ui.notify(`Paused cron job '${job.name}' (${job.id}).`, "info");
 						} else if (sub === "resume") {
@@ -260,7 +245,7 @@ export default function (pi: ExtensionAPI): void {
 						return;
 					}
 					default: {
-						ctx.ui.notify("Usage: /cron list | create <schedule> <prompt> | pause|resume|run|remove <id-or-name> | status", "error");
+						ctx.ui.notify("Usage: /cron list | create <schedule> <prompt> | pause|resume|run|remove|rebind <id-or-name> | status", "error");
 					}
 				}
 			} catch (err) {
@@ -274,10 +259,11 @@ export default function (pi: ExtensionAPI): void {
 		name: "cron",
 		label: "Cron",
 		description: [
-			"Manage scheduled cron jobs that run prompts unattended in this session.",
-			"Actions: create (needs prompt + schedule), list, update (id + fields), pause, resume, remove, run (trigger now).",
+			"Manage profile-wide scheduled jobs. One operator owns execution; busy sessions defer scheduled work.",
+			"TUI execution requires the job's saved project to match the current project. Recreate jobs without a saved project from the intended project.",
+			"Actions: create (needs prompt + schedule), list, update (id + fields), pause, resume, remove, run (trigger on the owning TUI operator; otherwise returns an owner error).",
 			"Schedule formats: 'every 30m' / 'every 2h' / 'every 1d' (recurring), '30m'/'2h' or an ISO timestamp (one-shot), or a 5-field cron expression.",
-			"Job output is delivered automatically; the job's prompt can answer [SILENT] to suppress delivery.",
+			"Job output is saved locally; platform delivery requires the gateway operator and current grants. Legacy origin jobs need rebind from an approved gateway chat. The prompt can answer [SILENT] to suppress delivery.",
 		].join("\n"),
 		parameters: Type.Object({
 			action: Type.Union([
@@ -311,17 +297,7 @@ export default function (pi: ExtensionAPI): void {
 						if (!params.prompt?.trim() || !params.schedule?.trim()) {
 							return text("cron create: prompt and schedule are required.");
 						}
-						// Inside a gateway chat turn, stamp the chat as the delivery
-						// origin and default deliver to "origin" (Phase 4); outside
-						// any origin context the default stays "local".
-						const origin = currentOrigin();
-						const job = await createJob({
-							prompt: params.prompt,
-							schedule: params.schedule,
-							name: params.name,
-							deliver: params.deliver ?? (origin ? "origin" : undefined),
-							origin: origin ? { ...origin } : undefined,
-						});
+                        const job = await createInContext({ prompt: params.prompt, schedule: params.schedule, name: params.name, deliver: params.deliver }, ctx);
 						return text(`Created cron job '${job.name}' (${job.id}) — ${job.scheduleDisplay}, next run ${fmtTime(job.nextRunAt)}.`);
 					}
 					case "list": {

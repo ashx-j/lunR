@@ -39,7 +39,7 @@ import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
 import type { ContextUsage, SessionShutdownEvent, ToolDefinition } from "../core/extensions/types.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
-import { createPermissionContext, deletePermissionContext, getPermissionMode } from "../core/permissions.ts";
+import { deletePermissionContext, getPermissionMode, initializePermissionContext } from "../core/permissions.ts";
 import { list as listProcesses } from "../core/process-registry.ts";
 import { runtimeScope } from "../core/runtime-scope.ts";
 import { registerTransferHandler, SessionTransferError } from "../core/session-handoff.ts";
@@ -100,6 +100,8 @@ export interface BridgeSessionStatus {
  * fakeable in tests. Expanded to support gateway slash commands.
  */
 export interface BridgeSession {
+	promptWithCompletion?: AgentSession["promptWithCompletion"];
+	drain?: AgentSession["drain"];
 	prompt(text: string, options?: { source?: "extension"; images?: ImageContent[] }): Promise<void>;
 	abort(): Promise<void> | void;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -446,7 +448,7 @@ export class AgentBridge {
 			const newSessionId = session.sessionManager?.getSessionId();
 			if (newFile) putSession(key, { sessionId: newSessionId ?? key, sessionFile: newFile });
 			if (newSessionId)
-				createPermissionContext(
+				initializePermissionContext(
 					newSessionId,
 					session.sessionManager?.getPermissionMode?.() ?? session.settingsManager?.getDefaultPermissionMode(),
 				);
@@ -642,6 +644,7 @@ export class AgentBridge {
 			await runWithOrigin(
 				{
 					platform: source.platform,
+					userId: source.userId,
 					chatId: source.chatId,
 					threadId: source.threadId,
 					chatType: source.chatType,
@@ -733,7 +736,7 @@ export class AgentBridge {
 			putSession(key, { sessionId: sessionId ?? key, sessionFile });
 		}
 		if (sessionId) {
-			createPermissionContext(
+			initializePermissionContext(
 				sessionId,
 				session.sessionManager?.getPermissionMode?.() ?? session.settingsManager?.getDefaultPermissionMode(),
 			);

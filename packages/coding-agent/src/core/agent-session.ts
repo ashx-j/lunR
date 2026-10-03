@@ -96,7 +96,16 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
-import { gateToolCall } from "./permissions.ts";
+import {
+	AUTO_MODE_ADDENDUM,
+	deletePermissionContext,
+	gateToolCall,
+	getPermissionMode,
+	initializePermissionContext,
+	type PermissionMode,
+	setPermissionMode,
+} from "./permissions.ts";
+import { READ_ONLY_MODE_ADDENDUM } from "./plan-mode.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
@@ -105,6 +114,11 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import {
+	isSubagentChildProcess,
+	resolveChildRuntimePermissionMode,
+	SUBAGENT_CHILD_PERMISSION_ENV,
+} from "./subagent-permission-inherit.ts";
 import {
 	registerSubagentWaitInterruptionOwner,
 	type SubagentWaitInterruptionRegistration,
@@ -189,6 +203,8 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
 }
 
 export interface AgentSessionConfig {
+	/** Explicit permission override; otherwise child inheritance, checkpoint, then settings. */
+	permissionMode?: PermissionMode;
 	agent: Agent;
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
@@ -260,7 +276,16 @@ interface ActiveSubagentWait {
 	ownerSignal: AbortSignal;
 }
 
+interface PromptCompletion {
+	messages: AgentMessage[];
+	signal?: AbortSignal;
+	cancelled?: boolean;
+	settle: () => void;
+	detach?: () => void;
+}
+
 interface ActivePromptRun {
+	completion?: PromptCompletion;
 	waits: Set<ActiveSubagentWait>;
 	gracefulStopRequested: boolean;
 }
@@ -380,7 +405,12 @@ export class AgentSession {
 	private _retryAttempt = 0;
 
 	// Bash execution state
-	private _bashAbortController: AbortController | undefined = undefined;
+	private _bashOperations = new Map<AbortController, Promise<void>>();
+	private _operations = new Set<Promise<void>>();
+	private _closing = false;
+	private _disposed = false;
+	private _drainPromise?: Promise<void>;
+	private _shutdownPromise?: Promise<void>;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
 
 	// Extension system
@@ -418,7 +448,7 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _systemPromptOverride?: string;
-	// lunr: core-owned system-prompt append (read-only mode addendum) applied on top of base/override
+	// Optional host-owned prompt append, separate from session permission guidance.
 	private _systemPromptAppend?: string;
 	// lunr: core-owned tool-call gates (read-only mode) checked before extension tool_call handlers
 	private _toolCallGates: ToolCallGate[] = [];
@@ -427,6 +457,14 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		const permissionMode =
+			config.permissionMode ??
+			(isSubagentChildProcess()
+				? resolveChildRuntimePermissionMode(process.env[SUBAGENT_CHILD_PERMISSION_ENV])
+				: undefined) ??
+			this.sessionManager.getPermissionMode() ??
+			this.settingsManager.getDefaultPermissionMode();
+		initializePermissionContext(this.sessionId, permissionMode, config.permissionMode);
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -751,6 +789,8 @@ export class AgentSession {
 			}
 		}
 
+		if (event.type === "message_end") this._activePromptRun?.completion?.messages.push(event.message);
+
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
 
@@ -988,28 +1028,81 @@ export class AgentSession {
 
 	private assertCanStartWork(): void {
 		this.sessionManager.assertWritable();
+		if (this._closing) throw new Error("Session is closing. New work is not accepted.");
 		if (this.transferring) throw new Error("Session transfer is in progress. Wait or reclaim the session.");
 	}
 
-	dispose(): void {
+	/** Stop admission synchronously, retaining listeners and session ownership. */
+	stopAdmission(): void {
+		this._closing = true;
 		this._invalidateWaitPromptHandoffs("Session closed before the pending prompt could run.");
-		for (const unregister of this._unregisterSubagentWaitInterruptionOwners.splice(0)) unregister();
-		try {
-			this.abortRetry();
-			this.abortCompaction();
-			this.abortBranchSummary();
-			this.abortBash();
-			this.agent.abort();
-		} catch {
-			// Dispose must succeed even if an abort hook throws.
-		}
+	}
 
+	private async _trackOperation<T>(operation: () => Promise<T>): Promise<T> {
+		let settle = () => {};
+		const completion = new Promise<void>((resolve) => {
+			settle = resolve;
+		});
+		this._operations.add(completion);
+		try {
+			return await operation();
+		} finally {
+			this._operations.delete(completion);
+			settle();
+		}
+	}
+
+	/** Cancel owned work and wait for final persistence before extension shutdown. */
+	drain(): Promise<void> {
+		if (this._drainPromise) return this._drainPromise;
+		this.stopAdmission();
+		if (this._activePromptRun) this._activePromptRun.gracefulStopRequested = true;
+		this.abortRetry();
+		this.abortCompaction();
+		this.abortBranchSummary();
+		this.abortBash();
+		this.clearQueue();
+		this.agent.abort();
+		this._drainPromise = (async () => {
+			await Promise.all([...this._operations]);
+			await this.waitForIdle();
+			await this.agent.waitForIdle();
+			this._flushPendingBashMessages();
+		})();
+		return this._drainPromise;
+	}
+
+	/** Await cancellation and persistence, then release listeners and ownership. */
+	shutdown(): Promise<void> {
+		if (!this._shutdownPromise) {
+			this._shutdownPromise = this.drain().then(() => this._disposeSettled());
+		}
+		return this._shutdownPromise;
+	}
+
+	/** Compatibility wrapper. Use await shutdown() when release must be complete. */
+	dispose(): void {
+		if (this._operations.size === 0 && !this._isAgentRunActive && !this.agent.state.isStreaming) {
+			this.stopAdmission();
+			this._disposeSettled();
+			return;
+		}
+		void this.shutdown().catch(() => {
+			/* Awaitable callers receive shutdown failures. */
+		});
+	}
+
+	private _disposeSettled(): void {
+		if (this._disposed) return;
+		this._disposed = true;
+		for (const unregister of this._unregisterSubagentWaitInterruptionOwners.splice(0)) unregister();
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
+		deletePermissionContext(this.sessionId);
 		this.sessionManager.dispose();
 	}
 
@@ -1078,8 +1171,28 @@ export class AgentSession {
 		);
 	}
 
+	get permissionMode(): PermissionMode {
+		return getPermissionMode(this.sessionId);
+	}
+
+	private _permissionAddendum(mode: PermissionMode): string | undefined {
+		return mode === "read-only" ? READ_ONLY_MODE_ADDENDUM : mode === "auto" ? AUTO_MODE_ADDENDUM : undefined;
+	}
+
+	/** Update the same permission context consulted by headless and interactive tools. */
+	setPermissionMode(mode: PermissionMode): void {
+		this.assertCanStartWork();
+		setPermissionMode(mode, this.sessionId);
+		this.sessionManager.setPermissionMode(mode);
+		this.agent.state.systemPrompt = this._withSystemPromptAppend(
+			this._systemPromptOverride ?? this._baseSystemPrompt,
+		);
+	}
+
 	private _withSystemPromptAppend(prompt: string): string {
-		return this._systemPromptAppend ? `${prompt}\n\n${this._systemPromptAppend}` : prompt;
+		return [prompt, this._permissionAddendum(this.permissionMode), this._systemPromptAppend]
+			.filter(Boolean)
+			.join("\n\n");
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -1319,27 +1432,66 @@ export class AgentSession {
 		for (const reservation of handoff.reservations.splice(0)) reservation.reject(error);
 	}
 
-	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+	private _reservePromptRun(): ActivePromptRun {
+		this.assertCanStartWork();
+		if (this._isAgentRunActive || this._manualCompactionPromise) {
+			throw new Error(
+				"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+			);
+		}
 		const run: ActivePromptRun = { waits: new Set(), gracefulStopRequested: false };
 		this._activePromptRun = run;
 		this._isAgentRunActive = true;
-		try {
-			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun(run)) {
-				await this.agent.continue();
+		return run;
+	}
+
+	private async _releasePromptRun(run: ActivePromptRun): Promise<void> {
+		if (this._activePromptRun !== run) return;
+		this._activePromptRun = undefined;
+		this._systemPromptOverride = undefined;
+		this._flushPendingBashMessages();
+		await this._emitAgentSettled();
+	}
+
+	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[], owner?: ActivePromptRun): Promise<void> {
+		const run = owner ?? this._reservePromptRun();
+		await this._trackOperation(async () => {
+			try {
+				this.assertCanStartWork();
+				if (run.gracefulStopRequested) throw new Error("Prompt was cancelled during preparation.");
+				await this.agent.prompt(Array.isArray(messages) ? messages : [messages], {
+					consumeFollowUps: !run.completion,
+				});
+				while (await this._handlePostAgentRun(run)) {
+					if (run.gracefulStopRequested || this._closing || run.completion?.cancelled) break;
+					await this.agent.continue({ consumeFollowUps: !run.completion });
+				}
+				if (run.completion) {
+					const completion = run.completion;
+					run.completion = undefined;
+					completion.detach?.();
+					const hasQueuedWork = !run.gracefulStopRequested && !this._closing && this.agent.hasQueuedMessages();
+					if (!hasQueuedWork) await this._releasePromptRun(run);
+					completion.settle();
+					// Later queued work retains normal session lifecycle, with a fresh queue admission.
+					if (hasQueuedWork) {
+						await this.agent.continueQueued();
+						while (await this._handlePostAgentRun(run)) {
+							if (run.gracefulStopRequested || this._closing) break;
+							await this.agent.continue();
+						}
+					}
+				}
+			} finally {
+				await this._releasePromptRun(run);
 			}
-		} finally {
-			if (this._activePromptRun === run) this._activePromptRun = undefined;
-			this._systemPromptOverride = undefined;
-			this._flushPendingBashMessages();
-			await this._emitAgentSettled();
-		}
+		});
 	}
 
 	private async _handlePostAgentRun(run: ActivePromptRun): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
-		if (!msg || run.gracefulStopRequested) {
+		if (!msg || run.gracefulStopRequested || run.completion?.signal?.aborted) {
 			return false;
 		}
 
@@ -1372,9 +1524,9 @@ export class AgentSession {
 			return true;
 		}
 
-		// The agent loop drains both queues before emitting agent_end. Any messages
-		// here were queued by agent_end extension handlers and need a continuation.
-		return this.agent.hasQueuedMessages();
+		// Correlated requests leave follow-ups queued. Ordinary runs also continue
+		// messages queued by agent_end extension handlers.
+		return !run.completion && this.agent.hasQueuedMessages();
 	}
 
 	/**
@@ -1388,44 +1540,113 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		this.assertCanStartWork();
-		const preflightResult = options?.preflightResult;
-		let prepared: PreparedPromptInput | undefined;
-		let messages: AgentMessage[];
+		const commandName = text.startsWith("/") ? text.slice(1).split(" ")[0] : undefined;
+		// Lifecycle commands may replace the session; they cannot own a run they must drain.
+		if ((options?.expandPromptTemplates ?? true) && commandName && this._extensionRunner.getCommand(commandName)) {
+			try {
+				await this._tryExecuteExtensionCommand(text);
+				options?.preflightResult?.(true);
+			} catch (error) {
+				options?.preflightResult?.(false);
+				throw error;
+			}
+			return;
+		}
+		return this._trackOperation(() => this._prompt(text, options));
+	}
 
+	private async _prompt(text: string, options?: PromptOptions, completion?: PromptCompletion): Promise<void> {
+		let run: ActivePromptRun | undefined;
+		let accepted = false;
 		try {
-			prepared = await this._preparePromptInput(
+			this.assertCanStartWork();
+			const wasStreaming = this.isStreaming;
+			if (!wasStreaming) {
+				run = this._reservePromptRun();
+				run.completion = completion;
+				if (completion?.signal) {
+					const owner = run;
+					const cancel = () => {
+						if (this._activePromptRun !== owner || owner.completion !== completion) return;
+						completion.cancelled = true;
+						this.agent.abort();
+						this.abortRetry();
+						this._autoCompactionAbortController?.abort();
+					};
+					completion.signal.addEventListener("abort", cancel, { once: true });
+					completion.detach = () => completion.signal?.removeEventListener("abort", cancel);
+					completion.signal.throwIfAborted();
+				}
+			} else if (!options?.streamingBehavior) {
+				throw new Error(
+					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+				);
+			}
+			const prepared = await this._preparePromptInput(
 				text,
 				options,
-				this.isStreaming ? options?.streamingBehavior : undefined,
+				wasStreaming ? options?.streamingBehavior : undefined,
 			);
+			this.assertCanStartWork();
+			run?.completion?.signal?.throwIfAborted();
+			if (run?.gracefulStopRequested) throw new Error("Prompt was cancelled during preparation.");
 			if (!prepared) {
-				preflightResult?.(true);
+				accepted = true;
+				options?.preflightResult?.(true);
 				return;
 			}
-
-			if (this.isStreaming) {
-				if (!options?.streamingBehavior) {
-					throw new Error(
-						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-					);
-				}
-				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(prepared.text, prepared.images);
-				} else {
-					await this._queueSteer(prepared.text, prepared.images);
-				}
-				preflightResult?.(true);
+			if (wasStreaming && this.isStreaming) {
+				if (options?.streamingBehavior === "followUp") await this._queueFollowUp(prepared.text, prepared.images);
+				else await this._queueSteer(prepared.text, prepared.images);
+				accepted = true;
+				options?.preflightResult?.(true);
 				return;
 			}
-
-			messages = await this._createPromptMessages(prepared);
+			run ??= this._reservePromptRun();
+			run.completion = completion;
+			const messages = await this._createPromptMessages(prepared);
+			this.assertCanStartWork();
+			run.completion?.signal?.throwIfAborted();
+			if (run.gracefulStopRequested) throw new Error("Prompt was cancelled during preparation.");
+			accepted = true;
+			options?.preflightResult?.(true);
+			await this._runAgentPrompt(messages, run);
 		} catch (error) {
-			preflightResult?.(false);
+			if (!accepted) options?.preflightResult?.(false);
 			throw error;
+		} finally {
+			completion?.detach?.();
+			if (run) await this._releasePromptRun(run);
 		}
+	}
 
-		preflightResult?.(true);
-		await this._runAgentPrompt(messages);
+	/**
+	 * Admit one scheduled request, including steering, retries and compaction.
+	 * Completes before later follow-ups; signal cancellation belongs only to this request.
+	 */
+	async promptWithCompletion(
+		text: string,
+		options?: Omit<PromptOptions, "streamingBehavior" | "preflightResult"> & { signal?: AbortSignal },
+	): Promise<{ messages: AgentMessage[] }> {
+		this.assertCanStartWork();
+		if (!this.isIdle || this.isBashRunning || this.isCompacting || this.pendingMessageCount > 0) {
+			throw new Error("Session is busy. Retry the scheduled prompt after its work settles.");
+		}
+		if (text.startsWith("/") && (options?.expandPromptTemplates ?? true)) this._throwIfExtensionCommand(text);
+		options?.signal?.throwIfAborted();
+		const messages: AgentMessage[] = [];
+		return new Promise((resolve, reject) => {
+			const completion: PromptCompletion = {
+				messages,
+				signal: options?.signal,
+				settle: () => {
+					if (completion.cancelled) reject(completion.signal?.reason);
+					else resolve({ messages });
+				},
+			};
+			// Track the full session operation while returning only the admitted request's completion.
+			void this._trackOperation(() => this._prompt(text, options, completion)).then(completion.settle, reject);
+		});
 	}
 
 	private async _preparePromptInput(
@@ -1526,7 +1747,11 @@ export class AgentSession {
 		text: string,
 		options?: Pick<PromptOptions, "expandPromptTemplates" | "images" | "source">,
 	): Promise<WaitPromptHandoff | undefined> {
-		const acceptance = this._waitPromptAcceptance.then(() => this._reserveWaitPrompt(text, options));
+		this.assertCanStartWork();
+		const previousAcceptance = this._waitPromptAcceptance;
+		const acceptance = this._trackOperation(() =>
+			previousAcceptance.then(() => this._reserveWaitPrompt(text, options)),
+		);
 		this._waitPromptAcceptance = acceptance.then(
 			() => {},
 			() => {},
@@ -1568,6 +1793,9 @@ export class AgentSession {
 			}
 			throw error;
 		}
+		this.assertCanStartWork();
+		if (handoff.generation !== this._waitPromptGeneration)
+			throw new Error("Pending prompt was cancelled during preparation.");
 		if (!prepared) {
 			if (handoff.reservations.length === 0 && this._waitPromptHandoff === handoff) {
 				this._waitPromptHandoff = undefined;
@@ -1602,15 +1830,18 @@ export class AgentSession {
 			handoff.reservations.length > 0
 		) {
 			const reservation = handoff.reservations[0]!;
+			let run: ActivePromptRun | undefined;
 			try {
 				this.assertCanStartWork();
+				run = this._reservePromptRun();
 				const messages = await this._createPromptMessages(reservation.input);
 				handoff.accepting = false;
-				await this._runAgentPrompt(messages);
+				await this._runAgentPrompt(messages, run);
 				reservation.resolve();
 			} catch (error) {
 				reservation.reject(error);
 			} finally {
+				if (run) await this._releasePromptRun(run);
 				if (handoff.reservations[0] === reservation) handoff.reservations.shift();
 			}
 		}
@@ -1899,8 +2130,12 @@ export class AgentSession {
 	async abort(): Promise<void> {
 		this._invalidateWaitPromptHandoffs("The active run was aborted before the pending prompt could run.");
 		this.abortRetry();
+		if (this._activePromptRun && !this.agent.signal) this._activePromptRun.gracefulStopRequested = true;
+		const bash = [...this._bashOperations.values()];
+		this.abortBash();
 		this.agent.abort();
 		await this.waitForIdle();
+		await Promise.all(bash);
 	}
 
 	async waitForIdle(): Promise<void> {
@@ -2181,11 +2416,12 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
+		this.assertCanStartWork();
 		const existing = this._latestCompactionResult();
 		if (existing) return existing;
 		if (this._manualCompactionPromise) return this._manualCompactionPromise;
 
-		const promise = this._compact(customInstructions);
+		const promise = this._trackOperation(() => this._compact(customInstructions));
 		this._manualCompactionPromise = promise;
 		try {
 			return await promise;
@@ -2195,17 +2431,15 @@ export class AgentSession {
 	}
 
 	private async _compact(customInstructions?: string): Promise<CompactionResult> {
-		this._disconnectFromAgent();
 		await this.abort();
+		this.assertCanStartWork();
 		const existing = this._latestCompactionResult();
-		if (existing) {
-			this._reconnectToAgent();
-			return existing;
-		}
+		if (existing) return existing;
+		this._disconnectFromAgent();
 		this._compactionAbortController = new AbortController();
-		this._emit({ type: "compaction_start", reason: "manual" });
 
 		try {
+			this._emit({ type: "compaction_start", reason: "manual" });
 			if (!this.model) {
 				throw new Error(formatNoModelSelectedMessage());
 			}
@@ -2598,9 +2832,9 @@ export class AgentSession {
 				return true;
 			}
 
-			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Only ordinary runs continue queued requests after successful compaction.
+			// Correlated completion must settle before those requests begin.
+			return !this._activePromptRun?.completion && this.agent.hasQueuedMessages();
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {
@@ -2890,6 +3124,7 @@ export class AgentSession {
 			{
 				getModel: () => this.resolvedCatalogModel(),
 				isIdle: () => this.isIdle,
+				promptWithCompletion: (text, options) => this.promptWithCompletion(text, options),
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,
 				abort: () => {
@@ -3268,28 +3503,35 @@ export class AgentSession {
 		options?: { excludeFromContext?: boolean; operations?: BashOperations },
 	): Promise<BashResult> {
 		this.assertCanStartWork();
-		this._bashAbortController = new AbortController();
-
-		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
-		const prefix = this.settingsManager.getShellCommandPrefix();
-		const shellPath = this.settingsManager.getShellPath();
-		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
+		const controller = new AbortController();
+		let settle = () => {};
+		const completion = new Promise<void>((resolve) => {
+			settle = resolve;
+		});
+		this._bashOperations.set(controller, completion);
+		this._operations.add(completion);
 
 		try {
+			// Apply the configured shell prefix within this operation's cleanup boundary.
+			const prefix = this.settingsManager.getShellCommandPrefix();
+			const shellPath = this.settingsManager.getShellPath();
+			const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
 				options?.operations ?? createLocalBashOperations({ shellPath, sessionId: this.sessionId }),
 				{
 					onChunk,
-					signal: this._bashAbortController.signal,
+					signal: controller.signal,
 				},
 			);
 
 			this.recordBashResult(command, result, options);
 			return result;
 		} finally {
-			this._bashAbortController = undefined;
+			this._bashOperations.delete(controller);
+			this._operations.delete(completion);
+			settle();
 		}
 	}
 
@@ -3324,15 +3566,15 @@ export class AgentSession {
 	}
 
 	/**
-	 * Cancel running bash command.
+	 * Cancel every running direct bash operation.
 	 */
 	abortBash(): void {
-		this._bashAbortController?.abort();
+		for (const controller of this._bashOperations.keys()) controller.abort();
 	}
 
 	/** Whether a bash command is currently running */
 	get isBashRunning(): boolean {
-		return this._bashAbortController !== undefined;
+		return this._bashOperations.size > 0;
 	}
 
 	/** Whether there are pending bash messages waiting to be flushed */
@@ -3388,6 +3630,20 @@ export class AgentSession {
 	 * @returns Result with editorText (if user message) and cancelled status
 	 */
 	async navigateTree(
+		targetId: string,
+		options: {
+			summarize?: boolean;
+			customInstructions?: string;
+			replaceInstructions?: boolean;
+			label?: string;
+		} = {},
+	) {
+		this.assertCanStartWork();
+		if (this._branchSummaryAbortController) throw new Error("Tree navigation is already in progress.");
+		return this._trackOperation(() => this._navigateTree(targetId, options));
+	}
+
+	private async _navigateTree(
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},
 	): Promise<{
@@ -3507,6 +3763,7 @@ export class AgentSession {
 				summaryDetails = extensionSummary.details;
 			}
 
+			if (this._branchSummaryAbortController.signal.aborted) return { cancelled: true, aborted: true };
 			// Determine the new leaf position based on target type
 			let newLeafId: string | null;
 			let editorText: string | undefined;

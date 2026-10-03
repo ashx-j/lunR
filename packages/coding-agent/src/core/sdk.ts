@@ -10,6 +10,7 @@ import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefi
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
+import type { PermissionMode } from "./permissions.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
@@ -31,6 +32,8 @@ import {
 } from "./tools/index.ts";
 
 export interface CreateAgentSessionOptions {
+	/** Explicit permission override; defaults to child inheritance, session checkpoint, then settings. */
+	permissionMode?: PermissionMode;
 	/** Working directory for project-local discovery. Default: process.cwd() */
 	cwd?: string;
 	/** Global config directory. Default: ~/.pi/agent */
@@ -406,6 +409,7 @@ async function createOwnedAgentSession(options: CreateAgentSessionOptions): Prom
 		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
+		permissionMode: options.permissionMode,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 
