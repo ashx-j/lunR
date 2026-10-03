@@ -194,13 +194,14 @@ export function getMcpDiscoverySummary(overridePath?: string, cwd = process.cwd(
   };
 }
 
-export function loadMcpConfig(overridePath?: string, cwd = process.cwd()): McpConfig {
+export function loadMcpConfig(overridePath?: string, cwd = process.cwd(), projectTrusted = false): McpConfig {
   let config: McpConfig = { mcpServers: {} };
 
   for (const source of getConfigSources(overridePath, cwd)) {
+    if (source.scope === "project" && !projectTrusted) continue;
     const loaded = readValidatedConfig(source.readPath, `MCP config from ${source.readPath}`);
     if (!loaded) continue;
-    config = mergeConfigs(config, expandImports(loaded, cwd));
+    config = mergeConfigs(config, expandImports(loaded, cwd, projectTrusted));
   }
 
   return config;
@@ -288,12 +289,12 @@ function mergeImports(left: ImportKind[] | undefined, right: ImportKind[] | unde
   return [...new Set(merged)];
 }
 
-function expandImports(config: McpConfig, cwd = process.cwd()): McpConfig {
+function expandImports(config: McpConfig, cwd = process.cwd(), projectTrusted = false): McpConfig {
   if (!config.imports?.length) return config;
 
   const importedServers: Record<string, ServerEntry> = {};
   for (const importKind of config.imports) {
-    const importPath = resolveImportPath(importKind, cwd);
+    const importPath = resolveImportPath(importKind, cwd, projectTrusted);
     if (!importPath) continue;
 
     try {
@@ -316,9 +317,10 @@ function expandImports(config: McpConfig, cwd = process.cwd()): McpConfig {
   };
 }
 
-function resolveImportPath(importKind: ImportKind, cwd = process.cwd()): string | null {
+function resolveImportPath(importKind: ImportKind, cwd = process.cwd(), projectTrusted = true): string | null {
   const candidates = IMPORT_PATHS[importKind] ?? [];
   for (const candidate of candidates) {
+    if (candidate.startsWith(".") && !projectTrusted) continue;
     const fullPath = candidate.startsWith(".") ? resolve(cwd, candidate) : candidate;
     if (existsSync(fullPath)) {
       return fullPath;
@@ -623,6 +625,7 @@ export function getServerProvenance(overridePath?: string, cwd = process.cwd()):
   const userPath = getPiGlobalConfigPath(overridePath);
 
   for (const source of getConfigSources(overridePath, cwd)) {
+    if (source.scope === "project" && !projectTrusted) continue;
     const loaded = readValidatedConfig(source.readPath, `MCP config from ${source.readPath}`);
     if (!loaded) continue;
 

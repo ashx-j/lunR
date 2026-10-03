@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Project trust (`fix/review-project-trust`, 2026-10-03):** bootstrap ignores unapproved project settings; approved session directories receive a second lookup with cwd-bound services rebuilt when needed. Global retention keeps its own policy. MCP project files/imports, cached tool registration and startup, LSP command overrides/autostart, and prompt-model discovery now follow resolved trust. Global integrations, explicit CLI resources, and recursive trusted templates remain available. No live integration process or provider request was used.
+
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
 
 - **Computer recovery (`fix/computer-use-recovery`):** settled native failures retain a safe post-image and structured outcome; local validation mistakes permit fresh observation without restarting a healthy workflow. Discovery preserves token age, optional `include_windows` returns bounded named-app windows, and launch has phase-specific guidance plus a 45-second request budget. Windows-only `computer_hover` moves the foreground desktop pointer, waits 700 ms, then captures once. Native binary, exact-token checks, permissions, and ownership remain unchanged. No live qualification of the original taskbar failure or hover yet.
@@ -164,6 +166,8 @@ Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Project trust, 2026-10-03: 66 tests across nine focused suites pass, covering startup session paths, integration trust, MCP cold start, LSP startup, trust store/selector, system prompt, deferred built-ins and dynamic tools. Fifteen inert desired-behavior cases fail when the relevant production code is restored to its starting baseline. All five offline package builds and the Node bundle pass; touched non-vendored Biome and whitespace checks pass. Seven existing resource-loader tests still use `.pi` project fixtures and fail independently of this change. Validation uses isolated profiles and fake credentials, with no inference, actual MCP/LSP command, browser or desktop action.
+
 - v0.2.26 release (2026-09-27): five offline package builds and coding-agent Node bundle pass; 21 focused coding-agent suites pass 375/375, with the ten computer suites rerun after approval passing 128/128. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass; Linux integration CI build, first-request, and Check pass. Full CI retains 98 baseline fixture failures across 24 suites, versus 101 across 27 in #77's earlier Ubuntu log; AI 623 and Agent 181 pass. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog, pinned dependencies and whitespace checks pass. All three pinned archives pass byte/SHA-256 verification and seven staged package dry-run packs pass. Production gate passes. Tag publication workflow `36312684171` succeeded at `c3d6e31`; all seven 0.2.26 versions expose npm tarballs, `npm view` reports 0.2.26 latest, and a fresh isolated public install reports 0.2.26 for the CLI, three dependencies, and Windows x64 payload. First-paint and first-turn subagent/MCP/LSP/fetch checks pass against that installed CLI. No global install, Mac/ARM desktop operation, or live provider test.
 
 - Computer recovery, 2026-09-26: 128 tests across ten focused computer suites pass after integrating both implementation branches. All five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged initial tool fingerprints. An isolated compiled CLI turn against a local scripted provider loads the new tools and verifies the Windows hover and window-enrichment schemas; initial/loaded inventories and prompts remain private under `.artifacts/computer-recovery/`. Touched-file Biome with formatting disabled, relative imports, shrinkwrap, installer lock, and whitespace checks pass. No native driver, desktop operation, remote model, installed CLI update, or release.
@@ -281,6 +285,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Prompt-model discovery reads the runtime's EventBus-scoped resource policy. A custom loader that directly supplies this built-in without the internal policy binding fails closed. MCP definitions retired on session replacement remain in the extension's registered inventory but leave active tools, and captured executors reject them before initialization. Full integration lifecycle fixes remain separate.
+
 - npm published all seven 0.2.26 packages before the CLI's registry metadata propagated. Verify the exact tarball and a fresh isolated install before treating tag publication as complete.
 
 - On npm 10 and 12, `npm run version:patch` rejects the existing `-ws` shortcut; use `npm version patch --workspaces --no-git-tag-version`, then `scripts/sync-versions.js` and the normal lock generators until the script is corrected in a separate change.
@@ -396,6 +402,9 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-03: apply project retention only to its approved configured tree and resolve session paths in two stages, because declined settings must never redirect storage or shorten global retention.
+- 2026-10-03: give built-ins the runtime's resolved discovery policy, because separate MCP/LSP/template loaders must honor trust without removing trusted recursive templates or explicit user configuration.
 
 - 2026-09-27: tag the merged 0.2.26 release commit after production approval and confirm seven public npm tarballs plus a fresh install, because workflow success preceded registry propagation.
 

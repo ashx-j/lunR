@@ -279,7 +279,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     latestCtx = ctx;
     sessionCwd = ctx.cwd;
 
-    projectConfig = loadProjectConfig(ctx.cwd);
+    projectConfig = ctx.isProjectTrusted() ? loadProjectConfig(ctx.cwd) : null;
     await host.bindSession(buildBindOptions(ctx.cwd));
 
     const statusText = pendingProvider?.getStatusText?.() ?? "";

@@ -155,6 +155,7 @@ function createExtensionHarness(factory: (pi: never) => void = lspExtension) {
 
 	const ctx = {
 		cwd: process.cwd(),
+		isProjectTrusted: () => true,
 		ui,
 	};
 
@@ -601,7 +602,7 @@ describe("pi-lsp-extension startup readiness", () => {
 		expect(replacement.manager.getLanguageId).not.toHaveBeenCalled();
 	});
 
-	it("autoStart from .pi-lsp.json still ensures runtime and starts languages", async () => {
+	it.each([true, false])("project LSP autoStart applies only with trust=%s", async (trusted) => {
 		const cwd = mkdtempSync(join(tmpdir(), "lsp-ext-autostart-"));
 		dirs.push(cwd);
 		writeFileSync(
@@ -614,6 +615,7 @@ describe("pi-lsp-extension startup readiness", () => {
 		);
 
 		const startEagerly = vi.fn();
+		const configureServer = vi.fn();
 		const constructed: string[] = [];
 
 		vi.resetModules();
@@ -623,7 +625,7 @@ describe("pi-lsp-extension startup readiness", () => {
 					constructed.push(rootDir);
 				}
 				setWorkspaceProvider() {}
-				setServerConfig() {}
+				setServerConfig = configureServer;
 				setLombokJar() {}
 				getLombokJar() {
 					return null;
@@ -673,8 +675,20 @@ describe("pi-lsp-extension startup readiness", () => {
 		const { default: freshExtension } = await import("../src/builtin-extensions/pi-lsp-extension/src/index.ts");
 		const harness = createExtensionHarness(freshExtension);
 		harness.setCwd(cwd);
+		harness.ctx.isProjectTrusted = () => trusted;
 		await harness.emit("session_start", { type: "session_start" }, harness.ctx);
 
+		if (!trusted) {
+			expect(startEagerly).not.toHaveBeenCalled();
+			expect(constructed).toEqual([]);
+			// Await explicit lazy initialization so any wrongly queued eager start must settle too.
+			await harness.tools
+				.find((tool) => tool.name === "lsp_hover")!
+				.execute("probe", { path: "missing.ts" }, undefined, undefined, harness.ctx);
+			expect(startEagerly).not.toHaveBeenCalled();
+			expect(configureServer).not.toHaveBeenCalled();
+			return;
+		}
 		await vi.waitFor(() => expect(startEagerly).toHaveBeenCalledWith(["typescript"]));
 		expect(constructed).toEqual([cwd]);
 		expect(harness.statuses.some((status) => status.includes("auto-starting typescript"))).toBe(true);
