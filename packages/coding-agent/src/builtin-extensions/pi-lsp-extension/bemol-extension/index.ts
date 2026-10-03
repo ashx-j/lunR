@@ -5,7 +5,7 @@
  * Detects Amazon Brazil workspaces, runs bemol to generate LSP configs,
  * and registers a WorkspaceProvider with the LSP extension via pi.events.
  *
- * Install: place in ~/.pi/agent/extensions/pi-lsp-bemol/ or load with pi -e
+ * Install: place in ~/.lunr/agent/extensions/pi-lsp-bemol/ or load with lunr -e
  *
  * Requires: bemol on PATH (toolbox install bemol)
  */

@@ -5,7 +5,7 @@
  *
  * Setup:
  *   1. Get an API key from https://ollama.com
- *   2. Add to auth.json in the agent config dir (~/.pi/agent/auth.json, or set PI_CODING_AGENT_DIR):
+ *   2. Add to auth.json in the agent config dir (~/.lunr/agent/auth.json, or set PI_CODING_AGENT_DIR):
  *      { "ollama-cloud": { "type": "api_key", "key": "your-key" } }
  *   3. Run /refresh to fetch model metadata
  *   4. Use /model or ctrl+l to select an Ollama Cloud model

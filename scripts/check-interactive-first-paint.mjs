@@ -206,8 +206,8 @@ registerHooks({load(url, context, nextLoad) {
 		assert.equal(
 			request.toolSchemaHash,
 			computerHost
-				? browserEnabled ? "8c44eedcd28e9832cd50ff7c7a7828eb13fd0d41cfd75b0cbf3d576b9d75c1ae" : "02e256b2d384b810ee1d21d4764db69b56c66e66732b766b6c85e5a6d3c2849f"
-				: browserEnabled ? "3306aa26e5e29887792d54edf5646c087e48685b4cd2bd86d9ae56f269e0726a" : "0ab7bbb8317ef7f074bae5f05bec24f12c268caa26b3b2ae99436f1ee2dfb39e",
+				? browserEnabled ? "c259c7af949e61b92e128be0df1fc103aedb237a1eac616e01363f56077833fe" : "c43940f8b8cf6f1d299ba08fe82b01d40eb9c62d0656c524ba87ee5c3fafce9c"
+				: browserEnabled ? "ff46855efd0d5aeca993b16d0020876f6a58104db068be3d1f6a22bae995ac93" : "b734a0f24cb60ac79f0d8b6f7f4d8f6d75ad8b12dd96379f2d6eba20eb823102",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
