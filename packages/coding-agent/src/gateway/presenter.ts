@@ -6,15 +6,39 @@ import { noOpUIContext } from "../core/extensions/runner.ts";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../core/extensions/types.ts";
 import { runWithApprovalContext } from "./approval.ts";
 import { isAuthorized } from "./authz.ts";
-import { createPicker } from "./buttons.ts";
+import { createPicker, gatewayPickerGeneration, invalidateGatewayPickers } from "./buttons.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
-import { createPairingStore } from "./pairing.ts";
+import { createPairingStore, type PairingStore } from "./pairing.ts";
 import { atomicJson } from "./service.ts";
 import { splitMessage } from "./text.ts";
 import type { MessageEvent, PlatformAdapter, SendOptions } from "./types.ts";
 
 const epochs = new Map<string, number>();
+const sessionIdentities = new Map<string, object>();
+
+function sessionIdentity(key: string): object {
+	let identity = sessionIdentities.get(key);
+	if (!identity) {
+		identity = {};
+		sessionIdentities.set(key, identity);
+	}
+	return identity;
+}
+
+/** Retire session UI independently of cancelling its current dialogs. Roll back a failed replacement. */
+export function invalidateGatewaySession(key: string): () => void {
+	const previous = sessionIdentity(key);
+	const next = {};
+	sessionIdentities.set(key, next);
+	invalidateGatewayDialogs(key);
+	return () => {
+		if (sessionIdentities.get(key) === next) {
+			invalidateGatewayDialogs(key);
+			sessionIdentities.set(key, previous);
+		}
+	};
+}
 const inputs = new Map<string, { userId: string; resolve: (value: string | undefined) => void }>();
 const dialogs = new Map<string, Set<() => void>>();
 let adapters = new Map<string, PlatformAdapter>();
@@ -54,12 +78,29 @@ export function rememberGatewayRole(key: string, source: MessageEvent["source"])
 	else roleGrants.delete(key);
 }
 
+/** Fresh delivery authorization shared by previews, final edits and durable retries. */
+export function canDeliverGatewayText(
+	key: string,
+	source: MessageEvent["source"],
+	fallbackConfig?: GatewayConfig,
+	pairing: PairingStore = createPairingStore(),
+): boolean {
+	const binding = conversationBinding(key);
+	const cfg = existsSync(gatewayConfigPath()) ? loadGatewayConfig() : (fallbackConfig ?? loadGatewayConfig());
+	return (
+		(!binding ||
+			(binding.source.platform === source.platform &&
+				binding.source.chatId === source.chatId &&
+				binding.source.userId === source.userId &&
+				binding.source.threadId === source.threadId &&
+				(!binding.owner || binding.owner === source.userId))) &&
+		isAuthorized(sourceWithCurrentRole(key, source), cfg, pairing)
+	);
+}
+
 function canDeliver(key: string): boolean {
 	const binding = conversationBinding(key);
-	if (!binding) return false;
-	const cfg = loadGatewayConfig();
-	if (binding.owner && binding.owner !== binding.source.userId) return false;
-	return isAuthorized(sourceWithCurrentRole(key, binding.source), cfg, createPairingStore());
+	return !!binding && canDeliverGatewayText(key, binding.source);
 }
 
 export function gatewayDestination(key: string): { adapter: PlatformAdapter; source: MessageEvent["source"] } {
@@ -107,7 +148,7 @@ export function startGatewayPresenter(connected: Map<string, PlatformAdapter>): 
 export function stopGatewayPresenter(): void {
 	if (timer) clearInterval(timer);
 	timer = undefined;
-	for (const key of dialogs.keys()) invalidateGatewayDialogs(key);
+	for (const key of new Set([...sessionIdentities.keys(), ...dialogs.keys()])) invalidateGatewaySession(key);
 	adapters = new Map();
 	deliveryConfigs.clear();
 	roleGrants.clear();
@@ -188,18 +229,7 @@ async function drainKey(key: string): Promise<void> {
 		const binding = conversationBinding(item.key);
 		const source = item.source ?? binding?.source;
 		if (!source) break;
-		const cfg = existsSync(gatewayConfigPath())
-			? loadGatewayConfig()
-			: (deliveryConfigs.get(item.key) ?? loadGatewayConfig());
-		if (
-			(binding &&
-				(binding.source.platform !== source.platform ||
-					binding.source.chatId !== source.chatId ||
-					binding.source.userId !== source.userId ||
-					binding.source.threadId !== source.threadId)) ||
-			!isAuthorized(sourceWithCurrentRole(key, source), cfg, createPairingStore()) ||
-			(binding?.owner && binding.owner !== source.userId)
-		) {
+		if (!canDeliverGatewayText(key, source, deliveryConfigs.get(key))) {
 			outbox = outbox.filter((v) => v.id !== item.id);
 			atomicJson(path(), outbox);
 			continue;
@@ -231,6 +261,7 @@ async function drainKey(key: string): Promise<void> {
 }
 
 export function invalidateGatewayDialogs(key: string): void {
+	invalidateGatewayPickers(key);
 	epochs.set(key, (epochs.get(key) ?? 0) + 1);
 	const remaining = outbox.filter((item) => item.key !== key || item.kind !== "notice");
 	if (remaining.length !== outbox.length) {
@@ -250,12 +281,20 @@ export function acceptGatewayInput(key: string, event: MessageEvent): boolean {
 	return true;
 }
 
+interface GatewayDialogRequest {
+	generation: number;
+	source: MessageEvent["source"];
+}
+
 function dialog(
 	key: string,
 	opts: ExtensionUIDialogOptions | undefined,
 	show: (done: (value: string | undefined) => void, valid: () => boolean) => Promise<void>,
+	request?: GatewayDialogRequest,
 ): Promise<string | undefined> {
+	if (request && request.generation !== gatewayPickerGeneration(key)) return Promise.resolve(undefined);
 	const epoch = epochs.get(key) ?? 0;
+	const source = request?.source ?? conversationBinding(key)?.source;
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		const finish = (value: string | undefined, error?: unknown) => {
@@ -263,7 +302,7 @@ function dialog(
 			settled = true;
 			clearTimeout(timeout);
 			opts?.signal?.removeEventListener("abort", cancel);
-			inputs.delete(key);
+			if (inputs.get(key)?.resolve === done) inputs.delete(key);
 			dialogs.get(key)?.delete(cancel);
 			if (error !== undefined) reject(error);
 			else resolve(value);
@@ -279,7 +318,10 @@ function dialog(
 			cancel();
 			return;
 		}
-		void show(done, () => !settled && (epochs.get(key) ?? 0) === epoch && canDeliver(key)).catch((error) => {
+		void show(
+			done,
+			() => !settled && (epochs.get(key) ?? 0) === epoch && !!source && canDeliverGatewayText(key, source),
+		).catch((error) => {
 			finish(undefined, error);
 		});
 	});
@@ -290,29 +332,37 @@ export function gatewaySelect(
 	title: string,
 	options: string[],
 	opts?: ExtensionUIDialogOptions,
+	request?: GatewayDialogRequest,
 ): Promise<string | undefined> {
-	return dialog(key, opts, async (done, valid) => {
-		const { adapter, source } = gatewayDestination(key);
-		const result = await createPicker(
-			adapter,
-			source,
-			{
-				kind: "dialog",
-				sessionKey: key,
-				invokerId: source.userId,
-				title,
-				items: options.map((value) => ({ label: value, value })),
-				validate: valid,
-				onCancel: () => done(undefined),
-				resolve: async (item) => {
-					done(item.value);
-					return { done: true, text: `${title}\n${item.value}` };
+	return dialog(
+		key,
+		opts,
+		async (done, valid) => {
+			const { adapter, source: destination } = gatewayDestination(key);
+			const source = request?.source ?? destination;
+			const result = await createPicker(
+				adapter,
+				source,
+				{
+					kind: "dialog",
+					generation: request?.generation,
+					sessionKey: key,
+					invokerId: source.userId,
+					title,
+					items: options.map((value) => ({ label: value, value })),
+					validate: valid,
+					onCancel: () => done(undefined),
+					resolve: async (item) => {
+						done(item.value);
+						return { done: true, text: `${title}\n${item.value}` };
+					},
 				},
-			},
-			{ threadId: source.threadId },
-		);
-		if (!result.success) throw new Error(result.error ?? "Could not send picker.");
-	});
+				{ threadId: source.threadId },
+			);
+			if (!result.success) throw new Error(result.error ?? "Could not send picker.");
+		},
+		request,
+	);
 }
 
 export function gatewayInput(
@@ -320,36 +370,46 @@ export function gatewayInput(
 	title: string,
 	placeholder?: string,
 	opts?: ExtensionUIDialogOptions,
+	request?: GatewayDialogRequest,
 ): Promise<string | undefined> {
 	if (inputs.has(key)) return Promise.reject(new Error("Answer or cancel the existing question first."));
 	const epoch = gatewayEpoch(key);
-	return dialog(key, opts, async (done) => {
-		const { source } = gatewayDestination(key);
-		inputs.set(key, { userId: source.userId, resolve: done });
-		await sendGatewayNotice(
-			key,
-			`${title}${placeholder ? `\n${placeholder}` : ""}\nReply with text, or /cancel.`,
-			"notice",
-			epoch,
-		);
-	});
+	return dialog(
+		key,
+		opts,
+		async (done, valid) => {
+			if (!valid()) {
+				done(undefined);
+				return;
+			}
+			const source = request?.source ?? gatewayDestination(key).source;
+			inputs.set(key, { userId: source.userId, resolve: done });
+			await sendGatewayNotice(
+				key,
+				`${title}${placeholder ? `\n${placeholder}` : ""}\nReply with text, or /cancel.`,
+				"notice",
+				epoch,
+			);
+		},
+		request,
+	);
 }
 
 export function createGatewayUI(key: string): ExtensionUIContext {
-	const epoch = gatewayEpoch(key);
+	const identity = sessionIdentity(key);
+	const source = conversationBinding(key)?.source;
+	const valid = () => sessionIdentity(key) === identity && !!source && canDeliverGatewayText(key, source);
 	return {
 		...noOpUIContext,
 		select: (title, options, opts) =>
-			gatewayEpoch(key) === epoch ? gatewaySelect(key, title, options, opts) : Promise.resolve(undefined),
+			valid() ? gatewaySelect(key, title, options, opts) : Promise.resolve(undefined),
 		confirm: async (title, message, opts) =>
-			gatewayEpoch(key) === epoch &&
-			(await gatewaySelect(key, `${title}\n${message}`, ["Approve", "Decline"], opts)) === "Approve",
+			valid() && (await gatewaySelect(key, `${title}\n${message}`, ["Approve", "Decline"], opts)) === "Approve",
 		input: (title, placeholder, opts) =>
-			gatewayEpoch(key) === epoch ? gatewayInput(key, title, placeholder, opts) : Promise.resolve(undefined),
-		editor: (title, prefill) =>
-			gatewayEpoch(key) === epoch ? gatewayInput(key, title, prefill) : Promise.resolve(undefined),
+			valid() ? gatewayInput(key, title, placeholder, opts) : Promise.resolve(undefined),
+		editor: (title, prefill) => (valid() ? gatewayInput(key, title, prefill) : Promise.resolve(undefined)),
 		notify: (message) => {
-			void sendGatewayNotice(key, message, "notice", epoch).catch(() => {});
+			if (valid()) void sendGatewayNotice(key, message).catch(() => {});
 		},
 		custom: async () => {
 			throw new Error(
@@ -357,10 +417,10 @@ export function createGatewayUI(key: string): ExtensionUIContext {
 			);
 		},
 		pasteToEditor: (text) => {
-			void sendGatewayNotice(key, text, "notice", epoch).catch(() => {});
+			if (valid()) void sendGatewayNotice(key, text).catch(() => {});
 		},
 		setEditorText: (text) => {
-			void sendGatewayNotice(key, text, "notice", epoch).catch(() => {});
+			if (valid()) void sendGatewayNotice(key, text).catch(() => {});
 		},
 	};
 }

@@ -7,8 +7,10 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { isAuthorized } from "./authz.ts";
-import type { GatewayConfig } from "./config.ts";
+import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig } from "./config.ts";
+import { conversationBinding } from "./conversations.ts";
 import type { PairingStore } from "./pairing.ts";
 import type { BridgeLike } from "./router.ts";
 import type { ButtonSpec, CallbackEvent, PlatformAdapter, SendOptions, SendResult, SessionSource } from "./types.ts";
@@ -31,6 +33,7 @@ export type PickerResolveResult =
 	| { done: false; items: PickerItem[]; title: string; breadcrumbs?: string };
 
 export interface PickerSpec {
+	generation?: number;
 	kind: "model" | "thinking" | "sessions" | "project" | "dialog";
 	validate?(): boolean;
 	onCancel?(): void;
@@ -44,6 +47,7 @@ export interface PickerSpec {
 }
 
 interface PendingPicker extends PickerSpec {
+	generation: number;
 	resolving?: boolean;
 	completed?: string;
 	id: string;
@@ -64,6 +68,42 @@ export interface ButtonDeps {
 }
 
 const registry = new Map<string, PendingPicker>();
+const generations = new Map<string, number>();
+
+export function gatewayPickerGeneration(key: string): number {
+	return generations.get(key) ?? 0;
+}
+
+/** Cancel pending controls when their conversation changes or the user stops them. */
+export function invalidateGatewayPickers(key: string): void {
+	generations.set(key, gatewayPickerGeneration(key) + 1);
+	for (const [id, picker] of registry) {
+		if (picker.sessionKey !== key || picker.completed !== undefined) continue;
+		registry.delete(id);
+		picker.onCancel?.();
+	}
+}
+
+function pickerRequesterValid(picker: PendingPicker): boolean {
+	const binding = conversationBinding(picker.sessionKey);
+	return (
+		!binding ||
+		((!binding.owner || binding.owner === picker.invokerId) &&
+			binding.source.platform === picker.source.platform &&
+			binding.source.chatId === picker.source.chatId &&
+			binding.source.userId === picker.invokerId &&
+			binding.source.threadId === picker.source.threadId)
+	);
+}
+
+function pickerValid(picker: PendingPicker): boolean {
+	return (
+		picker.generation === gatewayPickerGeneration(picker.sessionKey) &&
+		pickerRequesterValid(picker) &&
+		(!picker.validate || picker.validate())
+	);
+}
+
 let sweeper: ReturnType<typeof setInterval> | undefined;
 
 function generatePickerId(): string {
@@ -164,6 +204,7 @@ export async function createPicker(
 	const id = generatePickerId();
 	const pending: PendingPicker = {
 		...spec,
+		generation: spec.generation ?? gatewayPickerGeneration(spec.sessionKey),
 		id,
 		chatId: source.chatId,
 		source,
@@ -173,9 +214,19 @@ export async function createPicker(
 		perPage: spec.perPage ?? DEFAULT_PER_PAGE,
 		createdAt: Date.now(),
 	};
+	if (!pickerValid(pending)) return { success: false, error: "Picker expired." };
+	if (
+		source.userId !== spec.invokerId ||
+		(existsSync(gatewayConfigPath()) && !isAuthorized(source, loadGatewayConfig()))
+	)
+		return { success: false, error: "Gateway access is no longer approved." };
 	const { text, buttons } = renderPage(pending);
 	const result = await adapter.sendButtons(source.chatId, text, buttons, opts);
 	if (!result.success) return result;
+	if (!pickerValid(pending)) {
+		pending.onCancel?.();
+		return result;
+	}
 	if (result.messageId) {
 		pending.messageId = result.messageId;
 		registry.set(id, pending);
@@ -200,7 +251,8 @@ export async function handleCallback(
 	cb: CallbackEvent,
 	deps: ButtonDeps & { adapter: PlatformAdapter },
 ): Promise<void> {
-	const { adapter, cfg, pairing } = deps;
+	const { adapter, pairing } = deps;
+	const freshConfig = () => (existsSync(gatewayConfigPath()) ? loadGatewayConfig() : deps.cfg);
 	const parsed = parseCallbackData(cb.data);
 	if (!parsed) return;
 
@@ -210,26 +262,14 @@ export async function handleCallback(
 		return;
 	}
 
-	if (!picker.completed && picker.validate && !picker.validate()) {
+	if (picker.completed === undefined && !pickerValid(picker)) {
 		registry.delete(parsed.id);
 		picker.onCancel?.();
 		await answerExpired(adapter, cb);
 		return;
 	}
 
-	if (Date.now() > picker.createdAt + PICKER_TTL_MS) {
-		if (!picker.completed) picker.onCancel?.();
-		registry.delete(parsed.id);
-		try {
-			await picker.adapter.editMessage(picker.chatId, picker.messageId, "⏱ Expired — run the command again.", []);
-		} catch {
-			// best-effort expiry message
-		}
-		await answerExpired(adapter, cb);
-		return;
-	}
-
-	if (!isSameChat(picker.source, sourceForAuth(picker, cb))) {
+	if (adapter.platform !== picker.source.platform || !isSameChat(picker.source, sourceForAuth(picker, cb))) {
 		await answerExpired(adapter, cb);
 		return;
 	}
@@ -239,8 +279,22 @@ export async function handleCallback(
 		return;
 	}
 
-	if (!isAuthorized(sourceForAuth(picker, cb), cfg, pairing)) {
+	if (!isAuthorized(sourceForAuth(picker, cb), freshConfig(), pairing)) {
 		await answerUnauthorized(adapter, cb);
+		return;
+	}
+
+	const authorized = () =>
+		pickerRequesterValid(picker) && isAuthorized(sourceForAuth(picker, cb), freshConfig(), pairing);
+	if (Date.now() > picker.createdAt + PICKER_TTL_MS) {
+		if (!picker.completed) picker.onCancel?.();
+		registry.delete(parsed.id);
+		try {
+			await picker.adapter.editMessage(picker.chatId, picker.messageId, "⏱ Expired — run the command again.", []);
+		} catch {
+			// best-effort expiry message
+		}
+		await answerExpired(adapter, cb);
 		return;
 	}
 
@@ -291,8 +345,11 @@ export async function handleCallback(
 	picker.resolving = true;
 	await adapter.answerCallback(cb.id).catch(() => {});
 	try {
+		// A callback acknowledgement can yield to stop, replacement or revocation.
+		if (!pickerValid(picker) || !authorized()) return;
 		const result = await picker.resolve(item);
 		if (!result.done) {
+			if (!pickerValid(picker) || !authorized()) return;
 			picker.items = result.items;
 			picker.title = result.title;
 			picker.breadcrumbs = result.breadcrumbs;
@@ -304,21 +361,22 @@ export async function handleCallback(
 			return;
 		}
 		picker.completed = result.text;
-		await confirmPicker(picker, result.text);
+		await confirmPicker(picker, result.text, authorized);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		picker.completed = `⚠ ${message}`;
-		await confirmPicker(picker, picker.completed);
+		await confirmPicker(picker, picker.completed, authorized);
 	} finally {
 		picker.resolving = false;
 	}
 }
 
-async function confirmPicker(picker: PendingPicker, text: string): Promise<void> {
+async function confirmPicker(picker: PendingPicker, text: string, authorized: () => boolean): Promise<void> {
+	if (!authorized()) return;
 	const edited = await picker.adapter
 		.editMessage(picker.chatId, picker.messageId, text, [])
 		.catch(() => ({ success: false }));
-	if (edited.success) return;
+	if (edited.success || !authorized()) return;
 	const sent = await picker.adapter
 		.send(picker.chatId, text, { threadId: picker.source.threadId })
 		.catch(() => ({ success: false }));
@@ -335,6 +393,11 @@ export function startButtonSweeper(): void {
 			registry.delete(id);
 			if (entry.completed) continue;
 			entry.onCancel?.();
+			if (
+				!pickerRequesterValid(entry) ||
+				!isAuthorized({ ...entry.source, roleAuthorized: undefined }, loadGatewayConfig())
+			)
+				continue;
 			void entry.adapter
 				.editMessage(entry.chatId, entry.messageId, "⏱ Expired — run the command again.", [])
 				.catch(() => {});

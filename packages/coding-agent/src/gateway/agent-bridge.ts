@@ -53,6 +53,7 @@ import {
 	createGatewayUI,
 	gatewayEpoch,
 	invalidateGatewayDialogs,
+	invalidateGatewaySession,
 	sendGatewayNotice,
 	withGatewayPresentation,
 } from "./presenter.ts";
@@ -183,6 +184,7 @@ interface CacheEntry {
  * import light and matches how main.ts loads it in the real CLI.
  */
 async function defaultSessionFactory(key: string, reopen: { sessionFile: string } | undefined): Promise<AgentSession> {
+	const ui = createGatewayUI(key);
 	const [
 		{ loadAllBuiltinExtensions },
 		{ getAgentDir },
@@ -247,9 +249,9 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 				bindRuntimeBridges({ session, services });
 				await session.bindExtensions({
 					mode: "gateway",
-					uiContext: createGatewayUI(key),
+					uiContext: ui,
 					onError: (err) => {
-						void sendGatewayNotice(key, `Extension error: ${err.error}`).catch(() => {});
+						ui.notify(`Extension error: ${err.error}`, "error");
 					},
 				});
 				return session;
@@ -339,8 +341,10 @@ export class AgentBridge {
 	async abort(key: string): Promise<void> {
 		this.invalidate(key);
 		const entry = this.cache.get(key);
-		if (entry) entry.queue.length = 0;
-		invalidateGatewayDialogs(key);
+		if (entry) {
+			entry.queue.length = 0;
+			invalidateGatewayDialogs(key);
+		} else invalidateGatewaySession(key);
 		cancelGatewayApprovals(key);
 		await entry?.session.abort();
 	}
@@ -391,6 +395,7 @@ export class AgentBridge {
 					"Background work has not stopped. Session ownership was retained. Use /stopall before retrying.",
 				);
 			for (const [key, entry] of entries) {
+				invalidateGatewaySession(key);
 				entry.unregisterTransfer?.();
 				entry.unsubscribe?.();
 				await shutdownBridgeSession(entry.session, "quit");
@@ -430,9 +435,10 @@ export class AgentBridge {
 			throw new Error("Session is busy. Stop its work or wait before switching.");
 		this.changing.add(key);
 		let candidate: BridgeSession | undefined;
+		const restorePresentation = invalidateGatewaySession(key);
+		let replaced = false;
 		try {
 			candidate = await this.sessionFactory(key, { sessionFile });
-			invalidateGatewayDialogs(key);
 			cancelGatewayApprovals(key);
 			if (entry) {
 				const oldSessionId = entry.session.sessionManager?.getSessionId();
@@ -452,6 +458,7 @@ export class AgentBridge {
 				);
 			const newEntry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
 			this.cache.set(key, newEntry);
+			replaced = true;
 			newEntry.unsubscribe = this._subscribeToSession(key, newEntry);
 			this.attachTransfer(key, newEntry);
 			this.redoStack.delete(key);
@@ -459,6 +466,7 @@ export class AgentBridge {
 			await this._enforceCacheCap(key);
 		} finally {
 			if (candidate) await shutdownBridgeSession(candidate, "quit");
+			if (!replaced) restorePresentation();
 			this.changing.delete(key);
 		}
 	}
@@ -555,9 +563,10 @@ export class AgentBridge {
 				throw new Error("Background work is still active. Use /stopall and wait before replacing the session.");
 			entry.unregisterTransfer?.();
 			entry.unsubscribe?.();
+			invalidateGatewaySession(key);
 			this.cache.delete(key);
 			await shutdownBridgeSession(entry.session, "new");
-		}
+		} else invalidateGatewaySession(key);
 		removeSession(key);
 		this.redoStack.delete(key);
 	}
@@ -771,7 +780,7 @@ export class AgentBridge {
 				await entry.session.waitForIdle?.();
 				signal.throwIfAborted();
 				manager.setPermissionMode(getPermissionMode(sessionId));
-				invalidateGatewayDialogs(key);
+				invalidateGatewaySession(key);
 				cancelGatewayApprovals(key);
 				await shutdownBridgeSession(entry.session, "quit");
 				entry.unsubscribe?.();
@@ -810,6 +819,7 @@ export class AgentBridge {
 				this.cap = this.cache.size;
 				break;
 			}
+			invalidateGatewaySession(oldestKey);
 			oldest.unsubscribe?.();
 			oldest.unregisterTransfer?.();
 			this.cache.delete(oldestKey);
@@ -820,8 +830,9 @@ export class AgentBridge {
 	}
 
 	private _subscribeToSession(key: string, entry: CacheEntry): () => void {
-		const epoch = gatewayEpoch(key);
-		return entry.session.subscribe((event) => this._handleSessionEvent(key, event, epoch));
+		return entry.session.subscribe((event) => {
+			if (this.cache.get(key) === entry) this._handleSessionEvent(key, event, gatewayEpoch(key));
+		});
 	}
 
 	private _handleSessionEvent(key: string, event: AgentSessionEvent, epoch: number): void {
