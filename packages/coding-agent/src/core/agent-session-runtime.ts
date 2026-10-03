@@ -89,15 +89,46 @@ export class AgentSessionRuntime {
 	private _modelFallbackMessage?: string;
 	private detached = false;
 	private transferring = false;
+	private replacement?: Promise<unknown>;
+	private teardown?: Promise<void>;
+	private closing = false;
+
+	private async withReplacement<T>(operation: () => Promise<T>): Promise<T> {
+		if (this.closing || this.replacement || this.transferring)
+			throw new Error("Session lifecycle change is already in progress.");
+		// Start after reserving the lifecycle slot, before any extension hook can yield.
+		const promise = Promise.resolve().then(operation);
+		this.replacement = promise;
+		try {
+			return await promise;
+		} finally {
+			if (this.replacement === promise) this.replacement = undefined;
+		}
+	}
 
 	get isDetached(): boolean {
 		return this.detached;
 	}
 
+	/** Correlated prompt entry for scheduled hosts; never queues across a lifecycle change. */
+	promptWithCompletion(text: string, options?: Parameters<AgentSession["promptWithCompletion"]>[1]) {
+		if (this.detached || this.closing || this.replacement || this.transferring) {
+			return Promise.reject(new Error("Session lifecycle change is in progress. Retry the scheduled prompt later."));
+		}
+		return this.session.promptWithCompletion(text, options);
+	}
+
 	async releaseForTransfer(options: { stop?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+		if (this.closing || this.replacement || this.transferring)
+			throw new SessionTransferError("Session transfer is already in progress.", "busy");
+		return this.withReplacement(() => this.releaseForTransferOwned(options));
+	}
+
+	private async releaseForTransferOwned(options: { stop?: boolean; signal?: AbortSignal }): Promise<void> {
 		options.signal?.throwIfAborted();
 		if (this.detached) return;
-		if (this.transferring) throw new SessionTransferError("Session transfer is already in progress.", "busy");
+		if (this.closing || this.transferring)
+			throw new SessionTransferError("Session transfer is already in progress.", "busy");
 		this.transferring = true;
 		this.session.setTransferring(true);
 		const hasAttachedWork = () =>
@@ -240,16 +271,29 @@ export class AgentSessionRuntime {
 		return { cancelled: result?.cancel === true };
 	}
 
-	private async teardownCurrent(reason: SessionShutdownEvent["reason"], targetSessionFile?: string): Promise<void> {
-		if (this.detached) return;
-		await emitSessionShutdownEvent(this.session.extensionRunner, {
-			type: "session_shutdown",
-			reason,
-			targetSessionFile,
-		});
-		this.beforeSessionInvalidate?.(reason);
-		this.session.dispose();
-		this.detached = true;
+	private teardownCurrent(reason: SessionShutdownEvent["reason"], targetSessionFile?: string): Promise<void> {
+		if (this.teardown) return this.teardown;
+		if (this.detached) return Promise.resolve();
+		const session = this.session;
+		session.stopAdmission();
+		this.teardown = (async () => {
+			await session.drain();
+			try {
+				await emitSessionShutdownEvent(session.extensionRunner, {
+					type: "session_shutdown",
+					reason,
+					targetSessionFile,
+				});
+			} finally {
+				try {
+					this.beforeSessionInvalidate?.(reason);
+				} finally {
+					await session.shutdown();
+					this.detached = true;
+				}
+			}
+		})();
+		return this.teardown;
 	}
 
 	private async teardownForReplacement(
@@ -266,7 +310,9 @@ export class AgentSessionRuntime {
 
 	private apply(result: CreateAgentSessionRuntimeResult): void {
 		this.detached = false;
+		this.teardown = undefined;
 		this._session = result.session;
+		if (this.closing) this._session.stopAdmission();
 		this._services = result.services;
 		this._diagnostics = result.diagnostics;
 		this._modelFallbackMessage = result.modelFallbackMessage;
@@ -289,6 +335,13 @@ export class AgentSessionRuntime {
 			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 			projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
 		},
+	): Promise<{ cancelled: boolean }> {
+		return this.withReplacement(() => this.switchSessionOwned(sessionPath, options));
+	}
+
+	private async switchSessionOwned(
+		sessionPath: string,
+		options?: Parameters<AgentSessionRuntime["switchSession"]>[1],
 	): Promise<{ cancelled: boolean }> {
 		if (
 			!this.detached &&
@@ -328,6 +381,12 @@ export class AgentSessionRuntime {
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 	}): Promise<{ cancelled: boolean }> {
+		return this.withReplacement(() => this.newSessionOwned(options));
+	}
+
+	private async newSessionOwned(
+		options?: Parameters<AgentSessionRuntime["newSession"]>[0],
+	): Promise<{ cancelled: boolean }> {
 		const beforeResult = await this.emitBeforeSwitch("new");
 		if (beforeResult.cancelled) {
 			return beforeResult;
@@ -361,7 +420,17 @@ export class AgentSessionRuntime {
 
 	async fork(
 		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+		options?: {
+			position?: "before" | "at";
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
+	): Promise<{ cancelled: boolean; selectedText?: string }> {
+		return this.withReplacement(() => this.forkOwned(entryId, options));
+	}
+
+	private async forkOwned(
+		entryId: string,
+		options?: Parameters<AgentSessionRuntime["fork"]>[1],
 	): Promise<{ cancelled: boolean; selectedText?: string }> {
 		const position = options?.position ?? "before";
 		const beforeResult = await this.emitBeforeFork(entryId, { position });
@@ -459,6 +528,10 @@ export class AgentSessionRuntime {
 	 * @throws {MissingSessionCwdError} When the imported session cwd cannot be resolved and no override is provided.
 	 */
 	async importFromJsonl(inputPath: string, cwdOverride?: string): Promise<{ cancelled: boolean }> {
+		return this.withReplacement(() => this.importFromJsonlOwned(inputPath, cwdOverride));
+	}
+
+	private async importFromJsonlOwned(inputPath: string, cwdOverride?: string): Promise<{ cancelled: boolean }> {
 		const resolvedPath = resolvePath(inputPath);
 		if (!existsSync(resolvedPath)) {
 			throw new SessionImportFileNotFoundError(resolvedPath);
@@ -506,6 +579,9 @@ export class AgentSessionRuntime {
 	}
 
 	async dispose(): Promise<void> {
+		this.closing = true;
+		this.session.stopAdmission();
+		if (this.replacement) await this.replacement.catch(() => {});
 		await this.teardownCurrent("quit");
 	}
 }
