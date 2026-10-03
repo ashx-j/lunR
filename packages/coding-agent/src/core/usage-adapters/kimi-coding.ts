@@ -7,7 +7,7 @@
  */
 
 import type { ModelRuntime } from "../model-runtime.ts";
-import type { PlanUsage, PlanUsageWindow } from "../usage-service.ts";
+import type { PlanUsage, PlanUsageWindow, UsageAuthSnapshot } from "../usage-service.ts";
 import { asNumber, asObject, fetchWithTimeout, toEpochMs, usedPercentFromRemaining } from "./shared.ts";
 
 const KIMI_PROVIDER_ID = "kimi-coding";
@@ -46,8 +46,8 @@ function detailWindow(label: string, detail: unknown): PlanUsageWindow | undefin
 	return { label, usedPercent, resetsAt: toEpochMs(object.resetTime) };
 }
 
-export async function fetchKimiPlanUsage(runtime: ModelRuntime): Promise<PlanUsage | undefined> {
-	const resolution = await runtime.getAuth(KIMI_PROVIDER_ID);
+export async function fetchKimiPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage | undefined> {
+	const resolution = auth ? auth.resolution : await runtime.getAuth(KIMI_PROVIDER_ID);
 	const apiKey = resolution?.auth.apiKey;
 	if (!apiKey) return undefined;
 

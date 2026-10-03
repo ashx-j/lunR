@@ -507,6 +507,7 @@ export class ModelRuntime implements Models {
 		apiKey: string,
 		options?: { allowNetwork?: boolean },
 	): Promise<void> {
+		clearPlanUsageCache();
 		this.credentials.setRuntimeApiKey(providerId, apiKey);
 		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
@@ -524,6 +525,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async removeRuntimeApiKey(providerId: string): Promise<void> {
+		clearPlanUsageCache();
 		this.credentials.removeRuntimeApiKey(providerId);
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 	}
@@ -616,6 +618,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential> {
+		clearPlanUsageCache();
 		const credential = await this.models.login(providerId, type, interaction);
 		clearPlanUsageCache();
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
@@ -623,6 +626,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async logout(providerId: string): Promise<void> {
+		clearPlanUsageCache();
 		await this.models.logout(providerId);
 		await this.modelsStore.delete(providerId);
 		this.userModels.evictProvider(providerId);
