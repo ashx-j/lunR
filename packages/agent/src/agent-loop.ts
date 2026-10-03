@@ -35,22 +35,7 @@ export function agentLoop(
 	signal?: AbortSignal,
 	streamFn?: StreamFn,
 ): EventStream<AgentEvent, AgentMessage[]> {
-	const stream = createAgentStream();
-
-	void runAgentLoop(
-		prompts,
-		context,
-		config,
-		async (event) => {
-			stream.push(event);
-		},
-		signal,
-		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
-
-	return stream;
+	return streamAgentRun(config, signal, (emit) => runAgentLoop(prompts, context, config, emit, signal, streamFn));
 }
 
 /**
@@ -75,21 +60,7 @@ export function agentLoopContinue(
 		throw new Error("Cannot continue from message role: assistant");
 	}
 
-	const stream = createAgentStream();
-
-	void runAgentLoopContinue(
-		context,
-		config,
-		async (event) => {
-			stream.push(event);
-		},
-		signal,
-		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
-
-	return stream;
+	return streamAgentRun(config, signal, (emit) => runAgentLoopContinue(context, config, emit, signal, streamFn));
 }
 
 export async function runAgentLoop(
@@ -142,11 +113,50 @@ export async function runAgentLoopContinue(
 	return newMessages;
 }
 
-function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-	return new EventStream<AgentEvent, AgentMessage[]>(
-		(event: AgentEvent) => event.type === "agent_end",
-		(event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
+/** Adapt low-level rejection to the same terminal events as an assistant error response. */
+function streamAgentRun(
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	run: (emit: AgentEventSink) => Promise<AgentMessage[]>,
+): EventStream<AgentEvent, AgentMessage[]> {
+	const stream = new EventStream<AgentEvent, AgentMessage[]>(
+		(event) => event.type === "agent_end",
+		(event) => (event.type === "agent_end" ? event.messages : []),
 	);
+	const completedMessages: AgentMessage[] = [];
+	const emit: AgentEventSink = (event) => {
+		if (event.type === "message_end") completedMessages.push(event.message);
+		stream.push(event);
+	};
+	void run(emit).then(
+		(messages) => stream.end(messages),
+		(error: unknown) => {
+			const failureMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "" }],
+				api: config.model.api,
+				provider: config.model.provider,
+				model: config.model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: signal?.aborted ? "aborted" : "error",
+				errorMessage: error instanceof Error ? error.message : String(error),
+				timestamp: Date.now(),
+			};
+			emit({ type: "message_start", message: failureMessage });
+			emit({ type: "message_end", message: failureMessage });
+			emit({ type: "turn_end", message: failureMessage, toolResults: [] });
+			emit({ type: "agent_end", messages: completedMessages });
+			stream.end(completedMessages);
+		},
+	);
+	return stream;
 }
 
 /**

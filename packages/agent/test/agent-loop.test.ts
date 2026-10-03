@@ -7,8 +7,8 @@ import {
 	type UserMessage,
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
-import { agentLoop, agentLoopContinue } from "../src/agent-loop.ts";
+import { describe, expect, it, vi } from "vitest";
+import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "../src/agent-loop.ts";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "../src/types.ts";
 
 // Mock stream for testing - mimics MockAssistantStream
@@ -1426,5 +1426,109 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messages = await stream.result();
 		expect(messages.length).toBe(1);
 		expect(messages[0].role).toBe("assistant");
+	});
+});
+
+describe("exported loop preparation failures", () => {
+	const preparations = ["transformContext", "convertToLlm", "getApiKey", "streamFn"] as const;
+	for (const continuation of [false, true]) {
+		it.each(preparations)(
+			`settles ${continuation ? "continue" : "new prompt"} streams after rejected %s`,
+			async (preparation) => {
+				const prompt = createUserMessage("Hello");
+				const context: AgentContext = { systemPrompt: "", messages: continuation ? [prompt] : [], tools: [] };
+				const fail = async () => {
+					throw new Error(`${preparation} failed`);
+				};
+				const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+				if (preparation !== "streamFn") config[preparation] = fail;
+				const streamFn = vi.fn(
+					preparation === "streamFn"
+						? fail
+						: () => {
+								throw new Error("Unexpected provider dispatch");
+							},
+				);
+				const stream = continuation
+					? agentLoopContinue(context, config, undefined, streamFn)
+					: agentLoop([prompt], context, config, undefined, streamFn);
+				// Start both consumers before preparation rejects. Neither may remain pending.
+				const events: AgentEvent[] = [];
+				const iteration = (async () => {
+					for await (const event of stream) events.push(event);
+				})();
+				const [messages] = await Promise.all([stream.result(), iteration]);
+				const failure = messages.at(-1);
+				expect(failure).toMatchObject({
+					role: "assistant",
+					api: "openai-responses",
+					provider: "openai",
+					model: "mock",
+					stopReason: "error",
+					errorMessage: `${preparation} failed`,
+					usage: createUsage(),
+				});
+				expect(messages).toHaveLength(continuation ? 1 : 2);
+				if (!continuation) expect(messages[0]).toBe(prompt);
+				expect(events.slice(-4)).toEqual([
+					{ type: "message_start", message: failure },
+					{ type: "message_end", message: failure },
+					{ type: "turn_end", message: failure, toolResults: [] },
+					{ type: "agent_end", messages },
+				]);
+				expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
+				if (preparation !== "streamFn") expect(streamFn).not.toHaveBeenCalled();
+			},
+			1_000,
+		);
+	}
+
+	it("reports an aborted preparation failure through the existing aborted outcome", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const stream = agentLoop(
+			[createUserMessage("Hello")],
+			{ systemPrompt: "", messages: [], tools: [] },
+			{
+				model: createModel(),
+				convertToLlm: identityConverter,
+				transformContext: async () => {
+					throw new Error("cancelled preparation");
+				},
+			},
+			controller.signal,
+			() => {
+				throw new Error("Unexpected provider dispatch");
+			},
+		);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+		expect((await stream.result()).at(-1)).toMatchObject({
+			stopReason: "aborted",
+			errorMessage: "cancelled preparation",
+		});
+		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
+	it("keeps direct low-level run rejection semantics", async () => {
+		const prompt = createUserMessage("Hello");
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			transformContext: async () => {
+				throw new Error("preparation failed");
+			},
+		};
+		const events: AgentEvent[] = [];
+		const emit = (event: AgentEvent) => {
+			events.push(event);
+		};
+		await expect(runAgentLoop([prompt], { systemPrompt: "", messages: [], tools: [] }, config, emit)).rejects.toThrow(
+			"preparation failed",
+		);
+		await expect(
+			runAgentLoopContinue({ systemPrompt: "", messages: [prompt], tools: [] }, config, emit),
+		).rejects.toThrow("preparation failed");
+		expect(events.some((event) => event.type === "agent_end")).toBe(false);
 	});
 });
