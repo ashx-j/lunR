@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Installation and release commands (`fix/review-install-release-commands`):** local release accepts lunR, compiles AI offline, and reuses public publisher staging and npm-pack handling. Interactive setup installs the browser and applies explicit feature choices. Uninstall verifies profile/process/startup ownership, unregisters and confirms shutdown before deleting control data; failures retain the profile. Release preparation requires a branch and leaves reviewable files without commits, tags or pushes; explicit `publish-tag <version> <merged-sha>` verifies remote master ancestry and reports publication triggers. Dependency checks use tracked manifests and version scripts use `--workspaces`.
+
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
 
 - **Computer recovery (`fix/computer-use-recovery`):** settled native failures retain a safe post-image and structured outcome; local validation mistakes permit fresh observation without restarting a healthy workflow. Discovery preserves token age, optional `include_windows` returns bounded named-app windows, and launch has phase-specific guidance plus a 45-second request budget. Windows-only `computer_hover` moves the foreground desktop pointer, waits 700 ms, then captures once. Native binary, exact-token checks, permissions, and ownership remain unchanged. No live qualification of the original taskbar failure or hover yet.
@@ -164,6 +166,8 @@ Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Installation/release repair (2026-10-03): 59 focused Vitest tests across install CLI, mocked gateway teardown and remote-work suites pass; 11 inert Node release-command tests pass. Five isolated offline package compiles, current coding-agent compile, Node bundle, focused test typecheck, touched TypeScript Biome, tracked dependency and relative-import checks pass. No real installer, service manager, uninstall, version bump, release/tag/publication or full-suite qualification ran.
+
 - v0.2.26 release (2026-09-27): five offline package builds and coding-agent Node bundle pass; 21 focused coding-agent suites pass 375/375, with the ten computer suites rerun after approval passing 128/128. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass; Linux integration CI build, first-request, and Check pass. Full CI retains 98 baseline fixture failures across 24 suites, versus 101 across 27 in #77's earlier Ubuntu log; AI 623 and Agent 181 pass. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog, pinned dependencies and whitespace checks pass. All three pinned archives pass byte/SHA-256 verification and seven staged package dry-run packs pass. Production gate passes. Tag publication workflow `36312684171` succeeded at `c3d6e31`; all seven 0.2.26 versions expose npm tarballs, `npm view` reports 0.2.26 latest, and a fresh isolated public install reports 0.2.26 for the CLI, three dependencies, and Windows x64 payload. First-paint and first-turn subagent/MCP/LSP/fetch checks pass against that installed CLI. No global install, Mac/ARM desktop operation, or live provider test.
 
 - Computer recovery, 2026-09-26: 128 tests across ten focused computer suites pass after integrating both implementation branches. All five offline package builds and the Node bundle pass. First-paint and first-turn subagent/MCP/LSP/fetch checks pass with unchanged initial tool fingerprints. An isolated compiled CLI turn against a local scripted provider loads the new tools and verifies the Windows hover and window-enrichment schemas; initial/loaded inventories and prompts remain private under `.artifacts/computer-recovery/`. Touched-file Biome with formatting disabled, relative imports, shrinkwrap, installer lock, and whitespace checks pass. No native driver, desktop operation, remote model, installed CLI update, or release.
@@ -283,7 +287,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - npm published all seven 0.2.26 packages before the CLI's registry metadata propagated. Verify the exact tarball and a fresh isolated install before treating tag publication as complete.
 
-- On npm 10 and 12, `npm run version:patch` rejects the existing `-ws` shortcut; use `npm version patch --workspaces --no-git-tag-version`, then `scripts/sync-versions.js` and the normal lock generators until the script is corrected in a separate change.
+- Release preparation is branch-only. Tagging is a separate explicit `node scripts/release.mjs publish-tag <x.y.z> <full-merged-sha>` action that starts npm and GitHub Release workflows, not evidence that publication succeeded. Local release delegates to publisher staging so distribution fixes remain shared.
+- Uninstall refuses mismatched gateway status/lock, changed startup files, systemd drop-ins, ambiguous service queries or unconfirmed process exit. Repair ownership with gateway doctor before retrying. Linux lingering stays unchanged because other user services may use it. Tests mock all OS service boundaries.
 
 - Computer results carry `details.computer` through the extension and use its scoped `tool_result` hook for the error flag; throwing a text exception would discard recovery images. Keep input evidence independent of cleanup failure. The pinned Windows `move_cursor` moves the real pointer only for desktop scope; window scope is overlay-only and must not be exposed as application hover.
 
@@ -396,6 +401,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-03: separate branch-only release preparation from explicit merged-commit tagging, reuse public staging, and require confirmed owned gateway teardown before purge so review and lifecycle state survive failures.
 
 - 2026-09-27: tag the merged 0.2.26 release commit after production approval and confirm seven public npm tarballs plus a fresh install, because workflow success preceded registry propagation.
 

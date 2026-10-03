@@ -3,6 +3,9 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { npmNameFor } from "./lunr-npm-names.mjs";
+import { release as computerRelease } from "./computer-use-packages.mjs";
 import { spawnSync } from "node:child_process";
 
 const packages = [
@@ -21,15 +24,15 @@ isolated directory outside the repository for local release testing.
 Options:
   --out <dir>          Output directory. Defaults to a new directory under ${tmpdir()}
   --force              Remove --out first if it already exists
-  --skip-check         Do not run npm run check before building
-  --skip-test          Do not run ./test.sh before building
+  --skip-check         Skip read-only source and lock checks before building
+  --skip-test          Skip tests in a disposable home before building
   --skip-install       Only create tarballs; do not create isolated installs
   --skip-bun-install   Do not create the isolated Bun install
   --help               Show this help
 `);
 }
 
-function parseArgs() {
+export function parseArgs(args = process.argv.slice(2)) {
 	const options = {
 		force: false,
 		outDir: undefined,
@@ -38,7 +41,6 @@ function parseArgs() {
 		skipInstall: false,
 		skipTest: false,
 	};
-	const args = process.argv.slice(2);
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -84,6 +86,7 @@ function run(command, args, options = {}) {
 	console.log(`$ ${[command, ...args].join(" ")}`);
 	const result = spawnSync(command, args, {
 		cwd: options.cwd,
+		env: options.env,
 		encoding: "utf8",
 		shell: process.platform === "win32",
 		stdio: options.capture ? ["inherit", "pipe", "inherit"] : "inherit",
@@ -109,15 +112,15 @@ function isInsidePath(child, parent) {
 	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
-function prepareOutputDirectory(options, repoRoot) {
+export function prepareOutputDirectory(options, repoRoot) {
 	if (!options.outDir) {
-		return mkdtempSync(join(tmpdir(), "pi-local-release-"));
+		return mkdtempSync(join(tmpdir(), "lunr-local-release-"));
 	}
 
 	const outDir = resolve(options.outDir);
 
-	if (isInsidePath(outDir, repoRoot)) {
-		throw new Error(`Output directory must be outside the repository: ${outDir}`);
+	if (isInsidePath(outDir, repoRoot) || isInsidePath(repoRoot, outDir)) {
+		throw new Error(`Output directory must be outside the repository and must not contain it: ${outDir}`);
 	}
 
 	if (existsSync(outDir)) {
@@ -149,7 +152,8 @@ function buildBunBinaryRelease(targetDirectory, archiveDirectory) {
 	}
 	const platform = currentBinaryPlatform();
 	const binaryBuildDirectory = join(archiveDirectory, "binary-build");
-	run("./scripts/build-binaries.sh", [
+	run("bash", [
+		"scripts/build-binaries.sh",
 		"--skip-install",
 		"--skip-deps",
 		"--skip-build",
@@ -160,125 +164,217 @@ function buildBunBinaryRelease(targetDirectory, archiveDirectory) {
 	]);
 	rmSync(targetDirectory, { force: true, recursive: true });
 	cpSync(join(binaryBuildDirectory, platform), targetDirectory, { recursive: true });
-	const archiveName = platform.startsWith("windows-") ? `pi-${platform}.zip` : `pi-${platform}.tar.gz`;
+	const archiveName = platform.startsWith("windows-") ? `lunr-${platform}.zip` : `lunr-${platform}.tar.gz`;
 	cpSync(join(binaryBuildDirectory, archiveName), join(archiveDirectory, archiveName));
 	return platform;
 }
 
-function createPiShim(installDirectory) {
+function createLunrShim(installDirectory) {
 	const binDirectory = join(installDirectory, "node_modules", ".bin");
 	if (process.platform === "win32") {
-		if (existsSync(join(binDirectory, "pi.cmd"))) {
-			writeFileSync(join(installDirectory, "pi.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.cmd" %*\r\n');
-			writeFileSync(join(installDirectory, "pi.ps1"), '& "$PSScriptRoot/node_modules/.bin/pi.ps1" @args\n');
+		if (existsSync(join(binDirectory, "lunr.cmd"))) {
+			writeFileSync(join(installDirectory, "lunr.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\lunr.cmd" %*\r\n');
+			writeFileSync(join(installDirectory, "lunr.ps1"), '& "$PSScriptRoot/node_modules/.bin/lunr.ps1" @args\n');
 			return;
 		}
-		writeFileSync(join(installDirectory, "pi.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.exe" %*\r\n');
-		writeFileSync(join(installDirectory, "pi.ps1"), '& "$PSScriptRoot/node_modules/.bin/pi.exe" @args\n');
+		writeFileSync(join(installDirectory, "lunr.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\lunr.exe" %*\r\n');
+		writeFileSync(join(installDirectory, "lunr.ps1"), '& "$PSScriptRoot/node_modules/.bin/lunr.exe" @args\n');
 		return;
 	}
-	symlinkSync(join("node_modules", ".bin", "pi"), join(installDirectory, "pi"));
+	symlinkSync(join("node_modules", ".bin", "lunr"), join(installDirectory, "lunr"));
 }
 
-function packPackage(pkg, tarballDirectory) {
-	const packageJson = readPackageJson(pkg.directory);
-	if (packageJson.name !== pkg.name) {
-		throw new Error(`${pkg.directory}/package.json has name ${packageJson.name}, expected ${pkg.name}`);
+export function assertRepositoryRoot(repoRoot) {
+	const manifest = readPackageJson(repoRoot);
+	if (manifest.name !== "lunr" || manifest.private !== true || !existsSync(join(repoRoot, "scripts", "publish.mjs"))) {
+		throw new Error("Run this script from the lunR repository root");
 	}
-
-	const output = run("npm", ["pack", "--json", "--pack-destination", tarballDirectory], {
-		capture: true,
-		cwd: pkg.directory,
-	});
-	const packed = JSON.parse(output)[0];
-	return join(tarballDirectory, packed.filename);
-}
-
-const options = parseArgs();
-const repoRoot = process.cwd();
-const rootPackageJson = readPackageJson(repoRoot);
-
-if (rootPackageJson.name !== "pi-monorepo") {
-	throw new Error("Run this script from the repository root");
-}
-
-const outDir = prepareOutputDirectory(options, repoRoot);
-const tarballDirectory = join(outDir, "tarballs");
-const nodeInstallDirectory = join(outDir, "node");
-const bunInstallDirectory = join(outDir, "bun-install");
-const binaryDirectory = join(outDir, "bun");
-mkdirSync(tarballDirectory, { recursive: true });
-
-if (!options.skipCheck) {
-	run("npm", ["run", "check"], { cwd: repoRoot });
-}
-
-if (!options.skipTest) {
-	run("./test.sh", [], { cwd: repoRoot });
-}
-
-for (const pkg of packages) {
-	run("npm", ["run", "clean"], { cwd: pkg.directory });
-	run("npm", ["run", "build"], { cwd: pkg.directory });
-}
-
-const tarballs = new Map();
-for (const pkg of packages) {
-	const tarball = packPackage(pkg, tarballDirectory);
-	tarballs.set(pkg.name, tarball);
-}
-
-let binaryPlatform;
-if (!options.skipInstall) {
-	binaryPlatform = buildBunBinaryRelease(binaryDirectory, outDir);
-
-	mkdirSync(nodeInstallDirectory, { recursive: true });
-	const dependencies = Object.fromEntries(
-		packages.map((pkg) => [pkg.name, fileSpecifier(nodeInstallDirectory, tarballs.get(pkg.name))]),
-	);
-	const installPackageJson = `${JSON.stringify({ private: true, dependencies, overrides: dependencies }, undefined, "\t")}\n`;
-	writeFileSync(join(nodeInstallDirectory, "package.json"), installPackageJson);
-
-	run("npm", ["install", "--omit=dev", "--ignore-scripts"], { cwd: nodeInstallDirectory });
-	createPiShim(nodeInstallDirectory);
-
-	if (!options.skipBunInstall) {
-		if (!commandExists("bun")) {
-			throw new Error("Bun is required for the isolated Bun install. Use --skip-bun-install to skip it.");
+	for (const pkg of packages) {
+		if (readPackageJson(join(repoRoot, pkg.directory)).name !== pkg.name) {
+			throw new Error(`Unexpected workspace package in ${pkg.directory}`);
 		}
-		mkdirSync(bunInstallDirectory, { recursive: true });
-		const bunDependencies = Object.fromEntries(
-			packages.map((pkg) => [pkg.name, fileSpecifier(bunInstallDirectory, tarballs.get(pkg.name))]),
+	}
+}
+
+// Keep the AI catalog unchanged; its regular package build regenerates it.
+export function localBuildCommands() {
+	return [
+		["npm", ["--prefix", "packages/tui", "run", "build"]],
+		["npm", ["exec", "--no", "--", "tsgo", "-p", "packages/ai/tsconfig.build.json"]],
+		...["agent", "coding-agent", "orchestrator"].map((pkg) => ["npm", ["--prefix", `packages/${pkg}`, "run", "build"]]),
+	];
+}
+
+export function localPackCommand(repoRoot, tarballDirectory) {
+	// The publisher owns name rewriting, entrypoint checks, notices, payloads,
+	// and npm's array/keyed-object pack output compatibility.
+	return [process.execPath, [join(repoRoot, "scripts", "publish.mjs"), "--dry-run", "--pack-dir", tarballDirectory]];
+}
+
+export function localTarballs(repoRoot, tarballDirectory) {
+	const version = readPackageJson(join(repoRoot, packages[0].directory)).version;
+	const names = [
+		...packages.map((pkg) => npmNameFor(pkg.name)),
+		...computerRelease.artifacts.map((artifact) => artifact.packageName),
+	];
+	return new Map(
+		names.map((name) => {
+			const file = join(tarballDirectory, `${name.replace("@", "").replace("/", "-")}-${version}.tgz`);
+			if (!existsSync(file)) throw new Error(`Publisher did not create expected tarball: ${file}`);
+			return [name, file];
+		}),
+	);
+}
+
+export function runIsolatedTests(repoRoot, execute = run) {
+	const home = mkdtempSync(join(tmpdir(), "lunr-release-tests-"));
+	const env = Object.fromEntries(
+		[
+			"PATH",
+			"SystemRoot",
+			"SYSTEMROOT",
+			"WINDIR",
+			"COMSPEC",
+			"PATHEXT",
+			"TERM",
+			"LANG",
+			"LC_ALL",
+			"LC_CTYPE",
+			"TZ",
+			"CI",
+			"GITHUB_ACTIONS",
+			"NO_COLOR",
+			"FORCE_COLOR",
+		].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])),
+	);
+	for (const [key, directory] of Object.entries({
+		HOME: "home",
+		USERPROFILE: "home",
+		PI_CODING_AGENT_DIR: "agent",
+		TMPDIR: "tmp",
+		TMP: "tmp",
+		TEMP: "tmp",
+		XDG_CONFIG_HOME: "config",
+		XDG_CACHE_HOME: "cache",
+		XDG_DATA_HOME: "data",
+		XDG_STATE_HOME: "state",
+		XDG_RUNTIME_DIR: "runtime",
+		APPDATA: "appdata",
+		LOCALAPPDATA: "localappdata",
+	})) {
+		const path = join(home, directory);
+		mkdirSync(path, { recursive: true, mode: 0o700 });
+		env[key] = path;
+	}
+	env.PI_NO_LOCAL_LLM = "1";
+	env.npm_config_update_notifier = "false";
+	try {
+		execute("bash", ["test.sh"], { cwd: repoRoot, env });
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+}
+
+export function main(options = parseArgs(), repoRoot = process.cwd(), execute = run) {
+	assertRepositoryRoot(repoRoot);
+	const outDir = prepareOutputDirectory(options, repoRoot);
+	const tarballDirectory = join(outDir, "tarballs");
+	const nodeInstallDirectory = join(outDir, "node");
+	const bunInstallDirectory = join(outDir, "bun-install");
+	const binaryDirectory = join(outDir, "bun");
+	mkdirSync(tarballDirectory, { recursive: true });
+
+	if (!options.skipCheck) {
+		execute("npm", ["exec", "--no", "--", "biome", "check", "packages/"], { cwd: repoRoot });
+		for (const check of [
+			"pinned-deps",
+			"ts-imports",
+			"shrinkwrap",
+			"install-lock:coding-agent",
+			"no-npm-publish-workflow",
+			"browser-smoke",
+		])
+			execute("npm", ["run", `check:${check}`], { cwd: repoRoot });
+	}
+
+	if (!options.skipTest) {
+		runIsolatedTests(repoRoot, execute);
+	}
+
+	for (const [command, args] of localBuildCommands()) execute(command, args, { cwd: repoRoot });
+	const [packCommand, packArgs] = localPackCommand(repoRoot, tarballDirectory);
+	execute(packCommand, packArgs, { cwd: repoRoot });
+	const tarballs = localTarballs(repoRoot, tarballDirectory);
+	const publicTarballs = [...tarballs].filter(
+		([name]) =>
+			!computerRelease.artifacts.some((artifact) => artifact.packageName === name) ||
+			computerRelease.artifacts.some(
+				(artifact) =>
+					artifact.packageName === name && artifact.platform === process.platform && artifact.arch === process.arch,
+			),
+	);
+
+	let binaryPlatform;
+	if (!options.skipInstall) {
+		binaryPlatform = buildBunBinaryRelease(binaryDirectory, outDir);
+
+		mkdirSync(nodeInstallDirectory, { recursive: true });
+		const dependencies = Object.fromEntries(
+			publicTarballs.map(([name, file]) => [name, fileSpecifier(nodeInstallDirectory, file)]),
 		);
-		writeFileSync(join(bunInstallDirectory, "package.json"), `${JSON.stringify({ private: true, dependencies: bunDependencies, overrides: bunDependencies }, undefined, "\t")}\n`);
-		run("bun", ["install", "--production", "--ignore-scripts"], { cwd: bunInstallDirectory });
-		createPiShim(bunInstallDirectory);
+		const installPackageJson = `${JSON.stringify({ private: true, dependencies, overrides: Object.fromEntries([...tarballs].map(([name, file]) => [name, fileSpecifier(nodeInstallDirectory, file)])) }, undefined, "\t")}\n`;
+		writeFileSync(join(nodeInstallDirectory, "package.json"), installPackageJson);
+
+		execute("npm", ["install", "--omit=dev", "--ignore-scripts"], { cwd: nodeInstallDirectory });
+		createLunrShim(nodeInstallDirectory);
+
+		if (!options.skipBunInstall) {
+			if (!commandExists("bun")) {
+				throw new Error("Bun is required for the isolated Bun install. Use --skip-bun-install to skip it.");
+			}
+			mkdirSync(bunInstallDirectory, { recursive: true });
+			const bunDependencies = Object.fromEntries(
+				publicTarballs.map(([name, file]) => [name, fileSpecifier(bunInstallDirectory, file)]),
+			);
+			writeFileSync(
+				join(bunInstallDirectory, "package.json"),
+				`${JSON.stringify({ private: true, dependencies: bunDependencies, overrides: Object.fromEntries([...tarballs].map(([name, file]) => [name, fileSpecifier(bunInstallDirectory, file)])) }, undefined, "\t")}\n`,
+			);
+			execute("bun", ["install", "--production", "--ignore-scripts"], { cwd: bunInstallDirectory });
+			createLunrShim(bunInstallDirectory);
+		}
+	}
+
+	console.log("\nLocal release artifacts created:");
+	console.log(`  ${outDir}`);
+	console.log("\nTarballs:");
+	for (const tarball of tarballs.values()) {
+		console.log(`  ${tarball}`);
+	}
+
+	if (!options.skipInstall) {
+		console.log("\nLocal Bun binary release:");
+		console.log(`  ${binaryDirectory}`);
+		console.log(
+			`  ${join(outDir, `lunr-${binaryPlatform}.${String(binaryPlatform).startsWith("windows-") ? "zip" : "tar.gz"}`)}`,
+		);
+		console.log("\nRun the local Bun binary release from outside the repository:");
+		console.log(
+			`  ${join(binaryDirectory, String(binaryPlatform).startsWith("windows-") ? "lunr.exe" : "lunr")} --help`,
+		);
+
+		console.log("\nIsolated npm install:");
+		console.log(`  ${nodeInstallDirectory}`);
+		console.log("\nRun the locally packed npm CLI from outside the repository:");
+		console.log(`  ${join(nodeInstallDirectory, process.platform === "win32" ? "lunr.cmd" : "lunr")} --help`);
+
+		if (!options.skipBunInstall) {
+			console.log("\nIsolated Bun package install:");
+			console.log(`  ${bunInstallDirectory}`);
+			console.log("\nRun the locally packed Bun package CLI from outside the repository:");
+			console.log(`  ${join(bunInstallDirectory, process.platform === "win32" ? "lunr.cmd" : "lunr")} --help`);
+		}
 	}
 }
 
-console.log("\nLocal release artifacts created:");
-console.log(`  ${outDir}`);
-console.log("\nTarballs:");
-for (const tarball of tarballs.values()) {
-	console.log(`  ${tarball}`);
-}
-
-if (!options.skipInstall) {
-	console.log("\nLocal Bun binary release:");
-	console.log(`  ${binaryDirectory}`);
-	console.log(`  ${join(outDir, `pi-${binaryPlatform}.${String(binaryPlatform).startsWith("windows-") ? "zip" : "tar.gz"}`)}`);
-	console.log("\nRun the local Bun binary release from outside the repository:");
-	console.log(`  ${join(binaryDirectory, String(binaryPlatform).startsWith("windows-") ? "pi.exe" : "pi")} --help`);
-
-	console.log("\nIsolated npm install:");
-	console.log(`  ${nodeInstallDirectory}`);
-	console.log("\nRun the locally packed npm CLI from outside the repository:");
-	console.log(`  ${join(nodeInstallDirectory, process.platform === "win32" ? "pi.cmd" : "pi")} --help`);
-
-	if (!options.skipBunInstall) {
-		console.log("\nIsolated Bun package install:");
-		console.log(`  ${bunInstallDirectory}`);
-		console.log("\nRun the locally packed Bun package CLI from outside the repository:");
-		console.log(`  ${join(bunInstallDirectory, process.platform === "win32" ? "pi.cmd" : "pi")} --help`);
-	}
-}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
