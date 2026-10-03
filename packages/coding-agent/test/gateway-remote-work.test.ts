@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markSessionHandoff } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
+import type { BridgeSession, ResetOptions } from "../src/gateway/agent-bridge.ts";
 import { isAuthorized, requireAuthorized } from "../src/gateway/authz.ts";
 import { createPicker, handleCallback, resetButtonRegistry } from "../src/gateway/buttons.ts";
 import { defaultGatewayConfig, loadGatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
@@ -240,7 +240,13 @@ describe("first chat readiness", () => {
 describe("projects and approved access", () => {
 	it.each([false, true])("checks current approval when selecting a project, revoked: %s", async (revoked) => {
 		const transport = adapter();
-		const active = { ...bridge, reset: vi.fn(async () => {}) };
+		const active = {
+			...bridge,
+			reset: vi.fn(async (_key: string, options?: ResetOptions) => {
+				options?.validate?.();
+				options?.commit?.();
+			}),
+		};
 		const cfg = loadGatewayConfig();
 		await handleMobileCommand(
 			{ key, event: { source, text: "/project", messageId: "m" }, adapter: transport, bridge: active, cfg },
@@ -264,6 +270,9 @@ describe("projects and approved access", () => {
 			},
 		);
 		expect(active.reset).toHaveBeenCalledTimes(revoked ? 0 : 1);
+		expect(vi.mocked(transport.editMessage).mock.calls.some((call) => call[2].includes("Project selected"))).toBe(
+			!revoked,
+		);
 	});
 	it.each(["skill", "settings", "mode"])("does not open a stale /%s dialog after session lookup", async (command) => {
 		const transport = adapter();

@@ -32,6 +32,9 @@ export type PickerResolveResult =
 	| { done: true; text: string }
 	| { done: false; items: PickerItem[]; title: string; breadcrumbs?: string };
 
+/** An awaited control was stopped or superseded before it could commit. */
+export class GatewayPickerCancelled extends Error {}
+
 export interface PickerSpec {
 	generation?: number;
 	kind: "model" | "thinking" | "sessions" | "project" | "dialog";
@@ -363,6 +366,7 @@ export async function handleCallback(
 		picker.completed = result.text;
 		await confirmPicker(picker, result.text, authorized);
 	} catch (err) {
+		if (err instanceof GatewayPickerCancelled) return;
 		const message = err instanceof Error ? err.message : String(err);
 		picker.completed = `⚠ ${message}`;
 		await confirmPicker(picker, picker.completed, authorized);

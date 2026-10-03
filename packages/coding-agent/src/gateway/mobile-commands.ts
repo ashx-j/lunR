@@ -5,10 +5,16 @@ import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from "../core/
 import { SessionManager } from "../core/session-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
 import { isAuthorized, requireAuthorized } from "./authz.ts";
-import { createPicker, gatewayPickerGeneration, type PickerItem, type PickerResolveResult } from "./buttons.ts";
+import {
+	createPicker,
+	GatewayPickerCancelled,
+	gatewayPickerGeneration,
+	type PickerItem,
+	type PickerResolveResult,
+} from "./buttons.ts";
 import { type GatewayConfig, loadGatewayConfig } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
-import { gatewayInput, gatewaySelect } from "./presenter.ts";
+import { gatewayInput, gatewaySelect, invalidateGatewayDialogs } from "./presenter.ts";
 import type { BridgeLike } from "./router.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
@@ -151,8 +157,29 @@ async function browseProject(ctx: MobileContext, initialPath?: string): Promise<
 					const cwd = resolveWithinRoots(current, loadGatewayConfig().projectRoots ?? []);
 					if (bridge.getStatus(key).busy)
 						throw new Error("Stop the current turn or wait before switching projects.");
-					await bridge.reset(key);
-					bindConversation(key, event.source, { cwd, owner: event.source.userId });
+					let committed = false;
+					await bridge.reset(key, {
+						validate: () => {
+							requireAuthorized(event.source);
+							const binding = conversationBinding(key);
+							if (
+								!binding ||
+								binding.owner !== event.source.userId ||
+								binding.source.userId !== event.source.userId ||
+								binding.source.platform !== event.source.platform ||
+								binding.source.chatId !== event.source.chatId ||
+								binding.source.threadId !== event.source.threadId
+							)
+								throw new GatewayPickerCancelled("Project requester changed before selection completed.");
+							resolveWithinRoots(cwd, loadGatewayConfig().projectRoots ?? []);
+						},
+						commit: () => {
+							bindConversation(key, event.source, { cwd, owner: event.source.userId });
+							committed = true;
+						},
+					});
+					if (!committed)
+						throw new Error("The gateway did not commit project replacement. Retry with an updated gateway.");
 					return {
 						done: true,
 						text: `Project selected: ${cwd}\nSend a task to begin. Existing sessions are still available through /sessions.`,
@@ -335,9 +362,10 @@ async function sessionPicker(ctx: MobileContext, items: PickerItem[]): Promise<v
 }
 
 export async function handleMobileCommand(ctx: MobileContext, command: string, args: string): Promise<boolean> {
-	ctx.pickerGeneration = gatewayPickerGeneration(ctx.key);
 	if (!MOBILE_COMMANDS.some((c) => c.name === command) && command !== "resume") return false;
 	requireAuthorized(ctx.event.source, ctx.cfg);
+	if (command === "project") invalidateGatewayDialogs(ctx.key);
+	ctx.pickerGeneration = gatewayPickerGeneration(ctx.key);
 	bindConversation(ctx.key, ctx.event.source, { owner: ctx.event.source.userId });
 	if (command === "project") {
 		await browseProject(ctx, args.trim() || undefined);

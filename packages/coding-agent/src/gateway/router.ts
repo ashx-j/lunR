@@ -17,7 +17,13 @@
  */
 
 import { existsSync } from "node:fs";
-import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
+import {
+	type BridgeSession,
+	type BridgeSessionStatus,
+	QUEUED,
+	type ResetOptions,
+	type TurnCallbacks,
+} from "./agent-bridge.ts";
 import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
 import { isAuthorized, requireAuthorized } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
@@ -43,7 +49,7 @@ import type { MessageEvent, PlatformAdapter } from "./types.ts";
 export interface BridgeLike {
 	runTurn(key: string, event: MessageEvent, callbacks: TurnCallbacks): Promise<string>;
 	abort(key: string): Promise<void> | void;
-	reset(key: string): void | Promise<void>;
+	reset(key: string, options?: ResetOptions): void | Promise<void>;
 	getStatus(key: string): BridgeSessionStatus;
 	getSession(key: string, create?: boolean): Promise<BridgeSession | null>;
 	peekSession?(key: string): BridgeSession | undefined;
