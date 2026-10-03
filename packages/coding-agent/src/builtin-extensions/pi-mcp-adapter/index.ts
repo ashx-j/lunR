@@ -236,6 +236,10 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   function createLazyDirectToolExecute(spec: DirectToolSpec) {
     return async function execute(toolCallId, params, incomingSignal, onUpdate, ctx) {
       const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+      const currentSpec = currentDirectSpecs.get(spec.prefixedName);
+      if (!currentSpec || JSON.stringify(currentSpec) !== JSON.stringify(spec)) {
+        throw new Error("MCP tool is unavailable in the current trusted configuration");
+      }
       let currentState: McpExtensionState;
       try {
         currentState = await ensureState(pi, ctx, signal);
@@ -262,35 +266,48 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   const earlyConfigPath = getConfigPathFromArgv();
   const earlyConfig = loadMcpConfig(earlyConfigPath);
   const earlyCache = loadMetadataCache();
-  const prefix = earlyConfig.settings?.toolPrefix ?? "server";
+  const registeredDirectTools = new Map<string, string>();
+  let currentDirectSpecs = new Map<string, DirectToolSpec>();
+  function registerConfiguredTools(config: McpConfig, cache: MetadataCache | null) {
+    const prefix = config.settings?.toolPrefix ?? "server";
 
-  const envRaw = process.env.MCP_DIRECT_TOOLS;
-  const directSpecs = envRaw === "__none__"
-    ? []
-    : resolveDirectTools(
-        earlyConfig,
-        earlyCache,
-        prefix,
-        envRaw?.split(",").map(s => s.trim()).filter(Boolean),
-      );
-  const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(earlyConfig, earlyCache);
-  const shouldRegisterProxyTool =
-    earlyConfig.settings?.disableProxyTool !== true
-    || directSpecs.length === 0
-    || missingConfiguredDirectToolServers.length > 0;
+    const envRaw = process.env.MCP_DIRECT_TOOLS;
+    const directSpecs = envRaw === "__none__"
+      ? []
+      : resolveDirectTools(
+          config,
+          cache,
+          prefix,
+          envRaw?.split(",").map(s => s.trim()).filter(Boolean),
+        );
+    currentDirectSpecs = new Map(directSpecs.map(spec => [spec.prefixedName, spec]));
+    const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(config, cache);
+    const shouldRegisterProxyTool =
+      config.settings?.disableProxyTool !== true
+      || directSpecs.length === 0
+      || missingConfiguredDirectToolServers.length > 0;
 
-  for (const spec of directSpecs) {
-    (pi.registerTool as (tool: unknown) => unknown)({
-      name: spec.prefixedName,
-      label: `MCP: ${spec.originalName}`,
-      description: `${spec.description || "(no description)"}\nUnavailable in read-only mode; switch to yolo or auto to call.`,
-      promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
-      parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never),
-      execute: createLazyDirectToolExecute(spec),
-      renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
-      renderResult: renderMcpToolResult,
-    });
+    for (const spec of directSpecs) {
+      const fingerprint = JSON.stringify(spec);
+      if (registeredDirectTools.get(spec.prefixedName) === fingerprint) continue;
+      registeredDirectTools.set(spec.prefixedName, fingerprint);
+      (pi.registerTool as (tool: unknown) => unknown)({
+        name: spec.prefixedName,
+        label: `MCP: ${spec.originalName}`,
+        description: `${spec.description || "(no description)"}\nUnavailable in read-only mode; switch to yolo or auto to call.`,
+        promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
+        parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never),
+        execute: createLazyDirectToolExecute(spec),
+        renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
+        renderResult: renderMcpToolResult,
+      });
+    }
+
+    if (shouldRegisterProxyTool) registerProxyTool(config, cache, directSpecs);
+    return { names: directSpecs.map(spec => spec.prefixedName), proxy: shouldRegisterProxyTool };
   }
+
+  registerConfiguredTools(earlyConfig, earlyCache);
 
   const getPiTools = (): ToolInfo[] => pi.getAllTools();
 
@@ -323,8 +340,12 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     }
 
     const configPath = (pi.getFlag("mcp-config") as string | undefined) ?? earlyConfigPath;
-    const sessionConfig = loadMcpConfig(configPath, ctx.cwd);
+    const sessionConfig = loadMcpConfig(configPath, ctx.cwd, ctx.isProjectTrusted());
     const sessionCache = loadMetadataCache();
+    const registered = registerConfiguredTools(sessionConfig, sessionCache);
+    // Session replacement can reuse the factory. Retire definitions from its prior config.
+    const active = pi.getActiveTools().filter(name => !registeredDirectTools.has(name) && name !== "mcp");
+    pi.setActiveTools([...active, ...registered.names, ...(registered.proxy ? ["mcp"] : [])]);
 
     if (!shouldBackgroundAutostart(sessionConfig, sessionCache)) {
       return;
@@ -444,11 +465,11 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     },
   });
 
-  if (shouldRegisterProxyTool) {
+  function registerProxyTool(config: McpConfig, cache: MetadataCache | null, specs: DirectToolSpec[]) {
     (pi.registerTool as (tool: unknown) => unknown)({
       name: "mcp",
       label: "MCP",
-      description: buildProxyDescription(earlyConfig, earlyCache, directSpecs),
+      description: buildProxyDescription(config, cache, specs),
       promptSnippet: "MCP gateway - connect to MCP servers and call their tools",
       renderCall: renderMcpProxyToolCall,
       parameters: Type.Object({

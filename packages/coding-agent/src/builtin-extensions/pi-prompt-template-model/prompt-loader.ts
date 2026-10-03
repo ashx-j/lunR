@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { minimatch } from "minimatch";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
+import type { PromptResourceView } from "../../core/prompt-resource-bridge.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
 import { parseChainDeclaration } from "./chain-parser.ts";
 
@@ -2065,8 +2066,12 @@ function loadPromptsWithModelFromConfiguredPath(
 	return loadPromptsWithModelFromDir(dirname(resolvedPath), source, includePlainPrompts, "", new Set<string>(), basename(resolvedPath), seenFiles, shouldLoadFile);
 }
 
-export function loadPromptsWithModel(cwd: string, includePlainPrompts = false): LoadPromptsWithModelResult {
-	const agentDir = getAgentDir();
+export function loadPromptsWithModel(
+	cwd: string,
+	includePlainPrompts = false,
+	view?: PromptResourceView,
+): LoadPromptsWithModelResult {
+	const agentDir = view?.agentDir ?? getAgentDir();
 	const globalDir = join(agentDir, "prompts");
 	const projectBaseDir = resolve(cwd, CONFIG_DIR_NAME);
 	const projectDir = join(projectBaseDir, "prompts");
@@ -2100,19 +2105,26 @@ export function loadPromptsWithModel(cwd: string, includePlainPrompts = false): 
 		}
 	}
 
-	const projectSettingsPaths = loadConfiguredPromptPaths(join(projectBaseDir, "settings.json"), "project", projectBaseDir, diagnostics);
-	const globalSettingsPaths = loadConfiguredPromptPaths(join(agentDir, "settings.json"), "user", agentDir, diagnostics);
-	const projectDefaultFilter = createPromptFileFilter(projectSettingsPaths.patterns.filter(isSettingsPromptOverridePattern), projectBaseDir);
-	const globalDefaultFilter = createPromptFileFilter(globalSettingsPaths.patterns.filter(isSettingsPromptOverridePattern), agentDir);
+	if (view?.includeDiscovery) {
+		const projectSettingsPaths = view?.projectTrusted ? loadConfiguredPromptPaths(join(projectBaseDir, "settings.json"), "project", projectBaseDir, diagnostics) : { paths: [], patterns: [] };
+		const globalSettingsPaths = loadConfiguredPromptPaths(join(agentDir, "settings.json"), "user", agentDir, diagnostics);
+		const projectDefaultFilter = createPromptFileFilter(projectSettingsPaths.patterns.filter(isSettingsPromptOverridePattern), projectBaseDir);
+		const globalDefaultFilter = createPromptFileFilter(globalSettingsPaths.patterns.filter(isSettingsPromptOverridePattern), agentDir);
 
-	for (const configuredPath of projectSettingsPaths.paths) {
-		addResult(loadPromptsWithModelFromConfiguredPath(configuredPath, includePlainPrompts, seenPromptFiles));
+		for (const configuredPath of projectSettingsPaths.paths) {
+			addResult(loadPromptsWithModelFromConfiguredPath(configuredPath, includePlainPrompts, seenPromptFiles));
+		}
+		if (view?.projectTrusted) addResult(loadPromptsWithModelFromDir(projectDir, "project", includePlainPrompts, "", new Set<string>(), undefined, seenPromptFiles, projectDefaultFilter));
+		for (const configuredPath of globalSettingsPaths.paths) {
+			addResult(loadPromptsWithModelFromConfiguredPath(configuredPath, includePlainPrompts, seenPromptFiles));
+		}
+		addResult(loadPromptsWithModelFromDir(globalDir, "user", includePlainPrompts, "", new Set<string>(), undefined, seenPromptFiles, globalDefaultFilter));
+
 	}
-	addResult(loadPromptsWithModelFromDir(projectDir, "project", includePlainPrompts, "", new Set<string>(), undefined, seenPromptFiles, projectDefaultFilter));
-	for (const configuredPath of globalSettingsPaths.paths) {
-		addResult(loadPromptsWithModelFromConfiguredPath(configuredPath, includePlainPrompts, seenPromptFiles));
+	for (const resource of view?.resources ?? []) {
+		const source: PromptSource = resource.sourceInfo.scope === "project" ? "project" : "user";
+		addResult(loadPromptsWithModelFromDir(dirname(resource.filePath), source, includePlainPrompts, "", new Set<string>(), basename(resource.filePath), seenPromptFiles));
 	}
-	addResult(loadPromptsWithModelFromDir(globalDir, "user", includePlainPrompts, "", new Set<string>(), undefined, seenPromptFiles, globalDefaultFilter));
 
 	return { prompts: promptMap, diagnostics };
 }
