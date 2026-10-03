@@ -369,6 +369,22 @@ async function runSingleAttempt(
 		let turnBudgetTerminationTimer: NodeJS.Timeout | undefined;
 		let turnBudgetHardKillTimer: NodeJS.Timeout | undefined;
 		let protocolHardKillTimer: NodeJS.Timeout | undefined;
+		let cancellationHardKillTimer: NodeJS.Timeout | undefined;
+		let interruptTerminationTimer: NodeJS.Timeout | undefined;
+		const clearCancellationTimers = () => {
+			if (cancellationHardKillTimer) clearTimeout(cancellationHardKillTimer);
+			if (interruptTerminationTimer) clearTimeout(interruptTerminationTimer);
+			cancellationHardKillTimer = undefined;
+			interruptTerminationTimer = undefined;
+		};
+		const scheduleCancellationHardKill = (delayMs: number) => {
+			if (cancellationHardKillTimer || childExited || processClosed || settled || detached) return;
+			cancellationHardKillTimer = setTimeout(() => {
+				cancellationHardKillTimer = undefined;
+				if (!childExited && !processClosed && !settled && !detached) trySignalChild(proc, "SIGKILL");
+			}, delayMs);
+			cancellationHardKillTimer.unref?.();
+		};
 		const clearTurnBudgetTimers = () => {
 			if (turnBudgetTerminationTimer) {
 				clearTimeout(turnBudgetTerminationTimer);
@@ -509,6 +525,7 @@ async function runSingleAttempt(
 		const finish = (code: number) => {
 			if (settled) return;
 			settled = true;
+			clearCancellationTimers();
 			clearFinalDrainTimers();
 			clearWatchdogTailTimer();
 			clearStdioGuard();
@@ -924,6 +941,7 @@ async function runSingleAttempt(
 		});
 		proc.on("exit", () => {
 			childExited = true;
+			clearCancellationTimers();
 			clearFinalDrainTimers();
 		});
 		proc.on("close", (code, signal) => {
@@ -1013,9 +1031,9 @@ async function runSingleAttempt(
 
 		if (options.signal) {
 			const kill = () => {
-				if (processClosed || detached) return;
-				proc.kill("SIGTERM");
-				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
+				if (childExited || processClosed || settled || detached) return;
+				trySignalChild(proc, "SIGTERM");
+				scheduleCancellationHardKill(3000);
 			};
 			if (options.signal.aborted) kill();
 			else {
@@ -1037,10 +1055,12 @@ async function runSingleAttempt(
 				progress.activityState = undefined;
 				fireUpdate();
 				trySignalChild(proc, "SIGINT");
-				setTimeout(() => {
-					if (settled || processClosed || detached) return;
+				interruptTerminationTimer = setTimeout(() => {
+					if (childExited || settled || processClosed || detached) return;
 					trySignalChild(proc, "SIGTERM");
-				}, 1000).unref?.();
+				}, 1000);
+				interruptTerminationTimer.unref?.();
+				scheduleCancellationHardKill(4000);
 			};
 			if (options.interruptSignal.aborted) interrupt();
 			else {

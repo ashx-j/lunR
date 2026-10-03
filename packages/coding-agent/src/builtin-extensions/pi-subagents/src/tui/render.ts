@@ -1224,7 +1224,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	return lines;
 }
 
-let activeWidget: SubagentAsyncWidget | undefined;
+const activeWidgets = new Map<ExtensionContext["ui"], SubagentAsyncWidget>();
 
 export class SubagentAsyncWidget {
 	private jobs: AsyncJobState[];
@@ -1309,7 +1309,9 @@ export class SubagentAsyncWidget {
 	dispose(): void {
 		this.disposed = true;
 		this.stopTimer();
-		if (activeWidget === this) activeWidget = undefined;
+		for (const [owner, widget] of activeWidgets) {
+			if (widget === this) activeWidgets.delete(owner);
+		}
 	}
 
 	render(width: number): string[] {
@@ -1343,9 +1345,14 @@ export function createSubagentWidgetComponent(
 	return new SubagentAsyncWidget(jobs, theme, options);
 }
 
-export function disposeSubagentWidget(): void {
-	activeWidget?.dispose();
-	activeWidget = undefined;
+export function disposeSubagentWidget(ctx?: ExtensionContext): void {
+	if (ctx) {
+		activeWidgets.get(ctx.ui)?.dispose();
+		activeWidgets.delete(ctx.ui);
+		return;
+	}
+	for (const widget of activeWidgets.values()) widget.dispose();
+	activeWidgets.clear();
 }
 
 export function clearWidgetPaintTimer(): void {
@@ -1358,13 +1365,14 @@ export function clearWidgetPaintTimer(): void {
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (jobs.length === 0) {
 		resetWidgetLayoutSession();
-		disposeSubagentWidget();
+		disposeSubagentWidget(ctx);
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 	if (!ctx.hasUI) return;
 	const expanded = ctx.ui.getToolsExpanded?.() ?? false;
 	const requestRender = () => ctx.ui.requestRender?.();
+	const activeWidget = activeWidgets.get(ctx.ui);
 	if (activeWidget) {
 		activeWidget.setJobs(jobs);
 		activeWidget.setExpanded(expanded);
@@ -1373,7 +1381,7 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		return;
 	}
 	const widget = new SubagentAsyncWidget(jobs, undefined, { expanded, requestRender });
-	activeWidget = widget;
+	activeWidgets.set(ctx.ui, widget);
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
 		widget.setTheme(theme);
 		return widget;

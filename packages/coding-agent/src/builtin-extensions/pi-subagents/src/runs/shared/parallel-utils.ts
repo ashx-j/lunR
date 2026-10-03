@@ -103,17 +103,11 @@ export function flattenSteps(steps: RunnerStep[]): RunnerSubagentStep[] {
 
 export const DEFAULT_GLOBAL_CONCURRENCY_LIMIT = Number.MAX_SAFE_INTEGER;
 
-// lunr: stagger parallel cold starts so the first child's response begins
-// (creating the Anthropic cache entry) before siblings fire identical
-// system prompts. Sequential mode (limit=1) is untouched.
-const PARALLEL_COLD_START_STAGGER_MS = 1000;
+// Give the first child a small head start for prompt-cache creation. All
+// siblings share this one deadline, even when bounded workers reuse slots.
+export const PARALLEL_COLD_START_ALLOWANCE_MS = 1000;
 
-/**
- * A promise-based semaphore for limiting concurrent access across multiple
- * mapConcurrent calls within a single run. Enforces a global cap on the total
- * number of subagent tasks executing simultaneously, regardless of each step's
- * per-step concurrency limit.
- */
+/** Run-wide concurrency cap, with removable waits for cancelled launches. */
 export class Semaphore {
 	private available: number;
 	private readonly queue: Array<() => void> = [];
@@ -122,24 +116,48 @@ export class Semaphore {
 		this.available = Math.max(1, Math.floor(limit) || 1);
 	}
 
-	acquire(): Promise<void> {
+	acquire(signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
 		if (this.available > 0) {
 			this.available--;
 			return Promise.resolve();
 		}
-		return new Promise<void>((resolve) => {
-			this.queue.push(resolve);
+		return new Promise<void>((resolve, reject) => {
+			const grant = () => {
+				signal?.removeEventListener("abort", abort);
+				resolve();
+			};
+			const abort = () => {
+				const index = this.queue.indexOf(grant);
+				if (index !== -1) this.queue.splice(index, 1);
+				reject(signal?.reason);
+			};
+			this.queue.push(grant);
+			signal?.addEventListener("abort", abort, { once: true });
 		});
 	}
 
 	release(): void {
 		const next = this.queue.shift();
-		if (next) {
-			next();
-		} else {
-			this.available++;
-		}
+		if (next) next();
+		else this.available++;
 	}
+}
+
+function waitForLaunch(delayMs: number, signal?: AbortSignal): Promise<void> {
+	signal?.throwIfAborted();
+	if (delayMs <= 0) return Promise.resolve();
+	return new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", abort);
+			resolve();
+		}, delayMs);
+		const abort = () => {
+			clearTimeout(timer);
+			reject(signal?.reason);
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+	});
 }
 
 export async function mapConcurrent<T, R>(
@@ -147,35 +165,40 @@ export async function mapConcurrent<T, R>(
 	limit: number,
 	fn: (item: T, i: number) => Promise<R>,
 	globalSemaphore?: Semaphore,
+	cancellation?: { signal?: AbortSignal; onAbort: (item: T, i: number) => R },
 ): Promise<R[]> {
 	const safeLimit = Math.max(1, Math.floor(limit) || 1);
 	const results: R[] = new Array(items.length);
+	const launchDeadline = Date.now() + (safeLimit > 1 ? PARALLEL_COLD_START_ALLOWANCE_MS : 0);
+	const signal = cancellation?.signal;
+	let launchReady: Promise<void> | undefined;
 	let next = 0;
 
-	async function worker(_workerIndex: number): Promise<void> {
+	async function worker(): Promise<void> {
 		while (next < items.length) {
 			const i = next++;
-			if (safeLimit > 1 && i > 0 && PARALLEL_COLD_START_STAGGER_MS > 0) {
-				await new Promise<void>((resolve) => {
-					setTimeout(resolve, PARALLEL_COLD_START_STAGGER_MS * i);
-				});
-			}
-			if (globalSemaphore) {
-				await globalSemaphore.acquire();
+			let acquired = false;
+			try {
 				try {
-					results[i] = await fn(items[i], i);
-				} finally {
-					globalSemaphore.release();
+					await (i === 0 ? waitForLaunch(0, signal) : launchReady ??= waitForLaunch(launchDeadline - Date.now(), signal));
+					if (globalSemaphore) {
+						await globalSemaphore.acquire(signal);
+						acquired = true;
+					}
+					signal?.throwIfAborted();
+				} catch (error) {
+					if (!signal?.aborted || !cancellation) throw error;
+					results[i] = cancellation.onAbort(items[i], i);
+					continue;
 				}
-			} else {
 				results[i] = await fn(items[i], i);
+			} finally {
+				if (acquired) globalSemaphore!.release();
 			}
 		}
 	}
 
-	await Promise.all(
-		Array.from({ length: Math.min(safeLimit, items.length) }, (_, wi) => worker(wi)),
-	);
+	await Promise.all(Array.from({ length: Math.min(safeLimit, items.length) }, () => worker()));
 	return results;
 }
 
