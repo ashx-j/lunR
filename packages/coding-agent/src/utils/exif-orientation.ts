@@ -6,6 +6,7 @@ function readOrientationFromTiff(bytes: Uint8Array, tiffStart: number): number {
 	if (tiffStart + 8 > bytes.length) return 1;
 
 	const byteOrder = (bytes[tiffStart] << 8) | bytes[tiffStart + 1];
+	if (byteOrder !== 0x4949 && byteOrder !== 0x4d4d) return 1;
 	const le = byteOrder === 0x4949;
 
 	const read16 = (pos: number): number => {
@@ -14,11 +15,12 @@ function readOrientationFromTiff(bytes: Uint8Array, tiffStart: number): number {
 	};
 
 	const read32 = (pos: number): number => {
-		if (le) return bytes[pos] | (bytes[pos + 1] << 8) | (bytes[pos + 2] << 16) | (bytes[pos + 3] << 24);
+		if (le) return (bytes[pos] | (bytes[pos + 1] << 8) | (bytes[pos + 2] << 16) | (bytes[pos + 3] << 24)) >>> 0;
 		return ((bytes[pos] << 24) | (bytes[pos + 1] << 16) | (bytes[pos + 2] << 8) | bytes[pos + 3]) >>> 0;
 	};
 
 	const ifdOffset = read32(tiffStart + 4);
+	if (ifdOffset < 8) return 1;
 	const ifdStart = tiffStart + ifdOffset;
 	if (ifdStart + 2 > bytes.length) return 1;
 
@@ -62,26 +64,33 @@ function findJpegTiffOffset(bytes: Uint8Array): number {
 	return -1;
 }
 
-function findWebpTiffOffset(bytes: Uint8Array): number {
+function findWebpTiff(bytes: Uint8Array): Uint8Array | undefined {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const riffSize = view.getUint32(4, true);
+	if (riffSize < 4 || riffSize > bytes.length - 8) return undefined;
+	const end = 8 + riffSize;
 	let offset = 12;
-	while (offset + 8 <= bytes.length) {
+	while (end - offset >= 8) {
 		const chunkId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
-		const chunkSize =
-			bytes[offset + 4] | (bytes[offset + 5] << 8) | (bytes[offset + 6] << 16) | (bytes[offset + 7] << 24);
+		const chunkSize = view.getUint32(offset + 4, true);
 		const dataStart = offset + 8;
+		const paddedSize = chunkSize + (chunkSize % 2);
+		if (paddedSize > end - dataStart) return undefined;
+		const nextOffset = dataStart + paddedSize;
+		if (nextOffset <= offset || nextOffset > end) return undefined;
 
 		if (chunkId === "EXIF") {
-			if (dataStart + chunkSize > bytes.length) return -1;
 			// Some WebP files have "Exif\0\0" prefix before the TIFF header
 			const tiffStart = chunkSize >= 6 && hasExifHeader(bytes, dataStart) ? dataStart + 6 : dataStart;
-			return tiffStart;
+			// TIFF offsets must remain inside this EXIF payload, excluding RIFF padding.
+			return bytes.subarray(tiffStart, dataStart + chunkSize);
 		}
 
 		// RIFF chunks are padded to even size
-		offset = dataStart + chunkSize + (chunkSize % 2);
+		offset = nextOffset;
 	}
 
-	return -1;
+	return undefined;
 }
 
 function hasExifHeader(bytes: Uint8Array, offset: number): boolean {
@@ -114,7 +123,8 @@ function getExifOrientation(bytes: Uint8Array): number {
 		bytes[10] === 0x42 &&
 		bytes[11] === 0x50
 	) {
-		tiffOffset = findWebpTiffOffset(bytes);
+		const tiff = findWebpTiff(bytes);
+		return tiff ? readOrientationFromTiff(tiff, 0) : 1;
 	}
 
 	if (tiffOffset === -1) return 1;

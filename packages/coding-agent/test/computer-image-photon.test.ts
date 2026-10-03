@@ -31,6 +31,33 @@ function encodedPng(level: number, red = 80) {
 }
 
 describe("computer image processing with Photon", () => {
+	it.each([
+		[1, 10000],
+		[10000, 1],
+	])("preserves separate mapping ratios for a %i x %i capture", async (width, height) => {
+		const photon = await loadPhoton();
+		if (!photon) throw new Error("Photon fixture dependency is unavailable");
+		const source = new photon.PhotonImage(new Uint8Array(width * height * 4).fill(255), width, height);
+		try {
+			const result = await prepareComputerImage({
+				type: "image",
+				mimeType: "image/png",
+				data: Buffer.from(source.get_bytes()).toString("base64"),
+			});
+			expect([result.width, result.height]).toEqual([Math.min(width, 1280), Math.min(height, 1280)]);
+			expect(result.scaleX).toBe(width / result.width);
+			expect(result.scaleY).toBe(height / result.height);
+			expect(result.image.data.length).toBeLessThan(1.5 * 1024 * 1024);
+			const decoded = photon.PhotonImage.new_from_byteslice(Buffer.from(result.image.data, "base64"));
+			try {
+				expect([decoded.get_width(), decoded.get_height()]).toEqual([result.width, result.height]);
+			} finally {
+				decoded.free();
+			}
+		} finally {
+			source.free();
+		}
+	});
 	it("identifies decoded pixels across PNG encodings, including the full image behind a crop", async () => {
 		const a = encodedPng(0), b = encodedPng(9), changed = encodedPng(9, 81);
 		expect(a.data).not.toBe(b.data);
