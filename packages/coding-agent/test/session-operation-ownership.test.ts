@@ -2,7 +2,12 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getPermissionMode } from "../src/core/permissions.ts";
+import {
+	createPermissionContext,
+	gateToolCall,
+	getPermissionMode,
+	registerApprovalHandler,
+} from "../src/core/permissions.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
@@ -19,12 +24,12 @@ function deferred<T = void>() {
 	return { promise, resolve };
 }
 
-function heldTool() {
+function heldTool(name = "wait") {
 	const entered = deferred();
 	const released = deferred();
 	const cancelled = deferred();
 	const tool: AgentTool = {
-		name: "wait",
+		name,
 		label: "Wait",
 		description: "Inert held tool",
 		parameters: Type.Object({}),
@@ -42,6 +47,7 @@ describe("session operation ownership", () => {
 	const harnesses: Harness[] = [];
 	afterEach(async () => {
 		vi.unstubAllEnvs();
+		registerApprovalHandler(undefined);
 		while (harnesses.length) {
 			const harness = harnesses.pop()!;
 			await harness.session.shutdown();
@@ -243,6 +249,264 @@ describe("session operation ownership", () => {
 		expect(JSON.stringify(next.messages)).not.toContain("first result");
 		expect(h.session.isIdle).toBe(true);
 	});
+
+	it("completes scheduled messages before a queued user follow-up settles", async () => {
+		const scheduled = heldTool();
+		const user = heldTool("user_wait");
+		const h = await harness({ tools: [scheduled.tool, user.tool] });
+		h.setResponses([
+			fauxAssistantMessage([fauxToolCall("wait", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("scheduled result"),
+			fauxAssistantMessage([fauxToolCall("user_wait", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("user result"),
+		]);
+		let completed = false;
+		const request = h.session.promptWithCompletion("same input").then((result) => {
+			completed = true;
+			return result;
+		});
+		await scheduled.entered.promise;
+		await h.session.prompt("same input", { streamingBehavior: "followUp" });
+		scheduled.released.resolve();
+		await user.entered.promise;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const completedBeforeUser = completed;
+		user.released.resolve();
+		const result = await request;
+		await h.session.waitForIdle();
+		expect(result.messages.filter((message) => message.role === "user")).toHaveLength(1);
+		expect(JSON.stringify(result.messages)).toContain("scheduled result");
+		expect(JSON.stringify(result.messages)).not.toContain("user result");
+		expect(completedBeforeUser).toBe(true);
+		expect(h.session.messages.filter((message) => message.role === "user")).toHaveLength(2);
+	});
+
+	it.each(["tool", "retry"] as const)(
+		"cancels only the scheduled %s and leaves later user work running",
+		async (phase) => {
+			const scheduled = heldTool();
+			const user = heldTool("user_wait");
+			const retryEntered = deferred();
+			const h = await harness({
+				tools: [scheduled.tool, user.tool],
+				settings: { retry: { enabled: true, baseDelayMs: 10000 } },
+			});
+			h.session.subscribe((event) => {
+				if (event.type === "auto_retry_start") retryEntered.resolve();
+			});
+			h.setResponses([
+				fauxAssistantMessage([fauxToolCall("wait", {})], { stopReason: "toolUse" }),
+				...(phase === "retry"
+					? [fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" })]
+					: []),
+			]);
+			const controller = new AbortController();
+			const reason = new Error("scheduled timeout");
+			const request = h.session.promptWithCompletion("scheduled", { signal: controller.signal });
+			const rejection = expect(request).rejects.toBe(reason);
+			await scheduled.entered.promise;
+			await h.session.prompt("user", { streamingBehavior: "followUp" });
+			if (phase === "retry") {
+				scheduled.released.resolve();
+				await retryEntered.promise;
+			}
+			h.appendResponses([
+				// Faux providers consume a response even when the request signal is already aborted.
+				...(phase === "tool" ? [fauxAssistantMessage("", { stopReason: "aborted" })] : []),
+				fauxAssistantMessage([fauxToolCall("user_wait", {})], { stopReason: "toolUse" }),
+				fauxAssistantMessage("user result"),
+			]);
+			controller.abort(reason);
+			if (phase === "tool") {
+				await scheduled.cancelled.promise;
+				scheduled.released.resolve();
+			}
+			await user.entered.promise;
+			await rejection;
+			expect(
+				h.session.sessionManager
+					.getEntries()
+					.some(
+						(entry) =>
+							entry.type === "message" &&
+							entry.message.role === "toolResult" &&
+							entry.message.toolName === "wait",
+					),
+			).toBe(true);
+			const userSignal = h.session.agent.signal!;
+			expect(userSignal.aborted).toBe(false);
+			user.released.resolve();
+			await h.session.waitForIdle();
+			expect(JSON.stringify(h.session.messages)).toContain("user result");
+		},
+	);
+
+	it("ignores a scheduled timeout after completion while the user follow-up is held", async () => {
+		const scheduled = heldTool();
+		const user = heldTool("user_wait");
+		const h = await harness({ tools: [scheduled.tool, user.tool] });
+		h.setResponses([
+			fauxAssistantMessage([fauxToolCall("wait", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("scheduled result"),
+			fauxAssistantMessage([fauxToolCall("user_wait", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("user result"),
+		]);
+		const controller = new AbortController();
+		const request = h.session.promptWithCompletion("scheduled", { signal: controller.signal });
+		await scheduled.entered.promise;
+		await h.session.prompt("user", { streamingBehavior: "followUp" });
+		scheduled.released.resolve();
+		await user.entered.promise;
+		const result = await request;
+		controller.abort();
+		const userCancelled = h.session.agent.signal!.aborted;
+		user.released.resolve();
+		await h.session.waitForIdle();
+		expect(userCancelled).toBe(false);
+		expect(JSON.stringify(result.messages)).not.toContain("user result");
+		expect(JSON.stringify(h.session.messages)).toContain("user result");
+	});
+
+	it.each(["retry", "overflow"] as const)(
+		"keeps %s recovery and steering inside the scheduled boundary",
+		async (recovery) => {
+			const scheduled = heldTool();
+			const h = await harness({
+				tools: [scheduled.tool],
+				settings: { retry: { baseDelayMs: 1 }, compaction: { keepRecentTokens: 1 } },
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_before_compact", (event) => ({
+							compaction: {
+								summary: "inert summary",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+							},
+						}));
+					},
+				],
+			});
+			h.setResponses([
+				fauxAssistantMessage("seed result"),
+				fauxAssistantMessage([fauxToolCall("wait", {})], { stopReason: "toolUse" }),
+				fauxAssistantMessage("", {
+					stopReason: "error",
+					errorMessage:
+						recovery === "retry" ? "overloaded_error" : "prompt is too long: 200000 tokens > 128000 maximum",
+				}),
+				fauxAssistantMessage("scheduled recovered"),
+				fauxAssistantMessage("user result"),
+			]);
+			await h.session.prompt("seed");
+			const request = h.session.promptWithCompletion("scheduled");
+			await scheduled.entered.promise;
+			await h.session.prompt("steering", { streamingBehavior: "steer" });
+			await h.session.prompt("user follow-up", { streamingBehavior: "followUp" });
+			scheduled.released.resolve();
+			const result = await request;
+			await h.session.waitForIdle();
+			expect(JSON.stringify(result.messages)).toContain("scheduled recovered");
+			expect(JSON.stringify(result.messages)).toContain("steering");
+			expect(JSON.stringify(result.messages)).not.toContain("user follow-up");
+			expect(JSON.stringify(result.messages)).not.toContain("user result");
+			expect(h.eventsOfType(recovery === "retry" ? "auto_retry_start" : "compaction_end")).toHaveLength(1);
+			expect(JSON.stringify(h.session.messages)).toContain("user result");
+		},
+	);
+
+	it("settles a successful scheduled response after compaction without retrying queued work", async () => {
+		const scheduled = heldTool();
+		const h = await harness({
+			models: [{ id: "small", contextWindow: 10000, maxTokens: 100 }],
+			tools: [scheduled.tool],
+			settings: { compaction: { reserveTokens: 100, keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						compaction: {
+							summary: "inert summary",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+				},
+			],
+		});
+		h.setResponses([
+			fauxAssistantMessage("seed result"),
+			fauxAssistantMessage([fauxToolCall("wait", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage(`scheduled ${"x".repeat(50000)}`),
+			fauxAssistantMessage("user result"),
+		]);
+		await h.session.prompt("seed");
+		const request = h.session.promptWithCompletion("scheduled");
+		await scheduled.entered.promise;
+		await h.session.prompt("user", { streamingBehavior: "followUp" });
+		scheduled.released.resolve();
+		const result = await request;
+		await h.session.waitForIdle();
+		expect(result.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
+		expect(JSON.stringify(result.messages)).not.toContain("user result");
+		expect(h.eventsOfType("compaction_end")).toEqual([expect.objectContaining({ willRetry: false, aborted: false })]);
+		expect(JSON.stringify(h.session.messages)).toContain("user result");
+	});
+
+	it("keeps work queued by agent_end handlers outside scheduled results", async () => {
+		const h = await harness();
+		h.setResponses([fauxAssistantMessage("scheduled result"), fauxAssistantMessage("user result")]);
+		let queued = false;
+		h.session.agent.subscribe(async (event) => {
+			if (event.type === "agent_end" && !queued) {
+				queued = true;
+				await h.session.prompt("later user", { streamingBehavior: "followUp" });
+			}
+		});
+		const result = await h.session.promptWithCompletion("scheduled");
+		await h.session.waitForIdle();
+		expect(result.messages).toHaveLength(2);
+		expect(JSON.stringify(result.messages)).not.toContain("user result");
+		expect(JSON.stringify(h.session.messages)).toContain("user result");
+	});
+
+	it.each([
+		{ permissionMode: undefined, approved: false },
+		{ permissionMode: "auto", approved: false },
+		{ permissionMode: undefined, approved: true },
+	] as const)(
+		"preserves caller permission policy with explicit mode $permissionMode and grant $approved",
+		async ({ permissionMode, approved }) => {
+			const h = await harness();
+			const manager = SessionManager.inMemory(h.tempDir);
+			manager.setPermissionMode("auto");
+			const initialMode = approved ? "yolo" : "read-only";
+			createPermissionContext(manager.getSessionId(), initialMode, approved);
+			const approval = vi.fn(async () => "session" as const);
+			registerApprovalHandler(approval);
+			const tasks = ["one", "two", "three"].map((task) => ({ task, description: task }));
+			if (approved) await gateToolCall("subagent", { tasks }, h.tempDir, manager.getSessionId());
+			approval.mockClear();
+			const { session } = await createAgentSession({
+				cwd: h.tempDir,
+				agentDir: h.tempDir,
+				model: h.getModel(),
+				modelRuntime: h.session.modelRuntime,
+				sessionManager: manager,
+				settingsManager: SettingsManager.inMemory({ defaultPermissionMode: "yolo" }),
+				resourceLoader: createTestResourceLoader(),
+				permissionMode,
+			});
+			try {
+				expect(session.permissionMode).toBe(permissionMode ?? initialMode);
+				session.setPermissionMode("yolo");
+				const gate = await gateToolCall("subagent", { tasks }, h.tempDir, session.sessionId);
+				if (approved) expect(gate).toBeUndefined();
+				else expect(gate).toMatchObject({ block: true });
+				expect(approval).not.toHaveBeenCalled();
+			} finally {
+				await session.shutdown();
+			}
+		},
+	);
 
 	it("initializes isolated read-only tools and routes mode changes to the same context", async () => {
 		const read = await harness({ settings: { defaultPermissionMode: "read-only" } });

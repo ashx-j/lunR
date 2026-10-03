@@ -132,6 +132,16 @@ export function createPermissionContext(
 	contexts.set(sessionId, { mode, allowApprovals, approvals: new Set() });
 }
 
+/** Initialize shared session defaults without replacing caller-owned approval policy or grants. */
+export function initializePermissionContext(
+	sessionId: string,
+	mode: PermissionMode = defaultContext.mode,
+	overrideMode?: PermissionMode,
+): void {
+	if (!contexts.has(sessionId)) createPermissionContext(sessionId, mode);
+	if (overrideMode !== undefined) setPermissionMode(overrideMode, sessionId);
+}
+
 export function deletePermissionContext(sessionId: string): void {
 	contexts.delete(sessionId);
 }

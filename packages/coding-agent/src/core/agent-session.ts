@@ -98,10 +98,10 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import {
 	AUTO_MODE_ADDENDUM,
-	createPermissionContext,
 	deletePermissionContext,
 	gateToolCall,
 	getPermissionMode,
+	initializePermissionContext,
 	type PermissionMode,
 	setPermissionMode,
 } from "./permissions.ts";
@@ -276,8 +276,16 @@ interface ActiveSubagentWait {
 	ownerSignal: AbortSignal;
 }
 
+interface PromptCompletion {
+	messages: AgentMessage[];
+	signal?: AbortSignal;
+	cancelled?: boolean;
+	settle: () => void;
+	detach?: () => void;
+}
+
 interface ActivePromptRun {
-	messages?: AgentMessage[];
+	completion?: PromptCompletion;
 	waits: Set<ActiveSubagentWait>;
 	gracefulStopRequested: boolean;
 }
@@ -456,7 +464,7 @@ export class AgentSession {
 				: undefined) ??
 			this.sessionManager.getPermissionMode() ??
 			this.settingsManager.getDefaultPermissionMode();
-		createPermissionContext(this.sessionId, permissionMode);
+		initializePermissionContext(this.sessionId, permissionMode, config.permissionMode);
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -781,7 +789,7 @@ export class AgentSession {
 			}
 		}
 
-		if (event.type === "message_end") this._activePromptRun?.messages?.push(event.message);
+		if (event.type === "message_end") this._activePromptRun?.completion?.messages.push(event.message);
 
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
@@ -1451,10 +1459,28 @@ export class AgentSession {
 			try {
 				this.assertCanStartWork();
 				if (run.gracefulStopRequested) throw new Error("Prompt was cancelled during preparation.");
-				await this.agent.prompt(messages);
+				await this.agent.prompt(Array.isArray(messages) ? messages : [messages], {
+					consumeFollowUps: !run.completion,
+				});
 				while (await this._handlePostAgentRun(run)) {
-					if (run.gracefulStopRequested || this._closing) break;
-					await this.agent.continue();
+					if (run.gracefulStopRequested || this._closing || run.completion?.cancelled) break;
+					await this.agent.continue({ consumeFollowUps: !run.completion });
+				}
+				if (run.completion) {
+					const completion = run.completion;
+					run.completion = undefined;
+					completion.detach?.();
+					const hasQueuedWork = !run.gracefulStopRequested && !this._closing && this.agent.hasQueuedMessages();
+					if (!hasQueuedWork) await this._releasePromptRun(run);
+					completion.settle();
+					// Later queued work retains normal session lifecycle, with a fresh queue admission.
+					if (hasQueuedWork) {
+						await this.agent.continueQueued();
+						while (await this._handlePostAgentRun(run)) {
+							if (run.gracefulStopRequested || this._closing) break;
+							await this.agent.continue();
+						}
+					}
 				}
 			} finally {
 				await this._releasePromptRun(run);
@@ -1465,7 +1491,7 @@ export class AgentSession {
 	private async _handlePostAgentRun(run: ActivePromptRun): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
-		if (!msg || run.gracefulStopRequested) {
+		if (!msg || run.gracefulStopRequested || run.completion?.signal?.aborted) {
 			return false;
 		}
 
@@ -1498,9 +1524,9 @@ export class AgentSession {
 			return true;
 		}
 
-		// The agent loop drains both queues before emitting agent_end. Any messages
-		// here were queued by agent_end extension handlers and need a continuation.
-		return this.agent.hasQueuedMessages();
+		// Correlated requests leave follow-ups queued. Ordinary runs also continue
+		// messages queued by agent_end extension handlers.
+		return !run.completion && this.agent.hasQueuedMessages();
 	}
 
 	/**
@@ -1529,14 +1555,29 @@ export class AgentSession {
 		return this._trackOperation(() => this._prompt(text, options));
 	}
 
-	private async _prompt(text: string, options?: PromptOptions, messagesForRun?: AgentMessage[]): Promise<void> {
+	private async _prompt(text: string, options?: PromptOptions, completion?: PromptCompletion): Promise<void> {
 		let run: ActivePromptRun | undefined;
 		let accepted = false;
 		try {
 			this.assertCanStartWork();
 			const wasStreaming = this.isStreaming;
-			if (!wasStreaming) run = this._reservePromptRun();
-			else if (!options?.streamingBehavior) {
+			if (!wasStreaming) {
+				run = this._reservePromptRun();
+				run.completion = completion;
+				if (completion?.signal) {
+					const owner = run;
+					const cancel = () => {
+						if (this._activePromptRun !== owner || owner.completion !== completion) return;
+						completion.cancelled = true;
+						this.agent.abort();
+						this.abortRetry();
+						this._autoCompactionAbortController?.abort();
+					};
+					completion.signal.addEventListener("abort", cancel, { once: true });
+					completion.detach = () => completion.signal?.removeEventListener("abort", cancel);
+					completion.signal.throwIfAborted();
+				}
+			} else if (!options?.streamingBehavior) {
 				throw new Error(
 					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
 				);
@@ -1547,6 +1588,7 @@ export class AgentSession {
 				wasStreaming ? options?.streamingBehavior : undefined,
 			);
 			this.assertCanStartWork();
+			run?.completion?.signal?.throwIfAborted();
 			if (run?.gracefulStopRequested) throw new Error("Prompt was cancelled during preparation.");
 			if (!prepared) {
 				accepted = true;
@@ -1561,9 +1603,10 @@ export class AgentSession {
 				return;
 			}
 			run ??= this._reservePromptRun();
-			run.messages = messagesForRun;
+			run.completion = completion;
 			const messages = await this._createPromptMessages(prepared);
 			this.assertCanStartWork();
+			run.completion?.signal?.throwIfAborted();
 			if (run.gracefulStopRequested) throw new Error("Prompt was cancelled during preparation.");
 			accepted = true;
 			options?.preflightResult?.(true);
@@ -1572,23 +1615,38 @@ export class AgentSession {
 			if (!accepted) options?.preflightResult?.(false);
 			throw error;
 		} finally {
+			completion?.detach?.();
 			if (run) await this._releasePromptRun(run);
 		}
 	}
 
-	/** Exclusive scheduled prompt. Rejects busy sessions and returns this request's settled messages. */
+	/**
+	 * Admit one scheduled request, including steering, retries and compaction.
+	 * Completes before later follow-ups; signal cancellation belongs only to this request.
+	 */
 	async promptWithCompletion(
 		text: string,
-		options?: Omit<PromptOptions, "streamingBehavior" | "preflightResult">,
+		options?: Omit<PromptOptions, "streamingBehavior" | "preflightResult"> & { signal?: AbortSignal },
 	): Promise<{ messages: AgentMessage[] }> {
 		this.assertCanStartWork();
 		if (!this.isIdle || this.isBashRunning || this.isCompacting || this.pendingMessageCount > 0) {
 			throw new Error("Session is busy. Retry the scheduled prompt after its work settles.");
 		}
 		if (text.startsWith("/") && (options?.expandPromptTemplates ?? true)) this._throwIfExtensionCommand(text);
+		options?.signal?.throwIfAborted();
 		const messages: AgentMessage[] = [];
-		await this._trackOperation(() => this._prompt(text, options, messages));
-		return { messages };
+		return new Promise((resolve, reject) => {
+			const completion: PromptCompletion = {
+				messages,
+				signal: options?.signal,
+				settle: () => {
+					if (completion.cancelled) reject(completion.signal?.reason);
+					else resolve({ messages });
+				},
+			};
+			// Track the full session operation while returning only the admitted request's completion.
+			void this._trackOperation(() => this._prompt(text, options, completion)).then(completion.settle, reject);
+		});
 	}
 
 	private async _preparePromptInput(
@@ -2774,9 +2832,9 @@ export class AgentSession {
 				return true;
 			}
 
-			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Only ordinary runs continue queued requests after successful compaction.
+			// Correlated completion must settle before those requests begin.
+			return !this._activePromptRun?.completion && this.agent.hasQueuedMessages();
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {

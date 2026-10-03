@@ -39,7 +39,7 @@ import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
 import type { ContextUsage, SessionShutdownEvent, ToolDefinition } from "../core/extensions/types.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
-import { createPermissionContext, deletePermissionContext, getPermissionMode } from "../core/permissions.ts";
+import { deletePermissionContext, getPermissionMode, initializePermissionContext } from "../core/permissions.ts";
 import { list as listProcesses } from "../core/process-registry.ts";
 import { runtimeScope } from "../core/runtime-scope.ts";
 import { registerTransferHandler, SessionTransferError } from "../core/session-handoff.ts";
@@ -446,7 +446,7 @@ export class AgentBridge {
 			const newSessionId = session.sessionManager?.getSessionId();
 			if (newFile) putSession(key, { sessionId: newSessionId ?? key, sessionFile: newFile });
 			if (newSessionId)
-				createPermissionContext(
+				initializePermissionContext(
 					newSessionId,
 					session.sessionManager?.getPermissionMode?.() ?? session.settingsManager?.getDefaultPermissionMode(),
 				);
@@ -733,7 +733,7 @@ export class AgentBridge {
 			putSession(key, { sessionId: sessionId ?? key, sessionFile });
 		}
 		if (sessionId) {
-			createPermissionContext(
+			initializePermissionContext(
 				sessionId,
 				session.sessionManager?.getPermissionMode?.() ?? session.settingsManager?.getDefaultPermissionMode(),
 			);
