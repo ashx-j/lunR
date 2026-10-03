@@ -212,14 +212,18 @@ export class OrchestratorSupervisor {
 		throw error;
 	}
 
+	/** Radius recovery changes identity metadata, never a captured owner's lifecycle snapshot. */
 	updateInstance(instance: InstanceRecord): void {
 		const live = this.liveInstances.get(instance.id);
-		if (live) {
-			live.record = instance;
-			live.resources.radiusPiId = instance.radiusPiId;
-			live.resources.sessionId = instance.sessionId;
-		}
-		upsertInstance(instance);
+		if (
+			!live ||
+			this.shuttingDown ||
+			live.record.createdAt !== instance.createdAt ||
+			live.record.pid !== instance.pid ||
+			(live.record.status !== "online" && live.record.status !== "starting")
+		)
+			return;
+		this.updateRecord(live, { radiusPiId: instance.radiusPiId });
 	}
 
 	openRpcStream(
