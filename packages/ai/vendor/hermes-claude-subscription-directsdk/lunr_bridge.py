@@ -18,6 +18,30 @@ def emit(request_id, kind, **fields):
         sys.stdout.flush()
 
 
+def error_category(error):
+    """Retain recovery categories only; native exception text never crosses the bridge."""
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return 'timeout'
+    # Only interpret errors emitted by the pinned transport, not arbitrary private text.
+    text = str(error).lower()
+    if not isinstance(error, RuntimeError) or not text.startswith((
+            'native api error:', 'incomplete upstream response (', 'incomplete native response:')):
+        return 'setup'
+    if re.search(r'prompt is too long|request_too_large|context[_ ]length[_ ]exceeded|exceeds the context window', text):
+        return 'context_overflow'
+    if re.search(r'rate[_ ]limit|too many requests|\b429\b', text):
+        return 'rate_limit'
+    if re.search(r'overloaded|overload|\b529\b', text):
+        return 'overloaded'
+    if re.search(r'timed? out|timeout', text):
+        return 'timeout'
+    if re.search(r'\b50[0234]\b|service unavailable|internal server error|network error|connection (?:reset|refused|lost)', text):
+        return 'transient'
+    if text.startswith('incomplete native response:') or re.search(r'status 200, capture incomplete', text):
+        return 'incomplete'
+    return 'setup'
+
+
 def main():
     line = sys.stdin.buffer.readline(MAX_RECORD + 1)
     if not line or len(line) > MAX_RECORD:
@@ -77,9 +101,9 @@ def main():
                     response = chunk._response.model_dump()
                     emit(request_id, 'complete', response=response)
         return 0
-    except Exception:
+    except Exception as error:
         emit(request_id, 'cancelled' if cancelled.is_set() else 'error',
-             message='Claude Code request failed. Check subscription setup and native CLI compatibility.')
+             category=error_category(error))
         return 1
     finally:
         client.close()
