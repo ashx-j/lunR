@@ -490,7 +490,7 @@ export class GoalRuntime {
 	prepareGoalToolsForActivation(ctx: StatusContext) {
 		if (this.settings.toolVisibility === "after-first-goal") {
 			if (!this.goalToolsAvailable() && ctx.isIdle?.() !== true) {
-				throw new Error("wait until Pi is idle before revealing the goal tools");
+				throw new Error("wait until lunR is idle before revealing the goal tools");
 			}
 			this.revealGoalTools();
 			return;

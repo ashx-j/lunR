@@ -1,4 +1,4 @@
-# @earendil-works/pi-ai
+# @ashx-j/lunr-ai
 
 Unified LLM API with provider collections, automatic auth resolution, token and cost tracking, and simple context persistence and hand-off to other models mid-session.
 
@@ -47,6 +47,7 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - [Browser Usage](#browser-usage)
 - [Bundling and Tree Shaking](#bundling-and-tree-shaking)
 - [OAuth Providers](#oauth-providers)
+  - [Anthropic subscriptions](#anthropic-subscriptions)
   - [Vertex AI](#vertex-ai)
   - [CLI Login](#cli-login)
   - [Programmatic OAuth](#programmatic-oauth)
@@ -90,18 +91,18 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 ## Installation
 
 ```bash
-npm install @earendil-works/pi-ai
+npm install @ashx-j/lunr-ai
 ```
 
-TypeBox exports are re-exported from `@earendil-works/pi-ai`: `Type`, `Static`, and `TSchema`.
+TypeBox exports are re-exported from `@ashx-j/lunr-ai`: `Type`, `Static`, and `TSchema`.
 
 ## Quick Start
 
 You build a `Models` collection of providers and stream through it. The quickest start registers every built-in provider; apps that care about bundle size register individual providers instead (see [Provider Factories](#provider-factories) and [Bundling and Tree Shaking](#bundling-and-tree-shaking)).
 
 ```typescript
-import { Type, type Context, type Tool } from '@earendil-works/pi-ai';
-import { builtinModels } from '@earendil-works/pi-ai/providers/all';
+import { Type, type Context, type Tool } from '@ashx-j/lunr-ai';
+import { builtinModels } from '@ashx-j/lunr-ai/providers/all';
 
 // A Models collection with every built-in provider registered
 const models = builtinModels();
@@ -236,10 +237,11 @@ Providers internally share **API implementations** (the wire protocols): Anthrop
 For apps that only need specific providers, there is one factory per built-in provider, each a subpath import that pulls only that provider's catalog:
 
 ```typescript
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
-import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
-import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
+import { createModels } from '@ashx-j/lunr-ai';
+import { anthropicProvider } from '@ashx-j/lunr-ai/providers/anthropic';
+import { openaiProvider } from '@ashx-j/lunr-ai/providers/openai';
+import { openrouterProvider } from '@ashx-j/lunr-ai/providers/openrouter';
+import { amazonBedrockProvider } from '@ashx-j/lunr-ai/providers/amazon-bedrock';
 // ...one module per provider in the Supported Providers list
 
 const models = createModels();
@@ -254,7 +256,7 @@ Provider factories import their model catalog and a lazy API wrapper. They do no
 For apps that want everything (as in Quick Start):
 
 ```typescript
-import { builtinModels } from '@earendil-works/pi-ai/providers/all';
+import { builtinModels } from '@ashx-j/lunr-ai/providers/all';
 
 const models = builtinModels(); // a Models collection with every built-in provider registered
 ```
@@ -285,7 +287,7 @@ for (const m of anthropicModels) {
 Dynamically listed models are typed `Model<Api>`. Narrow with the `hasApi()` guard when you need API-specific option typing:
 
 ```typescript
-import { hasApi } from '@earendil-works/pi-ai';
+import { hasApi } from '@ashx-j/lunr-ai';
 
 const m = models.getModel('anthropic', 'claude-sonnet-4-5');
 if (m && hasApi(m, 'anthropic-messages')) {
@@ -299,7 +301,7 @@ if (m && hasApi(m, 'anthropic-messages')) {
 For tooling that wants the generated built-in catalog with full literal typing (provider and model IDs auto-complete), independent of any collection:
 
 ```typescript
-import { getBuiltinModel, getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
+import { getBuiltinModel, getBuiltinModels, getBuiltinProviders } from '@ashx-j/lunr-ai/providers/all';
 
 const model = getBuiltinModel('openai', 'gpt-4o-mini'); // typed Model<'openai-responses'>
 const providers = getBuiltinProviders();
@@ -312,12 +314,12 @@ Providers may have dynamic model lists (a llama.cpp server, a live OpenRouter li
 
 ```typescript
 // getModels() returns the last-known list (empty before the first refresh)
-await models.refresh('llamacpp');        // fetch one provider's list; rejects on failure
-await models.refresh();                  // refresh all providers concurrently, best-effort
+const result = await models.refresh(); // refresh configured dynamic providers concurrently
+for (const [provider, error] of result.errors) console.error(provider, error);
 const fresh = models.getModel('llamacpp', 'qwen3-30b');
 ```
 
-Static built-in providers are no-ops for `refresh()`. See [createProvider()](#createprovider) for building a dynamic provider.
+`refresh()` takes an options object with `allowNetwork`, `force`, and `signal`. It returns per-provider errors and an `aborted` flag. Static providers are no-ops. See [createProvider()](#createprovider) for building a dynamic provider.
 
 ## Auth
 
@@ -377,10 +379,10 @@ Header names are merged case-insensitively. Explicit headers override auth/model
 
 ### Credential Store
 
-Stored credentials (API keys entered interactively, OAuth tokens) live in a `CredentialStore` — one type-tagged credential per provider. pi-ai ships an in-memory default; apps inject persistent storage:
+Stored credentials (API keys entered interactively, OAuth tokens) live in a `CredentialStore` — one type-tagged credential per provider. lunr-ai ships an in-memory default; apps inject persistent storage:
 
 ```typescript
-import { createModels, type CredentialStore } from '@earendil-works/pi-ai';
+import { createModels, type CredentialStore } from '@ashx-j/lunr-ai';
 
 const models = createModels({ credentials: myFileBackedStore });
 // builtinModels() takes the same options:
@@ -389,7 +391,7 @@ const models = createModels({ credentials: myFileBackedStore });
 
 The contract is small: `read(providerId)`, `list()` for non-secret `{ providerId, type }` metadata, `modify(providerId, fn)` (the only write path — a serialized read-modify-write), and `delete(providerId)`. Enumeration must not resolve secrets or execute configured key commands. OAuth token refresh runs inside `modify`, so concurrent requests and processes cannot double-refresh a rotated token. A stored credential *owns* its provider: environment variables are only consulted when nothing is stored, and a failed refresh never silently falls back to an env key.
 
-API-key credentials use the same discriminator as pi's `auth.json` and can carry provider-scoped env/config values:
+API-key credentials use the same discriminator as lunR's `auth.json` and can carry provider-scoped env/config values:
 
 ```typescript
 const credential = {
@@ -411,7 +413,7 @@ Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` ex
 | OpenAI | `OPENAI_API_KEY` |
 | Ant Ling | `ANT_LING_API_KEY` |
 | Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` (e.g. `https://{resource}.ai.azure.com`) or `AZURE_OPENAI_RESOURCE_NAME`. Supports `*.openai.azure.com`, `*.cognitiveservices.azure.com` and `*.ai.azure.com`; root endpoints auto-normalize to `/openai/v1`. Optional: `AZURE_OPENAI_API_VERSION` (default `v1`), `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`. |
-| Anthropic | `ANTHROPIC_API_KEY` or `ANTHROPIC_OAUTH_TOKEN` |
+| Anthropic | `ANTHROPIC_API_KEY` for API billing. Claude subscriptions require the Claude Code setup below; `ANTHROPIC_OAUTH_TOKEN` is unsupported. |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
 | Google | `GEMINI_API_KEY` |
@@ -449,7 +451,7 @@ Tools enable LLMs to interact with external systems. This library uses TypeBox s
 ### Defining Tools
 
 ```typescript
-import { Type, type Tool, StringEnum } from '@earendil-works/pi-ai';
+import { Type, type Tool, StringEnum } from '@ashx-j/lunr-ai';
 
 // Define tool parameters with TypeBox
 const weatherTool: Tool = {
@@ -573,7 +575,7 @@ for await (const event of s) {
 When implementing your own tool execution loop, use `validateToolCall` to validate arguments before passing them to your tools:
 
 ```typescript
-import { validateToolCall, type Tool } from '@earendil-works/pi-ai';
+import { validateToolCall, type Tool } from '@ashx-j/lunr-ai';
 
 const tools: Tool[] = [weatherTool, calculatorTool];
 const s = models.stream(model, { messages, tools });
@@ -666,7 +668,7 @@ Image generation uses a separate API surface from text/chat generation, mirrorin
 ### Basic Image Generation
 
 ```typescript
-import { builtinImagesModels } from '@earendil-works/pi-ai/providers/all';
+import { builtinImagesModels } from '@ashx-j/lunr-ai/providers/all';
 
 // Every built-in image-generation provider; accepts the same options as createModels()
 const imagesModels = builtinImagesModels();
@@ -688,12 +690,12 @@ for (const block of result.output) {
 }
 ```
 
-Like the chat side, you can build the collection from parts: `createImagesModels({ credentials?, authContext? })`, the `openrouterImagesProvider()` factory from `@earendil-works/pi-ai/providers/openrouter-images`, and `createImagesProvider({ id, auth, models, refreshModels?, api })` for custom image providers (with `imagesModels.refresh(provider?)` for dynamic lists). Failures never reject — they return an `AssistantImages` with `stopReason: "error"`. The collection's provider-scoped `getAuth(providerId)` works exactly like the chat-side one.
+Like the chat side, you can build the collection from parts: `createImagesModels({ credentials?, authContext? })`, the `openrouterImagesProvider()` factory from `@ashx-j/lunr-ai/providers/openrouter-images`, and `createImagesProvider({ id, auth, models, refreshModels?, api })` for custom image providers (with `imagesModels.refresh(provider?)` for dynamic lists). Failures never reject — they return an `AssistantImages` with `stopReason: "error"`. The collection's provider-scoped `getAuth(providerId)` works exactly like the chat-side one.
 
 The old global API (`getImageModel()` / `getImageModels()` / `getImageProviders()` / `generateImages()`) remains available on the [compat entrypoint](#migrating-from-the-old-global-api):
 
 ```typescript
-import { getImageModel, generateImages } from '@earendil-works/pi-ai/compat';
+import { getImageModel, generateImages } from '@ashx-j/lunr-ai/compat';
 
 const model = getImageModel('openrouter', 'google/gemini-2.5-flash-image');
 const result = await generateImages(model, {
@@ -778,7 +780,7 @@ for (const block of response.content) {
 `models.stream()`/`complete()` accept the owning API's full option set. Use `hasApi()` to narrow a dynamically looked-up model to its API for full option typing:
 
 ```typescript
-import { hasApi } from '@earendil-works/pi-ai';
+import { hasApi } from '@ashx-j/lunr-ai';
 
 // OpenAI Reasoning (o1, o3, gpt-5)
 const openaiModel = models.getModel('openai', 'gpt-5-mini')!;
@@ -950,8 +952,8 @@ The callback is supported by `stream`, `complete`, `streamSimple`, and `complete
 `createProvider()` builds a provider from parts: identity, auth, a model list, and an API implementation. Use it for local inference servers, proxies, or any OpenAI/Anthropic-compatible endpoint:
 
 ```typescript
-import { createModels, createProvider, envApiKeyAuth, type Model } from '@earendil-works/pi-ai';
-import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { createModels, createProvider, envApiKeyAuth, type Model } from '@ashx-j/lunr-ai';
+import { openAICompletionsApi } from '@ashx-j/lunr-ai/api/openai-completions.lazy';
 
 const ollamaModel: Model<'openai-completions'> = {
   id: 'llama-3.1-8b',
@@ -996,8 +998,8 @@ const proxy = createProvider({
 Mixed-API providers pass a map keyed by `model.api`; each model dispatches to its API's implementation:
 
 ```typescript
-import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy';
-import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
+import { anthropicMessagesApi } from '@ashx-j/lunr-ai/api/anthropic-messages.lazy';
+import { openAIResponsesApi } from '@ashx-j/lunr-ai/api/openai-responses.lazy';
 
 const gateway = createProvider({
   id: 'my-gateway',
@@ -1086,7 +1088,7 @@ const ollamaReasoningModel: Model<'openai-completions'> = {
 The API implementations are importable on their own. Each module exports exactly `stream` and `streamSimple` with that API's full option typing. Direct calls bypass provider auth — pass `apiKey` explicitly:
 
 ```typescript
-import { stream } from '@earendil-works/pi-ai/api/anthropic-messages';
+import { stream } from '@ashx-j/lunr-ai/api/anthropic-messages';
 
 const s = stream(claudeModel, context, {
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -1109,7 +1111,7 @@ Built-in API implementations live under `./api/<api-id>`:
 | `mistral-conversations` | `MistralOptions` |
 | `bedrock-converse-stream` | `BedrockOptions` |
 
-Importing an implementation module loads its SDK. The `./api/<id>.lazy` wrappers (used by the provider factories) defer that load to the first request when the runtime or bundler supports dynamic import chunking. Legacy raw API subpaths from older releases (`./anthropic`, `./google`, `./mistral`, `./openai-completions`, ...) were removed; use `@earendil-works/pi-ai/api/<api-id>`.
+Importing an implementation module loads its SDK. The `./api/<id>.lazy` wrappers (used by the provider factories) defer that load to the first request when the runtime or bundler supports dynamic import chunking. Legacy raw API subpaths from older releases (`./anthropic`, `./google`, `./mistral`, `./openai-completions`, ...) were removed; use `@ashx-j/lunr-ai/api/<api-id>`.
 
 ### OpenAI Compatibility Settings
 
@@ -1161,7 +1163,7 @@ import {
   fauxText,
   fauxThinking,
   fauxToolCall,
-} from '@earendil-works/pi-ai';
+} from '@ashx-j/lunr-ai';
 
 const faux = fauxProvider({
   tokensPerSecond: 50 // optional
@@ -1248,10 +1250,10 @@ When messages from one provider are sent to a different provider, the library au
 - **Tool calls and regular text** are preserved unchanged
 
 ```typescript
-import { createModels, type Context } from '@earendil-works/pi-ai';
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
-import { googleProvider } from '@earendil-works/pi-ai/providers/google';
+import { createModels, type Context } from '@ashx-j/lunr-ai';
+import { anthropicProvider } from '@ashx-j/lunr-ai/providers/anthropic';
+import { openaiProvider } from '@ashx-j/lunr-ai/providers/openai';
+import { googleProvider } from '@ashx-j/lunr-ai/providers/google';
 
 const models = createModels();
 models.setProvider(anthropicProvider());
@@ -1318,8 +1320,8 @@ Models are plain serializable data too — no functions or implementations attac
 The library supports browser environments. The core entrypoint and provider factories are side-effect free and bundle cleanly. Environment variables are not available in browsers, so pass API keys explicitly — or inject a `CredentialStore` (e.g. localStorage-backed) and let provider auth resolve from stored credentials:
 
 ```typescript
-import { createModels } from '@earendil-works/pi-ai';
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
+import { createModels } from '@ashx-j/lunr-ai';
+import { anthropicProvider } from '@ashx-j/lunr-ai/providers/anthropic';
 
 const models = createModels();
 models.setProvider(anthropicProvider());
@@ -1345,8 +1347,8 @@ Browser compatibility notes:
 For small bundles, import only the providers you need:
 
 ```typescript
-import { createModels } from '@earendil-works/pi-ai';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { createModels } from '@ashx-j/lunr-ai';
+import { openaiProvider } from '@ashx-j/lunr-ai/providers/openai';
 
 const models = createModels();
 models.setProvider(openaiProvider());
@@ -1354,14 +1356,14 @@ models.setProvider(openaiProvider());
 
 Rules:
 
-- `@earendil-works/pi-ai` is the core entrypoint and does not import built-in catalogs, provider factories, or SDK implementations.
-- `@earendil-works/pi-ai/providers/<provider>` imports that provider's catalog and lazy API wrapper only.
-- `@earendil-works/pi-ai/providers/all` imports every built-in provider factory and all catalogs. Use it only when you want the full built-in set.
+- `@ashx-j/lunr-ai` is the core entrypoint and does not import built-in catalogs, provider factories, or SDK implementations.
+- `@ashx-j/lunr-ai/providers/<provider>` imports that provider's catalog and lazy API wrapper only.
+- `@ashx-j/lunr-ai/providers/all` imports every built-in provider factory and all catalogs. Use it only when you want the full built-in set.
 - With code splitting, provider SDKs stay in lazy chunks and load on first request.
 - Without code splitting, bundlers fold reachable lazy API implementations into the single bundle. A single-provider bundle then includes that provider's SDK; `providers/all` includes all statically visible SDKs. Bedrock is the exception: its AWS SDK implementation is loaded through a bundler-opaque Node-only import.
-- Importing `@earendil-works/pi-ai/api/<api-id>` directly loads that API implementation and its SDK immediately.
+- Importing `@ashx-j/lunr-ai/api/<api-id>` directly loads that API implementation and its SDK immediately.
 
-Avoid `@earendil-works/pi-ai/compat` in new bundled apps; it preserves the old global API and imports the full built-in catalog surface.
+Avoid `@ashx-j/lunr-ai/compat` in new bundled apps; it preserves the old global API and imports the full built-in catalog surface.
 
 For single-file Node ESM bundles, some SDK dependencies may still use dynamic CommonJS `require()` internally. If you see errors such as `Dynamic require of "child_process" is not supported`, add a Node `require` shim to the bundle. With esbuild:
 
@@ -1376,8 +1378,8 @@ This is only for Node bundles; it is not a browser or Cloudflare Workers workaro
 Bedrock is Node-only. Add it like any other provider:
 
 ```typescript
-import { createModels } from '@earendil-works/pi-ai';
-import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
+import { createModels } from '@ashx-j/lunr-ai';
+import { amazonBedrockProvider } from '@ashx-j/lunr-ai/providers/amazon-bedrock';
 
 const models = createModels();
 models.setProvider(amazonBedrockProvider());
@@ -1386,8 +1388,8 @@ models.setProvider(amazonBedrockProvider());
 In normal Node package usage and code-split bundles, Bedrock loads its AWS SDK implementation lazily. For a standalone single-file bundle that must include Bedrock support, register the implementation module explicitly:
 
 ```typescript
-import { setBedrockProviderModule } from '@earendil-works/pi-ai/api/bedrock-converse-stream.lazy';
-import { bedrockProviderModule } from '@earendil-works/pi-ai/bedrock-provider';
+import { setBedrockProviderModule } from '@ashx-j/lunr-ai/api/bedrock-converse-stream.lazy';
+import { bedrockProviderModule } from '@ashx-j/lunr-ai/bedrock-provider';
 
 setBedrockProviderModule(bedrockProviderModule);
 ```
@@ -1417,45 +1419,49 @@ Use this when one process needs different provider settings per request, or when
 
 Several providers support OAuth authentication instead of static API keys:
 
-- **Anthropic** (Claude Pro/Max subscription)
+- **Anthropic** subscriptions use a separate Claude Code bridge, described below.
 - **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x Codex models)
 - **GitHub Copilot** (Copilot subscription)
 
-Each of these providers carries an `OAuthAuth` on `provider.auth.oauth` with three operations: `login(interaction)` uses the provider-neutral `AuthInteraction.prompt()`/`notify()` protocol and returns a credential, `refresh(credential)` exchanges the refresh token, and `toAuth(credential)` derives request auth (GitHub Copilot's per-account base URL comes from here). Refresh is automatic: `models.getAuth(providerId)` and request paths refresh expired tokens under a credential-store lock, so concurrent requests and processes cannot double-refresh.
+OpenAI Codex and GitHub Copilot expose `OAuthAuth` on `provider.auth.oauth`. `login(interaction)` returns a credential, `refresh(credential)` refreshes it, and `toAuth(credential)` derives request auth. `Models` persists login credentials and refreshes expired OAuth tokens under a credential-store lock.
 
 ```typescript
-import { createModels } from '@earendil-works/pi-ai';
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
+import { createModels } from '@ashx-j/lunr-ai';
+import { githubCopilotProvider } from '@ashx-j/lunr-ai/providers/github-copilot';
 
-const models = createModels({ credentials: myStore }); // persistent CredentialStore
-models.setProvider(anthropicProvider());
+const models = createModels({ credentials: myStore });
+models.setProvider(githubCopilotProvider());
 
-// Login: Models drives the flow and persists the credential
-await models.login('anthropic', 'oauth', {
-  prompt: async (p) => {
-    // p.type: 'text' | 'secret' | 'select' | 'manual_code'
-    // manual_code prompts race a local callback server; p.signal aborts them when the server wins
-    return await askUser(p.message);
+await models.login('github-copilot', 'oauth', {
+  prompt: async (prompt) => {
+    if (prompt.type === 'select') {
+      // Return the selected option's id, not its display label.
+      return await selectOption(prompt.message, prompt.options);
+    }
+    return await askUser(prompt.message, prompt.signal);
   },
   notify: (event) => {
-    // event.type: 'info' | 'auth_url' | 'device_code' | 'progress'
-    if (event.type === 'info') {
-      console.log(event.message);
-      for (const link of event.links ?? []) console.log(`${link.label ?? 'More information'}: ${link.url}`);
-    }
-    if (event.type === 'auth_url') console.log(`Open: ${event.url}`);
-    if (event.type === 'device_code') console.log(`Code: ${event.userCode} at ${event.verificationUri}`);
-    if (event.type === 'progress') console.log(event.message);
+    if (event.type === 'auth_url') console.log(event.url);
+    if (event.type === 'device_code') console.log(event.userCode, event.verificationUri);
+    if (event.type === 'info' || event.type === 'progress') console.log(event.message);
   },
 });
 
-// From here on, requests resolve and refresh the token automatically
-const model = models.getModel('anthropic', 'claude-sonnet-4-5')!;
-await models.complete(model, context);
-
-// Logout
-await models.logout('anthropic');
+// Requests resolve and refresh stored OAuth credentials automatically.
+const model = (await models.getAvailable('github-copilot'))[0];
+if (model) await models.complete(model, context);
+await models.logout('github-copilot');
 ```
+
+`myStore`, `selectOption`, and `askUser` are application-provided storage and UI functions. Handle prompt cancellation through the supplied signal.
+
+### Anthropic subscriptions
+
+Anthropic API keys use the Messages API. Claude subscription setup instead returns an `external_claude_code` credential. It requires Python 3.10+ and Claude Code 2.1.263, and checks the existing Claude Code subscription login and supported model routes. Missing dependency installers require explicit confirmation. Claude Code owns authentication; lunR stores the executable paths and route metadata, without copying subscription tokens.
+
+Use `/login anthropic` in lunR for the terminal setup flow. SDK applications can call `models.login('anthropic', 'oauth', interaction)` after registering `anthropicProvider()`. Their `AuthInteraction` must handle selection prompts and can supply `handoff` for Claude Code login. Without a handoff, setup asks the user to log in to Claude Code separately. Select a model through `models.getAvailable('anthropic')` after setup so its route matches the connected account.
+
+Legacy Anthropic OAuth credentials fail closed. `ANTHROPIC_OAUTH_TOKEN` does not configure this provider. Run setup again rather than attempting to refresh those credentials. Subscription requests use the vendored Python bridge and Claude Code CLI; they need a local Node environment and those external executables. Live subscription and cross-platform operation remain qualification limits. See the [provider guide](https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/docs/providers.md) for the integration limits.
 
 ### Vertex AI
 
@@ -1484,16 +1490,16 @@ Official docs: [Application Default Credentials](https://cloud.google.com/docs/a
 The quickest way to authenticate:
 
 ```bash
-npx @earendil-works/pi-ai login              # interactive provider selection
-npx @earendil-works/pi-ai login anthropic    # login to specific provider
-npx @earendil-works/pi-ai list               # list available providers
+npx @ashx-j/lunr-ai login              # interactive provider selection
+npx @ashx-j/lunr-ai login github-copilot # login to a supported OAuth provider
+npx @ashx-j/lunr-ai list               # list available providers
 ```
 
-Credentials are saved to `auth.json` in the current directory.
+The AI CLI saves OAuth credentials to `auth.json` in the current directory. It does not connect an Anthropic subscription; use `/login anthropic` inside lunR for Claude Code setup.
 
 ### Programmatic OAuth
 
-Built-in login and refresh flows are private provider implementations. Use provider-owned `OAuthAuth`, which composes with `CredentialStore` and gets locked auto-refresh through `Models`. The `@earendil-works/pi-ai/oauth` entry point retains only type declarations required by coding-agent extension OAuth compatibility.
+Built-in login and refresh flows are private provider implementations. Use `Models.login()` with a `CredentialStore` for persistence and supported OAuth refresh. Anthropic subscription setup follows the separate Claude Code route above. The `@ashx-j/lunr-ai/oauth` entry point retains only type declarations required by coding-agent extension OAuth compatibility.
 
 Provider notes:
 
@@ -1509,10 +1515,10 @@ Older versions exposed a global API: `stream()`/`complete()` dispatching on `mod
 
 ```typescript
 // Before
-import { getModel, complete } from '@earendil-works/pi-ai';
+import { getModel, complete } from '@ashx-j/lunr-ai';
 
 // After (verbatim behavior, one import-path change)
-import { getModel, complete } from '@earendil-works/pi-ai/compat';
+import { getModel, complete } from '@ashx-j/lunr-ai/compat';
 ```
 
 Compat is a strict superset of the root entrypoint, so a file can switch its import path wholesale. It will be removed in a future release; migrate to `createModels()` + provider factories:
@@ -1524,7 +1530,7 @@ Compat is a strict superset of the root entrypoint, so a file can switch its imp
 | `stream(model, ctx, opts)` (env-key injection) | `models.stream(model, ctx, opts)` (provider auth resolution) |
 | `registerApiProvider({ api, stream, streamSimple })` | `createProvider({ id, auth, models, api })` + `models.setProvider()` |
 | `getEnvApiKey('openai')` | `await models.getAuth(model.provider)` |
-| `streamAnthropic(model, ctx, opts)` | `stream` from `@earendil-works/pi-ai/api/anthropic-messages`, or a provider in a collection |
+| `streamAnthropic(model, ctx, opts)` | `stream` from `@ashx-j/lunr-ai/api/anthropic-messages`, or a provider in a collection |
 | `registerFauxProvider()` | `fauxProvider()` + `models.setProvider()` |
 
 ## Development
@@ -1548,7 +1554,7 @@ Create a new API implementation file (for example `bedrock-converse-stream.ts`) 
 - Tool conversion if the provider supports tools
 - Response parsing to emit standardized events (`text`, `tool_call`, `thinking`, `usage`, `stop`)
 
-Add a lazy wrapper `src/api/<api-id>.lazy.ts` (`<name>Api()` via `lazyApi()`) so providers can reference the implementation without importing its SDK. Add any root-level `export type` re-exports in `src/index.ts` that should remain available from `@earendil-works/pi-ai`.
+Add a lazy wrapper `src/api/<api-id>.lazy.ts` (`<name>Api()` via `lazyApi()`) so providers can reference the implementation without importing its SDK. Add any root-level `export type` re-exports in `src/index.ts` that should remain available from `@ashx-j/lunr-ai`.
 
 #### 3. Model Generation (`scripts/generate-models.ts`, `scripts/generate-image-models.ts`)
 

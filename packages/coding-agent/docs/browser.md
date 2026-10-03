@@ -14,7 +14,7 @@ Use **Browser** in `/settings` to turn it off or on. Turning it off immediately 
 lunr browser install
 ```
 
-`lunr setup` also installs matching Chromium automatically, including for Node-based standalone layouts. `PLAYWRIGHT_BROWSERS_PATH` selects an alternate cache and must be consistent between installation and execution. Linux may require Chromium system libraries; install those through your OS administrator. lunR does not install OS packages or disable Chromium's sandbox. Standalone compiled Bun browser installation has not been validated.
+`lunr setup` also installs matching Chromium automatically, including for Node-based standalone layouts. `PLAYWRIGHT_BROWSERS_PATH` selects an alternate cache and must be consistent between installation and execution. Linux may require Chromium system libraries; install those through your OS administrator. lunR does not install OS packages or disable Chromium's sandbox. Compiled Bun executables cannot run the Chromium installer. Install the Node/npm CLI and run `lunr browser install` through that installation, with the same `PLAYWRIGHT_BROWSERS_PATH` or OS cache as the compiled executable. Setup in a compiled executable can continue after an installer warning; it does not establish that Chromium is installed.
 
 ## Actions
 

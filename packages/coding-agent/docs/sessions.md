@@ -47,7 +47,7 @@ For marking a desktop session, choosing it on Telegram or Discord, and handling 
 
 ## Resuming and Deleting Sessions
 
-`/resume` opens an interactive session picker for the current project. `pi -r` opens the same picker at startup.
+`/resume` opens an interactive session picker for the current project. `lunr -r` opens the same picker at startup.
 
 In the picker you can:
 
@@ -75,7 +75,7 @@ lunr --name "Refactor auth module"
 lunr --name "CI audit" -p "Review this build failure"
 ```
 
-Named sessions are easier to find in `/resume` and `pi -r`.
+Named sessions are easier to find in `/resume` and `lunr -r`.
 
 ## Branching with `/tree`
 

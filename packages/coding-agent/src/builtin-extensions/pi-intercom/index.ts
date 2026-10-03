@@ -1444,7 +1444,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   if (!nativeSupervisorChannel) pi.registerTool({
     name: "intercom",
     label: "Intercom",
-    description: `Send a message to another pi session running on this machine.
+    description: `Send a message to another lunR session running on this machine.
 Use this to communicate findings, request help, or coordinate work with other sessions.
 
 Usage:
@@ -1455,7 +1455,7 @@ Usage:
   intercom({ action: "pending" })                                      → List unresolved inbound asks
   intercom({ action: "status" })                  → Show connection status`,
     promptSnippet:
-      "Use to coordinate with other local pi sessions: list peers, send updates, ask for help, or check intercom connectivity.",
+      "Use to coordinate with other local lunR sessions: list peers, send updates, ask for help, or check intercom connectivity.",
 
     parameters: Type.Object({
       action: StringEnum(["list", "send", "ask", "reply", "pending", "status"] as const, {

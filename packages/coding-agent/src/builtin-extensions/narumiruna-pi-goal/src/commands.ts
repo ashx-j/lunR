@@ -155,7 +155,7 @@ export class GoalCommandController {
 		this.runtime.pendingQueueAction = { kind: "prioritize", objective, tokenBudget };
 		this.runtime.persistGoal(this.runtime.activeGoal);
 		if (ctx.isIdle?.() !== true || hasPendingMessages(ctx)) {
-			ctx.ui.notify(`Priority goal queued until Pi settles: ${objective}`, "info");
+			ctx.ui.notify(`Priority goal queued until lunR settles: ${objective}`, "info");
 			return;
 		}
 		await this.dispatchPendingQueueActionIfSettled(ctx);
@@ -201,7 +201,7 @@ export class GoalCommandController {
 			completedText: currentGoal.text,
 		};
 		this.runtime.persistGoal(currentGoal);
-		ctx.ui.notify(`Goal skip queued until Pi settles: ${currentGoal.text}`, "info");
+		ctx.ui.notify(`Goal skip queued until lunR settles: ${currentGoal.text}`, "info");
 		if (ctx.isIdle?.() === true && !hasPendingMessages(ctx)) {
 			await this.dispatchPendingQueueActionIfSettled(ctx);
 		}
