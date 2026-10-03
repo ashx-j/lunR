@@ -8,6 +8,7 @@
  * zero-or-more siblings.
  */
 
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type Parser from "web-tree-sitter";
@@ -31,9 +32,11 @@ export interface SearchMatch {
   column: number;
   /** The matched source text */
   matchedText: string;
-  /** Byte offset of match start */
+  /** SHA-256 of the full source snapshot used to find this match. */
+  sourceHash: string;
+  /** Text offset of match start */
   startIndex: number;
-  /** Byte offset of match end */
+  /** Text offset of match end */
   endIndex: number;
   /** Metavariable bindings: name → captured text */
   captures: Record<string, string>;
@@ -79,11 +82,13 @@ export async function searchFiles(
       const tree = await treeSitter.parseWithLanguage(file, content, pattern.languageId);
       if (!tree) continue;
 
+      const sourceHash = createHash("sha256").update(content).digest("hex");
       const fileMatches = findMatches(tree.rootNode, pattern.root);
       for (const m of fileMatches) {
         if (matches.length >= maxResults) break;
         matches.push({
           file,
+          sourceHash,
           line: m.node.startPosition.row + 1,
           column: m.node.startPosition.column + 1,
           matchedText: m.node.text,

@@ -49,6 +49,7 @@ describe("readOnlyModeBlockReason", () => {
 	it("exposes a read-only system-prompt addendum", () => {
 		expect(READ_ONLY_MODE_ADDENDUM).toContain("read-only mode");
 		expect(READ_ONLY_MODE_ADDENDUM).toContain("present_plan");
+		expect(READ_ONLY_MODE_ADDENDUM).toMatchSnapshot();
 	});
 });
 
@@ -74,7 +75,7 @@ describe("isMutatingBashCommand", () => {
 			"git tag",
 			"git tag -l",
 			"git remote -v",
-			"npm test",
+			"npm --version",
 			"node --version",
 			"node -v",
 			"python --version",
@@ -202,5 +203,71 @@ describe("isMutatingBashCommand", () => {
 		expect(isMutatingBashCommand("cat ok.txt ; rm bad.txt")).toBe(true);
 		expect(isMutatingBashCommand("ls | xargs rm")).toBe(true);
 		expect(isMutatingBashCommand("ls || rm -rf dist")).toBe(true);
+	});
+});
+
+describe("read-only execution spellings", () => {
+	it.each([
+		"sort \\\n-ooutput.txt input.txt",
+		"node --eval=0",
+		'node "--eval=0"',
+		'sort "-ooutput.txt" input.txt',
+		"sort --out=output.txt input.txt",
+		"python -v",
+		"bash -v",
+		"sh -v",
+		"node --print=0",
+		"node -e0",
+		"node -p0",
+		"node --require=./hook.js",
+		"node --import=./hook.js",
+		"node --test",
+		"node --check=script.js",
+		"node",
+		"python3 -c0",
+		"python -mhttp.server",
+		"bash -c:tool",
+		"bash --init-file=hook.sh",
+		"npm test",
+		"npm run build",
+		"npm exec -- echo ok",
+		"pnpm run build",
+		"pnpm dlx tool",
+		"yarn run build",
+		"yarn build",
+		"bun run build",
+		"npm",
+		"yarn",
+		"env node --eval=0",
+		"env FOO=bar npm test",
+		"env -S 'node --eval=0'",
+		"sort -ooutput.txt input.txt",
+		"sort --output=output.txt input.txt",
+		"git update-ref refs/heads/x HEAD",
+		"git custom-alias",
+		"git remote --add",
+		"git tag --delete=tag",
+		"git branch --delete",
+		'echo "$(printf probe)"',
+		'echo "`printf probe`"',
+	])("blocks %s without executing it", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"pnpm --version",
+		"yarn --version",
+		"bun --version",
+		"npm ls",
+		"npm view typescript version",
+		"env",
+		"env --help",
+		"sort input.txt",
+		"git ls-files",
+		"git remote --verbose",
+		"echo '$(printf probe)'",
+		'echo "\\$(printf probe)"',
+	])("keeps informational form %s usable", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
 	});
 });
