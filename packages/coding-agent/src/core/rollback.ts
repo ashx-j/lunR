@@ -56,6 +56,7 @@ interface RecoveryProgress {
 	turnsToConsume: number;
 	completed: string[];
 	pending?: string;
+	newerTurnStarted?: boolean;
 }
 
 interface TurnSnapshots {
@@ -170,6 +171,11 @@ function pruneTurns(ctx: RollbackContext): void {
 export function beginTurn(cwd?: string, sessionId?: string): void {
 	const ctx = getContext(sessionId);
 	if (!isRollbackEnabled(ctx.sessionId)) return;
+	// Persist the boundary even for chat-only turns, which otherwise have no manifest.
+	for (const pending of ctx.turns.filter((turn) => turn.recovery)) {
+		pending.recovery!.newerTurnStarted = true;
+		persistRecoveryProgress(ctx, pending);
+	}
 	// lunr: remember the session cwd so auto-started turns (mid-turn enable) can
 	// still be constrained by the allowed-roots check.
 	if (cwd) ctx.lastCwd = cwd;
@@ -400,14 +406,18 @@ function parseRecoveryProgress(value: unknown): RecoveryProgress | undefined {
 	const progress = value as Record<string, unknown>;
 	if (
 		typeof progress.turnsToConsume !== "number" ||
-		!Number.isInteger(progress.turnsToConsume) || progress.turnsToConsume < 1 ||
-		!Array.isArray(progress.completed) || !progress.completed.every((path) => typeof path === "string")
-	) return undefined;
+		!Number.isInteger(progress.turnsToConsume) ||
+		progress.turnsToConsume < 1 ||
+		!Array.isArray(progress.completed) ||
+		!progress.completed.every((path) => typeof path === "string")
+	)
+		return undefined;
 	return {
 		targetUserId: typeof progress.targetUserId === "string" ? progress.targetUserId : undefined,
 		turnsToConsume: progress.turnsToConsume,
 		completed: progress.completed,
 		pending: typeof progress.pending === "string" ? progress.pending : undefined,
+		newerTurnStarted: progress.newerTurnStarted === true,
 	};
 }
 
@@ -527,6 +537,20 @@ export function getRollbackTargetUserId(sessionId?: string): string | undefined 
 	return recoveryTurn(getContext(sessionId))?.recovery?.targetUserId;
 }
 
+/** Older retained recovery must not rewind chat or overwrite work from later turns. */
+export function getRollbackRecoveryBlockReason(sessionId?: string): string | undefined {
+	const ctx = getContext(sessionId);
+	const pending = ctx.turns.find((turn) => turn.recovery);
+	if (!pending?.recovery) return undefined;
+	if (
+		pending.recovery.newerTurnStarted ||
+		ctx.turns.some((turn) => turn.turnIndex > pending.turnIndex + pending.recovery!.turnsToConsume - 1)
+	) {
+		return "Automatic rollback retry is unavailable after newer turns. Chat and files are unchanged. Use /new to continue in a separate chat; this does not repair the retained recovery. Snapshots remain available for manual recovery.";
+	}
+	return undefined;
+}
+
 /** Count trailing empty turns and the newest non-empty turn, or retain the pending recovery count. */
 export function peekRollbackTurnsConsumed(sessionId?: string): number {
 	const ctx = getContext(sessionId);
@@ -538,6 +562,8 @@ export function peekRollbackTurnsConsumed(sessionId?: string): number {
 /** Release a successfully restored turn only after its coordinated chat rewind succeeds. */
 export function commitRollbackTurn(sessionId: string, turnIndex: number): void {
 	const ctx = getContext(sessionId);
+	const blocked = getRollbackRecoveryBlockReason(sessionId);
+	if (blocked) throw new Error(blocked);
 	const index = ctx.turns.findIndex((turn) => turn.turnIndex === turnIndex);
 	if (index < 0) return;
 	const turn = ctx.turns[index];
@@ -557,6 +583,8 @@ export function rollbackLastTurn(
 	const ctx = getContext(sessionId);
 	const result: RollbackResult = { restored: [], deleted: [], failed: [], complete: true, turnsConsumed: 0 };
 	if (!isRollbackEnabled(ctx.sessionId)) return result;
+	const blocked = getRollbackRecoveryBlockReason(ctx.sessionId);
+	if (blocked) throw new Error(blocked);
 	const turn = recoveryTurn(ctx) ?? (options.deferCommit ? ctx.turns[0] : undefined);
 	if (!turn) {
 		for (const empty of ctx.turns.splice(0)) cleanupTurnFiles(ctx, empty);
@@ -604,7 +632,10 @@ export function rollbackLastTurn(
 				throw new Error("Outside the allowed rollback roots.");
 			}
 			if (turn.recovery.pending) {
-				result.failed.push({ path: absPath, error: "Resolve the uncertain recovery path before continuing this turn." });
+				result.failed.push({
+					path: absPath,
+					error: "Resolve the uncertain recovery path before continuing this turn.",
+				});
 				continue;
 			}
 			if (snap.existed && !snap.content) throw new Error("Snapshot content is unavailable.");
@@ -633,10 +664,10 @@ export function rollbackLastTurn(
 			if (!wasPending && turn.recovery.pending === absPath) {
 				turn.recovery.pending = undefined;
 				try {
-						persistRecoveryProgress(ctx, turn);
-					} catch {
-						// Retain the prior manifest and snapshots.
-					}
+					persistRecoveryProgress(ctx, turn);
+				} catch {
+					// Retain the prior manifest and snapshots.
+				}
 			}
 			result.failed.push({ path: absPath, error: error instanceof Error ? error.message : String(error) });
 		}

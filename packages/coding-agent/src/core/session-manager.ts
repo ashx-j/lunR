@@ -789,6 +789,28 @@ async function listSessionsFromDir(
 	return sessions;
 }
 
+/** Atomically replace a log without changing the manager that owns it. */
+function writeSessionEntries(file: string, entries: FileEntry[]): void {
+	const mode = existsSync(file) ? statSync(file).mode & 0o777 : 0o600;
+	const temp = `${file}.${randomUUID()}.tmp`;
+	const fd = openSync(temp, "wx", mode);
+	try {
+		try {
+			fchmodSync(fd, mode);
+			for (const entry of entries) {
+				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			}
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		renameSync(temp, file);
+	} finally {
+		// Only this invocation's successfully created temporary file is owned.
+		if (existsSync(temp)) unlinkSync(temp);
+	}
+}
+
 /**
  * Manages conversation sessions as append-only trees stored in JSONL files.
  *
@@ -1067,25 +1089,8 @@ export class SessionManager {
 		this.assertWritable();
 		if (!this.persist || !this.sessionFile) return;
 		const file = this.ownership?.owner.file ?? this.sessionFile;
-		const mode = existsSync(file) ? statSync(file).mode & 0o777 : 0o600;
-		const temp = `${file}.${randomUUID()}.tmp`;
-		const fd = openSync(temp, "wx", mode);
-		try {
-			try {
-				fchmodSync(fd, mode);
-				for (const entry of this.fileEntries) {
-					writeFileSync(fd, `${JSON.stringify(entry)}\n`);
-				}
-				fsyncSync(fd);
-			} finally {
-				closeSync(fd);
-			}
-			renameSync(temp, file);
-			this.needsAppendSeparator = false;
-		} finally {
-			// Only this invocation's successfully created temporary file is owned.
-			if (existsSync(temp)) unlinkSync(temp);
-		}
+		writeSessionEntries(file, this.fileEntries);
+		this.needsAppendSeparator = false;
 	}
 
 	private _appendToFile(entry: SessionEntry): void {
@@ -1468,8 +1473,7 @@ export class SessionManager {
 		if (!this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
-		this.leafId = branchFromId;
-		this.flush();
+		this.moveLeaf(branchFromId);
 	}
 
 	/**
@@ -1479,8 +1483,18 @@ export class SessionManager {
 	 */
 	resetLeaf(): void {
 		this.assertWritable();
-		this.leafId = null;
-		this.flush();
+		this.moveLeaf(null);
+	}
+
+	private moveLeaf(leafId: string | null): void {
+		const previous = this.leafId;
+		this.leafId = leafId;
+		try {
+			this.flush();
+		} catch (error) {
+			this.leafId = previous;
+			throw error;
+		}
 	}
 
 	/**
@@ -1574,25 +1588,37 @@ export class SessionManager {
 				parentId = labelEntry.id;
 			}
 
-			this.claim(newSessionFile);
-			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+			const entries: FileEntry[] = [header, ...pathWithoutLabels, ...labelEntries];
+			const hasAssistant = entries.some((e) => e.type === "message" && e.message.role === "assistant");
+			this.saveLeaf();
+			const nextOwnership = new SessionOwnership(canonicalSessionPath(newSessionFile));
+			let wroteFork = false;
+			try {
+				nextOwnership.bindSession(newSessionId);
+				if (hasAssistant) {
+					writeSessionEntries(nextOwnership.owner.file, entries);
+					wroteFork = true;
+				}
+				this.ownership?.release();
+			} catch (error) {
+				if (wroteFork) {
+					try {
+						unlinkSync(nextOwnership.owner.file);
+					} catch {
+						// The original session remains active even if failed-fork cleanup is unavailable.
+					}
+				}
+				nextOwnership.release();
+				throw error;
+			}
+			// Commit the replacement only after the new log has been written.
+			this.ownership = nextOwnership;
+			this.fileEntries = entries;
 			this.sessionId = newSessionId;
-			this.ownership?.bindSession(this.sessionId);
 			this.sessionFile = newSessionFile;
 			this._buildIndex();
-
-			// Only write the file now if it contains an assistant message.
-			// Otherwise defer to _persist(), which creates the file on the
-			// first assistant response, matching the newSession() contract
-			// and avoiding the duplicate-header bug when _persist()'s
-			// no-assistant guard later resets flushed to false.
-			const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
-			if (hasAssistant) {
-				this._rewriteFile();
-				this.flushed = true;
-			} else {
-				this.flushed = false;
-			}
+			this.flushed = hasAssistant;
+			this.needsAppendSeparator = false;
 
 			return newSessionFile;
 		}

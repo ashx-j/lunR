@@ -124,6 +124,7 @@ import {
 	commitRollbackTurn,
 	disableRollbackForSession,
 	enableRollbackForSession,
+	getRollbackRecoveryBlockReason,
 	getRollbackTargetUserId,
 	initRollback,
 	isRollbackEnabled,
@@ -7793,6 +7794,11 @@ export class InteractiveMode {
 			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
 			return;
 		}
+		const recoveryBlocked = getRollbackRecoveryBlockReason(this.sessionManager.getSessionId());
+		if (recoveryBlocked) {
+			this.showWarning(recoveryBlocked);
+			return;
+		}
 
 		// lunr: how many turns the rollback will consume — the newest non-empty turn
 		// plus any empty (chat-only) turns on top of it. The conversation must rewind
@@ -7829,7 +7835,9 @@ export class InteractiveMode {
 		try {
 			result = rollbackLastTurn(this.sessionManager.getSessionId(), { deferCommit: true, targetUserId });
 		} catch (error) {
-			this.showError(`Rollback could not prepare recovery: ${error instanceof Error ? error.message : String(error)}`);
+			this.showError(
+				`Rollback could not prepare recovery: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			return;
 		}
 		if (!result.complete) {
@@ -7865,9 +7873,11 @@ export class InteractiveMode {
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.showError(chatRewound
-				? `Chat rewound, but finishing rollback failed: ${message}`
-				: `File recovery complete; chat rewind failed: ${message}. /rollback retries the same turn.`);
+			this.showError(
+				chatRewound
+					? `Chat rewound, but finishing rollback failed: ${message}`
+					: `File recovery complete; chat rewind failed: ${message}. /rollback retries the same turn.`,
+			);
 			return;
 		}
 
@@ -7882,7 +7892,8 @@ export class InteractiveMode {
 		if (result.restored.length > 0)
 			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
 		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
-		if (parts.length === 0) parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
+		if (parts.length === 0)
+			parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
 		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
 	}
 

@@ -123,7 +123,7 @@ describe("rollback", () => {
 		expect(existsSync(turnDir)).toBe(false);
 	});
 
-	it("keeps an attempted recovery through retention and retries it before newer turns", async () => {
+	it("retains older recovery through retention and refuses retries across newer turns", async () => {
 		const rollback = await import("../src/core/rollback.ts");
 		mockSM.getRollbackTurns = () => 1;
 		const old = join(testDir, "old.txt");
@@ -144,10 +144,11 @@ describe("rollback", () => {
 		vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
 		rollback.initRollback(mockSM as SettingsManager, "test-session");
 		expect(rollback.getRollbackTargetUserId()).toBe("original-user");
-		const retry = rollback.rollbackLastTurn();
-		expect(retry).toMatchObject({ restored: [old], turnsConsumed: 1, complete: true });
-		expect(readFileSync(newer, "utf8")).toBe("newer modified");
-		expect(rollback.rollbackLastTurn().restored).toEqual([newer]);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			expect(() => rollback.rollbackLastTurn()).toThrow("after newer turns");
+			expect(readFileSync(old, "utf8")).toBe("modified");
+			expect(readFileSync(newer, "utf8")).toBe("newer modified");
+		}
 	});
 
 	it("retains unreadable snapshot metadata so restoring its payload permits retry", async () => {

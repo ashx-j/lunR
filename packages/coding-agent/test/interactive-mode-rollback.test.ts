@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	commitRollbackTurn,
+	getRollbackRecoveryBlockReason,
 	getRollbackTargetUserId,
 	isRollbackEnabled,
 	migrateRollbackSession,
@@ -17,6 +18,7 @@ vi.mock("../src/core/rollback.ts", async (importOriginal) => {
 		isRollbackEnabled: vi.fn(() => true),
 		peekRollbackTurnsConsumed: vi.fn(() => 2),
 		getRollbackTargetUserId: vi.fn(),
+		getRollbackRecoveryBlockReason: vi.fn(),
 		rollbackLastTurn: vi.fn(),
 		commitRollbackTurn: vi.fn(),
 		migrateRollbackSession: vi.fn(),
@@ -60,6 +62,7 @@ function result(overrides: Partial<RollbackResult> = {}): RollbackResult {
 beforeEach(() => {
 	vi.clearAllMocks();
 	vi.mocked(getRollbackTargetUserId).mockReturnValue(undefined);
+	vi.mocked(getRollbackRecoveryBlockReason).mockReturnValue(undefined);
 	vi.mocked(rollbackLastTurn).mockReturnValue(result());
 });
 
