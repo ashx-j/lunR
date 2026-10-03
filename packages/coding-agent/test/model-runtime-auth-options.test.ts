@@ -1,7 +1,8 @@
 import { type AuthType, type CredentialStore, InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { SubscriptionManager, subscriptionKeyFingerprint } from "../src/core/subscriptions.ts";
 
 function authOptions(runtime: ModelRuntime, type?: AuthType) {
 	return runtime
@@ -279,5 +280,214 @@ describe("ModelRuntime auth options", () => {
 			provider: { id: "extension-oauth", name: "Extension OAuth" },
 			method: { name: "Extension subscription" },
 		});
+	});
+});
+
+describe("stored API-key environment propagation", () => {
+	it("uses stored env for model headers and stream options and allows explicit overrides", async () => {
+		const env = { STORED_MODEL_HEADER: "fake-stored", CACHE_RETENTION: "long" };
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory({ openai: { type: "api_key", key: "fake-key", env } }),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		let captured: { env?: Record<string, string>; headers?: Record<string, string | null> } | undefined;
+		runtime.registerProvider("openai", {
+			baseUrl: "https://example.test/v1",
+			api: "openai-completions",
+			models: [{ ...testModel("fake-env-model"), headers: { "x-model": "$STORED_MODEL_HEADER" } }],
+			streamSimple: (_model, _context, options) => {
+				captured = options;
+				throw new Error("fake captured transport");
+			},
+		});
+		const model = runtime.getModel("openai", "fake-env-model")!;
+		expect((await runtime.getAuth(model))?.env).toEqual(env);
+		expect((await runtime.getAuth(model))?.auth.headers).toMatchObject({ "x-model": "fake-stored" });
+		await runtime.completeSimple(model, { messages: [] }, { env: { STORED_MODEL_HEADER: "fake-request" } });
+		expect(captured?.env).toEqual({ ...env, STORED_MODEL_HEADER: "fake-request" });
+		expect(captured?.headers).toMatchObject({ "x-model": "fake-request" });
+	});
+});
+
+describe("request credential identity", () => {
+	async function runtimeWithCredential(stored = true, authHeader = false) {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(stored ? { anthropic: { type: "api_key", key: "stored-key" } } : {}),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		let requestKey: string | undefined;
+		runtime.registerProvider("anthropic", {
+			api: "anthropic-messages",
+			authHeader,
+			streamSimple: (_model, _context, options) => {
+				requestKey = options?.apiKey;
+				throw new Error("fake quota transport failure");
+			},
+		});
+		const model = runtime.getModel("anthropic", "claude-sonnet-4-5")!;
+		return { runtime, model, requestKey: () => requestKey };
+	}
+
+	it.each(["stream", "streamSimple"] as const)(
+		"tracks the exact final %s response without serializing its identity",
+		async (method) => {
+			const { runtime, model, requestKey } = await runtimeWithCredential(true, true);
+			const stream = runtime[method](model, { messages: [] });
+			const message = await stream.result();
+			expect(requestKey()).toBe("stored-key");
+			expect(runtime.getRequestSubscriptionKey(message)).toEqual({
+				providerId: "anthropic",
+				fingerprint: subscriptionKeyFingerprint("anthropic", "stored-key"),
+			});
+			expect(runtime.getRequestSubscriptionKey({ ...message })).toBeUndefined();
+			expect(JSON.stringify(message)).not.toContain("stored-key");
+			expect(JSON.stringify(message)).not.toContain("fingerprint");
+		},
+	);
+
+	it("keeps the resolved key when credential state changes during header preparation", async () => {
+		const { runtime, model, requestKey } = await runtimeWithCredential();
+		const message = await runtime.completeSimple(
+			model,
+			{ messages: [] },
+			{
+				transformHeaders: async (headers) => {
+					await runtime.setRuntimeApiKey("anthropic", "later-override");
+					await runtime.removeRuntimeApiKey("anthropic");
+					return headers;
+				},
+			},
+		);
+		expect(requestKey()).toBe("stored-key");
+		expect(runtime.getRequestSubscriptionKey(message)?.fingerprint).toBe(
+			subscriptionKeyFingerprint("anthropic", "stored-key"),
+		);
+	});
+
+	it("keeps overlapping stored resolutions isolated and preserves each credential's environment", async () => {
+		const credentials = AuthStorage.inMemory({
+			anthropic: { type: "api_key", key: "key-a", env: { TEST_ENV: "a" } },
+		});
+		const runtime = await ModelRuntime.create({ credentials, modelsPath: null, allowModelNetwork: false });
+		const seen: { apiKey?: string; env?: Record<string, string> }[] = [];
+		runtime.registerProvider("anthropic", {
+			api: "anthropic-messages",
+			streamSimple: (_model, _context, options) => {
+				seen.push(options ?? {});
+				throw new Error("fake quota failure");
+			},
+		});
+		const model = runtime.getModel("anthropic", "claude-sonnet-4-5")!;
+		let release!: () => void;
+		let started!: () => void;
+		const requestStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const ready = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const read = credentials.read.bind(credentials);
+		let reads = 0;
+		vi.spyOn(credentials, "read").mockImplementation(async (provider) => {
+			const credential = await read(provider);
+			if (provider === "anthropic" && ++reads === 1) {
+				started();
+				await ready;
+			}
+			return credential;
+		});
+		const first = runtime.completeSimple(model, { messages: [] });
+		await requestStarted;
+		await credentials.modify("anthropic", async () => ({ type: "api_key", key: "key-b", env: { TEST_ENV: "b" } }));
+		const second = await runtime.completeSimple(model, { messages: [] });
+		release();
+		const old = await first;
+		expect(runtime.getRequestSubscriptionKey(old)?.fingerprint).toBe(
+			subscriptionKeyFingerprint("anthropic", "key-a"),
+		);
+		expect(runtime.getRequestSubscriptionKey(second)?.fingerprint).toBe(
+			subscriptionKeyFingerprint("anthropic", "key-b"),
+		);
+		expect(seen).toMatchObject([
+			{ apiKey: "key-b", env: { TEST_ENV: "b" } },
+			{ apiKey: "key-a", env: { TEST_ENV: "a" } },
+		]);
+	});
+
+	it("does not qualify configured environment fallback just because it matches a retained pool", async () => {
+		const credentials = AuthStorage.inMemory();
+		const subscriptions = SubscriptionManager.inMemory(credentials, {
+			anthropic: {
+				active: "1",
+				keys: [
+					{ id: "1", name: "retained", key: "env-key", addedAt: 0 },
+					{ id: "2", name: "other", key: "other-key", addedAt: 0 },
+				],
+			},
+		});
+		const runtime = await ModelRuntime.create({
+			credentials,
+			subscriptions,
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		let requestKey: string | undefined;
+		runtime.registerProvider("anthropic", {
+			api: "anthropic-messages",
+			apiKey: "$CONFIGURED_TEST_KEY",
+			streamSimple: (_model, _context, options) => {
+				requestKey = options?.apiKey;
+				throw new Error("fake quota failure");
+			},
+		});
+		const model = runtime.getModel("anthropic", "claude-sonnet-4-5")!;
+		const message = await runtime.completeSimple(
+			model,
+			{ messages: [] },
+			{ env: { CONFIGURED_TEST_KEY: "env-key" } },
+		);
+		expect(requestKey).toBe("env-key");
+		expect(runtime.getRequestSubscriptionKey(message)).toBeUndefined();
+		expect(await subscriptions.getActive("anthropic")).toMatchObject({ id: "1" });
+		expect(await credentials.read("anthropic")).toBeUndefined();
+	});
+
+	it("does not assign a stored-pool identity to explicit keys or replacement auth headers", async () => {
+		const { runtime, model } = await runtimeWithCredential(true, true);
+		for (const options of [
+			{ apiKey: "stored-key" },
+			{ headers: { authorization: "Bearer foreign-key" } },
+			{ transformHeaders: async () => ({ "x-api-key": "foreign-key" }) },
+		]) {
+			const message = await runtime.completeSimple(model, { messages: [] }, options);
+			expect(runtime.getRequestSubscriptionKey(message)).toBeUndefined();
+		}
+	});
+
+	it("does not mistake a removed runtime override or env-only credential for a stored key", async () => {
+		const { runtime, model, requestKey } = await runtimeWithCredential();
+		await runtime.setRuntimeApiKey("anthropic", "override-key");
+		const override = await runtime.completeSimple(
+			model,
+			{ messages: [] },
+			{
+				transformHeaders: async (headers) => {
+					await runtime.removeRuntimeApiKey("anthropic");
+					return headers;
+				},
+			},
+		);
+		expect(requestKey()).toBe("override-key");
+		expect(runtime.getRequestSubscriptionKey(override)).toBeUndefined();
+		const ambient = await runtimeWithCredential(false);
+		const env = await ambient.runtime.completeSimple(
+			ambient.model,
+			{ messages: [] },
+			{ env: { ANTHROPIC_API_KEY: "env-key" } },
+		);
+		expect(ambient.requestKey()).toBe("env-key");
+		expect(ambient.runtime.getRequestSubscriptionKey(env)).toBeUndefined();
 	});
 });

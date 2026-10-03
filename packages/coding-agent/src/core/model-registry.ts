@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
+import { getUsageServiceBridge } from "./usage-service.ts";
 
 export type { ProviderConfigInput } from "./provider-composer.ts";
 export type ResolvedRequestAuth =
@@ -22,6 +23,11 @@ export class ModelRegistry {
 
 	constructor(runtime: ModelRuntime) {
 		this.runtime = runtime;
+	}
+
+	/** Owner-bound usage bridge for deferred footer rendering. */
+	getUsageServiceBridge() {
+		return getUsageServiceBridge(this.runtime);
 	}
 
 	/** Reload models.json asynchronously. Await before making synchronous registry reads. */

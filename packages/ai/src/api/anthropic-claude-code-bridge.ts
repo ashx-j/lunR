@@ -18,6 +18,25 @@ import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 const WORKER = fileURLToPath(
 	new URL("../../vendor/hermes-claude-subscription-directsdk/lunr_bridge.py", import.meta.url),
 );
+const SAFE_ERRORS = {
+	context_overflow: "Claude Code prompt is too long for the context window.",
+	timeout: "Claude Code request timed out.",
+	rate_limit: "Claude Code rate limit reached. Please retry your request.",
+	overloaded: "Claude Code service overloaded. Please retry your request.",
+	transient: "Claude Code service unavailable. Please retry your request.",
+	incomplete: "Claude Code stream ended before message_stop. Please retry your request.",
+} as const;
+
+class ClaudeCodeRequestError extends Error {
+	constructor(category: unknown) {
+		super(
+			typeof category === "string" && Object.hasOwn(SAFE_ERRORS, category)
+				? SAFE_ERRORS[category as keyof typeof SAFE_ERRORS]
+				: "Claude Code request failed. Run /login anthropic to check setup and Claude Code version 2.1.263.",
+		);
+	}
+}
+
 const MAX_RECORD = 64 * 1024 * 1024;
 const CONFLICTS = [
 	"ANTHROPIC_API_KEY",
@@ -200,7 +219,7 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 		throw new Error("Claude Code subscription does not support sampling overrides");
 }
 
-type WorkerEvent = { v: 1; requestId: string; type: string; text?: unknown; pid?: unknown; response?: unknown };
+type WorkerEvent = { v: 1; requestId: string; type: string; text?: unknown; pid?: unknown; response?: unknown; category?: unknown };
 
 function parseWorkerRecord(line: string, requestId: string): WorkerEvent {
 	if (Buffer.byteLength(line) > MAX_RECORD) throw new Error("Claude Code bridge record exceeds size limit");
@@ -373,6 +392,7 @@ export function streamClaudeCode(
 			nativeCleanup ??= stopNative(nativePid);
 			return nativeCleanup;
 		};
+		let timedOut = false;
 		let timer: NodeJS.Timeout | undefined;
 		let abortTimer: NodeJS.Timeout | undefined;
 		let started = false;
@@ -427,7 +447,6 @@ export function streamClaudeCode(
 			if (Buffer.byteLength(payload) > MAX_RECORD) throw new Error("Claude Code request exceeds size limit");
 			worker.stdin.write(`${payload}\n`);
 			let cancelSent = false;
-			let timedOut = false;
 			const abort = () => {
 				if (cancelSent) return;
 				cancelSent = true;
@@ -577,9 +596,7 @@ export function streamClaudeCode(
 									}
 								} else if (event.type === "cancelled" && cancelSent) {
 								} else if (event.type === "error" || event.type === "cancelled")
-									throw new Error(
-										"Claude Code request failed. Check subscription setup and native CLI compatibility.",
-									);
+									throw new ClaudeCodeRequestError(event.type === "error" ? event.category : undefined);
 								else throw new Error("Unknown Claude Code bridge event");
 							}
 						} catch (error) {
@@ -599,7 +616,8 @@ export function streamClaudeCode(
 			} finally {
 				options.signal?.removeEventListener("abort", abort);
 			}
-			if (options.signal?.aborted || timedOut) throw new Error("Claude Code request cancelled or timed out");
+			if (timedOut) throw new ClaudeCodeRequestError("timeout");
+			if (options.signal?.aborted) throw new Error("Claude Code request cancelled");
 			stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
 		} catch (error) {
 			output.content = [];
@@ -615,7 +633,7 @@ export function streamClaudeCode(
 					: undefined;
 			output.errorMessage = options.signal?.aborted
 				? "Claude Code request cancelled"
-				: (detail ??
+				: (timedOut ? SAFE_ERRORS.timeout : error instanceof ClaudeCodeRequestError ? error.message : detail ??
 					"Claude Code request failed. Run /login anthropic to check setup and Claude Code version 2.1.263.");
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 		} finally {

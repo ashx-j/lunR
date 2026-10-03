@@ -198,7 +198,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		expect(getMemoryCapBridge()?.getCharCap()).toBe(777);
 		expect(getModelTiersBridge()?.isTierModeEnabled()).toBe(true);
 		expect(getModelTiersBridge()?.getTierModel("light")).toBe("faux/replacement");
-		expect(getUsageServiceBridge()?.getPreferredWindow()).toBe("5h");
+		expect(getUsageServiceBridge(runtimeHost.session.modelRuntime)?.getPreferredWindow()).toBe("5h");
 
 		await runtimeHost.switchSession(firstSessionFile!);
 		await runtimeHost.session.bindExtensions({});

@@ -31,6 +31,7 @@ import { GENERATED_MODELS } from "./models.generated.ts";
 import {
   assembleModels,
   fetchModels,
+  type OllamaDiscoveryAuth,
   OLLAMA_BASE,
   type RefreshProgress,
   readCacheState,
@@ -74,7 +75,7 @@ function createRefreshProgressUi(ctx: Pick<ExtensionCommandContext, "ui">) {
   };
 }
 
-async function runRefresh(pi: ExtensionAPI, ctx: Pick<ExtensionCommandContext, "ui">) {
+async function runRefresh(pi: ExtensionAPI, ctx: Pick<ExtensionCommandContext, "ui"> & { auth?: OllamaDiscoveryAuth }) {
   const progressUi = createRefreshProgressUi(ctx);
   try {
     progressUi.update({ stage: "list", message: "Starting refresh..." });
@@ -112,6 +113,6 @@ export default async function (pi: ExtensionAPI) {
   // point. Core triggers this extension's refresh through the bridge because
   // it bypasses the refreshModels hook and re-registers the provider wholesale.
   (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] = (
-    ctx: Pick<ExtensionCommandContext, "ui">,
+    ctx: Pick<ExtensionCommandContext, "ui"> & { auth?: OllamaDiscoveryAuth },
   ) => runRefresh(pi, ctx);
 }
