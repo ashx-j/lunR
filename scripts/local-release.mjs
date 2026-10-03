@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { npmNameFor } from "./lunr-npm-names.mjs";
 import { release as computerRelease } from "./computer-use-packages.mjs";
@@ -109,7 +109,24 @@ function commandExists(command) {
 
 function isInsidePath(child, parent) {
 	const relativePath = relative(parent, child);
-	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+	return relativePath === "" || (relativePath.split(sep)[0] !== ".." && !isAbsolute(relativePath));
+}
+
+// Resolve parent links even when the requested output does not exist yet.
+function canonicalPath(path) {
+	let ancestor = resolve(path);
+	const suffix = [];
+	while (true) {
+		try {
+			return resolve(realpathSync(ancestor), ...suffix);
+		} catch (error) {
+			if (error.code !== "ENOENT" || lstatSync(ancestor, { throwIfNoEntry: false })) throw error;
+			const parent = dirname(ancestor);
+			if (parent === ancestor) throw error;
+			suffix.unshift(basename(ancestor));
+			ancestor = parent;
+		}
+	}
 }
 
 export function prepareOutputDirectory(options, repoRoot) {
@@ -119,7 +136,12 @@ export function prepareOutputDirectory(options, repoRoot) {
 
 	const outDir = resolve(options.outDir);
 
-	if (isInsidePath(outDir, repoRoot) || isInsidePath(repoRoot, outDir)) {
+	const canonicalRepo = canonicalPath(repoRoot);
+	const canonicalOut = canonicalPath(outDir);
+	if (
+		isInsidePath(outDir, resolve(repoRoot)) || isInsidePath(resolve(repoRoot), outDir) ||
+		isInsidePath(canonicalOut, canonicalRepo) || isInsidePath(canonicalRepo, canonicalOut)
+	) {
 		throw new Error(`Output directory must be outside the repository and must not contain it: ${outDir}`);
 	}
 

@@ -75,7 +75,7 @@ function running() {
 	atomicJson(join(profile, "gateway-service/lock/owner.json"), status);
 }
 
-function mockCommands(spec: ReturnType<typeof startupSpec>, fail?: "disable" | "verify") {
+function mockCommands(spec: ReturnType<typeof startupSpec>, fail?: "disable" | "verify" | "reload") {
 	vi.mocked(spawnSync).mockImplementation((_command, args) => {
 		const command = (args ?? []).join(" ");
 		let stdout = "";
@@ -90,6 +90,7 @@ function mockCommands(spec: ReturnType<typeof startupSpec>, fail?: "disable" | "
 			stdout = "disabled\n";
 		}
 		if (command.includes("LoadState")) stdout = fail === "verify" ? "loaded\n" : "not-found\n";
+		if (command.includes("daemon-reload") && fail === "reload") code = 1;
 		return { pid: 1, status: code, signal: null, output: [], stdout, stderr: "" };
 	});
 }
@@ -173,6 +174,62 @@ describe("installation-owned gateway teardown", () => {
 		expect(existsSync(join(profile, "gateway-service/service.json"))).toBe(true);
 	});
 
+	it.each(["verify", "reload"] as const)(
+		"retries partial Linux teardown after a %s failure without disabling again",
+		async (failure) => {
+			const spec = startup();
+			mockCommands(spec, failure);
+			await expect(teardownGatewayService()).rejects.toThrow();
+			expect(existsSync(spec.path)).toBe(false);
+			expect(JSON.parse(readFileSync(join(profile, "gateway-service/service.json"), "utf8"))).toEqual({
+				startup: "login",
+			});
+			vi.mocked(spawnSync).mockClear();
+			mockCommands(spec);
+			await teardownGatewayService();
+			expect(JSON.parse(readFileSync(join(profile, "gateway-service/service.json"), "utf8"))).toEqual({
+				startup: "off",
+			});
+			const commands = vi.mocked(spawnSync).mock.calls.map(([, args]) => args?.join(" ") ?? "");
+			expect(commands).toHaveLength(2);
+			expect(commands[0]).toContain("daemon-reload");
+			expect(commands[1]).toContain("LoadState");
+			vi.mocked(spawnSync).mockClear();
+			await teardownGatewayService();
+			expect(spawnSync).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ status: 0, stdout: "loaded\n" },
+		{ status: 1, stdout: "not-found\n" },
+		{ status: null, stdout: "" },
+	])(
+		"retains an absent-file profile without stopping or unregistering on ambiguous Linux state $status/$stdout",
+		async (query) => {
+			const spec = startup();
+			rmSync(spec.path);
+			running();
+			vi.mocked(spawnSync).mockImplementation((_command, args) => ({
+				pid: 1,
+				status: args?.includes("daemon-reload") ? 0 : query.status,
+				signal: null,
+				output: [],
+				stdout: query.stdout,
+				stderr: "",
+			}));
+			await expect(teardownGatewayService()).rejects.toThrow("removal could not be confirmed");
+			expect(existsSync(join(profile, "gateway-service/control.json"))).toBe(false);
+			expect(JSON.parse(readFileSync(join(profile, "gateway-service/service.json"), "utf8"))).toEqual({
+				startup: "login",
+			});
+			const commands = vi.mocked(spawnSync).mock.calls.map(([, args]) => args?.join(" ") ?? "");
+			expect(commands.every((command) => command.includes("daemon-reload") || command.includes("LoadState"))).toBe(
+				true,
+			);
+		},
+	);
+
 	it("waits for the owned process even if status disappears and retains control on timeout", async () => {
 		vi.useFakeTimers();
 		running();
@@ -195,6 +252,24 @@ describe("installation-owned gateway teardown", () => {
 		expect(existsSync(spec.path)).toBe(false);
 	});
 
+	it("retries Windows final verification without unregistering an absent-file task", async () => {
+		const spec = startup("win32");
+		const success = { pid: 1, status: 0, signal: null, output: [], stdout: "", stderr: "" };
+		vi.mocked(spawnSync)
+			.mockReturnValueOnce(success)
+			.mockReturnValueOnce(success)
+			.mockReturnValueOnce({ ...success, status: 1 });
+		await expect(teardownGatewayService()).rejects.toThrow("failed");
+		expect(existsSync(spec.path)).toBe(false);
+		vi.mocked(spawnSync).mockClear().mockReturnValue(success);
+		await teardownGatewayService();
+		expect(spawnSync).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(spawnSync).mock.calls[0][1]?.join(" ")).toContain("Gateway task still registered");
+		expect(JSON.parse(readFileSync(join(profile, "gateway-service/service.json"), "utf8"))).toEqual({
+			startup: "off",
+		});
+	});
+
 	it("confirms launchd absence and retains state on an ambiguous query failure", async () => {
 		startup("darwin");
 		vi.mocked(spawnSync).mockReturnValueOnce({ pid: 1, status: 0, signal: null, output: [], stdout: "", stderr: "" });
@@ -208,5 +283,19 @@ describe("installation-owned gateway teardown", () => {
 		});
 		await expect(teardownGatewayService()).rejects.toThrow("launchd removal could not be confirmed");
 		expect(existsSync(join(profile, "gateway-service/service.json"))).toBe(true);
+		vi.mocked(spawnSync).mockClear().mockReturnValue({
+			pid: 1,
+			status: 1,
+			signal: null,
+			output: [],
+			stdout: "",
+			stderr: "Could not find service",
+		});
+		await teardownGatewayService();
+		expect(spawnSync).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(spawnSync).mock.calls[0][1]?.[0]).toBe("print");
+		expect(JSON.parse(readFileSync(join(profile, "gateway-service/service.json"), "utf8"))).toEqual({
+			startup: "off",
+		});
 	});
 });

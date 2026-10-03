@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import {
 	assertRepositoryRoot,
@@ -56,6 +56,55 @@ test("forced output cannot remove the repository or an ancestor", () =>
 		assert.throws(() => prepareOutputDirectory({ outDir: root, force: true }, root), /must not contain/);
 		assert.throws(() => prepareOutputDirectory({ outDir: tmpdir(), force: true }, root), /must not contain/);
 		assert.equal(existsSync(join(root, "package.json")), true);
+	}));
+
+test("forced output resolves parent links before protecting the repository and its ancestors", () =>
+	fixture((root) => {
+		const alias = `${root}-alias`;
+		try {
+			symlinkSync(dirname(root), alias, process.platform === "win32" ? "junction" : "dir");
+			const aliasedRoot = join(alias, basename(root));
+			for (const outDir of [aliasedRoot, alias, join(aliasedRoot, "missing", "output"), join(root, "..output")]) {
+				assert.throws(() => prepareOutputDirectory({ outDir, force: true }, root), /must not contain/);
+				assert.equal(existsSync(join(root, "package.json")), true);
+			}
+			assert.throws(() => prepareOutputDirectory({ outDir: root, force: true }, aliasedRoot), /must not contain/);
+		} finally {
+			rmSync(alias, { force: true, recursive: true });
+		}
+	}));
+
+test("output through an unrelated parent link still works for existing and missing directories", () =>
+	fixture((root) => {
+		const external = mkdtempSync(join(tmpdir(), "lunr-release-output-"));
+		const alias = `${root}-alias`;
+		try {
+			symlinkSync(external, alias, process.platform === "win32" ? "junction" : "dir");
+			const insideLink = join(root, "external-output");
+			symlinkSync(external, insideLink, process.platform === "win32" ? "junction" : "dir");
+			assert.throws(() => prepareOutputDirectory({ outDir: insideLink, force: true }, root), /must not contain/);
+			const outDir = join(alias, "missing", "output");
+			assert.equal(prepareOutputDirectory({ outDir, force: true }, root), outDir);
+			writeFileSync(join(outDir, "old"), "disposable output");
+			prepareOutputDirectory({ outDir, force: true }, root);
+			assert.equal(existsSync(join(outDir, "old")), false);
+			assert.equal(existsSync(join(root, "package.json")), true);
+		} finally {
+			rmSync(alias, { force: true, recursive: true });
+			rmSync(external, { force: true, recursive: true });
+		}
+	}));
+
+test("an unresolved output link fails before any directory removal", () =>
+	fixture((root) => {
+		const alias = `${root}-dangling`;
+		try {
+			symlinkSync(`${root}-absent`, alias, process.platform === "win32" ? "junction" : "dir");
+			assert.throws(() => prepareOutputDirectory({ outDir: join(alias, "output"), force: true }, root));
+			assert.equal(existsSync(join(root, "package.json")), true);
+		} finally {
+			rmSync(alias, { force: true, recursive: true });
+		}
 	}));
 
 test("build plan compiles AI offline in dependency order and reuses public staging", () => {

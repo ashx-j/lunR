@@ -286,6 +286,7 @@ export async function teardownGatewayService(): Promise<void> {
 		uid: user.uid,
 	};
 	const spec = mode === "off" ? undefined : startupSpec(process.platform, mode, options);
+	const startupFileMissing = !!spec && !existsSync(spec.path);
 	if (!spec) {
 		if (
 			["linux", "darwin", "win32"].includes(process.platform) &&
@@ -294,8 +295,11 @@ export async function teardownGatewayService(): Promise<void> {
 			)
 		)
 			throw new Error("Gateway startup file exists without active ownership settings. Profile retained.");
+	} else if (startupFileMissing) {
+		// Retry only verification. A missing file never authorizes removing a registration.
+		confirmStartupRemoval(spec);
 	} else {
-		if (!existsSync(spec.path) || readFileSync(spec.path, "utf8") !== spec.content)
+		if (readFileSync(spec.path, "utf8") !== spec.content)
 			throw new Error("Gateway startup file does not match this installation. Profile retained.");
 		if (process.platform === "linux") {
 			const unit = spec.verify.at(-1)!;
@@ -338,7 +342,7 @@ export async function teardownGatewayService(): Promise<void> {
 	if (owner && processExists(owner.pid)) {
 		atomicJson(controlPath(), { instance: owner.instance, action: "stop" });
 	}
-	if (spec) {
+	if (spec && !startupFileMissing) {
 		if (process.platform === "linux") {
 			const unit = spec.verify.at(-1)!;
 			execute(["systemctl", "--user", "disable", "--now", unit]);
@@ -357,31 +361,9 @@ export async function teardownGatewayService(): Promise<void> {
 		}
 		if (process.platform === "darwin" && mode === "boot") execute(["sudo", "rm", "-f", spec.path]);
 		else rmSync(spec.path);
-		if (process.platform === "linux") {
-			execute(["systemctl", "--user", "daemon-reload"]);
-			const removed = serviceQuery([
-				"systemctl",
-				"--user",
-				"show",
-				spec.verify.at(-1)!,
-				"--property=LoadState",
-				"--value",
-			]);
-			if (removed.status !== 0 || removed.stdout.trim() !== "not-found")
-				throw new Error("Gateway startup removal could not be confirmed. Profile retained.");
-		} else if (process.platform === "darwin") {
-			const removed = serviceQuery(spec.verify);
-			if (removed.status === 0 || !/Could not find (?:specified )?service/i.test(removed.stderr))
-				throw new Error("Gateway launchd removal could not be confirmed. Profile retained.");
-		} else {
-			const name = `${servicePrefix}-${createHash("sha256").update(resolve(getAgentDir())).digest("hex").slice(0, 10)}`;
-			execute([
-				"powershell.exe",
-				"-NoProfile",
-				"-Command",
-				`$ErrorActionPreference='Stop'; if(Get-ScheduledTask | Where-Object {$_.TaskName -eq ${ps(name)}}){throw 'Gateway task still registered'}`,
-			]);
-		}
+		confirmStartupRemoval(spec);
+	}
+	if (spec) {
 		atomicJson(settingsPath(), { startup: "off" });
 	}
 	for (let i = 0; owner && processExists(owner.pid); i++) {
@@ -392,6 +374,35 @@ export async function teardownGatewayService(): Promise<void> {
 	const remainingLock = readGatewayStatus(ownerPath);
 	if ((remaining && processExists(remaining.pid)) || (remainingLock && processExists(remainingLock.pid)))
 		throw new Error("Gateway ownership changed during teardown. Profile retained.");
+}
+
+/** Refresh and verify absence without unregistering an unverified startup entry. */
+function confirmStartupRemoval(spec: StartupSpec): void {
+	if (process.platform === "linux") {
+		execute(["systemctl", "--user", "daemon-reload"]);
+		const removed = serviceQuery([
+			"systemctl",
+			"--user",
+			"show",
+			spec.verify.at(-1)!,
+			"--property=LoadState",
+			"--value",
+		]);
+		if (removed.status !== 0 || removed.stdout.trim() !== "not-found")
+			throw new Error("Gateway startup removal could not be confirmed. Profile retained.");
+	} else if (process.platform === "darwin") {
+		const removed = serviceQuery(spec.verify);
+		if (removed.status === 0 || !/Could not find (?:specified )?service/i.test(removed.stderr))
+			throw new Error("Gateway launchd removal could not be confirmed. Profile retained.");
+	} else {
+		const name = `${servicePrefix}-${createHash("sha256").update(resolve(getAgentDir())).digest("hex").slice(0, 10)}`;
+		execute([
+			"powershell.exe",
+			"-NoProfile",
+			"-Command",
+			`$ErrorActionPreference='Stop'; if(Get-ScheduledTask | Where-Object {$_.TaskName -eq ${ps(name)}}){throw 'Gateway task still registered'}`,
+		]);
+	}
 }
 
 function serviceQuery(command: string[]) {
