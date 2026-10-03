@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import {
 	acquireSchedulerLease,
@@ -36,7 +37,7 @@ function worker(action: string, argument = "") {
 			process.execPath,
 			[
 				"--experimental-strip-types",
-				resolve("packages/coding-agent/test/fixtures/cron-worker.ts"),
+				fileURLToPath(new URL("./fixtures/cron-worker.ts", import.meta.url)),
 				dir,
 				action,
 				argument,

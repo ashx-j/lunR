@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- Cron subprocess fixtures resolve from their module URL so package-directory and root test runs both work. All 11 ownership tests pass from the package directory.
+
 - Cron tool startup fingerprints match its revised ownership and delivery guidance. The Node bundle and compiled first-paint/first-request checks pass with browser on/off and local first-turn subagent, MCP, LSP and web execution.
 
 - **Cron ownership and settlement (`fix/review-cron-execution`):** one live operator holds a profile lease; store mutations read fresh data under a lock and persist occurrence claims before dispatch. Interrupted claims pause for deliberate retry. TUI fires await their exact admitted request, timeout/stop settle owned cancellation, and gateway shutdown awaits cron cleanup. Command/tool creation retains requester, origin and approved workdir. Every platform chunk checks current grants; legacy origins report delivery failure until explicit `/cron rebind`, while TUI owners report external delivery unavailable. Includes runtime prerequisite #132.
