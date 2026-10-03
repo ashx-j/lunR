@@ -28,6 +28,10 @@ In the interactive TUI, normal Enter during an executing `subagent_wait` release
 
 The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remain accepted but no longer change launch mode. Omitted `async` resolves to async, while explicit `async:false`, `clarify:true`, and internal `foregroundOnly` calls stay foreground. RPC and scheduled launches remain always async.
 
+`/prompt-workflow <name> [args]` runs a prompt workflow with a declared `tier` through native subagents. `/chain-workflows analyze -> fix -- auth --foreground` runs those workflows as a native chain with shared arguments. Omit `--foreground` to run in the background. Use `/prompt-workflow list` or `/chain-workflows list` to list available workflows.
+
+`/chain-prompts analyze -> fix --loop 3 --chain-context` belongs to the separate prompt-template engine. It supports template model selection, loops, and delegated step summaries. The optional `run-prompt` tool uses this same engine and queues commands until the current turn ends. A successful queue receipt confirms acceptance. Disabled, busy, uninitialized, empty, or already-queued requests return tool errors. `/prompt-tool on` enables the tool, and `/prompt-tool off` disables it.
+
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
 A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
