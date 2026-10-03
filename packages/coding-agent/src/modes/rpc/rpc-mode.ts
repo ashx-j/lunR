@@ -704,12 +704,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
+		session.stopAdmission();
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
+		await runtimeHost.dispose();
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
-		await runtimeHost.dispose();
 		detachInput();
 		process.stdin.pause();
 		if (signal !== "SIGTERM") {

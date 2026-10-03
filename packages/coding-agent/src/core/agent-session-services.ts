@@ -52,6 +52,7 @@ export interface CreateAgentSessionServicesOptions {
  * have been resolved against those services.
  */
 export interface CreateAgentSessionFromServicesOptions {
+	permissionMode?: CreateAgentSessionOptions["permissionMode"];
 	services: AgentSessionServices;
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
@@ -209,5 +210,6 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
+		permissionMode: options.permissionMode,
 	});
 }

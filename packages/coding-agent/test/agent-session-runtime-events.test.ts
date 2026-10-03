@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -122,6 +123,70 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 
 		return { runtimeHost, faux };
 	}
+
+	it("waits for a cancelled tool's persisted result before replacement releases the old owner", async () => {
+		const { promise: entered, resolve: markEntered } = Promise.withResolvers<void>();
+		const { promise: released, resolve: release } = Promise.withResolvers<void>();
+		const { promise: cancelled, resolve: markCancelled } = Promise.withResolvers<void>();
+		let sawFinal = false;
+		const { runtimeHost, faux } = await createRuntimeHost((pi) => {
+			pi.registerTool({
+				name: "held",
+				label: "Held",
+				description: "Inert deferred tool",
+				parameters: Type.Object({}),
+				execute: async (_id, _args, signal) => {
+					markEntered();
+					signal?.addEventListener("abort", () => markCancelled(), { once: true });
+					await released;
+					return { content: [{ type: "text", text: "final held result" }], details: {} };
+				},
+			});
+			pi.on("session_shutdown", () => {
+				if (runtimeHost.session === old) {
+					expect(readSessionOwner(file!)).toBeDefined();
+					sawFinal = old.sessionManager
+						.buildSessionContext()
+						.messages.some((message) => message.role === "toolResult");
+				}
+			});
+		});
+		faux.setResponses([fauxAssistantMessage([fauxToolCall("held", {})], { stopReason: "toolUse" })]);
+		const old = runtimeHost.session;
+		const file = old.sessionFile;
+		const prompt = old.prompt("run tool");
+		await entered;
+		let replaced = false;
+		const replacement = runtimeHost.newSession().then(() => {
+			replaced = true;
+		});
+		await cancelled;
+		expect(replaced).toBe(false);
+		expect(runtimeHost.session).toBe(old);
+		expect(readSessionOwner(file!)).toBeDefined();
+		await expect(old.prompt("late input")).rejects.toThrow(/closing/);
+		release();
+		await Promise.all([prompt, replacement]);
+		expect(sawFinal).toBe(true);
+		expect(readSessionOwner(file!)).toBeUndefined();
+		const reopened = SessionManager.open(file!);
+		expect(reopened.buildSessionContext().messages.some((message) => message.role === "toolResult")).toBe(true);
+		reopened.dispose();
+	});
+
+	it("provides correlated host prompt completion and refuses admission across replacement", async () => {
+		const { runtimeHost } = await createRuntimeHost(() => {});
+		const first = runtimeHost.promptWithCompletion("one");
+		await expect(runtimeHost.promptWithCompletion("rival")).rejects.toThrow(/busy/);
+		const outcome = await first;
+		expect(outcome.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		const replacement = runtimeHost.newSession();
+		await expect(runtimeHost.promptWithCompletion("during replacement")).rejects.toThrow(/lifecycle change/);
+		await replacement;
+		const next = await runtimeHost.promptWithCompletion("two");
+		expect(next.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		expect(runtimeHost.session.isIdle).toBe(true);
+	});
 
 	it("refuses transfer with live children, then releases and reclaims fresh state without reviving the stale manager", async () => {
 		const { runtimeHost } = await createRuntimeHost(() => {});
