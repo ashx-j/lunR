@@ -4,7 +4,7 @@
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
-#   ./scripts/build-binaries.sh [--skip-install] [--skip-deps] [--skip-build] [--platform <platform>] [--out <dir>]
+#   bash scripts/build-binaries.sh [--skip-install] [--skip-deps] [--skip-build] [--platform <platform>] [--out <dir>]
 #
 # Options:
 #   --skip-install      Skip npm ci
@@ -144,6 +144,7 @@ echo "==> Creating release archives..."
 
 # Copy shared files to each platform directory
 for platform in "${PLATFORMS[@]}"; do
+    node ../../scripts/distribution-assets.mjs "$OUTPUT_DIR/$platform"
     node ../../scripts/computer-use-packages.mjs standalone "$OUTPUT_DIR/$platform" "${platform%-*}" "${platform##*-}"
     cp package.json "$OUTPUT_DIR/$platform/"
     cp README.md "$OUTPUT_DIR/$platform/"

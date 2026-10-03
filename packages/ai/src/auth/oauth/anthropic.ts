@@ -3,13 +3,10 @@ import { randomUUID } from "node:crypto";
 import { access, constants } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { claudeCodeEnvironment, stopNative } from "../../api/anthropic-claude-code-bridge.ts";
+import { getClaudeCodeWorkerPath } from "../../utils/claude-code-assets.ts";
 import type { AuthInteraction, ExternalClaudeCodeCredential, OAuthAuth } from "../types.ts";
 
-const SETUP_WORKER = fileURLToPath(
-	new URL("../../../vendor/hermes-claude-subscription-directsdk/lunr_setup_bridge.py", import.meta.url),
-);
 const VERSION = "2.1.263";
 
 export function isQualifiedClaudeCodeVersion(value: string): boolean {
@@ -103,7 +100,7 @@ async function setupProbe(python: string, command: string, type: "status" | "dis
 	const requestId = randomUUID();
 	const line = await run(
 		python,
-		["-s", "-B", "-u", SETUP_WORKER],
+		["-s", "-B", "-u", getClaudeCodeWorkerPath("lunr_setup_bridge.py")],
 		`${JSON.stringify({ v: 1, requestId, type, command, env: claudeCodeEnvironment(undefined, false) })}\n`,
 		55_000,
 	);
@@ -223,7 +220,7 @@ async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCr
 		if (choice !== "login") throw new Error("Anthropic subscription setup cancelled");
 		await interaction.handoff(
 			python,
-			["-s", "-B", "-u", SETUP_WORKER, "auth-login", command],
+			["-s", "-B", "-u", getClaudeCodeWorkerPath("lunr_setup_bridge.py"), "auth-login", command],
 			claudeCodeEnvironment(undefined, false),
 		);
 		status = (await setupProbe(python, command, "status")) as typeof status;

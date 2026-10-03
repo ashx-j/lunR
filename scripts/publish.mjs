@@ -20,6 +20,7 @@ import {
 } from "./lunr-npm-names.mjs";
 
 import { addPayloadDependencies, release as computerRelease, stagePayloadPackages } from "./computer-use-packages.mjs";
+import { stagePackageNotice } from "./distribution-assets.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -127,6 +128,7 @@ function copyPackageForPublish(directory) {
 			return true;
 		},
 	});
+	stagePackageNotice(dest);
 	const sourcePkg = readPackageJson(directory);
 	const rewritten = rewritePackageJsonForNpm(sourcePkg);
 	if (rewritten.repository && rewritten.repository.directory === undefined) {
