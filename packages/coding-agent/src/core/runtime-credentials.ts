@@ -1,9 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 
 /** Async credential store overlay for non-persistent runtime API keys. */
 export class RuntimeCredentials implements CredentialStore {
 	private readonly store: CredentialStore;
 	private readonly overrides = new Map<string, string>();
+	private readonly requestReads = new AsyncLocalStorage<{
+		providerId: string;
+		observe: (apiKey: string | undefined) => void;
+	}>();
 
 	constructor(store: CredentialStore) {
 		this.store = store;
@@ -23,7 +28,22 @@ export class RuntimeCredentials implements CredentialStore {
 
 	async read(providerId: string): Promise<Credential | undefined> {
 		const override = this.overrides.get(providerId);
-		return override ? { type: "api_key", key: override } : this.store.read(providerId);
+		if (override) return { type: "api_key", key: override };
+		const credential = await this.store.read(providerId);
+		const request = this.requestReads.getStore();
+		if (request?.providerId === providerId) {
+			request.observe(credential?.type === "api_key" ? credential.key : undefined);
+		}
+		return credential;
+	}
+
+	/** Observe the actual stored read for this request, excluding runtime overrides. */
+	withStoredApiKeyRead<T>(
+		providerId: string,
+		observe: (apiKey: string | undefined) => void,
+		resolve: () => Promise<T>,
+	): Promise<T> {
+		return this.requestReads.run({ providerId, observe }, resolve);
 	}
 
 	async list(): Promise<readonly CredentialInfo[]> {

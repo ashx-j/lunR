@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@earendil-works/pi-agent-core";
@@ -70,18 +70,38 @@ describe("AgentSession subscription rotation", () => {
 		failures: (string | undefined)[];
 		pool?: { active: string; keys: { id: string; name: string; key: string; addedAt: number }[] };
 		runtimeApiKey?: string;
+		beforeResponse?: (callIndex: number) => Promise<void>;
 	}) {
 		let callCount = 0;
+		const requestKeys: (string | undefined)[] = [];
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
-		const agent = new Agent({
-			getApiKey: () => "key-1",
-			initialState: { model, systemPrompt: "Test", tools: [] },
-			streamFn: () => {
+		const agent = new Agent({ initialState: { model, systemPrompt: "Test", tools: [] } });
+
+		const sessionManager = SessionManager.inMemory();
+		const settingsManager = SettingsManager.create(tempDir, tempDir);
+		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } });
+		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "key-1" }));
+		const subscriptionsPath = join(tempDir, "subscriptions.json");
+		if (options.pool) writeFileSync(subscriptionsPath, JSON.stringify({ anthropic: options.pool }));
+		const subscriptions = SubscriptionManager.create(authStorage, subscriptionsPath);
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: null,
+			allowModelNetwork: false,
+			subscriptions,
+		});
+		modelRuntime.registerProvider("anthropic", {
+			api: "anthropic-messages",
+			streamSimple: (_model, _context, requestOptions) => {
+				requestKeys.push(requestOptions?.apiKey);
+				const callIndex = callCount;
 				// Calls beyond the failure list succeed.
 				const failure = options.failures[callCount];
 				callCount++;
 				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
+				queueMicrotask(async () => {
+					await options.beforeResponse?.(callIndex);
 					if (failure !== undefined) {
 						const msg = createAssistantMessage("", { stopReason: "error", errorMessage: failure });
 						stream.push({ type: "start", partial: msg });
@@ -95,19 +115,8 @@ describe("AgentSession subscription rotation", () => {
 				return stream;
 			},
 		});
-
-		const sessionManager = SessionManager.inMemory();
-		const settingsManager = SettingsManager.create(tempDir, tempDir);
-		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } });
-		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
-		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "key-1" }));
-		const subscriptions = SubscriptionManager.inMemory(authStorage, options.pool ? { anthropic: options.pool } : {});
-		const modelRuntime = await ModelRuntime.create({
-			credentials: authStorage,
-			modelsPath: null,
-			allowModelNetwork: false,
-			subscriptions,
-		});
+		agent.streamFn = (requestModel, context, streamOptions) =>
+			modelRuntime.streamSimple(requestModel, context, streamOptions);
 		if (options.runtimeApiKey) {
 			await modelRuntime.setRuntimeApiKey("anthropic", options.runtimeApiKey);
 		}
@@ -123,7 +132,16 @@ describe("AgentSession subscription rotation", () => {
 
 		const events: AgentSessionEvent[] = [];
 		session.subscribe((event) => events.push(event));
-		return { session, authStorage, events, getCallCount: () => callCount };
+		return {
+			session,
+			authStorage,
+			subscriptions,
+			subscriptionsPath,
+			modelRuntime,
+			requestKeys,
+			events,
+			getCallCount: () => callCount,
+		};
 	}
 
 	const twoKeyPool = () => ({
@@ -150,6 +168,150 @@ describe("AgentSession subscription rotation", () => {
 		const last = messages[messages.length - 1];
 		expect(last?.role).toBe("assistant");
 		expect((last as AssistantMessage).stopReason).toBe("stop");
+	});
+
+	it("attributes a delayed failure to its request key and preserves a later shared selection", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const requestStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const responseReady = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const pool = twoKeyPool();
+		pool.keys.push({ id: "3", name: "Sub 3", key: "key-3", addedAt: 0 });
+		const created = await createSession({
+			failures: ["quota exceeded, reset in 2h"],
+			pool,
+			beforeResponse: async (index) => {
+				if (index === 0) {
+					started();
+					await responseReady;
+				}
+			},
+		});
+		const prompt = created.session.prompt("Test");
+		await requestStarted;
+		const second = SubscriptionManager.create(created.authStorage, created.subscriptionsPath);
+		await second.setActive("anthropic", "2");
+		await second.addKey("google", "other-provider-key");
+		release();
+		await prompt;
+
+		expect(created.requestKeys).toEqual(["key-1", "key-2"]);
+		expect(await second.getActive("anthropic")).toMatchObject({ id: "2" });
+		expect(await created.authStorage.read("anthropic")).toMatchObject({ key: "key-2" });
+		const keys = await second.list("anthropic");
+		expect(keys[0].exhaustedUntil).toBeGreaterThan(Date.now());
+		expect(keys[1].exhaustedUntil).toBeUndefined();
+		expect(keys[2].exhaustedUntil).toBeUndefined();
+		expect(await second.list("google")).toHaveLength(1);
+		expect(created.events.filter((event) => event.type === "subscription_rotation")).toMatchObject([
+			{ providerId: "anthropic", keyName: "Sub 2" },
+		]);
+		const message = created.session.agent.state.messages.at(-1) as AssistantMessage;
+		expect(message.stopReason).toBe("stop");
+		expect(JSON.stringify(message)).not.toContain("key-2");
+		expect(message).not.toHaveProperty("fingerprint");
+	});
+
+	it("attributes failure to the request provider after the session model changes", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const requestStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const responseReady = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const created = await createSession({
+			failures: [QUOTA_ERROR],
+			pool: twoKeyPool(),
+			beforeResponse: async (index) => {
+				if (index === 0) {
+					started();
+					await responseReady;
+				}
+			},
+		});
+		await created.authStorage.modify("openai", async () => ({ type: "api_key", key: "openai-key" }));
+		created.modelRuntime.registerProvider("openai", {
+			api: "openai-responses",
+			streamSimple: (_model, _context, options) => {
+				expect(options?.apiKey).toBe("openai-key");
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage("new provider succeeded", {
+						provider: "openai",
+						api: "openai-responses",
+					});
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+		});
+		const prompt = created.session.prompt("Test");
+		await requestStarted;
+		await created.session.setModel(getModel("openai", "gpt-5")!);
+		release();
+		await prompt;
+		expect(created.events.filter((event) => event.type === "subscription_rotation")).toMatchObject([
+			{ providerId: "anthropic", keyName: "Sub 2" },
+		]);
+		expect(await created.subscriptions.getActive("anthropic")).toMatchObject({ id: "2" });
+		expect(await created.authStorage.read("openai")).toMatchObject({ key: "openai-key" });
+		expect((created.session.agent.state.messages.at(-1) as AssistantMessage).provider).toBe("openai");
+	});
+
+	it("leaves removed request credentials and the remaining accounts untouched", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const requestStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const responseReady = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const pool = twoKeyPool();
+		pool.keys.push({ id: "3", name: "Sub 3", key: "key-3", addedAt: 0 });
+		const created = await createSession({
+			failures: [QUOTA_ERROR],
+			pool,
+			beforeResponse: async (index) => {
+				if (index === 0) {
+					started();
+					await responseReady;
+				}
+			},
+		});
+		const prompt = created.session.prompt("Test");
+		await requestStarted;
+		const second = SubscriptionManager.create(created.authStorage, created.subscriptionsPath);
+		await second.removeKey("anthropic", "1");
+		const before = await second.list("anthropic");
+		release();
+		await prompt;
+		expect(created.requestKeys).toEqual(["key-1"]);
+		expect(created.events.filter((event) => event.type === "subscription_rotation")).toHaveLength(0);
+		expect(await second.list("anthropic")).toEqual(before);
+		expect(await created.authStorage.read("anthropic")).toMatchObject({ key: "key-2" });
+	});
+
+	it("does not infer a failed request credential from the currently selected pool", async () => {
+		const created = await createSession({ failures: [], pool: twoKeyPool() });
+		created.session.agent.streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const msg = createAssistantMessage("", { stopReason: "error", errorMessage: QUOTA_ERROR });
+				stream.push({ type: "error", reason: "error", error: msg });
+			});
+			return stream;
+		};
+		await created.session.prompt("Test");
+		expect(created.events.filter((event) => event.type === "subscription_rotation")).toHaveLength(0);
+		expect(await created.subscriptions.getActive("anthropic")).toMatchObject({ id: "1" });
+		expect(await created.authStorage.read("anthropic")).toMatchObject({ key: "key-1" });
 	});
 
 	it("leaves the error as final when all keys are exhausted", async () => {

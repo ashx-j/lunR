@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { SubscriptionManager } from "../src/core/subscriptions.ts";
+import { SubscriptionManager, subscriptionKeyFingerprint } from "../src/core/subscriptions.ts";
 
 function makeManager(authData: Parameters<typeof AuthStorage.inMemory>[0] = {}) {
 	const authStorage = AuthStorage.inMemory(authData);
@@ -85,7 +85,11 @@ describe("SubscriptionManager", () => {
 		await manager.setActive("openai", "1");
 
 		const before = Date.now();
-		const rotated = await manager.rotateOnFailure("openai", "quota exceeded, reset in 2h");
+		const rotated = await manager.rotateOnFailure(
+			"openai",
+			"quota exceeded, reset in 2h",
+			subscriptionKeyFingerprint("openai", "sk-1"),
+		);
 		expect(rotated?.id).toBe("2");
 		expect(await authStorage.read("openai")).toEqual({ type: "api_key", key: "sk-2" });
 
@@ -100,13 +104,21 @@ describe("SubscriptionManager", () => {
 		await manager.setActive("openai", "1");
 
 		// 1 exhausted (in-memory) → rotate to 2.
-		const first = await manager.rotateOnFailure("openai", "quota exceeded");
+		const first = await manager.rotateOnFailure(
+			"openai",
+			"quota exceeded",
+			subscriptionKeyFingerprint("openai", "sk-1"),
+		);
 		expect(first?.id).toBe("2");
 		// Unparseable reset time: nothing persisted on the entry.
 		expect((await manager.list("openai")).find((entry) => entry.id === "1")?.exhaustedUntil).toBeUndefined();
 
 		// 2 exhausted (in-memory) → wraps around past 1 (exhausted) → no alternative.
-		const second = await manager.rotateOnFailure("openai", "quota exceeded");
+		const second = await manager.rotateOnFailure(
+			"openai",
+			"quota exceeded",
+			subscriptionKeyFingerprint("openai", "sk-2"),
+		);
 		expect(second).toBeNull();
 		expect((await manager.getActive("openai"))?.id).toBe("2");
 	});
@@ -120,16 +132,30 @@ describe("SubscriptionManager", () => {
 		await manager.setActive("openai", "2");
 
 		// Exhaust 2 with a persisted reset time, landing on 3.
-		expect((await manager.rotateOnFailure("openai", "quota exceeded, reset in 2h"))?.id).toBe("3");
+		expect(
+			(
+				await manager.rotateOnFailure(
+					"openai",
+					"quota exceeded, reset in 2h",
+					subscriptionKeyFingerprint("openai", "sk-2"),
+				)
+			)?.id,
+		).toBe("3");
 		// Exhaust 3 in-memory; round-robin order is 1, 2 — 2 is still exhausted → 1.
-		expect((await manager.rotateOnFailure("openai", "quota exceeded"))?.id).toBe("1");
+		expect(
+			(await manager.rotateOnFailure("openai", "quota exceeded", subscriptionKeyFingerprint("openai", "sk-3")))?.id,
+		).toBe("1");
 	});
 
 	test("clearExhaustion reactivates a key", async () => {
 		const { manager } = makeManager({ openai: { type: "api_key", key: "sk-1" } });
 		await manager.addKey("openai", "sk-2");
 		await manager.setActive("openai", "1");
-		await manager.rotateOnFailure("openai", "quota exceeded, reset in 2h");
+		await manager.rotateOnFailure(
+			"openai",
+			"quota exceeded, reset in 2h",
+			subscriptionKeyFingerprint("openai", "sk-1"),
+		);
 
 		await manager.clearExhaustion("openai", "1");
 		const cleared = (await manager.list("openai")).find((entry) => entry.id === "1");
@@ -137,10 +163,11 @@ describe("SubscriptionManager", () => {
 		expect(cleared?.lastError).toBeUndefined();
 
 		// Rotating 2 can now fall back to the reactivated 1.
-		expect((await manager.rotateOnFailure("openai", "quota exceeded"))?.id).toBe("1");
+		expect(
+			(await manager.rotateOnFailure("openai", "quota exceeded", subscriptionKeyFingerprint("openai", "sk-2")))?.id,
+		).toBe("1");
 	});
 });
-
 
 describe("subscription transactions", () => {
 	test("preserves interleaved changes from independent managers and allocates current IDs", async () => {
@@ -156,7 +183,11 @@ describe("subscription transactions", () => {
 			await second.addKey("google", "fake-g");
 			await second.addKey("openai", "fake-b");
 			await first.renameKey("openai", "1", "Renamed");
-			await second.rotateOnFailure("openai", "quota exceeded, reset in 2h");
+			await second.rotateOnFailure(
+				"openai",
+				"quota exceeded, reset in 2h",
+				subscriptionKeyFingerprint("openai", "fake-b"),
+			);
 			const third = SubscriptionManager.create(auth, path);
 			expect(await third.list("openai")).toMatchObject([
 				{ id: "1", name: "Renamed" },
@@ -201,6 +232,47 @@ describe("subscription transactions", () => {
 		}
 	});
 
+	test("does not exhaust unknown, removed, or replaced request credentials", async () => {
+		const { manager, authStorage } = makeManager({ openai: { type: "api_key", key: "old-key" } });
+		await manager.addKey("openai", "other-key");
+		const identity = subscriptionKeyFingerprint("openai", "old-key");
+		await manager.removeKey("openai", "1");
+		await manager.addKey("openai", "replacement-key");
+		const before = await manager.list("openai");
+		for (const unknown of [undefined, identity, subscriptionKeyFingerprint("openai", "never-used")]) {
+			expect(await manager.rotateOnFailure("openai", "quota exceeded, reset in 2h", unknown)).toBeNull();
+		}
+		expect(await manager.list("openai")).toEqual(before);
+		expect(await authStorage.read("openai")).toMatchObject({ key: "replacement-key" });
+	});
+
+	test("process-local exhaustion follows key material rather than a reused entry id", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "lunr-subscriptions-"));
+		try {
+			const auth = AuthStorage.inMemory({ openai: { type: "api_key", key: "old-key" } });
+			const path = join(dir, "subscriptions.json");
+			const manager = SubscriptionManager.create(auth, path);
+			await manager.addKey("openai", "other-key");
+			await manager.setActive("openai", "1");
+			await manager.rotateOnFailure("openai", "quota exceeded", subscriptionKeyFingerprint("openai", "old-key"));
+			const data = JSON.parse(readFileSync(path, "utf8"));
+			data.openai.keys[0].key = "replacement-key";
+			writeFileSync(path, JSON.stringify(data));
+			expect(
+				(
+					await manager.rotateOnFailure(
+						"openai",
+						"quota exceeded",
+						subscriptionKeyFingerprint("openai", "other-key"),
+					)
+				)?.key,
+			).toBe("replacement-key");
+			expect(await auth.read("openai")).toMatchObject({ key: "replacement-key" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("preserves provider env through add, select, and rotation", async () => {
 		const env = { CLOUDFLARE_ACCOUNT_ID: "fake-account", CLOUDFLARE_GATEWAY_ID: "fake-gateway" };
 		const { manager, authStorage } = makeManager({
@@ -210,7 +282,11 @@ describe("subscription transactions", () => {
 		expect(await authStorage.read("cloudflare-ai-gateway")).toMatchObject({ key: "fake-b", env });
 		await manager.setActive("cloudflare-ai-gateway", "1");
 		expect(await authStorage.read("cloudflare-ai-gateway")).toMatchObject({ key: "fake-a", env });
-		await manager.rotateOnFailure("cloudflare-ai-gateway", "quota exceeded, reset in 2h");
+		await manager.rotateOnFailure(
+			"cloudflare-ai-gateway",
+			"quota exceeded, reset in 2h",
+			subscriptionKeyFingerprint("cloudflare-ai-gateway", "fake-a"),
+		);
 		expect(await authStorage.read("cloudflare-ai-gateway")).toMatchObject({ key: "fake-b", env });
 	});
 
