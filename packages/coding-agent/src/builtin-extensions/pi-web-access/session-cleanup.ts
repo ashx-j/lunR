@@ -30,7 +30,16 @@ export function runSessionCleanups(session: WebSession): Promise<void> {
 	session.closed = true;
 	const pending = [...session.cleanups].map(async (cleanup) => cleanup());
 	session.cleanups.clear();
-	const cleanup = Promise.allSettled(pending).then(() => undefined);
+	const cleanup = Promise.allSettled(pending).then((results) => {
+		const errors: unknown[] = [];
+		for (const result of results) {
+			if (result.status === "rejected") errors.push(result.reason);
+		}
+		if (errors.length > 0) {
+			const details = errors.map((error) => error instanceof Error ? error.message : String(error)).join("; ");
+			throw new AggregateError(errors, `Web session cleanup failed: ${details}`);
+		}
+	});
 	pendingCleanups.set(session, cleanup);
 	return cleanup;
 }

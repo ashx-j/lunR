@@ -42,6 +42,7 @@ vi.mock("node:child_process", () => ({
 				writeFileSync(join(path, "README.md"), "# Fake repository\nFixture content");
 				child.emit("exit", 0);
 				callback(null);
+				child.emit("close", 0);
 			},
 		});
 		return Object.assign(child, { kill });
@@ -181,6 +182,37 @@ describe("session-owned GitHub clone leases", () => {
 });
 
 describe("session activity ownership", () => {
+	it("settles every cleanup before reporting failures and preserves the shared result", async () => {
+		const session = createWebSession();
+		const failure = new Error("inert cleanup failure");
+		const completed: string[] = [];
+		let release!: () => void;
+		session.cleanups.add(() => {
+			throw failure;
+		});
+		session.cleanups.add(async () => {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			completed.push("slow");
+		});
+		session.cleanups.add(() => {
+			completed.push("last");
+		});
+		const closing = runSessionCleanups(session);
+		expect(runSessionCleanups(session)).toBe(closing);
+		expect(session.closed).toBe(true);
+		expect(completed).toEqual(["last"]);
+		const rejected = expect(closing).rejects.toMatchObject({
+			message: "Web session cleanup failed: inert cleanup failure",
+			errors: [failure],
+		});
+		release();
+		await rejected;
+		expect(completed).toEqual(["last", "slow"]);
+		expect(session.cleanups.size).toBe(0);
+	});
+
 	it("routes overlapping async activity and cleanup to each monitor", async () => {
 		const first = createWebSession();
 		const second = createWebSession();

@@ -30,6 +30,8 @@ const NOISE_DIRS = new Set([
 
 const MAX_INLINE_FILE_CHARS = 100_000;
 const MAX_TREE_ENTRIES = 200;
+const CLONE_TERMINATION_GRACE_MS = 1_000;
+const CLONE_EXIT_CONFIRMATION_MS = 1_000;
 
 export interface GitHubUrlInfo {
 	owner: string;
@@ -58,6 +60,35 @@ interface GitHubCloneConfig {
 const cloneCache = new Map<string, CachedClone>();
 const standaloneOwner = Symbol("standalone clone caller");
 
+function removeClone(key: string, entry: CachedClone): void {
+	if (cloneCache.get(key) !== entry) return;
+	try { rmSync(entry.localPath, { recursive: true, force: true }); } catch {}
+	cloneCache.delete(key);
+	if (cloneCache.size === 0) cachedConfig = null;
+}
+
+/** Never release a clone directory while its command may still be writing into it. */
+async function finishClone(key: string, entry: CachedClone): Promise<void> {
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			entry.clonePromise.catch(() => undefined),
+			new Promise<never>((_resolve, reject) => {
+				deadline = setTimeout(() => reject(new Error(
+					"GitHub clone cleanup could not confirm command completion after termination; clone retained until completion",
+				)), CLONE_TERMINATION_GRACE_MS + CLONE_EXIT_CONFIRMATION_MS);
+			}),
+		]);
+	} catch (error) {
+		// Keep the failed cleanup visible to new callers, but permit retry after the command eventually exits.
+		void entry.clonePromise.catch(() => undefined).then(() => removeClone(key, entry));
+		throw error;
+	} finally {
+		clearTimeout(deadline);
+	}
+	removeClone(key, entry);
+}
+
 /** Keep a shared clone alive until its final session releases it, including pending clones. */
 function acquireClone(key: string, entry: CachedClone): void {
 	const owner = getWebSession() ?? standaloneOwner;
@@ -68,14 +99,7 @@ function acquireClone(key: string, entry: CachedClone): void {
 		entry.owners.delete(owner);
 		if (entry.owners.size > 0) return;
 		entry.controller.abort();
-		entry.cleanup = (async () => {
-			// A failed startup still releases its cache entry and any partial output.
-			await entry.clonePromise.catch(() => undefined);
-			if (cloneCache.get(key) !== entry) return;
-			try { rmSync(entry.localPath, { recursive: true, force: true }); } catch {}
-			cloneCache.delete(key);
-			if (cloneCache.size === 0) cachedConfig = null;
-		})();
+		entry.cleanup = finishClone(key, entry);
 		await entry.cleanup;
 	});
 }
@@ -213,23 +237,38 @@ function cloneDir(config: GitHubCloneConfig, owner: string, repo: string, ref?: 
 function execClone(args: string[], localPath: string, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
 	if (signal?.aborted) return Promise.resolve(null);
 	return new Promise((resolve) => {
-		const child = execFile(args[0], args.slice(1), { timeout: timeoutMs }, (err) => {
-			if (err) {
-				try {
-					rmSync(localPath, { recursive: true, force: true });
-				} catch {
-				}
+		let failed = false;
+		let exited = false;
+		let closed = false;
+		let stopping = false;
+		let escalation: ReturnType<typeof setTimeout> | undefined;
+		// An execFile callback may also report a kill error while the process is still alive.
+		const child = execFile(args[0], args.slice(1), {}, (err) => { failed = Boolean(err); });
+		const stop = () => {
+			if (stopping || closed) return;
+			stopping = true;
+			escalation = setTimeout(() => {
+				try { child.kill("SIGKILL"); } catch {}
+			}, CLONE_TERMINATION_GRACE_MS);
+			try { child.kill("SIGTERM"); } catch {}
+		};
+		const timeout = setTimeout(stop, timeoutMs);
+		child.once("exit", () => { exited = true; });
+		child.once("close", () => {
+			// Failed spawning has no PID. A spawned command must actually exit before output can be released.
+			if (child.pid && !exited) return;
+			closed = true;
+			clearTimeout(timeout);
+			clearTimeout(escalation);
+			signal?.removeEventListener("abort", stop);
+			if (failed || stopping) {
+				try { rmSync(localPath, { recursive: true, force: true }); } catch {}
 				resolve(null);
-				return;
+			} else {
+				resolve(localPath);
 			}
-			resolve(localPath);
 		});
-
-		if (signal) {
-			const onAbort = () => child.kill();
-			signal.addEventListener("abort", onAbort, { once: true });
-			child.on("exit", () => signal.removeEventListener("abort", onAbort));
-		}
+		signal?.addEventListener("abort", stop, { once: true });
 	});
 }
 
