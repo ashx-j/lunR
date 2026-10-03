@@ -7,13 +7,15 @@ import type {
 	RpcExtensionUIResponse,
 	RpcResponse,
 } from "@earendil-works/pi-coding-agent";
-import { radiusPresence } from "./radius.ts";
+import { withDeadline } from "./deadline.ts";
+import { RADIUS_REQUEST_TIMEOUT_MS, radiusPresence } from "./radius.ts";
 import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process.ts";
 import { getInstance, loadInstances, removeInstance, saveInstances, upsertInstance } from "./storage.ts";
 import type { InstanceRecord, InstanceStatus } from "./types.ts";
 
 interface LiveInstanceResources {
 	rpcProcess?: RpcProcessInstance;
+	radiusRegistration?: Promise<InstanceRecord>;
 	radiusPiId?: string;
 	sessionId?: string;
 }
@@ -25,6 +27,7 @@ interface LiveInstance {
 	onUiRequest?: (request: RpcExtensionUIRequest) => void;
 	unsubscribeEvents?: () => void;
 	unsubscribeExit?: () => void;
+	stopPromise?: Promise<InstanceRecord>;
 }
 
 function cloneInstance(record: InstanceRecord): InstanceRecord {
@@ -62,6 +65,7 @@ function isGetStateSuccess(
 
 export class OrchestratorSupervisor {
 	private readonly liveInstances = new Map<string, LiveInstance>();
+	private shuttingDown = false;
 
 	private setStatus(live: LiveInstance, status: InstanceStatus): void {
 		live.record = {
@@ -120,25 +124,26 @@ export class OrchestratorSupervisor {
 			return;
 		}
 		this.setStatus(live, "error");
-		this.clearBindings(live);
-		live.resources.rpcProcess = undefined;
-		if (live.resources.radiusPiId) {
-			try {
-				await radiusPresence.disconnectPi(live.record);
-				this.updateRecord(live, { radiusPiId: undefined });
-			} catch (error) {
-				console.error(`Failed to disconnect Radius Pi ${live.record.id}: ${String(error)}`);
-			}
+		try {
+			await this.cleanupAcquiredResources(live);
+		} catch (error) {
+			this.updateRecord(live, {
+				cleanupError: error instanceof AggregateError ? error.errors.map(String).join("; ") : String(error),
+			});
+			console.error(`Failed to clean up exited RPC instance ${live.record.id}: ${String(error)}`);
 		}
-		this.liveInstances.delete(live.record.id);
+		this.updateRecord(live, {});
+		if (!live.resources.rpcProcess && !live.resources.radiusPiId) {
+			this.liveInstances.delete(live.record.id);
+		}
 	}
 
 	private getRpcProcess(live: LiveInstance): RpcProcessInstance | undefined {
-		return live.resources.rpcProcess;
+		return !this.shuttingDown && live.record.status === "online" ? live.resources.rpcProcess : undefined;
 	}
 
 	private async syncInstanceRecord(live: LiveInstance): Promise<void> {
-		const rpcProcess = this.getRpcProcess(live);
+		const rpcProcess = live.resources.rpcProcess;
 		if (!rpcProcess) {
 			this.updateRecord(live, {});
 			return;
@@ -157,29 +162,52 @@ export class OrchestratorSupervisor {
 	private async cleanupAcquiredResources(live: LiveInstance): Promise<void> {
 		const rpcProcess = live.resources.rpcProcess;
 		this.clearBindings(live);
-		if (live.resources.radiusPiId) {
-			await radiusPresence.disconnectPi(live.record);
-			live.resources.radiusPiId = undefined;
-			live.record = {
-				...live.record,
-				radiusPiId: undefined,
-				lastSeenAt: new Date().toISOString(),
-			};
-		}
-		live.resources.sessionId = undefined;
-		if (rpcProcess) {
-			live.resources.rpcProcess = undefined;
-			await rpcProcess.dispose();
+		const results = await Promise.allSettled([
+			(async () => {
+				if (live.resources.radiusRegistration) {
+					const registered = await live.resources.radiusRegistration.catch(() => undefined);
+					live.resources.radiusRegistration = undefined;
+					if (registered) {
+						live.resources.radiusPiId = registered.radiusPiId;
+						live.record = { ...live.record, radiusPiId: registered.radiusPiId };
+					}
+				}
+				if (live.resources.radiusPiId) {
+					await withDeadline(
+						() => radiusPresence.disconnectPi(live.record),
+						RADIUS_REQUEST_TIMEOUT_MS,
+						`Radius disconnect for instance ${live.record.id}`,
+					);
+					live.resources.radiusPiId = undefined;
+					live.record = { ...live.record, radiusPiId: undefined };
+				}
+			})(),
+			(async () => {
+				if (rpcProcess) {
+					await rpcProcess.dispose();
+					live.resources.rpcProcess = undefined;
+					live.resources.sessionId = undefined;
+					live.record = { ...live.record, pid: undefined };
+				}
+			})(),
+		]);
+		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+		if (errors.length > 0) {
+			// Keep the original handle and observe a late exit after a failed termination attempt.
+			if (live.resources.rpcProcess) {
+				live.unsubscribeExit = live.resources.rpcProcess.onExit((error) => {
+					void this.handleUnexpectedRpcExit(live, error);
+				});
+			}
+			throw new AggregateError(errors, `Instance ${live.record.id} cleanup failed`);
 		}
 	}
 
 	private async failSpawn(live: LiveInstance, error: unknown): Promise<never> {
-		this.setStatus(live, "error");
 		try {
-			await this.cleanupAcquiredResources(live);
-		} finally {
-			this.setStatus(live, "stopped");
-			this.liveInstances.delete(live.record.id);
+			await this.stopInstance(live.record.id);
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], `Instance ${live.record.id} spawn and cleanup failed`);
 		}
 		throw error;
 	}
@@ -245,13 +273,28 @@ export class OrchestratorSupervisor {
 		const recoveredAt = new Date().toISOString();
 		const instances = loadInstances().map((instance) => ({
 			...instance,
-			status: instance.status === "online" || instance.status === "starting" ? "stopped" : instance.status,
+			status:
+				instance.status === "online" || instance.status === "starting" || instance.status === "stopping"
+					? instance.pid
+						? "error"
+						: "stopped"
+					: instance.status,
+			cleanupError: instance.pid ? "RPC exit unconfirmed after orchestrator restart" : instance.cleanupError,
 			lastSeenAt: recoveredAt,
 		}));
-		for (const instance of instances) {
-			await radiusPresence.disconnectPi(instance);
-		}
+		const results = await Promise.allSettled(
+			instances.map(async (instance) => {
+				await withDeadline(
+					() => radiusPresence.disconnectPi(instance),
+					RADIUS_REQUEST_TIMEOUT_MS,
+					`Radius recovery disconnect for instance ${instance.id}`,
+				);
+				instance.radiusPiId = undefined;
+			}),
+		);
 		saveInstances(instances);
+		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+		if (errors.length > 0) throw new AggregateError(errors, "Orchestrator restart cleanup failed");
 	}
 
 	listInstances(): InstanceRecord[] {
@@ -268,6 +311,7 @@ export class OrchestratorSupervisor {
 	}
 
 	async spawnInstance(options: { cwd: string; label?: string }): Promise<InstanceRecord> {
+		if (this.shuttingDown) throw new Error("Orchestrator is shutting down");
 		const now = new Date().toISOString();
 		const live: LiveInstance = {
 			record: {
@@ -287,8 +331,17 @@ export class OrchestratorSupervisor {
 		try {
 			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd });
 			this.bindRpcProcess(live, rpcProcess);
+			this.updateRecord(live, { pid: rpcProcess.process.pid });
 			await this.syncInstanceRecord(live);
-			const registeredRecord = await radiusPresence.registerPi(live.record);
+			if (this.shuttingDown || live.record.status !== "starting") throw new Error("Instance stopped during spawn");
+			live.resources.radiusRegistration = withDeadline(
+				() => radiusPresence.registerPi(live.record),
+				RADIUS_REQUEST_TIMEOUT_MS,
+				`Radius registration for instance ${live.record.id}`,
+			);
+			const registeredRecord = await live.resources.radiusRegistration;
+			if (this.shuttingDown || live.record.status !== "starting") throw new Error("Instance stopped during spawn");
+			live.resources.radiusRegistration = undefined;
 			this.updateRecord(live, { radiusPiId: registeredRecord.radiusPiId });
 			this.setStatus(live, "online");
 			return cloneInstance(live.record);
@@ -303,18 +356,31 @@ export class OrchestratorSupervisor {
 			return undefined;
 		}
 
+		if (live.stopPromise) return live.stopPromise;
+		live.stopPromise = this.stopLiveInstance(live).finally(() => {
+			live.stopPromise = undefined;
+		});
+		return live.stopPromise;
+	}
+
+	private async stopLiveInstance(live: LiveInstance): Promise<InstanceRecord> {
 		this.setStatus(live, "stopping");
 		try {
 			await this.cleanupAcquiredResources(live);
-		} finally {
-			live.record = {
-				...live.record,
-				status: "stopped",
-				lastSeenAt: new Date().toISOString(),
-			};
-			this.liveInstances.delete(instanceId);
-			removeInstance(instanceId);
+		} catch (error) {
+			this.updateRecord(live, {
+				cleanupError: error instanceof AggregateError ? error.errors.map(String).join("; ") : String(error),
+			});
+			this.setStatus(live, "error");
+			throw error;
 		}
+		live.record = {
+			...live.record,
+			status: "stopped",
+			lastSeenAt: new Date().toISOString(),
+		};
+		this.liveInstances.delete(live.record.id);
+		removeInstance(live.record.id);
 		return cloneInstance(live.record);
 	}
 
@@ -333,9 +399,10 @@ export class OrchestratorSupervisor {
 	}
 
 	async shutdown(): Promise<void> {
-		for (const instanceId of [...this.liveInstances.keys()]) {
-			await this.stopInstance(instanceId);
-		}
+		this.shuttingDown = true;
+		const results = await Promise.allSettled([...this.liveInstances.keys()].map((id) => this.stopInstance(id)));
+		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+		if (errors.length > 0) throw new AggregateError(errors, "Orchestrator shutdown cleanup failed");
 	}
 }
 

@@ -17,6 +17,8 @@ interface PendingRequest {
 }
 
 const require = createRequire(import.meta.url);
+export const RPC_TERMINATE_GRACE_MS = 5_000;
+export const RPC_KILL_CONFIRM_MS = 2_000;
 
 function toError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
@@ -26,6 +28,8 @@ export class RpcProcessInstance {
 	readonly process: ChildProcess;
 
 	private exited = false;
+	private disposing = false;
+	private disposalPromise?: Promise<void>;
 	private nextRequestId = 0;
 	private stdoutBuffer = "";
 	private stderrBuffer = "";
@@ -83,11 +87,14 @@ export class RpcProcessInstance {
 			this.stderrBuffer += chunk;
 		});
 
-		this.process.once("error", (error) => {
-			this.exited = true;
+		this.process.on("error", (error) => {
 			const wrapped = new Error(`RPC process error: ${error.message}. Stderr: ${this.stderrBuffer}`);
 			this.rejectAllPending(wrapped);
-			this.notifyExit(wrapped);
+			// A failed spawn has no process to terminate. A later kill error is not exit confirmation.
+			if (this.process.pid === undefined) {
+				this.exited = true;
+				this.notifyExit(wrapped);
+			}
 		});
 
 		this.process.once("exit", (code, signal) => {
@@ -141,7 +148,7 @@ export class RpcProcessInstance {
 	}
 
 	send(command: RpcCommand): Promise<RpcResponse> {
-		if (this.exited) {
+		if (this.exited || this.disposing) {
 			throw new Error(`RPC process is not running. Stderr: ${this.stderrBuffer}`);
 		}
 		const id = command.id ?? `orchestrator_${++this.nextRequestId}_${randomUUID()}`;
@@ -159,7 +166,7 @@ export class RpcProcessInstance {
 	}
 
 	handleUiResponse(response: RpcExtensionUIResponse): void {
-		if (this.exited) {
+		if (this.exited || this.disposing) {
 			return;
 		}
 		this.process.stdin?.write(`${JSON.stringify(response)}\n`);
@@ -183,15 +190,45 @@ export class RpcProcessInstance {
 		};
 	}
 
-	async dispose(): Promise<void> {
+	dispose(): Promise<void> {
+		if (this.disposalPromise) return this.disposalPromise;
+		this.disposing = true;
 		this.uiRequestHandler = undefined;
 		this.rejectAllPending(new Error("RPC process disposed"));
-		if (this.exited) {
-			return;
-		}
-		this.process.kill("SIGTERM");
-		await new Promise<void>((resolve) => {
-			this.process.once("exit", () => resolve());
+		this.disposalPromise = this.terminate().finally(() => {
+			this.disposalPromise = undefined;
+		});
+		return this.disposalPromise;
+	}
+
+	private async terminate(): Promise<void> {
+		if (this.exited) return;
+		if (await this.signalAndWait("SIGTERM", RPC_TERMINATE_GRACE_MS)) return;
+		if (await this.signalAndWait("SIGKILL", RPC_KILL_CONFIRM_MS)) return;
+		throw new Error(`RPC process ${this.process.pid ?? "unknown"} termination unconfirmed after SIGTERM and SIGKILL`);
+	}
+
+	private signalAndWait(signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+		if (this.exited) return Promise.resolve(true);
+		return new Promise<boolean>((resolve) => {
+			const finish = () => {
+				clearTimeout(timer);
+				this.process.off("exit", finish);
+				this.process.off("error", onError);
+				resolve(this.exited);
+			};
+			const onError = () => {
+				if (this.exited) finish();
+			};
+			const timer = setTimeout(finish, timeoutMs);
+			// Subscribe before kill, including for synchronously exiting test/process adapters.
+			this.process.once("exit", finish);
+			this.process.on("error", onError);
+			try {
+				if (!this.process.kill(signal)) finish();
+			} catch {
+				finish();
+			}
 		});
 	}
 }
