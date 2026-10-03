@@ -138,7 +138,18 @@ describe("pi-web-access lazy first-use runtime", () => {
 		vi.resetModules();
 	});
 
-	type TestTool = { name: string; execute: (...args: unknown[]) => Promise<{ details?: Record<string, unknown> }> };
+	type TestTool = {
+		name: string;
+		description?: string;
+		promptSnippet?: string;
+		parameters?: { properties: Record<string, unknown> };
+		execute: (
+			...args: unknown[]
+		) => Promise<{
+			content?: Array<{ type: string; text?: string }>;
+			details?: Record<string, unknown>;
+		}>;
+	};
 	type Handler = (...args: unknown[]) => unknown;
 
 	function createPi() {
@@ -197,6 +208,196 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(loadGeminiWeb).not.toHaveBeenCalled();
 		expect(loadBrave).not.toHaveBeenCalled();
 		expect(loadOpenAISearch).not.toHaveBeenCalled();
+	});
+
+	function branchContext(id: string, content: string, timestamp = Date.now()) {
+		return {
+			sessionManager: {
+				getBranch: () => [
+					{
+						type: "custom",
+						customType: "web-search-results",
+						data: {
+							id,
+							type: "fetch",
+							timestamp,
+							urls: [
+								{
+									url: `https://${id}.example`,
+									title: id,
+									content,
+									error: null,
+								},
+							],
+						},
+					},
+				],
+			},
+		};
+	}
+
+	async function emit(
+		instance: ReturnType<typeof createPi>,
+		event: string,
+		context?: unknown,
+	) {
+		for (const handler of instance.handlers.get(event) ?? [])
+			await handler({}, context);
+	}
+
+	it("isolates restored results through startup, navigation and shutdown of another factory", async () => {
+		const factory = await loadFactory();
+		const first = createPi();
+		const second = createPi();
+		factory(first.pi);
+		factory(second.pi);
+		await emit(
+			first,
+			"session_start",
+			branchContext("first", "first private body"),
+		);
+		await emit(
+			second,
+			"session_start",
+			branchContext("second", "second private body"),
+		);
+		const retrieve = (instance: ReturnType<typeof createPi>, id: string) =>
+			instance.tools
+				.get("get_search_content")!
+				.execute("read", { responseId: id, urlIndex: 0 });
+		expect((await retrieve(first, "first")).content?.[0].text).toContain(
+			"first private body",
+		);
+		expect((await retrieve(first, "second")).details?.error).toBe("Not found");
+		expect((await retrieve(second, "first")).details?.error).toBe("Not found");
+		await emit(
+			second,
+			"session_tree",
+			branchContext("first", "second branch body"),
+		);
+		expect((await retrieve(first, "first")).content?.[0].text).toContain(
+			"first private body",
+		);
+		expect((await retrieve(second, "first")).content?.[0].text).toContain(
+			"second branch body",
+		);
+		await emit(second, "session_shutdown");
+		expect((await retrieve(first, "first")).content?.[0].text).toContain(
+			"first private body",
+		);
+		expect((await retrieve(second, "first")).details?.error).toBe("Not found");
+		await emit(
+			first,
+			"session_tree",
+			branchContext("old", "expired", Date.now() - 3600_001),
+		);
+		expect((await retrieve(first, "old")).details?.error).toBe("Not found");
+	});
+
+	it("paginates fetched bodies through the registered tool and advertises continuation", async () => {
+		const factory = await loadFactory();
+		const instance = createPi();
+		factory(instance.pi);
+		const body = "😀".repeat(30_000);
+		await emit(instance, "session_start", branchContext("large", body));
+		const tool = instance.tools.get("get_search_content")!;
+		expect(tool.description).toContain("50 KiB");
+		expect(tool.promptSnippet).toContain("nextOffset");
+		expect(tool.parameters?.properties.offset).toMatchObject({
+			type: "integer",
+			minimum: 0,
+		});
+		const firstPage = await tool.execute("page1", {
+			responseId: "large",
+			urlIndex: 0,
+		});
+		expect(firstPage.details?.truncated).toBe(true);
+		expect(
+			Buffer.byteLength(firstPage.content?.[0].text ?? ""),
+		).toBeLessThanOrEqual(50 * 1024);
+		const secondPage = await tool.execute("page2", {
+			responseId: "large",
+			urlIndex: 0,
+			offset: firstPage.details?.nextOffset,
+		});
+		expect(secondPage.details?.offset).toBe(firstPage.details?.nextOffset);
+		expect(secondPage.content?.[0].text).not.toContain("�");
+		expect(JSON.stringify(secondPage.details).length).toBeLessThan(1000);
+	});
+
+	it.each([
+		"fetch list",
+		"fetch missing",
+		"fetch error",
+		"search list",
+		"search missing",
+		"search answer",
+		"search error",
+	])("bounds the registered retrieval tool's %s response", async (kind) => {
+		const factory = await loadFactory();
+		const instance = createPi();
+		factory(instance.pi);
+		const huge = "é long value\n".repeat(10_000);
+		const search = kind.startsWith("search");
+		const data = search
+			? {
+					id: "large",
+					type: "search",
+					timestamp: Date.now(),
+					queries: [
+						{
+							query: huge,
+							answer: huge,
+							results: [],
+							error: kind.endsWith("error") ? huge : null,
+						},
+					],
+				}
+			: {
+					id: "large",
+					type: "fetch",
+					timestamp: Date.now(),
+					urls: [
+						{
+							url: huge,
+							title: huge,
+							content: huge,
+							error: kind.endsWith("error") ? huge : null,
+						},
+					],
+				};
+		await emit(instance, "session_start", {
+			sessionManager: {
+				getBranch: () => [
+					{ type: "custom", customType: "web-search-results", data },
+				],
+			},
+		});
+		const selectors = kind.endsWith("list")
+			? {}
+			: kind.endsWith("missing")
+				? search
+					? { query: "missing" }
+					: { url: "missing" }
+				: search
+					? { queryIndex: 0 }
+					: { urlIndex: 0 };
+		const tool = instance.tools.get("get_search_content")!;
+		const firstPage = await tool.execute("read", {
+			responseId: "large",
+			...selectors,
+		});
+		const text = firstPage.content?.[0].text ?? "";
+		expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
+		expect(text.split("\n").length).toBeLessThanOrEqual(2000);
+		expect(firstPage.details?.truncated).toBe(true);
+		expect(JSON.stringify(firstPage.details).length).toBeLessThan(1500);
+		const next = await tool.execute("next", {
+			responseId: "large",
+			...selectors,
+			offset: firstPage.details?.nextOffset,
+		});
+		expect(next.details?.offset).toBe(firstPage.details?.nextOffset);
 	});
 
 	it("loads extract on first fetch_content use and honors abort after the import boundary", async () => {
