@@ -18,12 +18,13 @@ const state = vi.hoisted(() => ({
 		complete: () => void;
 	}>,
 	checkRepoSize: vi.fn(),
+	checkGhAvailable: vi.fn(),
 }));
 vi.mock("../src/builtin-extensions/pi-web-access/utils.ts", () => ({
 	getWebSearchConfigPath: () => state.config,
 }));
 vi.mock("../src/builtin-extensions/pi-web-access/github-api.ts", () => ({
-	checkGhAvailable: async () => true,
+	checkGhAvailable: state.checkGhAvailable,
 	checkRepoSize: state.checkRepoSize,
 	fetchViaApi: async () => null,
 	showGhHint: vi.fn(),
@@ -52,6 +53,7 @@ beforeEach(() => {
 	vi.resetModules();
 	state.clones = [];
 	state.checkRepoSize.mockReset().mockResolvedValue(null);
+	state.checkGhAvailable.mockReset().mockResolvedValue(true);
 	root = mkdtempSync(join(tmpdir(), "lunr-clone-leases-"));
 	state.config = join(root, "web-search.json");
 	writeFileSync(state.config, JSON.stringify({ githubClone: { clonePath: join(root, "clones") } }));
@@ -67,6 +69,24 @@ async function runtime() {
 }
 
 describe("session-owned GitHub clone leases", () => {
+	it("releases a rejected clone on shutdown so another session can retry", async () => {
+		const rt = await runtime();
+		const first = rt.createWebSession();
+		state.checkGhAvailable.mockRejectedValueOnce(new Error("inert startup failure"));
+		await expect(
+			rt.runWithWebSession(first, () => rt.extractGitHub("https://github.com/example/retry")),
+		).rejects.toThrow("inert startup failure");
+		await rt.runSessionCleanups(first);
+		const second = rt.createWebSession();
+		const pending = rt
+			.runWithWebSession(second, () => rt.extractGitHub("https://github.com/example/retry"))
+			.catch((error: unknown) => error);
+		await vi.waitFor(() => expect(state.clones).toHaveLength(1));
+		state.clones[0].complete();
+		expect(await pending).toMatchObject({ error: null });
+		await rt.runSessionCleanups(second);
+	});
+
 	it("shares one pending clone and keeps it alive until the last owner closes", async () => {
 		const rt = await runtime();
 		const first = rt.createWebSession();

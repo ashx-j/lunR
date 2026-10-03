@@ -69,7 +69,8 @@ function acquireClone(key: string, entry: CachedClone): void {
 		if (entry.owners.size > 0) return;
 		entry.controller.abort();
 		entry.cleanup = (async () => {
-			await entry.clonePromise;
+			// A failed startup still releases its cache entry and any partial output.
+			await entry.clonePromise.catch(() => undefined);
 			if (cloneCache.get(key) !== entry) return;
 			try { rmSync(entry.localPath, { recursive: true, force: true }); } catch {}
 			cloneCache.delete(key);
