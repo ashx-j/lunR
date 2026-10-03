@@ -7,6 +7,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http"
+import { throwIfAborted } from "./abort.ts"
 import {
   DEFAULT_OAUTH_CALLBACK_PATH,
   getConfiguredOAuthCallbackPort,
@@ -86,6 +87,7 @@ const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000
 
 interface EnsureCallbackServerOptions {
   owner?: symbol
+  signal?: AbortSignal
   strictPort?: boolean
   port?: number
   callbackHost?: string
@@ -212,8 +214,10 @@ export async function releaseCallbackServerOwner(owner: symbol): Promise<void> {
  */
 export async function ensureCallbackServer(options: EnsureCallbackServerOptions = {}): Promise<void> {
   await withCallbackLock(async () => {
+    throwIfAborted(options.signal)
     if (options.owner && !callbackOwners.has(options.owner)) throw new Error("MCP OAuth session closed")
     await ensureCallbackServerLocked(options)
+    throwIfAborted(options.signal)
   })
 }
 
@@ -243,7 +247,7 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
         }
         setOAuthCallbackPath(requestedPath)
       }
-      if (options.reserveState && options.oauthState) {
+      if (options.reserveState && options.oauthState && !options.signal?.aborted) {
         reservedAuthStates.add(options.oauthState)
         reservedState = options.oauthState
       }
@@ -290,7 +294,8 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
     callbackServerHost = requestedHost
     setOAuthCallbackPath(requestedPath)
     server = candidateServer
-    if (options.reserveState && options.oauthState) {
+    // Flow cleanup can finish while binding yields. Never reserve its canceled state afterward.
+    if (options.reserveState && options.oauthState && !options.signal?.aborted) {
       reservedAuthStates.add(options.oauthState)
       reservedState = options.oauthState
     }

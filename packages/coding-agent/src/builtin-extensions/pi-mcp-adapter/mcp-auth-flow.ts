@@ -253,6 +253,7 @@ export function createMcpAuthFlow() {
         const redirect = config.redirectUri ? parseOAuthRedirectUri(config.redirectUri) : undefined
         await ensureCallbackServer({
           owner,
+          signal,
           strictPort: Boolean(config.clientId || storedAuth?.clientInfo) || config.redirectUri !== undefined,
           oauthState: flow.state.oauthState,
           reserveState: true,
