@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Subagent lifecycle (`fix/review-subagent-lifecycle`):** result watching starts at session binding; each session owns its notification listeners, batches, supervisor polling and widget timer. Shutdown/reload preserves other live sessions, cancellation registers under both session UUID and file identity, and child spawning passes parent identity without changing process-wide routing. Foreground abort and interrupt escalate against actual child exit, explicit unknown/blank/foreign-owner interrupt IDs fail closed, and parallel launches share one cancellable one-second cold-start allowance with unchanged unlimited default and explicit concurrency. Gateway factory/reload fixtures and one local POSIX child qualify these paths; Windows signal acceptance and provider-driven use remain untested.
+- **Subagent lifecycle (`fix/review-subagent-lifecycle`):** result watching starts at session binding; each session owns its notification listeners, batches, supervisor polling and widget timer. Shutdown/reload preserves other live sessions, cancellation registers under both session UUID and file identity, and child spawning passes parent identity without changing process-wide routing. Foreground abort and interrupt escalate against actual child exit, explicit unknown/blank/foreign-owner interrupt IDs fail closed, and parallel launches share one cancellable one-second cold-start allowance with unchanged unlimited default and explicit concurrency. Status reads detect atomic replacements with equal timestamps and clear missing cache entries. Gateway factory/reload fixtures and one local POSIX child qualify these paths; Windows signal acceptance and provider-driven use remain untested.
 
 - **v0.2.26 (2026-09-27):** #125 merged into #77; #77 and integration PR #126 merged to master, closing #118, #116, #117, #124, and #122 through ancestry. Release PR #127 and tag `v0.2.26` published four public packages and three pinned native payloads. The owner separately approved CuaDriver 0.28.1 for production. No global CLI was changed; hardware acceptance beyond the recorded Windows x64 tests remains unverified.
 
@@ -166,7 +166,9 @@ Last updated: 2026-10-03 (subagent lifecycle branch; release remains v0.2.26). P
 
 ## Build & run
 
-- Subagent lifecycle, 2026-10-03: 167/167 tests pass across 16 focused suites, with the final blank-ID interrupt cases checked in a separate 5/5 rerun. Five isolated offline package builds and focused test typechecking pass. Touched non-vendored lint and whitespace checks pass. New desired-behavior tests fail on the starting source and pass with the fixes; a local Node child that ignores SIGTERM exits through SIGKILL. An expanded 17-suite batch hit an intermittent existing supervisor-questions failure, and its focused rerun hit two cases; the baseline-only rerun passes 11/11. Its reconciliation and status-cache code are unchanged. This is not full CI or compiled CLI, Windows process, provider, broker or live gateway qualification.
+- Status-cache follow-up, 2026-10-03: 35/35 tests pass across subagent-status-cache, supervisor-question-lifecycle and supervisor-questions. Both equal-mtime, equal-length replacement cases fail on the starting source, including deletion/recreation. Five current isolated offline package builds, focused test typechecking, non-mutating relative-import validation, new-test Biome and whitespace checks pass. Combined full-suite acceptance remains separate.
+
+- Subagent lifecycle, 2026-10-03: 167/167 tests pass across 16 focused suites, with the final blank-ID interrupt cases checked in a separate 5/5 rerun. Five isolated offline package builds and focused test typechecking pass. Touched non-vendored lint and whitespace checks pass. New desired-behavior tests fail on the starting source and pass with the fixes; a local Node child that ignores SIGTERM exits through SIGKILL. An initial expanded 17-suite batch hit an intermittent supervisor-questions failure, and its focused rerun hit two cases; the baseline-only rerun passed 11/11. The status-cache follow-up above now covers equal-timestamp atomic replacement. This is not full CI or compiled CLI, Windows process, provider, broker or live gateway qualification.
 
 - v0.2.26 release (2026-09-27): five offline package builds and coding-agent Node bundle pass; 21 focused coding-agent suites pass 375/375, with the ten computer suites rerun after approval passing 128/128. Windows browser-on/off first-paint and first-turn subagent/MCP/LSP/fetch checks pass; Linux integration CI build, first-request, and Check pass. Full CI retains 98 baseline fixture failures across 24 suites, versus 101 across 27 in #77's earlier Ubuntu log; AI 623 and Agent 181 pass. Shrinkwrap, installer lock, relative imports, workflow policy, browser smoke, catalog, pinned dependencies and whitespace checks pass. All three pinned archives pass byte/SHA-256 verification and seven staged package dry-run packs pass. Production gate passes. Tag publication workflow `36312684171` succeeded at `c3d6e31`; all seven 0.2.26 versions expose npm tarballs, `npm view` reports 0.2.26 latest, and a fresh isolated public install reports 0.2.26 for the CLI, three dependencies, and Windows x64 payload. First-paint and first-turn subagent/MCP/LSP/fetch checks pass against that installed CLI. No global install, Mac/ARM desktop operation, or live provider test.
 
@@ -285,7 +287,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
-- Subagent reload cleanup relies on the existing `session_shutdown` lifecycle before runtime invalidation. Completion deduplication includes the owning session identity; control-notice deduplication restores from session history. Keep the one-second parallel allowance shared across the entire group, not restarted for each worker/task. Existing supervisor-questions fixtures intermittently fail on rapid status rewrites; the mtime-only status cache is a suspected cause, not a verified diagnosis.
+- Subagent reload cleanup relies on the existing `session_shutdown` lifecycle before runtime invalidation. Completion deduplication includes the owning session identity; control-notice deduplication restores from session history. Keep the one-second parallel allowance shared across the entire group, not restarted for each worker/task. Atomic status writes can replace the inode without changing mtime or size. Cache reuse requires matching device, inode, mtime, ctime and size; missing files clear their entries.
 
 - npm published all seven 0.2.26 packages before the CLI's registry metadata propagated. Verify the exact tarball and a fresh isolated install before treating tag publication as complete.
 
@@ -402,6 +404,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-03: validate status-file identity and metadata before cache reuse, because equal-mtime atomic replacement can otherwise retain a running state after cancellation.
 
 - 2026-10-03: use session-owned cleanup, both cancellation identities and one shared one-second launch allowance, because independent gateway sessions must stay operational and queued launch delay must remain bounded.
 
