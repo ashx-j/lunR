@@ -22,4 +22,7 @@ export interface InstanceRecord {
 	sessionId?: string;
 	sessionFile?: string;
 	radiusPiId?: string;
+	/** Owned child PID for diagnostics only. Never use a persisted PID as authority to kill. */
+	pid?: number;
+	cleanupError?: string;
 }

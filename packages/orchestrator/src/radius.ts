@@ -2,6 +2,7 @@ import { hostname, platform } from "node:os";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { getOrchestratorDir, getSocketPath, VERSION } from "./config.ts";
+import { withDeadline } from "./deadline.ts";
 import { loadMachine, saveMachine } from "./storage.ts";
 import type { InstanceRecord, MachineRecord, RadiusRegistration } from "./types.ts";
 
@@ -11,6 +12,7 @@ const NOT_FOUND_RETRY_THRESHOLD = 3;
 const HEARTBEAT_BACKOFF_BASE_MS = 1_000;
 const HEARTBEAT_BACKOFF_MAX_MS = 30_000;
 const RADIUS_PROVIDER = "radius";
+export const RADIUS_REQUEST_TIMEOUT_MS = 5_000;
 
 interface RegisterMachineResponse extends RadiusRegistration {
 	id: string;
@@ -27,6 +29,9 @@ interface RadiusPresenceCoordinator {
 }
 
 interface PiHeartbeatState {
+	generation: number;
+	ownerCreatedAt: string;
+	recovery?: { controller: AbortController; promise: Promise<boolean> };
 	timer?: NodeJS.Timeout;
 	intervalMs: number;
 	radiusPiId: string;
@@ -44,35 +49,78 @@ class RadiusHttpError extends Error {
 	}
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-	const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${getRadiusAccessToken()}`,
-			"Content-Type": "application/json",
+interface RegistrationOwnership<T> {
+	signal: AbortSignal;
+	disposeLateResult(result: T): Promise<void>;
+}
+
+async function post<T>(path: string, body: unknown, ownership?: RegistrationOwnership<T>): Promise<T> {
+	return withDeadline(
+		async (deadlineSignal) => {
+			const signal = ownership ? AbortSignal.any([deadlineSignal, ownership.signal]) : deadlineSignal;
+			signal.throwIfAborted();
+			let onAbort: () => void = () => {};
+			const cancelled = new Promise<never>((_resolve, reject) => {
+				onAbort = () => reject(signal.reason);
+				signal.addEventListener("abort", onAbort, { once: true });
+			});
+			// Keep this continuation even if cancellation wins and a transport ignores its signal.
+			const request = (async () => {
+				const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
+					method: "POST",
+					signal,
+					headers: {
+						Authorization: `Bearer ${getRadiusAccessToken()}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(body),
+				});
+				if (!response.ok) {
+					throw new RadiusHttpError(
+						response.status,
+						`Radius request failed: ${response.status} ${await response.text()}`,
+					);
+				}
+				const result = (await response.json()) as T;
+				if (signal.aborted) {
+					await ownership?.disposeLateResult(result);
+					throw signal.reason;
+				}
+				return result;
+			})();
+			try {
+				return await Promise.race([request, cancelled]);
+			} finally {
+				signal.removeEventListener("abort", onAbort);
+			}
 		},
-		body: JSON.stringify(body),
-	});
-
-	if (!response.ok) {
-		throw new RadiusHttpError(response.status, `Radius request failed: ${response.status} ${await response.text()}`);
-	}
-
-	return (await response.json()) as T;
+		RADIUS_REQUEST_TIMEOUT_MS,
+		`Radius ${path}`,
+	);
 }
 
 async function maybePost(path: string, body: unknown): Promise<void> {
-	const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${getRadiusAccessToken()}`,
-			"Content-Type": "application/json",
+	return withDeadline(
+		async (signal) => {
+			const response = await fetch(new URL(path, getRadiusOrchestratorBaseUrl()), {
+				method: "POST",
+				signal,
+				headers: {
+					Authorization: `Bearer ${getRadiusAccessToken()}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(body),
+			});
+			if (!response.ok) {
+				throw new RadiusHttpError(
+					response.status,
+					`Radius request failed: ${response.status} ${await response.text()}`,
+				);
+			}
 		},
-		body: JSON.stringify(body),
-	});
-	if (!response.ok) {
-		throw new RadiusHttpError(response.status, `Radius request failed: ${response.status} ${await response.text()}`);
-	}
+		RADIUS_REQUEST_TIMEOUT_MS,
+		`Radius ${path}`,
+	);
 }
 
 function isNotFoundError(error: unknown): error is RadiusHttpError {
@@ -141,12 +189,18 @@ export function isRadiusEnabled(): boolean {
 }
 
 export class RadiusPresence {
+	private stopped = false;
+	private generation = 0;
+	private lifecycle = new AbortController();
+	private readonly pendingPiDisconnects = new Set<string>();
+	private readonly pendingMachineDisconnects = new Set<string>();
 	private machineHeartbeatTimer?: NodeJS.Timeout;
 	private machineHeartbeatIntervalMs = 0;
 	private machineConsecutiveNotFoundCount = 0;
 	private machineTransientFailureCount = 0;
 	private readonly piHeartbeatStates = new Map<string, PiHeartbeatState>();
 	private machine?: MachineRecord;
+	private machineGeneration?: number;
 	private coordinator?: RadiusPresenceCoordinator;
 
 	setCoordinator(coordinator: RadiusPresenceCoordinator): void {
@@ -154,92 +208,167 @@ export class RadiusPresence {
 	}
 
 	async start(label?: string): Promise<MachineRecord | undefined> {
+		if (this.machineHeartbeatTimer) clearTimeout(this.machineHeartbeatTimer);
+		this.machineHeartbeatTimer = undefined;
+		this.lifecycle.abort(new Error("Radius presence replaced"));
+		this.lifecycle = new AbortController();
+		this.generation += 1;
+		const generation = this.generation;
+		this.stopped = false;
 		if (!isRadiusEnabled()) {
 			return undefined;
 		}
 
 		const registered = await this.registerMachine(label);
+		if (this.stopped || this.generation !== generation) return undefined;
 		this.startMachineHeartbeat(registered.heartbeatIntervalMs);
 		return this.machine;
 	}
 
 	async stop(): Promise<void> {
+		this.stopped = true;
+		this.generation += 1;
+		this.lifecycle.abort(new Error("Radius presence stopped"));
 		if (this.machineHeartbeatTimer) {
 			clearTimeout(this.machineHeartbeatTimer);
 			this.machineHeartbeatTimer = undefined;
 		}
-		for (const [instanceId, state] of this.piHeartbeatStates) {
-			if (state.timer) {
-				clearTimeout(state.timer);
-			}
-			this.piHeartbeatStates.delete(instanceId);
+		const pending: Promise<unknown>[] = [];
+		for (const state of this.piHeartbeatStates.values()) {
+			if (state.timer) clearTimeout(state.timer);
+			state.recovery?.controller.abort(new Error("Radius presence stopped"));
+			if (state.recovery) pending.push(state.recovery.promise.catch(() => undefined));
 		}
-		if (!this.machine || !isRadiusEnabled()) {
-			return;
+		this.piHeartbeatStates.clear();
+		if (this.machine && isRadiusEnabled()) pending.push(this.disposeMachineRegistration(this.machine.id));
+		for (const id of this.pendingPiDisconnects) pending.push(this.disposePiRegistration(id));
+		for (const id of this.pendingMachineDisconnects) {
+			if (id !== this.machine?.id) pending.push(this.disposeMachineRegistration(id));
 		}
-		try {
-			await maybePost(`machines/${this.machine.id}/disconnect`, {});
-		} catch (error) {
-			if (!isNotFoundError(error)) {
-				throw error;
-			}
-		}
+		const results = await Promise.allSettled(pending);
+		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+		if (errors.length > 0) throw new AggregateError(errors, "Radius shutdown cleanup failed");
 	}
 
-	async registerPi(instance: InstanceRecord): Promise<InstanceRecord> {
-		if (!isRadiusEnabled()) {
+	async registerPi(
+		instance: InstanceRecord,
+		recovery?: { signal: AbortSignal; isCurrent(): boolean },
+	): Promise<InstanceRecord> {
+		if (!isRadiusEnabled()) return instance;
+		const generation = this.generation;
+		const machine = this.machine ?? loadMachine();
+		if (!machine) throw new Error("No registered machine available for Pi registration");
+		const signal = recovery ? AbortSignal.any([this.lifecycle.signal, recovery.signal]) : this.lifecycle.signal;
+		const registered = await post<RegisterPiResponse>(
+			"pis/register",
+			{
+				machineId: machine.id,
+				label: instance.label,
+				cwd: instance.cwd,
+				hostname: hostname(),
+				pid: process.pid,
+				transport: "local-rpc",
+				capabilities: { rpc: true, relay: false, iroh: false },
+				sessionId: instance.sessionId,
+			},
+			{ signal, disposeLateResult: (result) => this.disposePiRegistration(result.id) },
+		);
+		const current = this.coordinator?.getLiveInstance(instance.id);
+		if (
+			this.stopped ||
+			this.generation !== generation ||
+			(recovery && !recovery.isCurrent()) ||
+			(this.coordinator &&
+				(!current ||
+					current.createdAt !== instance.createdAt ||
+					(current.status !== "online" && current.status !== "starting")))
+		) {
+			await this.disposePiRegistration(registered.id);
 			return instance;
 		}
-		const machine = this.machine ?? loadMachine();
-		if (!machine) {
-			throw new Error("No registered machine available for Pi registration");
-		}
-		const registered = await post<RegisterPiResponse>("pis/register", {
-			machineId: machine.id,
-			label: instance.label,
-			cwd: instance.cwd,
-			hostname: hostname(),
-			pid: process.pid,
-			transport: "local-rpc",
-			capabilities: { rpc: true, relay: false, iroh: false },
-			sessionId: instance.sessionId,
-		});
 		const registeredInstance = { ...instance, radiusPiId: registered.id };
-		this.startPiHeartbeat(instance.id, registered.heartbeatIntervalMs, registered.id);
+		this.startPiHeartbeat(instance, registered.heartbeatIntervalMs, registered.id);
 		return registeredInstance;
 	}
 
 	async disconnectPi(instance: InstanceRecord): Promise<void> {
-		const state = this.piHeartbeatStates.get(instance.id);
+		const candidate = this.piHeartbeatStates.get(instance.id);
+		const state = candidate?.ownerCreatedAt === instance.createdAt ? candidate : undefined;
 		if (state) {
-			if (state.timer) {
-				clearTimeout(state.timer);
-			}
+			if (state.timer) clearTimeout(state.timer);
 			this.piHeartbeatStates.delete(instance.id);
+			state.recovery?.controller.abort(new Error("Radius instance stopped"));
+			await state.recovery?.promise.catch(() => undefined);
 		}
-		if (!isRadiusEnabled() || !instance.radiusPiId) {
+		if (!isRadiusEnabled()) return;
+		const ids = new Set([instance.radiusPiId, state?.radiusPiId]);
+		const results = await Promise.allSettled(
+			[...ids].filter((id): id is string => !!id).map((id) => this.disposePiRegistration(id)),
+		);
+		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+		if (errors.length === 1) throw errors[0];
+		if (errors.length > 0) throw new AggregateError(errors, "Radius instance disconnect failed");
+	}
+
+	private async disposePiRegistration(id: string): Promise<void> {
+		// A replacement can receive the same remote ID. Never disconnect its active registration.
+		if (
+			!this.stopped &&
+			[...this.piHeartbeatStates.entries()].some(([instanceId, state]) => {
+				const current = this.coordinator?.getLiveInstance(instanceId);
+				return (
+					state.generation === this.generation &&
+					state.radiusPiId === id &&
+					(!this.coordinator ||
+						(current?.createdAt === state.ownerCreatedAt &&
+							(current.status === "online" || current.status === "starting")))
+				);
+			})
+		)
 			return;
-		}
+		await this.disposeRegistration("pis", id, this.pendingPiDisconnects);
+	}
+
+	private async disposeMachineRegistration(id: string): Promise<void> {
+		if (!this.stopped && this.machineGeneration === this.generation && this.machine?.id === id) return;
+		await this.disposeRegistration("machines", id, this.pendingMachineDisconnects);
+	}
+
+	private async disposeRegistration(kind: "pis" | "machines", id: string, pending: Set<string>): Promise<void> {
+		pending.add(id);
 		try {
-			await maybePost(`pis/${instance.radiusPiId}/disconnect`, {});
+			await maybePost(`${kind}/${id}/disconnect`, {});
+			pending.delete(id);
 		} catch (error) {
-			if (!isNotFoundError(error)) {
-				throw error;
+			if (isNotFoundError(error)) {
+				pending.delete(id);
+				return;
 			}
+			console.error(`Radius ${kind}/${id} cleanup failed: ${formatRadiusError(error)}`);
+			throw error;
 		}
 	}
 
 	private async registerMachine(label?: string): Promise<RegisterMachineResponse> {
+		const generation = this.generation;
 		const existingMachine = this.machine ?? loadMachine();
-		const registered = await post<RegisterMachineResponse>("machines/register", {
-			machineId: existingMachine?.id,
-			label,
-			hostname: hostname(),
-			platform: platform(),
-			arch: process.arch,
-			version: VERSION,
-			capabilities: { spawn: true, relay: false, iroh: false },
-		});
+		const registered = await post<RegisterMachineResponse>(
+			"machines/register",
+			{
+				machineId: existingMachine?.id,
+				label,
+				hostname: hostname(),
+				platform: platform(),
+				arch: process.arch,
+				version: VERSION,
+				capabilities: { spawn: true, relay: false, iroh: false },
+			},
+			{ signal: this.lifecycle.signal, disposeLateResult: (result) => this.disposeMachineRegistration(result.id) },
+		);
+		if (this.stopped || this.generation !== generation) {
+			await this.disposeMachineRegistration(registered.id);
+			throw new Error("Radius presence stopped during machine registration");
+		}
 
 		const timestamp = new Date().toISOString();
 		this.machine = {
@@ -248,6 +377,7 @@ export class RadiusPresence {
 			lastSeenAt: timestamp,
 			label,
 		};
+		this.machineGeneration = generation;
 		saveMachine(this.machine);
 		this.machineConsecutiveNotFoundCount = 0;
 		this.machineTransientFailureCount = 0;
@@ -260,6 +390,7 @@ export class RadiusPresence {
 	}
 
 	private scheduleMachineHeartbeat(delayMs: number): void {
+		if (this.stopped) return;
 		if (this.machineHeartbeatTimer) {
 			clearTimeout(this.machineHeartbeatTimer);
 		}
@@ -268,17 +399,27 @@ export class RadiusPresence {
 		}, delayMs);
 	}
 
-	private startPiHeartbeat(instanceId: string, intervalMs: number, radiusPiId: string): void {
+	private startPiHeartbeat(instance: InstanceRecord, intervalMs: number, radiusPiId: string): void {
+		const instanceId = instance.id;
+		if (this.stopped) return;
 		const existingState = this.piHeartbeatStates.get(instanceId);
 		if (existingState?.timer) {
 			clearTimeout(existingState.timer);
 		}
-		const state: PiHeartbeatState = existingState ?? {
-			intervalMs,
-			radiusPiId,
-			consecutiveNotFoundCount: 0,
-			transientFailureCount: 0,
-		};
+		const state: PiHeartbeatState =
+			existingState?.generation === this.generation && existingState.ownerCreatedAt === instance.createdAt
+				? existingState
+				: {
+						generation: this.generation,
+						ownerCreatedAt: instance.createdAt,
+						intervalMs,
+						radiusPiId,
+						consecutiveNotFoundCount: 0,
+						transientFailureCount: 0,
+					};
+		if (existingState && existingState !== state) {
+			existingState.recovery?.controller.abort(new Error("Radius instance replaced"));
+		}
 		state.intervalMs = intervalMs;
 		state.radiusPiId = radiusPiId;
 		state.consecutiveNotFoundCount = 0;
@@ -289,7 +430,7 @@ export class RadiusPresence {
 
 	private schedulePiHeartbeat(instanceId: string, delayMs: number): void {
 		const state = this.piHeartbeatStates.get(instanceId);
-		if (!state) {
+		if (!state || this.stopped || state.generation !== this.generation) {
 			return;
 		}
 		if (state.timer) {
@@ -301,19 +442,22 @@ export class RadiusPresence {
 	}
 
 	private async heartbeatMachine(): Promise<void> {
-		if (!this.machine || !isRadiusEnabled()) {
+		if (this.stopped || !this.machine || !isRadiusEnabled()) {
 			return;
 		}
 
+		const generation = this.generation;
 		try {
 			await maybePost(`machines/${this.machine.id}/heartbeat`, {
 				cwd: getOrchestratorDir(),
 				socketPath: getSocketPath(),
 			});
+			if (this.stopped || this.generation !== generation) return;
 			this.machineConsecutiveNotFoundCount = 0;
 			this.machineTransientFailureCount = 0;
 			this.scheduleMachineHeartbeat(this.machineHeartbeatIntervalMs);
 		} catch (error) {
+			if (this.stopped || this.generation !== generation) return;
 			if (!isNotFoundError(error)) {
 				this.machineTransientFailureCount += 1;
 				const delayMs = computeBackoffDelayMs(this.machineTransientFailureCount);
@@ -332,6 +476,7 @@ export class RadiusPresence {
 			try {
 				await this.reRegisterMachineAndPis();
 			} catch (recoveryError) {
+				if (this.stopped || this.generation !== generation) return;
 				this.machineTransientFailureCount += 1;
 				const delayMs = computeBackoffDelayMs(this.machineTransientFailureCount);
 				logRadiusRetry(
@@ -352,16 +497,20 @@ export class RadiusPresence {
 		}
 
 		const state = this.piHeartbeatStates.get(instanceId);
-		if (!state) {
+		if (!state || this.stopped || state.generation !== this.generation) {
 			return;
 		}
 
 		try {
 			await maybePost(`pis/${state.radiusPiId}/heartbeat`, {});
+			if (this.stopped || state.generation !== this.generation || this.piHeartbeatStates.get(instanceId) !== state)
+				return;
 			state.consecutiveNotFoundCount = 0;
 			state.transientFailureCount = 0;
 			this.schedulePiHeartbeat(instanceId, state.intervalMs);
 		} catch (error) {
+			if (this.stopped || state.generation !== this.generation || this.piHeartbeatStates.get(instanceId) !== state)
+				return;
 			if (!isNotFoundError(error)) {
 				state.transientFailureCount += 1;
 				const delayMs = computeBackoffDelayMs(state.transientFailureCount);
@@ -379,12 +528,13 @@ export class RadiusPresence {
 
 			try {
 				const recovered = await this.reRegisterPi(instanceId);
-				if (!recovered) {
+				if (!recovered && !this.stopped && this.piHeartbeatStates.get(instanceId) === state) {
 					const delayMs = computeBackoffDelayMs(1);
 					console.error(`Radius Pi ${instanceId} re-registration skipped; retrying in ${delayMs}ms`);
 					this.schedulePiHeartbeat(instanceId, delayMs);
 				}
 			} catch (recoveryError) {
+				if (this.stopped || this.piHeartbeatStates.get(instanceId) !== state) return;
 				state.transientFailureCount += 1;
 				const delayMs = computeBackoffDelayMs(state.transientFailureCount);
 				logRadiusRetry(
@@ -400,11 +550,16 @@ export class RadiusPresence {
 	}
 
 	private async reRegisterMachineAndPis(): Promise<void> {
+		if (this.stopped) return;
+		const generation = this.generation;
 		const registered = await this.registerMachine(this.machine?.label);
+		if (this.stopped || this.generation !== generation) return;
 		this.startMachineHeartbeat(registered.heartbeatIntervalMs);
 
+		if (this.stopped) return;
 		const instances = this.coordinator?.listLiveInstances() ?? [];
 		for (const instance of instances) {
+			if (this.stopped || this.generation !== generation) return;
 			try {
 				await this.reRegisterPi(instance.id);
 			} catch (error) {
@@ -414,10 +569,12 @@ export class RadiusPresence {
 	}
 
 	private async reRegisterPi(instanceId: string): Promise<boolean> {
+		if (this.stopped) return false;
 		const instance = this.coordinator?.getLiveInstance(instanceId);
-		if (!instance) {
+		if (!instance || (instance.status !== "online" && instance.status !== "starting")) {
 			const state = this.piHeartbeatStates.get(instanceId);
 			if (state) {
+				state.recovery?.controller.abort(new Error("Radius instance no longer active"));
 				if (state.timer) {
 					clearTimeout(state.timer);
 				}
@@ -431,9 +588,36 @@ export class RadiusPresence {
 			return true;
 		}
 
-		const registeredInstance = await this.registerPi(instance);
-		this.coordinator?.updateInstance(registeredInstance);
-		return true;
+		const state = this.piHeartbeatStates.get(instanceId);
+		if (!state || state.generation !== this.generation || state.ownerCreatedAt !== instance.createdAt) return false;
+		if (state.recovery) return state.recovery.promise;
+		const generation = this.generation;
+		const isCurrent = () => {
+			const current = this.coordinator?.getLiveInstance(instanceId);
+			return (
+				!this.stopped &&
+				this.generation === generation &&
+				this.piHeartbeatStates.get(instanceId) === state &&
+				current?.createdAt === instance.createdAt &&
+				current.pid === instance.pid &&
+				(current.status === "online" || current.status === "starting")
+			);
+		};
+		const controller = new AbortController();
+		const promise = (async () => {
+			const registered = await this.registerPi(instance, { signal: controller.signal, isCurrent });
+			if (!isCurrent()) return false;
+			const current = this.coordinator?.getLiveInstance(instanceId);
+			if (current) this.coordinator?.updateInstance({ ...current, radiusPiId: registered.radiusPiId });
+			return true;
+		})();
+		const recovery = { controller, promise };
+		state.recovery = recovery;
+		try {
+			return await promise;
+		} finally {
+			if (state.recovery === recovery) state.recovery = undefined;
+		}
 	}
 }
 
