@@ -240,7 +240,7 @@ export class McpServerManager {
   private createClient(serverName: string): Client {
     const capabilities = this.buildClientCapabilities();
     const client = new Client(
-      { name: `pi-mcp-${serverName}`, version: "1.0.0" },
+      { name: `lunR-mcp-${serverName}`, version: "1.0.0" },
       Object.keys(capabilities).length > 0 ? { capabilities } : undefined,
     );
     if (this.samplingConfig) {
@@ -337,7 +337,7 @@ export class McpServerManager {
 
     try {
       // Create a test client to verify the transport works
-      const testClient = new Client({ name: "pi-mcp-probe", version: "2.1.2" });
+      const testClient = new Client({ name: "lunR-mcp-probe", version: "2.1.2" });
       await testClient.connect(streamableTransport, this.buildRequestOptions(definition, signal));
       await testClient.close().catch(() => {});
       // Close probe transport before creating fresh one

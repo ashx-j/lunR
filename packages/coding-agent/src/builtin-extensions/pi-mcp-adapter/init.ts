@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createMcpAuthFlow } from "./mcp-auth-flow.ts";
 import type { McpExtensionState } from "./state.ts";
 import type { ToolMetadata } from "./types.ts";
 import { existsSync } from "node:fs";
@@ -67,6 +68,7 @@ export async function initializeMcp(
   const consentManager = new ConsentManager("once-per-server");
   const ui = ctx.hasUI ? ctx.ui : undefined;
   const state: McpExtensionState = {
+    authFlow: createMcpAuthFlow(),
     manager,
     lifecycle,
     toolMetadata,
