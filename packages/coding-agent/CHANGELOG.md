@@ -1,6 +1,15 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.27`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.28`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.28] - 2026-10-04
+
+### Fixed
+
+- Session, gateway, goal, and history totals count title, summary, and child requests once, including cached input and failed fallback attempts. Branch navigation retains incurred usage; forks exclude inherited usage.
+- Context estimates include system instructions and tools and discard obsolete measurements after compaction or prompt changes.
+- Provider accounting preserves reported usage and charges, reasoning tokens, and cache writes. Gemini long-context pricing matches the reviewed provider tiers.
+- Usage labels distinguish full input, estimated cache misses, visible thinking, approximate context, and subscription quota. Output-rate counters reset for each response.
 
 ## [0.2.27] - 2026-10-04
 

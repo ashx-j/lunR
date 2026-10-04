@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.28] - 2026-10-04
+
+### Fixed
+
+- Compaction uses the shared request-aware context estimate and records the prompt identity for each response.
+
 ## [0.2.27] - 2026-10-04
 
 ### Fixed
