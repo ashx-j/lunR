@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markSessionHandoff } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
+import type { BridgeSession, ResetOptions } from "../src/gateway/agent-bridge.ts";
 import { isAuthorized, requireAuthorized } from "../src/gateway/authz.ts";
-import { handleCallback, resetButtonRegistry } from "../src/gateway/buttons.ts";
+import { createPicker, handleCallback, resetButtonRegistry } from "../src/gateway/buttons.ts";
 import { defaultGatewayConfig, loadGatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 import { bindConversation } from "../src/gateway/conversations.ts";
 import { runGateway } from "../src/gateway/index.ts";
@@ -16,6 +16,7 @@ import {
 	createGatewayUI,
 	flushGatewayOutbox,
 	invalidateGatewayDialogs,
+	invalidateGatewaySession,
 	queueGatewayText,
 	rememberGatewayRole,
 	sendGatewayNotice,
@@ -239,7 +240,13 @@ describe("first chat readiness", () => {
 describe("projects and approved access", () => {
 	it.each([false, true])("checks current approval when selecting a project, revoked: %s", async (revoked) => {
 		const transport = adapter();
-		const active = { ...bridge, reset: vi.fn(async () => {}) };
+		const active = {
+			...bridge,
+			reset: vi.fn(async (_key: string, options?: ResetOptions) => {
+				options?.validate?.();
+				options?.commit?.();
+			}),
+		};
 		const cfg = loadGatewayConfig();
 		await handleMobileCommand(
 			{ key, event: { source, text: "/project", messageId: "m" }, adapter: transport, bridge: active, cfg },
@@ -263,6 +270,85 @@ describe("projects and approved access", () => {
 			},
 		);
 		expect(active.reset).toHaveBeenCalledTimes(revoked ? 0 : 1);
+		expect(vi.mocked(transport.editMessage).mock.calls.some((call) => call[2].includes("Project selected"))).toBe(
+			!revoked,
+		);
+	});
+	it.each(["skill", "settings", "mode"])("does not open a stale /%s dialog after session lookup", async (command) => {
+		const transport = adapter();
+		let release!: (session: BridgeSession) => void;
+		const active = {
+			...bridge,
+			getSession: () =>
+				new Promise<BridgeSession>((resolve) => {
+					release = resolve;
+				}),
+		};
+		const pending = handleMobileCommand(
+			{
+				key,
+				event: { source, text: `/${command}`, messageId: "m" },
+				adapter: transport,
+				bridge: active,
+				cfg: loadGatewayConfig(),
+			},
+			command,
+			"",
+		);
+		invalidateGatewayDialogs(key);
+		release({} as BridgeSession);
+		expect(await pending).toBe(true);
+		expect(transport.sendButtons).not.toHaveBeenCalled();
+	});
+	it.each(["project", "sessions"])("expires the old mobile /%s picker after replacement", async (command) => {
+		const transport = adapter();
+		const active = { ...bridge, reset: vi.fn(async () => {}), switchSession: vi.fn(async () => {}) };
+		const manager = SessionManager.create(dir, join(dir, "sessions"));
+		manager.appendMessage({ role: "user", content: "saved", timestamp: Date.now() });
+		manager.flush();
+		manager.dispose();
+		const list = vi.spyOn(SessionManager, "listAll").mockResolvedValue([
+			{
+				id: manager.getSessionId(),
+				path: manager.getSessionFile()!,
+				cwd: dir,
+				created: new Date(),
+				modified: new Date(),
+				messageCount: 1,
+				firstMessage: "saved",
+				allMessagesText: "saved",
+			},
+		]);
+		try {
+			await handleMobileCommand(
+				{
+					key,
+					event: { source, text: `/${command}`, messageId: "m" },
+					adapter: transport,
+					bridge: active,
+					cfg: loadGatewayConfig(),
+				},
+				command,
+				command === "project" ? dir : "",
+			);
+			const data = vi.mocked(transport.sendButtons).mock.calls[0][2][0][0].data;
+			invalidateGatewaySession(key);
+			await handleCallback(
+				{ id: "old", chatId: "1", messageId: "2", userId: "1", data },
+				{
+					adapter: transport,
+					adapters: new Map([["telegram", transport]]),
+					cfg: loadGatewayConfig(),
+					pairing: createPairingStore(),
+					bridge: active,
+				},
+			);
+			expect(active.reset).not.toHaveBeenCalled();
+			expect(active.switchSession).not.toHaveBeenCalled();
+			expect(transport.editMessage).not.toHaveBeenCalled();
+		} finally {
+			list.mockRestore();
+		}
 	});
 	it("continues a stale phone binding without trying to reopen it before transfer", async () => {
 		const manager = SessionManager.create(dir, join(dir, "sessions"));
@@ -471,6 +557,38 @@ describe("mobile UI delivery", () => {
 		await pending;
 	});
 
+	it("does not retry a completed picker confirmation after revocation during its failed edit", async () => {
+		const transport = adapter();
+		const resolve = vi.fn(async () => ({ done: true as const, text: "Private confirmation" }));
+		await createPicker(transport, source, {
+			kind: "model",
+			sessionKey: key,
+			invokerId: "1",
+			title: "Choose",
+			items: [{ label: "Select", value: "v" }],
+			resolve,
+		});
+		vi.mocked(transport.editMessage).mockImplementationOnce(async () => {
+			const cfg = loadGatewayConfig();
+			cfg.telegram.allowedUsers = [];
+			saveGatewayConfig(cfg);
+			return { success: false, retryable: true };
+		});
+		const data = vi.mocked(transport.sendButtons).mock.calls[0][2][0][0].data;
+		await handleCallback(
+			{ id: "select", chatId: "1", messageId: "2", userId: "1", data },
+			{
+				adapter: transport,
+				adapters: new Map([["telegram", transport]]),
+				cfg: loadGatewayConfig(),
+				pairing: createPairingStore(),
+				bridge,
+			},
+		);
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(transport.editMessage).toHaveBeenCalledOnce();
+		expect(transport.send).not.toHaveBeenCalled();
+	});
 	it("drops a queued answer when destination authorization is revoked before retry", async () => {
 		const transport = adapter();
 		vi.mocked(transport.send).mockResolvedValueOnce({ success: false, retryable: true });
@@ -489,7 +607,7 @@ describe("mobile UI delivery", () => {
 		const transport = adapter();
 		startGatewayPresenter(new Map([["telegram", transport]]));
 		const oldUi = createGatewayUI(key);
-		invalidateGatewayDialogs(key);
+		invalidateGatewaySession(key);
 		oldUi.notify("Old selection");
 		await sendGatewayNotice(key, "Finished old task", "result");
 		expect(transport.send).toHaveBeenCalledTimes(1);

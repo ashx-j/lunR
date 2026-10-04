@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QUEUED, type TurnCallbacks } from "../src/gateway/agent-bridge.ts";
-import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
+import { defaultGatewayConfig, type GatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 import { createPairingStore } from "../src/gateway/pairing.ts";
 import { flushGatewayOutbox, startGatewayPresenter, stopGatewayPresenter } from "../src/gateway/presenter.ts";
 import { type BridgeLike, createRouter } from "../src/gateway/router.ts";
@@ -358,6 +358,75 @@ describe("router: normal path", () => {
 		// ...and the remainder went out as a new message.
 		expect(adapter.sent[1].text.endsWith(" (2/2)")).toBe(true);
 		expect(adapter.sent[0].text.endsWith("…")).toBe(true);
+	});
+});
+
+describe("router: fresh streaming authorization", () => {
+	it.each(["preview edit", "final edit", "failed initial send", "failed final edit", "pairing"])(
+		"stops delivery after revocation before %s",
+		async (stage) => {
+			const cfg = makeConfig((c) => {
+				c.streaming.enabled = true;
+				c.streaming.editIntervalMs = 0;
+				c.streaming.bufferThreshold = 1;
+				if (stage === "pairing") c.telegram.allowedUsers = [];
+			});
+			saveGatewayConfig(cfg);
+			if (stage === "pairing") {
+				const pairing = createPairingStore({ dir });
+				pairing.approve("telegram", pairing.issueCode("telegram", "u1")!);
+			}
+			const { adapter, bridge, router } = makeDeps(cfg);
+			const revoke = () => {
+				cfg.telegram.allowedUsers = [];
+				saveGatewayConfig(cfg);
+				if (stage === "pairing")
+					writeFileSync(join(dir, "store.json"), JSON.stringify({ pending: [], approved: [] }));
+			};
+			if (stage === "failed initial send")
+				vi.spyOn(adapter, "send").mockImplementationOnce(async (chatId, text, opts) => {
+					adapter.sent.push({ chatId, text, opts });
+					return { success: false, retryable: true };
+				});
+			if (stage === "failed final edit")
+				vi.spyOn(adapter, "editMessage").mockImplementationOnce(async (chatId, messageId, text) => {
+					adapter.edits.push({ chatId, messageId, text });
+					revoke();
+					return { success: false, retryable: true };
+				});
+			bridge.results = ["private final answer"];
+			bridge.onRunTurn = async (callbacks) => {
+				callbacks.onDelta?.("first preview");
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(adapter.sent).toHaveLength(1);
+				if (stage !== "failed final edit") revoke();
+				if (stage === "preview edit" || stage === "failed initial send" || stage === "pairing") {
+					callbacks.onDelta?.(" more private text");
+					await new Promise((resolve) => setImmediate(resolve));
+				}
+			};
+			await router.handleEvent(dmEvent("go"));
+			await flushGatewayOutbox();
+			expect(adapter.sent).toHaveLength(1);
+			expect(adapter.edits).toHaveLength(stage === "failed final edit" ? 1 : 0);
+		},
+	);
+
+	it("checks authorization before sending the first preview or the final reply", async () => {
+		const cfg = makeConfig((c) => {
+			c.streaming.enabled = true;
+			c.streaming.bufferThreshold = 1;
+		});
+		saveGatewayConfig(cfg);
+		const { adapter, bridge, router } = makeDeps(cfg);
+		bridge.onRunTurn = (callbacks) => {
+			cfg.telegram.allowedUsers = [];
+			saveGatewayConfig(cfg);
+			callbacks.onDelta?.("private answer");
+		};
+		await router.handleEvent(dmEvent("go"));
+		expect(adapter.sent).toEqual([]);
+		expect(adapter.edits).toEqual([]);
 	});
 });
 

@@ -17,7 +17,13 @@
  */
 
 import { existsSync } from "node:fs";
-import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
+import {
+	type BridgeSession,
+	type BridgeSessionStatus,
+	QUEUED,
+	type ResetOptions,
+	type TurnCallbacks,
+} from "./agent-bridge.ts";
 import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
 import { isAuthorized, requireAuthorized } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
@@ -27,6 +33,7 @@ import { resolveWithinRoots } from "./mobile-commands.ts";
 import type { PairingStore } from "./pairing.ts";
 import {
 	acceptGatewayInput,
+	canDeliverGatewayText,
 	gatewayEpoch,
 	invalidateGatewayDialogs,
 	queueGatewayText,
@@ -42,7 +49,7 @@ import type { MessageEvent, PlatformAdapter } from "./types.ts";
 export interface BridgeLike {
 	runTurn(key: string, event: MessageEvent, callbacks: TurnCallbacks): Promise<string>;
 	abort(key: string): Promise<void> | void;
-	reset(key: string): void | Promise<void>;
+	reset(key: string, options?: ResetOptions): void | Promise<void>;
 	getStatus(key: string): BridgeSessionStatus;
 	getSession(key: string, create?: boolean): Promise<BridgeSession | null>;
 	peekSession?(key: string): BridgeSession | undefined;
@@ -250,8 +257,10 @@ export function createRouter(deps: RouterDeps): Router {
 		text: string,
 		key: string,
 		cfg: GatewayConfig,
-		opts: { reply: boolean; editMessageId?: string; previewTruncated?: boolean },
+		opts: { reply: boolean; editMessageId?: string; previewTruncated?: boolean; valid?: () => boolean },
 	): Promise<void> {
+		if (opts.valid && !opts.valid()) return;
+		if (!canDeliverGatewayText(key, event.source, cfg, pairing)) return;
 		const filtered = applySilenceFilter(text);
 		if (filtered === null) return;
 		if (opts.editMessageId) {
@@ -284,10 +293,16 @@ export function createRouter(deps: RouterDeps): Router {
 	): Promise<void> {
 		const epoch = gatewayEpoch(key);
 		const streaming = cfg.streaming.enabled && typeof adapter.editMessage === "function";
+		let denied = false;
+		const valid = () => {
+			if (!denied) denied = !canDeliverGatewayText(key, event.source, cfg, pairing);
+			return !denied;
+		};
 		let consumer: StreamConsumer | undefined;
 		if (streaming) {
 			consumer = new StreamConsumer({
 				sendInitial: async (text) => {
+					if (!valid() || gatewayEpoch(key) !== epoch) return null;
 					const result = await adapter.send(event.source.chatId, text, {
 						replyTo: event.messageId,
 						threadId: event.source.threadId,
@@ -295,6 +310,7 @@ export function createRouter(deps: RouterDeps): Router {
 					return result.success ? (result.messageId ?? null) : null;
 				},
 				edit: async (messageId, text) => {
+					if (!valid() || gatewayEpoch(key) !== epoch) return;
 					const result = await adapter.editMessage(event.source.chatId, messageId, text);
 					if (!result.success) throw new Error(result.error ?? "Preview edit failed");
 				},
@@ -327,6 +343,7 @@ export function createRouter(deps: RouterDeps): Router {
 			reply: !consumer,
 			editMessageId: consumer?.sentMessageId ?? undefined,
 			previewTruncated: consumer?.truncated ?? false,
+			valid,
 		});
 	}
 
