@@ -252,6 +252,166 @@ export async function stopGatewayService(): Promise<string> {
 	throw new Error("Gateway is still stopping after 30 seconds. Inspect the log; no unrelated process was terminated.");
 }
 
+/** Remove only this profile's gateway and startup entry, before uninstall deletes control data. */
+export async function teardownGatewayService(): Promise<void> {
+	const dir = serviceDirectory();
+	const ownerPath = join(dir, "lock", "owner.json");
+	const status = readGatewayStatus();
+	const lockOwner = readGatewayStatus(ownerPath);
+	if ((existsSync(statusPath()) && !status) || (existsSync(join(dir, "lock")) && !lockOwner))
+		throw new Error("Gateway ownership is unresolved. Profile retained; run lunr gateway doctor.");
+	if (status && lockOwner && (status.instance !== lockOwner.instance || status.pid !== lockOwner.pid))
+		throw new Error("Gateway status and lock ownership disagree. Profile retained.");
+	const owner = status ?? lockOwner;
+	if (owner && processExists(owner.pid) && !lockOwner)
+		throw new Error("Running gateway has no ownership lock. Profile retained.");
+
+	const rawSettings = readJson(settingsPath());
+	if (
+		existsSync(settingsPath()) &&
+		(!rawSettings ||
+			typeof rawSettings !== "object" ||
+			!("startup" in rawSettings) ||
+			!["off", "login", "boot"].includes(String(rawSettings.startup)))
+	)
+		throw new Error("Gateway startup settings are unresolved. Profile retained.");
+	const mode = loadServiceSettings().startup;
+	const user = userInfo();
+	const options = {
+		home: homedir(),
+		agentDir: getAgentDir(),
+		node: process.execPath,
+		cli: cliPath(),
+		username: user.username,
+		uid: user.uid,
+	};
+	const spec = mode === "off" ? undefined : startupSpec(process.platform, mode, options);
+	const startupFileMissing = !!spec && !existsSync(spec.path);
+	if (!spec) {
+		if (
+			["linux", "darwin", "win32"].includes(process.platform) &&
+			(["login", "boot"] as const).some((candidate) =>
+				existsSync(startupSpec(process.platform, candidate, options).path),
+			)
+		)
+			throw new Error("Gateway startup file exists without active ownership settings. Profile retained.");
+	} else if (startupFileMissing) {
+		// Retry only verification. A missing file never authorizes removing a registration.
+		confirmStartupRemoval(spec);
+	} else {
+		if (readFileSync(spec.path, "utf8") !== spec.content)
+			throw new Error("Gateway startup file does not match this installation. Profile retained.");
+		if (process.platform === "linux") {
+			const unit = spec.verify.at(-1)!;
+			const registration = serviceQuery([
+				"systemctl",
+				"--user",
+				"show",
+				unit,
+				"--property=FragmentPath",
+				"--property=DropInPaths",
+			]);
+			const properties = new Map(
+				registration.stdout
+					.trim()
+					.split("\n")
+					.map((line) => {
+						const separator = line.indexOf("=");
+						return [line.slice(0, separator), line.slice(separator + 1)];
+					}),
+			);
+			if (
+				registration.status !== 0 ||
+				properties.get("FragmentPath") !== spec.path ||
+				properties.get("DropInPaths") !== ""
+			)
+				throw new Error("Gateway systemd ownership could not be verified. Profile retained.");
+		} else if (process.platform === "win32") {
+			const name = `${servicePrefix}-${createHash("sha256").update(resolve(getAgentDir())).digest("hex").slice(0, 10)}`;
+			const actionArgs = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${spec.path}"`;
+			execute([
+				"powershell.exe",
+				"-NoProfile",
+				"-Command",
+				`$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName ${ps(name)}; if($t.Actions.Count -ne 1 -or $t.Actions[0].Execute -ne 'powershell.exe' -or $t.Actions[0].Arguments -ne ${ps(actionArgs)}){throw 'Gateway task ownership mismatch'}`,
+			]);
+		}
+	}
+
+	// Request graceful shutdown before unregistering; no PID signal can hit a reused process.
+	if (owner && processExists(owner.pid)) {
+		atomicJson(controlPath(), { instance: owner.instance, action: "stop" });
+	}
+	if (spec && !startupFileMissing) {
+		if (process.platform === "linux") {
+			const unit = spec.verify.at(-1)!;
+			execute(["systemctl", "--user", "disable", "--now", unit]);
+			const disabled = serviceQuery(spec.verify);
+			if (disabled.status !== 1 || disabled.stdout.trim() !== "disabled")
+				throw new Error("Gateway startup disable could not be confirmed. Profile retained.");
+		} else {
+			for (const command of spec.remove) {
+				const removed = serviceQuery(command);
+				if (
+					removed.status !== 0 &&
+					!(process.platform === "darwin" && /Could not find (?:specified )?service/i.test(removed.stderr))
+				)
+					throw new Error("Gateway startup removal failed. Profile retained.");
+			}
+		}
+		if (process.platform === "darwin" && mode === "boot") execute(["sudo", "rm", "-f", spec.path]);
+		else rmSync(spec.path);
+		confirmStartupRemoval(spec);
+	}
+	if (spec) {
+		atomicJson(settingsPath(), { startup: "off" });
+	}
+	for (let i = 0; owner && processExists(owner.pid); i++) {
+		if (i >= 150) throw new Error("Gateway shutdown could not be confirmed after 30 seconds. Profile retained.");
+		await sleep(200);
+	}
+	const remaining = readGatewayStatus();
+	const remainingLock = readGatewayStatus(ownerPath);
+	if ((remaining && processExists(remaining.pid)) || (remainingLock && processExists(remainingLock.pid)))
+		throw new Error("Gateway ownership changed during teardown. Profile retained.");
+}
+
+/** Refresh and verify absence without unregistering an unverified startup entry. */
+function confirmStartupRemoval(spec: StartupSpec): void {
+	if (process.platform === "linux") {
+		execute(["systemctl", "--user", "daemon-reload"]);
+		const removed = serviceQuery([
+			"systemctl",
+			"--user",
+			"show",
+			spec.verify.at(-1)!,
+			"--property=LoadState",
+			"--value",
+		]);
+		if (removed.status !== 0 || removed.stdout.trim() !== "not-found")
+			throw new Error("Gateway startup removal could not be confirmed. Profile retained.");
+	} else if (process.platform === "darwin") {
+		const removed = serviceQuery(spec.verify);
+		if (removed.status === 0 || !/Could not find (?:specified )?service/i.test(removed.stderr))
+			throw new Error("Gateway launchd removal could not be confirmed. Profile retained.");
+	} else {
+		const name = `${servicePrefix}-${createHash("sha256").update(resolve(getAgentDir())).digest("hex").slice(0, 10)}`;
+		execute([
+			"powershell.exe",
+			"-NoProfile",
+			"-Command",
+			`$ErrorActionPreference='Stop'; if(Get-ScheduledTask | Where-Object {$_.TaskName -eq ${ps(name)}}){throw 'Gateway task still registered'}`,
+		]);
+	}
+}
+
+function serviceQuery(command: string[]) {
+	const [file, ...args] = command;
+	const result = spawnSync(file, args, { encoding: "utf8", windowsHide: true, timeout: 120_000 });
+	if (result.error) throw result.error;
+	return result;
+}
+
 export interface StartupSpec {
 	path: string;
 	content: string;
