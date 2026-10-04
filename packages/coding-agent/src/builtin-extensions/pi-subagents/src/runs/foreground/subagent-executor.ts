@@ -544,7 +544,6 @@ function getAsyncInterruptTarget(
 	state: SubagentState,
 	runId: string | undefined,
 	location?: { asyncDir: string | null; resolvedId?: string },
-	options: { fallbackToNewest?: boolean } = {},
 ): { asyncId: string; asyncDir: string } | undefined {
 	if (location?.asyncDir) {
 		return {
@@ -555,7 +554,7 @@ function getAsyncInterruptTarget(
 	if (runId) {
 		const direct = state.asyncJobs.get(runId);
 		if (direct) return { asyncId: direct.asyncId, asyncDir: direct.asyncDir };
-		if (options.fallbackToNewest === false) return undefined;
+		return undefined;
 	}
 	let newest: { asyncId: string; asyncDir: string; updatedAt: number } | undefined;
 	for (const job of state.asyncJobs.values()) {
@@ -604,6 +603,13 @@ function interruptAsyncRun(
 	const target = getAsyncInterruptTarget(state, runId, location);
 	if (!target) return null;
 	const status = reconcileAsyncRun(target.asyncDir, { kill }).status;
+	if (state.currentSessionId && status?.sessionId !== state.currentSessionId) {
+		return {
+			content: [{ type: "text", text: `Async run '${target.asyncId}' was not found in the active session.` }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	if (!status || status.state !== "running" || typeof status.pid !== "number") {
 		return {
 			content: [{ type: "text", text: `No running async run with an interrupt-capable pid was found for '${runId ?? "current"}'.` }],
@@ -638,7 +644,7 @@ function stopAsyncRun(
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean,
 	location?: { asyncDir: string | null; resolvedId?: string },
 ): AgentToolResult<Details> | null {
-	const target = getAsyncInterruptTarget(state, runId, location, { fallbackToNewest: false });
+	const target = getAsyncInterruptTarget(state, runId, location);
 	if (!target) return null;
 	const status = reconcileAsyncRun(target.asyncDir, { kill }).status;
 	if (state.currentSessionId && status?.sessionId !== state.currentSessionId) {
@@ -2664,7 +2670,14 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				input.foregroundControl.updatedAt = Date.now();
 			}
 		});
-	}, input.globalSemaphore);
+	}, input.globalSemaphore, {
+		signal: input.signal,
+		onAbort: (task) => ({
+			agent: task.agent, task: task.task ?? "", exitCode: 1, messages: [],
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+			error: "Subagent launch cancelled.",
+		}),
+	});
 }
 
 async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
@@ -3599,6 +3612,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (action === "interrupt") {
 				const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;
+				if (targetRunId !== undefined && !targetRunId.trim()) {
+					return {
+						content: [{ type: "text", text: "Explicit interrupt id must be non-empty." }],
+						isError: true,
+						details: { mode: "management", results: [] },
+					};
+				}
 				let resolved: ResolvedSubagentRunId | undefined;
 				if (targetRunId) {
 					try {

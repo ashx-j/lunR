@@ -285,13 +285,16 @@ export function createResultWatcher(
 		}
 		try {
 			const watchDir = resolveWatchPath(resultsDir, fsApi.realpathSync.native);
-			state.watcher = fsApi.watch(watchDir, (ev, file) => {
+			const watcher = fsApi.watch(watchDir, (ev, file) => {
+				if (state.watcher !== watcher) return;
 				if (ev !== "rename" || !file) return;
 				const fileName = file.toString();
 				if (!fileName.endsWith(".json")) return;
 				state.resultFileCoalescer.schedule(fileName);
 			});
-			state.watcher.on("error", (error) => {
+			state.watcher = watcher;
+			watcher.on("error", (error) => {
+				if (state.watcher !== watcher) return;
 				if (shouldFallBackToPolling(error)) {
 					startPollingFallback(error);
 					return;

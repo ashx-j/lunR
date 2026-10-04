@@ -91,7 +91,7 @@ export function getAgentDir(): string {
 	return configured || path.join(os.homedir(), getConfigDirName(), "agent");
 }
 
-const statusCache = new Map<string, { mtime: number; status: AsyncStatus }>();
+const statusCache = new Map<string, { stat: fs.Stats; status: AsyncStatus }>();
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -110,7 +110,7 @@ function isNotFoundError(error: unknown): boolean {
 }
 
 /**
- * Read async job status from disk (with mtime-based caching)
+ * Read async job status from disk, caching while file identity and metadata match.
  */
 export function readStatus(asyncDir: string): AsyncStatus | null {
 	const statusPath = path.join(asyncDir, "status.json");
@@ -119,14 +119,23 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	try {
 		stat = fs.statSync(statusPath);
 	} catch (error) {
-		if (isNotFoundError(error)) return null;
+		if (isNotFoundError(error)) {
+			statusCache.delete(statusPath);
+			return null;
+		}
 		throw new Error(`Failed to inspect async status file '${statusPath}': ${getErrorMessage(error)}`, {
 			cause: error instanceof Error ? error : undefined,
 		});
 	}
 
 	const cached = statusCache.get(statusPath);
-	if (cached && cached.mtime === stat.mtimeMs) {
+	// Atomic writers replace the file even when timestamp precision hides the update.
+	if (cached
+		&& cached.stat.dev === stat.dev
+		&& cached.stat.ino === stat.ino
+		&& cached.stat.mtimeMs === stat.mtimeMs
+		&& cached.stat.ctimeMs === stat.ctimeMs
+		&& cached.stat.size === stat.size) {
 		return cached.status;
 	}
 
@@ -134,7 +143,10 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	try {
 		content = fs.readFileSync(statusPath, "utf-8");
 	} catch (error) {
-		if (isNotFoundError(error)) return null;
+		if (isNotFoundError(error)) {
+			statusCache.delete(statusPath);
+			return null;
+		}
 		throw new Error(`Failed to read async status file '${statusPath}': ${getErrorMessage(error)}`, {
 			cause: error instanceof Error ? error : undefined,
 		});
@@ -149,7 +161,7 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 		});
 	}
 
-	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
+	statusCache.set(statusPath, { stat, status });
 	if (statusCache.size > 50) {
 		const firstKey = statusCache.keys().next().value;
 		if (firstKey) statusCache.delete(firstKey);

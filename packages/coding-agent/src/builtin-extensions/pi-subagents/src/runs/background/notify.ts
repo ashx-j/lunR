@@ -220,44 +220,19 @@ export default function registerSubagentNotify(
 	pi: ExtensionAPI,
 	state: Pick<SubagentState, "currentSessionId">,
 	options: RegisterSubagentNotifyOptions = {},
-): void {
-	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
-	const batcherStoreKey = "__pi_subagents_notify_batcher__";
-	const globalStore = globalThis as Record<string, unknown>;
-	const previousUnsubscribe = globalStore[unsubscribeStoreKey];
-	if (typeof previousUnsubscribe === "function") {
-		try {
-			previousUnsubscribe();
-		} catch {
-			// Best effort cleanup for stale handlers from an older reload.
-		}
-	}
-	const previousBatcher = globalStore[batcherStoreKey];
-	if (previousBatcher && typeof (previousBatcher as { dispose?: () => void }).dispose === "function") {
-		try {
-			(previousBatcher as { dispose: () => void }).dispose();
-		} catch {
-			// Best effort cleanup for a stale batcher from an older reload.
-		}
-	}
-
+): () => void {
+	let disposed = false;
 	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
 	const ttlMs = 10 * 60 * 1000;
 	const nowFn = options.now ?? Date.now;
 	const batchConfig = resolveCompletionBatchConfig(options.batchConfig);
 	const batchers = new Map<string, CompletionBatcher<SubagentNotifyDetails>>();
-	globalStore[batcherStoreKey] = {
-		dispose() {
-			for (const batcher of batchers.values()) batcher.dispose();
-			batchers.clear();
-		},
-	};
-
 	const handleComplete = (data: unknown) => {
+		if (disposed) return;
 		const result = data as SubagentResult;
 		if (typeof result.sessionId !== "string" || result.sessionId !== state.currentSessionId) return;
 		const now = nowFn();
-		const key = buildCompletionKey(result, "notify");
+		const key = `${result.sessionId}:${buildCompletionKey(result, "notify")}`;
 		if (markSeenWithTtl(seen, key, now, ttlMs)) return;
 
 		const details = buildCompletionDetails(result);
@@ -270,7 +245,9 @@ export default function registerSubagentNotify(
 		if (!batcher) {
 			batcher = createCompletionBatcher<SubagentNotifyDetails>({
 				config: batchConfig,
-				emit: (items) => sendCompletion(pi, items),
+				emit: (items) => {
+					if (!disposed && result.sessionId === state.currentSessionId) sendCompletion(pi, items);
+				},
 				...(options.timers ? { timers: options.timers } : {}),
 				now: nowFn,
 			});
@@ -291,7 +268,11 @@ export default function registerSubagentNotify(
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_FOREGROUND_COMPLETE_EVENT, handleComplete),
 	].filter((unsubscribe): unsubscribe is () => void => typeof unsubscribe === "function");
-	globalStore[unsubscribeStoreKey] = () => {
+	return () => {
+		if (disposed) return;
+		disposed = true;
+		for (const batcher of batchers.values()) batcher.dispose();
+		batchers.clear();
 		for (const unsubscribe of unsubscribers) unsubscribe();
 	};
 }
