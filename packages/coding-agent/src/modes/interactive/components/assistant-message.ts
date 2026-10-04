@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ReasoningDisplay } from "../../../core/settings-manager.ts";
 import { copyToClipboard } from "../../../utils/clipboard.ts";
+import { sanitizeTerminalText } from "../../../utils/sanitize-terminal-text.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { CopyableTextBlockComponent, type CopyableTextStatus, parseCopyableTextSegments } from "./copyable-text.ts";
 import {
@@ -224,7 +225,7 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				for (const segment of parseCopyableTextSegments(content.text)) {
 					if (segment.type === "markdown") {
-						const trimmed = segment.text.trim();
+						const trimmed = sanitizeTerminalText(segment.text).trim();
 						if (!trimmed) continue;
 						const text = isFirstTextBlock ? `● ${trimmed}` : trimmed;
 						isFirstTextBlock = false;
@@ -269,7 +270,14 @@ export class AssistantMessageComponent extends Container {
 				const fullyRevealed =
 					displayBlocks.length === sourceBlocks.length &&
 					displayBlocks.every((block, index) => block === sourceBlocks[index]);
-				this.renderThinkingRun(thinkingRunIndex, displayBlocks, message, i, fullyRevealed);
+				// Compare original reveal source above, then sanitize only the displayed blocks.
+				this.renderThinkingRun(
+					thinkingRunIndex,
+					displayBlocks.map(sanitizeTerminalText),
+					message,
+					i,
+					fullyRevealed,
+				);
 			}
 		}
 
@@ -297,11 +305,15 @@ export class AssistantMessageComponent extends Container {
 						? message.errorMessage
 						: "Operation aborted";
 				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
+				this.contentContainer.addChild(
+					new Text(theme.fg("error", sanitizeTerminalText(abortMessage)), this.outputPad, 0),
+				);
 			} else if (message.stopReason === "error") {
 				const errorMsg = message.errorMessage || "Unknown error";
 				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+				this.contentContainer.addChild(
+					new Text(theme.fg("error", `Error: ${sanitizeTerminalText(errorMsg)}`), this.outputPad, 0),
+				);
 			}
 		}
 		this.onThinkingAnimationChange?.(this.thinkingAnimationActive);
