@@ -3695,9 +3695,7 @@ export class InteractiveMode {
 
 			case "agent_end":
 				this.session.refreshModelFromRegistry();
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(false);
-				}
+				this.ui.terminal.setProgress(false);
 				this.clearStatusIndicator("working");
 				this.stopSmoothStreaming();
 				if (this.streamingComponent) {
@@ -3740,9 +3738,7 @@ export class InteractiveMode {
 			}
 
 			case "compaction_end": {
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(false);
-				}
+				this.ui.terminal.setProgress(false);
 				if (this.autoCompactionEscapeHandler) {
 					this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
 					this.autoCompactionEscapeHandler = undefined;
@@ -5140,6 +5136,7 @@ export class InteractiveMode {
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
+						if (!enabled) this.ui.terminal.setProgress(false);
 					},
 					onModelTiersEnabledChange: (enabled) => {
 						this.settingsManager.setModelTiersEnabled(enabled);
@@ -8189,9 +8186,7 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 		this.setThinkingAnimation(false);
 		this.stopCatalogRefresh?.();
 		this.stopCatalogRefresh = undefined;
-		if (this.settingsManager.getShowTerminalProgress()) {
-			this.ui.terminal.setProgress(false);
-		}
+		this.ui.terminal.setProgress(false);
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
