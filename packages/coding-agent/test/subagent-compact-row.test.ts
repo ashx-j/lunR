@@ -535,9 +535,14 @@ describe("async widget ownership", () => {
 	it("keeps the other owner's animation when one UI closes or a headless session resets", async () => {
 		vi.useFakeTimers();
 		const job = { asyncId: "widget-owner", status: "running", startedAt: Date.now(), updatedAt: Date.now() };
-		const makeContext = () => ({ hasUI: true, ui: {
-			setWidget: vi.fn(), requestRender: vi.fn(), getToolsExpanded: () => false,
-		} });
+		const makeContext = () => ({
+			hasUI: true,
+			ui: {
+				setWidget: vi.fn(),
+				requestRender: vi.fn(),
+				getToolsExpanded: () => false,
+			},
+		});
 		const a = makeContext();
 		const b = makeContext();
 		renderWidget(a as never, [job] as never);

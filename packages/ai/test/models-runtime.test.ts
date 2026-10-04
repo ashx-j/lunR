@@ -689,7 +689,6 @@ describe("Models runtime", () => {
 	});
 });
 
-
 describe("standard API-key environment", () => {
 	it("returns credential env and forwards it to model requests with request overrides", async () => {
 		const credentials = new InMemoryCredentialStore();

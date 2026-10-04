@@ -5,38 +5,76 @@ const target = {
 	window_id: Type.Integer({ minimum: 1 }),
 };
 const observation = Type.String({
-	description: "Copy the latest image token exactly for this target. Single action, expires after 30 seconds. Failed actions consume it; capture again before acting.",
+	description:
+		"Copy the latest image token exactly for this target. Single action, expires after 30 seconds. Failed actions consume it; capture again before acting.",
 });
 const grounded = {
 	pid: Type.Optional(target.pid),
 	window_id: Type.Optional(target.window_id),
-	desktop: Type.Optional(Type.Boolean({ description: "Primary desktop instead of a window; requires foreground=true." })),
+	desktop: Type.Optional(
+		Type.Boolean({ description: "Primary desktop instead of a window; requires foreground=true." }),
+	),
 	observation,
-	foreground: Type.Optional(Type.Boolean({ description: "Window focus escalation after verified background failure. Settings may forbid it." })),
+	foreground: Type.Optional(
+		Type.Boolean({
+			description: "Window focus escalation after verified background failure. Settings may forbid it.",
+		}),
+	),
 };
 const coordinate = Type.Number({ minimum: 0 });
 const pixels = { x: coordinate, y: coordinate };
 const optionalPixels = { x: Type.Optional(coordinate), y: Type.Optional(coordinate) };
 export const computerSchemas = {
 	computer_load: Type.Object({}, { additionalProperties: false }),
-	computer_apps: Type.Object({
-		pid: Type.Optional(target.pid),
-		query: Type.Optional(Type.String({ minLength: 1, maxLength: 240, description: "Case-insensitive literal substring in the requested app or window collection before pagination. Omit to list all. Required with include_windows." })),
-		include_windows: Type.Optional(Type.Boolean({ description: "With a named app query and no pid, include windows for matching running PIDs (at most 5 PIDs and 50 window rows). Narrow the query or use pid if more match." })),
-		offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Zero-based row offset, default 0. Pass the result's next_offset to retrieve the next 50 apps or windows." })),
-	}, { additionalProperties: false }),
+	computer_apps: Type.Object(
+		{
+			pid: Type.Optional(target.pid),
+			query: Type.Optional(
+				Type.String({
+					minLength: 1,
+					maxLength: 240,
+					description:
+						"Case-insensitive literal substring in the requested app or window collection before pagination. Omit to list all. Required with include_windows.",
+				}),
+			),
+			include_windows: Type.Optional(
+				Type.Boolean({
+					description:
+						"With a named app query and no pid, include windows for matching running PIDs (at most 5 PIDs and 50 window rows). Narrow the query or use pid if more match.",
+				}),
+			),
+			offset: Type.Optional(
+				Type.Integer({
+					minimum: 0,
+					maximum: Number.MAX_SAFE_INTEGER,
+					description:
+						"Zero-based row offset, default 0. Pass the result's next_offset to retrieve the next 50 apps or windows.",
+				}),
+			),
+		},
+		{ additionalProperties: false },
+	),
 	computer_observe: Type.Object(
 		{
 			pid: Type.Optional(target.pid),
 			window_id: Type.Optional(target.window_id),
 			desktop: Type.Optional(Type.Boolean({ description: "Capture the primary desktop instead of a window." })),
 			observation: Type.Optional(observation),
-			crop: Type.Optional(Type.Object({
-				x: coordinate,
-				y: coordinate,
-				width: Type.Number({ exclusiveMinimum: 0 }),
-				height: Type.Number({ exclusiveMinimum: 0 }),
-			}, { additionalProperties: false, description: "Region in the latest returned image's pixels; requires its observation token. Captures fresh pixels. Omit for full target." })),
+			crop: Type.Optional(
+				Type.Object(
+					{
+						x: coordinate,
+						y: coordinate,
+						width: Type.Number({ exclusiveMinimum: 0 }),
+						height: Type.Number({ exclusiveMinimum: 0 }),
+					},
+					{
+						additionalProperties: false,
+						description:
+							"Region in the latest returned image's pixels; requires its observation token. Captures fresh pixels. Omit for full target.",
+					},
+				),
+			),
 		},
 		{ additionalProperties: false },
 	),
@@ -53,7 +91,9 @@ export const computerSchemas = {
 	computer_hover: Type.Object(
 		{
 			desktop: Type.Literal(true, { description: "Primary desktop only; no window/PID hover." }),
-			foreground: Type.Literal(true, { description: "Moves the real pointer to the visible desktop target; foreground control must be allowed." }),
+			foreground: Type.Literal(true, {
+				description: "Moves the real pointer to the visible desktop target; foreground control must be allowed.",
+			}),
 			observation,
 			...pixels,
 		},

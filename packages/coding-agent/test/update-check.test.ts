@@ -4,12 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleUpdateCli } from "../src/cli/update-cli.ts";
 import { NPM_CLI_PACKAGE } from "../src/config.ts";
-import {
-	checkForUpdate,
-	isPublishedInstall,
-	markUpdateNotified,
-	updateCheckPath,
-} from "../src/core/update-check.ts";
+import { checkForUpdate, isPublishedInstall, markUpdateNotified, updateCheckPath } from "../src/core/update-check.ts";
 
 describe("isPublishedInstall", () => {
 	it("is false for the workspace package name", () => {

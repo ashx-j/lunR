@@ -66,7 +66,6 @@ describe("lunr local providers", () => {
 	});
 });
 
-
 describe("local discovery cancellation", () => {
 	it("dispatches nothing for an already-aborted signal", async () => {
 		const controller = new AbortController();

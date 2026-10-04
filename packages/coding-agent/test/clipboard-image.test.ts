@@ -239,7 +239,11 @@ describe("readClipboardImage", () => {
 		writeFileSync(fixture, Buffer.from([14, 15]));
 
 		mocks.spawnSync.mockImplementation((command, args, _options) => {
-			if (command === "powershell.exe" && args.includes("-STA") && args[args.indexOf("-Command") + 1].includes("FileDropList")) {
+			if (
+				command === "powershell.exe" &&
+				args.includes("-STA") &&
+				args[args.indexOf("-Command") + 1].includes("FileDropList")
+			) {
 				return spawnOk(Buffer.from(`C:\\Users\\test\\notes.txt\r\n${fixture}\r\n`, "utf-8"));
 			}
 			if (command === "powershell.exe") {

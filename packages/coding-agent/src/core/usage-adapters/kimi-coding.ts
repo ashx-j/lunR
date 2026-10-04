@@ -46,7 +46,10 @@ function detailWindow(label: string, detail: unknown): PlanUsageWindow | undefin
 	return { label, usedPercent, resetsAt: toEpochMs(object.resetTime) };
 }
 
-export async function fetchKimiPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage | undefined> {
+export async function fetchKimiPlanUsage(
+	runtime: ModelRuntime,
+	auth?: UsageAuthSnapshot,
+): Promise<PlanUsage | undefined> {
 	const resolution = auth ? auth.resolution : await runtime.getAuth(KIMI_PROVIDER_ID);
 	const apiKey = resolution?.auth.apiKey;
 	if (!apiKey) return undefined;

@@ -49,7 +49,10 @@ function weeklyWindow(config: Record<string, unknown>): PlanUsageWindow | undefi
 	};
 }
 
-export async function fetchXaiPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage | undefined> {
+export async function fetchXaiPlanUsage(
+	runtime: ModelRuntime,
+	auth?: UsageAuthSnapshot,
+): Promise<PlanUsage | undefined> {
 	if (!(auth?.oauth ?? runtime.isUsingOAuth(XAI_PROVIDER_ID))) return undefined;
 
 	const resolution = auth ? auth.resolution : await runtime.getAuth(XAI_PROVIDER_ID);

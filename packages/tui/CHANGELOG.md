@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Terminal output sanitization handles Unicode control sequences. Editor undo and narrow rendering retain the intended draft state.
+
 ## [0.2.26] - 2026-09-27
 
 ## [0.2.25] - 2026-09-26

@@ -216,7 +216,15 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 		throw new Error("Claude Code subscription does not support sampling overrides");
 }
 
-type WorkerEvent = { v: 1; requestId: string; type: string; text?: unknown; pid?: unknown; response?: unknown; category?: unknown };
+type WorkerEvent = {
+	v: 1;
+	requestId: string;
+	type: string;
+	text?: unknown;
+	pid?: unknown;
+	response?: unknown;
+	category?: unknown;
+};
 
 function parseWorkerRecord(line: string, requestId: string): WorkerEvent {
 	if (Buffer.byteLength(line) > MAX_RECORD) throw new Error("Claude Code bridge record exceeds size limit");
@@ -630,8 +638,12 @@ export function streamClaudeCode(
 					: undefined;
 			output.errorMessage = options.signal?.aborted
 				? "Claude Code request cancelled"
-				: (timedOut ? SAFE_ERRORS.timeout : error instanceof ClaudeCodeRequestError ? error.message : detail ??
-					"Claude Code request failed. Run /login anthropic to check setup and Claude Code version 2.1.263.");
+				: timedOut
+					? SAFE_ERRORS.timeout
+					: error instanceof ClaudeCodeRequestError
+						? error.message
+						: (detail ??
+							"Claude Code request failed. Run /login anthropic to check setup and Claude Code version 2.1.263.");
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 		} finally {
 			if (timer) clearTimeout(timer);

@@ -87,7 +87,6 @@ export type {
 	GrepToolCallEvent,
 	GrepToolResultEvent,
 	InlineExtension,
-	NamedInlineExtension,
 	// Events - Input
 	InputEvent,
 	InputEventResult,
@@ -104,6 +103,7 @@ export type {
 	MessageUpdateEvent,
 	ModelSelectEvent,
 	ModelSelectSource,
+	NamedInlineExtension,
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventDecision,

@@ -28,9 +28,14 @@ export async function prepareComputerImage(image: ImageContent, crop?: ImageRegi
 	const region = crop ?? { x: 0, y: 0, ...source };
 	if (
 		![region.x, region.y, region.width, region.height].every(Number.isInteger) ||
-		region.x < 0 || region.y < 0 || region.width < 1 || region.height < 1 ||
-		region.x + region.width > source.width || region.y + region.height > source.height
-	) throw new Error("Crop is outside the captured image.");
+		region.x < 0 ||
+		region.y < 0 ||
+		region.width < 1 ||
+		region.height < 1 ||
+		region.x + region.width > source.width ||
+		region.y + region.height > source.height
+	)
+		throw new Error("Crop is outside the captured image.");
 	let bytes: Uint8Array = Buffer.from(image.data, "base64");
 	let fingerprint: string | undefined;
 	if (crop) {
@@ -40,7 +45,10 @@ export async function prepareComputerImage(image: ImageContent, crop?: ImageRegi
 		try {
 			if (original.get_width() !== source.width || original.get_height() !== source.height)
 				throw new Error("Decoded screenshot dimensions changed.");
-			fingerprint = createHash("sha256").update(`${source.width}x${source.height}:`).update(original.get_raw_pixels()).digest("hex");
+			fingerprint = createHash("sha256")
+				.update(`${source.width}x${source.height}:`)
+				.update(original.get_raw_pixels())
+				.digest("hex");
 			const cropped = photon.crop(original, region.x, region.y, region.x + region.width, region.y + region.height);
 			try {
 				bytes = cropped.get_bytes();
@@ -51,16 +59,27 @@ export async function prepareComputerImage(image: ImageContent, crop?: ImageRegi
 			original.free();
 		}
 	}
-	const ratio = Math.min(1, 1280 / Math.max(region.width, region.height), Math.sqrt(1_000_000 / (region.width * region.height)));
+	const ratio = Math.min(
+		1,
+		1280 / Math.max(region.width, region.height),
+		Math.sqrt(1_000_000 / (region.width * region.height)),
+	);
 	const resized = await resizeImage(bytes, "image/png", {
 		maxWidth: Math.max(1, Math.floor(region.width * ratio)),
 		maxHeight: Math.max(1, Math.floor(region.height * ratio)),
 		maxBytes: 1.5 * 1024 * 1024,
 		includePixelFingerprint: !crop,
 	});
-	if (!resized || resized.originalWidth !== region.width || resized.originalHeight !== region.height ||
-		resized.width < 1 || resized.height < 1 || resized.width > 1280 || resized.height > 1280 ||
-		resized.width * resized.height > 1_000_000)
+	if (
+		!resized ||
+		resized.originalWidth !== region.width ||
+		resized.originalHeight !== region.height ||
+		resized.width < 1 ||
+		resized.height < 1 ||
+		resized.width > 1280 ||
+		resized.height > 1280 ||
+		resized.width * resized.height > 1_000_000
+	)
 		throw new Error("Screenshot could not be decoded within the image budget.");
 	fingerprint ??= resized.fingerprint;
 	if (!fingerprint) throw new Error("Screenshot pixel identity could not be verified.");

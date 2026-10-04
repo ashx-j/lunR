@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Provider requests retain their credential identity and report safe Claude Code bridge errors.
+- Packaged Claude Code workers resolve their physical assets and retain distribution notices.
+
 ## [0.2.26] - 2026-09-27
 
 ## [0.2.25] - 2026-09-26

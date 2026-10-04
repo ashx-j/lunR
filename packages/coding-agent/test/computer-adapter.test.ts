@@ -130,9 +130,17 @@ describe("computer adapter lifecycle", () => {
 	it("uses a launch-specific 45-second RPC budget without retrying a reply after 15 seconds", async () => {
 		mocks.install.mockResolvedValue({ command: "fixture.exe" });
 		mocks.pid = 4242;
-		vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("exited"), { code: "ESRCH" }); });
-		mocks.call.mockResolvedValueOnce({ content: [] }).mockImplementationOnce(() =>
-			new Promise((resolve) => setTimeout(() => resolve({ content: [], structuredContent: { activated: true } }), 16000)));
+		vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("exited"), { code: "ESRCH" });
+		});
+		mocks.call
+			.mockResolvedValueOnce({ content: [] })
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) =>
+						setTimeout(() => resolve({ content: [], structuredContent: { activated: true } }), 16000),
+					),
+			);
 		const adapter = new CuaAdapter();
 		await adapter.call("list_apps", {});
 		vi.useFakeTimers();
@@ -150,13 +158,22 @@ describe("computer adapter lifecycle", () => {
 	it("does not retry a launch when its 45-second RPC budget expires", async () => {
 		mocks.install.mockResolvedValue({ command: "fixture.exe" });
 		mocks.pid = 4242;
-		vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("exited"), { code: "ESRCH" }); });
-		mocks.call.mockResolvedValueOnce({ content: [] }).mockImplementationOnce(() => new Promise((_resolve, reject) => setTimeout(() => reject(new Error("PRIVATE timeout text")), 45000)));
+		vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("exited"), { code: "ESRCH" });
+		});
+		mocks.call
+			.mockResolvedValueOnce({ content: [] })
+			.mockImplementationOnce(
+				() => new Promise((_resolve, reject) => setTimeout(() => reject(new Error("PRIVATE timeout text")), 45000)),
+			);
 		const adapter = new CuaAdapter();
 		await adapter.call("list_apps", {});
 		vi.useFakeTimers();
 		try {
-			const pending = expect(adapter.call("launch_app", { name: "fixture" })).rejects.toMatchObject({ phase: "native_request", dispatched: true });
+			const pending = expect(adapter.call("launch_app", { name: "fixture" })).rejects.toMatchObject({
+				phase: "native_request",
+				dispatched: true,
+			});
 			await vi.advanceTimersByTimeAsync(45001);
 			await pending;
 			expect(mocks.call).toHaveBeenCalledTimes(2);
@@ -168,7 +185,9 @@ describe("computer adapter lifecycle", () => {
 	it("marks a request-boundary transport error uncertain without forwarding private exception text", async () => {
 		mocks.install.mockResolvedValue({ command: "fixture.exe" });
 		mocks.pid = 4242;
-		vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("exited"), { code: "ESRCH" }); });
+		vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("exited"), { code: "ESRCH" });
+		});
 		mocks.call.mockRejectedValue(new Error("RAW PRIVATE STDERR"));
 		const adapter = new CuaAdapter();
 		await expect(adapter.call("click", {})).rejects.toMatchObject({ phase: "native_request", dispatched: true });

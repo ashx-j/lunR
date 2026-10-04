@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { FULL_SUBAGENT_TOOL_DESCRIPTION, COMPACT_SUBAGENT_TOOL_DESCRIPTION, buildSubagentToolDescription } from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
+import {
+	buildSubagentToolDescription,
+	COMPACT_SUBAGENT_TOOL_DESCRIPTION,
+	FULL_SUBAGENT_TOOL_DESCRIPTION,
+} from "../src/builtin-extensions/pi-subagents/src/extension/tool-description.ts";
 import {
 	advertisedDefaultContext,
 	lunrChildContext,

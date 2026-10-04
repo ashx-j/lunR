@@ -249,7 +249,8 @@ export function localTarballs(repoRoot, tarballDirectory) {
 }
 
 export function runIsolatedTests(repoRoot, execute = run) {
-	const home = mkdtempSync(join(tmpdir(), "lunr-release-tests-"));
+	// Keep nested test socket paths below the POSIX Unix socket path limit.
+	const home = mkdtempSync(join(tmpdir(), "lr-"));
 	const env = Object.fromEntries(
 		[
 			"PATH",

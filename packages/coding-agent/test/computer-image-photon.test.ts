@@ -23,11 +23,19 @@ function encodedPng(level: number, red = 80) {
 	header.writeUInt32BE(6, 4);
 	header[8] = 8;
 	header[9] = 6;
-	const rows = Buffer.concat(Array.from({ length: 6 }, () => Buffer.from([0, ...Array.from({ length: 8 }, () => [red, 90, 100, 255]).flat()])));
-	return { type: "image" as const, mimeType: "image/png", data: Buffer.concat([
-		Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header),
-		chunk("IDAT", deflateSync(rows, { level })), chunk("IEND", Buffer.alloc(0)),
-	]).toString("base64") };
+	const rows = Buffer.concat(
+		Array.from({ length: 6 }, () => Buffer.from([0, ...Array.from({ length: 8 }, () => [red, 90, 100, 255]).flat()])),
+	);
+	return {
+		type: "image" as const,
+		mimeType: "image/png",
+		data: Buffer.concat([
+			Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+			chunk("IHDR", header),
+			chunk("IDAT", deflateSync(rows, { level })),
+			chunk("IEND", Buffer.alloc(0)),
+		]).toString("base64"),
+	};
 }
 
 describe("computer image processing with Photon", () => {
@@ -59,7 +67,9 @@ describe("computer image processing with Photon", () => {
 		}
 	});
 	it("identifies decoded pixels across PNG encodings, including the full image behind a crop", async () => {
-		const a = encodedPng(0), b = encodedPng(9), changed = encodedPng(9, 81);
+		const a = encodedPng(0),
+			b = encodedPng(9),
+			changed = encodedPng(9, 81);
 		expect(a.data).not.toBe(b.data);
 		const first = await prepareComputerImage(a);
 		const second = await prepareComputerImage(b);
@@ -71,18 +81,38 @@ describe("computer image processing with Photon", () => {
 	});
 	it("refuses repeating an action when identical pixels use different PNG encodings", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "lunr-pixel-repeat-"));
-		const call = vi.fn().mockResolvedValueOnce({ content: [encodedPng(0)], structuredContent: { screenshot_width: 8, screenshot_height: 6 } })
+		const call = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: [encodedPng(0)],
+				structuredContent: { screenshot_width: 8, screenshot_height: 6 },
+			})
 			.mockResolvedValueOnce({ content: [], structuredContent: { effect: "unverifiable" } })
-			.mockResolvedValueOnce({ content: [encodedPng(9)], structuredContent: { screenshot_width: 8, screenshot_height: 6 } });
+			.mockResolvedValueOnce({
+				content: [encodedPng(9)],
+				structuredContent: { screenshot_width: 8, screenshot_height: 6 },
+			});
 		const workflow = new ComputerWorkflow({ call, close: async () => undefined }, new DesktopLease(directory));
 		try {
 			const target = { pid: 1, window_id: 2 };
 			const before = await workflow.execute("computer_observe", target);
-			const after = await workflow.execute("computer_click", { ...target, observation: before.details.observation, x: 1, y: 1 });
+			const after = await workflow.execute("computer_click", {
+				...target,
+				observation: before.details.observation,
+				x: 1,
+				y: 1,
+			});
 			expect(JSON.parse(after.content.find((item) => item.type === "text")?.text ?? "{}").unchanged).toBe(true);
-			const repeated = await workflow.execute("computer_click", { ...target, observation: after.details.observation, x: 1, y: 1 });
+			const repeated = await workflow.execute("computer_click", {
+				...target,
+				observation: after.details.observation,
+				x: 1,
+				y: 1,
+			});
 			expect(repeated.details.computer).toMatchObject({ failed: true, workflow: "ready" });
-			expect(JSON.parse(repeated.content[0]?.type === "text" ? repeated.content[0].text : "{}").code).toBe("invalid_arguments");
+			expect(JSON.parse(repeated.content[0]?.type === "text" ? repeated.content[0].text : "{}").code).toBe(
+				"invalid_arguments",
+			);
 			expect(call).toHaveBeenCalledTimes(3);
 		} finally {
 			await workflow.close();
@@ -101,13 +131,33 @@ describe("computer image processing with Photon", () => {
 		const workflow = new ComputerWorkflow({ call, close: async () => undefined }, new DesktopLease(directory));
 		try {
 			const full = await workflow.execute("computer_observe", { desktop: true });
-			const crop = await workflow.execute("computer_observe", { desktop: true, observation: full.details.observation, crop: { x: 2, y: 1, width: 4, height: 3 } });
+			const crop = await workflow.execute("computer_observe", {
+				desktop: true,
+				observation: full.details.observation,
+				crop: { x: 2, y: 1, width: 4, height: 3 },
+			});
 			call.mockResolvedValueOnce({ content: [], structuredContent: { effect: "unverifiable" } });
-			const pending = workflow.execute("computer_hover", { desktop: true, foreground: true, observation: crop.details.observation, x: 1, y: 1 });
+			const pending = workflow.execute("computer_hover", {
+				desktop: true,
+				foreground: true,
+				observation: crop.details.observation,
+				x: 1,
+				y: 1,
+			});
 			const result = await pending;
 			expect(result.content.filter((item) => item.type === "image")).toHaveLength(1);
-			expect(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}").mapping).toMatchObject({ x: 0, y: 0, width: 8, height: 6 });
-			expect(call.mock.calls.map(([name]) => name)).toEqual(["get_desktop_state", "get_desktop_state", "move_cursor", "get_desktop_state"]);
+			expect(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}").mapping).toMatchObject({
+				x: 0,
+				y: 0,
+				width: 8,
+				height: 6,
+			});
+			expect(call.mock.calls.map(([name]) => name)).toEqual([
+				"get_desktop_state",
+				"get_desktop_state",
+				"move_cursor",
+				"get_desktop_state",
+			]);
 			expect(call.mock.calls[2]?.[1]).toEqual({ scope: "desktop", x: 3, y: 2 });
 		} finally {
 			await workflow.close();
