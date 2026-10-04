@@ -117,7 +117,7 @@ vim ~/.lunr/agent/themes/my-theme.json
 
 3. Select the theme via `/settings`.
 
-**Hot reload:** When you edit the currently active custom theme file, pi reloads it automatically for immediate visual feedback.
+**Hot reload:** When you edit the currently active custom theme file, lunR reloads it automatically for immediate visual feedback.
 
 ## Theme Format
 

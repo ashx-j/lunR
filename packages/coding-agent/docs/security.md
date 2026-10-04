@@ -19,7 +19,7 @@ A bare `.lunr` directory does not count as a project resource that requires trus
 
 When an interactive session starts in a project with resources that require trust and no saved decision for the current directory or a parent directory, lunR follows `defaultProjectTrust` from global settings. The default value is `"ask"`, which asks whether to trust the project when UI is available. Saved decisions are stored by canonical directory in `~/.lunr/agent/trust.json`, and the closest saved decision on the current or parent path applies before the global default.
 
-Trusting a project allows pi to load project resources that require trust, including:
+Trusting a project allows lunR to load project resources that require trust, including:
 
 - `.lunr/settings.json`
 - `.lunr` resources such as extensions, skills, prompt templates, themes, and system prompt files
@@ -27,7 +27,7 @@ Trusting a project allows pi to load project resources that require trust, inclu
 - missing project packages configured through project settings
 - project-local extensions and project package-managed extensions
 
-Declining trust skips protected resources. `AGENTS.md` and `CLAUDE.md` context files are loaded regardless of project trust unless context loading is disabled. Before trust is resolved, pi only loads context files, user/global extensions, and CLI `-e` extensions. User/global and CLI extensions can handle the `project_trust` event; the first extension that returns a yes/no decision owns the decision.
+Declining trust skips protected resources. `AGENTS.md` and `CLAUDE.md` context files are loaded regardless of project trust unless context loading is disabled. Before trust is resolved, lunR only loads context files, user/global extensions, and CLI `-e` extensions. User/global and CLI extensions can handle the `project_trust` event; the first extension that returns a yes/no decision owns the decision.
 
 Global retention settings control the global session tree. An approved project's retention settings apply only to its configured session directory. CLI and environment session-directory overrides remain explicit user choices.
 
@@ -35,15 +35,15 @@ Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trus
 
 ## No Built-in Sandbox
 
-lunR does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the pi process. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.
+lunR does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the lunR process. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.
 
 This is intentional. lunR is designed to operate on local source trees, invoke project toolchains, and integrate with the user's existing development environment. A partial in-process sandbox would be easy to misunderstand as a security boundary while still depending on the host shell, filesystem, package managers, credentials, and extension code. Real isolation needs to come from the operating system or a virtualization/container boundary.
 
-Project trust is only an input-loading guard. It prevents a repository from silently changing lunR's settings or extensions before you approve it. It does not make untrusted code, untrusted prompts, or untrusted model output safe. Prompt injection from repository files, comments, documentation, context files, or build output is expected local-agent risk and cannot be reliably prevented by pi.
+Project trust is only an input-loading guard. It prevents a repository from silently changing lunR's settings or extensions before you approve it. It does not make untrusted code, untrusted prompts, or untrusted model output safe. Prompt injection from repository files, comments, documentation, context files, or build output is expected local-agent risk and cannot be reliably prevented by lunR.
 
 ## Running Untrusted or Unmonitored Work
 
-For untrusted repositories, generated code you do not intend to monitor closely, or unattended automation, run pi in a contained environment. Use a container, VM, micro-VM, remote sandbox, or policy-controlled sandbox with only the files and credentials required for the task.
+For untrusted repositories, generated code you do not intend to monitor closely, or unattended automation, run lunr in a contained environment. Use a container, VM, micro-VM, remote sandbox, or policy-controlled sandbox with only the files and credentials required for the task.
 
 Common patterns are documented in [Containerization](containerization.md):
 

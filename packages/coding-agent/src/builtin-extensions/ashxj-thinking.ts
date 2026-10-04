@@ -9,7 +9,7 @@
  * plus `/thinking show|hide|toggle` for thinking-block visibility.
  * `/effort` and `/reasoning` are full-parity aliases.
  *
- * Loaded by pi via jiti — no build step, plain TypeScript.
+ * Registered as a built-in lunR extension and compiled with the coding-agent package.
  *
  * NOTE on type imports: this file deliberately declares structural types
  * rather than importing from `@earendil-works/pi-coding-agent` (or
