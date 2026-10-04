@@ -23,6 +23,7 @@ vi.mock("@earendil-works/pi-tui", async (original) => {
 			hideCursor() {}
 			showCursor() {}
 			setTitle() {}
+			setProgress() {}
 		},
 	};
 });
