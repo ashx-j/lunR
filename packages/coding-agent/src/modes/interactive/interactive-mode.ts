@@ -106,16 +106,11 @@ import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import {
 	type ApprovalResponse,
-	AUTO_MODE_ADDENDUM,
-	getPermissionMode,
 	nextPermissionMode,
 	type PermissionMode,
 	registerApprovalHandler,
-	resetPermissions,
 	restorePermissionModeAfterPlan,
-	setPermissionMode,
 } from "../../core/permissions.ts";
-import { READ_ONLY_MODE_ADDENDUM } from "../../core/plan-mode.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
@@ -617,10 +612,9 @@ export class InteractiveMode {
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate((reason) => {
 			this.resetExtensionUI();
-			// lunr: reset permission mode to configured default + clear session approvals
+			// Reset UI mode history before binding the replacement session.
 			this.previousPermissionMode = undefined;
 			this.preGoalPermissionMode = undefined;
-			resetPermissions(this.settingsManager.getDefaultPermissionMode());
 			// lunr: clear process registry and rollback state
 			processRegistry.clearRegistry();
 			// lunr: on fork (/rollback, tree navigation) the snapshots SURVIVE —
@@ -634,8 +628,7 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
-			const mode = this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode();
-			resetPermissions(mode);
+			const mode = this.session.permissionMode;
 			this.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
@@ -643,12 +636,11 @@ export class InteractiveMode {
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
-		registerPermissionModeBridge(() => getPermissionMode());
+		registerPermissionModeBridge(() => this.session.permissionMode);
 		registerPermissionModeControlBridge({
 			enterGoalAuto: () => this.enterGoalAuto(),
 			leaveGoalAuto: () => this.leaveGoalAuto(),
 		});
-		resetPermissions(this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode());
 		this.headerContainer = new Container();
 		if (options.startupView) {
 			this.headerContainer.addChild(new Spacer(1));
@@ -949,9 +941,7 @@ export class InteractiveMode {
 		// lunr: initialize rollback service for this session.
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
-		this.syncPermissionModeEffects(
-			this.sessionManager.getPermissionMode() ?? this.settingsManager.getDefaultPermissionMode(),
-		);
+		this.syncPermissionModeEffects(this.session.permissionMode);
 
 		await this.themeController.applyFromSettings();
 
@@ -4221,6 +4211,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.session.stopAdmission();
 		this.unregisterSessionTransfer?.();
 		this.stopSmoothStreaming();
 		if (this.planUsageTimer) {
@@ -4500,7 +4491,7 @@ export class InteractiveMode {
 	}
 
 	private cyclePermissionMode(): void {
-		this.applyPermissionMode(nextPermissionMode(getPermissionMode()), { silent: true });
+		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), { silent: true });
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -7556,11 +7547,13 @@ export class InteractiveMode {
 	// /plan is a shortcut into read-only mode for planning.
 	private async handlePlanCommand(args: string): Promise<void> {
 		const sub = args.toLowerCase();
-		const inReadOnly = getPermissionMode() === "read-only";
+		const inReadOnly = this.session.permissionMode === "read-only";
 
 		if (sub === "status") {
 			this.showStatus(
-				inReadOnly ? "Read mode is active. /plan off to leave it." : `Permission mode: ${getPermissionMode()}.`,
+				inReadOnly
+					? "Read mode is active. /plan off to leave it."
+					: `Permission mode: ${this.session.permissionMode}.`,
 			);
 			return;
 		}
@@ -7584,7 +7577,9 @@ export class InteractiveMode {
 		const sub = args.toLowerCase();
 
 		if (sub === "status") {
-			this.showStatus(`Permission mode: ${getPermissionMode() === "read-only" ? "read" : getPermissionMode()}`);
+			this.showStatus(
+				`Permission mode: ${this.session.permissionMode === "read-only" ? "read" : this.session.permissionMode}`,
+			);
 			return;
 		}
 
@@ -7622,52 +7617,36 @@ export class InteractiveMode {
 	/** Apply addendum + auto-rollback for a mode without a status toast. */
 	private syncPermissionModeEffects(mode: PermissionMode): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		this.sessionManager.setPermissionMode(mode);
-		if (mode === "read-only") {
-			this.session.setSystemPromptAppend(READ_ONLY_MODE_ADDENDUM);
-		} else if (mode === "auto") {
-			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
-			enableRollbackForSession(this.sessionManager.getSessionId());
-		} else {
-			this.session.setSystemPromptAppend(undefined);
-		}
+		this.session.setPermissionMode(mode);
+		if (mode === "auto") enableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
 	// lunr: `/goal` forces session auto without writing settings.
 	private enterGoalAuto(): void {
-		const next = nextModeForGoal(getPermissionMode(), "enter", this.preGoalPermissionMode);
+		const next = nextModeForGoal(this.session.permissionMode, "enter", this.preGoalPermissionMode);
 		this.preGoalPermissionMode = next.saved;
-		if (next.mode !== getPermissionMode()) {
+		if (next.mode !== this.session.permissionMode) {
 			this.applyPermissionMode(next.mode, { silent: true });
 		}
 	}
 
 	private leaveGoalAuto(): void {
-		const next = nextModeForGoal(getPermissionMode(), "leave", this.preGoalPermissionMode);
+		const next = nextModeForGoal(this.session.permissionMode, "leave", this.preGoalPermissionMode);
 		this.preGoalPermissionMode = next.saved;
-		if (next.mode !== getPermissionMode()) {
+		if (next.mode !== this.session.permissionMode) {
 			this.applyPermissionMode(next.mode, { silent: true });
 		}
 	}
 
 	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean }): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		this.sessionManager.setPermissionMode(mode);
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
-		const prev = getPermissionMode();
+		const prev = this.session.permissionMode;
 		if (mode === "read-only" && prev !== "read-only") {
 			this.previousPermissionMode = prev;
 		}
-		setPermissionMode(mode);
+		this.session.setPermissionMode(mode);
 		this.ui.requestRender();
-
-		if (mode === "read-only") {
-			this.session.setSystemPromptAppend(READ_ONLY_MODE_ADDENDUM);
-		} else if (mode === "auto") {
-			this.session.setSystemPromptAppend(AUTO_MODE_ADDENDUM);
-		} else {
-			this.session.setSystemPromptAppend(undefined);
-		}
 
 		if (mode === "auto" && prev !== "auto") {
 			enableRollbackForSession(this.sessionManager.getSessionId());

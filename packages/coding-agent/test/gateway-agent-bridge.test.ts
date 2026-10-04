@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setPermissionMode } from "../src/core/permissions.ts";
+import {
+	createPermissionContext,
+	gateToolCall,
+	getPermissionMode,
+	registerApprovalHandler,
+	setPermissionMode,
+} from "../src/core/permissions.ts";
 import { requestSessionTransfer } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { registerSubagentCancellation } from "../src/core/subagent-cancellation.ts";
@@ -15,6 +21,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	vi.restoreAllMocks();
+	registerApprovalHandler(undefined);
 	vi.unstubAllEnvs();
 	rmSync(profile, { recursive: true, force: true });
 });
@@ -69,6 +76,31 @@ function makeEvent(key: string): MessageEvent {
 describe("AgentBridge LRU eviction", () => {
 	beforeEach(() => {
 		vi.useRealTimers();
+	});
+
+	it("preserves factory-owned permission context and approval flags during gateway setup", async () => {
+		const manager = SessionManager.inMemory(profile);
+		manager.setPermissionMode("auto");
+		const session = { ...fakeSession(), sessionManager: manager };
+		const approval = vi.fn(async () => "once" as const);
+		registerApprovalHandler(approval);
+		const bridge = new AgentBridge({
+			sessionFactory: async () => {
+				createPermissionContext(manager.getSessionId(), "yolo", false);
+				return session;
+			},
+		});
+		try {
+			await bridge.runTurn("k1", makeEvent("k1"));
+			expect(getPermissionMode(manager.getSessionId())).toBe("yolo");
+			const tasks = ["one", "two", "three"].map((task) => ({ task, description: task }));
+			expect(await gateToolCall("subagent", { tasks }, profile, manager.getSessionId())).toMatchObject({
+				block: true,
+			});
+			expect(approval).not.toHaveBeenCalled();
+		} finally {
+			await bridge.shutdown();
+		}
 	});
 
 	it("evicts the oldest idle session after emitting session_shutdown", async () => {
