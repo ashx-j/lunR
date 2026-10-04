@@ -1778,7 +1778,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	if (toolManager.isEnabled()) toolManager.ensureRegistered();
 
 	pi.registerCommand("chain-prompts", {
-		description: "Chain prompt templates sequentially [template -> template -> ...]",
+		description: "Chain prompt templates sequentially: /chain-prompts analyze -> fix [--loop N] [--chain-context]",
 		handler: async (args, ctx) => {
 			await runChainCommand(args, ctx);
 		},
