@@ -195,3 +195,35 @@ describe("large subagent launch", () => {
 		expect(await gateToolCall("subagent", { action: "status", id: "old-run" }, "/cwd")).toBeUndefined();
 	});
 });
+
+describe("same-turn executable launch approval", () => {
+	it.each([true, false, undefined])("counts singles regardless of async=%s", async (async) => {
+		const calls = ["one", "two", "three"].map((task) => ({ task, description: task, async }));
+		const assistantMessage = {
+			content: calls.map((arguments_) => ({ type: "toolCall", name: "subagent", arguments: arguments_ })),
+		};
+		let prompts = 0;
+		registerApprovalHandler(async () => {
+			prompts++;
+			return "reject";
+		});
+		for (const call of calls) {
+			expect(effectiveLargeSubagentLaunchCountForTurn(call, assistantMessage)).toBe(3);
+			expect((await gateToolCall("subagent", call, "/cwd", undefined, { assistantMessage }))?.block).toBe(true);
+		}
+		expect(prompts).toBe(1);
+	});
+
+	it("counts launch payloads normalized by executor dispatch and ignores control-only calls", () => {
+		const launch = { action: "status", task: "inspect", description: "Inspect", async: true, tasks: [], chain: [] };
+		const assistantMessage = {
+			content: [
+				launch,
+				{ ...launch, action: "single" },
+				{ task: "third", description: "Third", async: false },
+				{ action: "status", id: "existing" },
+			].map((arguments_) => ({ type: "toolCall", name: "subagent", arguments: arguments_ })),
+		};
+		expect(effectiveLargeSubagentLaunchCountForTurn(launch, assistantMessage)).toBe(3);
+	});
+});

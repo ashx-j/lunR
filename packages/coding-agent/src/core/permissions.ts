@@ -16,12 +16,16 @@
  * concurrent gateway chats do not share permission decisions.
  */
 
-import { dirname, join, resolve } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
-import { isUserInstructionsPath } from "./model-instructions.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
+import { protectedTargetWriteReason } from "./protected-targets.ts";
+
+export {
+	GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
+	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
+	SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
+} from "./protected-targets.ts";
 
 /** Shift+Tab cycle order. */
 export const PERMISSION_MODES = ["yolo", "auto", "read-only"] as const;
@@ -218,43 +222,10 @@ export function resetAllPermissionContexts(): void {
 export const AUTO_MODE_ADDENDUM =
 	"You are running fully autonomously. Do not ask the user questions or wait for confirmation; make reasonable decisions and complete the task end-to-end.";
 
-function resolvePath(cwd: string, p: unknown): string {
-	if (typeof p !== "string") return "";
-	if (!p) return "";
-	return resolve(cwd, p);
-}
-
-export const GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON =
-	"The agents instruction tree is user-managed. The agent cannot change ~/.lunr/agent/agents/.";
-export const MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON =
-	"Memory is model-managed through the memory tools. Do not directly change ~/.lunr/simple-memory/memory.md.";
-export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
-	"lunR settings are user-managed through /settings. Do not directly change settings.json.";
-
 function protectedFileWriteReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
 	if (toolName !== "edit" && toolName !== "write" && toolName !== "code_rewrite") return undefined;
-	const target = resolvePath(cwd, input.path);
-	if (!target) return undefined;
-	const normalize = (path: string) => {
-		const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
-		return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-	};
-	if (isUserInstructionsPath(target, getAgentDir())) {
-		return GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON;
-	}
-	if (normalize(target) === normalize(join(dirname(getAgentDir()), "simple-memory", "memory.md"))) {
-		return MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON;
-	}
-	const globalSettings = normalize(join(getAgentDir(), "settings.json"));
-	const projectSettings = normalize(join(cwd, CONFIG_DIR_NAME, "settings.json"));
-	const normalizedTarget = normalize(target);
-	if (normalizedTarget === normalize(join(getAgentDir(), "install-features.json"))) {
-		return "Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.";
-	}
-	if (normalizedTarget === globalSettings || normalizedTarget === projectSettings) {
-		return SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON;
-	}
-	return undefined;
+	if (typeof input.path !== "string" || !input.path) return undefined;
+	return protectedTargetWriteReason(input.path, cwd);
 }
 
 interface RequestedChildLaunch {

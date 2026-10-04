@@ -1,3 +1,5 @@
+import { resolveSubagentRequestParams } from "../builtin-extensions/pi-subagents/src/runs/foreground/request-params.ts";
+
 /** Number of children above which aggregate launch confirmation engages. */
 export const LARGE_SUBAGENT_LAUNCH_THRESHOLD = 2;
 
@@ -10,11 +12,8 @@ function isManagementCall(args: Record<string, unknown>): boolean {
 	return typeof args.action === "string" && args.action.length > 0;
 }
 
-function isAsyncDetached(args: Record<string, unknown>): boolean {
-	return args.async === true && args.clarify !== true;
-}
-
-export function effectiveLargeSubagentLaunchCount(args: Record<string, unknown>): number {
+export function effectiveLargeSubagentLaunchCount(input: Record<string, unknown>): number {
+	const args = resolveSubagentRequestParams(input);
 	let total = 0;
 	if (Array.isArray(args.tasks)) {
 		for (const task of args.tasks) total += countEntry(task);
@@ -30,9 +29,11 @@ export function effectiveLargeSubagentLaunchCount(args: Record<string, unknown>)
 	return total;
 }
 
-function siblingSingleCount(args: Record<string, unknown>): number {
-	if (isManagementCall(args) || isAsyncDetached(args)) return 0;
-	if (Array.isArray(args.tasks) || Array.isArray(args.chain)) return 0;
+function siblingSingleCount(input: Record<string, unknown>): number {
+	const args = resolveSubagentRequestParams(input);
+	if (isManagementCall(args)) return 0;
+	if ((Array.isArray(args.tasks) && args.tasks.length > 0) || (Array.isArray(args.chain) && args.chain.length > 0))
+		return 0;
 	return typeof args.task === "string" &&
 		args.task.length > 0 &&
 		typeof args.description === "string" &&

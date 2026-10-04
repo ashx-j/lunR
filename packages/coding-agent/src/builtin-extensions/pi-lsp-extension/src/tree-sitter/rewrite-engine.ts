@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Rewrite Engine — apply structural replacements using matched patterns.
  *
@@ -6,6 +5,10 @@
  * substitutes captured values, and applies the text changes.
  */
 
+import { createHash } from "node:crypto";
+import { dirname } from "node:path";
+import { protectedTargetWriteReason } from "../../../../core/protected-targets.js";
+import { withFileMutationQueue } from "../../../../core/tools/file-mutation-queue.js";
 import { readFile, writeFile } from "node:fs/promises";
 import type { SearchMatch } from "./search-engine.js";
 
@@ -22,6 +25,9 @@ export interface RewriteChange {
 export interface RewriteResult {
   changes: RewriteChange[];
   filesModified: number;
+  modifiedFiles: string[];
+  failures: { file: string; reason: string; writeAttempted?: boolean }[];
+  skippedFiles: string[];
 }
 
 // ── Replacement template substitution ───────────────────────────────────────
@@ -79,61 +85,74 @@ export function computeRewrites(
 }
 
 /**
- * Apply rewrite changes to files. Modifies files in-place.
- * Applies changes bottom-up (last offset first) within each file to preserve byte offsets.
+ * Preflight every protected destination, then queue each file's read/validate/write.
+ * Stop on the first failure and retain an accurate partial result. This is not a
+ * multi-file transaction; earlier successful files remain changed.
  */
 export async function applyRewrites(
   matches: SearchMatch[],
   replacementTemplate: string,
+  cwd?: string,
 ): Promise<RewriteResult> {
-  // Group matches by file
   const byFile = new Map<string, SearchMatch[]>();
-  for (const m of matches) {
-    const existing = byFile.get(m.file);
-    if (existing) {
-      existing.push(m);
-    } else {
-      byFile.set(m.file, [m]);
-    }
+  for (const match of matches) {
+    const existing = byFile.get(match.file);
+    if (existing) existing.push(match);
+    else byFile.set(match.file, [match]);
   }
-
-  const changes: RewriteChange[] = [];
-  let filesModified = 0;
+  const result: RewriteResult = { changes: [], filesModified: 0, modifiedFiles: [], failures: [], skippedFiles: [] };
+  const files = [...byFile.keys()];
+  // An allowed directory scope never authorizes a protected matched file.
+  for (const file of files) {
+    const reason = protectedTargetWriteReason(file, cwd ?? dirname(file));
+    if (reason) result.failures.push({ file, reason });
+  }
+  if (result.failures.length) {
+    result.skippedFiles = files.filter((file) => !result.failures.some((failure) => failure.file === file));
+    return result;
+  }
 
   for (const [file, fileMatches] of byFile) {
-    // Sort by startIndex descending — apply from bottom to top
-    const sorted = [...fileMatches].sort((a, b) => b.startIndex - a.startIndex);
-
-    let content = await readFile(file, "utf-8");
-    let modified = false;
-
-    for (const m of sorted) {
-      const raw = substituteCaptures(replacementTemplate, m.captures);
-      const replacement = preserveTrailingSemicolon(m.matchedText, raw);
-      if (replacement !== m.matchedText) {
-        content =
-          content.slice(0, m.startIndex) +
-          replacement +
-          content.slice(m.endIndex);
-        modified = true;
-      }
-      changes.push({
-        file,
-        line: m.line,
-        column: m.column,
-        before: m.matchedText,
-        after: replacement,
+    let writeAttempted = false;
+    try {
+      const applied = await withFileMutationQueue(file, async () => {
+        const reason = protectedTargetWriteReason(file, cwd ?? dirname(file));
+        if (reason) throw new Error(reason);
+        const source = await readFile(file, "utf-8");
+        const sourceHash = createHash("sha256").update(source).digest("hex");
+        const sorted = [...fileMatches].sort((a, b) => b.startIndex - a.startIndex);
+        let nextStart = source.length;
+        for (const match of sorted) {
+          if (match.sourceHash !== sourceHash || !Number.isInteger(match.startIndex) ||
+            !Number.isInteger(match.endIndex) || match.startIndex < 0 || match.endIndex > nextStart ||
+            match.startIndex > match.endIndex || source.slice(match.startIndex, match.endIndex) !== match.matchedText) {
+            throw new Error("Source changed or match offsets are invalid. Search again before applying a rewrite.");
+          }
+          nextStart = match.startIndex;
+        }
+        let content = source;
+        const changes: RewriteChange[] = [];
+        for (const match of sorted) {
+          const raw = substituteCaptures(replacementTemplate, match.captures);
+          const replacement = preserveTrailingSemicolon(match.matchedText, raw);
+          content = content.slice(0, match.startIndex) + replacement + content.slice(match.endIndex);
+          changes.push({ file, line: match.line, column: match.column, before: match.matchedText, after: replacement });
+        }
+        const modified = content !== source;
+        if (modified) {
+          writeAttempted = true;
+          await writeFile(file, content, "utf-8");
+        }
+        return { changes: changes.reverse(), modified };
       });
-    }
-
-    if (modified) {
-      await writeFile(file, content, "utf-8");
-      filesModified++;
+      result.changes.push(...applied.changes);
+      if (applied.modified) result.modifiedFiles.push(file);
+    } catch (error) {
+      result.failures.push({ file, reason: error instanceof Error ? error.message : String(error), writeAttempted });
+      result.skippedFiles = files.slice(files.indexOf(file) + 1);
+      break;
     }
   }
-
-  // Reverse so changes appear top-to-bottom
-  changes.reverse();
-
-  return { changes, filesModified };
+  result.filesModified = result.modifiedFiles.length;
+  return result;
 }
