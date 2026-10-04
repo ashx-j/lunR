@@ -426,6 +426,14 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			return result;
 		},
 		input.globalSemaphore,
+		{
+			signal: input.signal,
+			onAbort: (task) => ({
+				agent: task.agent, task: "(cancelled)", exitCode: 1, messages: [],
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+				error: "Subagent launch cancelled.",
+			}),
+		},
 	);
 
 	return parallelResults;

@@ -1610,6 +1610,7 @@ async function runSubagent(
 	const stopMessage = "Subagent stopped by user.";
 	const timeoutAbortController = new AbortController();
 	const stopAbortController = new AbortController();
+	const launchInterruptController = new AbortController();
 	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
 	let latestSessionFile: string | undefined;
 
@@ -2430,10 +2431,18 @@ async function runSubagent(
 		activityTimer.unref?.();
 	}
 
+	const launchCancellation = {
+		signal: combinedAbortSignal([timeoutAbortController.signal, stopAbortController.signal, launchInterruptController.signal]),
+		onAbort: (task: SubagentStep) => stopped
+			? stoppedStepResult(task.agent)
+			: timedOut ? timedOutStepResult(task.agent) : pausedStepResult(task.agent),
+	};
+
 	const interruptRunner = () => {
 		consumeInterruptRequest(asyncDir);
 		if (interrupted || statusPayload.state !== "running") return;
 		interrupted = true;
+		launchInterruptController.abort();
 		const now = Date.now();
 		statusPayload.state = "paused";
 		currentActivityState = undefined;
@@ -2896,7 +2905,7 @@ async function runSubagent(
 				}));
 				if (singleResult.exitCode !== 0 && failFast) aborted = true;
 				return stopped || childStopped ? { ...singleResult, output: stopMessage, error: stopMessage, exitCode: 1, interrupted: false, timedOut: false, stopped: true, skipped: false } : timedOut ? { ...singleResult, output: timeoutMessage ?? "Subagent timed out.", error: timeoutMessage ?? "Subagent timed out.", exitCode: 1, interrupted: false, timedOut: true, skipped: false } : { ...singleResult, skipped: false };
-			}, globalSemaphore);
+			}, globalSemaphore, launchCancellation);
 
 			flatIndex += dynamicSteps.length;
 			for (const pr of parallelResults) {
@@ -3224,6 +3233,7 @@ async function runSubagent(
 						return stopped || childStopped ? { ...singleResult, output: stopMessage, error: stopMessage, exitCode: 1, interrupted: false, timedOut: false, stopped: true, skipped: false } : timedOut ? { ...singleResult, output: timeoutMessage ?? "Subagent timed out.", error: timeoutMessage ?? "Subagent timed out.", exitCode: 1, interrupted: false, timedOut: true, skipped: false } : { ...singleResult, skipped: false };
 					},
 					globalSemaphore,
+					launchCancellation,
 				);
 
 				flatIndex += group.parallel.length;

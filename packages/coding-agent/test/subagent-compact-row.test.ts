@@ -531,6 +531,27 @@ describe("widget component timer", () => {
 	});
 });
 
+describe("async widget ownership", () => {
+	it("keeps the other owner's animation when one UI closes or a headless session resets", async () => {
+		vi.useFakeTimers();
+		const job = { asyncId: "widget-owner", status: "running", startedAt: Date.now(), updatedAt: Date.now() };
+		const makeContext = () => ({ hasUI: true, ui: {
+			setWidget: vi.fn(), requestRender: vi.fn(), getToolsExpanded: () => false,
+		} });
+		const a = makeContext();
+		const b = makeContext();
+		renderWidget(a as never, [job] as never);
+		renderWidget(b as never, [job] as never);
+		expect(a.ui.setWidget).toHaveBeenCalledOnce();
+		expect(b.ui.setWidget).toHaveBeenCalledOnce();
+		renderWidget({ hasUI: false, ui: {} } as never, []);
+		renderWidget(a as never, []);
+		b.ui.requestRender.mockClear();
+		await vi.advanceTimersByTimeAsync(160);
+		expect(b.ui.requestRender).toHaveBeenCalled();
+	});
+});
+
 describe("renderSingleCompact thinking line", () => {
 	it("registers live clock lines and terminal rows freeze duration", () => {
 		vi.useFakeTimers();
