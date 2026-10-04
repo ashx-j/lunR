@@ -192,6 +192,7 @@ registerHooks({load(url, context, nextLoad) {
 			"subagent",
 			"web_search",
 			"fetch_content",
+			"get_search_content",
 			"mcp",
 			"lsp_diagnostics",
 			"ast_search",
