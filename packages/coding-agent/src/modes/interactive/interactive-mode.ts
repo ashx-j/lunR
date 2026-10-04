@@ -116,8 +116,11 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
 	captureTreeChanges,
 	clearRollback,
+	commitRollbackTurn,
 	disableRollbackForSession,
 	enableRollbackForSession,
+	getRollbackRecoveryBlockReason,
+	getRollbackTargetUserId,
 	initRollback,
 	isRollbackEnabled,
 	isRollbackSessionForceEnabled,
@@ -7766,8 +7769,13 @@ export class InteractiveMode {
 			this.showWarning("Wait for the current response to finish before running /rollback.");
 			return;
 		}
-		if (!isRollbackEnabled()) {
+		if (!isRollbackEnabled(this.sessionManager.getSessionId())) {
 			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
+			return;
+		}
+		const recoveryBlocked = getRollbackRecoveryBlockReason(this.sessionManager.getSessionId());
+		if (recoveryBlocked) {
+			this.showWarning(recoveryBlocked);
 			return;
 		}
 
@@ -7781,16 +7789,22 @@ export class InteractiveMode {
 		// the current branch) BEFORE mutating anything — forking to it is what makes
 		// the rewind persistent.
 		const branch = this.sessionManager.getBranch();
-		let targetUserId: string | undefined;
+		let targetUserId = getRollbackTargetUserId(this.sessionManager.getSessionId());
+		if (targetUserId && !branch.some((entry) => entry.id === targetUserId)) {
+			this.showWarning("Rollback recovery belongs to another chat branch. Return to that branch to retry.");
+			return;
+		}
 		let userMessagesSeen = 0;
-		for (let i = branch.length - 1; i >= 0; i--) {
+		let fallbackUserId: string | undefined;
+		for (let i = branch.length - 1; !targetUserId && i >= 0; i--) {
 			const entry = branch[i];
 			if (entry.type === "message" && entry.message.role === "user") {
 				userMessagesSeen++;
-				targetUserId = entry.id;
+				fallbackUserId = entry.id;
 				if (userMessagesSeen >= turnsToConsume) break;
 			}
 		}
+		targetUserId ??= fallbackUserId;
 		if (!targetUserId) {
 			this.showStatus("Nothing to roll back");
 			return;
@@ -7798,25 +7812,51 @@ export class InteractiveMode {
 
 		let result: RollbackResult;
 		try {
-			// lunr: fork FIRST. If the fork throws or is cancelled by an extension veto,
-			// no snapshot has been popped yet, so files and conversation stay consistent
-			// and /rollback can simply be retried. Fork teardown skips the rollback wipe
-			// (reason === "fork"); the snapshots are then migrated to the forked session id.
+			result = rollbackLastTurn(this.sessionManager.getSessionId(), { deferCommit: true, targetUserId });
+		} catch (error) {
+			this.showError(
+				`Rollback could not prepare recovery: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
+		}
+		if (!result.complete) {
+			const failures = result.failed
+				.slice(0, 3)
+				.map(({ path: file, error }) => `${path.basename(file)}: ${error}`)
+				.join("; ");
+			this.showWarning(
+				`Rollback incomplete. ${result.restored.length} file(s) restored, ${result.deleted.length} deleted, ${result.failed.length} failed. ${failures}. Chat unchanged. /rollback retries this turn's unfinished recovery.`,
+			);
+			return;
+		}
+
+		let chatRewound = false;
+		try {
+			// Restore first, but keep snapshots and completed-path receipts until
+			// the fork succeeds. A veto or exception retries only this chat rewind.
 			const oldSid = this.sessionManager.getSessionId();
 			const forkResult = await this.runtimeHost.fork(targetUserId, { position: "before" });
 			if (forkResult.cancelled) {
-				this.showStatus("Rollback cancelled");
+				this.showWarning(
+					"File recovery complete. Chat rewind cancelled. /rollback retries the same turn without restoring completed files again.",
+				);
 				return;
 			}
+			chatRewound = true;
 			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
-			result = rollbackLastTurn(this.sessionManager.getSessionId());
-			// /redo cannot redo across a fork — the branched session has new entry ids.
+			if (result.turnIndex !== undefined) commitRollbackTurn(this.sessionManager.getSessionId(), result.turnIndex);
+			// /redo cannot cross a fork because the branched session has new entry ids.
 			this.redoStack.length = 0;
 			if (forkResult.selectedText && !this.editor.getText().trim()) {
 				this.editor.setText(forkResult.selectedText);
 			}
 		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
+			const message = error instanceof Error ? error.message : String(error);
+			this.showError(
+				chatRewound
+					? `Chat rewound, but finishing rollback failed: ${message}`
+					: `File recovery complete; chat rewind failed: ${message}. /rollback retries the same turn.`,
+			);
 			return;
 		}
 
@@ -7831,7 +7871,8 @@ export class InteractiveMode {
 		if (result.restored.length > 0)
 			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
 		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
-		if (parts.length === 0) parts.push("no file changes to restore");
+		if (parts.length === 0)
+			parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
 		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
 	}
 

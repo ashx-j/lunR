@@ -1,10 +1,25 @@
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir } from "../src/config.ts";
 import type { SettingsManager } from "../src/core/settings-manager.ts";
+
+vi.mock("node:os", async (importOriginal) => {
+	const os = await importOriginal<typeof import("node:os")>();
+	const fs = await import("node:fs");
+	const { join } = await import("node:path");
+	const home = fs.mkdtempSync(join(os.tmpdir(), "lunr-rollback-home-"));
+	return { ...os, homedir: () => home };
+});
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return { ...fs, writeFileSync: vi.fn(fs.writeFileSync), unlinkSync: vi.fn(fs.unlinkSync) };
+});
+const realFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+afterAll(() => rmSync(homedir(), { recursive: true, force: true }));
 
 // We test the rollback module directly with a mock settings manager.
 // The module is stateful, so we import it dynamically.
@@ -32,7 +47,7 @@ describe("rollback", () => {
 		testDir = join(tmpdir(), `rollback-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(testDir, { recursive: true });
 
-		const home = join(testDir, "home");
+		const home = homedir();
 		vi.stubEnv("HOME", home);
 		vi.stubEnv("USERPROFILE", home);
 		vi.stubEnv(ENV_AGENT_DIR, join(home, CONFIG_DIR_NAME, "agent"));
@@ -51,6 +66,8 @@ describe("rollback", () => {
 	});
 
 	afterEach(async () => {
+		vi.mocked(fs.writeFileSync).mockReset().mockImplementation(realFs.writeFileSync);
+		vi.mocked(fs.unlinkSync).mockReset().mockImplementation(realFs.unlinkSync);
 		const rollback = await import("../src/core/rollback.ts");
 		rollback.clearRollback();
 		if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
@@ -73,6 +90,175 @@ describe("rollback", () => {
 		const result = rollback.rollbackLastTurn();
 		expect(result.restored).toContain(filePath);
 		expect(readFileSync(filePath, "utf8")).toBe("original content");
+	});
+
+	it("retains failed snapshots and retries the same turn after restart without rewriting completed paths", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		mockSM.getRollbackTurns = () => 5;
+		const successful = join(testDir, "successful.txt");
+		const failed = join(testDir, "failed.txt");
+		const created = join(testDir, "created.txt");
+		for (const file of [successful, failed]) writeFileSync(file, "original");
+		rollback.beginTurn(testDir);
+		for (const file of [successful, failed, created]) rollback.rollbackSnapshotBeforeWrite(file);
+		for (const file of [successful, failed, created]) writeFileSync(file, "modified");
+		rollback.beginTurn(testDir); // Chat-only turn must still count on retry.
+		vi.mocked(fs.writeFileSync).mockImplementation((file, ...args) => {
+			if (file === failed) throw new Error("locked destination");
+			return realFs.writeFileSync(file, ...args);
+		});
+		vi.mocked(fs.unlinkSync).mockImplementation((file) => {
+			if (file === created) throw new Error("locked deletion");
+			return realFs.unlinkSync(file);
+		});
+		const first = rollback.rollbackLastTurn();
+		expect(first.restored).toEqual([successful]);
+		expect(first).toMatchObject({ complete: false, turnsConsumed: 0 });
+		expect(first.failed.map((item) => item.path)).toEqual([failed, created]);
+		const turnDir = join(homedir(), ".lunr", "rollback", "test-session", "turn-0");
+		expect(fs.readdirSync(turnDir).filter((name) => name.endsWith(".snap"))).toHaveLength(2);
+		writeFileSync(successful, "newer edit");
+		vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
+		vi.mocked(fs.unlinkSync).mockImplementation(realFs.unlinkSync);
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		expect(rollback.peekRollbackTurnsConsumed()).toBe(2);
+		const retry = rollback.rollbackLastTurn();
+		expect(retry).toMatchObject({ complete: true, restored: [failed], deleted: [created], turnsConsumed: 2 });
+		expect(readFileSync(successful, "utf8")).toBe("newer edit");
+		expect(readFileSync(failed, "utf8")).toBe("original");
+		expect(existsSync(turnDir)).toBe(false);
+	});
+
+	it("retains older recovery through retention and refuses retries across newer turns", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		mockSM.getRollbackTurns = () => 1;
+		const old = join(testDir, "old.txt");
+		writeFileSync(old, "original");
+		rollback.beginTurn(testDir);
+		rollback.rollbackSnapshotBeforeWrite(old);
+		writeFileSync(old, "modified");
+		vi.mocked(fs.writeFileSync).mockImplementation((file, ...args) => {
+			if (file === old) throw new Error("locked");
+			return realFs.writeFileSync(file, ...args);
+		});
+		expect(rollback.rollbackLastTurn(undefined, { targetUserId: "original-user" }).complete).toBe(false);
+		rollback.beginTurn(testDir);
+		const newer = join(testDir, "newer.txt");
+		writeFileSync(newer, "newer original");
+		rollback.rollbackSnapshotBeforeWrite(newer);
+		writeFileSync(newer, "newer modified");
+		vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		expect(rollback.getRollbackTargetUserId()).toBe("original-user");
+		for (let attempt = 0; attempt < 2; attempt++) {
+			expect(() => rollback.rollbackLastTurn()).toThrow("after newer turns");
+			expect(readFileSync(old, "utf8")).toBe("modified");
+			expect(readFileSync(newer, "utf8")).toBe("newer modified");
+		}
+	});
+
+	it("retains unreadable snapshot metadata so restoring its payload permits retry", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const file = join(testDir, "missing-snapshot.txt");
+		writeFileSync(file, "original");
+		rollback.beginTurn(testDir);
+		rollback.rollbackSnapshotBeforeWrite(file);
+		writeFileSync(file, "modified");
+		const turnDir = join(homedir(), ".lunr", "rollback", "test-session", "turn-0");
+		const manifest = JSON.parse(readFileSync(join(turnDir, "manifest.json"), "utf8"));
+		const payload = join(turnDir, manifest.files[file].snapFile);
+		const saved = readFileSync(payload);
+		rmSync(payload);
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		const first = rollback.rollbackLastTurn();
+		expect(first).toMatchObject({ complete: false, restored: [], turnsConsumed: 0 });
+		expect(first.failed).toHaveLength(1);
+		writeFileSync(payload, saved);
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		expect(rollback.rollbackLastTurn()).toMatchObject({ complete: true, restored: [file] });
+		expect(readFileSync(file, "utf8")).toBe("original");
+	});
+
+	it("keeps successful recovery pending until the chat rewind is committed", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const file = join(testDir, "fork-retry.txt");
+		writeFileSync(file, "original");
+		rollback.beginTurn(testDir);
+		rollback.rollbackSnapshotBeforeWrite(file);
+		writeFileSync(file, "modified");
+		const first = rollback.rollbackLastTurn(undefined, { deferCommit: true, targetUserId: "rewind-user" });
+		expect(first).toMatchObject({ complete: true, turnsConsumed: 0, restored: [file], turnIndex: 0 });
+		writeFileSync(file, "newer edit");
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		expect(rollback.getRollbackTargetUserId()).toBe("rewind-user");
+		expect(rollback.rollbackLastTurn(undefined, { deferCommit: true })).toMatchObject({
+			complete: true,
+			restored: [],
+			turnIndex: 0,
+		});
+		expect(readFileSync(file, "utf8")).toBe("newer edit");
+		rollback.migrateRollbackSession("test-session", "forked-session");
+		rollback.commitRollbackTurn("forked-session", 0);
+		expect(rollback.getRollbackStatus("forked-session").turns).toBe(0);
+	});
+
+	it("does not restore files if the recovery manifest cannot be committed", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const file = join(testDir, "manifest-failure.txt");
+		writeFileSync(file, "original");
+		rollback.beginTurn(testDir);
+		rollback.rollbackSnapshotBeforeWrite(file);
+		writeFileSync(file, "modified");
+		vi.mocked(fs.writeFileSync).mockImplementation((destination, ...args) => {
+			if (String(destination).endsWith(".tmp")) throw new Error("manifest write failed");
+			return realFs.writeFileSync(destination, ...args);
+		});
+		expect(() => rollback.rollbackLastTurn()).toThrow("manifest write failed");
+		expect(readFileSync(file, "utf8")).toBe("modified");
+		expect(() => rollback.commitRollbackTurn("test-session", 0)).toThrow("unrestored");
+		vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
+		expect(rollback.rollbackLastTurn()).toMatchObject({ complete: true, restored: [file] });
+	});
+
+	it("keeps chat-only rewind targets pending across a cancelled fork and restart", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		rollback.beginTurn(testDir);
+		rollback.beginTurn(testDir);
+		const first = rollback.rollbackLastTurn(undefined, { deferCommit: true, targetUserId: "first-chat-user" });
+		expect(first).toMatchObject({ complete: true, turnIndex: 0, turnsConsumed: 0 });
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		expect(rollback.getRollbackTargetUserId()).toBe("first-chat-user");
+		expect(rollback.peekRollbackTurnsConsumed()).toBe(2);
+		const retry = rollback.rollbackLastTurn(undefined, { deferCommit: true });
+		expect(retry).toMatchObject({ complete: true, turnIndex: 0, turnsConsumed: 0 });
+		rollback.commitRollbackTurn("test-session", 0);
+		expect(rollback.getRollbackStatus().turns).toBe(0);
+	});
+
+	it("does not overwrite newer edits after restart if a restore receipt could not be saved", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const file = join(testDir, "receipt-failure.txt");
+		writeFileSync(file, "original");
+		rollback.beginTurn(testDir);
+		rollback.rollbackSnapshotBeforeWrite(file);
+		writeFileSync(file, "modified");
+		let manifestWrites = 0;
+		vi.mocked(fs.writeFileSync).mockImplementation((destination, ...args) => {
+			if (String(destination).endsWith(".tmp") && ++manifestWrites === 3) throw new Error("receipt write failed");
+			return realFs.writeFileSync(destination, ...args);
+		});
+		const first = rollback.rollbackLastTurn();
+		expect(first).toMatchObject({ complete: false, restored: [file], turnsConsumed: 0 });
+		writeFileSync(file, "newer edit");
+		vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
+		rollback.initRollback(mockSM as SettingsManager, "test-session");
+		const retry = rollback.rollbackLastTurn();
+		expect(retry).toMatchObject({ complete: false, restored: [], turnsConsumed: 0 });
+		expect(retry.failed[0].error).toContain("uncertain");
+		expect(readFileSync(file, "utf8")).toBe("newer edit");
+		// Manually recovering the uncertain path confirms completion without replay.
+		writeFileSync(file, "original");
+		expect(rollback.rollbackLastTurn()).toMatchObject({ complete: true, restored: [], turnsConsumed: 1 });
 	});
 
 	it("copies mode deletes tool-created files", async () => {
