@@ -4,7 +4,7 @@
  * is product uninstall and `lunr uninstall <source>` stays package-remove.
  */
 
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { APP_NAME, getAgentDir, NPM_CLI_PACKAGE, VERSION } from "../config.ts";
@@ -93,37 +93,36 @@ async function runSetup(argv: string[]): Promise<number> {
 	}
 
 	const current = loadInstallFeatures();
-	let next = current;
-
-	if (parsed.yes) {
-		const applied = applyFeatureFlags(current, parsed);
-		if (!applied.ok) {
-			console.error(applied.error);
-			return applied.exitCode;
-		}
-		next = applied.next;
-		for (const id of applied.enabledIds) {
-			const prev = current.features[id];
-			const state = next.features[id];
-			if (state) {
-				await FEATURE_HANDLERS[id].apply({
-					previous: prev,
-					next: state,
-					secrets: applied.secrets,
-					nonInteractive: true,
-				});
-			}
-		}
-		for (const id of applied.disabledIds) {
-			await FEATURE_HANDLERS[id].disable({ purgeSecrets: false });
-		}
-	} else {
-		await (await import("../gateway/setup.ts")).setupGateway();
-		return 0;
+	const applied = applyFeatureFlags(current, parsed);
+	if (!applied.ok) {
+		console.error(applied.error);
+		return applied.exitCode;
 	}
-
+	const explicitFeatures = parsed.features.length > 0 || parsed.noFeatures.length > 0 || parsed.sets.length > 0;
 	const { installBrowser } = await import("../core/browser/setup.ts");
 	await installBrowser(false);
+	let next = applied.next;
+	if (!parsed.yes && !explicitFeatures) {
+		await (await import("../gateway/setup.ts")).setupGateway();
+		// Gateway setup persists its own feature choices. Do not overwrite them.
+		next = loadInstallFeatures();
+	} else {
+		const enabled = new Set([...applied.enabledIds, ...parsed.sets.map((set) => getFeatureSpec(set.id)?.id)]);
+		for (const id of enabled) {
+			if (!id) continue;
+			const state = next.features[id];
+			if (!state) continue;
+			if (!parsed.yes) await collectSecretsForFeature(id, applied.secrets);
+			await FEATURE_HANDLERS[id].apply({
+				previous: current.features[id],
+				next: state,
+				secrets: applied.secrets,
+				nonInteractive: parsed.yes,
+			});
+		}
+		for (const id of applied.disabledIds) await FEATURE_HANDLERS[id].disable({ purgeSecrets: false });
+	}
+
 	saveInstallFeatures(next);
 	appendInstallLog(`setup installerVersion=${VERSION}`);
 	console.log(`Writing ${getAgentDir()}/install-features.json`);
@@ -256,13 +255,14 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 					return 1;
 				}
 			}
+			await (await import("../gateway/service.ts")).teardownGatewayService();
 			if (existsSync(agentDir)) rmSync(agentDir, { recursive: true, force: true });
 			console.log(`purged ${agentDir}`);
 		} else {
 			console.log(`sessions, auth, and gateway config kept in ${agentDir}`);
 			console.log(`Add --purge to delete that directory.`);
 		}
-		appendInstallLog(`uninstall npm purge=${purge}`);
+		if (!purge) appendInstallLog("uninstall npm purge=false");
 		return 0;
 	}
 
@@ -280,6 +280,7 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 		}
 	}
 
+	await (await import("../gateway/service.ts")).teardownGatewayService();
 	const versions = join(prefix, "versions");
 	const bin = join(prefix, "bin");
 	if (existsSync(versions)) rmSync(versions, { recursive: true, force: true });
@@ -290,7 +291,7 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 		if (existsSync(agentDir)) rmSync(agentDir, { recursive: true, force: true });
 		if (existsSync(prefix)) {
 			try {
-				rmSync(prefix, { recursive: true, force: true });
+				rmdirSync(prefix);
 			} catch {
 				// prefix may still hold unrelated files
 			}
@@ -300,7 +301,7 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 		console.log(`sessions, auth, and gateway config kept in ${agentDir}`);
 	}
 	console.log("Remove the PATH line from your shell profile if you added one.");
-	appendInstallLog(`uninstall purge=${purge}`);
+	if (!purge) appendInstallLog("uninstall purge=false");
 	return 0;
 }
 
