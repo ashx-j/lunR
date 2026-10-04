@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.ts";
 import {
@@ -408,6 +410,35 @@ describe("pi-lsp-extension startup readiness", () => {
 		while (dirs.length > 0) {
 			rmSync(dirs.pop()!, { recursive: true, force: true });
 		}
+	});
+
+	it("leaves host exception listeners unchanged across factory construction and shutdown", async () => {
+		const baseline = process.listeners("uncaughtException");
+		for (let index = 0; index < 3; index++) {
+			const harness = createExtensionHarness();
+			expect(process.listeners("uncaughtException")).toEqual(baseline);
+			await harness.emit("session_shutdown", {}, harness.ctx);
+			expect(process.listeners("uncaughtException")).toEqual(baseline);
+		}
+	});
+
+	it("preserves fatal exit for unrelated uncaught exceptions in an isolated host", async () => {
+		const script = `
+			import { createJiti } from "jiti";
+			import { resolve } from "node:path";
+			const jiti = createJiti(resolve("lsp-exception-test.mjs"), {
+				moduleCache: false, fsCache: false,
+				alias: { "@earendil-works/pi-tui": resolve("../tui/src/index.ts") },
+			});
+			const { default: extension } = await jiti.import(resolve("src/builtin-extensions/pi-lsp-extension/src/index.ts"));
+			extension({ registerTool() {}, registerCommand() {}, on() {}, events: { on() {} } });
+			setImmediate(() => { throw new Error("LSP_UNRELATED_FATAL_SENTINEL"); });
+		`;
+		await expect(
+			promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], {
+				timeout: 15000,
+			}),
+		).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("LSP_UNRELATED_FATAL_SENTINEL") });
 	});
 
 	it("registers exact tool schemas and commands before any heavy runtime load", async () => {
