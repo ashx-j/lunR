@@ -4,22 +4,13 @@ import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum, complete, type Model } from "@earendil-works/pi-ai/compat";
 import type { ExtractedContent } from "./extract.ts";
+import { contentPage } from "./content-page.ts";
 import { normalizeFetchContentParams } from "./fetch-params.ts";
 import type { SearchProvider, ResolvedSearchProvider } from "./gemini-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { getWebSearchConfigDir, getWebSearchConfigPath } from "./utils.ts";
-import {
-	clearResults,
-	deleteResult,
-	generateId,
-	getAllResults,
-	getResult,
-	restoreFromSession,
-	storeResult,
-	type QueryResultData,
-	type StoredSearchData,
-} from "./storage.ts";
-import { activityMonitor, type ActivityEntry } from "./activity.ts";
+import { createResultStore, generateId, type QueryResultData, type StoredSearchData } from "./storage.ts";
+import type { ActivityEntry } from "./activity.ts";
 import type { CuratorServerHandle } from "./curator-server.ts";
 import type {
 	SummaryGenerationContext,
@@ -46,7 +37,7 @@ import {
 	loadSummaryReview,
 	loadTavily,
 } from "./lazy.ts";
-import { runSessionCleanups } from "./session-cleanup.ts";
+import { createWebSession, getWebSession, runWithWebSession, runSessionCleanups } from "./session-cleanup.ts";
 import { buildSearchErrorPlan, type SearchErrorDetails, type SearchErrorPlan } from "./render-search-error.ts";
 import {
 	collectFetchUrls,
@@ -499,6 +490,12 @@ function formatEntryLine(
 }
 
 export default function (pi: ExtensionAPI) {
+	const { clearResults, deleteResult, getAllResults, getResult, restoreFromSession, storeResult } = createResultStore();
+	let webSession = createWebSession();
+	function registerWebTool(tool: Parameters<ExtensionAPI["registerTool"]>[0]): void {
+		pi.registerTool({ ...tool, execute: (...args) => runWithWebSession(webSession, () => tool.execute(...args)) });
+	}
+
 	const initConfig = loadConfigForExtensionInit();
 	const curateKey = initConfig.shortcuts?.curate || DEFAULT_SHORTCUTS.curate;
 	const activityKey = initConfig.shortcuts?.activity || DEFAULT_SHORTCUTS.activity;
@@ -546,7 +543,7 @@ export default function (pi: ExtensionAPI) {
 
 	function updateWidget(ctx: ExtensionContext): void {
 		const theme = ctx.ui.theme;
-		const entries = activityMonitor.getEntries();
+		const entries = webSession.activity.getEntries();
 		const lines: string[] = [];
 		lines.push(theme.fg("accent", "─── Web Search Activity " + "─".repeat(36)));
 
@@ -557,7 +554,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		lines.push(theme.fg("accent", "─".repeat(60)));
-		const rateInfo = activityMonitor.getRateLimitInfo();
+		const rateInfo = webSession.activity.getRateLimitInfo();
 		const resetMs = rateInfo.oldestTimestamp
 			? Math.max(0, rateInfo.oldestTimestamp + rateInfo.windowMs - Date.now())
 			: 0;
@@ -569,19 +566,21 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setWidget("web-activity", new Text(lines.join("\n"), 0, 0));
 	}
 
-	function handleSessionChange(ctx: ExtensionContext): void {
+	async function handleSessionChange(ctx: ExtensionContext): Promise<void> {
 		abortPendingFetches();
 		closeCurator();
-		runSessionCleanups();
+		const cleanup = runSessionCleanups(webSession);
+		webSession = createWebSession();
 		sessionActive = true;
 		restoreFromSession(ctx);
 		widgetUnsubscribe?.();
 		widgetUnsubscribe = null;
-		activityMonitor.clear();
+		webSession.activity.clear();
 		if (widgetVisible) {
-			widgetUnsubscribe = activityMonitor.onUpdate(() => updateWidget(ctx));
+			widgetUnsubscribe = webSession.activity.onUpdate(() => updateWidget(ctx));
 			updateWidget(ctx);
 		}
+		await cleanup;
 	}
 	/** Populated on first summary/curator use so sync curator submit/cancel can build fallbacks. */
 	let warmSummaryReview: Awaited<ReturnType<typeof loadSummaryReview>> | null = null;
@@ -591,11 +590,11 @@ export default function (pi: ExtensionAPI) {
 		if (generation !== sessionGeneration) throw new Error("Web request cancelled: session changed");
 	}
 
-	function startSession(ctx: ExtensionContext): void {
+	async function startSession(ctx: ExtensionContext): Promise<void> {
 		sessionGeneration++;
 		sessionAbort.abort();
 		sessionAbort = new AbortController();
-		handleSessionChange(ctx);
+		await handleSessionChange(ctx);
 	}
 
 	async function ensureSummaryReview(): Promise<Awaited<ReturnType<typeof loadSummaryReview>>> {
@@ -607,8 +606,9 @@ export default function (pi: ExtensionAPI) {
 		query: string,
 		options: Parameters<Awaited<ReturnType<typeof loadGeminiSearch>>["search"]>[1],
 	) {
+		const owner = getWebSession() ?? webSession;
 		const { search } = await loadGeminiSearch();
-		return search(query, options);
+		return runWithWebSession(owner, () => search(query, options));
 	}
 
 	// lunr: expose curator workflow state to core (/settings "Extensions" submenu)
@@ -628,7 +628,7 @@ export default function (pi: ExtensionAPI) {
 		const fetchId = generateId();
 		const controller = new AbortController();
 		pendingFetches.set(fetchId, controller);
-		void (async () => {
+		void runWithWebSession(webSession, async () => {
 			try {
 				const { fetchAllContent } = await loadExtract();
 				if (!sessionActive || !pendingFetches.has(fetchId)) return;
@@ -668,7 +668,7 @@ export default function (pi: ExtensionAPI) {
 			} finally {
 				pendingFetches.delete(fetchId);
 			}
-		})();
+		});
 		return fetchId;
 	}
 
@@ -1292,7 +1292,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (ctx) => {
 			widgetVisible = !widgetVisible;
 			if (widgetVisible) {
-				widgetUnsubscribe = activityMonitor.onUpdate(() => updateWidget(ctx));
+				widgetUnsubscribe = webSession.activity.onUpdate(() => updateWidget(ctx));
 				updateWidget(ctx);
 			} else {
 				widgetUnsubscribe?.();
@@ -1305,22 +1305,23 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => startSession(ctx));
 	pi.on("session_tree", async (_event, ctx) => startSession(ctx));
 
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async () => {
 		sessionGeneration++;
 		sessionAbort.abort();
 		sessionActive = false;
 		abortPendingFetches();
 		closeCurator();
-		runSessionCleanups();
+		const cleanup = runSessionCleanups(webSession);
 		clearResults();
 		// Unsubscribe before clear() to avoid callback with stale ctx
 		widgetUnsubscribe?.();
 		widgetUnsubscribe = null;
-		activityMonitor.clear();
+		webSession.activity.clear();
 		widgetVisible = false;
+		await cleanup;
 	});
 
-	if (initConfig.webSearch?.enabled !== false) pi.registerTool({
+	if (initConfig.webSearch?.enabled !== false) registerWebTool({
 		name: "web_search",
 		label: "Web Search",
 		description:
@@ -1749,7 +1750,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerTool({
+	registerWebTool({
 		name: "fetch_content",
 		label: "Fetch Content",
 		description: "Fetch URL(s) and extract readable content as markdown. Prefer fetch_content for reading URLs and web_search for discovery. The browser tool handles JavaScript-rendered inspection and explicit website interactions when enabled; it is not an automatic fallback, and interaction tasks do not require a preliminary fetch. Supports YouTube video transcripts (with thumbnail), GitHub repository contents, and local video files (with frame thumbnail). Video frames can be extracted via timestamp/range or sampled across the entire video with frames alone. Falls back to Gemini for pages that block bots or fail Readability extraction. For YouTube and video files: ALWAYS pass the user's specific question via the prompt parameter — this directs the AI to focus on that aspect of the video, producing much better results than a generic extraction. Content is always stored and can be retrieved with get_search_content.",
@@ -1835,7 +1836,7 @@ export default function (pi: ExtensionAPI) {
 
 				if (truncated) {
 					output += `\n\n---\nShowing ${MAX_INLINE_CONTENT} of ${fullLength} chars. ` +
-						`Use get_search_content({ responseId: "${responseId}", urlIndex: 0 }) for full content.`;
+						`Use get_search_content({ responseId: "${responseId}", urlIndex: 0 }) for stored content. Follow nextOffset if truncated.`;
 				}
 
 				const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
@@ -1879,7 +1880,7 @@ export default function (pi: ExtensionAPI) {
 					output += `- ${title || url} (${content.length} chars)\n`;
 				}
 			}
-			output += `\n---\nUse get_search_content({ responseId: "${responseId}", urlIndex: 0 }) to retrieve full content.`;
+			output += `\n---\nUse get_search_content({ responseId: "${responseId}", urlIndex: 0 }) to retrieve stored content. Follow nextOffset if truncated.`;
 
 			return {
 				content: [{ type: "text", text: output }],
@@ -1964,13 +1965,14 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerTool({
+	registerWebTool({
 		name: "get_search_content",
 		label: "Get Search Content",
-		description: "Retrieve full content from a previous web_search or fetch_content call.",
+		description: "Retrieve stored web_search or fetch_content text in pages capped at 50 KiB and 2,000 lines. Reuse responseId and selectors with nextOffset to continue. Available-selector lists and errors are paginated too.",
 		promptSnippet:
-			"Use after web_search/fetch_content when full stored content is needed via responseId plus query/url selectors.",
+			"Retrieve stored text with responseId and query/url selectors. If truncated, repeat with offset=nextOffset and the same selectors. Each page is at most 50 KiB/2,000 lines.",
 		parameters: Type.Object({
+			offset: Type.Optional(Type.Integer({ minimum: 0, description: "UTF-8 byte offset, starting at 0. Use nextOffset from the previous page with unchanged selectors." })),
 			responseId: Type.String({ description: "The responseId from web_search or fetch_content" }),
 			query: Type.Optional(Type.String({ description: "Get content for this query (web_search)" })),
 			queryIndex: Type.Optional(Type.Number({ description: "Get content for query at index" })),
@@ -1979,12 +1981,10 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params) {
+			const reply = (text: string, details: Record<string, unknown>) => contentPage(text, params.offset, details);
 			const data = getResult(params.responseId);
 			if (!data) {
-				return {
-					content: [{ type: "text", text: `Error: No stored results for "${params.responseId}"` }],
-					details: { error: "Not found", responseId: params.responseId },
-				};
+				return reply(`Error: No stored results for "${params.responseId}"`, { error: "Not found", responseId: params.responseId });
 			}
 
 			if (data.type === "search" && data.queries) {
@@ -1994,38 +1994,23 @@ export default function (pi: ExtensionAPI) {
 					queryData = data.queries.find((q) => q.query === params.query);
 					if (!queryData) {
 						const available = data.queries.map((q) => `"${q.query}"`).join(", ");
-						return {
-							content: [{ type: "text", text: `Query "${params.query}" not found. Available: ${available}` }],
-							details: { error: "Query not found" },
-						};
+						return reply(`Query "${params.query}" not found. Available: ${available}`, { error: "Query not found" });
 					}
 				} else if (params.queryIndex !== undefined) {
 					queryData = data.queries[params.queryIndex];
 					if (!queryData) {
-						return {
-							content: [{ type: "text", text: `Index ${params.queryIndex} out of range (0-${data.queries.length - 1})` }],
-							details: { error: "Index out of range" },
-						};
+						return reply(`Index ${params.queryIndex} out of range (0-${data.queries.length - 1})`, { error: "Index out of range" });
 					}
 				} else {
 					const available = data.queries.map((q, i) => `${i}: "${q.query}"`).join(", ");
-					return {
-						content: [{ type: "text", text: `Specify query or queryIndex. Available: ${available}` }],
-						details: { error: "No query specified" },
-					};
+					return reply(`Specify query or queryIndex. Available: ${available}`, { error: "No query specified" });
 				}
 
 				if (queryData.error) {
-					return {
-						content: [{ type: "text", text: `Error for "${queryData.query}": ${queryData.error}` }],
-						details: { error: queryData.error, query: queryData.query },
-					};
+					return reply(`Error for "${queryData.query}": ${queryData.error}`, { error: queryData.error, query: queryData.query });
 				}
 
-				return {
-					content: [{ type: "text", text: formatFullResults(queryData) }],
-					details: { query: queryData.query, resultCount: queryData.results.length },
-				};
+				return reply(formatFullResults(queryData), { query: queryData.query, resultCount: queryData.results.length });
 			}
 
 			if (data.type === "fetch" && data.urls) {
@@ -2035,44 +2020,26 @@ export default function (pi: ExtensionAPI) {
 					urlData = data.urls.find((u) => u.url === params.url);
 					if (!urlData) {
 						const available = data.urls.map((u) => u.url).join("\n  ");
-						return {
-							content: [{ type: "text", text: `URL not found. Available:\n  ${available}` }],
-							details: { error: "URL not found" },
-						};
+						return reply(`URL not found. Available:\n  ${available}`, { error: "URL not found" });
 					}
 				} else if (params.urlIndex !== undefined) {
 					urlData = data.urls[params.urlIndex];
 					if (!urlData) {
-						return {
-							content: [{ type: "text", text: `Index ${params.urlIndex} out of range (0-${data.urls.length - 1})` }],
-							details: { error: "Index out of range" },
-						};
+						return reply(`Index ${params.urlIndex} out of range (0-${data.urls.length - 1})`, { error: "Index out of range" });
 					}
 				} else {
 					const available = data.urls.map((u, i) => `${i}: ${u.url}`).join("\n  ");
-					return {
-						content: [{ type: "text", text: `Specify url or urlIndex. Available:\n  ${available}` }],
-						details: { error: "No URL specified" },
-					};
+					return reply(`Specify url or urlIndex. Available:\n  ${available}`, { error: "No URL specified" });
 				}
 
 				if (urlData.error) {
-					return {
-						content: [{ type: "text", text: `Error for ${urlData.url}: ${urlData.error}` }],
-						details: { error: urlData.error, url: urlData.url },
-					};
+					return reply(`Error for ${urlData.url}: ${urlData.error}`, { error: urlData.error, url: urlData.url });
 				}
 
-				return {
-					content: [{ type: "text", text: `# ${urlData.title}\n\n${urlData.content}` }],
-					details: { url: urlData.url, title: urlData.title, contentLength: urlData.content.length },
-				};
+				return reply(`# ${urlData.title}\n\n${urlData.content}`, { url: urlData.url, title: urlData.title, contentLength: urlData.content.length });
 			}
 
-			return {
-				content: [{ type: "text", text: "Invalid stored data format" }],
-				details: { error: "Invalid data" },
-			};
+			return reply("Invalid stored data format", { error: "Invalid data" });
 		},
 
 		renderCall(args, theme) {

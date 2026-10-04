@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtractedContent } from "./extract.ts";
 import type { SearchResult } from "./perplexity.ts";
@@ -21,30 +20,8 @@ export interface StoredSearchData {
 	urls?: ExtractedContent[];
 }
 
-const storedResults = new Map<string, StoredSearchData>();
-
 export function generateId(): string {
 	return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-export function storeResult(id: string, data: StoredSearchData): void {
-	storedResults.set(id, data);
-}
-
-export function getResult(id: string): StoredSearchData | null {
-	return storedResults.get(id) ?? null;
-}
-
-export function getAllResults(): StoredSearchData[] {
-	return Array.from(storedResults.values());
-}
-
-export function deleteResult(id: string): boolean {
-	return storedResults.delete(id);
-}
-
-export function clearResults(): void {
-	storedResults.clear();
 }
 
 function isValidStoredData(data: unknown): data is StoredSearchData {
@@ -58,16 +35,52 @@ function isValidStoredData(data: unknown): data is StoredSearchData {
 	return true;
 }
 
-export function restoreFromSession(ctx: ExtensionContext): void {
-	storedResults.clear();
-	const now = Date.now();
+/** One factory owns its in-memory results; persisted record formats and TTL stay shared. */
+export function createResultStore() {
+	const storedResults = new Map<string, StoredSearchData>();
+	function storeResult(id: string, data: StoredSearchData): void {
+		storedResults.set(id, data);
+	}
 
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type === "custom" && entry.customType === "web-search-results") {
-			const data = entry.data;
-			if (isValidStoredData(data) && now - data.timestamp < CACHE_TTL_MS) {
-				storedResults.set(data.id, data);
+	function getResult(id: string): StoredSearchData | null {
+		return storedResults.get(id) ?? null;
+	}
+
+	function getAllResults(): StoredSearchData[] {
+		return Array.from(storedResults.values());
+	}
+
+	function deleteResult(id: string): boolean {
+		return storedResults.delete(id);
+	}
+
+	function clearResults(): void {
+		storedResults.clear();
+	}
+
+	function restoreFromSession(ctx: ExtensionContext): void {
+		storedResults.clear();
+		const now = Date.now();
+
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (
+				entry.type === "custom" &&
+				entry.customType === "web-search-results"
+			) {
+				const data = entry.data;
+				if (isValidStoredData(data) && now - data.timestamp < CACHE_TTL_MS) {
+					storedResults.set(data.id, data);
+				}
 			}
 		}
 	}
+
+	return {
+		storeResult,
+		getResult,
+		getAllResults,
+		deleteResult,
+		clearResults,
+		restoreFromSession,
+	};
 }
