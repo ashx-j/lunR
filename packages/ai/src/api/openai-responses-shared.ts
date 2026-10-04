@@ -405,7 +405,10 @@ export async function processResponsesStream<TApi extends Api>(
 		}
 	};
 	const finalizeResponse = (
-		response: Extract<ResponseStreamEvent, { type: "response.completed" | "response.incomplete" }>["response"],
+		response: Extract<
+			ResponseStreamEvent,
+			{ type: "response.completed" | "response.incomplete" | "response.failed" }
+		>["response"],
 	): void => {
 		sawTerminalResponseEvent = true;
 		backfillReasoningSignatures(response.output ?? []);
@@ -424,8 +427,10 @@ export async function processResponsesStream<TApi extends Api>(
 				output: response.usage.output_tokens || 0,
 				cacheRead: cachedTokens,
 				cacheWrite: cacheWriteTokens,
-				reasoning: response.usage.output_tokens_details?.reasoning_tokens || 0,
-				totalTokens: response.usage.total_tokens || 0,
+				reasoning: response.usage.output_tokens_details?.reasoning_tokens,
+				measurement: "reported",
+				totalTokens:
+					response.usage.total_tokens ?? (response.usage.input_tokens || 0) + (response.usage.output_tokens || 0),
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			};
 		}
@@ -572,7 +577,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
 		} else if (event.type === "response.failed") {
-			sawTerminalResponseEvent = true;
+			finalizeResponse(event.response);
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
 			const msg = error
@@ -580,7 +585,9 @@ export async function processResponsesStream<TApi extends Api>(
 				: details?.reason
 					? `incomplete: ${details.reason}`
 					: "Unknown error (no error details in response)";
-			throw new Error(msg);
+			const failure = Object.assign(new Error(msg), { code: error?.code });
+			failure.name = "ResponseFailedError";
+			throw failure;
 		}
 	}
 	if (!sawTerminalResponseEvent) {

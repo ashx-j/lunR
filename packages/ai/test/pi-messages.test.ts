@@ -129,7 +129,7 @@ describe("pi-messages", () => {
 		const message = await eventStream.result();
 
 		expect(message.stopReason).toBe("toolUse");
-		expect(message.usage).toEqual(usage);
+		expect(message.usage).toEqual({ ...usage, measurement: "reported" });
 		expect(message.responseId).toBe("resp_1");
 		expect(message.model).toBe("auto");
 		expect(message.provider).toBe("radius");
@@ -201,7 +201,7 @@ describe("pi-messages", () => {
 
 		expect(message.stopReason).toBe("error");
 		expect(message.errorMessage).toBe("Upstream failed");
-		expect(message.usage).toEqual(usage);
+		expect(message.usage).toEqual({ ...usage, measurement: "reported" });
 	});
 
 	it("errors when no API key is provided", async () => {

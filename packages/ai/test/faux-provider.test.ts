@@ -595,3 +595,22 @@ describe("faux provider", () => {
 		).rejects.toThrow(`No API provider registered for api: ${registration.api}`);
 	});
 });
+
+describe("faux prompt cache accounting", () => {
+	it("partitions prompt input into read, write, and ordinary tokens", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		registration.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("second")]);
+		const context: Context = { messages: [{ role: "user", content: "x".repeat(400), timestamp: 1 }] };
+		const first = await complete(registration.getModel(), context, { sessionId: "cache-counting" });
+		expect(first.usage.input).toBe(0);
+		expect(first.usage.cacheWrite).toBeGreaterThan(0);
+		expect(first.usage.totalTokens).toBe(first.usage.cacheWrite + first.usage.output);
+		context.messages.push({ role: "user", content: "tail", timestamp: 2 });
+		const second = await complete(registration.getModel(), context, { sessionId: "cache-counting" });
+		expect(second.usage.input).toBe(0);
+		expect(second.usage.cacheRead).toBeGreaterThan(0);
+		expect(second.usage.totalTokens).toBe(second.usage.cacheRead + second.usage.cacheWrite + second.usage.output);
+		expect(second.usage.measurement).toBe("estimated");
+	});
+});

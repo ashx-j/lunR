@@ -85,6 +85,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -239,8 +240,13 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 							(chunk.usageMetadata.candidatesTokenCount || 0) + (chunk.usageMetadata.thoughtsTokenCount || 0),
 						cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
 						cacheWrite: 0,
-						reasoning: chunk.usageMetadata.thoughtsTokenCount || 0,
-						totalTokens: chunk.usageMetadata.totalTokenCount || 0,
+						reasoning: chunk.usageMetadata.thoughtsTokenCount,
+						measurement: "reported",
+						totalTokens:
+							chunk.usageMetadata.totalTokenCount ??
+							(chunk.usageMetadata.promptTokenCount || 0) +
+								(chunk.usageMetadata.candidatesTokenCount || 0) +
+								(chunk.usageMetadata.thoughtsTokenCount || 0),
 						cost: {
 							input: 0,
 							output: 0,

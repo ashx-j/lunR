@@ -26,41 +26,55 @@ function safeJsonStringify(value: unknown): string {
 	}
 }
 
-function estimateTextAndImageContentChars(content: string | Array<TextContent | ImageContent>): number {
-	if (typeof content === "string") return content.length;
-
-	let chars = 0;
-	for (const block of content) chars += block.type === "text" ? block.text.length : ESTIMATED_IMAGE_CHARS;
-	return chars;
+/** Local heuristic, not a provider tokenizer. Non-ASCII text often needs more tokens. */
+export function estimateTextTokens(text: string): number {
+	let ascii = 0;
+	let nonAscii = 0;
+	for (const character of text) {
+		if (character.codePointAt(0)! <= 0x7f) ascii++;
+		else nonAscii++;
+	}
+	return Math.ceil(ascii / CHARS_PER_TOKEN + nonAscii);
 }
 
-export function estimateTextTokens(text: string): number {
-	return Math.ceil(text.length / CHARS_PER_TOKEN);
+/** Only the stable request prefix; conversation growth is handled separately. */
+export function getContextFingerprint(context: Pick<Context, "systemPrompt" | "tools">): string {
+	const serialized = safeJsonStringify([context.systemPrompt ?? "", context.tools ?? []]);
+	let hash = 2166136261;
+	for (let i = 0; i < serialized.length; i++) hash = Math.imul(hash ^ serialized.charCodeAt(i), 16777619);
+	return `${serialized.length}:${hash >>> 0}`;
 }
 
 export function estimateTextAndImageContentTokens(content: string | Array<TextContent | ImageContent>): number {
-	return Math.ceil(estimateTextAndImageContentChars(content) / CHARS_PER_TOKEN);
+	if (typeof content === "string") return estimateTextTokens(content);
+	return content.reduce(
+		(sum, block) =>
+			sum + (block.type === "text" ? estimateTextTokens(block.text) : ESTIMATED_IMAGE_CHARS / CHARS_PER_TOKEN),
+		0,
+	);
 }
 
 export function estimateMessageTokens(message: Message): number {
-	let chars = 0;
-
-	if (message.role === "user") return estimateTextAndImageContentTokens(message.content);
-	if (message.role === "toolResult") return estimateTextAndImageContentTokens(message.content);
-
-	for (const block of message.content) {
-		if (block.type === "text") {
-			chars += block.text.length;
-		} else if (block.type === "thinking") {
-			chars += block.thinking.length;
-		} else {
-			chars += block.name.length + safeJsonStringify(block.arguments).length;
-		}
-	}
-	return Math.ceil(chars / CHARS_PER_TOKEN);
+	if (message.role === "user" || message.role === "toolResult")
+		return estimateTextAndImageContentTokens(message.content);
+	return message.content.reduce(
+		(tokens, block) =>
+			tokens +
+			estimateTextTokens(
+				block.type === "text"
+					? block.text
+					: block.type === "thinking"
+						? block.thinking
+						: block.name + safeJsonStringify(block.arguments),
+			),
+		0,
+	);
 }
 
-function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage; index: number } | undefined {
+function getLastAssistantUsageInfo(
+	messages: readonly Message[],
+	fingerprint?: string,
+): { usage: Usage; index: number } | undefined {
 	let latestPrefixTimestamp = Number.NEGATIVE_INFINITY;
 	let usageInfo: { usage: Usage; index: number } | undefined;
 
@@ -73,6 +87,9 @@ function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage
 			const usageAppliesToPrefix = assistant.timestamp >= latestPrefixTimestamp;
 			if (
 				usageAppliesToPrefix &&
+				(fingerprint === undefined ||
+					assistant.usage.contextFingerprint === undefined ||
+					assistant.usage.contextFingerprint === fingerprint) &&
 				assistant.stopReason !== "aborted" &&
 				assistant.stopReason !== "error" &&
 				calculateContextTokens(assistant.usage) > 0
@@ -86,8 +103,8 @@ function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage
 	return usageInfo;
 }
 
-function estimateMessages(messages: readonly Message[]): ContextUsageEstimate {
-	const usageInfo = getLastAssistantUsageInfo(messages);
+function estimateMessages(messages: readonly Message[], fingerprint?: string): ContextUsageEstimate {
+	const usageInfo = getLastAssistantUsageInfo(messages, fingerprint);
 	if (usageInfo) {
 		const usageTokens = calculateContextTokens(usageInfo.usage);
 		let trailingTokens = 0;
@@ -114,7 +131,7 @@ function isMessageArray(value: Context | readonly Message[]): value is readonly 
 export function estimateContextTokens(context: Context | readonly Message[]): ContextUsageEstimate {
 	if (isMessageArray(context)) return estimateMessages(context);
 
-	const estimate = estimateMessages(context.messages);
+	const estimate = estimateMessages(context.messages, getContextFingerprint(context));
 	if (estimate.lastUsageIndex !== null) {
 		const addedNames = new Set(
 			context.messages

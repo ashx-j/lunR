@@ -367,11 +367,20 @@ export interface ToolCall {
 }
 
 export interface Usage {
+	/** Stable local request identity, retained when a session is forked. */
+	requestId?: string;
+	/** System prompt/tool identity for deciding whether prior usage describes this request. */
+	contextFingerprint?: string;
+	/** Missing provider usage is unknown, never a measured zero. */
+	measurement?: "reported" | "partial" | "estimated" | "unknown";
+	/** Provider account charge, when supplied. Category costs remain catalog estimates. */
+	reportedCost?: number;
+	costSource?: "reported" | "estimated" | "unknown";
 	input: number;
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	/** Subset of `cacheWrite` written with 1h retention. Only Anthropic reports this split. */
+	/** Subset of `cacheWrite` written with 1h retention. Reported by Anthropic and Bedrock. */
 	cacheWrite1h?: number;
 	/**
 	 * Reasoning/thinking tokens, when the provider reports them. This is a subset of

@@ -1101,6 +1101,13 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
+		// Official request-wide long-context rates, absent from flat models.dev costs.
+		const googleTiers = (id: string) => id === "gemini-2.5-pro"
+			? [{ inputTokensAbove: 200000, input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }]
+			: id.startsWith("gemini-3.1-pro-preview")
+				? [{ inputTokensAbove: 200000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 }]
+				: undefined;
+
 		// Process Google models
 		if (data.google?.models) {
 			for (const [modelId, model] of Object.entries(data.google.models)) {
@@ -1127,6 +1134,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						output: source.cost?.output || 0,
 						cacheRead: source.cost?.cache_read || 0,
 						cacheWrite: source.cost?.cache_write || 0,
+						tiers: googleTiers(modelId),
 					},
 					contextWindow: source.limit?.context || 4096,
 					maxTokens: source.limit?.output || 4096,
@@ -1168,6 +1176,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						output: source.cost?.output || 0,
 						cacheRead,
 						cacheWrite: 0,
+						tiers: googleTiers(modelId),
 					},
 					contextWindow: source.limit?.context || 4096,
 					maxTokens: source.limit?.output || 4096,
