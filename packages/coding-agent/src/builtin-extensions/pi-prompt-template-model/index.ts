@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { getPromptResources } from "../../core/prompt-resource-bridge.ts";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -159,8 +160,9 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	}
 
 	function refreshPrompts(cwd: string, ctx?: ExtensionContext) {
-		const result = loadPromptsWithModel(cwd);
-		const chainResult = loadPromptsWithModel(cwd, true);
+		const resources = getPromptResources(pi.events);
+		const result = loadPromptsWithModel(cwd, false, resources);
+		const chainResult = loadPromptsWithModel(cwd, true, resources);
 		prompts = result.prompts;
 		chainPrompts = chainResult.prompts;
 
