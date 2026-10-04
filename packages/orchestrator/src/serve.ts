@@ -27,9 +27,10 @@ export async function serve(): Promise<void> {
 			console.log("radius integration disabled: login radius in ~/.lunr/agent/auth.json or set RADIUS_API_KEY");
 		}
 	} catch (error) {
-		server.close();
-		if (existsSync(socketPath)) {
-			unlinkSync(socketPath);
+		try {
+			await cleanup();
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], "Orchestrator startup and cleanup failed");
 		}
 		throw error;
 	}
@@ -37,24 +38,35 @@ export async function serve(): Promise<void> {
 	console.log(`orchestrator listening on ${socketPath}`);
 
 	let shutdownPromise: Promise<void> | undefined;
-	const shutdown = async (exitCode: number) => {
-		if (shutdownPromise) {
-			await shutdownPromise;
-			process.exit(exitCode);
-		}
-
-		shutdownPromise = (async () => {
-			server.close();
-			await supervisor.shutdown();
-			await radiusPresence.stop();
-			if (existsSync(socketPath)) {
-				unlinkSync(socketPath);
-			}
-		})();
-
-		await shutdownPromise;
-		process.exit(exitCode);
+	let requestedExitCode = 0;
+	const shutdown = (exitCode: number) => {
+		requestedExitCode = Math.max(requestedExitCode, exitCode);
+		if (shutdownPromise) return;
+		shutdownPromise = cleanup().then(
+			() => {
+				process.exit(requestedExitCode);
+			},
+			(error: unknown) => {
+				console.error(error);
+				process.exit(1);
+			},
+		);
 	};
+
+	async function cleanup(): Promise<void> {
+		const results = await Promise.allSettled([
+			Promise.resolve().then(() => server.close()),
+			supervisor.shutdown(),
+			radiusPresence.stop(),
+		]);
+		try {
+			if (existsSync(socketPath)) unlinkSync(socketPath);
+		} catch (error) {
+			results.push({ status: "rejected", reason: error });
+		}
+		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+		if (errors.length > 0) throw new AggregateError(errors, "Orchestrator service cleanup failed");
+	}
 
 	process.on("SIGINT", () => {
 		void shutdown(0);

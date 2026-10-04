@@ -481,6 +481,8 @@ for await (const event of agentLoopContinue(context, config)) {
 }
 ```
 
+If preparation or execution rejects, these wrappers emit an assistant message with `stopReason: "error"` or `"aborted"`, followed by `turn_end` and `agent_end`. Iteration finishes and `.result()` resolves to the completed run messages plus that failure message. The direct `runAgentLoop()` and `runAgentLoopContinue()` functions still reject on execution failure.
+
 These low-level streams are observational. They preserve event order, but they do not wait for your async event handling to settle before later producer phases continue. If you need message processing to act as a barrier before tool preflight, use the `Agent` class instead of raw `agentLoop()` or `agentLoopContinue()`.
 
 ## License
