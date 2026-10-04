@@ -6,16 +6,21 @@ import { formatTokens } from "./footer.ts";
 
 /** Simple token totals (rendered by /usage). */
 export interface UsageTotals {
+	requests?: number;
 	input: number;
 	output: number;
 	cacheRead?: number;
 	cacheWrite?: number;
 	total: number;
+	unknownRequests?: number;
+	partialRequests?: number;
 }
 
 export interface UsageViewData {
 	/** Session-wide token totals (summed across models); omitted when no usage yet. */
 	sessionTotals: UsageTotals | undefined;
+	childTotals?: UsageTotals;
+	combinedTotals?: UsageTotals;
 	context: { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
 	plan: PlanUsage[];
 	/** Live session context split; omitted when the window is unknown. */
@@ -107,17 +112,38 @@ export function renderThemedBox(headerText: string, content: string[], maxWidth:
 export function renderUsageBox(data: UsageViewData, maxWidth: number): string[] {
 	const content: string[] = [];
 
-	if (data.sessionTotals && data.sessionTotals.total > 0) {
-		content.push("Session usage");
+	if (
+		data.sessionTotals &&
+		(data.sessionTotals.total > 0 ||
+			data.sessionTotals.requests ||
+			data.sessionTotals.unknownRequests ||
+			data.sessionTotals.partialRequests)
+	) {
+		content.push("Parent usage including auxiliary requests");
 		content.push(
-			`  input ${formatTokens(data.sessionTotals.input)}  output ${formatTokens(data.sessionTotals.output)}  total ${formatTokens(data.sessionTotals.total)}${formatCachedSuffix(data.sessionTotals.input, data.sessionTotals.cacheRead ?? 0, data.sessionTotals.cacheWrite ?? 0)}`,
+			`  input ${formatTokens(data.sessionTotals.input + (data.sessionTotals.cacheRead ?? 0) + (data.sessionTotals.cacheWrite ?? 0))}  output ${formatTokens(data.sessionTotals.output)}  total ${formatTokens(data.sessionTotals.total)}${formatCachedSuffix(data.sessionTotals.input, data.sessionTotals.cacheRead ?? 0, data.sessionTotals.cacheWrite ?? 0)}`,
 		);
 	}
+
+	if (data.sessionTotals?.unknownRequests)
+		content.push(`  Usage unavailable for ${data.sessionTotals.unknownRequests} request(s).`);
+	if (data.sessionTotals?.partialRequests)
+		content.push(`  Usage incomplete for ${data.sessionTotals.partialRequests} request(s).`);
+	if (data.childTotals?.total || data.childTotals?.unknownRequests || data.childTotals?.partialRequests) {
+		content.push(
+			`  children ${formatTokens(data.childTotals.total)}  combined ${formatTokens(data.combinedTotals?.total ?? 0)}`,
+		);
+	}
+
+	if (data.childTotals?.unknownRequests)
+		content.push(`  Child usage unavailable for ${data.childTotals.unknownRequests} request(s).`);
+	if (data.childTotals?.partialRequests)
+		content.push(`  Child usage incomplete for ${data.childTotals.partialRequests} request(s).`);
 
 	if (data.breakdown) {
 		if (content.length > 0) content.push("");
 		content.push("Context");
-		content.push(theme.fg("dim", "Estimated (chars/4), current session only — actual token counts may differ."));
+		content.push(theme.fg("dim", "Estimated visible context. Tokenization, images and hidden reasoning may differ."));
 		const rows: { label: string; tokens: number }[] = [
 			{ label: "System prompt", tokens: data.breakdown.systemPrompt },
 			...data.breakdown.contextFiles.map((file) => ({ label: file.label, tokens: file.tokens })),
@@ -125,7 +151,7 @@ export function renderUsageBox(data: UsageViewData, maxWidth: number): string[] 
 			{ label: "Tool definitions", tokens: data.breakdown.toolDefinitions },
 			{ label: "User messages", tokens: data.breakdown.user },
 			{ label: "Assistant text", tokens: data.breakdown.assistantText },
-			{ label: "Thinking", tokens: data.breakdown.thinking },
+			{ label: "Visible thinking", tokens: data.breakdown.thinking },
 			{ label: "Tool calls", tokens: data.breakdown.toolCalls },
 			{ label: "Tool results", tokens: data.breakdown.toolResults },
 			{ label: "Summaries", tokens: data.breakdown.summaries },
@@ -155,7 +181,7 @@ export function renderUsageBox(data: UsageViewData, maxWidth: number): string[] 
 		if (plan.windows.length === 0) continue;
 		if (content.length > 0) content.push("");
 		const planName = plan.planLabel ? `${plan.provider} · ${plan.planLabel}` : plan.provider;
-		content.push(`Plan usage (${planName})`);
+		content.push(`Plan usage (${planName}, cached up to 60s)`);
 		const labelWidth = Math.max(...plan.windows.map((window) => window.label.length));
 		for (const window of plan.windows) {
 			content.push(planWindowLine(window, labelWidth));

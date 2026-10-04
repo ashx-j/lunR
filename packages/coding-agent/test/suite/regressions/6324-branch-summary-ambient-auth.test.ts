@@ -51,11 +51,20 @@ describe("issue #6324 branch summary ambient auth", () => {
 		harness.sessionManager.appendMessage(userMsg("abandoned branch work"));
 		harness.sessionManager.appendMessage(assistantMsg("abandoned reply"));
 
+		const tokensBefore = harness.session.getSessionStats().tokens.total;
 		const result = await harness.session.navigateTree(targetId, { summarize: true });
 
 		expect(result.cancelled).toBe(false);
 		expect(streamCallCount).toBe(1);
 		expect(result.summaryEntry?.type).toBe("branch_summary");
 		expect(result.summaryEntry?.summary).toContain("branch summary text");
+		expect(harness.session.getSessionStats().tokens.total).toBe(tokensBefore + 2);
+		expect(harness.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "custom",
+				customType: "request-usage",
+				data: expect.objectContaining({ purpose: "branch-summary" }),
+			}),
+		);
 	});
 });

@@ -314,7 +314,7 @@ describe("harness compaction", () => {
 			lastUsageIndex: 0,
 		});
 		const estimate = estimateContextTokens([
-			createUserMessage("Hello"),
+			{ ...createUserMessage("Hello"), timestamp: assistant.timestamp - 1 },
 			assistant,
 			createUserMessage("continue"),
 			createAssistantMessage("Partial thinking", createMockUsage(0, 0)),

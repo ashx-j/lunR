@@ -437,6 +437,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		sessionFile: input.result.sessionFile,
 		sessionId: input.sessionId,
 		taskIndex: input.index,
+		results: [{ childId: input.result.childId, agent: input.result.agent, sessionFile: input.result.sessionFile, usage: input.result.usage, usageRequests: input.result.usageRequests, success, output: summary }],
 	});
 }
 

@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, Model, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
 	convertToLlm,
@@ -81,6 +81,7 @@ export interface GenerateBranchSummaryOptions {
 	reserveTokens?: number;
 	/** Optional session stream function. Used to preserve SDK request behavior without mutating agent state. */
 	streamFn?: StreamFn;
+	onUsage?: (response: AssistantMessage) => void;
 }
 
 // ============================================================================
@@ -343,6 +344,7 @@ export async function generateBranchSummary(
 		? await (await streamFn(model, context, requestOptions)).result()
 		: await completeSimple(model, context, requestOptions);
 
+	options.onUsage?.(response);
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {
 		return { aborted: true };

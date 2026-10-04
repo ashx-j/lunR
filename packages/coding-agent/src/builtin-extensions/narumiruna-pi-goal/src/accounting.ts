@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { collectUsageRequests, totalRequestUsage, collectChildUsage, totalChildUsage } from "../../../core/usage-accounting.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 
 export interface GoalAccountingState {
@@ -42,7 +43,7 @@ export function updateGoalUsage(
 	const now = Date.now();
 	const baselineTokens = nonNegativeFiniteNumber(goal.baselineTokens);
 	goal.baselineTokens = baselineTokens;
-	goal.tokensUsed = Math.max(0, currentTokenTotal(ctx) - baselineTokens);
+	goal.tokensUsed = Math.max(nonNegativeFiniteNumber(goal.tokensUsed), currentTokenTotal(ctx) - baselineTokens);
 	checkpointGoalActiveTime(goal, now, continueClock);
 	goal.updatedAt = now;
 }
@@ -104,6 +105,7 @@ export function cumulativeAssistantTokens(entries: unknown[]) {
 }
 
 export function currentTokenTotal(ctx: UsageContext): number {
-	const sessionManager = ctx.sessionManager as { getBranch?: () => unknown[] } | undefined;
-	return cumulativeAssistantTokens(sessionManager?.getBranch?.() ?? []);
+	const sessionManager = ctx.sessionManager as { getEntries?: () => unknown[]; getBranch?: () => unknown[] } | undefined;
+	const entries = sessionManager?.getEntries?.() ?? sessionManager?.getBranch?.() ?? [];
+	return totalRequestUsage(collectUsageRequests(entries)).total + totalChildUsage(collectChildUsage(entries)).total;
 }

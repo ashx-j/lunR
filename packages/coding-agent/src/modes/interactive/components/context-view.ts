@@ -34,7 +34,12 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	const content: string[] = [];
 
 	if (data.model) content.push(data.model);
-	content.push(theme.fg("dim", "Estimated (chars/4), current session only — actual token counts may differ."));
+	content.push(
+		theme.fg(
+			"dim",
+			"Estimated visible context, current session only. Actual tokens and hidden reasoning may differ.",
+		),
+	);
 	content.push("");
 
 	const rows: BreakdownRow[] = [
@@ -44,7 +49,7 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 		{ label: "Tool definitions", tokens: breakdown.toolDefinitions },
 		{ label: "User messages", tokens: breakdown.user, count: breakdown.counts.user },
 		{ label: "Assistant text", tokens: breakdown.assistantText, count: breakdown.counts.assistantText },
-		{ label: "Thinking", tokens: breakdown.thinking, count: breakdown.counts.thinking },
+		{ label: "Visible thinking", tokens: breakdown.thinking, count: breakdown.counts.thinking },
 		{ label: "Tool calls", tokens: breakdown.toolCalls, count: breakdown.counts.toolCalls },
 		{ label: "Tool results", tokens: breakdown.toolResults, count: breakdown.counts.toolResults },
 		{ label: "Summaries", tokens: breakdown.summaries, count: breakdown.counts.summaries },

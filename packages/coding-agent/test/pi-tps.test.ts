@@ -78,6 +78,7 @@ describe("TPS animation ownership", () => {
 		vi.advanceTimersByTime(80);
 		second.emit("message_start", assistant);
 		expect(vi.getTimerCount()).toBe(2);
+		vi.advanceTimersByTime(1);
 		first.emit("message_update", assistant);
 		second.emit("message_update", assistant);
 		expect(first.setStatus.mock.lastCall?.[1]).toContain("⠙");
@@ -96,11 +97,24 @@ describe("TPS animation ownership", () => {
 		session.emit("message_start", assistant);
 		vi.advanceTimersByTime(1000);
 		session.emit("message_end", assistant);
-		expect(session.setStatus.mock.lastCall?.[1]).toContain("120.0 t/s");
+		expect(session.setStatus.mock.lastCall?.[1]).toContain("120.0 output t/s");
 		session.emit("session_start");
 		const calls = session.setStatus.mock.calls.length;
 		vi.runAllTimers();
 		expect(session.setStatus).toHaveBeenCalledTimes(calls);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+});
+
+it("clears completion tokens when the next assistant reports no usage", () => {
+	const session = register();
+	session.emit("message_start", assistant);
+	vi.advanceTimersByTime(1000);
+	session.emit("message_end", assistant);
+	expect(session.setStatus.mock.lastCall?.[1]).toContain("120 tokens");
+	const empty = { message: { role: "assistant", usage: { output: 0 } } };
+	session.emit("message_start", empty);
+	vi.advanceTimersByTime(1000);
+	session.emit("message_end", empty);
+	expect(session.setStatus.mock.lastCall?.[1]).toBe("");
 });

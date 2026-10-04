@@ -2,6 +2,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type CompactionPreparation, compact, generateSummary } from "../src/core/compaction/index.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
+import { collectUsageRequests } from "../src/core/usage-accounting.ts";
 
 const { completeSimpleMock } = vi.hoisted(() => ({
 	completeSimpleMock: vi.fn(),
@@ -127,7 +129,26 @@ describe("generateSummary reasoning options", () => {
 			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
 		};
 
-		await compact(preparation, createModel(false, 128000), "test-key");
+		const requests: AssistantMessage[] = [];
+		const manager = SessionManager.inMemory();
+		await compact(
+			preparation,
+			createModel(false, 128000),
+			"test-key",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(message) => {
+				requests.push(message);
+				manager.appendRequestUsage("compaction", message);
+			},
+		);
+		expect(requests).toHaveLength(2);
+		expect(collectUsageRequests(manager.getEntries())).toHaveLength(2);
+		manager.dispose();
 
 		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([128000, 128000]);
 	});

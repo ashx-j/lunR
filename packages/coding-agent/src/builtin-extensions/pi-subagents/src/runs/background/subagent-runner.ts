@@ -82,7 +82,7 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
-import { parseSessionTokens } from "../../shared/session-tokens.ts";
+import { parseSessionRequests, parseSessionUsage, sessionUsageDelta, tokenUsageFromUsage } from "../../shared/session-tokens.ts";
 import type { TokenUsage } from "../../shared/types.ts";
 import {
 	cleanupWorktrees,
@@ -270,7 +270,7 @@ function findLatestSessionFile(sessionDir: string): string | null {
 			.filter((f) => f.endsWith(".jsonl"))
 			.map((f) => path.join(sessionDir, f));
 		if (files.length === 0) return null;
-		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs || b.localeCompare(a));
 		return files[0] ?? null;
 	} catch {
 		// Session lookup is optional metadata.
@@ -279,19 +279,16 @@ function findLatestSessionFile(sessionDir: string): string | null {
 }
 
 function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
 function tokenUsageFromAttempts(attempts: ModelAttempt[] | undefined): TokenUsage | null {
-	if (!attempts || attempts.length === 0) return null;
-	let input = 0;
-	let output = 0;
-	for (const attempt of attempts) {
-		input += attempt.usage?.input ?? 0;
-		output += attempt.usage?.output ?? 0;
+	if (!attempts?.some((attempt) => attempt.usage)) return null;
+	const usage = emptyUsage();
+	for (const attempt of attempts) if (attempt.usage) {
+		for (const key of Object.keys(usage) as Array<keyof Usage>) usage[key] += attempt.usage[key] ?? 0;
 	}
-	const total = input + output;
-	return total > 0 ? { input, output, total } : null;
+	return tokenUsageFromUsage(usage);
 }
 
 function costSummaryFromAttempts(attempts: ModelAttempt[] | undefined): CostSummary | undefined {
@@ -300,7 +297,7 @@ function costSummaryFromAttempts(attempts: ModelAttempt[] | undefined): CostSumm
 	let outputTokens = 0;
 	let costUsd = 0;
 	for (const attempt of attempts) {
-		inputTokens += attempt.usage?.input ?? 0;
+		inputTokens += (attempt.usage?.input ?? 0) + (attempt.usage?.cacheRead ?? 0) + (attempt.usage?.cacheWrite ?? 0);
 		outputTokens += attempt.usage?.output ?? 0;
 		costUsd += attempt.usage?.cost ?? 0;
 	}
@@ -343,6 +340,8 @@ interface ChildEventContext {
 }
 
 interface ChildUsage {
+	measurement?: "reported" | "partial" | "estimated" | "unknown";
+	costSource?: "reported" | "estimated" | "unknown";
 	input?: number;
 	inputTokens?: number;
 	output?: number;
@@ -554,6 +553,9 @@ function runPiStreaming(
 					usage.cacheRead += eventUsage.cacheRead ?? 0;
 					usage.cacheWrite += eventUsage.cacheWrite ?? 0;
 					usage.cost += eventUsage.cost?.total ?? 0;
+					usage.unknownRequests += Number(eventUsage.measurement === "unknown");
+					usage.partialRequests += Number(eventUsage.measurement === "partial");
+					usage.unknownCosts += Number(eventUsage.costSource === "unknown");
 				}
 				if (isTerminalAssistantStop(event.message)) {
 					if (!event.message.errorMessage && extractTextFromContent(event.message.content).trim()) assistantError = undefined;
@@ -979,6 +981,8 @@ export async function runSingleStep(
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
 	sessionFile?: string;
+	receiptUsage?: Usage;
+	usageRequests?: import("../../../../../core/usage-accounting.ts").AccountedRequest[];
 	intercomTarget?: string;
 	completionGuardTriggered?: boolean;
 	structuredOutput?: unknown;
@@ -1042,6 +1046,8 @@ export async function runSingleStep(
 				model: imported.model,
 				attemptedModels: imported.attemptedModels,
 				modelAttempts: imported.modelAttempts,
+				receiptUsage: imported.usage,
+				usageRequests: imported.usageRequests,
 				totalCost: imported.totalCost,
 				structuredOutput: timedOut || stopped ? undefined : imported.structuredOutput,
 				structuredOutputPath: timedOut || stopped ? undefined : imported.structuredOutputPath,
@@ -1098,6 +1104,7 @@ export async function runSingleStep(
 			: [undefined];
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
+	const priorRequestIds = new Set(parseSessionRequests(step.sessionFile ?? sessionDir).map((request) => request.id));
 	const attemptNotes: string[] = [];
 	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
 	let finalResult: RunPiStreamingResult | undefined;
@@ -1172,6 +1179,7 @@ export async function runSingleStep(
 			waitToolEnabled: step.waitToolEnabled,
 			parentPermissionMode,
 		});
+		const usageBeforeAttempt = parseSessionUsage(step.sessionFile ?? sessionDir);
 		const run = await runPiStreaming(
 			args,
 			step.cwd ?? ctx.cwd,
@@ -1191,6 +1199,9 @@ export async function runSingleStep(
 			ctx.registerTurnBudgetAbort,
 			ctx.onWriterProcess,
 		);
+		const persistedUsage = parseSessionUsage(step.sessionFile ?? sessionDir);
+		if (persistedUsage) run.usage = sessionUsageDelta(persistedUsage, usageBeforeAttempt);
+
 		if (run.turnBudget) turnBudget = run.turnBudget;
 		else if (ctx.turnBudget) {
 			const assistantMessages = run.messages.filter((message) => message.role === "assistant");
@@ -1381,6 +1392,7 @@ export async function runSingleStep(
 		}
 	}
 
+	const usageRequests = parseSessionRequests(step.sessionFile ?? sessionDir).filter((request) => Boolean(step.sessionFile) || !priorRequestIds.has(request.id));
 	return {
 		childId: step.childId,
 		description: step.description,
@@ -1390,7 +1402,9 @@ export async function runSingleStep(
 		exitCode: effectiveFinalExitCode,
 		error: effectiveFinalError,
 		protocolError: finalResult?.protocolError,
-		sessionFile: step.sessionFile,
+		sessionFile: step.sessionFile ?? (sessionDir ? findLatestSessionFile(sessionDir) ?? undefined : undefined),
+		receiptUsage: step.sessionFile ? parseSessionUsage(step.sessionFile) ?? undefined : undefined,
+		usageRequests: usageRequests.length > 0 ? usageRequests : undefined,
 		intercomTarget: ctx.childIntercomTarget,
 		model: finalResult?.model,
 		attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
@@ -2347,7 +2361,7 @@ async function runSubagent(
 			step.turnCount = (step.turnCount ?? 0) + 1;
 			const usage = event.message.usage;
 			if (usage) {
-				const input = usage.input ?? usage.inputTokens ?? 0;
+				const input = (usage.input ?? usage.inputTokens ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
 				const output = usage.output ?? usage.outputTokens ?? 0;
 				const previousInput = step.tokens?.input ?? 0;
 				const previousOutput = step.tokens?.output ?? 0;
@@ -2911,6 +2925,10 @@ async function runSubagent(
 			for (const pr of parallelResults) {
 				results.push({
 					agent: pr.agent,
+					childId: pr.childId,
+					description: pr.description,
+					receiptUsage: pr.receiptUsage,
+					usageRequests: pr.usageRequests,
 					output: pr.output,
 					error: pr.error,
 					protocolError: pr.protocolError,
@@ -3133,7 +3151,7 @@ async function runSubagent(
 						}));
 
 						const taskSessionDir = config.sessionDir
-							? path.join(config.sessionDir, `parallel-${taskIdx}`)
+							? path.join(config.sessionDir, `parallel-${stepIndex}-${taskIdx}`)
 							: undefined;
 						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
 						flushPendingStepSteers(fi);
@@ -3240,10 +3258,7 @@ async function runSubagent(
 
 				for (let t = 0; t < group.parallel.length; t++) {
 					const fi = groupStartFlatIndex + t;
-					const sessionTokens = config.sessionDir
-						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
-						: null;
-					const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
+					const taskTokens = tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
 					if (!taskTokens) continue;
 					statusPayload.steps[fi].tokens = taskTokens;
 					previousCumulativeTokens = {
@@ -3259,6 +3274,10 @@ async function runSubagent(
 				for (const pr of parallelResults) {
 					results.push({
 						agent: pr.agent,
+					childId: pr.childId,
+					description: pr.description,
+					receiptUsage: pr.receiptUsage,
+					usageRequests: pr.usageRequests,
 						output: pr.output,
 						error: pr.error,
 						protocolError: pr.protocolError,
@@ -3389,6 +3408,10 @@ async function runSubagent(
 			const childStopped = singleResult.stopped === true;
 			results.push({
 				agent: singleResult.agent,
+				childId: singleResult.childId,
+				description: singleResult.description,
+				receiptUsage: singleResult.receiptUsage,
+				usageRequests: singleResult.usageRequests,
 				output: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.output,
 				error: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.error,
 				protocolError: singleResult.protocolError,
@@ -3426,27 +3449,16 @@ async function runSubagent(
 			}
 			statusPayload.outputs = outputs;
 
-			const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
-			let stepTokens: TokenUsage | null = cumulativeTokens
-				? {
-						input: cumulativeTokens.input - previousCumulativeTokens.input,
-						output: cumulativeTokens.output - previousCumulativeTokens.output,
-						total: cumulativeTokens.total - previousCumulativeTokens.total,
-					}
-				: null;
-			if (cumulativeTokens) {
-				previousCumulativeTokens = cumulativeTokens;
-			} else {
-				stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
-				if (stepTokens) {
-					previousCumulativeTokens = {
-						input: previousCumulativeTokens.input + stepTokens.input,
-						output: previousCumulativeTokens.output + stepTokens.output,
-						total: previousCumulativeTokens.total + stepTokens.total,
-					};
-				}
+			const stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
+			if (stepTokens) {
+				previousCumulativeTokens = {
+					input: previousCumulativeTokens.input + stepTokens.input,
+					output: previousCumulativeTokens.output + stepTokens.output,
+					total: previousCumulativeTokens.total + stepTokens.total,
+					cacheRead: (previousCumulativeTokens.cacheRead ?? 0) + (stepTokens.cacheRead ?? 0),
+					cacheWrite: (previousCumulativeTokens.cacheWrite ?? 0) + (stepTokens.cacheWrite ?? 0),
+				};
 			}
-
 			const stepEndTime = Date.now();
 			const childInterrupted = singleResult.interrupted === true;
 			statusPayload.steps[flatIndex].status = stopped || childStopped ? "stopped" : timedOut ? "failed" : childInterrupted ? "paused" : singleResult.exitCode === 0 ? "complete" : "failed";
@@ -3535,6 +3547,14 @@ async function runSubagent(
 		outputTokens: sum.outputTokens + (result.totalCost?.outputTokens ?? 0),
 		costUsd: sum.costUsd + (result.totalCost?.costUsd ?? 0),
 	}), { inputTokens: 0, outputTokens: 0, costUsd: 0 });
+	statusPayload.totalTokens = results.reduce((total, result) => {
+		const usage = tokenUsageFromAttempts(result.modelAttempts);
+		if (usage) {
+			total.input += usage.input; total.output += usage.output; total.total += usage.total;
+			total.cacheRead += usage.cacheRead ?? 0; total.cacheWrite += usage.cacheWrite ?? 0;
+		}
+		return total;
+	}, { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 });
 	const finalTotalCost = totalCost.inputTokens > 0 || totalCost.outputTokens > 0 || totalCost.costUsd > 0 ? totalCost : undefined;
 	const finalFlatAgents = statusPayload.steps.map((step) => step.agent);
 	const agentName = finalFlatAgents.length === 1
@@ -3698,6 +3718,11 @@ async function runSubagent(
 				attemptedModels: r.attemptedModels,
 				modelAttempts: r.modelAttempts,
 				totalCost: r.totalCost,
+				usageRequests: r.usageRequests,
+				usage: r.receiptUsage ?? r.modelAttempts?.reduce((total, attempt) => {
+					if (attempt.usage) for (const key of Object.keys(total)) total[key] += attempt.usage[key] ?? 0;
+					return total;
+				}, emptyUsage()),
 				artifactPaths: r.artifactPaths,
 				truncated: r.truncated,
 				transcriptPath: r.transcriptPath,

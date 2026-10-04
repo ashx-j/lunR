@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	EventStream,
+	getContextFingerprint,
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
@@ -351,6 +352,7 @@ async function streamAssistantResponse(
 			case "done":
 			case "error": {
 				const finalMessage = await response.result();
+				finalMessage.usage.contextFingerprint = getContextFingerprint(llmContext);
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -366,6 +368,7 @@ async function streamAssistantResponse(
 	}
 
 	const finalMessage = await response.result();
+	finalMessage.usage.contextFingerprint = getContextFingerprint(llmContext);
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {

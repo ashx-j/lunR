@@ -1,3 +1,10 @@
+import {
+	collectChildUsage,
+	collectUsageRequests,
+	totalChildUsage,
+	totalRequestUsage,
+	type UsageTotals,
+} from "./usage-accounting.ts";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -36,6 +43,7 @@ import type {
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
+	estimateContextTokens as estimateRequestContextTokens,
 	getSupportedThinkingLevels,
 	isContextOverflow,
 	isRetryableAssistantError,
@@ -93,6 +101,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { Extension, InlineExtension } from "./extensions/types.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-cap.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { convertToLlm } from "./messages.ts";
 import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
@@ -331,6 +340,10 @@ export interface SessionStats {
 	};
 	cost: number;
 	contextUsage?: ContextUsage;
+	/** Parent includes auxiliary requests; children and combined are cumulative receipts. */
+	parentUsage?: UsageTotals;
+	childUsage?: UsageTotals;
+	combinedUsage?: UsageTotals;
 }
 
 interface ToolDefinitionEntry {
@@ -685,13 +698,22 @@ export class AgentSession {
 				: undefined);
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
-			let previousContext = previousSnapshot?.context ?? turn.context;
+			let previousContext = {
+				...(previousSnapshot?.context ?? turn.context),
+				systemPrompt: this._withSystemPromptAppend(this._systemPromptOverride ?? this._baseSystemPrompt),
+				tools: this.agent.state.tools.slice(),
+			};
 			const model = this.model;
 			const settings = this.settingsManager.getCompactionSettings();
 			if (
 				model?.provider === "openai-codex" &&
 				settings.enabled &&
-				shouldCompact(estimateContextTokens(previousContext.messages).tokens, model.contextWindow, settings)
+				shouldCompact(
+					estimateRequestContextTokens({ ...previousContext, messages: convertToLlm(previousContext.messages) })
+						.tokens,
+					model.contextWindow,
+					settings,
+				)
 			) {
 				const previousCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
 				await this._runAutoCompaction("threshold", true);
@@ -2506,6 +2528,7 @@ export class AgentSession {
 					this.thinkingLevel,
 					this.agent.streamFn,
 					env,
+					(response) => this.sessionManager.appendRequestUsage("compaction", response),
 				);
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
@@ -2775,6 +2798,7 @@ export class AgentSession {
 					this.thinkingLevel,
 					this.agent.streamFn,
 					env,
+					(response) => this.sessionManager.appendRequestUsage("compaction", response),
 				);
 				summary = compactResult.summary;
 				firstKeptEntryId = compactResult.firstKeptEntryId;
@@ -3745,6 +3769,7 @@ export class AgentSession {
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
 					streamFn: this.agent.streamFn,
+					onUsage: (response) => this.sessionManager.appendRequestUsage("branch-summary", response),
 				});
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };
@@ -3884,7 +3909,7 @@ export class AgentSession {
 	/**
 	 * Get session statistics. Aggregates over ALL session entries (including
 	 * history that was compacted away), so token/cost totals reflect what was
-	 * actually billed across the session.
+	 * reported or estimated across requests incurred in this session.
 	 */
 	getSessionStats(): SessionStats {
 		let userMessages = 0;
@@ -3892,11 +3917,11 @@ export class AgentSession {
 		let toolResults = 0;
 		let totalMessages = 0;
 		let toolCalls = 0;
-		let totalInput = 0;
-		let totalOutput = 0;
-		let totalCacheRead = 0;
-		let totalCacheWrite = 0;
-		let totalCost = 0;
+		const entries = this.sessionManager.getEntries();
+		const parentUsage = totalRequestUsage(collectUsageRequests(entries));
+		const childUsage = totalChildUsage(collectChildUsage(entries));
+		const combinedUsage = { ...parentUsage };
+		for (const key of Object.keys(combinedUsage) as Array<keyof UsageTotals>) combinedUsage[key] += childUsage[key];
 
 		for (const entry of this.sessionManager.getEntries()) {
 			if (entry.type !== "message") continue;
@@ -3912,12 +3937,6 @@ export class AgentSession {
 				if (Array.isArray(assistantMsg.content)) {
 					toolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
 				}
-				const usage = assistantMsg.usage;
-				totalInput += usage.input;
-				totalOutput += usage.output;
-				totalCacheRead += usage.cacheRead;
-				totalCacheWrite += usage.cacheWrite;
-				totalCost += usage.cost.total;
 			}
 		}
 
@@ -3930,13 +3949,16 @@ export class AgentSession {
 			toolResults,
 			totalMessages,
 			tokens: {
-				input: totalInput,
-				output: totalOutput,
-				cacheRead: totalCacheRead,
-				cacheWrite: totalCacheWrite,
-				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+				input: parentUsage.input,
+				output: parentUsage.output,
+				cacheRead: parentUsage.cacheRead,
+				cacheWrite: parentUsage.cacheWrite,
+				total: parentUsage.total,
 			},
-			cost: totalCost,
+			cost: parentUsage.cost,
+			parentUsage,
+			childUsage,
+			combinedUsage,
 			contextUsage: this.getContextUsage(),
 		};
 	}
@@ -3948,42 +3970,18 @@ export class AgentSession {
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
 
-		// After compaction, the last assistant usage reflects pre-compaction context size.
-		// We can only trust usage from an assistant that responded after the latest compaction.
-		// If no such assistant exists, context token count is unknown until the next LLM response.
-		const branchEntries = this.sessionManager.getBranch();
-		const latestCompaction = getLatestCompactionEntry(branchEntries);
-
-		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
-			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-			let hasPostCompactionUsage = false;
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-				const entry = branchEntries[i];
-				if (entry.type === "message" && entry.message.role === "assistant") {
-					const assistant = entry.message;
-					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
-						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-							break;
-						}
-					}
-				}
-			}
-
-			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
-			}
-		}
-
-		const estimate = estimateContextTokens(this.messages);
+		const estimate = estimateRequestContextTokens({
+			systemPrompt: this.systemPrompt,
+			tools: this.agent.state.tools,
+			messages: convertToLlm(this.messages),
+		});
 		const percent = (estimate.tokens / contextWindow) * 100;
 
 		return {
 			tokens: estimate.tokens,
 			contextWindow,
 			percent,
+			estimated: estimate.lastUsageIndex === null || estimate.trailingTokens > 0,
 		};
 	}
 

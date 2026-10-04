@@ -1,4 +1,5 @@
 import type { AssistantMessage, ImageContent, Model, Models, TextContent, Usage } from "@earendil-works/pi-ai";
+import { estimateContextTokens as estimateRequestContextTokens } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
 	convertToLlm,
@@ -157,43 +158,9 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 
-function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; index: number } | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const usage = getAssistantUsage(messages[i]);
-		if (usage) return { usage, index: i };
-	}
-	return undefined;
-}
-
-/** Estimate context tokens for messages using provider usage when available. */
+/** Prior usage must describe the current prefix, including newer summaries. */
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-	const usageInfo = getLastAssistantUsageInfo(messages);
-
-	if (!usageInfo) {
-		let estimated = 0;
-		for (const message of messages) {
-			estimated += estimateTokens(message);
-		}
-		return {
-			tokens: estimated,
-			usageTokens: 0,
-			trailingTokens: estimated,
-			lastUsageIndex: null,
-		};
-	}
-
-	const usageTokens = calculateContextTokens(usageInfo.usage);
-	let trailingTokens = 0;
-	for (let i = usageInfo.index + 1; i < messages.length; i++) {
-		trailingTokens += estimateTokens(messages[i]);
-	}
-
-	return {
-		tokens: usageTokens + trailingTokens,
-		usageTokens,
-		trailingTokens,
-		lastUsageIndex: usageInfo.index,
-	};
+	return estimateRequestContextTokens(convertToLlm(messages));
 }
 
 /** Return whether context usage exceeds the configured compaction threshold. */
@@ -220,7 +187,7 @@ function estimateTextAndImageContentChars(content: string | Array<{ type: string
 	return chars;
 }
 
-/** Estimate token count for one message using a conservative character heuristic. */
+/** Estimate token count for one message using an approximate character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
 	let chars = 0;
 

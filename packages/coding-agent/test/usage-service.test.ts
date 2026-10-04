@@ -459,14 +459,14 @@ describe("renderUsageBox", () => {
 		const lines = renderUsageBox(data, 120);
 		const plain = lines.join("\n");
 		expect(plain).toContain("╭ Usage ");
-		expect(plain).toContain("Session usage");
+		expect(plain).toContain("Parent usage including auxiliary requests");
 		expect(plain).not.toContain("kimi-coding/k3");
 		expect(plain).toContain("input 24M");
 		expect(plain).toContain("output 83k");
 		expect(plain).toContain("Context window");
 		expect(plain).toContain("19%");
 		expect(plain).toContain("193k / 1.0M");
-		expect(plain).toContain("Plan usage (openai-codex · plus)");
+		expect(plain).toContain("Plan usage (openai-codex · plus, cached up to 60s)");
 		expect(plain).toContain("14% used");
 		expect(plain).toContain("resets in 6d 21h");
 		expect(plain).toContain("71% used");

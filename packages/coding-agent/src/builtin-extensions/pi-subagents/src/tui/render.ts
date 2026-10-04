@@ -276,7 +276,7 @@ function usageTokenTotal(usage?: { input?: number; output?: number; cacheRead?: 
 
 function compactResultTokens(result: Details["results"][number]): number {
 	const progress = result.progress || result.progressSummary;
-	if (progress && progress.tokens > 0) return progress.tokens;
+	if (progress && progress.tokens > 0) return Math.max(progress.tokens, usageTokenTotal(result.usage));
 	const fromUsage = usageTokenTotal(result.usage);
 	if (fromUsage > 0) return fromUsage;
 	return progress?.tokens ?? 0;
