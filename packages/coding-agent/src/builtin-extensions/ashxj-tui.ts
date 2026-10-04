@@ -11,7 +11,7 @@
  *     around the input.
  *   - No session-mode indicator anywhere (pi has no such concept).
  *
- * Loaded by pi via jiti — no build step, plain TypeScript.
+ * Registered as a built-in lunR extension and compiled with the coding-agent package.
  *
  * NOTE on type imports (see `ashxj-thinking`/`simple-memory` for the convention):
  * This file declares structural types inline rather than importing them from

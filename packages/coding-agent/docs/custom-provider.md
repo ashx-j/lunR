@@ -211,7 +211,7 @@ models: [{
   id: "custom-model",
   // ...
   reasoning: true,
-  thinkingLevelMap: {              // map pi levels to provider values; null hides unsupported levels
+  thinkingLevelMap: {              // map lunR levels to provider values; null hides unsupported levels
     minimal: null,
     low: null,
     medium: null,
@@ -571,7 +571,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before lunR tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what pi checks. With this in place, lunR will:
+`message_end` runs before lunR tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what lunR checks. With this in place, lunR will:
 
 1. Detect the overflow from `errorMessage`.
 2. Drop the failed assistant message from live context.
@@ -679,7 +679,7 @@ interface ProviderModelConfig {
   /** Whether the model supports extended thinking. */
   reasoning: boolean;
 
-  /** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
+  /** Maps lunR thinking levels to provider/model-specific values; null marks a level unsupported. */
   thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
 
   /** Supported input types. */

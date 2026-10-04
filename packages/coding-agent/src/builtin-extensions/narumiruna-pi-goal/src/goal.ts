@@ -438,7 +438,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 			}
 			if (runtime.pendingQueueAction && result.kind !== "show" && result.kind !== "clear") {
 				ctx.ui.notify(
-					"A queued goal change is waiting for Pi to settle. Retry after it finishes.",
+					"A queued goal change is waiting for lunR to settle. Retry after it finishes.",
 					"warning",
 				);
 				return;

@@ -11,7 +11,7 @@ The interface has four main areas:
 - **Startup header** - shortcuts, loaded context files, prompt templates, skills, and extensions
 - **Messages** - user messages, assistant responses, tool calls, tool results, notifications, errors, and extension UI
 - **Editor** - where you type; border color indicates the current thinking level
-- **Footer** - working directory, git branch, session name, token/cache usage, cost, context usage, plan bar, and current model
+- **Footer** - working directory, git branch, session name, token/cache usage, context usage, plan bar, and current model
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI. Click a thinking or tool card to expand or collapse that item. Smooth streaming (`smoothStreaming`, default off) is interactive TUI only.
 
