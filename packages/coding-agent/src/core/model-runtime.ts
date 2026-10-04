@@ -64,7 +64,7 @@ import {
 	validateExtensionProvider,
 } from "./provider-composer.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
-import { SubscriptionManager } from "./subscriptions.ts";
+import { type RequestSubscriptionKey, SubscriptionManager, subscriptionKeyFingerprint } from "./subscriptions.ts";
 import { clearPlanUsageCache } from "./usage-service.ts";
 import { type UserModelEntry, UserModelsStore, userEntryToModel, userModelsPath } from "./user-models.ts";
 
@@ -131,6 +131,7 @@ export class ModelRuntime implements Models {
 	private readonly credentials: RuntimeCredentials;
 	/** lunr: per-provider subscription-key pools; rotation mirrors the active key into the credential store. */
 	readonly subscriptionManager: SubscriptionManager;
+	private readonly requestSubscriptionKeys = new WeakMap<AssistantMessage, RequestSubscriptionKey>();
 	private readonly defaultBuiltins: ReadonlyMap<string, Provider>;
 	private readonly builtins = new Map<string, Provider>();
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
@@ -502,11 +503,8 @@ export class ModelRuntime implements Models {
 		return this.credentials.hasRuntimeApiKey(providerId);
 	}
 
-	async setRuntimeApiKey(
-		providerId: string,
-		apiKey: string,
-		options?: { allowNetwork?: boolean },
-	): Promise<void> {
+	async setRuntimeApiKey(providerId: string, apiKey: string, options?: { allowNetwork?: boolean }): Promise<void> {
+		clearPlanUsageCache();
 		this.credentials.setRuntimeApiKey(providerId, apiKey);
 		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
@@ -524,6 +522,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async removeRuntimeApiKey(providerId: string): Promise<void> {
+		clearPlanUsageCache();
 		this.credentials.removeRuntimeApiKey(providerId);
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 	}
@@ -552,22 +551,48 @@ export class ModelRuntime implements Models {
 	private async prepareRequest(
 		model: Model<Api>,
 		options: (StreamOptions & ModelsStreamTransforms) | undefined,
-	): Promise<{ provider: Provider; model: Model<Api>; options: StreamOptions }> {
+	): Promise<{
+		provider: Provider;
+		model: Model<Api>;
+		options: StreamOptions;
+		subscriptionKey?: RequestSubscriptionKey;
+	}> {
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
-		const resolution = await this.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+		let storedKeyFingerprint: string | undefined;
+		const resolution = await this.credentials.withStoredApiKeyRead(
+			model.provider,
+			(apiKey) => {
+				storedKeyFingerprint = apiKey ? subscriptionKeyFingerprint(model.provider, apiKey) : undefined;
+			},
+			() => this.getAuth(model, { apiKey: options?.apiKey, env: options?.env }),
+		);
 		if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
 
 		const { transformHeaders, ...providerOptions } = options ?? {};
 		const route = anthropicRequestRoute(model.provider, resolution, options);
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
+		const overridesAuth = Object.entries(headers ?? {}).some(
+			([name, value]) =>
+				/^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(name) &&
+				value !== route.apiKey &&
+				value !== `Bearer ${route.apiKey}`,
+		);
+		const subscriptionKey =
+			route.apiKey &&
+			options?.apiKey === undefined &&
+			storedKeyFingerprint === subscriptionKeyFingerprint(model.provider, route.apiKey) &&
+			!overridesAuth
+				? { providerId: model.provider, fingerprint: subscriptionKeyFingerprint(model.provider, route.apiKey) }
+				: undefined;
 		const env =
 			resolution.env || providerOptions.env
 				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
 				: undefined;
 		return {
 			provider,
+			subscriptionKey,
 			model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
 			options: {
 				...providerOptions,
@@ -578,22 +603,33 @@ export class ModelRuntime implements Models {
 		};
 	}
 
+	/** The final response identity stays process-local and never enters saved chat. */
+	getRequestSubscriptionKey(message: AssistantMessage): RequestSubscriptionKey | undefined {
+		return this.requestSubscriptionKeys.get(message);
+	}
+
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
+		let subscriptionKey: RequestSubscriptionKey | undefined;
+		const stream = lazyStream(model, async () => {
 			const prepared = await this.prepareRequest(
 				model,
 				options as (StreamOptions & ModelsStreamTransforms) | undefined,
 			);
+			subscriptionKey = prepared.subscriptionKey;
 			return prepared.provider.stream(
 				prepared.model as Model<TApi>,
 				context,
 				prepared.options as ApiStreamOptions<TApi>,
 			);
 		});
+		void stream.result().then((message) => {
+			if (subscriptionKey) this.requestSubscriptionKeys.set(message, subscriptionKey);
+		});
+		return stream;
 	}
 
 	complete<TApi extends Api>(
@@ -605,10 +641,16 @@ export class ModelRuntime implements Models {
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
+		let subscriptionKey: RequestSubscriptionKey | undefined;
+		const stream = lazyStream(model, async () => {
 			const prepared = await this.prepareRequest(model, options);
+			subscriptionKey = prepared.subscriptionKey;
 			return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
 		});
+		void stream.result().then((message) => {
+			if (subscriptionKey) this.requestSubscriptionKeys.set(message, subscriptionKey);
+		});
+		return stream;
 	}
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
@@ -616,6 +658,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential> {
+		clearPlanUsageCache();
 		const credential = await this.models.login(providerId, type, interaction);
 		clearPlanUsageCache();
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
@@ -623,6 +666,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async logout(providerId: string): Promise<void> {
+		clearPlanUsageCache();
 		await this.models.logout(providerId);
 		await this.modelsStore.delete(providerId);
 		this.userModels.evictProvider(providerId);

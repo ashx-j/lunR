@@ -3432,17 +3432,16 @@ export class AgentSession {
 	 * false when rotation is impossible, leaving the error as the final message.
 	 */
 	private async _tryRotateSubscriptionKey(message: AssistantMessage): Promise<boolean> {
-		const model = this.model;
-		if (!model) return false;
-		const providerId = model.provider;
+		const requestKey = this._modelRuntime.getRequestSubscriptionKey(message);
+		if (!requestKey) return false;
+		const providerId = requestKey.providerId;
 		// A runtime --api-key override wins over auth.json in RuntimeCredentials.read(),
 		// so mirroring a rotated key into the store would have no effect — skip rotation.
 		if (this._modelRuntime.hasRuntimeApiKey(providerId)) return false;
 		const manager = this._modelRuntime.subscriptionManager;
-		if ((await manager.list(providerId)).length < 2) return false;
 
 		const errorMessage = message.errorMessage ?? "Unknown error";
-		const entry = await manager.rotateOnFailure(providerId, errorMessage);
+		const entry = await manager.rotateOnFailure(providerId, errorMessage, requestKey.fingerprint);
 		if (!entry) return false;
 
 		// Close out any in-flight retry indicator; a fresh key gets a fresh retry budget.

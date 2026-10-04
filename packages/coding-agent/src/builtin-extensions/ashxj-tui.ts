@@ -87,13 +87,9 @@ function lunrFooterToggles(): {
 	};
 }
 
-const USAGE_SERVICE_BRIDGE = Symbol.for("@lunr/usage-service");
 interface UsageServiceBridgeForFooter {
 	pickForFooter?(providerId: string): { label: string; usedPercent: number } | undefined;
 	prefetch?(providerId: string): void;
-}
-function lunrUsageBridge(): UsageServiceBridgeForFooter | undefined {
-	return (globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE] as UsageServiceBridgeForFooter | undefined;
 }
 
 function compactPlanBar(percent: number, theme: Theme): string {
@@ -234,6 +230,7 @@ interface ExtensionUIContextLike {
 
 /** Trimmed view of `ExtensionContext`. */
 interface ExtensionContextLike {
+	modelRegistry?: { getUsageServiceBridge?(): UsageServiceBridgeForFooter | undefined };
 	mode: "tui" | "rpc" | "json" | "print";
 	hasUI: boolean;
 	model: ModelLike | undefined;
@@ -748,7 +745,7 @@ export function renderStatsLine(
 	if (footerToggles.plan) {
 		const provider = ctx.model?.provider;
 		if (provider) {
-			const usage = lunrUsageBridge();
+			const usage = ctx.modelRegistry?.getUsageServiceBridge?.();
 			usage?.prefetch?.(provider);
 			const seg = usage?.pickForFooter?.(provider);
 			if (seg) {

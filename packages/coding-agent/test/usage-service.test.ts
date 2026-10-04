@@ -1,15 +1,22 @@
 import { ModelsError } from "@earendil-works/pi-ai";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelRuntime } from "../src/core/model-runtime.ts";
+import { renderStatsLine } from "../src/builtin-extensions/ashxj-tui.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRegistry } from "../src/core/model-registry.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
 import {
 	clearPlanUsageCache,
 	footerPlanLabel,
 	getAllPlanUsageResults,
 	getPlanUsage,
 	getPlanUsageResult,
+	getUsageServiceBridge,
+	peekPlanUsage,
 	pickPlanWindow,
 	planUsageAuthError,
+	registerUsageServiceBridge,
 } from "../src/core/usage-service.ts";
 import {
 	formatResetCountdown,
@@ -181,7 +188,7 @@ describe("usage adapters", () => {
 	});
 
 	it("normalizes the kimi-coding usages payload", async () => {
-		const fetchMock = vi.fn(async () => jsonResponse(KIMI_PAYLOAD));
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
 		vi.stubGlobal("fetch", fetchMock);
 		const usage = await getPlanUsage("kimi-coding", fakeRuntime({ apiKey: "kimi-key" }));
 		expect(usage?.windows).toEqual([
@@ -287,7 +294,7 @@ describe("usage service failure paths", () => {
 	});
 
 	it("returns undefined when no credentials are stored", async () => {
-		const fetchMock = vi.fn(async () => jsonResponse(KIMI_PAYLOAD));
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
 		vi.stubGlobal("fetch", fetchMock);
 		expect(await getPlanUsage("kimi-coding", fakeRuntime())).toBeUndefined();
 		expect(fetchMock).not.toHaveBeenCalled();
@@ -396,7 +403,7 @@ describe("all plan usage", () => {
 
 describe("usage service cache", () => {
 	it("caches results for 60 seconds per provider", async () => {
-		const fetchMock = vi.fn(async () => jsonResponse(KIMI_PAYLOAD));
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
 		vi.stubGlobal("fetch", fetchMock);
 		const runtime = fakeRuntime({ apiKey: "kimi-key" });
 		const first = await getPlanUsage("kimi-coding", runtime);
@@ -416,7 +423,7 @@ describe("usage service cache", () => {
 
 	it("refetches after the TTL expires", async () => {
 		vi.useFakeTimers();
-		const fetchMock = vi.fn(async () => jsonResponse(KIMI_PAYLOAD));
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
 		vi.stubGlobal("fetch", fetchMock);
 		const runtime = fakeRuntime({ apiKey: "kimi-key" });
 		await getPlanUsage("kimi-coding", runtime);
@@ -549,5 +556,152 @@ describe("usage view helpers", () => {
 		expect(formatResetCountdown(now + 45 * 60000, now)).toBe("45m");
 		expect(formatResetCountdown(now + (2 * 60 + 51) * 60000, now)).toBe("2h 51m");
 		expect(formatResetCountdown(now + (6 * 24 * 60 + 21 * 60) * 60000, now)).toBe("6d 21h");
+	});
+});
+
+
+describe("usage ownership and invalidation", () => {
+	it("isolates two runtimes and their footer peeks", async () => {
+		let count = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({ ...KIMI_PAYLOAD, usage: { limit: 100, remaining: ++count === 1 ? 90 : 20 } }),
+			),
+		);
+		const first = fakeRuntime({ apiKey: "account-a" });
+		const second = fakeRuntime({ apiKey: "account-b" });
+		registerUsageServiceBridge(first, SettingsManager.inMemory());
+		registerUsageServiceBridge(second, SettingsManager.inMemory());
+		await getPlanUsage("kimi-coding", first);
+		await getPlanUsage("kimi-coding", second);
+		expect(new ModelRegistry(first).getUsageServiceBridge()?.peek("kimi-coding")?.windows[0]?.usedPercent).toBe(10);
+		expect(getUsageServiceBridge(second)?.peek("kimi-coding")?.windows[0]?.usedPercent).toBe(80);
+		expect(getUsageServiceBridge()).toBeUndefined();
+		const render = (runtime: ModelRuntime) =>
+			renderStatsLine(
+				160,
+				{
+					mode: "tui",
+					hasUI: true,
+					ui: { setEditorComponent() {}, setFooter() {} },
+					model: { provider: "kimi-coding", id: "fake-model" },
+					modelRegistry: new ModelRegistry(runtime),
+					sessionManager: { getEntries: () => [] },
+					getContextUsage: () => undefined,
+				},
+				{ fg: (_token, text) => text } as Parameters<typeof renderStatsLine>[2],
+				{
+					getGitBranch: () => null,
+					getExtensionStatuses: () => new Map(),
+					getAvailableProviderCount: () => 0,
+					onBranchChange: () => () => {},
+				},
+			).join("\n");
+		expect(render(first)).toContain("10%");
+		expect(render(second)).toContain("80%");
+	});
+
+	it("changes accounts within a runtime without reusing cached usage", async () => {
+		let key = "account-a";
+		const runtime = fakeRuntime({ apiKey: key });
+		runtime.getAuth = vi.fn(async () => ({ auth: { apiKey: key } }));
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
+		vi.stubGlobal("fetch", fetchMock);
+		await getPlanUsage("kimi-coding", runtime);
+		key = "account-b";
+		await getPlanUsage("kimi-coding", runtime);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({ Authorization: "Bearer account-b" });
+	});
+
+	it("does not restore old usage or remove the new pending request after clear", async () => {
+		const replies: Array<(response: Response) => void> = [];
+		const fetchMock = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
+		vi.stubGlobal("fetch", fetchMock);
+		const runtime = fakeRuntime({ apiKey: "account-a" });
+		const old = getPlanUsage("kimi-coding", runtime);
+		await vi.waitFor(() => expect(replies).toHaveLength(1));
+		clearPlanUsageCache();
+		const current = getPlanUsage("kimi-coding", runtime);
+		await vi.waitFor(() => expect(replies).toHaveLength(2));
+		replies[0]!(jsonResponse(KIMI_PAYLOAD));
+		await old;
+		expect(peekPlanUsage("kimi-coding", runtime)).toBeUndefined();
+		const joined = getPlanUsage("kimi-coding", runtime);
+		await Promise.resolve();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		replies[1]!(jsonResponse(KIMI_PAYLOAD));
+		expect(await joined).toEqual(await current);
+		expect(peekPlanUsage("kimi-coding", runtime)).toEqual(await current);
+	});
+});
+
+describe("usage account transitions", () => {
+	it("coalesces concurrent requests for the same owner and account", async () => {
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
+		vi.stubGlobal("fetch", fetchMock);
+		const runtime = fakeRuntime({ apiKey: "fake-account" });
+		const [first, second] = await Promise.all([
+			getPlanUsage("kimi-coding", runtime),
+			getPlanUsage("kimi-coding", runtime),
+		]);
+		expect(second).toEqual(first);
+		expect(first).toBeDefined();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("hides old footer usage immediately when a runtime key changes", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse(KIMI_PAYLOAD)),
+		);
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory({ "kimi-coding": { type: "api_key", key: "fake-stored" } }),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		registerUsageServiceBridge(runtime, SettingsManager.inMemory());
+		await getPlanUsage("kimi-coding", runtime);
+		const bridge = getUsageServiceBridge(runtime)!;
+		expect(bridge.peek("kimi-coding")).toBeDefined();
+		const transition = runtime.setRuntimeApiKey("kimi-coding", "fake-runtime", { allowNetwork: false });
+		expect(bridge.peek("kimi-coding")).toBeUndefined();
+		expect(bridge.pickForFooter("kimi-coding")).toBeUndefined();
+		await transition;
+	});
+
+	it("does not let a late old auth read replace a newer account's footer data", async () => {
+		const runtime = fakeRuntime({ apiKey: "fake-account" });
+		let resolveOld: ((value: { auth: { apiKey: string } }) => void) | undefined;
+		runtime.getAuth = vi
+			.fn()
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveOld = resolve;
+					}),
+			)
+			.mockResolvedValue({ auth: { apiKey: "fake-new" } });
+		const fetchMock = vi.fn(async (_input: string | URL, _init?: RequestInit) => jsonResponse(KIMI_PAYLOAD));
+		vi.stubGlobal("fetch", fetchMock);
+		const old = getPlanUsage("kimi-coding", runtime);
+		const current = await getPlanUsage("kimi-coding", runtime);
+		resolveOld!({ auth: { apiKey: "fake-old" } });
+		expect(await old).toBeUndefined();
+		expect(peekPlanUsage("kimi-coding", runtime)).toEqual(current);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears cached footer data when canonical auth fails", async () => {
+		const runtime = fakeRuntime({ apiKey: "fake-account" });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse(KIMI_PAYLOAD)),
+		);
+		await getPlanUsage("kimi-coding", runtime);
+		runtime.getAuth = vi.fn().mockRejectedValue(new Error("fake auth failure"));
+		await getPlanUsage("kimi-coding", runtime);
+		expect(peekPlanUsage("kimi-coding", runtime)).toBeUndefined();
 	});
 });

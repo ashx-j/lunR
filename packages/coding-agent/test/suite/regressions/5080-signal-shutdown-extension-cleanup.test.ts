@@ -18,6 +18,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
+	stopPlanUsagePolling: () => void;
 	session: { stopAdmission(): void };
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
@@ -73,6 +74,7 @@ function createContext(order: string[], sessionManager = createSessionManager())
 		isShuttingDown: false,
 		session: { stopAdmission: vi.fn() },
 		stopSmoothStreaming: vi.fn(),
+		stopPlanUsagePolling: vi.fn(),
 		unregisterSignalHandlers: vi.fn(),
 		runtimeHost: {
 			dispose: vi.fn(async () => {

@@ -1,70 +1,72 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchModelIds, resolveOllamaApiKey } from "../src/builtin-extensions/pi-ollama-cloud/models.ts";
-
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalOllamaKey = process.env.OLLAMA_API_KEY;
+import {
+	fetchModelDetails,
+	fetchModelIds,
+	refreshOllamaCloudModels,
+} from "../src/builtin-extensions/pi-ollama-cloud/models.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-	if (originalOllamaKey === undefined) delete process.env.OLLAMA_API_KEY;
-	else process.env.OLLAMA_API_KEY = originalOllamaKey;
+	vi.unstubAllEnvs();
 });
 
-describe("resolveOllamaApiKey", () => {
-	it("uses the stored auth.json api_key when OLLAMA_API_KEY is unset", () => {
-		const dir = join(tmpdir(), `lunr-ollama-auth-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(
-			join(dir, "auth.json"),
-			JSON.stringify({ "ollama-cloud": { type: "api_key", key: "stored-ollama-key" } }),
-		);
-		process.env.PI_CODING_AGENT_DIR = dir;
-		delete process.env.OLLAMA_API_KEY;
-		try {
-			expect(resolveOllamaApiKey()).toBe("stored-ollama-key");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
+describe("Ollama Cloud canonical discovery auth", () => {
+	it.each([false, true])(
+		"matches inference with runtime override %s and ignores a different ambient key",
+		async (override) => {
+			vi.stubEnv("OLLAMA_API_KEY", "fake-ambient");
+			vi.stubEnv("OLLAMA_STORED_TEST_KEY", "fake-resolved");
+			const runtime = await ModelRuntime.create({
+				credentials: AuthStorage.inMemory({ "ollama-cloud": { type: "api_key", key: "$OLLAMA_STORED_TEST_KEY" } }),
+				modelsPath: null,
+				allowModelNetwork: false,
+			});
+			// Match the builtin extension's registered API-key provider.
+			runtime.registerProvider("ollama-cloud", {
+				baseUrl: "https://ollama.com/v1",
+				apiKey: "OLLAMA_API_KEY",
+				api: "openai-completions",
+				models: [
+					{
+						id: "fake-model",
+						name: "Fake",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 10000,
+						maxTokens: 1000,
+					},
+				],
+			});
+			if (override) await runtime.setRuntimeApiKey("ollama-cloud", "fake-runtime", { allowNetwork: false });
+			const resolved = await runtime.getAuth("ollama-cloud");
+			const fetch = vi
+				.spyOn(globalThis, "fetch")
+				.mockImplementation(async () => new Response(JSON.stringify({ data: [{ id: "fake-model" }] })));
+			const auth = { apiKey: resolved?.auth.apiKey };
+			await fetchModelIds(auth, 50);
+			await fetchModelDetails("fake-model", auth, 50);
+			for (const call of fetch.mock.calls)
+				expect(call[1]?.headers).toMatchObject({
+					Authorization: `Bearer ${override ? "fake-runtime" : "fake-resolved"}`,
+				});
+		},
+	);
 
-	it("sends Authorization from the stored key when fetching the model list", async () => {
-		const dir = join(tmpdir(), `lunr-ollama-auth-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(
-			join(dir, "auth.json"),
-			JSON.stringify({ "ollama-cloud": { type: "api_key", key: "stored-ollama-key" } }),
-		);
-		process.env.PI_CODING_AGENT_DIR = dir;
-		delete process.env.OLLAMA_API_KEY;
-		const fetchSpy = vi
+	it("preserves canonical Authorization headers instead of replacing them with the key", async () => {
+		const fetch = vi
 			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "llama" }] }), { status: 200 }));
-		try {
-			await fetchModelIds(50);
-			expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer stored-ollama-key" });
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+			.mockImplementation(async () => new Response(JSON.stringify({ data: [] })));
+		await fetchModelIds({ apiKey: "fake-key", headers: { authorization: "Bearer fake-selected-header" } }, 50);
+		expect(fetch.mock.calls[0]?.[1]?.headers).toEqual({ authorization: "Bearer fake-selected-header" });
 	});
 
-	it("prefers the environment key over auth.json", () => {
-		const dir = join(tmpdir(), `lunr-ollama-auth-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(
-			join(dir, "auth.json"),
-			JSON.stringify({ "ollama-cloud": { type: "api_key", key: "stored-ollama-key" } }),
-		);
-		process.env.PI_CODING_AGENT_DIR = dir;
-		process.env.OLLAMA_API_KEY = "env-ollama-key";
-		try {
-			expect(resolveOllamaApiKey()).toBe("env-ollama-key");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+	it("dispatches nothing without canonical auth, even with ambient credentials", async () => {
+		vi.stubEnv("OLLAMA_API_KEY", "fake-ambient");
+		const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("fake transport guard"));
+		expect(await refreshOllamaCloudModels({})).toEqual({});
+		expect(fetch).not.toHaveBeenCalled();
 	});
 });

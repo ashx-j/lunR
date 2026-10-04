@@ -3,8 +3,10 @@ import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
+import { isContextOverflow } from "../src/utils/overflow.ts";
+import { isRetryableAssistantError } from "../src/utils/retry.ts";
 
-const mock = vi.hoisted(() => ({ response: null as Record<string, unknown> | null, spawn: vi.fn() }));
+const mock = vi.hoisted(() => ({ response: null as Record<string, unknown> | null, spawn: vi.fn(), category: undefined as unknown }));
 vi.mock("node:child_process", () => ({ spawn: mock.spawn }));
 
 const connection: ExternalClaudeCodeCredential = {
@@ -77,7 +79,8 @@ function fakeWorker(text = "hello", splitUtf8 = false, nativePid?: number) {
 						worker.stdout.write(delta.subarray(0, boundary));
 						worker.stdout.write(delta.subarray(boundary));
 					} else send("text_delta", { text });
-					if (mock.response) send("complete", { response: mock.response });
+					if (mock.category !== undefined) send("error", { category: mock.category, message: "private prompt fake-token-secret" });
+					else if (mock.response) send("complete", { response: mock.response });
 					worker.exitCode = mock.response ? 0 : 1;
 					worker.emit("close", worker.exitCode);
 				});
@@ -93,8 +96,68 @@ describe("Claude Code stream boundary", () => {
 	afterEach(() => {
 		mock.spawn.mockReset();
 		mock.response = null;
+		mock.category = undefined;
 	});
 
+	it.each([
+		["context_overflow", true, false],
+		["timeout", false, true],
+		["rate_limit", false, true],
+		["overloaded", false, true],
+		["transient", false, true],
+		["incomplete", false, true],
+		["private prompt fake-token-secret", false, false],
+		[{ timeout: "private" }, false, false],
+	])("sanitizes category %s while preserving recovery", async (category, overflow, retryable) => {
+		mock.category = category;
+		mock.spawn.mockImplementation(() => fakeWorker());
+		const model = anthropicProvider().getModels()[0]!;
+		const result = await anthropicProvider()
+			.streamSimple(model, { messages: [] }, { externalClaudeCode: connection })
+			.result();
+		expect(result.stopReason).toBe("error");
+		expect(isContextOverflow(result)).toBe(overflow);
+		expect(isRetryableAssistantError(result)).toBe(retryable);
+		expect(result.errorMessage).not.toMatch(/private|fake-token-secret/);
+	});
+
+	it("preserves a locally detected idle timeout as retryable", async () => {
+		vi.useFakeTimers();
+		const worker = Object.assign(new EventEmitter(), {
+			stdout: new PassThrough(),
+			stderr: new PassThrough(),
+			exitCode: null as number | null,
+			stdin: new Writable({
+				write(chunk, _encoding, callback) {
+					const record = JSON.parse(String(chunk)) as { type: string; requestId: string };
+					queueMicrotask(() => {
+						if (record.type === "start")
+							worker.stdout.write(`${JSON.stringify({ v: 1, requestId: record.requestId, type: "ready" })}\n`);
+						else {
+							worker.exitCode = 0;
+							worker.emit("close", 0);
+						}
+					});
+					callback();
+				},
+			}),
+			kill: vi.fn(),
+		});
+		mock.spawn.mockReturnValue(worker);
+		try {
+			const model = anthropicProvider().getModels()[0]!;
+			const pending = anthropicProvider()
+				.streamSimple(model, { messages: [] }, { externalClaudeCode: connection, timeoutMs: 1000 })
+				.result();
+			await vi.waitFor(() => expect(mock.spawn).toHaveBeenCalled());
+			await vi.advanceTimersByTimeAsync(1001);
+			const result = await pending;
+			expect(result.errorMessage).toBe("Claude Code request timed out.");
+			expect(isRetryableAssistantError(result)).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("publishes native tool calls only after the validated completion", async () => {
 		mock.response = completion("hello", true);
 		mock.spawn.mockImplementation(() => fakeWorker());

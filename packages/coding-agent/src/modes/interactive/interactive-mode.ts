@@ -614,6 +614,7 @@ export class InteractiveMode {
 		this.options = options;
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate((reason) => {
+			this.stopPlanUsagePolling();
 			this.resetExtensionUI();
 			// Reset UI mode history before binding the replacement session.
 			this.previousPermissionMode = undefined;
@@ -629,6 +630,7 @@ export class InteractiveMode {
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
+			this.startPlanUsagePolling();
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
 			const mode = this.session.permissionMode;
@@ -1033,10 +1035,13 @@ export class InteractiveMode {
 	}
 
 	private planUsageTimer: ReturnType<typeof setInterval> | undefined;
+	private planUsageBridge: ReturnType<typeof getUsageServiceBridge>;
 
 	private startPlanUsagePolling(): void {
-		const bridge = getUsageServiceBridge();
+		this.stopPlanUsagePolling();
+		const bridge = getUsageServiceBridge(this.session.modelRuntime);
 		if (!bridge) return;
+		this.planUsageBridge = bridge;
 		bridge.setOnUpdate(() => this.ui.requestRender());
 		const tick = () => {
 			const provider = this.session.model?.provider;
@@ -1045,6 +1050,15 @@ export class InteractiveMode {
 		tick();
 		this.planUsageTimer = setInterval(tick, 60_000);
 		this.planUsageTimer.unref?.();
+	}
+
+	private stopPlanUsagePolling(): void {
+		if (this.planUsageTimer) {
+			clearInterval(this.planUsageTimer);
+			this.planUsageTimer = undefined;
+		}
+		this.planUsageBridge?.setOnUpdate(undefined);
+		this.planUsageBridge = undefined;
 	}
 
 	/** Background npm version check. Never blocks first paint. Workspace installs skip. */
@@ -4213,11 +4227,7 @@ export class InteractiveMode {
 		this.session.stopAdmission();
 		this.unregisterSessionTransfer?.();
 		this.stopSmoothStreaming();
-		if (this.planUsageTimer) {
-			clearInterval(this.planUsageTimer);
-			this.planUsageTimer = undefined;
-		}
-		getUsageServiceBridge()?.setOnUpdate(undefined);
+		this.stopPlanUsagePolling();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -5377,11 +5387,24 @@ export class InteractiveMode {
 		let ollama: string | undefined;
 		const runner = this.session.extensionRunner;
 		const cloudRefresh = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] as
-			| ((ctx: { ui: unknown }) => Promise<unknown>)
+			| ((ctx: { ui: unknown; auth?: { apiKey?: string; headers?: Record<string, string> } }) => Promise<unknown>)
 			| undefined;
 		if (cloudRefresh && allowNetwork) {
 			try {
-				await cloudRefresh({ ui: runner.createCommandContext().ui });
+				const resolution = await runtime.getAuth("ollama-cloud");
+				await cloudRefresh({
+					ui: runner.createCommandContext().ui,
+					auth: resolution
+						? {
+								apiKey: resolution.auth.apiKey,
+								headers: Object.fromEntries(
+									Object.entries(resolution.auth.headers ?? {}).filter(
+										(entry): entry is [string, string] => entry[1] !== null,
+									),
+								),
+							}
+						: undefined,
+				});
 			} catch (error) {
 				ollama = `ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 			}
