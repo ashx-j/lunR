@@ -7,6 +7,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http"
+import { throwIfAborted } from "./abort.ts"
 import {
   DEFAULT_OAUTH_CALLBACK_PATH,
   getConfiguredOAuthCallbackPort,
@@ -20,7 +21,7 @@ import {
 const HTML_SUCCESS = `<!DOCTYPE html>
 <html>
 <head>
-  <title>Pi - Authorization Successful</title>
+  <title>lunR - Authorization Successful</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1a1a2e; color: #eee; }
     .container { text-align: center; padding: 2rem; }
@@ -31,7 +32,7 @@ const HTML_SUCCESS = `<!DOCTYPE html>
 <body>
   <div class="container">
     <h1>Authorization Successful</h1>
-    <p>You can close this window and return to Pi.</p>
+    <p>You can close this window and return to lunR.</p>
   </div>
   <script>setTimeout(() => window.close(), 2000);</script>
 </body>
@@ -49,7 +50,7 @@ function escapeHtml(value: string): string {
 const HTML_ERROR = (error: string) => `<!DOCTYPE html>
 <html>
 <head>
-  <title>Pi - Authorization Failed</title>
+  <title>lunR - Authorization Failed</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1a1a2e; color: #eee; }
     .container { text-align: center; padding: 2rem; }
@@ -79,11 +80,14 @@ let server: Server | undefined
 let bindingPromise: Promise<void> | undefined
 const pendingAuths = new Map<string, PendingAuth>()
 const reservedAuthStates = new Set<string>()
+const callbackOwners = new Set<symbol>()
 
 /** Timeout for callback completion (5 minutes) */
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000
 
 interface EnsureCallbackServerOptions {
+  owner?: symbol
+  signal?: AbortSignal
   strictPort?: boolean
   port?: number
   callbackHost?: string
@@ -171,17 +175,14 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   res.end(HTML_SUCCESS)
 }
 
-/**
- * Ensure the callback server is running.
- * If strictPort is true, requires binding on the configured callback port.
- * If strictPort is false, asks the OS for an available local port.
- */
-export async function ensureCallbackServer(options: EnsureCallbackServerOptions = {}): Promise<void> {
+/** Serialize listener binding and final-owner release. */
+async function withCallbackLock(action: () => Promise<void>): Promise<void> {
   while (bindingPromise) {
-    await bindingPromise
+    // A failed bind belongs to its caller, not to the next owner in the queue.
+    await bindingPromise.catch(() => {})
   }
 
-  const operation = ensureCallbackServerLocked(options)
+  const operation = action()
   bindingPromise = operation
   try {
     await operation
@@ -190,6 +191,34 @@ export async function ensureCallbackServer(options: EnsureCallbackServerOptions 
       bindingPromise = undefined
     }
   }
+}
+
+/** Listener ownership survives a completed callback until its session closes. */
+export function acquireCallbackServerOwner(): symbol {
+  const owner = Symbol("MCP OAuth owner")
+  callbackOwners.add(owner)
+  return owner
+}
+
+export async function releaseCallbackServerOwner(owner: symbol): Promise<void> {
+  await withCallbackLock(async () => {
+    callbackOwners.delete(owner)
+    if (callbackOwners.size === 0) await stopCallbackServerLocked()
+  })
+}
+
+/**
+ * Ensure the callback server is running.
+ * If strictPort is true, requires binding on the configured callback port.
+ * If strictPort is false, asks the OS for an available local port.
+ */
+export async function ensureCallbackServer(options: EnsureCallbackServerOptions = {}): Promise<void> {
+  await withCallbackLock(async () => {
+    throwIfAborted(options.signal)
+    if (options.owner && !callbackOwners.has(options.owner)) throw new Error("MCP OAuth session closed")
+    await ensureCallbackServerLocked(options)
+    throwIfAborted(options.signal)
+  })
 }
 
 async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions = {}): Promise<void> {
@@ -218,7 +247,7 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
         }
         setOAuthCallbackPath(requestedPath)
       }
-      if (options.reserveState && options.oauthState) {
+      if (options.reserveState && options.oauthState && !options.signal?.aborted) {
         reservedAuthStates.add(options.oauthState)
         reservedState = options.oauthState
       }
@@ -265,7 +294,8 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
     callbackServerHost = requestedHost
     setOAuthCallbackPath(requestedPath)
     server = candidateServer
-    if (options.reserveState && options.oauthState) {
+    // Flow cleanup can finish while binding yields. Never reserve its canceled state afterward.
+    if (options.reserveState && options.oauthState && !options.signal?.aborted) {
       reservedAuthStates.add(options.oauthState)
       reservedState = options.oauthState
     }
@@ -333,6 +363,10 @@ export function cancelPendingCallback(oauthState: string): void {
  * Stop the callback server and reject all pending authorizations.
  */
 export async function stopCallbackServer(): Promise<void> {
+  await withCallbackLock(stopCallbackServerLocked)
+}
+
+async function stopCallbackServerLocked(): Promise<void> {
   if (server) {
     await new Promise<void>((resolve) => {
       server!.close(() => {

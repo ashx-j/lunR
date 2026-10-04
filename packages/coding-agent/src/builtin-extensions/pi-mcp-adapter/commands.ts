@@ -16,7 +16,7 @@ import {
 import { lazyConnect, updateMetadataCache, updateStatusBar, getFailureAgeSeconds } from "./init.ts";
 import { loadMetadataCache } from "./metadata-cache.ts";
 import { buildToolMetadata } from "./tool-metadata.ts";
-import { supportsOAuth, authenticate, removeAuth } from "./mcp-auth-flow.ts";
+import { supportsOAuth, type McpAuthFlow } from "./mcp-auth-flow.ts";
 import { getAuthForUrl } from "./mcp-auth.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
 import { openPath } from "./utils.ts";
@@ -140,7 +140,8 @@ export async function reconnectServers(
 export async function authenticateServer(
   serverName: string,
   config: McpConfig,
-  ctx: ExtensionContext
+  ctx: ExtensionContext,
+  authFlow: McpAuthFlow,
 ): Promise<McpAuthResult> {
   if (!ctx.hasUI) return { ok: false, message: "OAuth authentication requires an interactive session." };
 
@@ -169,11 +170,11 @@ export async function authenticateServer(
 
   try {
     ctx.ui.setStatus("mcp-auth", `Authenticating ${serverName}...`);
-    const status = await authenticate(serverName, definition.url, definition, {
+    const status = await authFlow.authenticate(serverName, definition.url, definition, {
       onAuthorizationUrl: (authorizationUrl) => {
         ctx.ui.notify(
           `Open this URL to authenticate ${serverName}:\n\n${authorizationUrl}\n\n` +
-          "After approving, return to Pi; the local callback will complete automatically.",
+          "After approving, return to lunR; the local callback will complete automatically.",
           "info"
         );
       },
@@ -213,7 +214,7 @@ export async function logoutServer(
     return { ok: false, message };
   }
 
-  await removeAuth(serverName);
+  await state.authFlow.removeAuth(serverName);
   await state.manager.close(serverName);
   updateStatusBar(state);
 
@@ -317,7 +318,7 @@ function buildMcpPanelCallbacks(
       const definition = config.mcpServers[serverName];
       return definition ? supportsOAuth(definition) : false;
     },
-    authenticate: (serverName: string) => authenticateServer(serverName, config, ctx),
+    authenticate: (serverName: string) => authenticateServer(serverName, config, ctx, state.authFlow),
     getConnectionStatus: (serverName: string) => {
       const definition = config.mcpServers[serverName];
       const connection = state.manager.getConnection(serverName);

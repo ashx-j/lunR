@@ -12,7 +12,7 @@ import { resolveMcpResultContent, transformMcpContent } from "./tool-registrar.t
 import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
 import { maybeStartUiSession, type UiSessionRuntime } from "./ui-session.ts";
 import { formatAuthRequiredMessage, truncateAtWord } from "./utils.ts";
-import { authenticate, completeAuthFromInput, startAuth, supportsOAuth } from "./mcp-auth-flow.ts";
+import { supportsOAuth } from "./mcp-auth-flow.ts";
 
 type ProxyToolResult = AgentToolResult<Record<string, unknown>>;
 
@@ -102,7 +102,7 @@ async function attemptAutoAuth(
   }
 
   try {
-    await authenticate(serverName, definition.url, definition);
+    await state.authFlow.authenticate(serverName, definition.url, definition);
     return { status: "success" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -264,7 +264,7 @@ export async function executeAuthStart(state: McpExtensionState, serverName: str
   }
 
   try {
-    const { authorizationUrl } = await startAuth(serverName, definition.url, definition);
+    const { authorizationUrl } = await state.authFlow.startAuth(serverName, definition.url, definition);
     if (!authorizationUrl) {
       return {
         content: [{ type: "text" as const, text: `OAuth authentication successful for "${serverName}".` }],
@@ -294,7 +294,7 @@ export async function executeAuthComplete(state: McpExtensionState, serverName: 
   }
 
   try {
-    const status = await completeAuthFromInput(serverName, input);
+    const status = await state.authFlow.completeAuthFromInput(serverName, input);
     if (status !== "authenticated") {
       return {
         content: [{ type: "text" as const, text: `OAuth authentication did not complete for "${serverName}".` }],
