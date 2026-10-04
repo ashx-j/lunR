@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- PR #151 merge qualification: gateway approval fixtures own a disposable agent directory and persist their expected configuration, preventing other suites' conversation bindings from changing authorization. The previously failing three-suite reproduction passes all 77 tests; five offline package builds pass. Full isolated tests and fresh CI follow.
+
 - **Token accounting (`fix/token-accounting`, 2026-10-04):** conversation, title, compaction and branch-summary requests share durable request identities. Session, gateway and goal totals retain incurred parent and child usage through branch navigation; forks retain context without charging inherited history. Foreground and default async children include cache tokens, failed fallback attempts and auxiliary requests, with request receipts deduplicated through completion, wait and resume. Shared request-aware estimation includes system/tools and rejects obsolete usage after compaction or prefix changes. Failed Responses usage, native reasoning/cache retention, OpenRouter reported charges/image cache splits, reviewed Gemini long-context tiers in both shipped catalogs, missing measurements, labels and per-response TPS are corrected. Quota polling remains provider-defined.
 
 - **v0.2.27 release preparation (2026-10-04):** all 21 PRs #129 through #149 are merged after fresh green CI, using their completed reviews and recorded conflict resolutions. Versioned package manifests, shrinkwrap and installer locks are current. Five offline package builds and composed tool snapshots pass. Agent 191, AI 635 with 760 skips, TUI 757, and Orchestrator 32 pass. The local coding-agent run passed 3,477 tests with 56 skips and one intercom failure from a 114-byte nested socket path. Shortening the release runner prefix brings it to 98 bytes; all four intercom startup tests pass through the same nested runner. Release PR CI and publication qualification follow. The pinned CuaDriver approval is unchanged.
@@ -295,6 +297,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Gateway approval fixtures must isolate `PI_CODING_AGENT_DIR` and save their configuration because callbacks recheck persisted authorization; a pairing-store directory alone does not isolate saved conversation bindings.
+
 - Usage records live in existing session custom entries, outside model context. New request IDs survive receipt replay; inherited fork entries carry context but no new spend. Legacy sessions and receipts retain their supported counters but cannot recover previously omitted requests. Unknown/partial usage and unavailable prices remain distinct from measured zero. Current-context, image and cache-miss counts remain visibly approximate. Active children may not have delivered their final accounting receipt yet.
 
 - Release preparation checks formatting without writing; inherited formatting must be normalized on the release branch before those checks pass. Keep catalog generation out of release builds.
@@ -417,6 +421,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-04: isolate the PR #151 gateway approval fixture instead of weakening callback authorization, because the CI failure reproduces only with other suites' saved gateway data.
 
 - 2026-10-04: count durable request identities across conversation and auxiliary calls, then deduplicate child receipts, so navigation and replay cannot erase or duplicate incurred usage.
 - 2026-10-04: prefer provider-reported spend while preserving catalog component estimates, and reuse the AI request estimator to keep context-window decisions consistent with the prepared prefix.

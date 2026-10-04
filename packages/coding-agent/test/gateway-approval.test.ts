@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clearSessionApprovals,
 	gateToolCall,
@@ -11,7 +11,7 @@ import {
 } from "../src/core/permissions.ts";
 import type { TurnCallbacks } from "../src/gateway/agent-bridge.ts";
 import { handleApprovalCallback, resetApprovalRegistry } from "../src/gateway/approval.ts";
-import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
+import { defaultGatewayConfig, type GatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 import { createPairingStore } from "../src/gateway/pairing.ts";
 import { type BridgeLike, createRouter } from "../src/gateway/router.ts";
 import type { ButtonSpec, CallbackEvent, MessageEvent, PlatformAdapter } from "../src/gateway/types.ts";
@@ -100,6 +100,7 @@ function makeConfig(mutate?: (cfg: GatewayConfig) => void): GatewayConfig {
 }
 
 function makeDeps(cfg: GatewayConfig) {
+	saveGatewayConfig(cfg);
 	const adapter = new FakeAdapter();
 	const bridge = new FakeBridge();
 	const pairing = createPairingStore({ dir: tmpDir });
@@ -151,6 +152,7 @@ const threeTasks = {
 
 beforeEach(() => {
 	tmpDir = mkdtempSync(join(tmpdir(), "lunr-gw-approval-"));
+	vi.stubEnv("PI_CODING_AGENT_DIR", tmpDir);
 	resetPermissions("yolo");
 	clearSessionApprovals();
 	resetApprovalRegistry();
@@ -160,6 +162,7 @@ afterEach(() => {
 	resetPermissions("yolo");
 	resetApprovalRegistry();
 	rmSync(tmpDir, { recursive: true, force: true });
+	vi.unstubAllEnvs();
 });
 
 describe("gateway yolo-mode approvals", () => {
