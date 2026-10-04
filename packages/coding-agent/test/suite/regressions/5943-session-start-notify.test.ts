@@ -73,7 +73,15 @@ type LoadedResourcesContext = {
 	getBuiltInCommandConflictDiagnostics: (extensionRunner: LoadedResourcesContext["session"]["extensionRunner"]) => [];
 };
 
-type RebindContext = {
+function createRebindDefaults() {
+	return {
+		waitForDeferredBuiltins: async () => {},
+		sessionManager: { isPersisted: () => false, getOwnership: () => undefined },
+		runtimeHost: { services: { agentDir: "unused-in-memory-profile" } },
+	};
+}
+
+type RebindContext = ReturnType<typeof createRebindDefaults> & {
 	unsubscribe?: () => void;
 	applyRuntimeSettings: () => void;
 	renderCurrentSessionState: () => void;
@@ -92,17 +100,19 @@ type ReloadCommandContext = {
 		reload: (options?: { beforeSessionStart?: () => void | Promise<void> }) => Promise<void>;
 		resourceLoader: { getThemes: () => { themes: [] } };
 		extensionRunner: unknown;
-		modelRegistry: { getError: () => string | undefined };
+		modelRuntime: { getError: () => string | undefined };
 	};
 	settingsManager: {
 		getHttpIdleTimeoutMs: () => number;
 		getHideThinkingBlock: () => boolean;
+		getThinkingCollapse: () => boolean;
 		getOutputPad: () => 0 | 1;
 		getEditorPaddingX: () => number;
 		getAutocompleteMaxVisible: () => number;
 		getShowHardwareCursor: () => boolean;
 		getClearOnShrink: () => boolean;
 	};
+	statusContainer: { clear(): void };
 	keybindings: { reload: () => void };
 	customHeader?: unknown;
 	builtInHeader?: unknown;
@@ -163,12 +173,13 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 			},
 			resourceLoader: { getThemes: () => ({ themes: [] }) },
 			extensionRunner: {},
-			modelRegistry: { getError: () => undefined },
+			modelRuntime: { getError: () => undefined },
 			...overrides.session,
 		},
 		settingsManager: {
 			getHttpIdleTimeoutMs: () => 0,
 			getHideThinkingBlock: () => false,
+			getThinkingCollapse: () => true,
 			getOutputPad: () => 1,
 			getEditorPaddingX: () => 1,
 			getAutocompleteMaxVisible: () => 10,
@@ -176,6 +187,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 			getClearOnShrink: () => false,
 			...overrides.settingsManager,
 		},
+		statusContainer: { clear: () => {} },
 		keybindings: { reload: () => {}, ...overrides.keybindings },
 		editorContainer: { clear: () => {}, addChild: () => {}, ...overrides.editorContainer },
 		ui: {
@@ -283,6 +295,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		try {
 			const context: RebindContext = {
+				...createRebindDefaults(),
 				applyRuntimeSettings: () => events.push("apply"),
 				renderCurrentSessionState: () => events.push("render"),
 				bindCurrentSessionExtensions: async () => {
@@ -324,6 +337,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		try {
 			const context: RebindContext = {
+				...createRebindDefaults(),
 				applyRuntimeSettings: () => {},
 				renderCurrentSessionState: () => events.push("render"),
 				bindCurrentSessionExtensions: async () => {
@@ -376,6 +390,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		try {
 			const context: RebindContext = {
+				...createRebindDefaults(),
 				applyRuntimeSettings: () => {},
 				renderCurrentSessionState: () => events.push("render"),
 				bindCurrentSessionExtensions: async () => {

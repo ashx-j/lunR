@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
+const tsxLoader = import.meta.resolve("tsx");
 const cliPath = resolve(__dirname, "../src/cli.ts");
 const tempDirs: string[] = [];
 
@@ -65,7 +66,7 @@ function readSessionInfoNames(sessionFile: string): string[] {
 
 async function runCli(args: string[], dirs: CliDirs): Promise<CliResult> {
 	let stderr = "";
-	const child = spawn(process.execPath, [cliPath, ...args], {
+	const child = spawn(process.execPath, ["--import", tsxLoader, cliPath, ...args], {
 		cwd: dirs.projectDir,
 		env: {
 			...process.env,

@@ -10,6 +10,8 @@ const TINY_PNG_BASE64 =
 type QueuedUserInput = { text: string; images?: Array<{ type: "image"; mimeType: string; data: string }> };
 
 type SubmitContext = {
+	runtimeHost: { isDetached: boolean; services: { agentDir: string } };
+	sessionManager: { isPersisted(): boolean };
 	defaultEditor: { onSubmit?: (text: string) => void };
 	editor: {
 		addToHistory?: (text: string) => void;
@@ -95,6 +97,8 @@ describe("InteractiveMode image paste chips", () => {
 			},
 		];
 		const context: SubmitContext = {
+			runtimeHost: { isDetached: false, services: { agentDir: "unused-in-memory-profile" } },
+			sessionManager: { isPersisted: () => false },
 			defaultEditor: {},
 			editor: {
 				addToHistory: vi.fn(),
@@ -126,6 +130,8 @@ describe("InteractiveMode image paste chips", () => {
 
 	it("runs /paste-image without sending a model prompt", async () => {
 		const context: SubmitContext = {
+			runtimeHost: { isDetached: false, services: { agentDir: "unused-in-memory-profile" } },
+			sessionManager: { isPersisted: () => false },
 			defaultEditor: {},
 			editor: {
 				addToHistory: vi.fn(),
