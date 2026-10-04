@@ -1,6 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import { calculateCost } from "../models.ts";
 import type {
@@ -13,11 +12,9 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.ts";
+import { getClaudeCodeWorkerPath } from "../utils/claude-code-assets.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 
-const WORKER = fileURLToPath(
-	new URL("../../vendor/hermes-claude-subscription-directsdk/lunr_bridge.py", import.meta.url),
-);
 const SAFE_ERRORS = {
 	context_overflow: "Claude Code prompt is too long for the context window.",
 	timeout: "Claude Code request timed out.",
@@ -420,7 +417,7 @@ export function streamClaudeCode(
 							}
 						: undefined;
 			const requestId = randomUUID();
-			child = spawn(connection.python, ["-s", "-B", "-u", WORKER], {
+			child = spawn(connection.python, ["-s", "-B", "-u", getClaudeCodeWorkerPath("lunr_bridge.py")], {
 				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: true,
 				env,
