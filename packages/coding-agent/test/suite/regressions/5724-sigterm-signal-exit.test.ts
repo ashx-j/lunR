@@ -12,6 +12,7 @@ type ShutdownThis = {
 	isShuttingDown: boolean;
 	stopSmoothStreaming: () => void;
 	unregisterSignalHandlers: () => void;
+	session: { stopAdmission: () => void };
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
 	themeController: { disableAutoSync: () => void };
@@ -66,6 +67,7 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 			unregisterSignalHandlers: vi.fn(() => {
 				order.push("unregister");
 			}),
+			session: { stopAdmission: vi.fn(() => order.push("stopAdmission")) },
 			runtimeHost: {
 				dispose: vi.fn(() => {
 					order.push("dispose");
@@ -89,13 +91,13 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const shutdownPromise = callShutdown(context, { fromSignal: true });
 		await disposeStarted.promise;
 
-		expect(order).toEqual(["stopSmoothStreaming", "dispose"]);
+		expect(order).toEqual(["stopAdmission", "stopSmoothStreaming", "dispose"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 
 		dispose.resolve();
 		await shutdownPromise;
 
-		expect(order).toEqual(["stopSmoothStreaming", "dispose", "drainInput", "stop"]);
+		expect(order).toEqual(["stopAdmission", "stopSmoothStreaming", "dispose", "drainInput", "stop"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 	});
 });
