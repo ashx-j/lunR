@@ -10,7 +10,7 @@ Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The
 
 - **yolo** auto-approves tools but still confirms large subagent launches. This is the default.
 - **auto** runs without questions or large-launch confirmation.
-- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. The shell command check is heuristic, not an OS sandbox.
+- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
 
 Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
 

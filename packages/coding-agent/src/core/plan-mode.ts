@@ -8,23 +8,15 @@ import { computerPolicy } from "./computer-use/policy.ts";
  * InteractiveMode installs `READ_ONLY_MODE_ADDENDUM` via the shared system-prompt
  * append slot (same slot auto mode uses).
  *
- * Bash heuristic (conservative, blocklist-based — NOT a security boundary):
- * - any `>`/`>>` redirect outside quotes blocks the whole command;
- * - the command is split on `;`, `|`, `&` separators (outside quotes) and every segment's
- *   leading command must be read-only:
- *   - known mutating commands (rm, mv, cp, mkdir, sed -i, tee, …) are blocked;
- *   - `git` is limited to read-only subcommands (status/log/diff/show/… plus flag-only
- *     branch/tag/remote); mutating subcommands (add/commit/push/checkout/…) are blocked;
- *   - package managers are limited to read-only subcommands (install/add/remove/… blocked);
- *   - arbitrary runners (sudo, xargs, npx, sh -c …) are blocked.
- * Unknown-but-not-listed commands are ALLOWED (blocklist, not allowlist) — the model is
- * additionally steered by the system-prompt addendum. False positives are expected; the
- * user can run the command themselves or switch to another mode.
+ * Bash uses a conservative command allowlist and rejects known execution and writing
+ * forms, including project scripts and package executors. Unknown forms fail closed.
+ * This is a shell heuristic, not an OS sandbox. False positives are expected; the
+ * user can run the command themselves or switch to a writable mode.
  */
 
 /** Appended to the system prompt while read-only mode is active. */
 export const READ_ONLY_MODE_ADDENDUM =
-	"You are in read-only mode. Investigate and answer without making changes. If the user asks for a plan, you may call present_plan for approval. Do not implement until the user switches modes or approves that plan.";
+	"You are in read-only mode. Investigate and answer without making changes. If the user asks for a plan, you may call present_plan for approval. Do not implement until the user switches modes or approves that plan. Shell use is limited to known informational forms; project scripts, tests, package executors, and interpreter execution require a writable mode.";
 
 export const READ_ONLY_MODE_BLOCK_MESSAGE = "Read-only mode is active; no changes allowed.";
 
@@ -81,59 +73,37 @@ const ALLOWED_COMMANDS = new Set([
 	"bun",
 ]);
 
-const MUTATING_GIT_SUBCOMMANDS = new Set([
-	"add",
-	"commit",
-	"push",
-	"pull",
-	"merge",
-	"rebase",
-	"reset",
-	"checkout",
-	"switch",
-	"restore",
-	"rm",
-	"mv",
-	"stash",
-	"cherry-pick",
-	"revert",
-	"clean",
-	"fetch",
-	"config",
-	"apply",
-	"am",
-	"init",
-	"clone",
-	"submodule",
-	"worktree",
-	"gc",
-	"prune",
-	"update-index",
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+	"status",
+	"log",
+	"diff",
+	"show",
+	"ls-files",
+	"ls-tree",
+	"rev-parse",
+	"rev-list",
+	"show-ref",
+	"cat-file",
+	"describe",
+	"name-rev",
+	"shortlog",
+	"blame",
+	"grep",
 ]);
 
-// git subcommands that are read-only only when they carry no positional args or
-// mutating flags (`git branch` lists, `git branch foo` / `git branch -d foo` mutate).
-const CONDITIONAL_GIT_SUBCOMMANDS = new Set(["branch", "tag", "remote"]);
-const CONDITIONAL_GIT_MUTATING_FLAGS = new Set(["-d", "-D", "-m", "-M", "-c", "-C"]);
+// Branch/tag/remote accept only these listing forms. Unknown options fail closed.
+const GIT_LIST_FLAGS = new Map<string, Set<string>>([
+	["branch", new Set(["-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "--show-current"])],
+	["tag", new Set(["-l", "--list", "-n"])],
+	["remote", new Set(["-v", "--verbose"])],
+]);
 
-const PACKAGE_MANAGER_MUTATIONS: Record<string, Set<string>> = {
-	npm: new Set([
-		"install",
-		"add",
-		"remove",
-		"uninstall",
-		"update",
-		"upgrade",
-		"publish",
-		"link",
-		"unlink",
-		"ci",
-		"init",
-	]),
-	pnpm: new Set(["install", "add", "remove", "uninstall", "update", "upgrade", "publish", "link", "unlink", "init"]),
-	yarn: new Set(["install", "add", "remove", "uninstall", "upgrade", "publish", "link", "unlink", "init"]),
-	bun: new Set(["install", "add", "remove", "uninstall", "update", "upgrade", "publish", "link", "unlink", "init"]),
-};
+const PACKAGE_MANAGER_READS = new Map<string, Set<string>>([
+	["npm", new Set(["ls", "list", "view", "info", "explain", "outdated", "root", "prefix"])],
+	["pnpm", new Set(["ls", "list", "why", "outdated"])],
+	["yarn", new Set(["info", "why"])],
+	["bun", new Set()],
+]);
 
 // Almost every subcommand mutates the system.
 const ALWAYS_MUTATING_MANAGERS = new Set([
@@ -148,19 +118,8 @@ const ALWAYS_MUTATING_MANAGERS = new Set([
 	"scoop",
 ]);
 
-/** Flags that cause an interpreter to execute code and are never allowed in read-only mode. */
-const EXECUTING_NODE_FLAGS = new Set([
-	"-e",
-	"--eval",
-	"-p",
-	"--print",
-	"-r",
-	"--require",
-	"--import",
-	"-i",
-	"--interactive",
-]);
-const EXECUTING_PYTHON_FLAGS = new Set(["-c", "-m", "-i", "--interactive"]);
+/** Only understood informational interpreter invocations are allowed. */
+const RUNNER_INFO_FLAGS = new Set(["-v", "--version", "-h", "--help"]);
 
 /** Apply-mode rewrite only. Default / omitted `dry_run` is preview and stays allowed. */
 export function isCodeRewriteMutating(input: unknown): boolean {
@@ -289,7 +248,7 @@ function splitShellSegments(command: string): string[] {
 	return segments.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-/** True when the command contains command/process substitution outside quotes. */
+/** Command substitution expands inside double quotes; single quotes keep it literal. */
 function hasShellSubstitution(command: string): boolean {
 	let quote: "'" | '"' | undefined;
 	let escaped = false;
@@ -303,7 +262,12 @@ function hasShellSubstitution(command: string): boolean {
 			escaped = true;
 			continue;
 		}
-		if (quote) {
+		if (quote === "'") {
+			if (ch === quote) quote = undefined;
+			continue;
+		}
+		if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
+		if (quote === '"') {
 			if (ch === quote) quote = undefined;
 			continue;
 		}
@@ -311,17 +275,51 @@ function hasShellSubstitution(command: string): boolean {
 			quote = ch;
 			continue;
 		}
-		if (ch === "`") return true;
-		if (ch === "$" && command[i + 1] === "(") return true;
-		if (ch === "<" && command[i + 1] === "(") return true;
-		if (ch === ">" && command[i + 1] === "(") return true;
+		if ((ch === "<" || ch === ">") && command[i + 1] === "(") return true;
 		if (ch === "&" && command[i + 1] === ">") return true;
 	}
 	return false;
 }
 
+/** Unquote shell words so quoted option spellings receive the same classification. */
+function shellWords(segment: string): string[] | undefined {
+	const words: string[] = [];
+	let word = "";
+	let inWord = false;
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < segment.length; i++) {
+		const ch = segment[i];
+		if (ch === "\\" && quote !== "'") {
+			const next = segment[++i];
+			if (next === undefined) return undefined;
+			if (next === "\n") continue;
+			// Inside double quotes, only these characters lose their backslash.
+			if (quote === '"' && !["$", "`", '"', "\\", "\n"].includes(next)) word += "\\";
+			word += next;
+			inWord = true;
+		} else if (quote) {
+			if (ch === quote) quote = undefined;
+			else word += ch;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+			inWord = true;
+		} else if (/\s/.test(ch)) {
+			if (inWord) words.push(word);
+			word = "";
+			inWord = false;
+		} else {
+			word += ch;
+			inWord = true;
+		}
+	}
+	if (quote) return undefined;
+	if (inWord) words.push(word);
+	return words;
+}
+
 function isMutatingSegment(segment: string): boolean {
-	let tokens = segment.split(/\s+/).filter((t) => t.length > 0);
+	let tokens = shellWords(segment);
+	if (!tokens) return true;
 	// Skip leading env assignments (FOO=bar cmd …) and command wrappers we can't see through.
 	while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) {
 		tokens = tokens.slice(1);
@@ -360,24 +358,29 @@ function isMutatingSegment(segment: string): boolean {
 			"status",
 		].includes(sub.trim());
 	}
-	if (command === "sh" || command === "bash" || command === "zsh" || command === "dash") {
-		// `sh -c '…'` runs arbitrary code; bare `sh script` also executes. Block -c; allow
-		// nothing else is too restrictive for `bash --version`, so allow flag-only invocations.
-		return args.some((a) => a === "-c" || a === "-s") || args.some((a) => !a.startsWith("-"));
-	}
-
-	const pkgMutations = PACKAGE_MANAGER_MUTATIONS[command];
-	if (pkgMutations) {
-		const subcommand = args.find((a) => !a.startsWith("-"))?.toLowerCase();
-		return subcommand !== undefined && pkgMutations.has(subcommand);
-	}
-
-	// Node / Python interpreters: flag-only, no executing flags, no positional scripts.
-	if (command === "node") {
-		return args.some((a) => !a.startsWith("-")) || args.some((a) => EXECUTING_NODE_FLAGS.has(a));
-	}
+	if (command === "node") return args.length !== 1 || !RUNNER_INFO_FLAGS.has(args[0]);
 	if (command === "python" || command === "python3") {
-		return args.some((a) => !a.startsWith("-")) || args.some((a) => EXECUTING_PYTHON_FLAGS.has(a));
+		return args.length !== 1 || !["-V", "--version", "-h", "--help"].includes(args[0]);
+	}
+	if (["sh", "bash", "zsh", "dash"].includes(command)) {
+		return args.length !== 1 || !["--version", "--help"].includes(args[0]);
+	}
+
+	const packageReads = PACKAGE_MANAGER_READS.get(command);
+	if (packageReads) {
+		if (args.length === 1 && RUNNER_INFO_FLAGS.has(args[0])) return false;
+		// Bare managers may install or execute; flags before the operation are ambiguous.
+		return !packageReads.has(args[0]?.toLowerCase());
+	}
+	if (command === "env") {
+		// env may launch any executable or parse a command with -S.
+		return args.length > 0 && !(args.length === 1 && ["--version", "--help", "-0", "--null"].includes(args[0]));
+	}
+	if (command === "sort") {
+		return args.some((arg) => {
+			const option = arg.split("=")[0];
+			return (option.startsWith("--") && option.length > 2 && "--output".startsWith(option)) || /^-[^-]*o/.test(arg);
+		});
 	}
 
 	// Final gate: the command must be in the read-only allowlist.
@@ -387,8 +390,6 @@ function isMutatingSegment(segment: string): boolean {
 /** Global git options that take no value. Unknown leading flags are treated as mutating. */
 const GIT_GLOBAL_FLAGS = new Set([
 	"--no-pager",
-	"--paginate",
-	"-p",
 	"--version",
 	"--help",
 	"-h",
@@ -412,23 +413,12 @@ function gitSubcommandIndex(args: string[]): number {
 			index++;
 			continue;
 		}
-		if (
-			token === "-C" ||
-			token === "-c" ||
-			token === "--git-dir" ||
-			token === "--work-tree" ||
-			token === "--namespace"
-		) {
+		if (token === "-C" || token === "--git-dir" || token === "--work-tree" || token === "--namespace") {
 			if (args[index + 1] === undefined) return -1;
 			index += 2;
 			continue;
 		}
-		if (
-			token.startsWith("--git-dir=") ||
-			token.startsWith("--work-tree=") ||
-			token.startsWith("--namespace=") ||
-			token.startsWith("--config-env=")
-		) {
+		if (token.startsWith("--git-dir=") || token.startsWith("--work-tree=") || token.startsWith("--namespace=")) {
 			index++;
 			continue;
 		}
@@ -443,12 +433,13 @@ function isMutatingGit(args: string[]): boolean {
 	const subcommand = args[index]?.toLowerCase();
 	if (!subcommand) return false;
 
-	if (MUTATING_GIT_SUBCOMMANDS.has(subcommand)) return true;
-	if (CONDITIONAL_GIT_SUBCOMMANDS.has(subcommand)) {
-		const rest = args.slice(index + 1);
-		return rest.some((a) => !a.startsWith("-") || CONDITIONAL_GIT_MUTATING_FLAGS.has(a));
-	}
-	return false;
+	const listFlags = GIT_LIST_FLAGS.get(subcommand);
+	if (listFlags) return args.slice(index + 1).some((arg) => !listFlags.has(arg));
+	if (!READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) return true;
+	// Read operations can still write output or invoke external diff/text converters.
+	return args
+		.slice(index + 1)
+		.some((arg) => arg === "--output" || arg.startsWith("--output=") || arg === "--ext-diff" || arg === "--textconv");
 }
 
 function basenameOf(token: string): string {
