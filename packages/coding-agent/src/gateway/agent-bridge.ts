@@ -48,11 +48,13 @@ import type { SettingsManager } from "../core/settings-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
 import { processImage } from "../utils/image-process.ts";
 import { cancelGatewayApprovals } from "./approval.ts";
+import { GatewayPickerCancelled, gatewayPickerGeneration } from "./buttons.ts";
 import { conversationBinding } from "./conversations.ts";
 import {
 	createGatewayUI,
 	gatewayEpoch,
 	invalidateGatewayDialogs,
+	invalidateGatewaySession,
 	sendGatewayNotice,
 	withGatewayPresentation,
 } from "./presenter.ts";
@@ -65,6 +67,12 @@ function isUserMessageEntry(entry: { type: string }): entry is SessionMessageEnt
 
 /** runTurn resolves with this when the message was queued behind a running turn. */
 export const QUEUED = "__lunr_gateway_queued__";
+
+/** Both callbacks are synchronous; replacement commits before its reservation is released. */
+export interface ResetOptions {
+	validate?(): void;
+	commit?(): void;
+}
 
 const CACHE_CAP = 20;
 const QUEUE_CAP = 5;
@@ -183,6 +191,7 @@ interface CacheEntry {
  * import light and matches how main.ts loads it in the real CLI.
  */
 async function defaultSessionFactory(key: string, reopen: { sessionFile: string } | undefined): Promise<AgentSession> {
+	const ui = createGatewayUI(key);
 	const [
 		{ loadAllBuiltinExtensions },
 		{ getAgentDir },
@@ -247,9 +256,9 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 				bindRuntimeBridges({ session, services });
 				await session.bindExtensions({
 					mode: "gateway",
-					uiContext: createGatewayUI(key),
+					uiContext: ui,
 					onError: (err) => {
-						void sendGatewayNotice(key, `Extension error: ${err.error}`).catch(() => {});
+						ui.notify(`Extension error: ${err.error}`, "error");
 					},
 				});
 				return session;
@@ -285,6 +294,7 @@ export class AgentBridge {
 	private readonly redoStack = new Map<string, string[]>();
 	private readonly creating = new Map<string, Promise<CacheEntry>>();
 	private readonly changing = new Set<string>();
+	private readonly resetting = new Map<string, symbol>();
 	private readonly generations = new Map<string, number>();
 	private shuttingDown = false;
 
@@ -339,8 +349,10 @@ export class AgentBridge {
 	async abort(key: string): Promise<void> {
 		this.invalidate(key);
 		const entry = this.cache.get(key);
-		if (entry) entry.queue.length = 0;
-		invalidateGatewayDialogs(key);
+		if (entry) {
+			entry.queue.length = 0;
+			invalidateGatewayDialogs(key);
+		} else invalidateGatewaySession(key);
 		cancelGatewayApprovals(key);
 		await entry?.session.abort();
 	}
@@ -391,6 +403,7 @@ export class AgentBridge {
 					"Background work has not stopped. Session ownership was retained. Use /stopall before retrying.",
 				);
 			for (const [key, entry] of entries) {
+				invalidateGatewaySession(key);
 				entry.unregisterTransfer?.();
 				entry.unsubscribe?.();
 				await shutdownBridgeSession(entry.session, "quit");
@@ -419,7 +432,7 @@ export class AgentBridge {
 
 	/** Switch the chat to a different persisted session file. */
 	async switchSession(key: string, sessionFile: string): Promise<void> {
-		if (this.changing.has(key) || this.creating.has(key))
+		if (this.changing.has(key) || this.resetting.has(key) || this.creating.has(key))
 			throw new Error("Session initialization is already in progress.");
 		const entry = this.cache.get(key);
 		if (entry?.session.sessionManager?.getSessionFile() === sessionFile) return;
@@ -430,9 +443,10 @@ export class AgentBridge {
 			throw new Error("Session is busy. Stop its work or wait before switching.");
 		this.changing.add(key);
 		let candidate: BridgeSession | undefined;
+		const restorePresentation = invalidateGatewaySession(key);
+		let replaced = false;
 		try {
 			candidate = await this.sessionFactory(key, { sessionFile });
-			invalidateGatewayDialogs(key);
 			cancelGatewayApprovals(key);
 			if (entry) {
 				const oldSessionId = entry.session.sessionManager?.getSessionId();
@@ -452,6 +466,7 @@ export class AgentBridge {
 				);
 			const newEntry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
 			this.cache.set(key, newEntry);
+			replaced = true;
 			newEntry.unsubscribe = this._subscribeToSession(key, newEntry);
 			this.attachTransfer(key, newEntry);
 			this.redoStack.delete(key);
@@ -459,6 +474,7 @@ export class AgentBridge {
 			await this._enforceCacheCap(key);
 		} finally {
 			if (candidate) await shutdownBridgeSession(candidate, "quit");
+			if (!replaced) restorePresentation();
 			this.changing.delete(key);
 		}
 	}
@@ -535,31 +551,68 @@ export class AgentBridge {
 	}
 
 	/** Drop the cached session (disposing it) and forget the store entry (/new, /reset). */
-	async reset(key: string): Promise<void> {
-		invalidateGatewayDialogs(key);
-		cancelGatewayApprovals(key);
-		this.invalidate(key);
+	async reset(key: string, options: ResetOptions = {}): Promise<void> {
+		if (this.shuttingDown || this.changing.has(key) || this.resetting.has(key))
+			throw new Error("The session is changing. Wait before selecting another project.");
+		const operation = Symbol();
+		this.resetting.set(key, operation);
+		this.changing.add(key);
 		const entry = this.cache.get(key);
-		if (entry) {
-			// lunr: /new while busy must stop the live turn and drop queued follow-ups
-			// before dispose, otherwise drainQueue can still fire on the torn-down entry.
-			entry.queue.length = 0;
-			entry.dropped = 0;
-			try {
-				await entry.session.abort();
-			} catch {
-				// best-effort; dispose still tears the session down
+		let expectedOwner = entry;
+		let generation = this.generations.get(key) ?? 0;
+		let pickerGeneration = gatewayPickerGeneration(key);
+		const validate = () => {
+			if (
+				this.resetting.get(key) !== operation ||
+				this.shuttingDown ||
+				this.cache.get(key) !== expectedOwner ||
+				(this.generations.get(key) ?? 0) !== generation ||
+				gatewayPickerGeneration(key) !== pickerGeneration
+			)
+				throw new GatewayPickerCancelled("Project selection was stopped or superseded.");
+			options.validate?.();
+		};
+		try {
+			validate();
+			invalidateGatewayDialogs(key);
+			cancelGatewayApprovals(key);
+			this.invalidate(key);
+			generation = this.generations.get(key) ?? 0;
+			pickerGeneration = gatewayPickerGeneration(key);
+			if (entry) {
+				// /new drops queued work before disposal; only this owner may retire the entry.
+				entry.queue.length = 0;
+				entry.dropped = 0;
+				try {
+					await entry.session.abort();
+				} catch {
+					// best-effort; disposal still tears the owned session down
+				}
+				await entry.session.waitForIdle?.();
+				validate();
+				if (this.hasAttachedWork(entry.session))
+					throw new Error("Background work is still active. Use /stopall and wait before replacing the session.");
+				entry.unregisterTransfer?.();
+				entry.unsubscribe?.();
+				invalidateGatewaySession(key);
+				pickerGeneration = gatewayPickerGeneration(key);
+				this.cache.delete(key);
+				expectedOwner = undefined;
+				await shutdownBridgeSession(entry.session, "new");
+			} else {
+				invalidateGatewaySession(key);
+				pickerGeneration = gatewayPickerGeneration(key);
 			}
-			await entry.session.waitForIdle?.();
-			if (this.hasAttachedWork(entry.session))
-				throw new Error("Background work is still active. Use /stopall and wait before replacing the session.");
-			entry.unregisterTransfer?.();
-			entry.unsubscribe?.();
-			this.cache.delete(key);
-			await shutdownBridgeSession(entry.session, "new");
+			validate();
+			removeSession(key);
+			this.redoStack.delete(key);
+			options.commit?.();
+		} finally {
+			if (this.resetting.get(key) === operation) {
+				this.resetting.delete(key);
+				this.changing.delete(key);
+			}
 		}
-		removeSession(key);
-		this.redoStack.delete(key);
 	}
 
 	getStatus(key: string): BridgeSessionStatus {
@@ -696,7 +749,7 @@ export class AgentBridge {
 	}
 
 	private async getOrCreate(key: string): Promise<CacheEntry> {
-		if (this.shuttingDown || this.changing.has(key))
+		if (this.shuttingDown || this.changing.has(key) || this.resetting.has(key))
 			throw new Error("The session is changing. Wait before sending another task.");
 		const cached = this.cache.get(key);
 		if (cached) {
@@ -751,6 +804,8 @@ export class AgentBridge {
 		if (!(manager instanceof SessionManager)) return;
 		entry.unregisterTransfer = registerTransferHandler(manager, async ({ stop, signal }) => {
 			signal.throwIfAborted();
+			if (this.resetting.has(key))
+				throw new SessionTransferError("The session is changing. Wait before transferring it.", "busy");
 			const sessionId = manager.getSessionId();
 			if (
 				getSubagentCancellation(sessionId)?.hasActiveRuns() ||
@@ -771,7 +826,7 @@ export class AgentBridge {
 				await entry.session.waitForIdle?.();
 				signal.throwIfAborted();
 				manager.setPermissionMode(getPermissionMode(sessionId));
-				invalidateGatewayDialogs(key);
+				invalidateGatewaySession(key);
 				cancelGatewayApprovals(key);
 				await shutdownBridgeSession(entry.session, "quit");
 				entry.unsubscribe?.();
@@ -792,7 +847,7 @@ export class AgentBridge {
 			let oldestKey: string | undefined;
 			let oldest: CacheEntry | undefined;
 			for (const [key, entry] of this.cache) {
-				if (key === protectedKey) continue;
+				if (key === protectedKey || this.resetting.has(key)) continue;
 				if (
 					entry.busy ||
 					entry.session.isStreaming ||
@@ -810,6 +865,7 @@ export class AgentBridge {
 				this.cap = this.cache.size;
 				break;
 			}
+			invalidateGatewaySession(oldestKey);
 			oldest.unsubscribe?.();
 			oldest.unregisterTransfer?.();
 			this.cache.delete(oldestKey);
@@ -820,8 +876,9 @@ export class AgentBridge {
 	}
 
 	private _subscribeToSession(key: string, entry: CacheEntry): () => void {
-		const epoch = gatewayEpoch(key);
-		return entry.session.subscribe((event) => this._handleSessionEvent(key, event, epoch));
+		return entry.session.subscribe((event) => {
+			if (this.cache.get(key) === entry) this._handleSessionEvent(key, event, gatewayEpoch(key));
+		});
 	}
 
 	private _handleSessionEvent(key: string, event: AgentSessionEvent, epoch: number): void {

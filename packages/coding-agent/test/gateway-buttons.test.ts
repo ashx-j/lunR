@@ -11,7 +11,9 @@ import { callbackQueryToEvent, TelegramAdapter, type TelegramCallbackQuery } fro
 import {
 	activePickerIds,
 	createPicker,
+	gatewayPickerGeneration,
 	handleCallback,
+	invalidateGatewayPickers,
 	type PickerItem,
 	resetButtonRegistry,
 	startButtonSweeper,
@@ -130,6 +132,90 @@ function findButtonByLabel(adapter: FakeAdapter, label: string): ButtonSpec | un
 }
 
 describe("button registry", () => {
+	it.each(["model", "thinking", "sessions", "project", "dialog"] as const)(
+		"expires a %s picker before it can mutate a replacement session",
+		async (kind) => {
+			const adapter = new FakeAdapter();
+			const resolve = vi.fn(async () => ({ done: true as const, text: "changed" }));
+			await createPicker(adapter, makeSource(), {
+				kind,
+				sessionKey: "k1",
+				invokerId: "u1",
+				title: "Choose",
+				items: [{ label: "Select", value: "v" }],
+				resolve,
+			});
+			const data = adapter.sent[0].buttons![0][0].data;
+			invalidateGatewayPickers("k1");
+			await handleCallback(
+				{ id: "old", chatId: "chat1", messageId: "m1", userId: "u1", data },
+				makeDeps({ adapter }),
+			);
+			expect(resolve).not.toHaveBeenCalled();
+			expect(adapter.edits).toEqual([]);
+			expect(adapter.callbackAnswers.at(-1)?.text).toContain("expired");
+		},
+	);
+
+	it("does not send a picker whose asynchronous preparation belongs to an old generation", async () => {
+		const adapter = new FakeAdapter();
+		const generation = gatewayPickerGeneration("k1");
+		invalidateGatewayPickers("k1");
+		const result = await createPicker(adapter, makeSource(), {
+			kind: "model",
+			sessionKey: "k1",
+			generation,
+			invokerId: "u1",
+			title: "Choose",
+			items: [],
+			resolve: async () => ({ done: true, text: "changed" }),
+		});
+		expect(result.success).toBe(false);
+		expect(adapter.sent).toEqual([]);
+	});
+
+	it("rejects a selection invalidated while acknowledging its callback", async () => {
+		const adapter = new FakeAdapter();
+		const resolve = vi.fn(async () => ({ done: true as const, text: "changed" }));
+		await createPicker(adapter, makeSource(), {
+			kind: "project",
+			sessionKey: "k1",
+			invokerId: "u1",
+			title: "Choose",
+			items: [{ label: "Select", value: "v" }],
+			resolve,
+		});
+		vi.spyOn(adapter, "answerCallback").mockImplementationOnce(async () => invalidateGatewayPickers("k1"));
+		await handleCallback(
+			{ id: "old", chatId: "chat1", messageId: "m1", userId: "u1", data: adapter.sent[0].buttons![0][0].data },
+			makeDeps({ adapter }),
+		);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it("does not register a picker whose send settles after cancellation", async () => {
+		const adapter = new FakeAdapter();
+		let finish!: (result: SendResult) => void;
+		vi.spyOn(adapter, "sendButtons").mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const pending = createPicker(adapter, makeSource(), {
+			kind: "thinking",
+			sessionKey: "k1",
+			invokerId: "u1",
+			title: "Choose",
+			items: [],
+			resolve: async () => ({ done: true, text: "changed" }),
+		});
+		invalidateGatewayPickers("k1");
+		finish({ success: true, messageId: "late" });
+		await pending;
+		expect(activePickerIds()).toEqual([]);
+	});
+
 	it("createPicker registers an entry and handleCallback selects an item", async () => {
 		const adapter = new FakeAdapter();
 		const selected: string[] = [];
@@ -557,6 +643,25 @@ function makeCommandCtx(text: string): ChatCommandContext {
 }
 
 describe("command picker integration", () => {
+	it.each(["model", "thinking"])("does not apply an old /%s selection", async (name) => {
+		const ctx = makeCommandCtx(`/${name}`);
+		const session = await ctx.bridge.getSession(ctx.key);
+		if (name === "thinking") {
+			vi.spyOn(session!, "supportsThinking").mockReturnValue(true);
+			vi.spyOn(session!, "getAvailableThinkingLevels").mockReturnValue(["off", "high"]);
+		}
+		const setModel = vi.spyOn(session!, "setModel");
+		const setThinking = vi.spyOn(session!, "setThinkingLevel");
+		await runChatCommand(CHAT_COMMANDS.find((c) => c.name === name)!, ctx);
+		const adapter = ctx.adapter as FakeAdapter;
+		const data = adapter.sent[0].buttons![0][0].data;
+		invalidateGatewayPickers(ctx.key);
+		await handleCallback({ id: "old", chatId: "chat1", messageId: "m1", userId: "u1", data }, makeDeps({ adapter }));
+		expect(setModel).not.toHaveBeenCalled();
+		expect(setThinking).not.toHaveBeenCalled();
+		expect(adapter.edits).toEqual([]);
+	});
+
 	it("/model with no args renders a two-level picker that selects a model", async () => {
 		const ctx = makeCommandCtx("/model");
 		const cmd = CHAT_COMMANDS.find((c) => c.name === "model")!;
