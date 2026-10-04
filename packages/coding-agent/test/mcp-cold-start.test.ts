@@ -38,6 +38,7 @@ type MockContext = {
 	hasUI: boolean;
 	mode: string;
 	cwd: string;
+	isProjectTrusted: () => boolean;
 	ui: {
 		notify: (message: string, level?: string) => void;
 		setStatus: (key: string, value: string | undefined) => void;
@@ -72,6 +73,7 @@ function collectStaticImports(filePath: string, seen = new Set<string>()): strin
 
 function createMockPi(cwd: string) {
 	const tools: RegisteredTool[] = [];
+	let activeTools: string[] = [];
 	const commands = new Map<string, RegisteredCommand>();
 	const flags = new Map<string, unknown>();
 	const handlers = new Map<string, SessionHandler[]>();
@@ -81,6 +83,7 @@ function createMockPi(cwd: string) {
 		hasUI: false,
 		mode: "print",
 		cwd,
+		isProjectTrusted: () => true,
 		ui: {
 			notify: (message, level) => {
 				notifications.push({ message, level });
@@ -98,6 +101,7 @@ function createMockPi(cwd: string) {
 		ctx,
 		registerTool(tool: RegisteredTool) {
 			tools.push(tool);
+			if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
 		},
 		registerCommand(name: string, spec: { description?: string; handler: RegisteredCommand["handler"] }) {
 			commands.set(name, { name, handler: spec.handler });
@@ -115,6 +119,10 @@ function createMockPi(cwd: string) {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
+		},
+		getActiveTools: () => activeTools,
+		setActiveTools: (names: string[]) => {
+			activeTools = names;
 		},
 		getAllTools() {
 			return tools.map((tool) => ({ name: tool.name }));
@@ -256,6 +264,42 @@ describe("mcp cold-start dependency split", () => {
 		writeFileSync(path, JSON.stringify({ version: 1, servers }, null, 2), "utf8");
 		return path;
 	}
+
+	it.each([true, false])("project cached tools register only after trust=%s", async (trusted) => {
+		const agentDir = tempAgentDir();
+		const cwd = join(agentDir, "project");
+		mkdirSync(cwd);
+		vi.spyOn(process, "cwd").mockReturnValue(cwd);
+		const serverDef = { command: "inert-project-command", directTools: true };
+		writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { project: serverDef } }));
+		writeCache(agentDir, {
+			project: {
+				configHash: computeServerHash(serverDef),
+				cachedAt: Date.now(),
+				resources: [],
+				tools: [{ name: "inspect", description: "Project only", inputSchema: { type: "object", properties: {} } }],
+			},
+		});
+		process.argv = ["node", "lunr"];
+		const initializeMcp = vi.fn();
+		mockHeavyModules({ initializeMcp });
+		const { default: adapter } = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+		const pi = createMockPi(cwd);
+		pi.ctx.isProjectTrusted = () => trusted;
+		adapter(pi);
+		expect(pi.tools.map((tool) => tool.name)).not.toContain("project_inspect");
+		await emit(pi, "session_start");
+		expect(pi.tools.some((tool) => tool.name === "project_inspect")).toBe(trusted);
+		expect(initializeMcp).not.toHaveBeenCalled();
+		if (trusted) {
+			const tool = pi.tools.find((tool) => tool.name === "project_inspect")!;
+			pi.ctx.isProjectTrusted = () => false;
+			await emit(pi, "session_start");
+			expect(pi.getActiveTools()).not.toContain("project_inspect");
+			await expect(tool.execute!("stale", {}, undefined, undefined, pi.ctx)).rejects.toThrow("unavailable");
+			expect(initializeMcp).not.toHaveBeenCalled();
+		}
+	});
 
 	it("keeps index static imports free of heavy MCP runtime modules", () => {
 		const imports = collectStaticImports(join(ADAPTER_ROOT, "index.ts"));

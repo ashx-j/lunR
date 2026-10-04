@@ -18,6 +18,7 @@ import {
 import type { Extension, ExtensionRuntime, InlineExtension, LoadExtensionsResult } from "./extensions/types.ts";
 import { getGlobalInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
+import { bindPromptResources } from "./prompt-resource-bridge.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
@@ -231,6 +232,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
+		bindPromptResources(this.eventBus, () => ({
+			resources: this.prompts,
+			projectTrusted: this.settingsManager.isProjectTrusted(),
+			includeDiscovery: !this.noPromptTemplates,
+			agentDir: this.agentDir,
+		}));
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
 			agentDir: this.agentDir,

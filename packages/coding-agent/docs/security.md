@@ -9,6 +9,8 @@ Project trust controls whether lunR loads project-local settings, resources, pac
 lunR considers a project to have resources that require trust when it finds any of these from the current working directory:
 
 - `.lunr/settings.json`
+- `.mcp.json`, `.lunr/mcp.json`, legacy `.pi/mcp.json`, or `.vscode/mcp.json`
+- `.pi-lsp.json`
 - `.lunr/extensions`, `.lunr/skills`, `.lunr/prompts`, or `.lunr/themes`
 - `.lunr/SYSTEM.md` or `.lunr/APPEND_SYSTEM.md`
 - project `.agents/skills` in the current directory or an ancestor directory
@@ -21,10 +23,13 @@ Trusting a project allows pi to load project resources that require trust, inclu
 
 - `.lunr/settings.json`
 - `.lunr` resources such as extensions, skills, prompt templates, themes, and system prompt files
+- project MCP servers and imports, and project LSP command overrides and eager startup
 - missing project packages configured through project settings
 - project-local extensions and project package-managed extensions
 
 Declining trust skips protected resources. `AGENTS.md` and `CLAUDE.md` context files are loaded regardless of project trust unless context loading is disabled. Before trust is resolved, pi only loads context files, user/global extensions, and CLI `-e` extensions. User/global and CLI extensions can handle the `project_trust` event; the first extension that returns a yes/no decision owns the decision.
+
+Global retention settings control the global session tree. An approved project's retention settings apply only to its configured session directory. CLI and environment session-directory overrides remain explicit user choices.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, `defaultProjectTrust: "ask"` and `"never"` ignore such resources, while `"always"` trusts them. Use `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
