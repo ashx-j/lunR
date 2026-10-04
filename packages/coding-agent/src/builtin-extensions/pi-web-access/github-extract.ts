@@ -5,7 +5,7 @@ import { extname, join, resolve as resolvePath, sep as pathSep } from "node:path
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { checkGhAvailable, checkRepoSize, fetchViaApi, showGhHint } from "./github-api.ts";
-import { registerSessionCleanup } from "./session-cleanup.ts";
+import { getWebSession, type WebSession } from "./session-cleanup.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -30,6 +30,8 @@ const NOISE_DIRS = new Set([
 
 const MAX_INLINE_FILE_CHARS = 100_000;
 const MAX_TREE_ENTRIES = 200;
+const CLONE_TERMINATION_GRACE_MS = 1_000;
+const CLONE_EXIT_CONFIRMATION_MS = 1_000;
 
 export interface GitHubUrlInfo {
 	owner: string;
@@ -43,6 +45,9 @@ export interface GitHubUrlInfo {
 interface CachedClone {
 	localPath: string;
 	clonePromise: Promise<string | null>;
+	controller: AbortController;
+	owners: Set<WebSession | symbol>;
+	cleanup?: Promise<void>;
 }
 
 interface GitHubCloneConfig {
@@ -53,6 +58,61 @@ interface GitHubCloneConfig {
 }
 
 const cloneCache = new Map<string, CachedClone>();
+const standaloneOwner = Symbol("standalone clone caller");
+
+function removeClone(key: string, entry: CachedClone): void {
+	if (cloneCache.get(key) !== entry) return;
+	try { rmSync(entry.localPath, { recursive: true, force: true }); } catch {}
+	cloneCache.delete(key);
+	if (cloneCache.size === 0) cachedConfig = null;
+}
+
+/** Never release a clone directory while its command may still be writing into it. */
+async function finishClone(key: string, entry: CachedClone): Promise<void> {
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			entry.clonePromise.catch(() => undefined),
+			new Promise<never>((_resolve, reject) => {
+				deadline = setTimeout(() => reject(new Error(
+					"GitHub clone cleanup could not confirm command completion after termination; clone retained until completion",
+				)), CLONE_TERMINATION_GRACE_MS + CLONE_EXIT_CONFIRMATION_MS);
+			}),
+		]);
+	} catch (error) {
+		// Keep the failed cleanup visible to new callers, but permit retry after the command eventually exits.
+		void entry.clonePromise.catch(() => undefined).then(() => removeClone(key, entry));
+		throw error;
+	} finally {
+		clearTimeout(deadline);
+	}
+	removeClone(key, entry);
+}
+
+/** Keep a shared clone alive until its final session releases it, including pending clones. */
+function acquireClone(key: string, entry: CachedClone): void {
+	const owner = getWebSession() ?? standaloneOwner;
+	if (typeof owner !== "symbol" && owner.closed) throw new Error("Web session closed");
+	if (entry.owners.has(owner)) return;
+	entry.owners.add(owner);
+	if (typeof owner !== "symbol") owner.cleanups.add(async () => {
+		entry.owners.delete(owner);
+		if (entry.owners.size > 0) return;
+		entry.controller.abort();
+		entry.cleanup = finishClone(key, entry);
+		await entry.cleanup;
+	});
+}
+
+async function findClone(key: string): Promise<CachedClone | undefined> {
+	const entry = cloneCache.get(key);
+	if (entry?.cleanup) {
+		await entry.cleanup;
+		return findClone(key);
+	}
+	if (entry && !getWebSession()?.closed) acquireClone(key, entry);
+	return entry;
+}
 
 let cachedConfig: GitHubCloneConfig | null = null;
 
@@ -175,24 +235,40 @@ function cloneDir(config: GitHubCloneConfig, owner: string, repo: string, ref?: 
 }
 
 function execClone(args: string[], localPath: string, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
+	if (signal?.aborted) return Promise.resolve(null);
 	return new Promise((resolve) => {
-		const child = execFile(args[0], args.slice(1), { timeout: timeoutMs }, (err) => {
-			if (err) {
-				try {
-					rmSync(localPath, { recursive: true, force: true });
-				} catch {
-				}
+		let failed = false;
+		let exited = false;
+		let closed = false;
+		let stopping = false;
+		let escalation: ReturnType<typeof setTimeout> | undefined;
+		// An execFile callback may also report a kill error while the process is still alive.
+		const child = execFile(args[0], args.slice(1), {}, (err) => { failed = Boolean(err); });
+		const stop = () => {
+			if (stopping || closed) return;
+			stopping = true;
+			escalation = setTimeout(() => {
+				try { child.kill("SIGKILL"); } catch {}
+			}, CLONE_TERMINATION_GRACE_MS);
+			try { child.kill("SIGTERM"); } catch {}
+		};
+		const timeout = setTimeout(stop, timeoutMs);
+		child.once("exit", () => { exited = true; });
+		child.once("close", () => {
+			// Failed spawning has no PID. A spawned command must actually exit before output can be released.
+			if (child.pid && !exited) return;
+			closed = true;
+			clearTimeout(timeout);
+			clearTimeout(escalation);
+			signal?.removeEventListener("abort", stop);
+			if (failed || stopping) {
+				try { rmSync(localPath, { recursive: true, force: true }); } catch {}
 				resolve(null);
-				return;
+			} else {
+				resolve(localPath);
 			}
-			resolve(localPath);
 		});
-
-		if (signal) {
-			const onAbort = () => child.kill();
-			signal.addEventListener("abort", onAbort, { once: true });
-			child.on("exit", () => signal.removeEventListener("abort", onAbort));
-		}
+		signal?.addEventListener("abort", stop, { once: true });
 	});
 }
 
@@ -212,6 +288,7 @@ async function cloneRepo(
 
 	const timeoutMs = config.cloneTimeoutSeconds * 1000;
 	const hasGh = await checkGhAvailable();
+	if (signal?.aborted) return null;
 
 	if (hasGh) {
 		const args = ["gh", "repo", "clone", `${owner}/${repo}`, localPath, "--", "--depth", "1", "--single-branch"];
@@ -497,6 +574,19 @@ function generateContent(localPath: string, info: GitHubUrlInfo): string {
 	return lines.join("\n");
 }
 
+/** Cancel the caller's wait without cancelling a clone leased by another session. */
+async function waitForClone(clone: Promise<string | null>, signal?: AbortSignal): Promise<string | null> {
+	if (!signal) return clone;
+	if (signal.aborted) return null;
+	let onAbort: () => void = () => {};
+	const cancelled = new Promise<null>((resolve) => {
+		onAbort = () => resolve(null);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	try { return await Promise.race([clone, cancelled]); }
+	finally { signal.removeEventListener("abort", onAbort); }
+}
+
 async function awaitCachedClone(
 	cached: CachedClone,
 	url: string,
@@ -506,8 +596,8 @@ async function awaitCachedClone(
 	signal?: AbortSignal,
 ): Promise<ExtractedContent | null> {
 	if (signal?.aborted) return null;
-	const result = await cached.clonePromise;
-	if (signal?.aborted) return null;
+	const result = await waitForClone(cached.clonePromise, signal);
+	if (signal?.aborted || getWebSession()?.closed) return null;
 	if (result) {
 		const content = generateContent(result, info);
 		const title = info.path ? `${owner}/${repo} - ${info.path}` : `${owner}/${repo}`;
@@ -532,8 +622,11 @@ export async function extractGitHub(
 	const { owner, repo } = info;
 	const key = cacheKey(owner, repo, info.ref);
 
-	const cached = cloneCache.get(key);
-	if (cached) return awaitCachedClone(cached, url, owner, repo, info, signal);
+	const cached = await findClone(key);
+	if (signal?.aborted || getWebSession()?.closed) return null;
+	if (cached) {
+		return awaitCachedClone(cached, url, owner, repo, info, signal);
+	}
 
 	if (info.refIsFullSha) {
 		if (signal?.aborted) return null;
@@ -577,7 +670,9 @@ export async function extractGitHub(
 	}
 
 	// Re-check: another concurrent caller may have started a clone while we awaited the size check
-	const cachedAfterSizeCheck = cloneCache.get(key);
+	let cachedAfterSizeCheck = await findClone(key);
+	while (!cachedAfterSizeCheck && cloneCache.has(key)) cachedAfterSizeCheck = await findClone(key);
+	if (signal?.aborted || getWebSession()?.closed) return null;
 	if (cachedAfterSizeCheck) {
 		const cachedResult = await awaitCachedClone(cachedAfterSizeCheck, url, owner, repo, info, signal);
 		if (signal?.aborted) {
@@ -590,19 +685,22 @@ export async function extractGitHub(
 		return cachedResult;
 	}
 
-	const clonePromise = cloneRepo(owner, repo, info.ref, config, signal);
+	if (signal?.aborted || getWebSession()?.closed) return null;
+	const controller = new AbortController();
+	const clonePromise = cloneRepo(owner, repo, info.ref, config, controller.signal);
 	const localPath = cloneDir(config, owner, repo, info.ref);
-	cloneCache.set(key, { localPath, clonePromise });
+	const entry: CachedClone = { localPath, clonePromise, controller, owners: new Set() };
+	cloneCache.set(key, entry);
+	acquireClone(key, entry);
 
-	const result = await clonePromise;
-	if (signal?.aborted) {
-		if (!result) cloneCache.delete(key);
+	const result = await waitForClone(clonePromise, signal);
+	if (signal?.aborted || getWebSession()?.closed) {
 		activityMonitor.logComplete(activityId, 0);
 		return null;
 	}
 
 	if (!result) {
-		cloneCache.delete(key);
+		if (cloneCache.get(key) === entry) cloneCache.delete(key);
 		if (signal?.aborted) {
 			activityMonitor.logComplete(activityId, 0);
 			return null;
@@ -623,16 +721,3 @@ export async function extractGitHub(
 	const title = info.path ? `${owner}/${repo} - ${info.path}` : `${owner}/${repo}`;
 	return { url, title, content, error: null };
 }
-
-export function clearCloneCache(): void {
-	for (const entry of cloneCache.values()) {
-		try {
-			rmSync(entry.localPath, { recursive: true, force: true });
-		} catch {
-		}
-	}
-	cloneCache.clear();
-	cachedConfig = null;
-}
-
-registerSessionCleanup(clearCloneCache);

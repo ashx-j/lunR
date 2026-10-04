@@ -1,4 +1,4 @@
-// @ts-nocheck
+import { AsyncLocalStorage } from "node:async_hooks";
 // Types
 export interface ActivityEntry {
 	id: string;
@@ -28,10 +28,17 @@ export class ActivityMonitor {
 	private entries: ActivityEntry[] = [];
 	private readonly maxEntries = 10;
 	private listeners = new Set<() => void>();
-	private rateLimitInfo: RateLimitInfo = { used: 0, max: 10, oldestTimestamp: null, windowMs: 60000 };
+	private rateLimitInfo: RateLimitInfo = {
+		used: 0,
+		max: 10,
+		oldestTimestamp: null,
+		windowMs: 60000,
+	};
 	private nextId = 1;
 
-	logStart(partial: Omit<ActivityEntry, "id" | "startTime" | "status">): string {
+	logStart(
+		partial: Omit<ActivityEntry, "id" | "startTime" | "status">,
+	): string {
 		const id = `act-${this.nextId++}`;
 		const entry: ActivityEntry = {
 			...partial,
@@ -85,7 +92,12 @@ export class ActivityMonitor {
 
 	clear(): void {
 		this.entries = [];
-		this.rateLimitInfo = { used: 0, max: 10, oldestTimestamp: null, windowMs: 60000 };
+		this.rateLimitInfo = {
+			used: 0,
+			max: 10,
+			oldestTimestamp: null,
+			windowMs: 60000,
+		};
 		this.notify();
 	}
 
@@ -93,10 +105,23 @@ export class ActivityMonitor {
 		for (const cb of this.listeners) {
 			try {
 				cb();
-			} catch {
-			}
+			} catch {}
 		}
 	}
 }
 
-export const activityMonitor = new ActivityMonitor();
+const activityScope = new AsyncLocalStorage<ActivityMonitor>();
+const standaloneActivity = new ActivityMonitor();
+
+export function runWithActivity<T>(monitor: ActivityMonitor, fn: () => T): T {
+	return activityScope.run(monitor, fn);
+}
+
+// Existing providers log through this facade without changing their request APIs.
+export const activityMonitor = new Proxy(standaloneActivity, {
+	get(_target, key: keyof ActivityMonitor) {
+		const monitor = activityScope.getStore() ?? standaloneActivity;
+		const value = monitor[key];
+		return typeof value === "function" ? value.bind(monitor) : value;
+	},
+});
