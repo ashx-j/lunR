@@ -22,11 +22,11 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- PR #151 merge qualification: gateway approval fixtures own a disposable agent directory and persist their expected configuration, preventing other suites' conversation bindings from changing authorization. The previously failing three-suite reproduction passes all 77 tests; five offline package builds pass. Full isolated tests and fresh CI follow.
+- **v0.2.28 release preparation (2026-10-04):** PR #151 merged as `bc1ecabe` after fresh green CI. The release updates lockstep package versions, shrinkwrap, installer locks and changelogs for request accounting. Gateway approval fixtures own their profile and saved configuration; the reproduced CI failure now passes all 77 focused tests. PR CI passes Agent 191, AI 652 with 760 skips, and coding-agent 3,505 with 56 skips. Publication follows release-PR CI and artifact qualification. The pinned native runtime and production approval are unchanged.
 
 - **Token accounting (`fix/token-accounting`, 2026-10-04):** conversation, title, compaction and branch-summary requests share durable request identities. Session, gateway and goal totals retain incurred parent and child usage through branch navigation; forks retain context without charging inherited history. Foreground and default async children include cache tokens, failed fallback attempts and auxiliary requests, with request receipts deduplicated through completion, wait and resume. Shared request-aware estimation includes system/tools and rejects obsolete usage after compaction or prefix changes. Failed Responses usage, native reasoning/cache retention, OpenRouter reported charges/image cache splits, reviewed Gemini long-context tiers in both shipped catalogs, missing measurements, labels and per-response TPS are corrected. Quota polling remains provider-defined.
 
-- **v0.2.27 release preparation (2026-10-04):** all 21 PRs #129 through #149 are merged after fresh green CI, using their completed reviews and recorded conflict resolutions. Versioned package manifests, shrinkwrap and installer locks are current. Five offline package builds and composed tool snapshots pass. Agent 191, AI 635 with 760 skips, TUI 757, and Orchestrator 32 pass. The local coding-agent run passed 3,477 tests with 56 skips and one intercom failure from a 114-byte nested socket path. Shortening the release runner prefix brings it to 98 bytes; all four intercom startup tests pass through the same nested runner. Release PR CI and publication qualification follow. The pinned CuaDriver approval is unchanged.
+- **v0.2.27 (2026-10-04):** release PR #150 merged the preparation for PRs #129 through #149. Public npm reports `@ashx-j/lunr@0.2.27`. Five offline package builds and composed tool snapshots passed. A shorter release-runner prefix repaired the nested intercom socket-path failure.
 
 - Shutdown fixture integration: the plain-object InteractiveMode fixture supplies session admission cleanup required by the runtime repair. Five ordering/resume tests pass independently; combined validation also retains provider polling cleanup.
 
@@ -43,7 +43,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-04 (token-accounting work based on v0.2.27). Public npm is `@ashx-j/lunr@0.2.27`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-04 (v0.2.28 release preparation). Public npm is `@ashx-j/lunr@0.2.27`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -173,6 +173,8 @@ Last updated: 2026-10-04 (token-accounting work based on v0.2.27). Public npm is
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- v0.2.28 preparation: all five offline package builds, read-only repository checks and seven real-payload public tarballs pass. PR #151 CI passes Agent 191, AI 652 with 760 credential skips, and coding-agent 3,505 with 56 skips. Release-PR CI and isolated installed-package validation follow.
 
 - Token accounting, 2026-10-04: five offline package compiles and the Node bundle pass. Full isolated tests pass: AI 649 with 760 credential skips, Agent 191, coding-agent 3,503 with 56 skips, TUI 741 and Orchestrator 32. Three added AI charge/zero cases and gateway combined-usage/non-ASCII consistency cases pass in focused follow-ups. Whole-package Biome, relative imports and bundled catalog integrity pass. Test profiles use an environment allowlist without account credentials; a short disposable prefix keeps nested intercom sockets within the POSIX limit. No original checkout, installed CLI, native desktop, live account or release was used.
 
@@ -421,6 +423,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-04: ship merged PR #151 as 0.2.28 through a separate release PR, keeping package versions and both installer locks aligned before tagging the merged release commit.
 
 - 2026-10-04: isolate the PR #151 gateway approval fixture instead of weakening callback authorization, because the CI failure reproduces only with other suites' saved gateway data.
 

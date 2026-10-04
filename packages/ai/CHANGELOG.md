@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.28] - 2026-10-04
+
+### Fixed
+
+- Provider accounting retains usage on failed responses, reported charges, reasoning tokens, and cache retention. Gemini long-context pricing uses the reviewed tiers.
+- Request-aware context estimates include system instructions and tool definitions and reject obsolete prompt measurements.
+
 ## [0.2.27] - 2026-10-04
 
 ### Fixed
