@@ -235,7 +235,7 @@ describe("renderContextBox", () => {
 		expect(text).toContain("Tool definitions");
 		expect(text).toContain("User messages (1)");
 		expect(text).toContain("Assistant text (1)");
-		expect(text).toContain("Thinking (1)");
+		expect(text).toContain("Visible thinking (1)");
 		expect(text).toContain("Estimated total");
 		expect(text).toContain("░");
 		// Bordered box chrome
