@@ -11,11 +11,13 @@
  * provider and key ids only.
  */
 
+import { createHash } from "node:crypto";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { join } from "path";
 import { getAgentDir } from "../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend, InMemoryAuthStorageBackend } from "./auth-storage.ts";
 import { parseResetTimeMs } from "./usage-limit.ts";
+import { clearPlanUsageCache } from "./usage-service.ts";
 
 export interface SubEntry {
 	id: string;
@@ -33,14 +35,23 @@ interface ProviderPool {
 
 type SubscriptionData = Record<string, ProviderPool>;
 
+export interface RequestSubscriptionKey {
+	providerId: string;
+	fingerprint: string;
+}
+
+/** Request identities are non-secret digests kept outside messages and storage. */
+export function subscriptionKeyFingerprint(providerId: string, key: string): string {
+	return createHash("sha256").update(providerId).update("\0").update(key).digest("hex");
+}
+
 export class SubscriptionManager {
 	private data: SubscriptionData = {};
-	private loaded = false;
 	private storage: AuthStorageBackend;
 	private authStorage: CredentialStore;
 	// In-process write queue so mutations serialize even before the file lock.
 	private queue: Promise<unknown> = Promise.resolve();
-	// Per-provider ids of keys exhausted without a parseable reset time.
+	// Per-provider fingerprints exhausted without a parseable reset time.
 	// Process-local on purpose: infinite exhaustion is never persisted.
 	private memoryExhausted = new Map<string, Set<string>>();
 
@@ -67,38 +78,58 @@ export class SubscriptionManager {
 	}
 
 	private parseStorageData(content: string | undefined): SubscriptionData {
-		if (!content) {
-			return {};
-		}
-		return JSON.parse(content) as SubscriptionData;
-	}
-
-	private ensureLoaded(): void {
-		if (this.loaded) return;
-		this.loaded = true;
-		let content: string | undefined;
+		if (content === undefined) return {};
 		try {
-			this.storage.withLock((current) => {
-				content = current;
-				return { result: undefined };
-			});
-			this.data = this.parseStorageData(content);
+			const parsed: unknown = JSON.parse(content);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+			for (const value of Object.values(parsed as Record<string, unknown>)) {
+				if (!value || typeof value !== "object") throw new Error();
+				const pool = value as Record<string, unknown>;
+				if (typeof pool.active !== "string" || !Array.isArray(pool.keys)) throw new Error();
+				const ids = new Set<string>();
+				for (const value of pool.keys as unknown[]) {
+					if (!value || typeof value !== "object") throw new Error();
+					const entry = value as Record<string, unknown>;
+					if (
+						typeof entry.id !== "string" ||
+						ids.has(entry.id) ||
+						typeof entry.name !== "string" ||
+						typeof entry.key !== "string" ||
+						typeof entry.addedAt !== "number" ||
+						!Number.isFinite(entry.addedAt) ||
+						(entry.exhaustedUntil !== undefined &&
+							(typeof entry.exhaustedUntil !== "number" || !Number.isFinite(entry.exhaustedUntil))) ||
+						(entry.lastError !== undefined && typeof entry.lastError !== "string")
+					)
+						throw new Error();
+					ids.add(entry.id);
+				}
+				if (!ids.has(pool.active)) throw new Error();
+			}
+			return parsed as SubscriptionData;
 		} catch {
-			// Preserve the empty snapshot; a malformed file is never overwritten by a load.
+			throw new Error("Subscription storage is malformed. Repair it before changing subscriptions.");
 		}
 	}
 
+	/**
+	 * Lock order is subscriptions then auth. Keep selection and its auth mirror
+	 * under the subscription lock so later selectors cannot overtake a mirror.
+	 * These files are not an atomic commit: a failed mirror aborts the pool write;
+	 * a later pool write failure can leave auth ahead and a repeated selection repairs it.
+	 */
 	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-		const next = this.queue.then(fn);
+		const next = this.queue.then(() =>
+			this.storage.withLockAsync(async (current) => {
+				this.data = this.parseStorageData(current);
+				const before = JSON.stringify(this.data, null, 2);
+				const result = await fn();
+				const after = JSON.stringify(this.data, null, 2);
+				return { result, next: before === after ? undefined : after };
+			}),
+		);
 		this.queue = next.catch(() => {});
 		return next;
-	}
-
-	private persist(): Promise<void> {
-		return this.storage.withLockAsync(async () => ({
-			result: undefined,
-			next: JSON.stringify(this.data, null, 2),
-		}));
 	}
 
 	/** Raw stored credential read via the modify path (returning undefined leaves it unchanged). */
@@ -116,7 +147,6 @@ export class SubscriptionManager {
 	 * as "Sub 1" on first access. OAuth credentials are not imported.
 	 */
 	private async ensurePool(providerId: string): Promise<ProviderPool | undefined> {
-		this.ensureLoaded();
 		const existing = this.data[providerId];
 		if (existing) return existing;
 
@@ -128,7 +158,6 @@ export class SubscriptionManager {
 			keys: [{ id: "1", name: "Sub 1", key: credential.key, addedAt: Date.now() }],
 		};
 		this.data = { ...this.data, [providerId]: pool };
-		await this.persist();
 		return pool;
 	}
 
@@ -142,7 +171,16 @@ export class SubscriptionManager {
 	}
 
 	private async mirrorActive(providerId: string, key: string): Promise<void> {
-		await this.authStorage.modify(providerId, async () => ({ type: "api_key", key }));
+		clearPlanUsageCache();
+		try {
+			await this.authStorage.modify(providerId, async (current) => ({
+				type: "api_key",
+				key,
+				...(current?.type === "api_key" && current.env ? { env: current.env } : {}),
+			}));
+		} finally {
+			clearPlanUsageCache();
+		}
 	}
 
 	async list(providerId: string): Promise<SubEntry[]> {
@@ -161,13 +199,11 @@ export class SubscriptionManager {
 
 	async addKey(providerId: string, key: string, name?: string): Promise<SubEntry> {
 		return this.enqueue(async () => {
-			this.ensureLoaded();
 			const pool = await this.ensurePool(providerId);
 			const id = pool ? this.nextId(pool) : "1";
 			const entry: SubEntry = { id, name: name ?? `Sub ${id}`, key, addedAt: Date.now() };
 			const keys = [...(pool?.keys ?? []), entry];
 			this.data = { ...this.data, [providerId]: { active: id, keys } };
-			await this.persist();
 			await this.mirrorActive(providerId, key);
 			return entry;
 		});
@@ -179,14 +215,21 @@ export class SubscriptionManager {
 			if (!pool || !pool.keys.some((entry) => entry.id === id)) return;
 
 			const keys = pool.keys.filter((entry) => entry.id !== id);
-			this.memoryExhausted.get(providerId)?.delete(id);
+			const removed = pool.keys.find((entry) => entry.id === id)!;
+			if (!keys.some((entry) => entry.key === removed.key)) {
+				this.memoryExhausted.get(providerId)?.delete(subscriptionKeyFingerprint(providerId, removed.key));
+			}
 
 			if (keys.length === 0) {
 				const data = { ...this.data };
 				delete data[providerId];
 				this.data = data;
-				await this.persist();
-				await this.authStorage.delete(providerId);
+				clearPlanUsageCache();
+				try {
+					await this.authStorage.delete(providerId);
+				} finally {
+					clearPlanUsageCache();
+				}
 				return;
 			}
 
@@ -194,14 +237,12 @@ export class SubscriptionManager {
 			if (active === id) {
 				active = keys[0]?.id ?? active;
 				this.data = { ...this.data, [providerId]: { active, keys } };
-				await this.persist();
 				const promoted = keys.find((entry) => entry.id === active);
 				if (promoted) await this.mirrorActive(providerId, promoted.key);
 				return;
 			}
 
 			this.data = { ...this.data, [providerId]: { active, keys } };
-			await this.persist();
 		});
 	}
 
@@ -211,7 +252,6 @@ export class SubscriptionManager {
 			if (!pool) return;
 			const keys = pool.keys.map((entry) => (entry.id === id ? { ...entry, name } : entry));
 			this.data = { ...this.data, [providerId]: { ...pool, keys } };
-			await this.persist();
 		});
 	}
 
@@ -221,57 +261,63 @@ export class SubscriptionManager {
 			const entry = pool?.keys.find((candidate) => candidate.id === id);
 			if (!pool || !entry) return;
 			this.data = { ...this.data, [providerId]: { ...pool, active: id } };
-			await this.persist();
 			await this.mirrorActive(providerId, entry.key);
 		});
 	}
 
 	/**
-	 * Mark the active key exhausted and rotate to the next non-exhausted key in
+	 * Mark the request's key exhausted and rotate to the next non-exhausted key in
 	 * round-robin order. A parseable reset time is persisted as exhaustedUntil;
-	 * otherwise the exhaustion is process-local only. Returns the new active key,
-	 * or null when no non-exhausted alternative exists (current key stays active).
+	 * otherwise the exhaustion is process-local only. A later selection is preserved.
+	 * Returns the usable active key for retry, or null when no alternative exists.
 	 */
-	async rotateOnFailure(providerId: string, errorMessage: string, now: number = Date.now()): Promise<SubEntry | null> {
+	async rotateOnFailure(
+		providerId: string,
+		errorMessage: string,
+		requestFingerprint: string | undefined,
+		now: number = Date.now(),
+	): Promise<SubEntry | null> {
+		if (!requestFingerprint) return null;
 		return this.enqueue(async () => {
-			const pool = await this.ensurePool(providerId);
-			if (!pool) return null;
+			const pool = this.data[providerId];
+			if (!pool || pool.keys.length < 2) return null;
 			const currentIndex = pool.keys.findIndex((entry) => entry.id === pool.active);
 			if (currentIndex === -1) return null;
 			const current = pool.keys[currentIndex];
-			if (!current) return null;
+			const matchesRequest = (entry: SubEntry): boolean =>
+				subscriptionKeyFingerprint(providerId, entry.key) === requestFingerprint;
+			if (!current || !pool.keys.some(matchesRequest)) return null;
 
 			const resetAt = parseResetTimeMs(errorMessage);
 			let keys = pool.keys;
 			if (resetAt !== undefined && resetAt > now) {
 				keys = pool.keys.map((entry) =>
-					entry.id === current.id ? { ...entry, exhaustedUntil: resetAt, lastError: errorMessage } : entry,
+					matchesRequest(entry) ? { ...entry, exhaustedUntil: resetAt, lastError: errorMessage } : entry,
 				);
 			} else {
 				const set = this.memoryExhausted.get(providerId) ?? new Set<string>();
-				set.add(current.id);
+				set.add(requestFingerprint);
 				this.memoryExhausted.set(providerId, set);
 			}
 
 			const isExhausted = (entry: SubEntry): boolean =>
-				this.memoryExhausted.get(providerId)?.has(entry.id) === true ||
+				this.memoryExhausted.get(providerId)?.has(subscriptionKeyFingerprint(providerId, entry.key)) === true ||
 				(entry.exhaustedUntil !== undefined && entry.exhaustedUntil > now);
+
+			if (keys !== pool.keys) this.data = { ...this.data, [providerId]: { ...pool, keys } };
+			// Another owner already selected a different credential. Retry it without
+			// replacing its selection or mirroring a stale failure over its auth.
+			if (!matchesRequest(current)) return isExhausted(current) ? null : current;
 
 			for (let offset = 1; offset < keys.length; offset++) {
 				const candidate = keys[(currentIndex + offset) % keys.length];
 				if (!candidate || isExhausted(candidate)) continue;
 				this.data = { ...this.data, [providerId]: { active: candidate.id, keys } };
-				await this.persist();
 				await this.mirrorActive(providerId, candidate.key);
 				return candidate;
 			}
 
-			// No alternative: keep the (now-exhausted) current key active, but still
-			// persist its exhaustion state when a reset time was recorded.
-			if (keys !== pool.keys) {
-				this.data = { ...this.data, [providerId]: { ...pool, keys } };
-				await this.persist();
-			}
+			// No alternative: keep the now-exhausted current key active.
 			return null;
 		});
 	}
@@ -279,10 +325,10 @@ export class SubscriptionManager {
 	/** Manual reactivate: clears persisted and process-local exhaustion for a key. */
 	async clearExhaustion(providerId: string, id: string): Promise<void> {
 		return this.enqueue(async () => {
-			this.memoryExhausted.get(providerId)?.delete(id);
 			const pool = await this.ensurePool(providerId);
 			if (!pool) return;
 			const target = pool.keys.find((entry) => entry.id === id);
+			if (target) this.memoryExhausted.get(providerId)?.delete(subscriptionKeyFingerprint(providerId, target.key));
 			if (!target || (target.exhaustedUntil === undefined && target.lastError === undefined)) return;
 			const keys = pool.keys.map((entry) => {
 				if (entry.id !== id) return entry;
@@ -290,7 +336,6 @@ export class SubscriptionManager {
 				return rest;
 			});
 			this.data = { ...this.data, [providerId]: { ...pool, keys } };
-			await this.persist();
 		});
 	}
 }

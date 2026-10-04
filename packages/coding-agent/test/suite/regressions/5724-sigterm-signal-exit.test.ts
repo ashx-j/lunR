@@ -10,6 +10,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
+	stopPlanUsagePolling: () => void;
 	stopSmoothStreaming: () => void;
 	unregisterSignalHandlers: () => void;
 	session: { stopAdmission: () => void };
@@ -61,6 +62,7 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const disposeStarted = deferred();
 		const context: ShutdownThis = {
 			isShuttingDown: false,
+			stopPlanUsagePolling: vi.fn(),
 			stopSmoothStreaming: vi.fn(() => {
 				order.push("stopSmoothStreaming");
 			}),

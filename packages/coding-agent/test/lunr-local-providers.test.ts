@@ -1,7 +1,7 @@
 import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import lunrLocalProviders from "../src/builtin-extensions/lunr-local-providers/index.ts";
-import { LOCAL_SERVERS } from "../src/builtin-extensions/lunr-local-providers/local-servers.ts";
+import { fetchLocalModelIds, LOCAL_SERVERS } from "../src/builtin-extensions/lunr-local-providers/local-servers.ts";
 import type { ExtensionAPI, ProviderConfig } from "../src/core/extensions/types.ts";
 
 afterEach(() => {
@@ -63,5 +63,25 @@ describe("lunr local providers", () => {
 		expect(Date.now() - started).toBeLessThan(200);
 		expect(fetchImpl).not.toHaveBeenCalled();
 		expect(models.map((model) => model.id)).toEqual(["cached-llama"]);
+	});
+});
+
+
+describe("local discovery cancellation", () => {
+	it("dispatches nothing for an already-aborted signal", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+		expect(await fetchLocalModelIds(LOCAL_SERVERS[0]!, 100, controller.signal)).toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+	it("does not dispatch the fallback after cancellation during the first request", async () => {
+		const controller = new AbortController();
+		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+			controller.abort();
+			throw new Error("fake cancellation");
+		});
+		expect(await fetchLocalModelIds(LOCAL_SERVERS[0]!, 100, controller.signal)).toBeNull();
+		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 });

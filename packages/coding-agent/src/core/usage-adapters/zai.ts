@@ -10,7 +10,7 @@
  */
 
 import type { ModelRuntime } from "../model-runtime.ts";
-import type { PlanUsage, PlanUsageWindow } from "../usage-service.ts";
+import type { PlanUsage, PlanUsageWindow, UsageAuthSnapshot } from "../usage-service.ts";
 import { asNumber, asObject, asString, clampPercent, fetchWithTimeout, toEpochMs } from "./shared.ts";
 
 const ZAI_PROVIDER_ID = "zai";
@@ -29,8 +29,8 @@ function limitLabel(limit: Record<string, unknown>): string | undefined {
 	return "Limit";
 }
 
-export async function fetchZaiPlanUsage(runtime: ModelRuntime): Promise<PlanUsage | undefined> {
-	const resolution = await runtime.getAuth(ZAI_PROVIDER_ID);
+export async function fetchZaiPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage | undefined> {
+	const resolution = auth ? auth.resolution : await runtime.getAuth(ZAI_PROVIDER_ID);
 	const apiKey = resolution?.auth.apiKey;
 	if (!apiKey) return undefined;
 

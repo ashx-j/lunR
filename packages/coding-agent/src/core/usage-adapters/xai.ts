@@ -18,7 +18,7 @@
 
 import { ModelsError } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../model-runtime.ts";
-import type { PlanUsage, PlanUsageWindow } from "../usage-service.ts";
+import type { PlanUsage, PlanUsageWindow, UsageAuthSnapshot } from "../usage-service.ts";
 import {
 	asObject,
 	asString,
@@ -49,10 +49,10 @@ function weeklyWindow(config: Record<string, unknown>): PlanUsageWindow | undefi
 	};
 }
 
-export async function fetchXaiPlanUsage(runtime: ModelRuntime): Promise<PlanUsage | undefined> {
-	if (!runtime.isUsingOAuth(XAI_PROVIDER_ID)) return undefined;
+export async function fetchXaiPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage | undefined> {
+	if (!(auth?.oauth ?? runtime.isUsingOAuth(XAI_PROVIDER_ID))) return undefined;
 
-	const resolution = await runtime.getAuth(XAI_PROVIDER_ID);
+	const resolution = auth ? auth.resolution : await runtime.getAuth(XAI_PROVIDER_ID);
 	const accessToken = resolution?.auth.apiKey;
 	if (!accessToken) return undefined;
 

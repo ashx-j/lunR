@@ -7,7 +7,7 @@
 
 import type { Api, AuthResult, Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../model-runtime.ts";
-import type { PlanUsage, PlanUsageWindow } from "../usage-service.ts";
+import type { PlanUsage, PlanUsageWindow, UsageAuthSnapshot } from "../usage-service.ts";
 import { asNumber, asObject, asString, fetchWithTimeout, toEpochMs } from "./shared.ts";
 
 const CODEX_PROVIDER_ID = "openai-codex";
@@ -143,7 +143,7 @@ function normalizeBackendCredits(value: unknown): boolean {
 // Auth resolution via core ModelRuntime (rewired from ctx.modelRegistry)
 // ---------------------------------------------------------------------------
 
-async function resolveCodexHeaders(runtime: ModelRuntime): Promise<Record<string, string> | undefined> {
+export async function resolveCodexHeaders(runtime: ModelRuntime): Promise<Record<string, string> | undefined> {
 	const candidates: Model<Api>[] = [];
 	const seen = new Set<string>();
 	const add = (model: Model<Api> | undefined) => {
@@ -227,8 +227,8 @@ function toPlanUsage(report: CodexUsageReport): PlanUsage[] {
 	});
 }
 
-export async function fetchCodexPlanUsage(runtime: ModelRuntime): Promise<PlanUsage[] | undefined> {
-	const headers = await resolveCodexHeaders(runtime);
+export async function fetchCodexPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage[] | undefined> {
+	const headers = auth ? auth.codexHeaders : await resolveCodexHeaders(runtime);
 	if (!headers) return undefined;
 
 	const response = await fetchWithTimeout(CODEX_USAGE_URL, { headers });

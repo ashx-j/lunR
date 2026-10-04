@@ -13,11 +13,13 @@
  * Auth failures are different: they return `error` and are not cached as empty.
  */
 
+import { createHash } from "node:crypto";
+import type { AuthResult } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import { fetchKimiPlanUsage } from "./usage-adapters/kimi-coding.ts";
-import { fetchCodexPlanUsage } from "./usage-adapters/openai-codex.ts";
+import { fetchCodexPlanUsage, resolveCodexHeaders } from "./usage-adapters/openai-codex.ts";
 import { fetchXaiPlanUsage } from "./usage-adapters/xai.ts";
 import { fetchZaiPlanUsage } from "./usage-adapters/zai.ts";
 
@@ -76,7 +78,13 @@ export function planUsageAuthError(error: unknown): string | undefined {
 	return undefined;
 }
 
-type UsageAdapter = (runtime: ModelRuntime) => Promise<PlanUsage | PlanUsage[] | undefined>;
+export interface UsageAuthSnapshot {
+	resolution?: AuthResult;
+	codexHeaders?: Record<string, string>;
+	oauth: boolean;
+}
+
+type UsageAdapter = (runtime: ModelRuntime, auth: UsageAuthSnapshot) => Promise<PlanUsage | PlanUsage[] | undefined>;
 
 const ADAPTERS: Readonly<Record<string, UsageAdapter>> = {
 	"openai-codex": fetchCodexPlanUsage,
@@ -116,8 +124,23 @@ export function footerPlanLabel(window: PlanUsageWindow): string {
 	return window.label.length <= 4 ? window.label : window.label.slice(0, 4);
 }
 
-const cache = new Map<string, { expiresAt: number; value: PlanUsage[] }>();
-const inflight = new Map<string, Promise<PlanUsageResult>>();
+interface UsageState {
+	accounts: Map<string, string>;
+	authReads: Map<string, { started: number; settled: number }>;
+	cache: Map<string, { expiresAt: number; value: PlanUsage[] }>;
+	inflight: Map<string, Promise<PlanUsageResult>>;
+}
+let generation = 0;
+let states = new WeakMap<ModelRuntime, UsageState>();
+
+function stateFor(runtime: ModelRuntime): UsageState {
+	let state = states.get(runtime);
+	if (!state) {
+		state = { accounts: new Map(), authReads: new Map(), cache: new Map(), inflight: new Map() };
+		states.set(runtime, state);
+	}
+	return state;
+}
 
 /** Whether a plan-usage adapter exists for this provider. */
 export function hasPlanUsageAdapter(providerId: string): boolean {
@@ -133,27 +156,63 @@ export async function getPlanUsage(providerId: string, runtime: ModelRuntime): P
 export async function getPlanUsageResult(providerId: string, runtime: ModelRuntime): Promise<PlanUsageResult> {
 	const adapter = ADAPTERS[providerId];
 	if (!adapter) return {};
-	const now = Date.now();
-	const cached = cache.get(providerId);
-	if (cached && cached.expiresAt > now) return { usage: cached.value[0], usages: cached.value };
-	const pending = inflight.get(providerId);
+	const state = stateFor(runtime);
+	const requestGeneration = generation;
+	const reads = state.authReads.get(providerId) ?? { started: 0, settled: 0 };
+	state.authReads.set(providerId, reads);
+	const authRead = ++reads.started;
+	let auth: UsageAuthSnapshot;
+	try {
+		auth =
+			providerId === "openai-codex"
+				? { codexHeaders: await resolveCodexHeaders(runtime), oauth: runtime.isUsingOAuth(providerId) }
+				: { resolution: await runtime.getAuth(providerId), oauth: runtime.isUsingOAuth(providerId) };
+	} catch (error) {
+		if (reads.settled <= authRead) {
+			reads.settled = authRead;
+			state.accounts.delete(providerId);
+			state.cache.delete(providerId);
+			state.inflight.delete(providerId);
+		}
+		return { error: planUsageAuthError(error) };
+	}
+	if (generation !== requestGeneration || states.get(runtime) !== state) return {};
+	// Only a digest is retained. Neither credentials nor account identifiers are persisted.
+	const account = createHash("sha256").update(JSON.stringify(auth)).digest("hex");
+	const previous = state.accounts.get(providerId);
+	if (reads.settled > authRead && previous !== account) return {};
+	reads.settled = Math.max(reads.settled, authRead);
+	if (previous !== account) {
+		state.cache.delete(providerId);
+		state.inflight.delete(providerId);
+		state.accounts.set(providerId, account);
+	}
+	const cached = state.cache.get(providerId);
+	if (cached && cached.expiresAt > Date.now()) return { usage: cached.value[0], usages: cached.value };
+	const pending = state.inflight.get(providerId);
 	if (pending) return pending;
+	const isCurrent = () =>
+		generation === requestGeneration &&
+		states.get(runtime) === state &&
+		state.accounts.get(providerId) === account &&
+		state.inflight.get(providerId) === task;
 	const task = (async (): Promise<PlanUsageResult> => {
 		try {
-			const value = await adapter(runtime);
+			const value = await adapter(runtime, auth);
 			const usages = value === undefined ? [] : Array.isArray(value) ? value : [value];
-			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: usages });
+			if (isCurrent())
+				state.cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: usages });
 			return { usage: usages[0], usages };
 		} catch (error) {
 			const authError = planUsageAuthError(error);
 			if (authError) return { error: authError };
-			cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: [] });
+			if (isCurrent()) state.cache.set(providerId, { expiresAt: Date.now() + PLAN_USAGE_CACHE_TTL_MS, value: [] });
 			return {};
 		} finally {
-			inflight.delete(providerId);
+			if (isCurrent()) state.inflight.delete(providerId);
 		}
 	})();
-	inflight.set(providerId, task);
+	state.inflight.set(providerId, task);
 	return task;
 }
 
@@ -174,14 +233,14 @@ export async function getAllPlanUsageResults(
 }
 
 /** Last fetched usage, including expired cache (footer can show stale while refetching). */
-export function peekPlanUsage(providerId: string): PlanUsage | undefined {
-	return cache.get(providerId)?.value[0];
+export function peekPlanUsage(providerId: string, runtime: ModelRuntime): PlanUsage | undefined {
+	return states.get(runtime)?.cache.get(providerId)?.value[0];
 }
 
 /** Clear the adapter cache (tests, /login changes). */
 export function clearPlanUsageCache(): void {
-	cache.clear();
-	inflight.clear();
+	generation++;
+	states = new WeakMap();
 }
 
 // ---------------------------------------------------------------------------
@@ -203,42 +262,37 @@ export interface UsageServiceBridge {
 	setOnUpdate(fn: (() => void) | undefined): void;
 }
 
-let activeRuntime: ModelRuntime | undefined;
-let activeUsageSettings: SettingsManager | undefined;
-let onUsageUpdate: (() => void) | undefined;
+const bridges = new WeakMap<ModelRuntime, UsageServiceBridge>();
 
-function preferredWindow(): PlanUsageWindowPreference {
-	return (runtimeScope.getStore()?.settingsManager ?? activeUsageSettings)?.getPlanUsageWindow() ?? "weekly";
-}
-
-const usageBridge: UsageServiceBridge = {
-	peek(providerId: string): PlanUsage | undefined {
-		return peekPlanUsage(providerId);
-	},
-	prefetch(providerId: string): void {
-		const runtime = runtimeScope.getStore()?.modelRuntime ?? activeRuntime;
-		if (!runtime || !hasPlanUsageAdapter(providerId)) return;
-		void getPlanUsage(providerId, runtime).then(() => onUsageUpdate?.());
-	},
-	setOnUpdate(fn: (() => void) | undefined): void {
-		onUsageUpdate = fn;
-	},
-	getPreferredWindow(): PlanUsageWindowPreference {
-		return preferredWindow();
-	},
-	pickForFooter(providerId: string): FooterPlanSegment | undefined {
-		const window = pickPlanWindow(peekPlanUsage(providerId), preferredWindow());
-		if (!window) return undefined;
-		return { label: footerPlanLabel(window), usedPercent: window.usedPercent };
-	},
-};
-
+/** Register a bridge bound to its runtime; footer callbacks can retain it outside async scope. */
 export function registerUsageServiceBridge(runtime: ModelRuntime, settingsManager: SettingsManager): void {
-	activeRuntime = runtime;
-	activeUsageSettings = settingsManager;
-	(globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] = usageBridge;
+	let onUpdate: (() => void) | undefined;
+	const bridge: UsageServiceBridge = {
+		peek: (providerId) => peekPlanUsage(providerId, runtime),
+		prefetch(providerId) {
+			if (!hasPlanUsageAdapter(providerId)) return;
+			void getPlanUsage(providerId, runtime).then(() => onUpdate?.());
+		},
+		setOnUpdate(fn) {
+			onUpdate = fn;
+		},
+		getPreferredWindow: () => settingsManager.getPlanUsageWindow(),
+		pickForFooter(providerId) {
+			const window = pickPlanWindow(peekPlanUsage(providerId, runtime), settingsManager.getPlanUsageWindow());
+			return window ? { label: footerPlanLabel(window), usedPercent: window.usedPercent } : undefined;
+		},
+	};
+	bridges.set(runtime, bridge);
+	// Compatibility bridge requires an explicit async owner; it never falls back to another session.
+	(globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] = {
+		peek: (providerId: string) => getUsageServiceBridge()?.peek(providerId),
+		prefetch: (providerId: string) => getUsageServiceBridge()?.prefetch(providerId),
+		pickForFooter: (providerId: string) => getUsageServiceBridge()?.pickForFooter(providerId),
+		getPreferredWindow: () => getUsageServiceBridge()?.getPreferredWindow() ?? "weekly",
+		setOnUpdate: (fn: (() => void) | undefined) => getUsageServiceBridge()?.setOnUpdate(fn),
+	} satisfies UsageServiceBridge;
 }
 
-export function getUsageServiceBridge(): UsageServiceBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] as UsageServiceBridge | undefined;
+export function getUsageServiceBridge(runtime = runtimeScope.getStore()?.modelRuntime): UsageServiceBridge | undefined {
+	return runtime ? bridges.get(runtime) : undefined;
 }
