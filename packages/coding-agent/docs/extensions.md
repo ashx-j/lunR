@@ -1010,6 +1010,10 @@ pi.on("tool_result", async (event, ctx) => {
 
 Control flow helpers. `ctx.isIdle()` is false while lunR is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
 
+### ctx.promptWithCompletion()
+
+`await ctx.promptWithCompletion?.(text, { source: "extension", signal })` atomically admits one idle request and returns its completed messages. It rejects busy or closing sessions, excludes later queued user follow-ups, and waits for owned cancellation to settle. This optional capability is intended for unattended callers that need an exact completion. Use a dedicated `AbortSignal` to cancel that request.
+
 ### ctx.shutdown()
 
 Request a graceful shutdown of pi.

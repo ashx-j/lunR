@@ -13,31 +13,31 @@
  *  - deliverResult: replaces the `@lunr/cron-delivery` bridge on globalThis
  *    with a platform deliverer. Targets come from job.deliver
  *    (comma-separated): "local" (no-op — the output file is already written),
- *    "origin" (the chat that created the job, homeChannel fallback), a bare
+ *    "origin" (the identified, currently authorized requester chat), a bare
  *    platform name (that platform's homeChannel), or
  *    "<platform>:<chatId>[:<threadId>]" (explicit). Content is wrapped as
  *    "Cron: <name>" and split to the adapter's maxMessageLength.
  *
- * The bridge is re-installed after every cron session creation because loading
- * the builtin extensions (lunr-cron) re-registers its local-notify bridge per
- * session; delivery re-reads the bridge on every call, matching lunr-cron.
+ * The compatibility delivery bridge exposes the platform deliverer. The scheduler
+ * retains its own callback so another session cannot redirect its output.
  *
- * Fallback models (2026-08-02): settings.json `cronFallbackModels`
- * ("provider/modelId" entries) are tried IN ORDER when a fire fails — timeout
- * or any error. Each attempt gets a fresh headless session and
- * jobTimeoutMs/candidates of the budget; a successful fallback run prefixes
+ * Fallback models: settings.json `cronFallbackModels`
+ * ("provider/modelId" entries) are tried in order only when session setup fails before prompt dispatch.
+ * An admitted failure may have external effects and is never replayed automatically; a successful fallback run prefixes
  * "[fell back to provider/modelId]" to the output. TUI fires are unaffected
  * (they use the live session's model).
  */
 
-import type { Model } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { beginCronFire, endCronFire } from "../core/cron/fire-guard.ts";
 import type { CronJob, CronJobOrigin } from "../core/cron/jobs.ts";
 import { setCronDeliverValidator } from "../core/cron/jobs.ts";
 import { startScheduler } from "../core/cron/scheduler.ts";
 import { createPermissionContext, deletePermissionContext } from "../core/permissions.ts";
 import { type BridgeSession, shutdownBridgeSession } from "./agent-bridge.ts";
-import { type GatewayConfig, platformConfigFor } from "./config.ts";
+import { isAuthorized } from "./authz.ts";
+import { type GatewayConfig, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import { splitMessage } from "./text.ts";
 import type { PlatformAdapter } from "./types.ts";
 
@@ -62,9 +62,10 @@ export interface GatewayCronOptions {
 	sessionFactory?: CronSessionFactory;
 	/** Test seam: fallback models. When omitted, read fresh from settings.json `cronFallbackModels` on every fire. */
 	fallbackModels?: CronModelRef[];
+	/** Config seam; production always reloads current grants. */
+	getConfig?: () => GatewayConfig;
+	jobTimeoutMs?: number;
 }
-
-const KNOWN_PLATFORMS = ["telegram", "discord"] as const;
 
 /** Default factory: fresh in-memory headless session, mirroring agent-bridge's wiring. */
 async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModelRef): Promise<BridgeSession> {
@@ -112,7 +113,7 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 	});
 	// Fallback-model attempts pin the session model explicitly; an unresolvable
 	// or unauthenticated override fails the attempt so the next fallback runs.
-	let model: Model<any> | undefined;
+	let model: Model<Api> | undefined;
 	if (modelOverride) {
 		const resolved = services.modelRuntime.getModel(modelOverride.provider, modelOverride.modelId);
 		if (!resolved) throw new Error(`model not found: ${modelOverride.provider}/${modelOverride.modelId}`);
@@ -143,8 +144,7 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 }
 
 /** Final assistant text, print-mode style; throws on error/aborted stop. */
-function extractFinalText(session: BridgeSession): string {
-	const messages = session.state.messages;
+function extractFinalText(messages: AgentMessage[]): string {
 	const last = messages[messages.length - 1];
 	if (last?.role !== "assistant") return "";
 	const assistant = last as {
@@ -174,17 +174,10 @@ const EXPLICIT_TARGET_RE = /^([a-z0-9_-]+):([^:]+)(?::([^:]+))?$/i;
 function resolveTarget(target: string, job: CronJob, cfg: GatewayConfig): ResolvedTarget | string {
 	if (target === "origin") {
 		const origin = job.origin;
-		if (origin?.platform && origin.chatId) {
+		if (origin?.platform && origin.chatId && origin.userId) {
 			return { platform: origin.platform, chatId: origin.chatId, threadId: origin.threadId };
 		}
-		// Missing/incomplete origin → fall back to a homeChannel: the origin's
-		// platform when known, otherwise the first platform that has one.
-		const platforms = origin?.platform ? [origin.platform] : KNOWN_PLATFORMS;
-		for (const platform of platforms) {
-			const home = platformConfigFor(cfg, platform)?.homeChannel;
-			if (home) return { platform, chatId: home };
-		}
-		return `deliver target "origin": job has no origin and no homeChannel is configured`;
+		return 'deliver target "origin": job has no origin requester identity; use /cron rebind from an approved gateway chat';
 	}
 
 	const explicit = EXPLICIT_TARGET_RE.exec(target);
@@ -201,6 +194,21 @@ function resolveTarget(target: string, job: CronJob, cfg: GatewayConfig): Resolv
 	return { platform, chatId: home };
 }
 
+/** Rebuild the source from durable identity, never from persisted adapter role grants. */
+function isAuthorizedOrigin(cfg: GatewayConfig, origin?: CronJobOrigin | null): boolean {
+	if (!origin?.userId) return false;
+	return isAuthorized(
+		{
+			platform: origin.platform,
+			chatId: origin.chatId,
+			userId: origin.userId,
+			chatType: origin.chatType === "group" ? "group" : origin.chatType === "channel" ? "channel" : "dm",
+			threadId: origin.threadId,
+		},
+		cfg,
+	);
+}
+
 /** True when a resolved chat may receive cron output for this job. */
 export function isAllowedDeliverChat(
 	cfg: GatewayConfig,
@@ -212,7 +220,7 @@ export function isAllowedDeliverChat(
 	if (!platformCfg) return false;
 	if (platformCfg.homeChannel && platformCfg.homeChannel === chatId) return true;
 	if (platformCfg.allowedChats?.includes(chatId)) return true;
-	return origin?.platform === platform && origin.chatId === chatId;
+	return origin?.platform === platform && origin.chatId === chatId && isAuthorizedOrigin(cfg, origin);
 }
 
 export function createDeliverValidator(
@@ -251,7 +259,11 @@ export function wrapCronContent(job: CronJob, content: string): string {
  * The platform deliverer installed at the `@lunr/cron-delivery` bridge.
  * Every target is attempted; the first error is returned (null on success).
  */
-export function createPlatformDeliverer(adapters: Map<string, PlatformAdapter>, cfg: GatewayConfig): DeliveryBridge {
+export function createPlatformDeliverer(
+	adapters: Map<string, PlatformAdapter>,
+	config: GatewayConfig | (() => GatewayConfig),
+): DeliveryBridge {
+	const getConfig = typeof config === "function" ? config : () => config;
 	return async (job, content) => {
 		const targets = job.deliver
 			.split(",")
@@ -260,6 +272,7 @@ export function createPlatformDeliverer(adapters: Map<string, PlatformAdapter>, 
 		let firstError: string | null = null;
 		for (const target of targets) {
 			if (target === "local") continue; // output file already written by the scheduler
+			const cfg = getConfig();
 			const resolved = resolveTarget(target, job, cfg);
 			if (typeof resolved === "string") {
 				firstError ??= resolved;
@@ -277,6 +290,20 @@ export function createPlatformDeliverer(adapters: Map<string, PlatformAdapter>, 
 			const wrapped = wrapCronContent(job, content);
 			for (const chunk of splitMessage(wrapped, adapter.maxMessageLength)) {
 				try {
+					const live = getConfig();
+					const current = resolveTarget(target, job, live);
+					if (typeof current === "string") throw new Error(current);
+					if (
+						current.platform !== resolved.platform ||
+						current.chatId !== resolved.chatId ||
+						current.threadId !== resolved.threadId
+					)
+						throw new Error("cron delivery destination changed");
+					if (target === "origin" && !isAuthorizedOrigin(live, job.origin)) {
+						throw new Error("cron origin requester access revoked; use /cron rebind");
+					}
+					if (!isAllowedDeliverChat(live, resolved.platform, resolved.chatId, job.origin))
+						throw new Error(`deliver target "${target}" is not an allowed chat for ${resolved.platform}`);
 					const result = await adapter.send(resolved.chatId, chunk, {
 						threadId: resolved.threadId,
 					});
@@ -292,18 +319,6 @@ export function createPlatformDeliverer(adapters: Map<string, PlatformAdapter>, 
 		}
 		return firstError;
 	};
-}
-
-/** Race one prompt attempt against its share of the job budget. */
-function withAttemptTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-	return Promise.race([
-		promise,
-		new Promise<never>((_, reject) => {
-			const timer = setTimeout(() => reject(new Error(`attempt timed out after ${ms}ms`)), ms);
-			// If the attempt settles first this promise is discarded; the timer must not keep the process alive.
-			timer.unref?.();
-		}),
-	]);
 }
 
 /**
@@ -340,48 +355,54 @@ async function readCronFallbackModels(): Promise<CronModelRef[]> {
 
 /**
  * Start the cron scheduler inside the gateway daemon. Starts even with zero
- * stored jobs — jobs can be created later from chats. stop() halts the loop.
+ * stored jobs — jobs can be created later from chats. stop() cancels admitted work, awaits session cleanup and releases the lease last.
  */
-export function startGatewayCron(options: GatewayCronOptions): { stop(): void; intervalMs: number } {
-	const { adapters, cfg } = options;
+export function startGatewayCron(options: GatewayCronOptions): { stop(): Promise<void>; intervalMs: number } {
+	const { adapters } = options;
+	const getConfig = options.getConfig ?? loadGatewayConfig;
 	const sessionFactory = options.sessionFactory ?? defaultCronSessionFactory;
-	const platformDeliverer = createPlatformDeliverer(adapters, cfg);
+	const platformDeliverer = createPlatformDeliverer(adapters, getConfig);
 
-	// Explicit so runJob can split it into per-attempt budgets that sum to (at
-	// most) the scheduler's outer race (core/cron/scheduler.ts runSchedulerTick).
-	const jobTimeoutMs = 5 * 60 * 1000;
+	// One budget covers setup, owned prompt cancellation and session settlement.
+	const jobTimeoutMs = options.jobTimeoutMs ?? 5 * 60 * 1000;
 
 	// Reject deliver targets that are not local, origin, a configured home channel,
 	// or an explicit chat in the platform allowlist / the job's origin.
-	setCronDeliverValidator(createDeliverValidator(cfg));
+	setCronDeliverValidator((deliver, origin) => createDeliverValidator(getConfig())(deliver, origin));
 
-	// Replace the local-notify bridge lunr-cron registered with the platform deliverer.
+	// Retain the compatibility delivery bridge for integrations.
 	(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;
 
-	const runJob = async (prompt: string, job: CronJob): Promise<string> => {
+	const runJob = async (prompt: string, job: CronJob, signal: AbortSignal): Promise<string> => {
 		const fallbacks = options.fallbackModels ?? (await readCronFallbackModels());
 		const candidates: Array<CronModelRef | undefined> = [undefined, ...fallbacks];
-		const attemptTimeoutMs = Math.floor(jobTimeoutMs / candidates.length);
 		const errors: string[] = [];
 		beginCronFire();
 		try {
 			for (const candidate of candidates) {
+				signal.throwIfAborted();
 				const label = candidate ? `${candidate.provider}/${candidate.modelId}` : "default model";
 				let session: BridgeSession | undefined;
+				let dispatched = false;
 				try {
 					session = await sessionFactory(job, candidate);
-					// Loading the builtin extensions re-registered lunr-cron's local-notify
-					// bridge; restore the platform deliverer before any delivery re-reads it.
-					(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;
-					await withAttemptTimeout(session.prompt(prompt, { source: "extension" }), attemptTimeoutMs);
-					const text = extractFinalText(session);
+					signal.throwIfAborted();
+					if (!session.promptWithCompletion) throw new Error("cron session lacks owned prompt admission");
+					dispatched = true;
+					const result = await session.promptWithCompletion(prompt, { source: "extension", signal });
+					const text = extractFinalText(result.messages);
 					// The marker lands in the output file (the audit trail); [SILENT] as
 					// the last line still suppresses delivery (scheduler isSilent check).
 					return candidate ? `[fell back to ${label}]\n${text}` : text;
 				} catch (err) {
 					errors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+					if (dispatched || signal.aborted) throw new Error(errors.join(" | "));
 				} finally {
-					if (session) await shutdownBridgeSession(session, "quit");
+					if (session) {
+						// The factory owns this fresh session, including extension-queued follow-ups.
+						await session.drain?.();
+						await shutdownBridgeSession(session, "quit");
+					}
 				}
 			}
 			throw new Error(errors.join(" | ") || "no model candidates");
@@ -391,10 +412,8 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): void; i
 	};
 
 	const deliverResult = async (job: CronJob, content: string): Promise<void> => {
-		// Re-read the bridge on every delivery (same pattern as lunr-cron).
-		const bridge = (globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] as DeliveryBridge | undefined;
-		if (!bridge) throw new Error("no cron delivery bridge registered");
-		const err = await bridge(job, content);
+		// Keep delivery bound to this operator even if another session changes a bridge.
+		const err = await platformDeliverer(job, content);
 		if (err) throw new Error(err);
 	};
 

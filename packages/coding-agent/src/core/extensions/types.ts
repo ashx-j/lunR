@@ -317,6 +317,11 @@ export interface ExtensionContext {
 	model: Model<any> | undefined;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
+	/** Admit one idle request and await only its messages and cancellation settlement. */
+	promptWithCompletion?: (
+		text: string,
+		options?: { source?: "extension"; signal?: AbortSignal },
+	) => Promise<{ messages: AgentMessage[] }>;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
@@ -1608,6 +1613,7 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
+	promptWithCompletion?: ExtensionContext["promptWithCompletion"];
 	getModel: () => Model<any> | undefined;
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;

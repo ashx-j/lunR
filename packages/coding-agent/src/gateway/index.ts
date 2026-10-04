@@ -201,10 +201,11 @@ async function runDaemon(): Promise<number> {
 		if (stopping) return;
 		stopping = true;
 		owner.update(platformStatus, "stopping");
-		cron?.stop();
+		const cronStopped = cron?.stop();
 		for (const timer of retries) clearTimeout(timer);
 		stopButtonSweeper();
 		void (async () => {
+			await cronStopped;
 			await bridge.shutdown();
 			await Promise.all([...adapters.values()].map((adapter) => adapter.disconnect().catch(() => {})));
 			stopGatewayPresenter();
