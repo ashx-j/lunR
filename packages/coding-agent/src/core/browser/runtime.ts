@@ -13,6 +13,25 @@ type Resources = {
 	nextId: number;
 };
 
+type ResourceOwner = {
+	generation: number;
+	browser?: Browser;
+	proxy?: Resources["proxy"];
+	browserClose?: Promise<void>;
+	proxyClose?: Promise<void>;
+};
+
+// Resources can arrive after cancellation. Each owner closes only its own handles, once.
+function closeOwnedResources(owner?: ResourceOwner): Promise<void> {
+	if (owner?.browser) owner.browserClose ??= Promise.resolve().then(() => owner.browser!.close());
+	if (owner?.proxy) owner.proxyClose ??= Promise.resolve().then(() => owner.proxy!.close());
+	return Promise.allSettled([owner?.browserClose, owner?.proxyClose]).then((results) => {
+		for (const result of results) {
+			if (result.status === "rejected") throw result.reason;
+		}
+	});
+}
+
 export function boundedBrowserText(text: string): string {
 	const result = truncateHead(text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ""), { maxBytes: 16384, maxLines: 300 });
 	return (
@@ -41,6 +60,8 @@ async function uniqueTarget(page: Page, input: BrowserInput): Promise<Locator> {
 
 export class BrowserSession {
 	private resources?: Promise<Resources>;
+	private owner?: ResourceOwner;
+	private activeCancellation?: AbortController;
 	private queue: Promise<unknown> = Promise.resolve();
 	private closing: Promise<void> = Promise.resolve();
 	private generation = 0;
@@ -58,19 +79,12 @@ export class BrowserSession {
 	async close(): Promise<void> {
 		this.generation++;
 		clearTimeout(this.idle);
-		const pending = this.resources;
+		this.activeCancellation?.abort();
+		const owner = this.owner;
+		this.owner = undefined;
 		this.resources = undefined;
-		const previous = this.closing;
-		const closing = (async () => {
-			await previous;
-			const resources = await pending?.catch(() => undefined);
-			if (!resources) return;
-			try {
-				await resources.browser.close();
-			} finally {
-				await resources.proxy.close();
-			}
-		})();
+		// Do not wait for initialization to discover handles. open() cleans late arrivals.
+		const closing = Promise.all([this.closing, closeOwnedResources(owner)]).then(() => undefined);
 		this.closing = closing.catch(() => undefined);
 		return closing;
 	}
@@ -87,22 +101,40 @@ export class BrowserSession {
 				throw new Error("Browser operation cancelled; navigate again in a new call.");
 			clearTimeout(this.idle);
 			const cancellation = new AbortController();
+			this.activeCancellation = cancellation;
+			let ownedGeneration = generation;
 			const abort = () => {
 				cancellation.abort();
-				void this.close().catch(() => undefined);
+				if (ownedGeneration === this.generation) void this.close().catch(() => undefined);
 			};
+			const cancellationError = new Error(
+				"Browser cancelled or exceeded 30s; browser cleanup requested. External effects may already have occurred.",
+			);
+			const checkCurrent = () => {
+				if (cancellation.signal.aborted || generation !== this.generation) throw cancellationError;
+			};
+			let rejectCancellation!: () => void;
+			const interrupted = new Promise<never>((_resolve, reject) => {
+				rejectCancellation = () => reject(cancellationError);
+				cancellation.signal.addEventListener("abort", rejectCancellation, { once: true });
+			});
+			const wait = <T>(pending: Promise<T>) => Promise.race([pending, interrupted]);
 			signal?.addEventListener("abort", abort, { once: true });
 			const deadline = setTimeout(abort, 30000);
 			try {
 				if (input.action === "close") {
-					await this.close();
+					// This operation intentionally invalidates its generation, without cancelling itself.
+					this.activeCancellation = undefined;
+					const closing = this.close();
+					ownedGeneration = this.generation;
+					await wait(closing);
 					return {
 						content: [{ type: "text" as const, text: "Browser closed; ephemeral cookies and tabs discarded." }],
 						details: { action: input.action },
 					};
 				}
-				await this.closing;
-				if (signal?.aborted || generation !== this.generation) throw new Error("Browser operation cancelled.");
+				await wait(this.closing);
+				checkCurrent();
 				if (
 					!this.resources &&
 					input.action !== "navigate" &&
@@ -112,29 +144,21 @@ export class BrowserSession {
 						"No browser is open. Use navigate or tabs/create first. Idle cleanup discards tabs after 5 minutes.",
 					);
 				}
-				this.resources ??= this.open().catch((error) => {
-					if (generation === this.generation) this.resources = undefined;
-					throw error;
-				});
-				const resources = await this.resources;
-				if (generation !== this.generation) throw new Error("Browser operation cancelled.");
-				const content = await Promise.race([
-					this.perform(resources, input),
-					new Promise<never>((_resolve, reject) => {
-						const cancelled = () =>
-							reject(
-								new Error(
-									"Browser cancelled or exceeded 30s; browser closed. External effects may already have occurred.",
-								),
-							);
-						if (cancellation.signal.aborted) cancelled();
-						else cancellation.signal.addEventListener("abort", cancelled, { once: true });
-					}),
-				]);
-				if (signal?.aborted || generation !== this.generation)
-					throw new Error(
-						"Browser operation cancelled; external effects may already have occurred. Inspect before retrying.",
-					);
+				if (!this.resources) {
+					const owner: ResourceOwner = { generation };
+					this.owner = owner;
+					this.resources = this.open(owner).catch((error) => {
+						if (this.owner === owner) {
+							this.resources = undefined;
+							this.owner = undefined;
+						}
+						throw error;
+					});
+				}
+				const resources = await wait(this.resources);
+				checkCurrent();
+				const content = await wait(this.perform(resources, input));
+				checkCurrent();
 				this.idle = setTimeout(() => {
 					void this.close().catch(() => undefined);
 				}, this.idleMs);
@@ -152,6 +176,8 @@ export class BrowserSession {
 			} finally {
 				clearTimeout(deadline);
 				signal?.removeEventListener("abort", abort);
+				cancellation.signal.removeEventListener("abort", rejectCancellation);
+				if (this.activeCancellation === cancellation) this.activeCancellation = undefined;
 			}
 		});
 		this.queue = operation.catch(() => undefined);
@@ -162,24 +188,36 @@ export class BrowserSession {
 		}
 	}
 
-	private async open(): Promise<Resources> {
-		const proxy = await createBrowserProxy(this.allowPrivate);
-		let browser: Browser | undefined;
+	private async open(owner: ResourceOwner): Promise<Resources> {
+		const checkCurrent = () => {
+			if (owner.generation !== this.generation) throw new Error("Browser operation cancelled.");
+		};
 		try {
+			const proxy = await createBrowserProxy(this.allowPrivate);
+			owner.proxy = proxy;
+			checkCurrent();
 			const { chromium } = await import("playwright-core");
-			browser = await chromium.launch({
+			checkCurrent();
+			const browser = await chromium.launch({
 				headless: true,
 				timeout: 15000,
 				chromiumSandbox: true,
 				proxy: { server: proxy.url, bypass: "<-loopback>" },
 				args: ["--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
 			});
+			owner.browser = browser;
+			checkCurrent();
 			const context = await browser.newContext({
 				acceptDownloads: false,
 				serviceWorkers: "block",
 				permissions: [],
 				viewport: { width: 1280, height: 800 },
 			});
+			if (owner.generation !== this.generation) {
+				// newContext may complete after browser.close() was already requested.
+				void context.close().catch(() => undefined);
+				checkCurrent();
+			}
 			context.setDefaultTimeout(10000);
 			context.setDefaultNavigationTimeout(15000);
 			await context.route("**/*", async (route) => {
@@ -190,7 +228,9 @@ export class BrowserSession {
 					await route.abort().catch(() => undefined);
 				}
 			});
+			checkCurrent();
 			await context.routeWebSocket("**/*", (socket) => socket.close());
+			checkCurrent();
 			const resources: Resources = { browser, context, proxy, pages: new Map(), nextId: 1 };
 			context.on("page", (page) => {
 				if (resources.pages.size >= 4) {
@@ -209,8 +249,7 @@ export class BrowserSession {
 			});
 			return resources;
 		} catch (error) {
-			await browser?.close().catch(() => undefined);
-			await proxy.close();
+			await closeOwnedResources(owner).catch(() => undefined);
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(
 				`Browser launch failed. Matching Chromium may be missing after --ignore-scripts or offline installation. Ask the user to run lunr browser install when online. Nothing was installed by this call. ${message}`,
