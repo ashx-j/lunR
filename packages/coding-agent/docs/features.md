@@ -72,6 +72,16 @@ The agent must ask only when the child has missing context, the answer changes a
 
 Compare the same task, models, thinking levels, and starting checkout before and after a communication change. Count parent wakeups by their triggering event, provider calls in both parent and child sessions, duplicate deliveries, input/output tokens, cache reads/writes, elapsed time, and blocked time. Check task correctness and delivery of required escalations before comparing cost. Cached input is separate from uncached input; fewer messages or a quieter UI alone do not establish savings. Keep transcript evidence local.
 
+## Token usage
+
+`/usage` and `/session` separate parent requests, completed child receipts, and their combined total. Input includes ordinary input, cache reads, and cache writes. Output includes reasoning when the provider reports it. Summary and automatic-title requests count as parent requests even though their text does not enter the chat. Goal token budgets use parent and child totals and retain consumed tokens after branch navigation.
+
+Child totals include failed fallback attempts and auxiliary requests. Completion notifications, waits, and resumed sessions deduplicate requests rather than charging the same history again. A fork retains the conversation as context but starts with zero newly incurred usage. Children still running may not have supplied their final receipt yet.
+
+Current context and its visible-thinking breakdown are estimates of the next request. They include the system prompt and tool definitions, and exclude `!!` shell output. The `~` footer marker means the context count includes an estimate. Image sizes, provider formatting, and hidden reasoning can differ from local estimates. Cache-miss estimates describe inferred overlap, not measured waste.
+
+Costs use a provider's reported charge when available, otherwise catalog prices. Subscription quota remains the provider's account measurement and can be cached for up to 60 seconds. Missing or incomplete usage is labeled separately from reported zero. Older sessions cannot recover requests or breakdowns that were never recorded.
+
 ## Todos, memory, and global instructions
 
 - **Todos** — lunr-todos is a full-replace list. `/settings` → Todos disables its system-prompt guidance, model-facing tool, and editor widget. Collapsed lists show all four active items; lists of five or more show three and a `+N more` line. Completed todos prune on the next user turn, so the footer does not leave a `✓ N done` line.

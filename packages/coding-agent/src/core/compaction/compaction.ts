@@ -14,7 +14,11 @@ import type {
 	SimpleStreamOptions,
 	Usage,
 } from "@earendil-works/pi-ai/compat";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import {
+	completeSimple,
+	estimateContextTokens as estimateRequestContextTokens,
+	estimateTextTokens,
+} from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionContext,
@@ -168,46 +172,9 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 
-function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; index: number } | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const usage = getAssistantUsage(messages[i]);
-		if (usage) return { usage, index: i };
-	}
-	return undefined;
-}
-
-/**
- * Estimate context tokens from messages, using the last assistant usage when available.
- * If there are messages after the last usage, estimate their tokens with estimateTokens.
- */
+/** Prior usage must describe the current prefix, including a newer compaction summary. */
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-	const usageInfo = getLastAssistantUsageInfo(messages);
-
-	if (!usageInfo) {
-		let estimated = 0;
-		for (const message of messages) {
-			estimated += estimateTokens(message);
-		}
-		return {
-			tokens: estimated,
-			usageTokens: 0,
-			trailingTokens: estimated,
-			lastUsageIndex: null,
-		};
-	}
-
-	const usageTokens = calculateContextTokens(usageInfo.usage);
-	let trailingTokens = 0;
-	for (let i = usageInfo.index + 1; i < messages.length; i++) {
-		trailingTokens += estimateTokens(messages[i]);
-	}
-
-	return {
-		tokens: usageTokens + trailingTokens,
-		usageTokens,
-		trailingTokens,
-		lastUsageIndex: usageInfo.index,
-	};
+	return estimateRequestContextTokens(convertToLlm(messages));
 }
 
 /**
@@ -222,67 +189,44 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 // Cut point detection
 // ============================================================================
 
-const ESTIMATED_IMAGE_CHARS = 4800;
+const ESTIMATED_IMAGE_TOKENS = 1200;
 
-function estimateTextAndImageContentChars(content: string | Array<{ type: string; text?: string }>): number {
-	if (typeof content === "string") {
-		return content.length;
-	}
-
-	let chars = 0;
+function estimateTextAndImageContentTokens(content: string | Array<{ type: string; text?: string }>): number {
+	if (typeof content === "string") return estimateTextTokens(content);
+	let text = "";
+	let images = 0;
 	for (const block of content) {
-		if (block.type === "text" && block.text) {
-			chars += block.text.length;
-		} else if (block.type === "image") {
-			chars += ESTIMATED_IMAGE_CHARS;
-		}
+		if (block.type === "text") text += block.text ?? "";
+		else if (block.type === "image") images++;
 	}
-	return chars;
+	return estimateTextTokens(text) + images * ESTIMATED_IMAGE_TOKENS;
 }
 
-/**
- * Estimate token count for a message using chars/4 heuristic.
- * This is conservative (overestimates tokens).
- */
+/** Local approximation using the shared text heuristic; provider formatting and images can differ. */
 export function estimateTokens(message: AgentMessage): number {
-	let chars = 0;
-
 	switch (message.role) {
-		case "user": {
-			chars = estimateTextAndImageContentChars(
-				(message as { content: string | Array<{ type: string; text?: string }> }).content,
-			);
-			return Math.ceil(chars / 4);
-		}
-		case "assistant": {
-			const assistant = message as AssistantMessage;
-			for (const block of assistant.content) {
-				if (block.type === "text") {
-					chars += block.text.length;
-				} else if (block.type === "thinking") {
-					chars += block.thinking.length;
-				} else if (block.type === "toolCall") {
-					chars += block.name.length + JSON.stringify(block.arguments).length;
-				}
-			}
-			return Math.ceil(chars / 4);
-		}
+		case "user":
 		case "custom":
-		case "toolResult": {
-			chars = estimateTextAndImageContentChars(message.content);
-			return Math.ceil(chars / 4);
-		}
-		case "bashExecution": {
-			chars = message.command.length + message.output.length;
-			return Math.ceil(chars / 4);
-		}
+		case "toolResult":
+			return estimateTextAndImageContentTokens(message.content);
+		case "assistant":
+			return estimateTextTokens(
+				message.content
+					.map((block) =>
+						block.type === "text"
+							? block.text
+							: block.type === "thinking"
+								? block.thinking
+								: block.name + JSON.stringify(block.arguments),
+					)
+					.join(""),
+			);
+		case "bashExecution":
+			return message.excludeFromContext ? 0 : estimateTextTokens(message.command + message.output);
 		case "branchSummary":
-		case "compactionSummary": {
-			chars = message.summary.length;
-			return Math.ceil(chars / 4);
-		}
+		case "compactionSummary":
+			return estimateTextTokens(message.summary);
 	}
-
 	return 0;
 }
 
@@ -567,6 +511,7 @@ export async function generateSummary(
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
 	env?: Record<string, string>,
+	onUsage?: (response: AssistantMessage) => void,
 ): Promise<string> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -608,6 +553,7 @@ export async function generateSummary(
 		streamFn,
 	);
 
+	onUsage?.(response);
 	if (response.stopReason === "error") {
 		throw new Error(`Summarization failed: ${response.errorMessage || "Unknown error"}`);
 	}
@@ -759,6 +705,7 @@ export async function compact(
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
 	env?: Record<string, string>,
+	onUsage?: (response: AssistantMessage) => void,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -789,6 +736,7 @@ export async function compact(
 						thinkingLevel,
 						streamFn,
 						env,
+						onUsage,
 					)
 				: "No prior history.";
 		const turnPrefixResult = await generateTurnPrefixSummary(
@@ -801,6 +749,7 @@ export async function compact(
 			signal,
 			thinkingLevel,
 			streamFn,
+			onUsage,
 		);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
@@ -818,6 +767,7 @@ export async function compact(
 			thinkingLevel,
 			streamFn,
 			env,
+			onUsage,
 		);
 	}
 
@@ -850,6 +800,7 @@ async function generateTurnPrefixSummary(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
+	onUsage?: (response: AssistantMessage) => void,
 ): Promise<string> {
 	const maxTokens = Math.min(
 		Math.floor(0.5 * reserveTokens),
@@ -873,6 +824,7 @@ async function generateTurnPrefixSummary(
 		streamFn,
 	);
 
+	onUsage?.(response);
 	if (response.stopReason === "error") {
 		throw new Error(`Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`);
 	}

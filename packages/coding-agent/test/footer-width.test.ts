@@ -30,6 +30,8 @@ function createSession(options: {
 			: [
 					{
 						type: "message",
+						id: "footer-request",
+						timestamp: new Date().toISOString(),
 						message: {
 							role: "assistant",
 							usage,

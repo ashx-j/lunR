@@ -388,7 +388,19 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 		await ctx.adapter.send(
 			ctx.event.source.chatId,
 			[
-				`Tokens: ${stats.tokens.total} · cost: $${stats.cost.toFixed(4)}`,
+				`Parent tokens including auxiliary requests: ${stats.tokens.total} · cost: $${stats.cost.toFixed(4)}`,
+				...(stats.childUsage?.requests || stats.childUsage?.total
+					? [
+							`Children: ${stats.childUsage.total} tokens · cost: $${stats.childUsage.cost.toFixed(4)}`,
+							`Combined: ${stats.combinedUsage?.total ?? stats.tokens.total + stats.childUsage.total} tokens · cost: $${(stats.combinedUsage?.cost ?? stats.cost + stats.childUsage.cost).toFixed(4)}`,
+						]
+					: []),
+				...(stats.combinedUsage?.unknownRequests
+					? [`Usage unavailable for ${stats.combinedUsage.unknownRequests} request(s).`]
+					: []),
+				...(stats.combinedUsage?.partialRequests
+					? [`Usage incomplete for ${stats.combinedUsage.partialRequests} request(s).`]
+					: []),
 				...plans.usages.flatMap((p) =>
 					p.windows.map((w) => `${p.provider} ${w.label}: ${w.usedPercent.toFixed(1)}% used`),
 				),

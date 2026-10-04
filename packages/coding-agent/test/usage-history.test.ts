@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectUsageHistory, resetUsageHistoryCache } from "../src/core/usage-history.ts";
 
-const NOW = Date.now();
+const NOW = Date.UTC(2026, 7, 15);
 
 function assistantEntry(
 	id: string,

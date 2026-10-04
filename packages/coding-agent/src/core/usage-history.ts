@@ -1,9 +1,10 @@
+import { type AccountedRequest, collectUsageRequests, usageTokens } from "./usage-accounting.ts";
 /**
- * lunr: 30-day token usage history for the /usage command.
+ * Request usage history for integrations.
  *
  * Scans the on-disk session files (`.jsonl` under `getSessionsDir()`, both the
  * flat and the per-project-subdirectory layouts) and aggregates:
- * - REAL token totals per provider/model from assistant-message `usage`
+ * - Token totals per provider/model from conversation and auxiliary-request `usage`
  *   metadata (same fields the live session rows use),
  * - per-day totals (YYYY-MM-DD buckets from the entry timestamp),
  * - an ESTIMATED category breakdown (chars/4) via the same accounting as
@@ -18,15 +19,9 @@
 
 import { type Dirent, readdirSync, type Stats, statSync } from "node:fs";
 import { join } from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
 import { getSessionsDir } from "../config.ts";
 import { computeContextBreakdown } from "./context-breakdown.ts";
-import {
-	type FileEntry,
-	loadEntriesFromFile,
-	type SessionEntry,
-	sessionEntryToContextMessages,
-} from "./session-manager.ts";
+import { loadEntriesFromFile, type SessionEntry, sessionEntryToContextMessages } from "./session-manager.ts";
 
 export interface UsageHistoryModelRow {
 	model: string;
@@ -70,10 +65,8 @@ export interface UsageHistory {
 interface FileAggregate {
 	mtimeMs: number;
 	size: number;
-	perModel: Map<string, UsageHistoryModelRow>;
-	perDay: Map<string, number>;
-	categories: UsageHistoryCategories;
-	hasUsage: boolean;
+	requests: AccountedRequest[];
+	entries: SessionEntry[];
 }
 
 const fileCache = new Map<string, FileAggregate>();
@@ -125,96 +118,18 @@ function enumerateSessionFiles(sessionsDir: string): string[] {
 	return files;
 }
 
-/** Milliseconds for day bucketing: entry timestamp, then message timestamp, then file mtime. */
-function entryTimestampMs(entry: SessionEntry, message: AssistantMessage, fallbackMs: number): number {
-	const entryMs = Date.parse(entry.timestamp ?? "");
-	if (!Number.isNaN(entryMs)) return entryMs;
-	if (typeof message.timestamp === "number" && message.timestamp > 0) return message.timestamp;
-	return fallbackMs;
-}
-
-/** Parse one session file into its aggregate. Returns null when the file is unusable. */
+/** Cache parsed records, not date-window aggregates, so changing the window stays correct. */
 function parseSessionFile(filePath: string, mtimeMs: number, size: number): FileAggregate | null {
-	let entries: FileEntry[];
 	try {
-		entries = loadEntriesFromFile(filePath);
+		const entries = loadEntriesFromFile(filePath).filter((entry): entry is SessionEntry => entry.type !== "session");
+		return { mtimeMs, size, entries, requests: collectUsageRequests(entries) };
 	} catch {
 		return null;
 	}
-	if (entries.length === 0) return null;
-
-	const aggregate: FileAggregate = {
-		mtimeMs,
-		size,
-		perModel: new Map(),
-		perDay: new Map(),
-		categories: emptyCategories(),
-		hasUsage: false,
-	};
-
-	const sessionEntries: SessionEntry[] = [];
-	for (const entry of entries) {
-		if (entry.type === "session") continue; // header
-		sessionEntries.push(entry);
-
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const message = entry.message as AssistantMessage;
-		const usage = message.usage;
-		if (!usage || typeof usage.input !== "number" || typeof usage.output !== "number") continue;
-
-		const provider = typeof message.provider === "string" && message.provider ? message.provider : "unknown";
-		const modelId = message.responseModel ?? message.model;
-		const key = `${provider}/${typeof modelId === "string" && modelId ? modelId : "unknown"}`;
-		const input = usage.input;
-		const output = usage.output;
-		const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : 0;
-		const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : 0;
-
-		let row = aggregate.perModel.get(key);
-		if (!row) {
-			row = { model: key, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-			aggregate.perModel.set(key, row);
-		}
-		row.input += input;
-		row.output += output;
-		row.cacheRead += cacheRead;
-		row.cacheWrite += cacheWrite;
-		row.total += input + output + cacheRead + cacheWrite;
-		aggregate.hasUsage = true;
-
-		const day = new Date(entryTimestampMs(entry, message, mtimeMs)).toISOString().slice(0, 10);
-		aggregate.perDay.set(day, (aggregate.perDay.get(day) ?? 0) + input + output + cacheRead + cacheWrite);
-	}
-
-	// Category estimate over the file's messages (system prompt/tools are not
-	// stored in session files, so message categories carry the breakdown).
-	try {
-		const messages = sessionEntries.flatMap(sessionEntryToContextMessages);
-		const breakdown = computeContextBreakdown({ systemPrompt: "", tools: [], messages, contextWindow: 0 });
-		aggregate.categories = {
-			user: breakdown.user,
-			assistantText: breakdown.assistantText,
-			thinking: breakdown.thinking,
-			toolCalls: breakdown.toolCalls,
-			toolResults: breakdown.toolResults,
-			summaries: breakdown.summaries,
-			total:
-				breakdown.user +
-				breakdown.assistantText +
-				breakdown.thinking +
-				breakdown.toolCalls +
-				breakdown.toolResults +
-				breakdown.summaries,
-		};
-	} catch {
-		// Category estimation is best-effort; per-model/day totals above still stand.
-	}
-
-	return aggregate;
 }
 
 /**
- * Aggregate token usage across all session files modified since `sinceMs`.
+ * Aggregate requests since `sinceMs`; file modification time only narrows the scan.
  * Never throws; on total failure returns an empty aggregate.
  */
 export function collectUsageHistory(options: { sinceMs: number; sessionsDir?: string }): UsageHistory {
@@ -223,6 +138,8 @@ export function collectUsageHistory(options: { sinceMs: number; sessionsDir?: st
 		const sessionsDir = options.sessionsDir ?? getSessionsDir();
 		const files = enumerateSessionFiles(sessionsDir);
 		const seen = new Set<string>();
+		const seenRequests = new Set<string>();
+		const seenEntries = new Set<string>();
 
 		for (const filePath of files) {
 			seen.add(filePath);
@@ -247,38 +164,40 @@ export function collectUsageHistory(options: { sinceMs: number; sessionsDir?: st
 			}
 			if (!aggregate) continue;
 
-			if (aggregate.hasUsage) result.sessionsWithUsage++;
-			for (const row of aggregate.perModel.values()) {
-				let target = result.perModel.find((r) => r.model === row.model);
-				if (!target) {
-					target = { model: row.model, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-					result.perModel.push(target);
+			let hasUsage = false;
+			for (const request of aggregate.requests) {
+				if (request.timestamp < options.sinceMs || seenRequests.has(request.id)) continue;
+				seenRequests.add(request.id);
+				hasUsage = true;
+				const model = `${request.provider}/${request.model}`;
+				let row = result.perModel.find((candidate) => candidate.model === model);
+				if (!row) {
+					row = { model, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+					result.perModel.push(row);
 				}
-				target.input += row.input;
-				target.output += row.output;
-				target.cacheRead += row.cacheRead;
-				target.cacheWrite += row.cacheWrite;
-				target.total += row.total;
+				row.input += request.usage.input;
+				row.output += request.usage.output;
+				row.cacheRead += request.usage.cacheRead;
+				row.cacheWrite += request.usage.cacheWrite;
+				row.total += usageTokens(request.usage);
+				const day = new Date(request.timestamp).toISOString().slice(0, 10);
+				const dayRow = result.perDay.find((candidate) => candidate.day === day);
+				if (dayRow) dayRow.total += usageTokens(request.usage);
+				else result.perDay.push({ day, total: usageTokens(request.usage) });
 			}
-			for (const [day, total] of aggregate.perDay) {
-				const existing = result.perDay.find((r) => r.day === day);
-				if (existing) {
-					existing.total += total;
-				} else {
-					result.perDay.push({ day, total });
-				}
-			}
-			for (const key of [
-				"user",
-				"assistantText",
-				"thinking",
-				"toolCalls",
-				"toolResults",
-				"summaries",
-				"total",
-			] as const) {
-				result.categories[key] += aggregate.categories[key];
-			}
+			if (hasUsage) result.sessionsWithUsage++;
+			const messages = aggregate.entries
+				.filter((entry) => {
+					const identity = `${entry.id}:${entry.timestamp}`;
+					if (entry.inherited || Date.parse(entry.timestamp) < options.sinceMs || seenEntries.has(identity))
+						return false;
+					seenEntries.add(identity);
+					return true;
+				})
+				.flatMap(sessionEntryToContextMessages);
+			const breakdown = computeContextBreakdown({ systemPrompt: "", tools: [], messages, contextWindow: 0 });
+			for (const key of Object.keys(result.categories) as Array<keyof UsageHistoryCategories>)
+				result.categories[key] += breakdown[key];
 		}
 
 		// Drop cache entries for deleted files.

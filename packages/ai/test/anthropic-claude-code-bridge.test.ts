@@ -264,3 +264,55 @@ describe("Claude Code stream boundary", () => {
 		expect(result.content).toEqual([]);
 	});
 });
+
+describe("subscription usage accounting", () => {
+	it("preserves reasoning and prices one-hour cache writes", async () => {
+		mock.response = completion("hello");
+		mock.response.usage = {
+			prompt_tokens: 1000100,
+			completion_tokens: 200,
+			total_tokens: 1000300,
+			cache_creation_input_tokens: 1000000,
+			prompt_tokens_details: { cached_tokens: 0 },
+			completion_tokens_details: { reasoning_tokens: 150 },
+			native_usage: {
+				input_tokens: 100,
+				output_tokens: 200,
+				cache_creation_input_tokens: 1000000,
+				cache_creation: { ephemeral_5m_input_tokens: 600000, ephemeral_1h_input_tokens: 400000 },
+				output_tokens_details: { thinking_tokens: 150 },
+			},
+			native_admission: { upstream_requests: 1 },
+		};
+		mock.spawn.mockImplementation(() => fakeWorker());
+		const model = anthropicProvider()
+			.getModels()
+			.find((model) => model.id === "claude-opus-4-8")!;
+		const result = await anthropicProvider()
+			.streamSimple(model, { messages: [] }, { externalClaudeCode: connection })
+			.result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.usage.reasoning).toBe(150);
+		expect(result.usage.cacheWrite1h).toBe(400000);
+		expect(result.usage.cost.cacheWrite).toBe(7.75);
+	});
+	it("retains native usage when carrier validation rejects the response", async () => {
+		mock.response = completion("hello");
+		const choices = mock.response.choices as Array<{ message: Record<string, unknown> }>;
+		choices[0].message.reasoning_details = [];
+		mock.spawn.mockImplementation(() => fakeWorker());
+		const model = anthropicProvider().getModels()[0]!;
+		const result = await anthropicProvider()
+			.streamSimple(model, { messages: [] }, { externalClaudeCode: connection })
+			.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.usage).toMatchObject({
+			input: 8,
+			output: 5,
+			cacheRead: 3,
+			cacheWrite: 2,
+			totalTokens: 18,
+			measurement: "reported",
+		});
+	});
+});

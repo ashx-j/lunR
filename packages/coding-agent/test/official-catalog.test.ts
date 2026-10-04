@@ -6,6 +6,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	BUNDLED_OFFICIAL_CATALOG,
+	loadBundledOfficialCatalog,
 	loadOfficialCatalog,
 	officialCatalogUrlFor,
 	officialEntryToModel,
@@ -410,5 +411,20 @@ describe("loadOfficialCatalog", () => {
 		});
 		expect(loaded.source).toBe("cache");
 		expect(loaded.catalog.models[0]?.id).toBe("grok-4.7");
+	});
+});
+
+describe("bundled long-context pricing", () => {
+	it.each(["google", "google-vertex"])("retains reviewed Gemini tiers for %s", (provider) => {
+		const catalog = loadBundledOfficialCatalog();
+		for (const id of ["gemini-2.5-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"]) {
+			const entry = catalog.models.find((model) => model.provider === provider && model.id === id);
+			expect(entry, `${provider}/${id}`).toBeDefined();
+			expect(entry?.cost.tiers?.[0]).toMatchObject(
+				id === "gemini-2.5-pro"
+					? { inputTokensAbove: 200000, input: 2.5, output: 15, cacheRead: 0.25 }
+					: { inputTokensAbove: 200000, input: 4, output: 18, cacheRead: 0.4 },
+			);
+		}
 	});
 });

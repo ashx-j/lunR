@@ -22,6 +22,10 @@ import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type
 
 interface ChainStepResult extends Partial<SubagentResultIntercomChild> {
 	agent: string;
+	childId?: string;
+	sessionFile?: string;
+	usage?: import("../../shared/types.ts").Usage;
+	usageRequests?: import("../../../../../core/usage-accounting.ts").AccountedRequest[];
 	output: string;
 	summary?: string;
 	error?: string;
@@ -31,6 +35,7 @@ interface ChainStepResult extends Partial<SubagentResultIntercomChild> {
 
 export interface SubagentNotifyDetails {
 	agent: string;
+	children?: ChainStepResult[];
 	status: "completed" | "failed" | "paused" | "stopped";
 	source?: "async" | "foreground";
 	taskInfo?: string;
@@ -148,6 +153,7 @@ function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, details: Subagent
 			customType: "subagent-notify",
 			content,
 			display: true,
+			details: { children: details.flatMap((detail) => detail.children ?? []) },
 		},
 		{ triggerTurn: details.some((detail) => detail.status !== "stopped") },
 	);
@@ -187,6 +193,7 @@ export function buildCompletionDetails(result: SubagentResult): SubagentNotifyDe
 	return {
 		agent,
 		status,
+		children: result.results?.map((child, index) => ({ ...child, childId: child.childId ?? `${result.id}:${index}` })),
 		...(result.source ? { source: result.source } : {}),
 		...(taskInfo ? { taskInfo } : {}),
 		resultPreview: [

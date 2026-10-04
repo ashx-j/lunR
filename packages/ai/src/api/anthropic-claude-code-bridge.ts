@@ -276,6 +276,7 @@ function validatedCompletion(
 	model: Model<Api>,
 	text: string,
 	thinking: string,
+	onUsage?: (usage: Usage) => void,
 ): {
 	content: AssistantMessage["content"];
 	carrier: AssistantMessage["claudeCodeCarrier"];
@@ -333,14 +334,32 @@ function validatedCompletion(
 	if (!Number.isFinite(cached)) throw new Error("Missing native cache usage");
 	const usage: Usage = {
 		input: Number(native.prompt_tokens) - Number(cached) - Number(native.cache_creation_input_tokens),
+		measurement: "reported",
+		reasoning: (native.completion_tokens_details as { reasoning_tokens?: number } | undefined)?.reasoning_tokens,
+		cacheWrite1h: (native.native_usage as { cache_creation?: { ephemeral_1h_input_tokens?: number } } | undefined)
+			?.cache_creation?.ephemeral_1h_input_tokens,
 		output: Number(native.completion_tokens),
 		cacheRead: Number(cached),
 		cacheWrite: Number(native.cache_creation_input_tokens),
 		totalTokens: Number(native.total_tokens),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
-	if (usage.input < 0 || usage.output < 0) throw new Error("Invalid native usage");
+	if (
+		[
+			usage.input,
+			usage.output,
+			usage.cacheRead,
+			usage.cacheWrite,
+			usage.totalTokens,
+			usage.reasoning ?? 0,
+			usage.cacheWrite1h ?? 0,
+		].some((value) => !Number.isFinite(value) || value < 0) ||
+		(usage.cacheWrite1h ?? 0) > usage.cacheWrite ||
+		(usage.reasoning ?? 0) > usage.output
+	)
+		throw new Error("Invalid native usage");
 	calculateCost(model, usage);
+	onUsage?.(usage);
 	const details = choice.message.reasoning_details;
 	const carrier = Array.isArray(details)
 		? details.find((entry) => entry?.type === "claude-subscription-directsdk-experimental.native_assistant")
@@ -383,6 +402,7 @@ export function streamClaudeCode(
 			cacheRead: 0,
 			cacheWrite: 0,
 			totalTokens: 0,
+			measurement: "unknown",
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "stop",
@@ -559,7 +579,9 @@ export function streamClaudeCode(
 									}
 								} else if (event.type === "complete") {
 									if (!started || complete) throw new Error("Invalid Claude Code completion order");
-									const result = validatedCompletion(event.response, model, text, thinking);
+									const result = validatedCompletion(event.response, model, text, thinking, (usage) => {
+										output.usage = usage;
+									});
 									complete = true;
 									if (activeType === "text")
 										stream.push({

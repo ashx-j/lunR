@@ -143,6 +143,7 @@ function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
 			cacheRead: 0,
 			cacheWrite: 0,
 			totalTokens: 0,
+			measurement: "unknown",
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "stop",
@@ -331,6 +332,7 @@ async function consumeChatStream(
 		output.responseId ||= chunk.id;
 
 		if (chunk.usage) {
+			output.usage.measurement = "reported";
 			const promptTokens = chunk.usage.promptTokens || 0;
 			const cachedPromptTokens = getMistralCachedPromptTokens(chunk.usage, promptTokens);
 

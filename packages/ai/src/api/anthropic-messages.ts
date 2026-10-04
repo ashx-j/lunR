@@ -500,6 +500,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -576,6 +577,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
+					output.usage.measurement = "partial";
 					output.usage.input = event.message.usage.input_tokens || 0;
 					output.usage.output = event.message.usage.output_tokens || 0;
 					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
@@ -716,6 +718,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
 					if (event.usage) {
+						output.usage.measurement = "reported";
 						if (event.usage.input_tokens != null) {
 							output.usage.input = event.usage.input_tokens;
 						}

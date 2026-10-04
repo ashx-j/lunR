@@ -282,7 +282,9 @@ export interface ExtensionUIContext {
 // ============================================================================
 
 export interface ContextUsage {
-	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
+	/** Includes locally estimated tokens rather than only a provider measurement. */
+	estimated?: boolean;
+	/** Estimated context tokens, or null when the request cannot be estimated. */
 	tokens: number | null;
 	contextWindow: number;
 	/** Context usage as percentage of context window, or null if tokens is unknown. */

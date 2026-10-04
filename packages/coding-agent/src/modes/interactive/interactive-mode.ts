@@ -1,3 +1,4 @@
+import { collectUsageRequests, usageTokens } from "../../core/usage-accounting.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -4088,7 +4089,7 @@ export class InteractiveMode {
 
 	/**
 	 * Show a transcript notice when a completed assistant message paid for a
-	 * significant cache miss. Only states observable facts: the miss itself,
+	 * significant cache miss. The overlap estimate cannot establish identical prompt content. It also shows
 	 * a model switch, or an idle gap past the cache TTL.
 	 */
 	private maybeShowCacheMissNotice(message: AssistantMessage): void {
@@ -4103,10 +4104,10 @@ export class InteractiveMode {
 		if (miss.missedTokens < 20_000 && miss.missedCost < 0.1) return;
 
 		const cost = miss.missedCost >= 0.01 ? ` (~$${miss.missedCost.toFixed(2)})` : "";
-		const reBilled = `${formatTokens(miss.missedTokens)} tokens re-billed${cost}`;
-		let label = "Cache miss";
+		const reBilled = `~${formatTokens(miss.missedTokens)} tokens may have missed cache${cost}`;
+		let label = "Estimated cache miss";
 		if (miss.modelChanged) {
-			label = "Cache miss after model switch";
+			label = "Estimated cache miss after model switch";
 		} else if (miss.idleMs >= CACHE_TTL_MS) {
 			label = `Cache miss after ${Math.round(miss.idleMs / 60_000)}m idle`;
 		}
@@ -7335,9 +7336,23 @@ export class InteractiveMode {
 				"Generate a title of at most 6 words summarizing this request. " +
 				"Reply with the title only — no quotes, no trailing punctuation, no prefix.\n\n" +
 				`Request:\n${firstUserText.slice(0, 2000)}`;
+			const requestSessionId = this.sessionManager.getSessionId();
+			const requestSessionFile = this.sessionManager.getSessionFile();
 			const response = await this.session.modelRuntime.complete(model, {
 				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 			});
+			if (this.sessionManager.getSessionId() !== requestSessionId) {
+				if (requestSessionFile) {
+					const target = SessionManager.open(requestSessionFile);
+					try {
+						target.appendRequestUsage("title", response);
+					} finally {
+						target.dispose();
+					}
+				}
+				return;
+			}
+			this.sessionManager.appendRequestUsage("title", response);
 			let title = response.content
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map((c) => c.text)
@@ -7364,18 +7379,12 @@ export class InteractiveMode {
 		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
 		// resolves to a concrete responseModel), sorted by cost descending.
 		const perModelMap = new Map<string, { key: string; cost: number; tokens: number }>();
-		for (const entry of entries) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			const message = entry.message;
-			const usage = message.usage;
-			const key = `${message.provider}/${message.responseModel ?? message.model}`;
-			let bucket = perModelMap.get(key);
-			if (!bucket) {
-				bucket = { key, cost: 0, tokens: 0 };
-				perModelMap.set(key, bucket);
-			}
-			bucket.cost += usage.cost.total;
-			bucket.tokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		for (const request of collectUsageRequests(entries)) {
+			const key = `${request.provider}/${request.model}`;
+			const bucket = perModelMap.get(key) ?? { key, cost: 0, tokens: 0 };
+			bucket.cost += request.usage.cost.total;
+			bucket.tokens += usageTokens(request.usage);
+			perModelMap.set(key, bucket);
 		}
 		const perModel = Array.from(perModelMap.values()).sort((a, b) => b.cost - a.cost);
 
@@ -7390,7 +7399,7 @@ export class InteractiveMode {
 		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
 		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
 		info += `${theme.fg("dim", "Tools:")} ${stats.toolCalls} calls, ${stats.toolResults} results\n\n`;
-		info += `${theme.bold("Tokens")}\n`;
+		info += `${theme.bold("Parent tokens including auxiliary requests")}\n`;
 		// "Input" is the full prompt volume. With cache activity, split it into
 		// cached (served from cache) vs uncached (everything else) - the only
 		// provider-independent split. Cache writes, where reported, are a detail
@@ -7407,6 +7416,17 @@ export class InteractiveMode {
 		}
 		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
+		if (stats.childUsage?.total) {
+			info += `Children: ${stats.childUsage.total.toLocaleString()} tokens, $${stats.childUsage.cost.toFixed(3)}\n`;
+			info += `Combined: ${stats.combinedUsage?.total.toLocaleString()} tokens, $${stats.combinedUsage?.cost.toFixed(3)}\n`;
+		}
+		if (stats.parentUsage?.unknownRequests)
+			info += `Usage unavailable for ${stats.parentUsage.unknownRequests} request(s).\n`;
+		if (stats.parentUsage?.partialRequests)
+			info += `Usage incomplete for ${stats.parentUsage.partialRequests} request(s).\n`;
+		if (stats.parentUsage?.unknownCosts)
+			info += `Pricing unavailable for ${stats.parentUsage.unknownCosts} request(s).\n`;
+		info += "Costs use catalog estimates unless the provider reports its account charge.\n";
 
 		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
 			info += `\n${theme.bold("Cost")}\n`;
@@ -7421,8 +7441,8 @@ export class InteractiveMode {
 				const detail = `${cacheWaste.missedTokens.toLocaleString()} tokens, ${missLabel}`;
 				info +=
 					cacheWaste.missedCost >= 0.0001
-						? `\n${theme.fg("dim", "Cache Re-billed:")} $${cacheWaste.missedCost.toFixed(3)} ${theme.fg("dim", `(${detail})`)}`
-						: `\n${theme.fg("dim", "Cache Re-billed:")} ${detail}`;
+						? `\n${theme.fg("dim", "Estimated cache misses:")} $${cacheWaste.missedCost.toFixed(3)} ${theme.fg("dim", `(${detail})`)}`
+						: `\n${theme.fg("dim", "Estimated cache misses:")} ${detail}`;
 			}
 		}
 
@@ -7476,13 +7496,19 @@ export class InteractiveMode {
 	private async handleUsageCommand(): Promise<void> {
 		const stats = this.session.getSessionStats();
 		const sessionTotals =
-			stats.tokens.total > 0
+			stats.tokens.total > 0 ||
+			stats.parentUsage?.requests ||
+			stats.parentUsage?.unknownRequests ||
+			stats.parentUsage?.partialRequests
 				? {
 						input: stats.tokens.input,
 						output: stats.tokens.output,
 						cacheRead: stats.tokens.cacheRead,
 						cacheWrite: stats.tokens.cacheWrite,
 						total: stats.tokens.total,
+						requests: stats.parentUsage?.requests,
+						unknownRequests: stats.parentUsage?.unknownRequests,
+						partialRequests: stats.parentUsage?.partialRequests,
 					}
 				: undefined;
 
@@ -7492,7 +7518,14 @@ export class InteractiveMode {
 		const breakdown = this.collectUsageBreakdown();
 
 		const lines = renderUsageBox(
-			{ sessionTotals, context, plan: planResult.usages, breakdown },
+			{
+				sessionTotals,
+				childTotals: stats.childUsage,
+				combinedTotals: stats.combinedUsage,
+				context,
+				plan: planResult.usages,
+				breakdown,
+			},
 			this.ui.terminal.columns,
 		);
 		this.chatContainer.addChild(new Spacer(1));

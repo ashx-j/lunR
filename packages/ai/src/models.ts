@@ -651,7 +651,10 @@ export function hasApi<TApi extends Api>(model: Model<Api>, api: TApi): model is
 	return model.api === api;
 }
 
-export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+export function calculateCost<TApi extends Api>(
+	model: Pick<Model<TApi>, "cost" | "catalog">,
+	usage: Usage,
+): Usage["cost"] {
 	const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
 	let rates: ModelCostRates = model.cost;
 	let matchedThreshold = -1;
@@ -663,13 +666,16 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
 	}
 
 	// Anthropic charges 2x base input for 1h cache writes.
-	const longWrite = usage.cacheWrite1h ?? 0;
+	const longWrite = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));
 	const shortWrite = usage.cacheWrite - longWrite;
 	usage.cost.input = (rates.input / 1000000) * usage.input;
 	usage.cost.output = (rates.output / 1000000) * usage.output;
 	usage.cost.cacheRead = (rates.cacheRead / 1000000) * usage.cacheRead;
 	usage.cost.cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1000000;
-	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+	usage.cost.total =
+		usage.reportedCost ?? usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+	usage.costSource =
+		usage.reportedCost !== undefined ? "reported" : model.catalog?.pricing === "unknown" ? "unknown" : "estimated";
 	return usage.cost;
 }
 

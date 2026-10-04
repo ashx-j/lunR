@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { emptyUsageTotals } from "../src/core/usage-accounting.ts";
+import * as usageService from "../src/core/usage-service.ts";
 import type { BridgeSession, BridgeSessionStatus } from "../src/gateway/agent-bridge.ts";
 import {
 	botCommandSpecs,
@@ -9,6 +11,8 @@ import {
 	runChatCommand,
 	sendCommandReply,
 } from "../src/gateway/commands.ts";
+import { defaultGatewayConfig } from "../src/gateway/config.ts";
+import { handleMobileCommand } from "../src/gateway/mobile-commands.ts";
 import type { BridgeLike } from "../src/gateway/router.ts";
 import type {
 	ButtonSpec,
@@ -579,4 +583,31 @@ describe("/sessions", () => {
 		expect(bridge.switched).toEqual([{ key: ctx.key, sessionFile: "/tmp/session.jsonl" }]);
 		expect(adapter.sent[0].text).toContain("Switched to");
 	});
+});
+
+it("shows parent, cache-inclusive children, and combined usage in the gateway", async () => {
+	const ctx = makeCtx("/usage", { source: makeSource({ roleAuthorized: true }) });
+	const session = bridge.session!;
+	const stats = session.getSessionStats();
+	const childUsage = {
+		...emptyUsageTotals(),
+		requests: 1,
+		input: 100,
+		output: 200,
+		cacheRead: 10000,
+		cacheWrite: 1000,
+		total: 11300,
+		cost: 2,
+	};
+	vi.spyOn(session, "getSessionStats").mockReturnValue({
+		...stats,
+		childUsage,
+		combinedUsage: { ...childUsage, total: 23300 },
+	});
+	vi.spyOn(usageService, "getAllPlanUsageResults").mockResolvedValue({ usages: [], errors: [] });
+	await handleMobileCommand({ ...ctx, cfg: defaultGatewayConfig() }, "usage", "");
+	const text = adapter.sent.at(-1)?.text;
+	expect(text).toContain("Parent tokens including auxiliary requests: 12000");
+	expect(text).toContain("Children: 11300 tokens");
+	expect(text).toContain("Combined: 23300 tokens");
 });

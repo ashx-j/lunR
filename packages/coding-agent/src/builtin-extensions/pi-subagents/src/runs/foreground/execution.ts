@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { parseSessionRequests, parseSessionUsage, sessionUsageDelta } from "../../shared/session-tokens.ts";
 /**
  * Core execution logic for running subagents
  */
@@ -93,7 +94,7 @@ const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
 
 function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
 function sumUsage(target: Usage, source: Usage): void {
@@ -103,6 +104,9 @@ function sumUsage(target: Usage, source: Usage): void {
 	target.cacheWrite += source.cacheWrite;
 	target.cost += source.cost;
 	target.turns += source.turns;
+	target.unknownRequests += source.unknownRequests ?? 0;
+	target.partialRequests += source.partialRequests ?? 0;
+	target.unknownCosts += source.unknownCosts ?? 0;
 }
 
 function formatTimeoutMessage(timeoutMs: number): string {
@@ -213,6 +217,7 @@ async function runSingleAttempt(
 		originalTask?: string;
 	},
 ): Promise<SingleResult> {
+	const usageBeforeAttempt = parseSessionUsage(options.sessionFile ?? options.sessionDir);
 	const effectiveThinking = options.thinkingOverride;
 	const modelArg = applyThinkingSuffix(model, effectiveThinking, options.thinkingOverride !== undefined);
 	const watchdogConfig = resolveWatchdogConfig(options.cwd ?? runtimeCwd);
@@ -857,7 +862,10 @@ async function runSingleAttempt(
 						result.usage.cacheRead += u.cacheRead || 0;
 						result.usage.cacheWrite += u.cacheWrite || 0;
 						result.usage.cost += u.cost?.total || 0;
-						progress.tokens = result.usage.input + result.usage.output;
+						result.usage.unknownRequests += Number(u.measurement === "unknown");
+						result.usage.partialRequests += Number(u.measurement === "partial");
+						result.usage.unknownCosts += Number(u.costSource === "unknown");
+						progress.tokens = result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite;
 					}
 					if (!result.model && evt.message.model) {
 						result.model = evt.message.model;
@@ -1003,6 +1011,12 @@ async function runSingleAttempt(
 			cleanupTempDir(tempDir);
 			stdoutReader.end();
 			stderrReader.end();
+			const persistedUsage = parseSessionUsage(options.sessionFile ?? options.sessionDir ?? result.sessionFile);
+			if (persistedUsage) {
+				result.usageRequests = parseSessionRequests(options.sessionFile ?? options.sessionDir ?? result.sessionFile);
+				result.usage = options.sessionFile ? persistedUsage : sessionUsageDelta(persistedUsage, usageBeforeAttempt);
+				progress.tokens = result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite;
+			}
 			const stderr = stderrTail.text();
 			let closeError = result.error ?? toolDiagnosticError ?? assistantError;
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && (cleanTerminalAssistantStopReceived || agentSettledReceived) && !closeError;
@@ -1459,11 +1473,13 @@ export async function runSync(
 		}
 		: options;
 
+	const priorRequestIds = new Set(parseSessionRequests(options.sessionFile ?? options.sessionDir).map((request) => request.id));
 	let lastResult: SingleResult | undefined;
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
 	for (let i = 0; i < modelsToTry.length; i++) {
 		const candidate = modelsToTry[i];
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
+		const usageBeforeAttempt = parseSessionUsage(options.sessionFile ?? options.sessionDir);
 		const result = await runSingleAttempt(runtimeCwd, spec, taskWithAcceptance, candidate, detachedAwareOptions, {
 			sessionEnabled,
 			systemPrompt,
@@ -1476,6 +1492,8 @@ export async function runSync(
 			outputSnapshot,
 			originalTask: task,
 		});
+		const persistedUsage = parseSessionUsage(options.sessionFile ?? options.sessionDir ?? result.sessionFile);
+		if (persistedUsage) result.usage = sessionUsageDelta(persistedUsage, usageBeforeAttempt);
 		lastResult = result;
 		if (result.model) attemptedModels.push(result.model);
 		else if (candidate) attemptedModels.push(candidate);
@@ -1515,12 +1533,16 @@ export async function runSync(
 		error: "Subagent did not produce a result.",
 	} satisfies SingleResult;
 
-	result.usage = aggregateUsage;
+	const cumulativeResumeUsage = options.sessionFile ? parseSessionUsage(options.sessionFile) : null;
+	result.usage = cumulativeResumeUsage ?? aggregateUsage;
+	result.usageRequests = parseSessionRequests(options.sessionFile ?? options.sessionDir ?? result.sessionFile)
+		.filter((request) => Boolean(options.sessionFile) || !priorRequestIds.has(request.id));
+	if (result.usageRequests.length === 0) result.usageRequests = undefined;
 	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
 	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
 	result.progressSummary = {
 		toolCount: totalToolCount,
-		tokens: aggregateUsage.input + aggregateUsage.output,
+		tokens: result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite,
 		durationMs: totalDurationMs,
 	};
 	if (attemptNotes.length > 0 && result.progress) {

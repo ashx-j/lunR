@@ -51,6 +51,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_start", (event, ctx) => {
 		if (event.message.role === "assistant") {
 			messageStartTime = Date.now();
+			lastAvgTps = 0;
+			lastOutputTokens = 0;
 			stopAnimation();
 			if (!ctx.hasUI) return;
 			spinnerIdx = 0;
@@ -73,11 +75,12 @@ export default function (pi: ExtensionAPI) {
 		if (outputTokens === 0) return;
 
 		const elapsed = (Date.now() - messageStartTime) / 1000;
+		if (elapsed <= 0) return;
 		const tps = outputTokens / elapsed;
 		const color = colorForTps(tps);
 		const frame = spinner[spinnerIdx % spinner.length];
 
-		ctx.ui.setStatus("tps", `${color}${frame} ${tps.toFixed(1)} t/s${RESET} ↓ ${formatTokens(outputTokens)} tokens`);
+		ctx.ui.setStatus("tps", `${color}${frame} ${tps.toFixed(1)} output t/s overall${RESET} ↓ ${formatTokens(outputTokens)} tokens`);
 	});
 
 	pi.on("message_end", (event, ctx) => {
@@ -94,10 +97,14 @@ export default function (pi: ExtensionAPI) {
 			lastOutputTokens = outputTokens;
 		}
 
+		if (outputTokens === 0) {
+			ctx.ui.setStatus("tps", "");
+			return;
+		}
 		const color = colorForTps(lastAvgTps);
 		ctx.ui.setStatus(
 			"tps",
-			`${color}✓ ${lastAvgTps.toFixed(1)} t/s · ${formatTokens(lastOutputTokens)} tokens in ${elapsed.toFixed(1)}s${RESET}`,
+			`${color}✓ ${lastAvgTps.toFixed(1)} output t/s overall · ${formatTokens(lastOutputTokens)} tokens in ${elapsed.toFixed(1)}s${RESET}`,
 		);
 	});
 }

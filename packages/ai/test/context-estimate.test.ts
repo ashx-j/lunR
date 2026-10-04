@@ -79,3 +79,23 @@ describe("context token estimation", () => {
 		});
 	});
 });
+
+describe("request prefix identity", () => {
+	it("invalidates usage when the system prompt or tool schema changes", async () => {
+		const { getContextFingerprint } = await import("../src/utils/estimate.ts");
+		const context: Context = { systemPrompt: "old", messages: [createAssistant(100, 9500)], tools: [] };
+		const assistant = context.messages[0] as AssistantMessage;
+		assistant.usage.contextFingerprint = getContextFingerprint(context);
+		expect(estimateContextTokens(context).usageTokens).toBe(9500);
+		context.systemPrompt = "new system";
+		expect(estimateContextTokens(context).usageTokens).toBe(0);
+		context.systemPrompt = "old";
+		context.tools = [{ name: "read", description: "read files", parameters: { type: "object", properties: {} } }];
+		expect(estimateContextTokens(context).usageTokens).toBe(0);
+	});
+	it("avoids the ASCII divisor for non-ASCII text", async () => {
+		const { estimateTextTokens } = await import("../src/utils/estimate.ts");
+		expect(estimateTextTokens("abcde")).toBe(2);
+		expect(estimateTextTokens("こんにちは世界")).toBe(7);
+	});
+});

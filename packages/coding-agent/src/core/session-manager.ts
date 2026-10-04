@@ -1,5 +1,5 @@
 import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
@@ -56,6 +56,8 @@ export interface NewSessionOptions {
 }
 
 export interface SessionEntryBase {
+	/** Copied context from another session, not newly incurred usage. */
+	inherited?: boolean;
 	type: string;
 	id: string;
 	parentId: string | null;
@@ -1168,6 +1170,7 @@ export class SessionManager {
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+		if (message.role === "assistant") message.usage.requestId ??= randomUUID();
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
@@ -1177,6 +1180,20 @@ export class SessionManager {
 		};
 		this._appendEntry(entry);
 		return entry.id;
+	}
+
+	/** Persist an auxiliary request without adding it to model context. */
+	appendRequestUsage(purpose: string, message: AssistantMessage): string {
+		const usage = { ...message.usage, requestId: message.usage.requestId ?? randomUUID() };
+		return this.appendCustomEntry("request-usage", {
+			id: usage.requestId,
+			purpose,
+			provider: message.provider,
+			model: message.responseModel ?? message.model,
+			timestamp: Date.now(),
+			usage,
+			stopReason: message.stopReason,
+		});
 	}
 
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
@@ -1542,7 +1559,7 @@ export class SessionManager {
 		let pathParentId: string | null = null;
 		for (const entry of path) {
 			if (entry.type === "label") continue;
-			pathWithoutLabels.push({ ...entry, parentId: pathParentId });
+			pathWithoutLabels.push({ ...entry, inherited: true, parentId: pathParentId });
 			pathParentId = entry.id;
 		}
 

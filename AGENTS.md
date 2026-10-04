@@ -22,6 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- PR #151 merge qualification: gateway approval fixtures own a disposable agent directory and persist their expected configuration, preventing other suites' conversation bindings from changing authorization. The previously failing three-suite reproduction passes all 77 tests; five offline package builds pass. Full isolated tests and fresh CI follow.
+
+- **Token accounting (`fix/token-accounting`, 2026-10-04):** conversation, title, compaction and branch-summary requests share durable request identities. Session, gateway and goal totals retain incurred parent and child usage through branch navigation; forks retain context without charging inherited history. Foreground and default async children include cache tokens, failed fallback attempts and auxiliary requests, with request receipts deduplicated through completion, wait and resume. Shared request-aware estimation includes system/tools and rejects obsolete usage after compaction or prefix changes. Failed Responses usage, native reasoning/cache retention, OpenRouter reported charges/image cache splits, reviewed Gemini long-context tiers in both shipped catalogs, missing measurements, labels and per-response TPS are corrected. Quota polling remains provider-defined.
+
 - **v0.2.27 release preparation (2026-10-04):** all 21 PRs #129 through #149 are merged after fresh green CI, using their completed reviews and recorded conflict resolutions. Versioned package manifests, shrinkwrap and installer locks are current. Five offline package builds and composed tool snapshots pass. Agent 191, AI 635 with 760 skips, TUI 757, and Orchestrator 32 pass. The local coding-agent run passed 3,477 tests with 56 skips and one intercom failure from a 114-byte nested socket path. Shortening the release runner prefix brings it to 98 bytes; all four intercom startup tests pass through the same nested runner. Release PR CI and publication qualification follow. The pinned CuaDriver approval is unchanged.
 
 - Shutdown fixture integration: the plain-object InteractiveMode fixture supplies session admission cleanup required by the runtime repair. Five ordering/resume tests pass independently; combined validation also retains provider polling cleanup.
@@ -39,7 +43,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.26`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-04 (token-accounting work based on v0.2.27). Public npm is `@ashx-j/lunr@0.2.27`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -170,6 +174,8 @@ Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
+- Token accounting, 2026-10-04: five offline package compiles and the Node bundle pass. Full isolated tests pass: AI 649 with 760 credential skips, Agent 191, coding-agent 3,503 with 56 skips, TUI 741 and Orchestrator 32. Three added AI charge/zero cases and gateway combined-usage/non-ASCII consistency cases pass in focused follow-ups. Whole-package Biome, relative imports and bundled catalog integrity pass. Test profiles use an environment allowlist without account credentials; a short disposable prefix keeps nested intercom sockets within the POSIX limit. No original checkout, installed CLI, native desktop, live account or release was used.
+
 - v0.2.27 preparation: five offline package compiles and Node bundle pass. Both Linux and both native-host tool hashes match the previously validated combined snapshot. Release checks normalize only formatter/import-order diagnostics in 31 files. Source/lock checks and 17 release/distribution tests pass. The release helper uses a short temporary prefix to keep nested socket tests within the POSIX path limit.
 
 - Isolated test profiles, 2026-10-03: 354 focused tests pass across 27 suites; the existing Windows-only rollback root-case test is skipped on Linux. Five offline tsgo package compiles, touched-file Biome, shell syntax, relative-import and diff checks pass. Test-inclusive typechecking still reports existing mock typing issues in startup-input, status and MCP cold-start fixtures; full workspace CI and Windows execution remain unqualified. Use `bash test.sh --workspace=packages/coding-agent -- <test files> --maxWorkers=1` for disposable profiles.
@@ -291,6 +297,10 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Gateway approval fixtures must isolate `PI_CODING_AGENT_DIR` and save their configuration because callbacks recheck persisted authorization; a pairing-store directory alone does not isolate saved conversation bindings.
+
+- Usage records live in existing session custom entries, outside model context. New request IDs survive receipt replay; inherited fork entries carry context but no new spend. Legacy sessions and receipts retain their supported counters but cannot recover previously omitted requests. Unknown/partial usage and unavailable prices remain distinct from measured zero. Current-context, image and cache-miss counts remain visibly approximate. Active children may not have delivered their final accounting receipt yet.
+
 - Release preparation checks formatting without writing; inherited formatting must be normalized on the release branch before those checks pass. Keep catalog generation out of release builds.
 
 - The resource-loader extension fixtures require current isolated package builds because jiti resolves compiled workspace aliases. Source CLI subprocess fixtures explicitly load tsx; a source-test pass does not qualify the compiled CLI. Keep intentional legacy migration inputs and credential sentinels under `.pi`.
@@ -411,6 +421,11 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-04: isolate the PR #151 gateway approval fixture instead of weakening callback authorization, because the CI failure reproduces only with other suites' saved gateway data.
+
+- 2026-10-04: count durable request identities across conversation and auxiliary calls, then deduplicate child receipts, so navigation and replay cannot erase or duplicate incurred usage.
+- 2026-10-04: prefer provider-reported spend while preserving catalog component estimates, and reuse the AI request estimator to keep context-window decisions consistent with the prepared prefix.
 
 - 2026-10-04: integrate the existing reviewed PRs with their prerequisites and require fresh green CI so baseline fixture failures do not reach the npm release.
 

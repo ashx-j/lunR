@@ -198,6 +198,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -1173,6 +1174,7 @@ function parseChunkUsage(
 	rawUsage: {
 		prompt_tokens?: number;
 		completion_tokens?: number;
+		cost?: number;
 		prompt_cache_hit_tokens?: number;
 		prompt_cache_miss_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
@@ -1205,7 +1207,15 @@ function parseChunkUsage(
 		output: outputTokens,
 		cacheRead: cacheReadTokens,
 		cacheWrite: cacheWriteTokens,
-		reasoning: rawUsage.completion_tokens_details?.reasoning_tokens || 0,
+		reasoning: rawUsage.completion_tokens_details?.reasoning_tokens,
+		measurement: "reported",
+		reportedCost:
+			model.provider === "openrouter" &&
+			typeof rawUsage.cost === "number" &&
+			Number.isFinite(rawUsage.cost) &&
+			rawUsage.cost >= 0
+				? rawUsage.cost
+				: undefined,
 		totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};

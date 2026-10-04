@@ -3,6 +3,7 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
+import { collectUsageRequests, totalRequestUsage } from "../../../core/usage-accounting.ts";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -84,21 +85,13 @@ export class FooterComponent implements Component {
 		const state = this.session.state;
 
 		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-		let totalInput = 0;
-		let totalOutput = 0;
-		let totalCacheRead = 0;
-		let totalCacheWrite = 0;
-		let totalCost = 0;
+		const totals = totalRequestUsage(collectUsageRequests(this.session.sessionManager.getEntries()));
+		const { input: totalInput, output: totalOutput, cacheRead: totalCacheRead, cacheWrite: totalCacheWrite } = totals;
+		const totalCost = totals.cost;
 		let latestCacheHitRate: number | undefined;
 
 		for (const entry of this.session.sessionManager.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "assistant") {
-				totalInput += entry.message.usage.input;
-				totalOutput += entry.message.usage.output;
-				totalCacheRead += entry.message.usage.cacheRead;
-				totalCacheWrite += entry.message.usage.cacheWrite;
-				totalCost += entry.message.usage.cost.total;
-
 				const latestPromptTokens =
 					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
 				latestCacheHitRate =
@@ -107,11 +100,14 @@ export class FooterComponent implements Component {
 		}
 
 		// Calculate context usage from session (handles compaction correctly).
-		// After compaction, tokens are unknown until the next LLM response.
+		// Local estimates are marked until applicable provider usage is available.
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+		const contextPercent =
+			contextUsage?.percent !== null
+				? `${contextUsage?.estimated ? "~" : ""}${contextPercentValue.toFixed(1)}`
+				: "?";
 
 		// Replace home directory with ~
 		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);

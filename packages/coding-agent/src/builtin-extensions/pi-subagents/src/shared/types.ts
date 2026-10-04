@@ -5,6 +5,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AccountedRequest } from "../../../../core/usage-accounting.ts";
 import type { Message } from "@earendil-works/pi-ai";
 import type { FSWatcher } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -153,6 +154,9 @@ interface TruncationResult {
 }
 
 export interface Usage {
+	unknownRequests?: number;
+	partialRequests?: number;
+	unknownCosts?: number;
 	input: number;
 	output: number;
 	cacheRead: number;
@@ -203,6 +207,9 @@ export interface TurnBudgetState extends ResolvedTurnBudget {
 }
 
 export interface TokenUsage {
+	/** Input includes cache reads and writes. */
+	cacheRead?: number;
+	cacheWrite?: number;
 	input: number;
 	output: number;
 	total: number;
@@ -677,6 +684,8 @@ export interface SingleResult {
 	toolBudgetBlocked?: boolean;
 	messages?: Message[];
 	usage: Usage;
+	/** Durable request receipts deduplicate fallback, completion, wait, and resume. */
+	usageRequests?: AccountedRequest[];
 	model?: string;
 	thinking?: string;
 	modelSelection?: ModelSelection;
