@@ -6,8 +6,8 @@ import {
 	computeSmoothRevealStep,
 	countGraphemesBeforeToolCall,
 	countMessageGraphemes,
-	sliceMessageContent,
 	SMOOTH_STREAMING_MAX_GRAPHEMES_PER_TICK,
+	sliceMessageContent,
 } from "../src/modes/interactive/smooth-streaming.ts";
 
 function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {

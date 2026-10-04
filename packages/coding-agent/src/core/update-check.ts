@@ -25,10 +25,7 @@ export interface UpdateCheckResult {
 	notice?: string;
 }
 
-export function isPublishedInstall(
-	packageName: string = PACKAGE_NAME,
-	npmName: string = NPM_CLI_PACKAGE,
-): boolean {
+export function isPublishedInstall(packageName: string = PACKAGE_NAME, npmName: string = NPM_CLI_PACKAGE): boolean {
 	return packageName === npmName;
 }
 

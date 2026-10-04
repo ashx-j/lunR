@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Supervisor shutdown is bounded and retains ownership of unconfirmed children. Registration and heartbeat recovery stay within the current lifecycle.
+
 ## [0.2.26] - 2026-09-27
 
 ## [0.2.25] - 2026-09-26

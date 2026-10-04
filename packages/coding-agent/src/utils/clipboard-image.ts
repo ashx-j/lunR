@@ -233,9 +233,13 @@ const FILE_DROP_IMAGE_MIME_TYPES: Record<string, string> = {
  * Return the first image file from the drop list. Only used on native Windows.
  */
 function readClipboardImageFileDropViaPowerShell(): ClipboardImage | null {
-	const result = runCommand("powershell.exe", ["-NoProfile", "-STA", "-Command", "Get-Clipboard -Format FileDropList"], {
-		timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
-	});
+	const result = runCommand(
+		"powershell.exe",
+		["-NoProfile", "-STA", "-Command", "Get-Clipboard -Format FileDropList"],
+		{
+			timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
+		},
+	);
 	if (!result.ok || result.stdout.length === 0) {
 		return null;
 	}

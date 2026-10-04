@@ -93,10 +93,17 @@ export class CuaAdapter implements ComputerDriver {
 			combined.throwIfAborted();
 			if (!this.client) throw new Error("Computer connection closed.");
 			dispatched = true;
-			return await this.client.callTool({ name, arguments: args }, undefined, { timeout: name === "launch_app" ? 45000 : 15000, signal: combined });
+			return await this.client.callTool({ name, arguments: args }, undefined, {
+				timeout: name === "launch_app" ? 45000 : 15000,
+				signal: combined,
+			});
 		} catch (error) {
 			const wasCancelled = combined.aborted;
-			try { await this.close(); } catch { /* The workflow retains the lease if shutdown is unconfirmed. */ }
+			try {
+				await this.close();
+			} catch {
+				/* The workflow retains the lease if shutdown is unconfirmed. */
+			}
 			if (wasCancelled) throw error;
 			throw new DriverCallError(dispatched ? "native_request" : "adapter_preflight", dispatched);
 		}

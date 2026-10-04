@@ -29,7 +29,10 @@ function limitLabel(limit: Record<string, unknown>): string | undefined {
 	return "Limit";
 }
 
-export async function fetchZaiPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage | undefined> {
+export async function fetchZaiPlanUsage(
+	runtime: ModelRuntime,
+	auth?: UsageAuthSnapshot,
+): Promise<PlanUsage | undefined> {
 	const resolution = auth ? auth.resolution : await runtime.getAuth(ZAI_PROVIDER_ID);
 	const apiKey = resolution?.auth.apiKey;
 	if (!apiKey) return undefined;

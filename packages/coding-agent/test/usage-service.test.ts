@@ -559,7 +559,6 @@ describe("usage view helpers", () => {
 	});
 });
 
-
 describe("usage ownership and invalidation", () => {
 	it("isolates two runtimes and their footer peeks", async () => {
 		let count = 0;

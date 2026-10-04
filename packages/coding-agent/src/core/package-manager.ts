@@ -2472,11 +2472,7 @@ export class DefaultPackageManager implements PackageManager {
 		});
 	}
 
-	private runCommand(
-		command: string,
-		args: string[],
-		options?: { cwd?: string; timeoutMs?: number },
-	): Promise<void> {
+	private runCommand(command: string, args: string[], options?: { cwd?: string; timeoutMs?: number }): Promise<void> {
 		return new Promise((resolvePromise, reject) => {
 			const child = this.spawnCommand(command, args, options);
 			let timedOut = false;

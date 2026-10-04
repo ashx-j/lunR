@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Agent loop preparation failures settle their event streams and return the terminal error result.
+
 ## [0.2.26] - 2026-09-27
 
 ## [0.2.25] - 2026-09-26

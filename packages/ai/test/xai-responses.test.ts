@@ -3,8 +3,8 @@ import type { OpenAIResponsesOptions } from "../src/api/openai-responses.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 import { XAI_MODELS } from "../src/providers/xai.models.ts";
 import { xaiProvider } from "../src/providers/xai.ts";
-import { shouldUseXaiResponsesApi } from "../src/xai-effort.ts";
 import type { Context, Model } from "../src/types.ts";
+import { shouldUseXaiResponsesApi } from "../src/xai-effort.ts";
 
 type CapturedRequest = {
 	url: string;

@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **v0.2.27 release preparation (2026-10-04):** all 21 PRs #129 through #149 are merged after fresh green CI, using their completed reviews and recorded conflict resolutions. Versioned package manifests, shrinkwrap and installer locks are current. Five offline package builds and composed tool snapshots pass. Agent 191, AI 635 with 760 skips, TUI 757, and Orchestrator 32 pass. The local coding-agent run passed 3,477 tests with 56 skips and one intercom failure from a 114-byte nested socket path. Shortening the release runner prefix brings it to 98 bytes; all four intercom startup tests pass through the same nested runner. Release PR CI and publication qualification follow. The pinned CuaDriver approval is unchanged.
+
 - Shutdown fixture integration: the plain-object InteractiveMode fixture supplies session admission cleanup required by the runtime repair. Five ordering/resume tests pass independently; combined validation also retains provider polling cleanup.
 
 - **Isolated test profiles (`fix/review-isolated-test-profiles`):** `test.sh` runs with disposable home/profile/cache/temp directories and an allowlisted environment. Sentinel auth and backup files survive success/failure; unused real-credential helpers are removed. Ordinary settings/resources use current lunR paths, source CLI fixtures load through tsx, UI fixtures exercise current runtime/render contracts, and session fixtures release destination ownership. Application behavior is unchanged.
@@ -154,7 +156,7 @@ Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.26**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.26**; v0.2.27 prepared.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -167,6 +169,8 @@ Last updated: 2026-09-27 (v0.2.26 on `master`). Public npm is `@ashx-j/lunr@0.2.
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- v0.2.27 preparation: five offline package compiles and Node bundle pass. Both Linux and both native-host tool hashes match the previously validated combined snapshot. Release checks normalize only formatter/import-order diagnostics in 31 files. Source/lock checks and 17 release/distribution tests pass. The release helper uses a short temporary prefix to keep nested socket tests within the POSIX path limit.
 
 - Isolated test profiles, 2026-10-03: 354 focused tests pass across 27 suites; the existing Windows-only rollback root-case test is skipped on Linux. Five offline tsgo package compiles, touched-file Biome, shell syntax, relative-import and diff checks pass. Test-inclusive typechecking still reports existing mock typing issues in startup-input, status and MCP cold-start fixtures; full workspace CI and Windows execution remain unqualified. Use `bash test.sh --workspace=packages/coding-agent -- <test files> --maxWorkers=1` for disposable profiles.
 
@@ -287,6 +291,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Release preparation checks formatting without writing; inherited formatting must be normalized on the release branch before those checks pass. Keep catalog generation out of release builds.
+
 - The resource-loader extension fixtures require current isolated package builds because jiti resolves compiled workspace aliases. Source CLI subprocess fixtures explicitly load tsx; a source-test pass does not qualify the compiled CLI. Keep intentional legacy migration inputs and credential sentinels under `.pi`.
 - Rollback fixture isolation overlaps the persistence work: retain its recovery failure-injection tests and one disposable-home strategy when integrating. The memory restoration fixture follows `dirname(getAgentDir())/simple-memory` and retains its restoration assertions.
 
@@ -405,6 +411,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-04: integrate the existing reviewed PRs with their prerequisites and require fresh green CI so baseline fixture failures do not reach the npm release.
 
 - 2026-10-03: isolate test profiles with an allowlisted environment instead of moving saved credentials, and repair stale fixtures against current contracts without changing application behavior.
 

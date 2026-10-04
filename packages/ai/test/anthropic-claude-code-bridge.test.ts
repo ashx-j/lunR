@@ -6,7 +6,11 @@ import { anthropicProvider } from "../src/providers/anthropic.ts";
 import { isContextOverflow } from "../src/utils/overflow.ts";
 import { isRetryableAssistantError } from "../src/utils/retry.ts";
 
-const mock = vi.hoisted(() => ({ response: null as Record<string, unknown> | null, spawn: vi.fn(), category: undefined as unknown }));
+const mock = vi.hoisted(() => ({
+	response: null as Record<string, unknown> | null,
+	spawn: vi.fn(),
+	category: undefined as unknown,
+}));
 vi.mock("node:child_process", () => ({ spawn: mock.spawn }));
 
 const connection: ExternalClaudeCodeCredential = {
@@ -79,7 +83,8 @@ function fakeWorker(text = "hello", splitUtf8 = false, nativePid?: number) {
 						worker.stdout.write(delta.subarray(0, boundary));
 						worker.stdout.write(delta.subarray(boundary));
 					} else send("text_delta", { text });
-					if (mock.category !== undefined) send("error", { category: mock.category, message: "private prompt fake-token-secret" });
+					if (mock.category !== undefined)
+						send("error", { category: mock.category, message: "private prompt fake-token-secret" });
 					else if (mock.response) send("complete", { response: mock.response });
 					worker.exitCode = mock.response ? 0 : 1;
 					worker.emit("close", worker.exitCode);

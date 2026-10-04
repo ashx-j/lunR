@@ -1,6 +1,21 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.26`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.27`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Session persistence and rollback retain saved work after failed writes. Project trust covers integration loading, saved sessions, and retention paths.
+- Subagent, browser, web, LSP, and MCP work retain session ownership through cancellation and shutdown.
+- Gateway access revocation and stale controls stop unauthorized actions. Cron execution claims prevent duplicate runs and settle the scheduled turn.
+- Provider errors follow the credential used by each request. Installation teardown, packaged assets, and dependency resolution preserve the required files and notices.
+- Editor undo and narrow rendering preserve draft state. Interactive exit restores a clean terminal without a stats box or resume hint.
+
+### Changed
+
+- Release tests use shorter isolated temporary paths so nested intercom socket tests can start on POSIX systems.
+- Shipped guidance and tool descriptions match the current lunR behavior. Release preparation runs on a branch and tags only an explicitly selected merged commit.
 
 ## [0.2.26] - 2026-09-27
 

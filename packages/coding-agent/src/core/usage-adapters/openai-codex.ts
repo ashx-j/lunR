@@ -227,7 +227,10 @@ function toPlanUsage(report: CodexUsageReport): PlanUsage[] {
 	});
 }
 
-export async function fetchCodexPlanUsage(runtime: ModelRuntime, auth?: UsageAuthSnapshot): Promise<PlanUsage[] | undefined> {
+export async function fetchCodexPlanUsage(
+	runtime: ModelRuntime,
+	auth?: UsageAuthSnapshot,
+): Promise<PlanUsage[] | undefined> {
 	const headers = auth ? auth.codexHeaders : await resolveCodexHeaders(runtime);
 	if (!headers) return undefined;
 

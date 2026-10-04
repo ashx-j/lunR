@@ -143,9 +143,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 		description?: string;
 		promptSnippet?: string;
 		parameters?: { properties: Record<string, unknown> };
-		execute: (
-			...args: unknown[]
-		) => Promise<{
+		execute: (...args: unknown[]) => Promise<{
 			content?: Array<{ type: string; text?: string }>;
 			details?: Record<string, unknown>;
 		}>;
@@ -236,13 +234,8 @@ describe("pi-web-access lazy first-use runtime", () => {
 		};
 	}
 
-	async function emit(
-		instance: ReturnType<typeof createPi>,
-		event: string,
-		context?: unknown,
-	) {
-		for (const handler of instance.handlers.get(event) ?? [])
-			await handler({}, context);
+	async function emit(instance: ReturnType<typeof createPi>, event: string, context?: unknown) {
+		for (const handler of instance.handlers.get(event) ?? []) await handler({}, context);
 	}
 
 	it("isolates restored results through startup, navigation and shutdown of another factory", async () => {
@@ -251,46 +244,20 @@ describe("pi-web-access lazy first-use runtime", () => {
 		const second = createPi();
 		factory(first.pi);
 		factory(second.pi);
-		await emit(
-			first,
-			"session_start",
-			branchContext("first", "first private body"),
-		);
-		await emit(
-			second,
-			"session_start",
-			branchContext("second", "second private body"),
-		);
+		await emit(first, "session_start", branchContext("first", "first private body"));
+		await emit(second, "session_start", branchContext("second", "second private body"));
 		const retrieve = (instance: ReturnType<typeof createPi>, id: string) =>
-			instance.tools
-				.get("get_search_content")!
-				.execute("read", { responseId: id, urlIndex: 0 });
-		expect((await retrieve(first, "first")).content?.[0].text).toContain(
-			"first private body",
-		);
+			instance.tools.get("get_search_content")!.execute("read", { responseId: id, urlIndex: 0 });
+		expect((await retrieve(first, "first")).content?.[0].text).toContain("first private body");
 		expect((await retrieve(first, "second")).details?.error).toBe("Not found");
 		expect((await retrieve(second, "first")).details?.error).toBe("Not found");
-		await emit(
-			second,
-			"session_tree",
-			branchContext("first", "second branch body"),
-		);
-		expect((await retrieve(first, "first")).content?.[0].text).toContain(
-			"first private body",
-		);
-		expect((await retrieve(second, "first")).content?.[0].text).toContain(
-			"second branch body",
-		);
+		await emit(second, "session_tree", branchContext("first", "second branch body"));
+		expect((await retrieve(first, "first")).content?.[0].text).toContain("first private body");
+		expect((await retrieve(second, "first")).content?.[0].text).toContain("second branch body");
 		await emit(second, "session_shutdown");
-		expect((await retrieve(first, "first")).content?.[0].text).toContain(
-			"first private body",
-		);
+		expect((await retrieve(first, "first")).content?.[0].text).toContain("first private body");
 		expect((await retrieve(second, "first")).details?.error).toBe("Not found");
-		await emit(
-			first,
-			"session_tree",
-			branchContext("old", "expired", Date.now() - 3600_001),
-		);
+		await emit(first, "session_tree", branchContext("old", "expired", Date.now() - 3600_001));
 		expect((await retrieve(first, "old")).details?.error).toBe("Not found");
 	});
 
@@ -312,9 +279,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 			urlIndex: 0,
 		});
 		expect(firstPage.details?.truncated).toBe(true);
-		expect(
-			Buffer.byteLength(firstPage.content?.[0].text ?? ""),
-		).toBeLessThanOrEqual(50 * 1024);
+		expect(Buffer.byteLength(firstPage.content?.[0].text ?? "")).toBeLessThanOrEqual(50 * 1024);
 		const secondPage = await tool.execute("page2", {
 			responseId: "large",
 			urlIndex: 0,
@@ -368,9 +333,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 				};
 		await emit(instance, "session_start", {
 			sessionManager: {
-				getBranch: () => [
-					{ type: "custom", customType: "web-search-results", data },
-				],
+				getBranch: () => [{ type: "custom", customType: "web-search-results", data }],
 			},
 		});
 		const selectors = kind.endsWith("list")
