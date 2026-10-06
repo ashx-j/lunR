@@ -4,6 +4,8 @@ lunR ships these workflows as baked-in extensions. You do not need a third-party
 
 Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`, and `examples/extensions/subagent/` is **Extension API sample code**, not the product implementation.
 
+PR watching polls GitHub every minute without model calls during quiet cycles. The `pr_watch` tool starts or waits on a session-owned finite watch. Set its duration in `/settings`; use `/pr-watch` to view, cancel, or restart watches. A new head resets the original duration. Monitoring ends at its deadline, PR completion, or user cancellation and never declares the PR ready. See [PR watching](pr-watch.md).
+
 ## Permissions and planning
 
 Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.

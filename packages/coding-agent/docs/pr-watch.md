@@ -1,5 +1,21 @@
 # PR watching
 
+Use `pr_watch` with `action: "start"` and a GitHub PR URL. The default call returns a watch ID immediately. lunR wakes the owning session when feedback or terminal checks change. Use `action: "wait"` with that ID when the current turn needs to wait for an update. `start` also accepts `wait: true`.
+
+Choose `PR watch duration` in `/settings`. The default is 30 minutes. Presets include 5, 10, 20, and 30 minutes and 1 hour, with custom positive finite minutes within JavaScript's supported date range. Timers have millisecond resolution. A different head commit restarts the original configured window. Green CI and finishing agent work keep monitoring active.
+
+`/pr-watch` shows the current session's watches. `/pr-watch cancel ID` ends one. `/pr-watch restart ID` gives a completed watch a fresh window using the current setting. The agent tool cannot perform either user action. Repeating `start` keeps the existing ID and state, even after expiry or cancellation.
+
+Monitoring runs only while the owning session is open in lunR. Closing or switching sessions pauses reads without pausing the deadline. Reopening an unexpired watch reconciles immediately. If that read finds a different head, the original duration restarts at observation time. If the saved deadline has already elapsed, the watch expires before any GitHub read and a later push cannot revive it. GitHub commit author/committer dates are not push timestamps.
+
+GitHub access uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the existing `gh auth token --hostname github.com` credential. Public repositories can use anonymous access when no credential is available. Repository access and rate-limit failures produce notices without claiming green checks. This version accepts `github.com` PR URLs. It does not run a background service or change GitHub accounts.
+
+Notification and wait batches reserve the same persisted events. lunR commits their consumption only after the owning session saves the notification or tool-result receipt. On reopening, it reconciles those receipts before replaying remaining events. Interruption releases a waiter and keeps its watch running. Pending check transitions do not wake the model; the first observation still describes the current pending state.
+
+At the deadline, lunR releases waits and sends pending feedback with the latest known PR/head/check state and a final notice. Monitoring ended does not mean the PR is ready. Reviews and inline comments retain GitHub's supplied commit IDs. General comments have no invented commit association. The agent must verify feedback and distinguish current-head evidence from earlier commits before repairing code.
+
+The design and acceptance criteria below record the agreed scope for implementation and independent review.
+
 ## Agreed scope and implementation brief
 
 lunR watches GitHub pull requests in the client while the owning session is open. A watcher reads GitHub every 60 seconds without model calls during quiet polls. It observes and delivers facts. The agent verifies findings against the source, decides what needs fixing, and performs repairs. The watcher never judges reviews, declares a PR ready, replies on GitHub, or merges.
