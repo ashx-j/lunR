@@ -99,6 +99,7 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_rename",
 	"memory_load",
 	"subagent_wait",
+	"pr_watch",
 	"subagent_supervisor",
 	"intercom",
 	"contact_supervisor",

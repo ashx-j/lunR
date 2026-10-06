@@ -17,6 +17,7 @@ import {
 import { getCustomizeBridge } from "../../../core/customize.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
+import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "../../../core/pr-watch/types.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import {
 	type DefaultPermissionMode,
@@ -91,6 +92,7 @@ export interface SettingsConfig {
 	hideThinkingBlock: boolean;
 	thinkingCollapse: boolean;
 	reasoningDisplay: ReasoningDisplay;
+	prWatchDurationMs?: number;
 	showCacheMissNotices: boolean;
 	/** Display value; unset settings render as "short". */
 	cacheRetention: "none" | "short" | "long";
@@ -191,6 +193,7 @@ export interface SettingsCallbacks {
 	onComputerUseChange?: (enabled: boolean) => void;
 	onComputerForegroundChange?: (enabled: boolean) => void;
 	onBrowserEnabledChange: (enabled: boolean) => void;
+	onPrWatchDurationChange?: (durationMs: number) => void;
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onTodosEnabledChange: (enabled: boolean) => void;
@@ -424,10 +427,55 @@ class ModelInstructionsSubmenu extends Container {
 	}
 }
 
-/**
- * Numeric input submenu for the simple-pi-memory character cap.
- * Enter validates and applies via done(newValue); Esc cancels.
- */
+/** Finite presets or custom minutes for new PR watches. */
+export class PrWatchDurationSubmenu extends Container {
+	private control: SelectList | Input;
+	constructor(current: number, done: (selectedValue?: string) => void) {
+		super();
+		const title = new Text(theme.bold(theme.fg("accent", "PR watch duration")), 0, 0);
+		this.addChild(title);
+		this.addChild(
+			new Text("New watches use this finite window. A new head commit resets the watch's original window.", 0, 1),
+		);
+		const items = [5, 10, 20, 30, 60].map((minutes) => ({
+			value: String(minutes * 60_000),
+			label: minutes === 60 ? "1 hour" : `${minutes} minutes`,
+		}));
+		const select = new SelectList([...items, { value: "custom", label: "Custom minutes" }], 6, getSelectListTheme());
+		const selectedIndex = items.findIndex((item) => Number(item.value) === current);
+		select.setSelectedIndex(selectedIndex < 0 ? items.length : selectedIndex);
+		select.onCancel = () => done();
+		select.onSelect = (item) => {
+			if (item.value !== "custom") {
+				done(item.value);
+				return;
+			}
+			this.removeChild(select);
+			const input = new Input();
+			input.setValue(String(current / 60_000));
+			const error = new Text("Enter a positive, finite number of minutes.", 0, 0);
+			input.onSubmit = (value) => {
+				const duration = Number(value.trim()) * 60_000;
+				if (!value.trim() || !validPrWatchDuration(duration)) {
+					error.setText(theme.fg("error", "Enter positive, finite minutes within the supported date range."));
+					return;
+				}
+				done(String(duration));
+			};
+			input.onEscape = () => done();
+			this.control = input;
+			this.addChild(input);
+			this.addChild(error);
+		};
+		this.control = select;
+		this.addChild(select);
+	}
+	handleInput(data: string): void {
+		this.control.handleInput(data);
+	}
+}
+
+/** Numeric memory cap. Enter validates and saves; Escape cancels. */
 class MemoryCharCapSubmenu extends Container {
 	private input: Input;
 	private errorText: Text;
@@ -1527,6 +1575,16 @@ export class SettingsSelectorComponent extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "pr-watch-duration",
+				label: "PR watch duration",
+				description: "Finite GitHub monitoring window for new watches",
+				currentValue: `${(config.prWatchDurationMs ?? PR_WATCH_DEFAULT_DURATION_MS) / 60_000} minutes`,
+				submenu: (value, done) =>
+					new PrWatchDurationSubmenu(Number.parseFloat(value) * 60_000, (selected) =>
+						done(selected ? `${Number(selected) / 60_000} minutes` : undefined),
+					),
+			},
+			{
 				id: "todos",
 				label: "Todos",
 				description: "Agent task list and todo tool",
@@ -1931,6 +1989,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "browser-enabled":
 						callbacks.onBrowserEnabledChange(newValue === "on");
+						break;
+					case "pr-watch-duration":
+						callbacks.onPrWatchDurationChange?.(Number.parseFloat(newValue) * 60_000);
 						break;
 					case "agent-memory":
 						callbacks.onMemoryEnabledChange(newValue === "on");

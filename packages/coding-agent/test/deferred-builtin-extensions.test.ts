@@ -43,6 +43,7 @@ describe("deferred builtin extensions", () => {
 		expect(names).toContain("pi-ollama-cloud");
 		expect(names).toContain("narumiruna-pi-goal");
 		expect(names).toContain("lunr-cron");
+		expect(names).toContain("lunr-pr-watch");
 		expect(names).toContain("pi-mcp-adapter");
 	});
 

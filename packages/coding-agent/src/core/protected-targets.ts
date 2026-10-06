@@ -10,6 +10,8 @@ export const MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON =
 	"Memory is model-managed through the memory tools. Do not directly change ~/.lunr/simple-memory/memory.md.";
 export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
 	"lunR settings are user-managed through /settings. Do not directly change settings.json.";
+export const PR_WATCH_STATE_WRITE_BLOCK_REASON =
+	"PR watch state is client-managed. Use pr_watch start/wait; only the user can cancel or restart through /pr-watch.";
 
 function normalize(path: string): string {
 	const normalized = resolve(path);
@@ -31,6 +33,7 @@ export function protectedTargetWriteReason(path: string, cwd: string): string | 
 			{ path: getInstructionsRoot(agentDir), tree: true, reason: GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON },
 			{ path: join(dirname(agentDir), "simple-memory", "memory.md"), reason: MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON },
 			{ path: join(agentDir, "settings.json"), reason: SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "pr-watches"), tree: true, reason: PR_WATCH_STATE_WRITE_BLOCK_REASON },
 			{ path: join(cwd, CONFIG_DIR_NAME, "settings.json"), reason: SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON },
 			{
 				path: join(agentDir, "install-features.json"),

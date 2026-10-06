@@ -324,6 +324,7 @@ describe("child-safe tool sets", () => {
 			else expect(excluded).toContain(tool);
 		}
 		expect(excluded).toContain("cron");
+		expect(excluded).toContain("pr_watch");
 		expect(excluded).toContain("memory_add");
 		expect(excluded).not.toContain("behavior_add");
 		expect(excluded).toContain("present_plan");
