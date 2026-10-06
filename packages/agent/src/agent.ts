@@ -143,6 +143,17 @@ class PendingMessageQueue {
 		return this.messages.length > 0;
 	}
 
+	hasMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		return this.messages.some(predicate);
+	}
+
+	removeMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		const index = this.messages.findIndex(predicate);
+		if (index === -1) return false;
+		this.messages.splice(index, 1);
+		return true;
+	}
+
 	drain(): AgentMessage[] {
 		if (this.mode === "all") {
 			const drained = this.messages.slice();
@@ -310,6 +321,16 @@ export class Agent {
 	/** Returns true when either queue still contains pending messages. */
 	hasQueuedMessages(): boolean {
 		return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
+	}
+
+	/** Inspect a specific message without draining either queue. */
+	hasQueuedMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.hasMessage(predicate) || this.followUpQueue.hasMessage(predicate);
+	}
+
+	/** Remove only one matching message that has not entered an agent turn. */
+	removeQueuedMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.removeMessage(predicate) || this.followUpQueue.removeMessage(predicate);
 	}
 
 	/** Active abort signal for the current run, if any. */

@@ -49,6 +49,7 @@ const DEFERRED_BUILTIN_LOADERS: Array<{
 	{ name: "pi-ollama-cloud", load: () => import("./pi-ollama-cloud/index.ts") },
 	{ name: "narumiruna-pi-goal", load: () => import("./narumiruna-pi-goal/src/goal.ts") },
 	{ name: "lunr-cron", load: () => import("./lunr-cron.ts") },
+	{ name: "lunr-pr-watch", load: () => import("./lunr-pr-watch.ts") },
 	{ name: "pi-intercom", load: () => import("./pi-intercom/index.ts") },
 	{ name: "pi-prompt-template-model", load: () => import("./pi-prompt-template-model/index.ts") },
 	{ name: "pi-subagents", load: () => import("./pi-subagents/index.ts") },

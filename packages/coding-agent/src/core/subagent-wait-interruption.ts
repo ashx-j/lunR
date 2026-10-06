@@ -23,6 +23,11 @@ function getBridge(): SubagentWaitInterruptionBridge {
 	return bridge;
 }
 
+/** Session-bound waits share normal Enter's existing prompt admission and interruption path. */
+export function registerSessionWaitInterruption(sessionId: string): SubagentWaitInterruptionRegistration | undefined {
+	return getBridge().owners.get(sessionId)?.register();
+}
+
 export function registerSubagentWaitInterruptionOwner(
 	sessionId: string,
 	owner: SubagentWaitInterruptionOwner,

@@ -2072,6 +2072,28 @@ export class AgentSession {
 		}
 	}
 
+	/** Queue inspection is bound to this session and the sender's original details object. */
+	hasQueuedCustomMessage(message: Pick<CustomMessage, "customType" | "details">): boolean {
+		this.sessionManager.assertWritable();
+		return this.agent.hasQueuedMessage(
+			(candidate) =>
+				candidate.role === "custom" &&
+				candidate.customType === message.customType &&
+				candidate.details === message.details,
+		);
+	}
+
+	/** A removed message can be transferred to another delivery channel before dispatch. */
+	removeQueuedCustomMessage(message: Pick<CustomMessage, "customType" | "details">): boolean {
+		this.assertCanStartWork();
+		return this.agent.removeQueuedMessage(
+			(candidate) =>
+				candidate.role === "custom" &&
+				candidate.customType === message.customType &&
+				candidate.details === message.details,
+		);
+	}
+
 	/**
 	 * Send a user message to the agent. Always triggers a turn.
 	 * When the agent is streaming, use deliverAs to specify how to queue the message.
@@ -3149,6 +3171,9 @@ export class AgentSession {
 				getModel: () => this.resolvedCatalogModel(),
 				isIdle: () => this.isIdle,
 				promptWithCompletion: (text, options) => this.promptWithCompletion(text, options),
+				sendMessage: (message, options) => this.sendCustomMessage(message, options),
+				hasQueuedMessage: (message) => this.hasQueuedCustomMessage(message),
+				removeQueuedMessage: (message) => this.removeQueuedCustomMessage(message),
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,
 				abort: () => {
