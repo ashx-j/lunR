@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Startup paint repair (`fix/terminal-paint-artifacts`, 2026-10-06):** model-scope startup messages now use the managed TUI after restored history instead of raw console output. This prevents cursor drift that left the smaller first-paint border above the session header. Terminal-emulator coverage checks complete frames with and without scoped models, including successful and failed deferred startup.
+
 - **v0.2.28 (2026-10-04):** PR #151 merged as `bc1ecabe` after fresh green CI. Release PR #152 merged as `c3666438`; tag `v0.2.28` triggered successful publication of all four public packages and three native payloads. All seven registry tarballs match their declared integrity; npm latest is 0.2.28. An isolated packed install reports 0.2.28 and passes first-request fixtures. The release contains the request-accounting fixes, and the gateway approval fixture now owns its profile and saved configuration. The pinned CuaDriver runtime and production approval are unchanged.
 
 - **Token accounting (`fix/token-accounting`, 2026-10-04):** conversation, title, compaction and branch-summary requests share durable request identities. Session, gateway and goal totals retain incurred parent and child usage through branch navigation; forks retain context without charging inherited history. Foreground and default async children include cache tokens, failed fallback attempts and auxiliary requests, with request receipts deduplicated through completion, wait and resume. Shared request-aware estimation includes system/tools and rejects obsolete usage after compaction or prefix changes. Failed Responses usage, native reasoning/cache retention, OpenRouter reported charges/image cache splits, reviewed Gemini long-context tiers in both shipped catalogs, missing measurements, labels and per-response TPS are corrected. Quota polling remains provider-defined.
@@ -174,6 +176,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 
 ## Build & run
 
+- Startup paint repair, 2026-10-06: 44 focused first-paint/status tests, all five offline package builds and the Node bundle, and compiled first-paint/first-request subagent/MCP/LSP/local-fetch checks pass in an isolated worktree/profile. Whole-package Biome and the pinned-dependency, relative-import, shrinkwrap, installer-lock, workflow-policy and browser-smoke checks pass. The new scoped-model frame assertions reproduced the screenshot before the fix. No installed CLI or live Windows terminal was changed or tested.
+
 - v0.2.28 qualification: all five offline package builds, read-only repository checks and seven real-payload public tarballs pass. Full isolated tests pass Agent 191, AI 652 with 760 credential skips, coding-agent 3,505 with 56 skips, TUI and Orchestrator. The packed CLI reports 0.2.28 and passes startup and first-request subagent/MCP/LSP/local-fetch fixtures. Both feature and release PR CI pass. All seven published tarballs match registry integrity, and npm latest reports 0.2.28. No live provider or native desktop qualification was performed.
 
 - Token accounting, 2026-10-04: five offline package compiles and the Node bundle pass. Full isolated tests pass: AI 649 with 760 credential skips, Agent 191, coding-agent 3,503 with 56 skips, TUI 741 and Orchestrator 32. Three added AI charge/zero cases and gateway combined-usage/non-ASCII consistency cases pass in focused follow-ups. Whole-package Biome, relative imports and bundled catalog integrity pass. Test profiles use an environment allowlist without account credentials; a short disposable prefix keeps nested intercom sockets within the POSIX limit. No original checkout, installed CLI, native desktop, live account or release was used.
@@ -298,6 +302,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Once the startup view paints, raw console output moves the terminal cursor outside TUI bookkeeping. Render startup notices through managed components after history restoration; do not repair this by adding repeated full-screen clears.
 
 - The v0.2.28 GitHub binary workflow failed during cross-platform dependency installation with npm `edgesOut`, matching v0.2.27. This is separate from successful npm publication; no GitHub binary release exists for this tag.
 
@@ -425,6 +431,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-06: render model-scope startup information through `showStatus` after history restoration so the retained first frame stays aligned and the message remains visible.
 
 - 2026-10-04: verify each 0.2.28 registry tarball and npm latest after workflow success, because the CLI remained unavailable for about eight minutes after npm accepted publication.
 
