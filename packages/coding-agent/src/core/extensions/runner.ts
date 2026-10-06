@@ -276,6 +276,8 @@ export class ExtensionRunner {
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private promptWithCompletionFn: ExtensionContext["promptWithCompletion"];
 	private sendMessageFn: ExtensionContext["sendMessage"];
+	private hasQueuedMessageFn: ExtensionContext["hasQueuedMessage"];
+	private removeQueuedMessageFn: ExtensionContext["removeQueuedMessage"];
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
@@ -340,6 +342,8 @@ export class ExtensionRunner {
 		this.isIdleFn = contextActions.isIdle;
 		this.promptWithCompletionFn = contextActions.promptWithCompletion;
 		this.sendMessageFn = contextActions.sendMessage;
+		this.hasQueuedMessageFn = contextActions.hasQueuedMessage;
+		this.removeQueuedMessageFn = contextActions.removeQueuedMessage;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
@@ -695,6 +699,16 @@ export class ExtensionRunner {
 				runner.assertActive();
 				if (!runner.sendMessageFn) return Promise.reject(new Error("owned message admission unavailable"));
 				return runner.sendMessageFn(message, options);
+			},
+			hasQueuedMessage: (message) => {
+				runner.assertActive();
+				if (!runner.hasQueuedMessageFn) throw new Error("owned queue inspection unavailable");
+				return runner.hasQueuedMessageFn(message);
+			},
+			removeQueuedMessage: (message) => {
+				runner.assertActive();
+				if (!runner.removeQueuedMessageFn) throw new Error("owned queue removal unavailable");
+				return runner.removeQueuedMessageFn(message);
 			},
 			isIdle: () => {
 				runner.assertActive();

@@ -329,6 +329,10 @@ export interface ExtensionContext {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): Promise<void>;
+	/** Match an owned queued custom message by customType and the original details object. */
+	hasQueuedMessage?(message: Pick<CustomMessage, "customType" | "details">): boolean;
+	/** Atomically remove that queued message; false means it was not in a queue. */
+	removeQueuedMessage?(message: Pick<CustomMessage, "customType" | "details">): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
@@ -1622,6 +1626,8 @@ export interface ExtensionActions {
 export interface ExtensionContextActions {
 	promptWithCompletion?: ExtensionContext["promptWithCompletion"];
 	sendMessage?: ExtensionContext["sendMessage"];
+	hasQueuedMessage?: ExtensionContext["hasQueuedMessage"];
+	removeQueuedMessage?: ExtensionContext["removeQueuedMessage"];
 	getModel: () => Model<any> | undefined;
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;

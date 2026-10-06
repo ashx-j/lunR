@@ -12,6 +12,8 @@ GitHub access uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the existing `gh auth t
 
 Notification and wait batches reserve the same persisted events. lunR commits their consumption only after the owning session saves the notification or tool-result receipt. On reopening, it reconciles those receipts before replaying remaining events. Interruption releases a waiter and keeps its watch running. Pending check transitions do not wake the model; the first observation still describes the current pending state.
 
+If a turn waits for feedback already queued as its follow-up, lunR removes that notification from the session queue and transfers its reservation to the wait result. The result includes any additional pending events, including expiry. An accepted notification that remains queued across a user-input interruption keeps its reservation until consumption. A discarded notification can retry without duplicating one still in the queue.
+
 If session admission temporarily rejects a notification, lunR releases its reservation and retries after 60 seconds without a user or model turn. It also retries an undelivered final notice after monitoring ends, without restarting GitHub reads. A notification already saved in the session is never replayed just because its resulting agent turn failed.
 
 At the deadline, lunR releases waits and sends pending feedback with the latest known PR/head/check state and a final notice. Monitoring ended does not mean the PR is ready. Reviews and inline comments retain GitHub's supplied commit IDs. General comments have no invented commit association. The agent must verify feedback and distinguish current-head evidence from earlier commits before repairing code.
@@ -44,6 +46,8 @@ Events include useful bodies, authors, links, review locations, and commit metad
 The watcher uses existing session-owned extension notifications and safe prompt admission. An idle owner wakes for meaningful events. A busy owner receives a follow-up after its turn. Quiet cycles never start model turns. Other sessions and projects never receive the events.
 
 Waiting and asynchronous delivery share one durable queue. A batch belongs either to a wait result or to an asynchronous notification, so races cannot deliver it twice or discard it. Wait releases on an event, watch end, or interruption. Interrupting the wait leaves monitoring active. New user input must release the waiting tool through the existing interactive admission path.
+
+A wait in the same busy turn must claim feedback already queued for that turn's follow-up. Transfer removes only that queued notification and preserves its receipt identity. Accepted notifications that survive a normal-input interruption must not be retried while still queued. Retry only after rejected admission or confirmed queue removal without a saved receipt.
 
 At expiry, deliver queued events and a final notice with the latest known PR/head/check state. State explicitly that monitoring ended and that this is not a readiness judgment. Release any waiter even when all GitHub reads failed.
 

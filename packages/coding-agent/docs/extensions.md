@@ -1018,6 +1018,12 @@ Control flow helpers. `ctx.isIdle()` is false while lunR is processing an agent 
 
 `await ctx.sendMessage?.(message, options)` sends a custom message through the owning session's guarded admission and propagates asynchronous rejection. It takes the same message and options as `pi.sendMessage()`. A busy session queues the message. An idle `triggerTurn` call resolves after its agent turn completes. Durable delivery should check a persisted message receipt before retrying, because a turn can fail after the session has saved the message. `pi.sendMessage()` retains its fire-and-forget behavior.
 
+### ctx.hasQueuedMessage() / ctx.removeQueuedMessage()
+
+These optional methods inspect or remove one queued custom message in the owning session. Pass its `customType` and the original `details` object used for admission. Matching uses that object's identity, so another extension's message with similar contents cannot match. `hasQueuedMessage` returns whether the message is still queued. `removeQueuedMessage` synchronously removes it and returns `true`, or returns `false` if it has already left the queue. Other queued messages keep their order. Removal rejects closing or transferring sessions.
+
+Use removal when transferring an undelivered notification to another delivery channel, such as a tool result. Keep the delivery reservation until that channel saves its receipt. A missing receipt alone does not mean admission failed, because an accepted follow-up may still be queued.
+
 ### ctx.shutdown()
 
 Request a graceful shutdown of pi.

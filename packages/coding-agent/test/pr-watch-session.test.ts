@@ -50,13 +50,17 @@ afterEach(async () => {
 });
 
 async function setup(
-	options: { read?: (signal: AbortSignal) => Promise<PrObservation>; tools?: AgentTool[]; durationMs?: number } = {},
+	options: {
+		read?: (signal: AbortSignal, pr: PullRequestIdentity) => Promise<PrObservation>;
+		tools?: AgentTool[];
+		durationMs?: number;
+	} = {},
 ) {
 	const dir = mkdtempSync(join(tmpdir(), "lunr-pr-session-"));
 	if (options.durationMs !== undefined)
 		writeFileSync(join(dir, "settings.json"), JSON.stringify({ prWatchDurationMs: options.durationMs }));
 	const read = vi.fn(async (_pr: PullRequestIdentity, signal: AbortSignal) =>
-		options.read ? options.read(signal) : observation(),
+		options.read ? options.read(signal, _pr) : observation(),
 	);
 	const harness = await createHarness({
 		tools: options.tools,
@@ -69,6 +73,12 @@ async function setup(
 	if (!tool) throw new Error("PR watcher tool missing");
 	const ctx = harness.session.extensionRunner.createContext();
 	return { harness, read, tool, ctx };
+}
+
+function watchId(details: unknown): string {
+	if (!details || typeof details !== "object" || !("watchId" in details) || typeof details.watchId !== "string")
+		throw new Error("Missing watch ID");
+	return details.watchId;
 }
 
 describe("PR watch owning session admission", () => {
@@ -157,6 +167,182 @@ describe("PR watch owning session admission", () => {
 		expect(f.read).toHaveBeenCalledTimes(2);
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(f.harness.faux.state.callCount).toBe(1);
+		expect(
+			f.harness.sessionManager
+				.getEntries()
+				.filter((entry) => entry.type === "custom_message" && entry.customType === "pr_watch_update"),
+		).toHaveLength(1);
+	});
+
+	it.each(["active", "expired"] as const)(
+		"transfers a queued %s watch into a wait in the same turn",
+		async (state) => {
+			vi.useFakeTimers();
+			const entered = deferred();
+			const gate = deferred();
+			const f = await setup({
+				durationMs: state === "expired" ? 1000 : undefined,
+				tools: [
+					{
+						name: "hold",
+						label: "Hold",
+						description: "Hold this turn",
+						parameters: Type.Object({}),
+						execute: async () => {
+							entered.resolve();
+							await gate.promise;
+							return { content: [{ type: "text", text: "done" }], details: {} };
+						},
+					},
+				],
+			});
+			f.harness.setResponses([fauxAssistantMessage([fauxToolCall("hold", {})], { stopReason: "toolUse" })]);
+			const turn = f.harness.session.prompt("Watch then wait for feedback");
+			await entered.promise;
+			const result = await f.tool.execute("start", { action: "start", url }, undefined, undefined, f.ctx);
+			const id = watchId(result.details);
+			await vi.advanceTimersByTimeAsync(0);
+			if (state === "expired") await vi.advanceTimersByTimeAsync(1000);
+			f.harness.appendResponses([
+				fauxAssistantMessage([fauxToolCall("pr_watch", { action: "wait", id })], { stopReason: "toolUse" }),
+				fauxAssistantMessage("Feedback received"),
+			]);
+			gate.resolve();
+			await vi.advanceTimersByTimeAsync(1);
+			const results = f.harness.session.messages.filter(
+				(message) => message.role === "toolResult" && message.toolName === "pr_watch",
+			);
+			expect(results).toHaveLength(1);
+			expect(results[0]).toMatchObject({
+				details: {
+					watchId: id,
+					state,
+					events:
+						state === "expired"
+							? [expect.objectContaining({ kind: "state" }), expect.objectContaining({ kind: "end" })]
+							: [expect.objectContaining({ kind: "state" })],
+				},
+			});
+			await turn;
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(f.harness.faux.state.callCount).toBe(3);
+			expect(
+				f.harness.sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "custom_message" && entry.customType === "pr_watch_update"),
+			).toHaveLength(0);
+		},
+	);
+
+	it("retains an accepted notification through another watch's normal-input interruption", async () => {
+		vi.useFakeTimers();
+		const firstEntered = deferred();
+		const secondEntered = deferred();
+		const firstGate = deferred();
+		const secondGate = deferred();
+		const pendingRead = deferred();
+		let executions = 0;
+		const f = await setup({
+			read: async (_signal, pr) => {
+				if (pr.number === 2) await pendingRead.promise;
+				return observation();
+			},
+			tools: [
+				{
+					name: "hold",
+					label: "Hold",
+					description: "Hold work",
+					parameters: Type.Object({}),
+					execute: async () => {
+						if (++executions === 1) {
+							firstEntered.resolve();
+							await firstGate.promise;
+						} else {
+							secondEntered.resolve();
+							await secondGate.promise;
+						}
+						return { content: [{ type: "text", text: "done" }], details: {} };
+					},
+				},
+			],
+		});
+		f.harness.setResponses([fauxAssistantMessage([fauxToolCall("hold", {})], { stopReason: "toolUse" })]);
+		const turn = f.harness.session.prompt("Watch the PR");
+		await firstEntered.promise;
+		const first = await f.tool.execute("start", { action: "start", url }, undefined, undefined, f.ctx);
+		const second = await f.tool.execute(
+			"start",
+			{ action: "start", url: "https://github.com/o/r/pull/2" },
+			undefined,
+			undefined,
+			f.ctx,
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		f.harness.appendResponses([
+			fauxAssistantMessage([fauxToolCall("pr_watch", { action: "wait", id: watchId(second.details) })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxToolCall("hold", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("Work finished"),
+			fauxAssistantMessage("Feedback received"),
+		]);
+		firstGate.resolve();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(
+			f.harness.events.some((event) => event.type === "tool_execution_start" && event.toolName === "pr_watch"),
+		).toBe(true);
+		const handoff = await f.harness.session.interruptSubagentWaitWithPrompt("Do other work");
+		expect(handoff).toBeDefined();
+		await secondEntered.promise;
+		await vi.advanceTimersByTimeAsync(60_001);
+		secondGate.resolve();
+		await vi.advanceTimersByTimeAsync(1);
+		await Promise.all([turn, handoff?.completion]);
+		await f.harness.session.waitForIdle();
+		const notifications = f.harness.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "custom_message" && entry.customType === "pr_watch_update");
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0]).toMatchObject({
+			details: { watchId: watchId(first.details), events: [expect.objectContaining({ kind: "state" })] },
+		});
+		expect(f.harness.faux.state.callCount).toBe(5);
+	});
+
+	it("retries a notification discarded from the queue without abandoning its watch", async () => {
+		vi.useFakeTimers();
+		const entered = deferred();
+		const gate = deferred();
+		const f = await setup({
+			tools: [
+				{
+					name: "hold",
+					label: "Hold",
+					description: "Hold work",
+					parameters: Type.Object({}),
+					execute: async () => {
+						entered.resolve();
+						await gate.promise;
+						return { content: [{ type: "text", text: "done" }], details: {} };
+					},
+				},
+			],
+		});
+		f.harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("hold", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("Work finished"),
+			fauxAssistantMessage("Feedback received"),
+		]);
+		const turn = f.harness.session.prompt("Watch this PR");
+		await entered.promise;
+		await f.tool.execute("start", { action: "start", url }, undefined, undefined, f.ctx);
+		await vi.advanceTimersByTimeAsync(0);
+		f.harness.session.clearQueue();
+		gate.resolve();
+		await turn;
+		await vi.advanceTimersByTimeAsync(60_001);
+		await f.harness.session.waitForIdle();
+		expect(f.harness.faux.state.callCount).toBe(3);
 		expect(
 			f.harness.sessionManager
 				.getEntries()

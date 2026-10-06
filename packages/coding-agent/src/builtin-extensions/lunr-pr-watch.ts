@@ -40,14 +40,14 @@ function registerPrWatchExtension(pi: ExtensionAPI, options: PrWatchExtensionOpt
 	let context: ExtensionContext | undefined;
 	let generation = 0;
 	let admissionError: string | undefined;
-	const deliveries = new Map<string, (received: boolean) => void>();
+	const deliveries = new Map<string, { batch: PrWatchBatch; resolve(received: boolean): void }>();
 	const receiptTimers = new Set<ReturnType<typeof setTimeout>>();
 
 	function close(): void {
 		generation++;
 		for (const timer of receiptTimers) clearTimeout(timer);
 		receiptTimers.clear();
-		for (const resolve of deliveries.values()) resolve(false);
+		for (const delivery of deliveries.values()) delivery.resolve(false);
 		deliveries.clear();
 		watcher?.close();
 		watcher = undefined;
@@ -60,10 +60,15 @@ function registerPrWatchExtension(pi: ExtensionAPI, options: PrWatchExtensionOpt
 	function reconcileReceipts(ctx: ExtensionContext, rejectMissing: boolean): void {
 		const receipts = notificationReceipts(ctx);
 		for (const id of receipts) watcher?.acknowledgeDelivery(id);
-		for (const [id, resolve] of deliveries) {
+		for (const [id, delivery] of deliveries) {
 			if (!receipts.has(id) && !rejectMissing) continue;
+			if (!receipts.has(id)) {
+				try {
+					if (!ctx.hasQueuedMessage || ctx.hasQueuedMessage({ customType: MESSAGE_TYPE, details: delivery.batch })) continue;
+				} catch { continue; }
+			}
 			deliveries.delete(id);
-			resolve(receipts.has(id));
+			delivery.resolve(receipts.has(id));
 		}
 	}
 
@@ -79,10 +84,19 @@ function registerPrWatchExtension(pi: ExtensionAPI, options: PrWatchExtensionOpt
 			watcher = new PrWatcher({
 				store,
 				read: options.read ?? ((pr, signal) => reader.read(pr, signal)),
+				takeQueuedNotification: (id) => {
+					const delivery = deliveries.get(id);
+					if (!delivery || !ctx.removeQueuedMessage) return false;
+					owner(ctx);
+					if (!ctx.removeQueuedMessage({ customType: MESSAGE_TYPE, details: delivery.batch })) return false;
+					deliveries.delete(id);
+					delivery.resolve(false);
+					return true;
+				},
 				deliver: (batch) => new Promise<boolean>((resolve) => {
 					const deliveryId = batch.deliveryId;
 					if (generation !== activeGeneration || !context || !deliveryId) { resolve(false); return; }
-					deliveries.set(deliveryId, resolve);
+					deliveries.set(deliveryId, { batch, resolve });
 					const rejected = () => {
 						// A provider can fail after persistence. Only a missing receipt permits replay.
 						let received = false;

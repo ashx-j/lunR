@@ -24,6 +24,8 @@ export interface PrWatcherOptions {
 	read(pr: PullRequestIdentity, signal: AbortSignal): Promise<PrObservation>;
 	/** Resolve true only once the notification has been persisted in the owning session. */
 	deliver(batch: PrWatchBatch): Promise<boolean>;
+	/** Atomically remove a still-queued notification so its reservation can become a wait result. */
+	takeQueuedNotification?(deliveryId: string): boolean;
 	now?: () => number;
 }
 interface Waiter {
@@ -187,6 +189,22 @@ export class PrWatcher {
 		const watch = this.find(id);
 		if (signal?.aborted) return Promise.resolve({ interrupted: true });
 		if (this.waiters.has(id)) throw new Error("This watch already has an active wait.");
+		const transferred = watch.deliveries?.find(
+			(delivery) => delivery.channel === "notification" && this.options.takeQueuedNotification?.(delivery.id),
+		);
+		if (transferred) {
+			transferred.channel = "wait";
+			transferred.eventIds.push(...this.available(watch).map((event) => event.id));
+			const ids = new Set(transferred.eventIds);
+			this.save();
+			return Promise.resolve({
+				...this.batch(
+					watch,
+					watch.pending.filter((event) => ids.has(event.id)),
+				),
+				deliveryId: transferred.id,
+			});
+		}
 		const events = this.available(watch);
 		if (events.length) {
 			return Promise.resolve(this.reserve(watch, events, "wait"));
@@ -363,13 +381,22 @@ export class PrWatcher {
 					(acknowledged) => {
 						if (this.closed) return;
 						if (acknowledged) this.acknowledgeDelivery(batch.deliveryId);
-						else {
+						else if (
+							watch.deliveries?.some(
+								(delivery) => delivery.id === batch.deliveryId && delivery.channel === "notification",
+							)
+						) {
 							this.releaseDelivery(watch, batch.deliveryId);
 							this.deliveryRetries.set(watch.id, this.now() + PR_WATCH_POLL_MS);
 						}
 					},
 					() => {
-						if (!this.closed) {
+						if (
+							!this.closed &&
+							watch.deliveries?.some(
+								(delivery) => delivery.id === batch.deliveryId && delivery.channel === "notification",
+							)
+						) {
 							this.releaseDelivery(watch, batch.deliveryId);
 							this.deliveryRetries.set(watch.id, this.now() + PR_WATCH_POLL_MS);
 						}
@@ -378,7 +405,11 @@ export class PrWatcher {
 				.finally(() => {
 					this.notifying.delete(watch.id);
 					// Failed admission retries independently of GitHub reads, including terminal notices.
-					if (!this.closed && this.available(watch).some((event) => !events.includes(event))) this.flush();
+					if (
+						!this.closed &&
+						(this.waiters.has(watch.id) || this.available(watch).some((event) => !events.includes(event)))
+					)
+						this.flush();
 					this.schedule();
 				});
 		}
