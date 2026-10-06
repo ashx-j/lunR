@@ -38,6 +38,7 @@ export class PrWatcher {
 	private readonly reads = new Map<string, AbortController>();
 	private readonly waiters = new Map<string, Waiter>();
 	private readonly notifying = new Set<string>();
+	private readonly deliveryRetries = new Map<string, number>();
 	private timer?: ReturnType<typeof setTimeout>;
 	private closed = false;
 	private readonly options: PrWatcherOptions;
@@ -206,6 +207,7 @@ export class PrWatcher {
 	private end(watch: PrWatchRecord, state: Exclude<PrWatchRecord["state"], "active">): void {
 		if (watch.state !== "active") return;
 		watch.state = state;
+		this.deliveryRetries.delete(watch.id);
 		this.reads.get(watch.id)?.abort();
 		this.add(watch, {
 			kind: "end",
@@ -223,12 +225,14 @@ export class PrWatcher {
 		const next = this.file.watches
 			.filter((watch) => watch.state === "active")
 			.flatMap((watch) => [watch.deadline, ...(this.reads.has(watch.id) ? [] : [watch.nextPoll])]);
+		next.push(...this.deliveryRetries.values());
 		if (!next.length) return;
 		this.timer = setTimeout(() => this.tick(), Math.max(0, Math.min(2_147_483_647, Math.min(...next) - this.now())));
 		this.timer.unref?.();
 	}
 	private tick(): void {
 		if (this.closed) return;
+		for (const [id, retryAt] of this.deliveryRetries) if (retryAt <= this.now()) this.deliveryRetries.delete(id);
 		for (const watch of this.file.watches) {
 			if (watch.state !== "active") continue;
 			if (this.now() >= watch.deadline) this.end(watch, "expired");
@@ -345,6 +349,7 @@ export class PrWatcher {
 			}
 			if (
 				!events.length ||
+				(this.deliveryRetries.get(watch.id) ?? 0) > this.now() ||
 				this.notifying.has(watch.id) ||
 				watch.deliveries?.some((delivery) => delivery.channel === "notification")
 			)
@@ -358,18 +363,23 @@ export class PrWatcher {
 					(acknowledged) => {
 						if (this.closed) return;
 						if (acknowledged) this.acknowledgeDelivery(batch.deliveryId);
-						else this.releaseDelivery(watch, batch.deliveryId);
+						else {
+							this.releaseDelivery(watch, batch.deliveryId);
+							this.deliveryRetries.set(watch.id, this.now() + PR_WATCH_POLL_MS);
+						}
 					},
 					() => {
 						if (!this.closed) {
 							this.releaseDelivery(watch, batch.deliveryId);
+							this.deliveryRetries.set(watch.id, this.now() + PR_WATCH_POLL_MS);
 						}
 					},
 				)
 				.finally(() => {
 					this.notifying.delete(watch.id);
-					// A successful receipt permits the next batch. Failed admission retries on the next poll/turn.
+					// Failed admission retries independently of GitHub reads, including terminal notices.
 					if (!this.closed && this.available(watch).some((event) => !events.includes(event))) this.flush();
+					this.schedule();
 				});
 		}
 	}

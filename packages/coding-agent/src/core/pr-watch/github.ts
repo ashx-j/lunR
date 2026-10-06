@@ -117,7 +117,20 @@ export class GitHubPrReader {
 				this.blockedUntil,
 			);
 		}
-		if (response.status === 304 && cached) return cached;
+		const linkHeader = response.headers.get("link");
+		const next = linkHeader
+			?.split(",")
+			.map((part) => /<([^>]+)>;\s*rel="next"/.exec(part)?.[1])
+			.find(Boolean);
+		if (response.status === 304 && cached) {
+			const page = {
+				...cached,
+				etag: response.headers.get("etag") ?? cached.etag,
+				next: linkHeader === null ? cached.next : next,
+			};
+			this.pages.set(url, page);
+			return page;
+		}
 		if (!response.ok)
 			throw new GitHubReadError(
 				response.status === 401 || response.status === 403 || response.status === 404
@@ -126,15 +139,10 @@ export class GitHubPrReader {
 				[401, 403, 404].includes(response.status),
 				Number.isFinite(retryAt) ? retryAt : undefined,
 			);
-		const link = response.headers
-			.get("link")
-			?.split(",")
-			.map((part) => /<([^>]+)>;\s*rel="next"/.exec(part)?.[1])
-			.find(Boolean);
 		const page = {
 			value: (await response.json()) as unknown,
 			etag: response.headers.get("etag") ?? undefined,
-			next: link,
+			next,
 		};
 		this.pages.set(url, page);
 		return page;

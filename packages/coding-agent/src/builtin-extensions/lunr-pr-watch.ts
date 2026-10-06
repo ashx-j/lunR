@@ -80,15 +80,23 @@ function registerPrWatchExtension(pi: ExtensionAPI, options: PrWatchExtensionOpt
 				store,
 				read: options.read ?? ((pr, signal) => reader.read(pr, signal)),
 				deliver: (batch) => new Promise<boolean>((resolve) => {
-					if (generation !== activeGeneration || !context || !batch.deliveryId) { resolve(false); return; }
-					deliveries.set(batch.deliveryId, resolve);
+					const deliveryId = batch.deliveryId;
+					if (generation !== activeGeneration || !context || !deliveryId) { resolve(false); return; }
+					deliveries.set(deliveryId, resolve);
+					const rejected = () => {
+						// A provider can fail after persistence. Only a missing receipt permits replay.
+						let received = false;
+						if (generation === activeGeneration && context) {
+							try { received = notificationReceipts(ctx).has(deliveryId); } catch {}
+						}
+						deliveries.delete(deliveryId);
+						resolve(received);
+					};
 					try {
 						owner(ctx);
-						pi.sendMessage({ customType: MESSAGE_TYPE, content: formatPrWatchBatch(batch), display: true, details: batch }, ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "followUp" });
-					} catch {
-						deliveries.delete(batch.deliveryId);
-						resolve(false);
-					}
+						if (!ctx.sendMessage) throw new Error("Owned PR watch message admission unavailable.");
+						void ctx.sendMessage({ customType: MESSAGE_TYPE, content: formatPrWatchBatch(batch), display: true, details: batch }, ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "followUp" }).catch(rejected);
+					} catch { rejected(); }
 				}),
 			}, notificationReceipts(ctx));
 		} catch (error) {

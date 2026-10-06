@@ -12,9 +12,11 @@ GitHub access uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the existing `gh auth t
 
 Notification and wait batches reserve the same persisted events. lunR commits their consumption only after the owning session saves the notification or tool-result receipt. On reopening, it reconciles those receipts before replaying remaining events. Interruption releases a waiter and keeps its watch running. Pending check transitions do not wake the model; the first observation still describes the current pending state.
 
+If session admission temporarily rejects a notification, lunR releases its reservation and retries after 60 seconds without a user or model turn. It also retries an undelivered final notice after monitoring ends, without restarting GitHub reads. A notification already saved in the session is never replayed just because its resulting agent turn failed.
+
 At the deadline, lunR releases waits and sends pending feedback with the latest known PR/head/check state and a final notice. Monitoring ended does not mean the PR is ready. Reviews and inline comments retain GitHub's supplied commit IDs. General comments have no invented commit association. The agent must verify feedback and distinguish current-head evidence from earlier commits before repairing code.
 
-The design and acceptance criteria below record the agreed scope for implementation and independent review.
+The design and acceptance criteria below describe the feature's implementation scope.
 
 ## Agreed scope and implementation brief
 
@@ -57,4 +59,4 @@ Register the builtin extension and tool with accurate structured descriptions an
 
 Focused fixtures must verify finite duration validation, reset only on a new head, expiry under failed reads, current and edited comments, pagination, terminal checks and commit statuses, stale-head labels, wait/notification races, interruption, cancellation, persistence, session/project ownership, duplicate client leases, and bounded errors. Tests use fake clocks and GitHub responses without live GitHub mutations. Relevant offline package builds, targeted lint, source checks, and tool inventory regeneration must pass.
 
-Implementation remains scoped to PR watching and its necessary session/settings/tool integration. No dependency is added unless existing facilities cannot meet a requirement. No global CLI, production, daily-driver build, or preview channel is changed. A separate reviewer examines the final implementation and repair cycles precede the PR.
+Implementation remains scoped to PR watching and its necessary session/settings/tool integration. No dependency is added unless existing facilities cannot meet a requirement. No global CLI, production, daily-driver build, or preview channel is changed.

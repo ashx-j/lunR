@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -49,8 +49,12 @@ afterEach(async () => {
 	vi.useRealTimers();
 });
 
-async function setup(options: { read?: (signal: AbortSignal) => Promise<PrObservation>; tools?: AgentTool[] } = {}) {
+async function setup(
+	options: { read?: (signal: AbortSignal) => Promise<PrObservation>; tools?: AgentTool[]; durationMs?: number } = {},
+) {
 	const dir = mkdtempSync(join(tmpdir(), "lunr-pr-session-"));
+	if (options.durationMs !== undefined)
+		writeFileSync(join(dir, "settings.json"), JSON.stringify({ prWatchDurationMs: options.durationMs }));
 	const read = vi.fn(async (_pr: PullRequestIdentity, signal: AbortSignal) =>
 		options.read ? options.read(signal) : observation(),
 	);
@@ -88,48 +92,104 @@ describe("PR watch owning session admission", () => {
 		expect(f.harness.faux.state.callCount).toBe(1);
 	});
 
-	it("delivers feedback after the busy turn through followUp without aborting its tool", async () => {
+	it.each(["stop", "aborted"] as const)(
+		"delivers one followUp after a busy turn ends with %s without aborting its tool",
+		async (stopReason) => {
+			vi.useFakeTimers();
+			const gate = deferred();
+			const toolStarted = deferred();
+			let siblingSignal: AbortSignal | undefined;
+			const sibling: AgentTool = {
+				name: "sibling",
+				label: "Sibling",
+				description: "Hold this turn",
+				parameters: Type.Object({}),
+				execute: async (_id, _params, signal) => {
+					siblingSignal = signal;
+					toolStarted.resolve();
+					await gate.promise;
+					return { content: [{ type: "text", text: "done" }], details: {} };
+				},
+			};
+			const f = await setup({ tools: [sibling] });
+			f.harness.setResponses([
+				fauxAssistantMessage([fauxToolCall("sibling", {})], { stopReason: "toolUse" }),
+				fauxAssistantMessage("Original work finished", { stopReason }),
+				fauxAssistantMessage("Feedback received"),
+			]);
+			const turn = f.harness.session.prompt("work");
+			await toolStarted.promise;
+			await f.tool.execute("start", { action: "start", url }, undefined, undefined, f.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(f.harness.faux.state.callCount).toBe(1);
+			expect(siblingSignal?.aborted).toBe(false);
+			gate.resolve();
+			await turn;
+			await vi.advanceTimersByTimeAsync(1);
+			expect(f.harness.faux.state.callCount).toBe(3);
+			const texts = f.harness.session.messages
+				.filter((message) => message.role === "assistant")
+				.map((message) => message.content);
+			expect(texts.at(-1)).toContainEqual(expect.objectContaining({ text: "Feedback received" }));
+			await vi.advanceTimersByTimeAsync(60_000);
+			await f.harness.session.waitForIdle();
+			expect(f.harness.faux.state.callCount).toBe(3);
+			expect(
+				f.harness.sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "custom_message" && entry.customType === "pr_watch_update"),
+			).toHaveLength(1);
+		},
+	);
+
+	it("retries temporary owned admission rejection on a quiet cycle without a user or model turn", async () => {
 		vi.useFakeTimers();
-		const gate = deferred();
-		const toolStarted = deferred();
-		let siblingSignal: AbortSignal | undefined;
-		const sibling: AgentTool = {
-			name: "sibling",
-			label: "Sibling",
-			description: "Hold this turn",
-			parameters: Type.Object({}),
-			execute: async (_id, _params, signal) => {
-				siblingSignal = signal;
-				toolStarted.resolve();
-				await gate.promise;
-				return { content: [{ type: "text", text: "done" }], details: {} };
-			},
-		};
-		const f = await setup({ tools: [sibling] });
-		f.harness.setResponses([
-			fauxAssistantMessage([fauxToolCall("sibling", {})], { stopReason: "toolUse" }),
-			fauxAssistantMessage("Original work finished"),
-			fauxAssistantMessage("Feedback received"),
-		]);
-		const turn = f.harness.session.prompt("work");
-		await toolStarted.promise;
+		const f = await setup();
+		f.harness.setResponses([fauxAssistantMessage("Feedback received")]);
 		await f.tool.execute("start", { action: "start", url }, undefined, undefined, f.ctx);
-		await vi.advanceTimersByTimeAsync(0);
-		expect(f.harness.faux.state.callCount).toBe(1);
-		expect(siblingSignal?.aborted).toBe(false);
-		gate.resolve();
-		await turn;
+		f.harness.session.setTransferring(true);
 		await vi.advanceTimersByTimeAsync(1);
-		expect(f.harness.faux.state.callCount).toBe(3);
-		const texts = f.harness.session.messages
-			.filter((message) => message.role === "assistant")
-			.map((message) => message.content);
-		expect(texts.at(-1)).toContainEqual(expect.objectContaining({ text: "Feedback received" }));
+		expect(f.harness.faux.state.callCount).toBe(0);
+		f.harness.session.setTransferring(false);
+		await vi.advanceTimersByTimeAsync(60_000);
+		await f.harness.session.waitForIdle();
+		expect(f.harness.faux.state.callCount).toBe(1);
+		expect(f.read).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(f.harness.faux.state.callCount).toBe(1);
 		expect(
 			f.harness.sessionManager
 				.getEntries()
 				.filter((entry) => entry.type === "custom_message" && entry.customType === "pr_watch_update"),
 		).toHaveLength(1);
+	});
+
+	it("retries the final expiry batch after rejected admission without restarting GitHub reads", async () => {
+		vi.useFakeTimers();
+		const f = await setup({ durationMs: 1000 });
+		f.harness.setResponses([fauxAssistantMessage("Monitoring ended")]);
+		await f.tool.execute("start", { action: "start", url }, undefined, undefined, f.ctx);
+		f.harness.session.setTransferring(true);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(f.harness.faux.state.callCount).toBe(0);
+		f.harness.session.setTransferring(false);
+		await vi.advanceTimersByTimeAsync(60_000);
+		await f.harness.session.waitForIdle();
+		const entries = f.harness.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "custom_message" && entry.customType === "pr_watch_update");
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({
+			details: {
+				state: "expired",
+				events: [expect.objectContaining({ kind: "state" }), expect.objectContaining({ kind: "end" })],
+			},
+		});
+		expect(f.harness.faux.state.callCount).toBe(1);
+		expect(f.read).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(f.harness.faux.state.callCount).toBe(1);
+		expect(f.read).toHaveBeenCalledTimes(1);
 	});
 
 	it("new user input interrupts a real pr_watch wait through normal prompt admission and leaves the watch/read active", async () => {

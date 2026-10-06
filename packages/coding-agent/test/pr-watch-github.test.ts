@@ -175,6 +175,58 @@ describe("GitHub PR observation", () => {
 		expect(new Headers(fetcher.mock.calls[0][1]?.headers).get("authorization")).toBe("Bearer test-token");
 	});
 
+	it.each(["growth", "shrink"])(
+		"refreshes pagination on 304 after page %s and preserves omitted Link headers",
+		async (change) => {
+			const f = fixture();
+			const base = f.fetcher.getMockImplementation();
+			let round = 0;
+			let pageTwoReads = 0;
+			const next = '<https://api.github.com/repos/o/r/issues/1/comments?per_page=100&page=2>; rel="next"';
+			f.fetcher.mockImplementation(async (input, options) => {
+				const url = new URL(String(input));
+				if (!url.pathname.endsWith("/issues/1/comments")) return base!(input, options);
+				if (url.searchParams.get("page") === "2") {
+					pageTwoReads++;
+					return new Response(
+						JSON.stringify([{ id: 101, body: "New page feedback", user: { login: "reviewer" } }]),
+					);
+				}
+				if (round) {
+					expect(new Headers(options?.headers).get("if-none-match")).toBe(round === 1 ? '"v1"' : '"v2"');
+					return new Response(null, {
+						status: 304,
+						headers: {
+							etag: '"v2"',
+							...(round === 1
+								? {
+										link:
+											change === "growth"
+												? next
+												: '<https://api.github.com/repos/o/r/issues/1/comments?per_page=100>; rel="first"',
+									}
+								: {}),
+						},
+					});
+				}
+				return new Response(JSON.stringify(f.comments), {
+					headers: { etag: '"v1"', ...(change === "shrink" ? { link: next } : {}) },
+				});
+			});
+			const first = await f.reader.read(pr, signal);
+			round++;
+			const changed = await f.reader.read(pr, signal);
+			round++;
+			const unchanged = await f.reader.read(pr, signal);
+			const comments = (value: typeof first) =>
+				value.snapshot.evidence.filter((item) => item.event.kind === "comment");
+			expect(comments(first)).toHaveLength(change === "growth" ? 1 : 2);
+			expect(comments(changed)).toHaveLength(change === "growth" ? 2 : 1);
+			expect(comments(unchanged)).toEqual(comments(changed));
+			expect(pageTwoReads).toBe(change === "growth" ? 2 : 1);
+		},
+	);
+
 	it("keeps partial evidence but marks checks unconfirmed after an endpoint fault", async () => {
 		const f = fixture();
 		const base = f.fetcher.getMockImplementation();

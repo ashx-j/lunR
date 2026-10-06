@@ -324,6 +324,11 @@ export interface ExtensionContext {
 		text: string,
 		options?: { source?: "extension"; signal?: AbortSignal },
 	) => Promise<{ messages: AgentMessage[] }>;
+	/** Send through this session's guarded admission and propagate asynchronous rejection. */
+	sendMessage?<T = unknown>(
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+	): Promise<void>;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
@@ -1616,6 +1621,7 @@ export interface ExtensionActions {
  */
 export interface ExtensionContextActions {
 	promptWithCompletion?: ExtensionContext["promptWithCompletion"];
+	sendMessage?: ExtensionContext["sendMessage"];
 	getModel: () => Model<any> | undefined;
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;

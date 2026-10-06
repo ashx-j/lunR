@@ -1014,6 +1014,10 @@ Control flow helpers. `ctx.isIdle()` is false while lunR is processing an agent 
 
 `await ctx.promptWithCompletion?.(text, { source: "extension", signal })` atomically admits one idle request and returns its completed messages. It rejects busy or closing sessions, excludes later queued user follow-ups, and waits for owned cancellation to settle. This optional capability is intended for unattended callers that need an exact completion. Use a dedicated `AbortSignal` to cancel that request.
 
+### ctx.sendMessage()
+
+`await ctx.sendMessage?.(message, options)` sends a custom message through the owning session's guarded admission and propagates asynchronous rejection. It takes the same message and options as `pi.sendMessage()`. A busy session queues the message. An idle `triggerTurn` call resolves after its agent turn completes. Durable delivery should check a persisted message receipt before retrying, because a turn can fail after the session has saved the message. `pi.sendMessage()` retains its fire-and-forget behavior.
+
 ### ctx.shutdown()
 
 Request a graceful shutdown of pi.
