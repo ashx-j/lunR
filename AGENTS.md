@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **New-user defaults (`fix/new-user-defaults`):** skill tags default to `$`; large subagent confirmations and footer token totals, TPS, Git, and subscription bars default off. Footer fallback paths match. Other defaults and explicit saved choices remain unchanged; no settings migration runs.
+- **New-user defaults (`fix/new-user-defaults`):** skill tags default to `$`; large subagent confirmations and footer token totals, TPS, Git, and subscription bars default off. Footer fallback paths match. Other defaults and explicit saved choices remain unchanged; no settings migration runs. Pi attribution and the full upstream MIT license ship separately in `THIRD_PARTY_NOTICES` across the four public packages and standalone archives; root `LICENSE` remains unchanged.
 
 - **v0.2.28 (2026-10-04):** PR #151 merged as `bc1ecabe` after fresh green CI. Release PR #152 merged as `c3666438`; tag `v0.2.28` triggered successful publication of all four public packages and three native payloads. All seven registry tarballs match their declared integrity; npm latest is 0.2.28. An isolated packed install reports 0.2.28 and passes first-request fixtures. The release contains the request-accounting fixes, and the gateway approval fixture now owns its profile and saved configuration. The pinned CuaDriver runtime and production approval are unchanged.
 
@@ -176,7 +176,7 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 
 ## Build & run
 
-- New-user defaults, 2026-10-11: all five offline package builds and 132 focused tests across settings, model instructions, permission gating, skill completion, footer, and first-paint suites pass in an isolated worktree with disposable test profiles. Changed TypeScript passes Biome; installed CLI and personal settings are untouched.
+- New-user defaults, 2026-10-11: all five offline package builds and 132 focused tests across settings, model instructions, permission gating, skill completion, footer, and first-paint suites pass in an isolated worktree with disposable test profiles. Changed TypeScript passes Biome; installed CLI and personal settings are untouched. Follow-up distribution, npm-name, and browser-install tests pass 19/19, including real npm pack file-list checks for both notices in all four public packages.
 
 - v0.2.28 qualification: all five offline package builds, read-only repository checks and seven real-payload public tarballs pass. Full isolated tests pass Agent 191, AI 652 with 760 credential skips, coding-agent 3,505 with 56 skips, TUI and Orchestrator. The packed CLI reports 0.2.28 and passes startup and first-request subagent/MCP/LSP/local-fetch fixtures. Both feature and release PR CI pass. All seven published tarballs match registry integrity, and npm latest reports 0.2.28. No live provider or native desktop qualification was performed.
 
@@ -302,6 +302,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- npm does not automatically include `THIRD_PARTY_NOTICES` like `LICENSE`; public manifest rewriting must keep it in the files allowlist, and shared staging copies both notices. Native payload packages retain their own CuaDriver license.
 
 - Factory defaults apply to missing settings keys, including existing profiles without an explicit value. Explicit saved values win; this change does not rewrite settings files.
 
@@ -431,6 +433,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: Ship pi attribution and its complete MIT text in `THIRD_PARTY_NOTICES` so the main license identifies lunR while distributions retain the upstream notice.
 
 - 2026-10-11: Change fallback defaults without a migration so fresh installs use the selected preferences and explicit saved choices remain authoritative.
 

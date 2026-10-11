@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, globSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stagePackageNotice, stageStandaloneAssets } from "../../../scripts/distribution-assets.mjs";
+import { rewritePackageJsonForNpm } from "../../../scripts/lunr-npm-names.mjs";
 import { getClaudeCodeWorkerPath } from "../../ai/src/utils/claude-code-assets.ts";
 
 const repository = new URL("../../../", import.meta.url);
@@ -40,8 +42,11 @@ describe("physical distribution assets", () => {
 					expect(readFileSync(join(relocated, file))).toEqual(readFileSync(new URL(file, aiDirectory)));
 				}
 			}
-			expect(readFileSync(join(relocated, "LICENSE"), "utf8")).toContain("2025 Mario Zechner");
 			expect(readFileSync(join(relocated, "LICENSE"), "utf8")).toContain("2026 ashx-j");
+			expect(readFileSync(join(relocated, "THIRD_PARTY_NOTICES"), "utf8")).toContain("2025 Mario Zechner");
+			expect(readFileSync(join(relocated, "THIRD_PARTY_NOTICES"))).toEqual(
+				readFileSync(new URL("THIRD_PARTY_NOTICES", repository)),
+			);
 		},
 	);
 
@@ -66,9 +71,20 @@ describe("physical distribution assets", () => {
 		).toThrow(/extract the complete standalone archive/);
 	});
 
-	it("stages the complete MIT notice for npm package copies", () => {
+	it.each(["ai", "tui", "agent", "coding-agent"])("includes both notices in the public %s npm package", (name) => {
 		const directory = temporaryDirectory();
 		stagePackageNotice(directory);
-		expect(readFileSync(join(directory, "LICENSE"))).toEqual(readFileSync(new URL("LICENSE", repository)));
+		const source = JSON.parse(readFileSync(new URL(`packages/${name}/package.json`, repository), "utf8"));
+		writeFileSync(join(directory, "package.json"), JSON.stringify(rewritePackageJsonForNpm(source)));
+		const output = execFileSync(
+			process.platform === "win32" ? "npm.cmd" : "npm",
+			["pack", "--dry-run", "--ignore-scripts", "--json"],
+			{ cwd: directory, encoding: "utf8", shell: process.platform === "win32" },
+		);
+		const [packed] = Object.values(JSON.parse(output)) as { files: { path: string }[] }[];
+		for (const notice of ["LICENSE", "THIRD_PARTY_NOTICES"]) {
+			expect(packed.files.map((file) => file.path)).toContain(notice);
+			expect(readFileSync(join(directory, notice))).toEqual(readFileSync(new URL(notice, repository)));
+		}
 	});
 });

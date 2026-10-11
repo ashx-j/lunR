@@ -679,7 +679,7 @@ See [docs/development.md](docs/development.md) for setup, forking, and debugging
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE) for lunR and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the original pi license.
 
 ## See Also
 
