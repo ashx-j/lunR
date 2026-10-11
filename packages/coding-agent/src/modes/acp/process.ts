@@ -45,6 +45,7 @@ export class AcpRpcProcess {
 	private readonly closed: Promise<void>;
 	private readonly stopReading: () => void;
 	private failure?: Error;
+	private exited = false;
 	private stopping?: Promise<void>;
 	private sequence = 0;
 
@@ -76,12 +77,17 @@ export class AcpRpcProcess {
 		this.child.on("error", (error: Error) => this.fail(error));
 		this.closed = new Promise((resolve) =>
 			this.child.once("close", (code, signal) => {
-				this.fail(new Error(`lunr worker exited (${signal ?? code}).`));
+				this.exited = true;
+				this.failure ??= new Error(`lunr worker exited (${signal ?? code}).`);
+				// only report a terminal failure once the worker can no longer perform work.
+				for (const request of this.pending.values()) request.reject(this.failure);
+				this.pending.clear();
+				for (const listener of this.exits) listener(this.failure);
 				resolve();
 			}),
 		);
 		this.stopReading = attachJsonlLineReader(this.child.stdout, (line) => {
-			if (!line.trim()) return;
+			if (this.failure || !line.trim()) return;
 			try {
 				const value: unknown = JSON.parse(line);
 				if (!value || typeof value !== "object" || !("type" in value))
@@ -101,9 +107,13 @@ export class AcpRpcProcess {
 	private fail(error: Error): void {
 		if (this.failure) return;
 		this.failure = error;
-		for (const request of this.pending.values()) request.reject(error);
-		this.pending.clear();
-		for (const listener of this.exits) listener(error);
+		this.stopReading();
+		this.events.clear();
+		void this.stop();
+	}
+
+	get usable(): boolean {
+		return !this.failure && !this.stopping;
 	}
 
 	onEvent(listener: (event: WorkerEvent) => void): () => void {
@@ -115,7 +125,7 @@ export class AcpRpcProcess {
 
 	onExit(listener: (error: Error) => void): () => void {
 		this.exits.add(listener);
-		if (this.failure) listener(this.failure);
+		if (this.exited && this.failure) listener(this.failure);
 		return () => {
 			this.exits.delete(listener);
 		};
@@ -125,7 +135,10 @@ export class AcpRpcProcess {
 		command: T,
 		timeoutMs = 30_000,
 	): Promise<Extract<RpcResponse, { command: T["type"]; success: true }>> {
-		if (this.failure) throw this.failure;
+		if (this.failure) {
+			await this.closed;
+			throw this.failure;
+		}
 		if (this.stopping) throw new Error("lunr worker is closing.");
 		const id = String(++this.sequence);
 		const response = await new Promise<RpcResponse>((resolve, reject) => {
@@ -151,7 +164,7 @@ export class AcpRpcProcess {
 				},
 			});
 			this.child.stdin.write(serializeJsonLine({ ...command, id }), (error) => {
-				if (error) this.pending.get(id)?.reject(error);
+				if (error) this.fail(error);
 			});
 		});
 		if (!response.success) throw new Error(response.error);

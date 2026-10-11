@@ -365,7 +365,7 @@ export class LunrAcpAgent implements Agent {
 			const { message, images } = promptToLunr(params.prompt);
 			if (!message.trim() && !images.length) throw new RequestError(-32602, "The prompt is empty.");
 			const stopReason = await owner.session.prompt(message, images);
-			if (this.sessions.get(params.sessionId) !== owner) return { stopReason };
+			if (this.sessions.get(params.sessionId) !== owner || !owner.session.process.usable) return { stopReason };
 			if (!owner.record.title) {
 				const title = promptTitle(message);
 				if (title) await owner.session.process.request({ type: "set_session_name", name: title });

@@ -53,6 +53,13 @@ Cancelling the session stops its owned background children too.
 
 Clients that advertise ACP form elicitation can show extension questions and
 text input. Other clients receive a chat notice and the dialog is cancelled.
+During session startup, questions return their cancelled defaults because the
+client has no active turn yet. A diagnostic appears in the worker log. Configure
+extensions that require interactive startup in lunR's terminal interface first.
+If a question expires or is cancelled internally after the client has opened
+it, the turn stays open until you dismiss the dialog or stop the turn. ACP v1
+does not let this adapter retract that host request. Late answers cannot resume
+the cancelled operation.
 Terminal-only widgets and custom terminal menus do not appear in the client.
 Extension commands cannot replace the ACP session or navigate its conversation
 history. The client owns those operations.
@@ -72,7 +79,7 @@ are not required; lunR executes its own tools.
 - Prefer **Build** over **Autonomous** when you want lunR to ask questions.
   Autonomous mode instructs it to decide without asking, even though tool
   approval still belongs to the client.
-- Turn off **Automatic delegation guidance** if you want T3 to manage
+- Turn off **Automatic subagent delegation** if you want T3 to manage
   delegation. lunR's subagents remain a separate system. Turn it on when you
   intentionally want lunR to manage its own children.
 - Turn off lunR's **Browser** feature when you want it to use T3's collaborative
@@ -80,9 +87,9 @@ are not required; lunR executes its own tools.
 - Prefer T3's scheduler for recurring work in T3. Avoid combining it with lunR
   cron or scheduled subagent jobs, which can start turns after the original
   ACP request has ended. Avoid a second goal loop for the same work.
-- Consider disabling lunR's **Rollback** in the modes where it is configurable
-  if you use T3 checkpoints. They track changes separately. Autonomous mode
-  enables lunR rollback as part of its existing behavior.
+- No change to **Rollback** is needed. lunR's rollback runs only in its terminal
+  interface; ACP sessions use the client's checkpoint controls. T3's file
+  checkpoints do not rewind lunR's conversation history.
 - Keep MCP enabled to expose T3's supplied tools. Avoid duplicate manually
   configured T3 servers. Keep normal project trust rules; granting T3 access to
   a directory does not automatically trust its lunR extensions.

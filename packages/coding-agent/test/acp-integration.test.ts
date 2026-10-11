@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const providerPath = fileURLToPath(new URL("fixtures/acp-provider.ts", import.meta.url));
+const lifecyclePath = fileURLToPath(new URL("fixtures/acp-lifecycle.ts", import.meta.url));
 const mcpPath = fileURLToPath(new URL("fixtures/acp-mcp-server.mjs", import.meta.url));
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/mT0AAAAASUVORK5CYII=";
 
@@ -47,7 +48,7 @@ function assistantText(updates: SessionNotification[], start = 0): string {
 		.join("");
 }
 
-async function launch() {
+async function launch(options: { lifecycle?: boolean; startupDialog?: boolean } = {}) {
 	const directory = mkdtempSync(join(tmpdir(), "lunr-acp-integration-"));
 	const home = join(directory, "home");
 	const agentDir = join(home, ".lunr", "agent");
@@ -56,6 +57,7 @@ async function launch() {
 	for (const path of [agentDir, project, temporary]) mkdirSync(path, { recursive: true });
 	mkdirSync(join(agentDir, "extensions"));
 	copyFileSync(providerPath, join(agentDir, "extensions", "acp-provider.ts"));
+	if (options.lifecycle) copyFileSync(lifecyclePath, join(agentDir, "extensions", "acp-lifecycle.ts"));
 	const settingsPath = join(agentDir, "settings.json");
 	const settings = `${JSON.stringify({ defaultProvider: "acp-fixture", defaultModel: "test", defaultThinkingLevel: "medium", compaction: { enabled: false }, retry: { enabled: false } }, null, 2)}\n`;
 	writeFileSync(settingsPath, settings);
@@ -77,6 +79,7 @@ async function launch() {
 		PI_CODING_AGENT_DIR: agentDir,
 		ACP_FIXTURE_WORKER_PIDS: workerPids,
 		ACP_FIXTURE_MCP_PIDS: mcpPids,
+		...(options.startupDialog ? { ACP_FIXTURE_STARTUP_DIALOG: "1" } : {}),
 		NO_COLOR: "1",
 	};
 	const child: ChildProcessWithoutNullStreams = spawn(
@@ -137,6 +140,12 @@ async function launch() {
 		answerForm(answer: string) {
 			heldForms.shift()?.({ action: "accept", content: { answer } });
 		},
+		dismissForm() {
+			heldForms.shift()?.({ action: "cancel" });
+		},
+		answerPermission() {
+			heldPermissions.shift()?.({ outcome: { outcome: "selected", optionId: "allow" } });
+		},
 		setPermissionDecision(decision: typeof permissionDecision) {
 			permissionDecision = decision;
 		},
@@ -174,6 +183,111 @@ afterEach(async () => {
 });
 
 describe("compiled ACP stdio integration", () => {
+	it("declines startup dialogs before opening a usable session", async () => {
+		const fixture = await launch({ lifecycle: true, startupDialog: true });
+		const { connection, project, forms } = fixture;
+		await connection.initialize({ protocolVersion: 1, clientCapabilities: { elicitation: { form: {} } } });
+		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+		expect(JSON.parse(readFileSync(join(project, "startup-results.json"), "utf8"))).toEqual([
+			null,
+			false,
+			null,
+			null,
+		]);
+		expect(forms).toHaveLength(0);
+		expect(fixture.stderr).toContain("skipped startup question");
+		expect((await connection.prompt({ sessionId, prompt: [{ type: "text", text: "report" }] })).stopReason).toBe(
+			"end_turn",
+		);
+	}, 30_000);
+
+	it("stops a worker after malformed output before reporting failure", async () => {
+		const fixture = await launch({ lifecycle: true });
+		const { connection, project, updates } = fixture;
+		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+		await expect(
+			connection.prompt({ sessionId, prompt: [{ type: "text", text: "/fixture-protocol-failure" }] }),
+		).rejects.toThrow();
+		expect(pids(fixture.workerPids).length).toBeGreaterThan(0);
+		expect(pids(fixture.workerPids).every((pid) => !alive(pid))).toBe(true);
+		expect(existsSync(join(project, "after-failure"))).toBe(false);
+		expect(assistantText(updates)).not.toContain("work continued after failure");
+		// a failed worker does not damage the adapter's next session.
+		const next = await connection.newSession({ cwd: project, mcpServers: [] });
+		expect(
+			(await connection.prompt({ sessionId: next.sessionId, prompt: [{ type: "text", text: "report" }] }))
+				.stopReason,
+		).toBe("end_turn");
+	}, 30_000);
+
+	it.each([
+		{ kind: "timed", action: "dismiss" },
+		{ kind: "aborted", action: "answer" },
+		{ kind: "timed", action: "stop" },
+	] as const)(
+		"keeps a $kind form inside its turn until the client chooses $action",
+		async ({ kind, action }) => {
+			const fixture = await launch({ lifecycle: true });
+			const { connection, project, forms, updates } = fixture;
+			await connection.initialize({ protocolVersion: 1, clientCapabilities: { elicitation: { form: {} } } });
+			const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+			let finished = false;
+			const prompt = connection
+				.prompt({ sessionId, prompt: [{ type: "text", text: `/fixture-${kind}-form` }] })
+				.finally(() => {
+					finished = true;
+				});
+			await vi.waitFor(() => expect(forms).toHaveLength(1));
+			await vi.waitFor(() => expect(assistantText(updates)).toContain("Dismiss it or stop the turn"));
+			expect(readFileSync(join(project, `${kind}-answer`), "utf8")).toBe("cancelled");
+			expect(finished).toBe(false);
+			await expect(connection.prompt({ sessionId, prompt: [{ type: "text", text: "report" }] })).rejects.toThrow();
+			if (action === "stop") {
+				await connection.cancel({ sessionId });
+				fixture.dismissForm();
+			} else if (action === "dismiss") fixture.dismissForm();
+			else fixture.answerForm("late answer");
+			expect((await prompt).stopReason).toBe(action === "stop" ? "cancelled" : "end_turn");
+			expect(readFileSync(join(project, `${kind}-answer`), "utf8")).toBe("cancelled");
+			expect((await connection.prompt({ sessionId, prompt: [{ type: "text", text: "report" }] })).stopReason).toBe(
+				"end_turn",
+			);
+		},
+		30_000,
+	);
+
+	it("does not revive an internally aborted plan approval when the client answers late", async () => {
+		const fixture = await launch({ lifecycle: true });
+		const { connection, project, updates, permissions } = fixture;
+		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+		await connection.setSessionMode({ sessionId, modeId: "read-only" });
+		fixture.setPermissionDecision("hold");
+		let finished = false;
+		const prompt = connection.prompt({ sessionId, prompt: [{ type: "text", text: "plan" }] }).finally(() => {
+			finished = true;
+		});
+		await vi.waitFor(() => expect(permissions).toHaveLength(1));
+		writeFileSync(join(project, "abort-approval"), "abort this plan");
+		await vi.waitFor(() => expect(assistantText(updates)).toContain("Dismiss it or stop the turn"));
+		expect(finished).toBe(false);
+		fixture.answerPermission();
+		await prompt;
+		expect(existsSync(join(project, "planned.txt"))).toBe(false);
+		expect(
+			updates.some(
+				({ update }) =>
+					update.sessionUpdate === "tool_call_update" &&
+					update.toolCallId === permissions[0].toolCall.toolCallId &&
+					update.status === "failed",
+			),
+		).toBe(true);
+		await connection.closeSession({ sessionId });
+		const restored = await connection.loadSession({ sessionId, cwd: project, mcpServers: [] });
+		expect(restored.modes?.currentModeId).toBe("read-only");
+	}, 30_000);
+
 	it("streams, approves tools, scopes configuration and reloads native session history", async () => {
 		const fixture = await launch();
 		const { connection, project, updates, permissions } = fixture;

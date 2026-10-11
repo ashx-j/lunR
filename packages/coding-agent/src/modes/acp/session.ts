@@ -17,6 +17,11 @@ type Turn = {
 	reject: (error: Error) => void;
 	cancelled: boolean;
 	accepted: boolean;
+	clientCancelled: boolean;
+	hostCancellation: Promise<void>;
+	releaseHostDialogs: () => void;
+	finishing?: Promise<void>;
+	failure?: Error;
 	error?: string;
 };
 type AcpClient = Pick<AgentSideConnection, "sessionUpdate" | "requestPermission" | "unstable_createElicitation">;
@@ -32,7 +37,7 @@ export class AcpSession {
 	private output = Promise.resolve();
 	private readonly tools = new Map<string, "pending" | "in_progress" | "completed" | "failed">();
 	private readonly snapshots = new Map<string, { path: string; oldText: string | null }>();
-	private readonly dialogs = new Map<string, () => void>();
+	private readonly dialogs = new Map<string, { cancel: () => void; closed: Promise<void> }>();
 	private disposed = false;
 	readonly id: string;
 	readonly cwd: string;
@@ -58,10 +63,7 @@ export class AcpSession {
 		process.onEvent((event) => this.handleEvent(event));
 		process.onExit((error) => {
 			if (this.settleTimer) clearTimeout(this.settleTimer);
-			this.cancelDialogs();
-			if (this.turn?.cancelled) this.turn.resolve("cancelled");
-			else this.turn?.reject(error);
-			this.turn = undefined;
+			if (this.turn) void this.finishTurn(this.turn, error);
 		});
 	}
 
@@ -72,7 +74,9 @@ export class AcpSession {
 	emit(update: SessionUpdate): void {
 		this.output = this.output.then(() => this.connection.sessionUpdate({ sessionId: this.id, update }));
 		void this.output.catch((error: unknown) => {
-			this.turn?.reject(error instanceof Error ? error : new Error(String(error)));
+			// a broken client transport cannot answer or dismiss its remaining dialogs.
+			this.turn?.releaseHostDialogs();
+			if (this.turn) void this.finishTurn(this.turn, error);
 			void this.process.stop();
 		});
 	}
@@ -86,7 +90,19 @@ export class AcpSession {
 		if (this.busy)
 			throw new RequestError(-32602, "This session is still working. Wait for completion or cancel it first.");
 		return new Promise<StopReason>((resolve, reject) => {
-			const turn: Turn = { resolve, reject, cancelled: false, accepted: false };
+			let releaseHostDialogs = () => {};
+			const hostCancellation = new Promise<void>((done) => {
+				releaseHostDialogs = done;
+			});
+			const turn: Turn = {
+				resolve,
+				reject,
+				cancelled: false,
+				accepted: false,
+				clientCancelled: false,
+				hostCancellation,
+				releaseHostDialogs,
+			};
 			this.turn = turn;
 			void (async () => {
 				if (images.length) {
@@ -111,12 +127,46 @@ export class AcpSession {
 					return this.settle(turn);
 				})
 				.catch((error: unknown) => {
-					if (this.turn !== turn) return;
-					this.turn = undefined;
-					if (turn.cancelled) resolve("cancelled");
-					else reject(error instanceof Error ? error : new Error(String(error)));
+					return this.finishTurn(turn, error);
 				});
 		});
+	}
+
+	private async finishTurn(turn: Turn, error?: unknown): Promise<void> {
+		if (this.turn !== turn) return;
+		if (error !== undefined) turn.failure = error instanceof Error ? error : new Error(String(error));
+		if (turn.finishing) return turn.finishing;
+		turn.finishing = (async () => {
+			this.cancelDialogs();
+			try {
+				if (this.dialogs.size && !turn.clientCancelled && !this.disposed) {
+					// acp v1 cannot retract host requests; keep them inside the turn until the client closes them.
+					this.emit({
+						sessionUpdate: "agent_message_chunk",
+						content: {
+							type: "text",
+							text: "This question or approval is no longer needed. Dismiss it or stop the turn to finish.\n",
+						},
+					});
+					await Promise.race([
+						Promise.all([...this.dialogs.values()].map((dialog) => dialog.closed)),
+						turn.hostCancellation,
+					]);
+				}
+				await this.flush();
+				if (turn.cancelled) turn.resolve("cancelled");
+				else if (turn.failure || turn.error) turn.reject(turn.failure ?? new Error(turn.error));
+				else turn.resolve("end_turn");
+			} catch (failure) {
+				turn.reject(failure instanceof Error ? failure : new Error(String(failure)));
+			} finally {
+				if (this.turn === turn) this.turn = undefined;
+				this.running = false;
+				this.tools.clear();
+				this.snapshots.clear();
+			}
+		})();
+		return turn.finishing;
 	}
 
 	private settleLater(): void {
@@ -128,7 +178,7 @@ export class AcpSession {
 	}
 
 	private async settle(turn = this.turn): Promise<void> {
-		if (!turn?.accepted || this.turn !== turn) return;
+		if (!turn?.accepted || this.turn !== turn || turn.finishing) return;
 		if (this.settling) {
 			this.settleLater();
 			return;
@@ -142,8 +192,6 @@ export class AcpSession {
 				this.settleLater();
 				return;
 			}
-			// internal aborts can resolve the worker's approval without a client response.
-			this.cancelDialogs();
 			await this.publishUsage();
 			await this.flush();
 			const { data: final } = await this.process.request({ type: "get_state" });
@@ -159,17 +207,9 @@ export class AcpSession {
 				this.settleLater();
 				return;
 			}
-			this.turn = undefined;
-			this.running = false;
-			this.tools.clear();
-			if (turn.cancelled) turn.resolve("cancelled");
-			else if (turn.error) turn.reject(new Error(turn.error));
-			else turn.resolve("end_turn");
+			await this.finishTurn(turn);
 		} catch (error) {
-			if (this.turn === turn) {
-				this.turn = undefined;
-				turn.reject(error instanceof Error ? error : new Error(String(error)));
-			}
+			await this.finishTurn(turn, error);
 		} finally {
 			this.settling = false;
 		}
@@ -194,22 +234,31 @@ export class AcpSession {
 	}
 
 	private cancelDialogs(): void {
-		for (const cancel of this.dialogs.values()) cancel();
-		this.dialogs.clear();
+		for (const dialog of this.dialogs.values()) dialog.cancel();
 	}
 
 	async cancel(): Promise<void> {
-		if (this.turn) this.turn.cancelled = true;
+		if (this.turn) {
+			this.turn.cancelled = true;
+			this.turn.clientCancelled = true;
+			this.turn.releaseHostDialogs();
+		}
 		this.cancelDialogs();
-		await this.process.request({ type: "abort" });
+		// an explicit client cancellation also dismisses its own requests.
+		this.dialogs.clear();
+		if (this.process.usable) await this.process.request({ type: "abort" });
 		await this.settle();
 	}
 
 	async dispose(): Promise<void> {
 		this.disposed = true;
 		if (this.settleTimer) clearTimeout(this.settleTimer);
-		if (this.turn) this.turn.cancelled = true;
+		if (this.turn) {
+			this.turn.cancelled = true;
+			this.turn.releaseHostDialogs();
+		}
 		this.cancelDialogs();
+		this.dialogs.clear();
 		await this.process.stop();
 	}
 
@@ -351,8 +400,9 @@ export class AcpSession {
 		this.startTool(event.toolCallId, event.toolName, event.input, "pending");
 		await this.respondToDialog(
 			event.id,
-			async () => {
+			async (signal) => {
 				await this.flush();
+				if (signal.aborted) return { cancelled: true };
 				const result = await this.connection.requestPermission({
 					sessionId: this.id,
 					toolCall: {
@@ -388,26 +438,34 @@ export class AcpSession {
 
 	private async respondToDialog(
 		id: string,
-		request: () => Promise<DialogResponse>,
+		request: (signal: AbortSignal) => Promise<DialogResponse>,
 		timeout?: number,
 		onResponse?: (response: DialogResponse) => void,
 	): Promise<void> {
 		let active = true;
+		const controller = new AbortController();
 		const finish = (response: DialogResponse) => {
 			if (!active) return;
 			active = false;
 			onResponse?.(response);
 			this.process.respond({ type: "extension_ui_response", id, ...response });
 		};
-		const cancel = () => finish({ cancelled: true });
-		this.dialogs.set(id, cancel);
+		const cancel = () => {
+			controller.abort();
+			finish({ cancelled: true });
+		};
+		let close = () => {};
+		const closed = new Promise<void>((resolve) => {
+			close = resolve;
+		});
+		this.dialogs.set(id, { cancel, closed });
 		const timer = timeout ? setTimeout(cancel, timeout) : undefined;
 		try {
 			if (this.disposed || this.turn?.cancelled) {
 				cancel();
 				return;
 			}
-			const response = await request();
+			const response = await request(controller.signal);
 			finish(response);
 		} catch {
 			cancel();
@@ -415,6 +473,7 @@ export class AcpSession {
 			active = false;
 			if (timer) clearTimeout(timer);
 			this.dialogs.delete(id);
+			close();
 		}
 	}
 

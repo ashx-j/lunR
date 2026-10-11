@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **ACP lifecycle repairs (`feat/acp-support`, 2026-10-11):** startup extension questions return cancelled defaults before a host turn exists. Fatal worker transport errors stop the worker and discard later events before reporting failure. Expired questions and internally cancelled approvals retain their ACP turn until the host dismisses them or explicitly cancels; late answers cannot resume the operation. ACP docs now use the actual delegation setting label and correctly describe rollback as terminal-only.
+
 - **ACP support (`feat/acp-support`, 2026-10-11):** `lunr --mode acp` adapts pi-acp for T3 Code and other ACP v1 clients. Separate RPC workers preserve native sessions, streamed text/reasoning, images, tool diffs, approvals, model/reasoning/mode controls, cancellation and injected MCP servers. Client selections stay session-local; host MCP configuration/cache stays temporary. Native child results and their parent continuation finish before the ACP turn closes. Approved plans restore write access; extension commands cannot replace client-owned sessions. Setup, limitations and overlapping T3 settings are in `packages/coding-agent/docs/acp.md`. Unreleased.
 
 - **v0.2.28 (2026-10-04):** PR #151 merged as `bc1ecabe` after fresh green CI. Release PR #152 merged as `c3666438`; tag `v0.2.28` triggered successful publication of all four public packages and three native payloads. All seven registry tarballs match their declared integrity; npm latest is 0.2.28. An isolated packed install reports 0.2.28 and passes first-request fixtures. The release contains the request-accounting fixes, and the gateway approval fixture now owns its profile and saved configuration. The pinned CuaDriver runtime and production approval are unchanged.
@@ -176,6 +178,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 
 ## Build & run
 
+- ACP lifecycle follow-up, 2026-10-11: coding-agent type build and Node bundle pass. All 41 focused tests pass across ACP integration/worker/translation and RPC prompt/exit/JSONL suites, including six new cases for startup fallback, fatal transport shutdown, expired and aborted dialogs, explicit Stop and late plan approval. Touched-file Biome and whitespace checks pass. No live T3 UI, account, daily-driver build or release was used.
+
 - ACP support, 2026-10-11: five offline package builds and the Node bundle pass. The 27 focused ACP tests cover actual compiled stdio sessions with an isolated scripted provider, injected MCP, native async children, delayed forms, settings isolation, approvals and cleanup. Related RPC, permission, settings and subagent suites pass. Normal terminal first-paint and first-request checks retain the existing tool fingerprints. Public package dry-run, exact dependency/installer locks, relative imports, touched TypeScript Biome and whitespace checks pass. Astra xhigh reviewed the implementation and follow-up repairs. No live T3 UI, live HTTP/SSE server, account, installed CLI or publication was used.
 
 - v0.2.28 qualification: all five offline package builds, read-only repository checks and seven real-payload public tarballs pass. Full isolated tests pass Agent 191, AI 652 with 760 credential skips, coding-agent 3,505 with 56 skips, TUI and Orchestrator. The packed CLI reports 0.2.28 and passes startup and first-request subagent/MCP/LSP/local-fetch fixtures. Both feature and release PR CI pass. All seven published tarballs match registry integrity, and npm latest reports 0.2.28. No live provider or native desktop qualification was performed.
@@ -302,6 +306,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- ACP cannot retract a form or approval through its current v1 connection. A locally expired request keeps the turn open with a dismissal notice until the host responds or stops the turn. Startup dialogs cannot use this path because there is no active host turn; they return cancellation defaults and write a worker diagnostic.
 
 - ACP uses the existing model profile but keeps client-driven model/reasoning settings in memory and the session journal. Launch model/reasoning arguments apply only to new sessions. Child delegation strips temporary host MCP credentials; a full-access child approval authorizes its normal tools without individual ACP dialogs. Scheduled future jobs can outlive an ACP turn, so use T3's scheduler for work that must remain visible there. See `packages/coding-agent/docs/acp.md` for other client limitations.
 
@@ -431,6 +437,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: keep expired ACP dialogs attached to their turn until host dismissal because the current connection cannot retract a host request; report fatal worker failures only after process closure.
 
 - 2026-10-11: adapt pi-acp around one native RPC worker per ACP session so T3 can use lunR's existing tools and journals without duplicating its agent runtime or changing saved defaults.
 

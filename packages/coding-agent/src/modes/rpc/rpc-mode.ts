@@ -62,6 +62,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
 	let acpWorker: AcpWorkerBridge | undefined;
+	let starting = true;
 	let configurationChanging = false;
 	const configure = async <T>(change: () => Promise<T> | T): Promise<T> => {
 		if (!acpWorker) return change();
@@ -124,6 +125,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		request: Record<string, unknown>,
 		parseResponse: (response: RpcExtensionUIResponse) => T,
 	): Promise<T> {
+		if (acpWorker && starting) {
+			// the client has no active turn during session creation, so it cannot present a startup dialog.
+			process.stderr.write(`lunR ACP: skipped startup question: ${String(request.title ?? "extension input")}\n`);
+			return Promise.resolve(defaultValue);
+		}
 		const signal = opts?.signal ?? (acpWorker ? session.agent.signal : undefined);
 		if (signal?.aborted) return Promise.resolve(defaultValue);
 
@@ -425,6 +431,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	};
 
 	await rebindSession();
+	starting = false;
 	registerSignalHandlers();
 
 	// Handle a single command
