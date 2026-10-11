@@ -1,6 +1,22 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.28`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.29`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.29] - 2026-10-11
+
+### Added
+
+- `lunr --mode acp` lets T3 Code and other ACP clients use native lunR sessions, streamed responses, approvals, MCP servers, and explicit subagents.
+- Bounded GitHub PR watches deliver new feedback and CI results to the owning session through `pr_watch` and `/pr-watch`.
+
+### Changed
+
+- Skill tags default to `$`. Large subagent launch confirmations, footer token totals, tokens per second, Git details, and subscription bars default off. Explicit saved settings still take precedence.
+- Public packages include pi attribution and its complete MIT license in `THIRD_PARTY_NOTICES`.
+
+### Fixed
+
+- Scoped-model startup notices use the TUI renderer, preventing leftover startup borders above the session header.
 
 ## [0.2.28] - 2026-10-04
 

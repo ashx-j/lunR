@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **v0.2.29 preparation, 2026-10-11:** release branch combines reviewed PRs #154 through #157 through merge ancestry, with startup paint repair, bounded GitHub PR watches, new defaults and upstream notices, and ACP support. All workspaces and installer locks target 0.2.29. Release validation is in progress; npm remains 0.2.28 until tag publication is verified.
+
 - **Startup paint repair (`fix/terminal-paint-artifacts`, 2026-10-06):** model-scope startup messages now use the managed TUI after restored history instead of raw console output. This prevents cursor drift that left the smaller first-paint border above the session header. Terminal-emulator coverage checks complete frames with and without scoped models, including successful and failed deferred startup.
 
 - **Bounded PR watching (`feat/pr-watch`, 2026-10-06):** the owning client session polls GitHub every 60 seconds without model calls on quiet cycles. `pr_watch` exposes only start/wait; `/pr-watch` gives the user view/cancel/restart controls. `/settings` defaults to a finite 30-minute window, snapshotted per watch and reset only on a different head commit. GitHub comments and edits, inline comments, submitted reviews, terminal check runs and commit statuses retain source and commit evidence. Conditional responses refresh pagination metadata. Wait results and asynchronous notifications share durable receipt-backed delivery; a same-turn wait claims its queued follow-up without duplication, while user-input interruption preserves accepted queued notifications. Rejected admission retries on a timer, including undelivered final notices. Session leases, shutdown and normal input interruption use existing session mechanisms. Reopening reconciles only an unexpired window; expiry always wins before a read and a late-discovered head cannot revive it. See `packages/coding-agent/docs/pr-watch.md` for the agreed brief and acceptance criteria. Watch completion never judges PR readiness or merges.
@@ -57,7 +59,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-06 (bounded PR watch implementation). Public npm is `@ashx-j/lunr@0.2.28`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-11 (v0.2.29 preparation). Public npm is `@ashx-j/lunr@0.2.28`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -187,6 +189,8 @@ Last updated: 2026-10-06 (bounded PR watch implementation). Public npm is `@ashx
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- v0.2.29 preparation: all five offline package builds and the Node bundle pass. Read-only Biome, pinned dependencies, relative imports, shrinkwrap, installer lock, publication policy and browser-smoke checks pass. Full isolated tests are in progress; Agent passes 193 and AI passes 652 with 760 credential-gated skips. The three unchanged production-approved native archives pass checksum verification.
 
 - Startup paint repair, 2026-10-06: 44 focused first-paint/status tests, all five offline package builds and the Node bundle, and compiled first-paint/first-request subagent/MCP/LSP/local-fetch checks pass in an isolated worktree/profile. Whole-package Biome and the pinned-dependency, relative-import, shrinkwrap, installer-lock, workflow-policy and browser-smoke checks pass. The new scoped-model frame assertions reproduced the screenshot before the fix. No installed CLI or live Windows terminal was changed or tested.
 
@@ -326,6 +330,8 @@ Last updated: 2026-10-06 (bounded PR watch implementation). Public npm is `@ashx
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- PRs #155 through #157 overlap in project history notes; preserve each entry. The license-test conflict retains full source-byte comparison from ACP and the separate upstream notice checks from new-user defaults.
 
 - Once the startup view paints, raw console output moves the terminal cursor outside TUI bookkeeping. Render startup notices through managed components after history restoration; do not repair this by adding repeated full-screen clears.
 
@@ -473,6 +479,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: combine the already-reviewed PRs through merge ancestry in the patch-release PR so one combined CI run covers the release without another code review.
 
 - 2026-10-06: render model-scope startup information through `showStatus` after history restoration so the retained first frame stays aligned and the message remains visible.
 
