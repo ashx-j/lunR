@@ -85,10 +85,10 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 export type DefaultPermissionMode = "yolo" | "auto" | "read-only";
 export type SkillTagCharacter = "+" | "~" | "$";
 export const SKILL_TAG_CHARACTERS: readonly SkillTagCharacter[] = ["+", "~", "$"];
-export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "+";
+export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "$";
 
 export function parseSkillTagCharacter(value: unknown): SkillTagCharacter {
-	return value === "~" || value === "$" ? value : DEFAULT_SKILL_TAG_CHARACTER;
+	return value === "+" || value === "~" || value === "$" ? value : DEFAULT_SKILL_TAG_CHARACTER;
 }
 export type RollbackCapture = "copies" | "shadow-git" | "hybrid";
 export type RollbackScope = "tools" | "tree";
@@ -172,7 +172,7 @@ export interface Settings {
 	prompts?: string[]; // Array of local prompt template paths or directories
 	themes?: string[]; // Array of local theme file paths or directories
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
-	skillTagCharacter?: SkillTagCharacter; // default: "+" - mid-message skill tag trigger
+	skillTagCharacter?: SkillTagCharacter; // default: "$" - mid-message skill tag trigger
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
@@ -198,13 +198,13 @@ export interface Settings {
 	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
 	footerContext?: boolean; // default: true - show the context-usage pct/window segment
-	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
+	footerTokens?: boolean; // default: false - show the ↑in ↓out token totals segment
 	footerCacheHitRate?: boolean; // default: true - show the latest prompt cache-hit rate
-	footerTps?: boolean; // default: true - show the pi-tps t/s segment
+	footerTps?: boolean; // default: false - show the pi-tps t/s segment
 	footerStatuses?: boolean; // default: true - show the plan/goal status segments
-	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
+	footerGit?: boolean; // default: false - show git branch + added/removed in the footer
 	footerPlan?: boolean; // default: true - show the subscription usage segment
-	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
+	footerPlanBar?: boolean; // default: false - show the █░ bar; off keeps the percent only
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
@@ -214,7 +214,7 @@ export interface Settings {
 	rollbackCapture?: RollbackCapture; // default "copies"
 	rollbackScope?: RollbackScope; // default "tools"
 	autoManageSubscriptions?: boolean; // lunr: when true, subscription key switching is fully automatic (no manual picker)
-	confirmLargeSubagentLaunches?: boolean; // default true - ask before launching 3+ children outside Auto mode
+	confirmLargeSubagentLaunches?: boolean; // default false - ask before launching 3+ children outside Auto mode
 	subagentCommunicationEnabled?: boolean;
 	automaticSubagentDelegation?: boolean;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -1162,7 +1162,7 @@ export class SettingsManager {
 	}
 
 	getFooterTokens(): boolean {
-		return this.settings.footerTokens ?? true;
+		return this.settings.footerTokens ?? false;
 	}
 
 	setFooterTokens(enabled: boolean): void {
@@ -1182,7 +1182,7 @@ export class SettingsManager {
 	}
 
 	getFooterTps(): boolean {
-		return this.settings.footerTps ?? true;
+		return this.settings.footerTps ?? false;
 	}
 
 	setFooterTps(enabled: boolean): void {
@@ -1202,7 +1202,7 @@ export class SettingsManager {
 	}
 
 	getFooterGit(): boolean {
-		return this.settings.footerGit ?? true;
+		return this.settings.footerGit ?? false;
 	}
 
 	setFooterGit(enabled: boolean): void {
@@ -1222,7 +1222,7 @@ export class SettingsManager {
 	}
 
 	getFooterPlanBar(): boolean {
-		return this.settings.footerPlanBar ?? true;
+		return this.settings.footerPlanBar ?? false;
 	}
 
 	setFooterPlanBar(enabled: boolean): void {
@@ -1682,7 +1682,7 @@ export class SettingsManager {
 	}
 
 	getConfirmLargeSubagentLaunches(): boolean {
-		return this.settings.confirmLargeSubagentLaunches ?? true;
+		return this.settings.confirmLargeSubagentLaunches ?? false;
 	}
 
 	setConfirmLargeSubagentLaunches(enabled: boolean): void {

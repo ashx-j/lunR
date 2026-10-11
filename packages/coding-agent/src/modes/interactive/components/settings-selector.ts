@@ -594,7 +594,7 @@ class CustomizeSubmenu extends Container {
 				id: "footer-tokens",
 				label: "Token counter",
 				description: "Input and output token counts",
-				currentValue: (bridge?.getFooterTokens() ?? true) ? "on" : "off",
+				currentValue: (bridge?.getFooterTokens() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
@@ -608,7 +608,7 @@ class CustomizeSubmenu extends Container {
 				id: "footer-tps",
 				label: "TPS counter",
 				description: "Token generation speed",
-				currentValue: (bridge?.getFooterTps() ?? true) ? "on" : "off",
+				currentValue: (bridge?.getFooterTps() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
@@ -622,7 +622,7 @@ class CustomizeSubmenu extends Container {
 				id: "footer-git",
 				label: "Git branch",
 				description: "Git branch and line changes",
-				currentValue: (bridge?.getFooterGit() ?? true) ? "on" : "off",
+				currentValue: (bridge?.getFooterGit() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
@@ -636,7 +636,7 @@ class CustomizeSubmenu extends Container {
 				id: "footer-plan-bar",
 				label: "Plan bar",
 				description: "Bar beside the subscription usage percentage",
-				currentValue: (bridge?.getFooterPlanBar() ?? true) ? "on" : "off",
+				currentValue: (bridge?.getFooterPlanBar() ?? false) ? "on" : "off",
 				values: ["on", "off"],
 			},
 		];

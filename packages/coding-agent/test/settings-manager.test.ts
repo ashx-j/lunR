@@ -71,21 +71,20 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getOpenAIFastMode()).toBe(true);
 	});
 
-	it("defaults the skill tag character to + and persists ~ and $", async () => {
+	it("defaults the skill tag character to $ and preserves every saved choice", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
-		expect(manager.getSkillTagCharacter()).toBe("+");
-		manager.setSkillTagCharacter("~");
-		await manager.flush();
-		expect(SettingsManager.create(projectDir, agentDir).getSkillTagCharacter()).toBe("~");
-		manager.setSkillTagCharacter("$");
-		await manager.flush();
-		expect(SettingsManager.create(projectDir, agentDir).getSkillTagCharacter()).toBe("$");
+		expect(manager.getSkillTagCharacter()).toBe("$");
+		for (const character of ["+", "~", "$"] as const) {
+			manager.setSkillTagCharacter(character);
+			await manager.flush();
+			expect(SettingsManager.create(projectDir, agentDir).getSkillTagCharacter()).toBe(character);
+		}
 	});
 
-	it("treats an unknown skill tag character as +", () => {
+	it("treats an unknown skill tag character as $", () => {
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ skillTagCharacter: "x" }));
 		const manager = SettingsManager.create(projectDir, agentDir);
-		expect(manager.getSkillTagCharacter()).toBe("+");
+		expect(manager.getSkillTagCharacter()).toBe("$");
 	});
 
 	describe("preserves externally added settings", () => {
@@ -603,12 +602,23 @@ describe("SettingsManager", () => {
 			expect(manager.getFooterContext()).toBe(false);
 		});
 
-		it("should default footerTokens to true and persist", async () => {
+		it.each([
+			["getFooterTokens", "setFooterTokens"],
+			["getFooterTps", "setFooterTps"],
+			["getFooterGit", "setFooterGit"],
+			["getFooterPlanBar", "setFooterPlanBar"],
+		] as const)("defaults %s off without writing settings and preserves an explicit opt-in", async (get, set) => {
 			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getFooterTokens()).toBe(true);
-			manager.setFooterTokens(false);
+			expect(manager[get]()).toBe(false);
 			await manager.flush();
-			expect(manager.getFooterTokens()).toBe(false);
+			expect(existsSync(join(agentDir, "settings.json"))).toBe(false);
+			manager[set](true);
+			await manager.flush();
+			const saved = readFileSync(join(agentDir, "settings.json"), "utf8");
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded[get]()).toBe(true);
+			await reloaded.flush();
+			expect(readFileSync(join(agentDir, "settings.json"), "utf8")).toBe(saved);
 		});
 
 		it("should default footerCacheHitRate to true and persist", async () => {
@@ -617,14 +627,6 @@ describe("SettingsManager", () => {
 			manager.setFooterCacheHitRate(false);
 			await manager.flush();
 			expect(manager.getFooterCacheHitRate()).toBe(false);
-		});
-
-		it("should default footerTps to true and persist", async () => {
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getFooterTps()).toBe(true);
-			manager.setFooterTps(false);
-			await manager.flush();
-			expect(manager.getFooterTps()).toBe(false);
 		});
 
 		it("should default footerStatuses to true and persist", async () => {

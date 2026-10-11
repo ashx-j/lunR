@@ -8,7 +8,7 @@ Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`
 
 Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
-- **yolo** auto-approves tools but still confirms large subagent launches. This is the default.
+- **yolo** auto-approves tools. Large subagent launch confirmation is optional and off by default. This is the default mode.
 - **auto** runs without questions or large-launch confirmation.
 - **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
 
@@ -34,7 +34,7 @@ The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remai
 
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
-A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
+Enable Confirm large subagent launches in `/settings` to receive one aggregate confirmation in **yolo** for 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. This setting is off by default. Sequential work stays `chain`. Auto bypasses confirmation even when the setting is enabled.
 
 `/goal` sets a session goal and **forces session auto** permission mode.
 
