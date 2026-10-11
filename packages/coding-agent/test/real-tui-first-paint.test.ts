@@ -3,25 +3,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const terminal = vi.hoisted(() => ({ output: "", starts: 0, input: (_data: string) => {} }));
+const terminal = vi.hoisted(() => ({
+	output: "",
+	starts: 0,
+	input: (_data: string) => {},
+	screen: undefined as import("../../tui/test/virtual-terminal.ts").VirtualTerminal | undefined,
+}));
 vi.mock("../src/utils/tools-manager.ts", () => ({ getToolPath: () => undefined, ensureTool: async () => undefined }));
 vi.mock("@earendil-works/pi-tui", async (original) => {
 	const actual = await original<typeof import("@earendil-works/pi-tui")>();
+	const { VirtualTerminal } = await import("../../tui/test/virtual-terminal.ts");
 	return {
 		...actual,
-		ProcessTerminal: class {
-			columns = 100;
-			rows = 30;
-			start(input: (data: string) => void) {
+		ProcessTerminal: class extends VirtualTerminal {
+			constructor() {
+				super(100, 30);
+				terminal.screen = this;
+			}
+			start(input: (data: string) => void, resize: () => void) {
+				super.start(input, resize);
 				terminal.starts++;
 				terminal.input = input;
 			}
-			stop() {}
 			write(data: string) {
 				terminal.output += data;
+				super.write(data);
 			}
-			hideCursor() {}
-			showCursor() {}
 			setTitle() {}
 			setProgress() {}
 		},
@@ -195,9 +202,14 @@ describe("real TUI first paint", () => {
 		expect(view.isExitRequested).toBe(true);
 	});
 
-	it.each([false, true])(
-		"attaches InteractiveMode and gates commands on feature readiness, failure=%s",
-		async (fail) => {
+	it.each([
+		{ fail: false, scoped: false },
+		{ fail: true, scoped: false },
+		{ fail: false, scoped: true },
+		{ fail: true, scoped: true },
+	])(
+		"attaches InteractiveMode without stale paint and gates feature readiness, failure=$fail scoped=$scoped",
+		async ({ fail, scoped }) => {
 			view = new InteractiveView();
 			view.start();
 			await view.waitForFirstFrame();
@@ -231,6 +243,7 @@ describe("real TUI first paint", () => {
 			const { session } = await createAgentSessionFromServices({
 				services,
 				sessionManager: SessionManager.inMemory(tempDir),
+				scopedModels: scoped ? [{ model: services.modelRuntime.getModels()[0], thinkingLevel: "off" }] : [],
 			});
 			const runtime = new AgentSessionRuntime(session, services, async () => {
 				throw new Error("unexpected session replacement");
@@ -257,11 +270,28 @@ describe("real TUI first paint", () => {
 			vi.spyOn(internal, "startPlanUsagePolling").mockImplementation(() => {});
 			const settings = vi.spyOn(internal, "showSettingsSelector").mockResolvedValue();
 			const prompt = vi.spyOn(session, "prompt");
+			// Accidental console output must move the emulator cursor just as it would in a real terminal.
+			const consoleLog = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+				terminal.screen!.write(`${args.join(" ")}\r\n`);
+			});
 			try {
 				terminal.input("/settings");
 				terminal.input("\x1b[D");
 				const cursor = view.editor.getCursor();
 				await mode.init();
+				await terminal.screen!.waitForRender();
+				const expectedFrame = view.ui.render(100).map((line) =>
+					line
+						.replace(/\x1b\[[0-9;]*m/g, "")
+						.replace(/\x1b_pi:c\x07/g, "")
+						.trimEnd(),
+				);
+				expect(terminal.screen!.getViewport().map((line) => line.trimEnd())).toEqual([
+					...expectedFrame,
+					...Array.from({ length: terminal.screen!.rows - expectedFrame.length }, () => ""),
+				]);
+				expect(consoleLog).not.toHaveBeenCalled();
+				expect(expectedFrame.join("\n").includes("Model scope:")).toBe(scoped);
 				expect(internal.editor).toBe(view.editor);
 				expect(view.editor.getCursor()).toEqual(cursor);
 				terminal.input("\r");

@@ -855,21 +855,6 @@ export class InteractiveMode {
 		});
 		time("ensureTools");
 
-		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
-			const modelList = this.session.scopedModels
-				.map((sm) => {
-					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
-					return `${sm.model.id}${thinkingStr}`;
-				})
-				.join(", ");
-			const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
-			const cycleHint =
-				cycleKeys.length > 0
-					? theme.fg("muted", ` (${formatKeyText(cycleKeys.join("/"), { capitalize: true })} to cycle)`)
-					: "";
-			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
-		}
-
 		if (this.options.startupView) {
 			this.ui.pinFrom(null);
 			this.ui.clear();
@@ -949,6 +934,21 @@ export class InteractiveMode {
 		await this.rebindCurrentSession();
 		time("rebindCurrentSession");
 		this.renderInitialMessages();
+		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
+			const modelList = this.session.scopedModels
+				.map((sm) => {
+					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
+					return `${sm.model.id}${thinkingStr}`;
+				})
+				.join(", ");
+			const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
+			const cycleHint =
+				cycleKeys.length > 0
+					? theme.fg("muted", ` (${formatKeyText(cycleKeys.join("/"), { capitalize: true })} to cycle)`)
+					: "";
+			// Startup output must use the TUI after the retained first frame is painted.
+			this.showStatus(`Model scope: ${modelList}${cycleHint}`);
+		}
 		this.ui.requestRender();
 		for (const diagnostic of this.options.startupDiagnostics ?? []) this.showStatus(diagnostic.message);
 		for (const warning of this.options.deprecationWarnings ?? []) this.showWarning(warning);
