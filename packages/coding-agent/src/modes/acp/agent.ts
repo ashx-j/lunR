@@ -205,7 +205,7 @@ export class LunrAcpAgent implements Agent {
 				currentValue: state.model ? `${state.model.provider}/${state.model.id}` : "",
 				options: models.map((model) => ({
 					value: `${model.provider}/${model.id}`,
-					name: `${model.name} (${model.provider})`,
+					name: model.name,
 				})),
 			},
 			{
