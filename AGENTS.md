@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **ACP CI packaging repair (`feat/acp-support`, 2026-10-11):** standalone relocation tests compare the complete packaged license with the repository source, matching the npm notice test. This removes stale hardcoded attribution expectations after the master license update; packaging and ACP runtime behavior are unchanged.
+
 - **Automatic ACP settings (`feat/acp-support`, 2026-10-11):** ACP workers default new sessions to Build and retain client-selected/restored modes. A session-only policy disables automatic delegation guidance, lunR browser, cron, goals and scheduled subagents while preserving MCP and explicit native child launches. Reloads, model changes and project trust transitions retain the policy without editing saved preferences. Disabled tools and scheduling instructions are absent from the ACP model inventory.
 
 - **ACP lifecycle repairs (`feat/acp-support`, 2026-10-11):** startup extension questions return cancelled defaults before a host turn exists. Fatal worker transport errors stop the worker and discard later events before reporting failure. Expired questions and internally cancelled approvals retain their ACP turn until the host dismisses them or explicitly cancels; late answers cannot resume the operation. ACP docs now use the actual delegation setting label and correctly describe rollback as terminal-only.
@@ -180,6 +182,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 
 ## Build & run
 
+- ACP CI packaging follow-up, 2026-10-11: reproduced all three CI failures after integrating current master, then all six distribution-asset tests passed with source-byte comparison. Touched-file Biome and whitespace checks pass. CI on the preceding head passed builds, first-request checks, lint, Agent 191 and AI 652 tests; coding-agent had 3,538 passes and only these three packaging failures. Fresh remote CI remains pending.
+
 - ACP automatic profile, 2026-10-11: coding-agent type build and Node bundle pass. All 144 focused tests pass across eight ACP, settings, system-prompt, deferred-extension and subagent suites. The compiled first-request inventory snapshot verifies disabled tools and scheduling parameters, while reload/resume, client mode selection, saved preference isolation, injected MCP and native async child completion remain covered. Touched-file Biome and whitespace checks pass. No live T3 UI, account, installed CLI or release was used.
 
 - ACP lifecycle follow-up, 2026-10-11: coding-agent type build and Node bundle pass. All 41 focused tests pass across ACP integration/worker/translation and RPC prompt/exit/JSONL suites, including six new cases for startup fallback, fatal transport shutdown, expired and aborted dialogs, explicit Stop and late plan approval. Touched-file Biome and whitespace checks pass. No live T3 UI, account, daily-driver build or release was used.
@@ -311,6 +315,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Standalone and npm notice tests verify the complete repository license reaches the staged package. Keep this copy check independent of hardcoded author names, which can become stale when the source notice changes.
+
 - ACP cannot retract a form or approval through its current v1 connection. A locally expired request keeps the turn open with a dismissal notice until the host responds or stops the turn. Startup dialogs cannot use this path because there is no active host turn; they return cancellation defaults and write a worker diagnostic.
 
 - ACP uses the existing model profile but keeps client-driven model/reasoning settings in memory and the session journal. Launch model/reasoning arguments apply only to new sessions. Child delegation strips temporary host MCP credentials; a full-access child approval authorizes its normal tools without individual ACP dialogs. ACP disables built-in cron, goals and scheduled subagents because future jobs can outlive a client turn; use the client's scheduler. Existing terminal jobs and custom extension behavior are unaffected. See `packages/coding-agent/docs/acp.md` for other client limitations.
@@ -441,6 +447,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: compare relocated license bytes to the repository source so distribution checks detect copy corruption without freezing source notice text.
 
 - 2026-10-11: apply ACP compatibility settings as persistent in-memory overrides and exclude conflicting factories before initialization so reloads preserve the profile without changing terminal preferences.
 

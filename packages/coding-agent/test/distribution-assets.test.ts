@@ -40,8 +40,7 @@ describe("physical distribution assets", () => {
 					expect(readFileSync(join(relocated, file))).toEqual(readFileSync(new URL(file, aiDirectory)));
 				}
 			}
-			expect(readFileSync(join(relocated, "LICENSE"), "utf8")).toContain("2025 Mario Zechner");
-			expect(readFileSync(join(relocated, "LICENSE"), "utf8")).toContain("2026 ashx-j");
+			expect(readFileSync(join(relocated, "LICENSE"))).toEqual(readFileSync(new URL("LICENSE", repository)));
 		},
 	);
 
