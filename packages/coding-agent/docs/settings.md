@@ -68,7 +68,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |
-| `confirmLargeSubagentLaunches` | boolean | `true` | Ask once before aggregate launches of three or more children outside Auto mode |
+| `confirmLargeSubagentLaunches` | boolean | `false` | Ask once before aggregate launches of three or more children outside Auto mode |
 | `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |
 | `trackingId` | string | - | Analytics tracking identifier, generated when `enableAnalytics` is turned on |
 | `doubleEscapeAction` | string | `"tree"` | Idle action for double-escape: `"tree"`, `"fork"`, or `"none"`. Active async subagents take priority: double-Escape requests their stop |
@@ -232,14 +232,14 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerMcp` | boolean | `true` | Show MCP status in the footer |
 | `footerLsp` | boolean | `false` | Show LSP status in the footer |
 | `footerContext` | boolean | `true` | Show context-usage pct/window |
-| `footerTokens` | boolean | `true` | Show ↑in ↓out token totals |
+| `footerTokens` | boolean | `false` | Show ↑in ↓out token totals |
 | `footerCacheHitRate` | boolean | `true` | Show the latest prompt cache-hit rate when reported |
-| `footerTps` | boolean | `true` | Show tokens/second. Independent of feature statuses |
+| `footerTps` | boolean | `false` | Show tokens/second. Independent of feature statuses |
 | `footerStatuses` | boolean | `true` | Show plan and goal status segments |
-| `footerGit` | boolean | `true` | Show git branch + added/removed |
+| `footerGit` | boolean | `false` | Show git branch + added/removed |
 | `footerPlan` | boolean | `true` | Show the subscription usage segment |
-| `footerPlanBar` | boolean | `true` | Show the █░ fill; off keeps the percent only |
-| `planUsageWindow` | string | `"5h"` | Preferred plan window: `"5h"` or `"weekly"`. Missing 5h falls back to weekly |
+| `footerPlanBar` | boolean | `false` | Show the █░ fill; off keeps the percent only |
+| `planUsageWindow` | string | `"weekly"` | Preferred plan window: `"5h"` or `"weekly"`. Missing 5h falls back to weekly |
 
 Customize these from `/settings` → Customize as well. The same menu controls `subagentSpinner` with an animated preview.
 
@@ -268,7 +268,7 @@ Paths in `~/.lunr/agent/settings.json` resolve relative to `~/.lunr/agent`. Path
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands |
-| `skillTagCharacter` | `"+" \| "~" \| "$"` | `"+"` | Character that lists skills mid-message after a space |
+| `skillTagCharacter` | `"+" \| "~" \| "$"` | `"$"` | Character that lists skills mid-message after a space |
 
 Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.
 

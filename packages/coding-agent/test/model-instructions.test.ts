@@ -109,19 +109,19 @@ describe("model-specific user instructions", () => {
 	it("persists model-instruction mode and large-launch confirmation defaults", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getModelInstructions()).toEqual({ enabled: false, mode: "both" });
-		expect(manager.getConfirmLargeSubagentLaunches()).toBe(true);
+		expect(manager.getConfirmLargeSubagentLaunches()).toBe(false);
 		expect(manager.getSubagentCommunicationEnabled()).toBe(true);
 		expect(manager.getAutomaticSubagentDelegation()).toBe(true);
 		manager.setModelInstructionsEnabled(true);
 		manager.setModelInstructionsMode("model-only");
-		manager.setConfirmLargeSubagentLaunches(false);
+		manager.setConfirmLargeSubagentLaunches(true);
 		manager.setSubagentCommunicationEnabled(false);
 		manager.setAutomaticSubagentDelegation(false);
 		await manager.flush();
 
 		const reloaded = SettingsManager.create(projectDir, agentDir);
 		expect(reloaded.getModelInstructions()).toEqual({ enabled: true, mode: "model-only" });
-		expect(reloaded.getConfirmLargeSubagentLaunches()).toBe(false);
+		expect(reloaded.getConfirmLargeSubagentLaunches()).toBe(true);
 		expect(reloaded.getSubagentCommunicationEnabled()).toBe(false);
 		expect(reloaded.getAutomaticSubagentDelegation()).toBe(false);
 		expect(

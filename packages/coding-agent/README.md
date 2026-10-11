@@ -485,7 +485,7 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in yolo; default parallel concurrency is unlimited
+- **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
 - **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
 - **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
@@ -679,7 +679,7 @@ See [docs/development.md](docs/development.md) for setup, forking, and debugging
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE) for lunR and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the original pi license.
 
 ## See Also
 

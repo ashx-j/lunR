@@ -58,8 +58,8 @@ function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
 function lunrPermissionModeBridge(): PermissionModeBridgeForFooter | undefined {
 	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE] as PermissionModeBridgeForFooter | undefined;
 }
-// lunr: footer toggles, read at render time. Bridgeless / missing-getter fallback
-// matches the settings-manager defaults: MCP on, LSP off, everything else on.
+// lunr: read footer toggles at render time, with settings-manager defaults
+// when the bridge or a getter is unavailable.
 function lunrFooterToggles(): {
 	mcp: boolean;
 	lsp: boolean;
@@ -77,13 +77,13 @@ function lunrFooterToggles(): {
 		mcp: bridge?.getFooterMcp?.() ?? true,
 		lsp: bridge?.getFooterLsp?.() ?? false,
 		context: bridge?.getFooterContext?.() ?? true,
-		tokens: bridge?.getFooterTokens?.() ?? true,
+		tokens: bridge?.getFooterTokens?.() ?? false,
 		cacheHitRate: bridge?.getFooterCacheHitRate?.() ?? true,
-		tps: bridge?.getFooterTps?.() ?? true,
+		tps: bridge?.getFooterTps?.() ?? false,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
-		git: bridge?.getFooterGit?.() ?? true,
+		git: bridge?.getFooterGit?.() ?? false,
 		plan: bridge?.getFooterPlan?.() ?? true,
-		planBar: bridge?.getFooterPlanBar?.() ?? true,
+		planBar: bridge?.getFooterPlanBar?.() ?? false,
 	};
 }
 

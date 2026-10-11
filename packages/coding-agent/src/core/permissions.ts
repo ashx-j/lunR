@@ -304,11 +304,9 @@ function largeLaunchTaskSummary(
 }
 
 /**
- * Aggregate launch gate. A launch above LARGE_SUBAGENT_LAUNCH_THRESHOLD
- * parallel subagents in one `tasks`/`chain.parallel` call, or that many same-turn
- * SINGLE `subagent` calls) requires user approval in yolo mode; auto
- * mode runs it unconditionally.
- * Fail-closed without an approval handler.
+ * when confirmation is enabled, launches above the large-launch threshold
+ * require approval in yolo, including aggregate same-turn single calls.
+ * auto bypasses confirmation. enabled confirmation fails closed without a handler.
  */
 async function gateLargeSubagentLaunch(
 	input: Record<string, unknown>,
