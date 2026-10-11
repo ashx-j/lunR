@@ -271,6 +271,10 @@ export type SettingsScope = "global" | "project";
 
 export interface SettingsManagerCreateOptions {
 	projectTrusted?: boolean;
+	/** load existing scopes, then retain changes only for this manager's lifetime. */
+	sessionOnly?: boolean;
+	/** session policy applied after saved settings and temporary overrides. */
+	runtimeOverrides?: Partial<Settings>;
 }
 
 export interface SettingsStorage {
@@ -368,12 +372,35 @@ export class InMemorySettingsStorage implements SettingsStorage {
 	}
 }
 
+// copy a scope on its first trusted read so later writes and reloads stay in memory.
+class SessionOnlySettingsStorage extends InMemorySettingsStorage {
+	private readonly copiedScopes = new Set<SettingsScope>();
+	private readonly source: SettingsStorage;
+
+	constructor(source: SettingsStorage) {
+		super();
+		this.source = source;
+	}
+
+	override withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+		if (!this.copiedScopes.has(scope)) {
+			this.source.withLock(scope, (current) => {
+				super.withLock(scope, () => current);
+				return undefined;
+			});
+			this.copiedScopes.add(scope);
+		}
+		super.withLock(scope, fn);
+	}
+}
+
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
 	private projectSettings: Settings;
 	private settings: Settings;
 	private projectTrusted: boolean;
+	private readonly runtimeOverrides: Partial<Settings>;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
 	private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
@@ -391,15 +418,21 @@ export class SettingsManager {
 		projectLoadError: Error | null = null,
 		initialErrors: SettingsError[] = [],
 		projectTrusted = true,
+		runtimeOverrides: Partial<Settings> = {},
 	) {
 		this.storage = storage;
 		this.globalSettings = initialGlobal;
 		this.projectSettings = initialProject;
 		this.projectTrusted = projectTrusted;
+		this.runtimeOverrides = structuredClone(runtimeOverrides);
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
+	}
+
+	private mergeSettings(): Settings {
+		return deepMergeSettings(deepMergeSettings(this.globalSettings, this.projectSettings), this.runtimeOverrides);
 	}
 
 	/** Create a SettingsManager that loads from files */
@@ -414,6 +447,7 @@ export class SettingsManager {
 
 	/** Create a SettingsManager from an arbitrary storage backend */
 	static fromStorage(storage: SettingsStorage, options: SettingsManagerCreateOptions = {}): SettingsManager {
+		if (options.sessionOnly) storage = new SessionOnlySettingsStorage(storage);
 		const projectTrusted = options.projectTrusted ?? true;
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
 		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project", projectTrusted);
@@ -433,6 +467,7 @@ export class SettingsManager {
 			projectLoad.error,
 			initialErrors,
 			projectTrusted,
+			options.runtimeOverrides,
 		);
 	}
 
@@ -560,7 +595,7 @@ export class SettingsManager {
 		if (!trusted) {
 			this.projectSettings = {};
 			this.projectSettingsLoadError = null;
-			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			this.settings = this.mergeSettings();
 			return;
 		}
 
@@ -570,7 +605,7 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			this.recordError("project", projectLoad.error);
 		}
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 	}
 
 	async reload(): Promise<void> {
@@ -598,12 +633,12 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 	}
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
-		this.settings = deepMergeSettings(this.settings, overrides);
+		this.settings = deepMergeSettings(deepMergeSettings(this.settings, overrides), this.runtimeOverrides);
 	}
 
 	/** Mark a global field as modified during this session */
@@ -704,7 +739,7 @@ export class SettingsManager {
 	}
 
 	private save(): void {
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 
 		if (this.globalSettingsLoadError) {
 			return;
@@ -722,7 +757,7 @@ export class SettingsManager {
 	private saveProjectSettings(settings: Settings): void {
 		this.assertProjectTrustedForWrite();
 		this.projectSettings = structuredClone(settings);
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 
 		if (this.projectSettingsLoadError) {
 			return;
@@ -1096,7 +1131,7 @@ export class SettingsManager {
 	}
 
 	getBrowserEnabled(): boolean {
-		return this.globalSettings.browserEnabled ?? browserEnabledDefault();
+		return this.runtimeOverrides.browserEnabled ?? this.globalSettings.browserEnabled ?? browserEnabledDefault();
 	}
 
 	getPrWatchDurationMs(): number {
@@ -1116,7 +1151,7 @@ export class SettingsManager {
 		this.globalSettings.browserEnabled = enabled;
 		this.markModified("browserEnabled");
 		this.save();
-		notifyBrowserEnabledChange(enabled);
+		notifyBrowserEnabledChange(this.getBrowserEnabled());
 	}
 
 	getMemoryEnabled(): boolean {

@@ -351,13 +351,17 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
-// lunr: core-owned tool-call gate (read-only mode). Return { block: true, reason } to prevent
+// lunr: core-owned tool-call gate. return { block: true, reason } to prevent
 // execution; the agent loop turns it into an error tool result shown to the model.
 export interface ToolCallGateResult {
 	block: boolean;
 	reason?: string;
 }
-export type ToolCallGate = (toolName: string, input: Record<string, unknown>) => ToolCallGateResult | undefined;
+export type ToolCallGate = (
+	toolName: string,
+	input: Record<string, unknown>,
+	toolCallId: string,
+) => ToolCallGateResult | undefined | Promise<ToolCallGateResult | undefined>;
 
 function estimateMessagesTokens(messages: AgentMessage[]): number {
 	let tokens = 0;
@@ -593,7 +597,7 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
-			// lunr: permission gate (async) runs before sync gates — may show an approval dialog.
+			// lunr: the permission gate runs before host gates and may request approval.
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
@@ -606,6 +610,14 @@ export class AgentSession {
 			);
 			if (permBlock) {
 				return { block: true, reason: permBlock.reason };
+			}
+
+			// lunr: await host gates before snapshots, extension handlers or tool execution.
+			for (const gate of this._toolCallGates) {
+				const gateResult = await gate(toolCall.name, args as Record<string, unknown>, toolCall.id);
+				if (gateResult?.block) {
+					return { block: true, reason: gateResult.reason };
+				}
 			}
 
 			// lunr: rollback snapshot — capture pre-write content for mutating tools before they run.
@@ -632,14 +644,6 @@ export class AgentSession {
 				}
 			} catch {
 				// rollback failures must never block the tool call
-			}
-
-			// lunr: core-owned gates (read-only mode) run first, even without extension handlers
-			for (const gate of this._toolCallGates) {
-				const gateResult = gate(toolCall.name, args as Record<string, unknown>);
-				if (gateResult?.block) {
-					return { block: true, reason: gateResult.reason };
-				}
 			}
 
 			const runner = this._extensionRunner;

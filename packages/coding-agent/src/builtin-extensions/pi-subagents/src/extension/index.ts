@@ -14,6 +14,8 @@
 
 import { randomUUID } from "node:crypto";
 import { createSubagentCancellation, registerSubagentCancellation } from "../../../../core/subagent-cancellation.ts";
+import { ACP_SCHEDULING_DISABLED } from "../../../../modes/acp/policy.ts";
+import { readAcpWorkerConfig } from "../../../../modes/acp/worker-config.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,7 +34,7 @@ import {
 	SUBAGENT_PAINT_INTERVAL_MS,
 	subagentAnimSink,
 } from "../tui/render.ts";
-import { SubagentParams } from "./schemas.ts";
+import { AcpSubagentParams, SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveSubagentRequestParams } from "../runs/foreground/request-params.ts";
@@ -341,6 +343,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	cleanupOldChainDirs();
 
 	const config = normalizeAsyncLaunchConfig(loadConfig());
+	const acpWorker = Boolean(readAcpWorkerConfig());
+	if (acpWorker) config.scheduledRuns = { ...config.scheduledRuns, enabled: false };
+	const descriptionOptions = { schedulingDisabled: acpWorker };
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
@@ -383,6 +388,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const pendingLaunches = new Set<Promise<void>>();
 	const pendingAsyncLaunches = new Set<Promise<void>>();
 	let unregisterCancellation: (() => void) | undefined;
+	const undeliveredRuns = new Set<string>();
+	const cancelledDeliveries = new Set<string>();
+	let cancellingOwnedWork = 0;
 
 	const { ensurePoller, refreshWidget, handleStarted, handleComplete: trackComplete, resetJobs, restoreActiveJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR, {
 		widgetEnabled: config.asyncWidget !== false,
@@ -398,6 +406,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	const scheduledRunManager = createScheduledRunManager({
 		config,
+		disabledReason: acpWorker ? ACP_SCHEDULING_DISABLED : undefined,
 		launch: (params, ctx, signal) => {
 			if (!executorExecute) {
 				return Promise.resolve({
@@ -525,11 +534,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		execute: (id, params, signal, onUpdate, ctx) => executor.execute(id, params, signal, onUpdate, ctx),
 	});
 
-	const tool: ToolDefinition<typeof SubagentParams, Details> = {
+	const tool: ToolDefinition<typeof SubagentParams | typeof AcpSubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		description: buildSubagentToolDescription(config),
-		parameters: SubagentParams,
+		description: buildSubagentToolDescription(config, descriptionOptions),
+		parameters: acpWorker ? AcpSubagentParams : SubagentParams,
 		// lunr: same-turn SINGLE calls overlap; sequential work uses chain.
 		executionMode: "parallel",
 
@@ -579,7 +588,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		| { registerToolDescriptionRefresher?: (refresher: () => void) => void }
 		| undefined;
 	modelTierBridge?.registerToolDescriptionRefresher?.(() => {
-		tool.description = buildSubagentToolDescription(config);
+		tool.description = buildSubagentToolDescription(config, descriptionOptions);
 		// pi.runtime is not on ExtensionAPI; registerTool refreshes the live registry.
 		pi.registerTool(tool);
 	});
@@ -597,7 +606,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	registerSlashCommands(pi, state);
 
-	let disposeNotify = registerSubagentNotify(pi, state, { batchConfig: config.completionBatch });
+	const notifyOptions = {
+		batchConfig: config.completionBatch,
+		onDelivered: (runId: string) => {
+			undeliveredRuns.delete(runId);
+			cancelledDeliveries.delete(runId);
+		},
+		canTriggerTurn: (runId: string) => cancellingOwnedWork === 0 && !cancelledDeliveries.has(runId),
+	};
+	let disposeNotify = registerSubagentNotify(pi, state, notifyOptions);
 	const visibleControlNotices = new Set<string>();
 	const controlEventHandler = (payload: unknown) => {
 		handleSubagentControlNotice({
@@ -611,7 +628,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		handleSubagentSteeringNotice({ pi, state, details: payload as SubagentSteeringMessageDetails });
 	};
 	const eventUnsubscribes = [
-		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
+		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data: unknown) => {
+			handleStarted(data);
+			if (!data || typeof data !== "object" || !("id" in data) || typeof data.id !== "string") return;
+			const job = state.asyncJobs.get(data.id);
+			if (job?.sessionId !== state.currentSessionId) return;
+			undeliveredRuns.add(data.id);
+			if (cancellingOwnedWork > 0) cancelledDeliveries.add(data.id);
+			else cancelledDeliveries.delete(data.id);
+		}),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
@@ -642,13 +667,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const resetSessionState = (ctx: ExtensionContext) => {
 		generation++;
 		disposeNotify();
-		disposeNotify = registerSubagentNotify(pi, state, { batchConfig: config.completionBatch });
+		disposeNotify = registerSubagentNotify(pi, state, notifyOptions);
 		stopResultWatcher();
 		supervisorChannel.dispose();
 		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
 		pendingAsyncLaunches.clear();
+		undeliveredRuns.clear();
+		cancelledDeliveries.clear();
+		cancellingOwnedWork = 0;
 		unregisterCancellation?.();
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
@@ -669,6 +697,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}
 		resetJobs(ctx);
 		restoreActiveJobs(ctx);
+		for (const job of state.asyncJobs.values()) {
+			if (job.sessionId === state.currentSessionId && (job.status === "queued" || job.status === "running")) undeliveredRuns.add(job.asyncId);
+		}
 		const sessionId = state.currentSessionId;
 		const sessionGeneration = generation;
 		if (sessionId) {
@@ -684,9 +715,30 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				},
 			});
 			// Results use the session file identity; gateway controls use its UUID.
+			const ownedCancellation = {
+				...cancellation,
+				hasPendingWork: () => generation === sessionGeneration && state.currentSessionId === sessionId &&
+					(pendingAsyncLaunches.size > 0 || undeliveredRuns.size > 0 || disposeNotify.hasPendingCompletions()),
+				async stop() {
+					if (!readAcpWorkerConfig() || generation !== sessionGeneration) return cancellation.stop();
+					cancellingOwnedWork++;
+					for (const id of undeliveredRuns) cancelledDeliveries.add(id);
+					disposeNotify.discardPending();
+					try {
+						const result = await cancellation.stop();
+						if (!result.failed && generation === sessionGeneration) {
+							undeliveredRuns.clear();
+							disposeNotify.discardPending();
+						}
+						return result;
+					} finally {
+						if (generation === sessionGeneration) cancellingOwnedWork--;
+					}
+				},
+			};
 			const identities = new Set([sessionId, ctx.sessionManager.getSessionId()]);
 			const unregisters = [...identities].filter((id): id is string => Boolean(id))
-				.map((id) => registerSubagentCancellation(id, cancellation));
+				.map((id) => registerSubagentCancellation(id, ownedCancellation));
 			unregisterCancellation = () => {
 				for (const unregister of unregisters) unregister();
 			};

@@ -26,6 +26,12 @@ import {
 	writeRawStdout,
 } from "../../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
+import {
+	type AcpWorkerBridge,
+	assertRpcConfigurationIdle,
+	createAcpWorkerBridge,
+	setRpcPermissionMode,
+} from "../acp/worker.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
@@ -55,6 +61,23 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
+	let acpWorker: AcpWorkerBridge | undefined;
+	let starting = true;
+	let configurationChanging = false;
+	const configure = async <T>(change: () => Promise<T> | T): Promise<T> => {
+		if (!acpWorker) return change();
+		assertRpcConfigurationIdle(session);
+		if (configurationChanging) throw new Error("A configuration change is already in progress.");
+		configurationChanging = true;
+		try {
+			return await change();
+		} finally {
+			configurationChanging = false;
+		}
+	};
+	const assertLocalSessionSelection = () => {
+		if (acpWorker) throw new Error("ACP client owns session selection and conversation history.");
+	};
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -78,8 +101,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
 		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
+		{ resolve: (value: RpcExtensionUIResponse) => void; reject: (error: Error) => void }
 	>();
+
+	// acp cancellation also releases extension dialogs that did not supply an abort signal.
+	const cancelExtensionDialogs = () => {
+		if (!acpWorker) return;
+		for (const [id, request] of pendingExtensionRequests) {
+			request.resolve({ type: "extension_ui_response", id, cancelled: true });
+		}
+		pendingExtensionRequests.clear();
+	};
 
 	// Shutdown request flag
 	let shutdownRequested = false;
@@ -93,7 +125,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		request: Record<string, unknown>,
 		parseResponse: (response: RpcExtensionUIResponse) => T,
 	): Promise<T> {
-		if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
+		if (acpWorker && starting) {
+			// the client has no active turn during session creation, so it cannot present a startup dialog.
+			process.stderr.write(`lunR ACP: skipped startup question: ${String(request.title ?? "extension input")}\n`);
+			return Promise.resolve(defaultValue);
+		}
+		const signal = opts?.signal ?? (acpWorker ? session.agent.signal : undefined);
+		if (signal?.aborted) return Promise.resolve(defaultValue);
 
 		const id = crypto.randomUUID();
 		return new Promise((resolve, reject) => {
@@ -101,7 +139,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			const cleanup = () => {
 				if (timeoutId) clearTimeout(timeoutId);
-				opts?.signal?.removeEventListener("abort", onAbort);
+				signal?.removeEventListener("abort", onAbort);
 				pendingExtensionRequests.delete(id);
 			};
 
@@ -109,7 +147,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				cleanup();
 				resolve(defaultValue);
 			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+			signal?.addEventListener("abort", onAbort, { once: true });
 
 			if (opts?.timeout) {
 				timeoutId = setTimeout(() => {
@@ -251,6 +289,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		},
 
 		async editor(title: string, prefill?: string): Promise<string | undefined> {
+			if (acpWorker) {
+				return createDialogPromise(undefined, undefined, { method: "editor", title, prefill }, (response) =>
+					"value" in response ? response.value : undefined,
+				);
+			}
 			const id = crypto.randomUUID();
 			return new Promise((resolve, reject) => {
 				pendingExtensionRequests.set(id, {
@@ -314,18 +357,26 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	});
 
 	const rebindSession = async (): Promise<void> => {
+		acpWorker?.dispose();
 		session = runtimeHost.session;
+		acpWorker = createAcpWorkerBridge(session, output);
+		if (acpWorker) session.sessionManager.flush();
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
-				newSession: async (options) => runtimeHost.newSession(options),
+				newSession: async (options) => {
+					assertLocalSessionSelection();
+					return runtimeHost.newSession(options);
+				},
 				fork: async (entryId, forkOptions) => {
+					assertLocalSessionSelection();
 					const result = await runtimeHost.fork(entryId, forkOptions);
 					return { cancelled: result.cancelled };
 				},
 				navigateTree: async (targetId, options) => {
+					assertLocalSessionSelection();
 					const result = await session.navigateTree(targetId, {
 						summarize: options?.summarize,
 						customInstructions: options?.customInstructions,
@@ -335,6 +386,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					return { cancelled: result.cancelled };
 				},
 				switchSession: async (sessionPath, options) => {
+					assertLocalSessionSelection();
 					return runtimeHost.switchSession(sessionPath, options);
 				},
 				reload: async () => {
@@ -379,6 +431,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	};
 
 	await rebindSession();
+	starting = false;
 	registerSignalHandlers();
 
 	// Handle a single command
@@ -391,6 +444,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "prompt": {
+				if (acpWorker && configurationChanging) throw new Error("A configuration change is in progress.");
+				if (session.isIdle) acpWorker?.beginTurn();
 				// Start prompt handling immediately, but emit the authoritative response only after
 				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
 				let preflightSucceeded = false;
@@ -425,7 +480,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "abort": {
-				await session.abort();
+				acpWorker?.cancel();
+				cancelExtensionDialogs();
+				if (acpWorker) session.abortCompaction();
+				await Promise.all([session.abort(), acpWorker?.stopChildren()]);
 				return success(id, "abort");
 			}
 
@@ -446,6 +504,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				const state: RpcSessionState = {
 					model: session.model,
 					thinkingLevel: session.thinkingLevel,
+					permissionMode: session.permissionMode,
+					...(acpWorker ? { pendingSubagents: acpWorker.hasPendingWork() } : {}),
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
 					steeringMode: session.steeringMode,
@@ -460,26 +520,32 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "get_state", state);
 			}
 
+			case "set_permission_mode": {
+				if (acpWorker && configurationChanging) throw new Error("A configuration change is in progress.");
+				setRpcPermissionMode(session, command.mode);
+				acpWorker?.permissionModeChanged();
+				return success(id, "set_permission_mode");
+			}
+
 			// =================================================================
 			// Model
 			// =================================================================
 
 			case "set_model": {
-				const models = await session.modelRuntime.getAvailable();
-				const model = models.find((m) => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
-				}
-				await session.setModel(model);
-				return success(id, "set_model", model);
+				return configure(async () => {
+					const models = await session.modelRuntime.getAvailable();
+					const model = models.find((m) => m.provider === command.provider && m.id === command.modelId);
+					if (!model) return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
+					await session.setModel(model);
+					return success(id, "set_model", model);
+				});
 			}
 
 			case "cycle_model": {
-				const result = await session.cycleModel();
-				if (!result) {
-					return success(id, "cycle_model", null);
-				}
-				return success(id, "cycle_model", result);
+				return configure(async () => {
+					const result = await session.cycleModel();
+					return success(id, "cycle_model", result ?? null);
+				});
 			}
 
 			case "get_available_models": {
@@ -492,16 +558,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "set_thinking_level": {
-				session.setThinkingLevel(command.level);
-				return success(id, "set_thinking_level");
+				return configure(() => {
+					session.setThinkingLevel(command.level);
+					return success(id, "set_thinking_level");
+				});
+			}
+
+			case "get_available_thinking_levels": {
+				return success(id, "get_available_thinking_levels", { levels: session.getAvailableThinkingLevels() });
 			}
 
 			case "cycle_thinking_level": {
-				const level = session.cycleThinkingLevel();
-				if (!level) {
-					return success(id, "cycle_thinking_level", null);
-				}
-				return success(id, "cycle_thinking_level", { level });
+				return configure(() => {
+					const level = session.cycleThinkingLevel();
+					return success(id, "cycle_thinking_level", level ? { level } : null);
+				});
 			}
 
 			// =================================================================
@@ -705,6 +776,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 		shuttingDown = true;
 		session.stopAdmission();
+		acpWorker?.cancel();
+		cancelExtensionDialogs();
+		await acpWorker?.stopChildren().catch((error: unknown) => {
+			output({
+				type: "extension_error",
+				extensionPath: "acp",
+				event: "shutdown",
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+		acpWorker?.dispose();
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
@@ -748,6 +830,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			parsed.type === "extension_ui_response"
 		) {
 			const response = parsed as RpcExtensionUIResponse;
+			if (acpWorker?.respond(response)) return;
 			const pending = pendingExtensionRequests.get(response.id);
 			if (pending) {
 				pendingExtensionRequests.delete(response.id);

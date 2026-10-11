@@ -51,6 +51,7 @@ import { applyInheritedSubagentPermissions } from "./core/subagent-permission-in
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
+import { ACP_DISABLED_BUILTINS, ACP_SETTINGS_OVERRIDES } from "./modes/acp/policy.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
@@ -157,7 +158,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
+function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "acp"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -551,6 +552,12 @@ export interface MainOptions {
 }
 
 export async function main(args: string[], options?: MainOptions) {
+	const initialArgs = parseArgs(args);
+	if (initialArgs.mode === "acp" && !initialArgs.help && !initialArgs.version) {
+		const { runAcpMode } = await import("./modes/acp/acp-mode.ts");
+		await runAcpMode(args);
+		return;
+	}
 	resetTimings();
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
@@ -559,7 +566,9 @@ export async function main(args: string[], options?: MainOptions) {
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
-	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const sessionOnly = Boolean(process.env.LUNR_ACP_WORKER_CONFIG);
+	const settingsPolicy = { sessionOnly, runtimeOverrides: sessionOnly ? ACP_SETTINGS_OVERRIDES : undefined };
+	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, ...settingsPolicy });
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
@@ -643,7 +652,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
 	time("runMigrations");
 
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, ...settingsPolicy });
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
 	// Register the model-tier bridge before extensions load so pi-subagents can read
@@ -682,7 +691,7 @@ export async function main(args: string[], options?: MainOptions) {
 		trustStore.get(cwd) ??
 		startupSettingsManager.getDefaultProjectTrust() === "always";
 	const lookupSettings = lookupTrusted
-		? SettingsManager.create(cwd, agentDir, { projectTrusted: true })
+		? SettingsManager.create(cwd, agentDir, { projectTrusted: true, ...settingsPolicy })
 		: startupSettingsManager;
 	let sessionDir = explicitSessionDir ?? lookupSettings.getSessionDir();
 	let startupSelectionDeferred = false;
@@ -758,7 +767,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
-	const builtinRoster = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const loadedBuiltins = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const builtinRoster = sessionOnly
+		? loadedBuiltins.filter((entry) => typeof entry === "function" || !ACP_DISABLED_BUILTINS.has(entry.name))
+		: loadedBuiltins;
 	const rememberAttachedFactories = (factories: InlineExtension[]) => {
 		const seen = new Set(
 			builtinRoster.map((entry) => (typeof entry === "function" ? undefined : entry.name)).filter(Boolean),
@@ -789,7 +801,7 @@ export async function main(args: string[], options?: MainOptions) {
 			: (cachedProjectTrust ??
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
-		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted, ...settingsPolicy });
 		const skipMissingPackageInstall = isInitialRuntime && appMode === "interactive";
 		const services = await createAgentSessionServices({
 			cwd,

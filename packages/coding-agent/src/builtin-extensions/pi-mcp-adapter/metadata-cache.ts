@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
+import { getAcpWorkerCachePath } from "../../modes/acp/worker-config.ts";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import type { McpTool, McpResource, ServerEntry, ToolMetadata } from "./types.ts";
@@ -40,7 +41,8 @@ export interface MetadataCache {
 }
 
 export function getMetadataCachePath(): string {
-  return getAgentPath("mcp-cache.json");
+  // acp host metadata stays with its disposable worker configuration.
+  return getAcpWorkerCachePath() ?? getAgentPath("mcp-cache.json");
 }
 
 export function loadMetadataCache(): MetadataCache | null {

@@ -192,6 +192,23 @@ Response:
 
 The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
 
+`permissionMode` reports `yolo`, `auto` or `read-only`. ACP-managed workers also
+report `pendingSubagents`, which includes owned child work awaiting completion
+delivery. Ordinary RPC clients do not receive this field.
+
+#### set_permission_mode
+
+Change session permissions while idle. Active prompts, compaction, retries and
+bash execution reject the change.
+
+```json
+{"type":"set_permission_mode","mode":"read-only"}
+```
+
+```json
+{"type":"response","command":"set_permission_mode","success":true}
+```
+
 #### get_messages
 
 Get all messages in the conversation.
@@ -277,6 +294,18 @@ Response contains an array of full [Model](#model) objects:
 ```
 
 ### Thinking
+
+#### get_available_thinking_levels
+
+Return the levels supported by the current model, including `off`.
+
+```json
+{"type":"get_available_thinking_levels"}
+```
+
+```json
+{"type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off","low","medium","high"]}}
+```
 
 #### set_thinking_level
 

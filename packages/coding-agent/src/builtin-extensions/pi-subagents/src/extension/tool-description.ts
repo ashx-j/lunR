@@ -1,6 +1,7 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ACP_SCHEDULING_DISABLED } from "../../../../modes/acp/policy.ts";
 import { SUBAGENT_ASYNC_GUIDANCE } from "../shared/async-guidance.ts";
 import type { ExtensionConfig, ToolDescriptionMode } from "../shared/types.ts";
 import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
@@ -32,6 +33,13 @@ ${SUBAGENT_TIER_GUIDANCE}
 • ${SUBAGENT_COORDINATION_GUIDANCE}
 • When Subagent communication is off in /settings, child contact and parent questions/steering are unavailable; final results and subagent_wait still work.
 • Artifacts/status essentials: chain outputs live under {chain_dir}; async runs expose asyncId/asyncDir with status.json, events.jsonl, output logs, and status via { action: "status", id }. Include output paths and residual risks when reporting results.`;
+
+const SCHEDULE_GUIDANCE = `SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
+• { action: "schedule", task, description, tier|model, thinking?, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
+• { action: "schedule-list" } - list scheduled runs for this session
+• { action: "schedule-status", id: "..." } - inspect one scheduled run
+• { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires`;
+const COMPACT_SCHEDULE_GUIDANCE = "• Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.";
 
 export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to generic children by prompting them directly. There are no named agent types.
 
@@ -68,11 +76,7 @@ CONTROL (use action field, omit task/chain/tasks):
 • subagent_wait({ questionId }) - wait for that supervisor question answer/expiry/cancel. Answers stay separate from final run results.
 • { action: "append-step", id: "...", chain: [{task:"Use {previous}", description:"Follow-up step", tier:"standard"}] } - append one step to the tail of a running async chain
 
-SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
-• { action: "schedule", task, description, tier|model, thinking?, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
-• { action: "schedule-list" } - list scheduled runs for this session
-• { action: "schedule-status", id: "..." } - inspect one scheduled run
-• { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires
+${SCHEDULE_GUIDANCE}
 
 DIAGNOSTICS:
 • { action: "doctor" } - read-only report for runtime paths, sessions, and intercom
@@ -94,7 +98,7 @@ ${SUBAGENT_TIER_GUIDANCE}
 CONTROL:
 • Use action without execution fields: doctor, watchdog.status, watchdog.check, watchdog.recommend-model, status, interrupt, stop, resume, steer, append-step.
 • Async control actions: status, interrupt, stop, resume, steer, append-step. Use stop with an id for current-session top-level async runs. Use status view:"fleet" for active-run overview, view:"transcript" to tail child output, and steer for acknowledged live guidance. Steering delivery means lunR accepted the correlated user input, not model compliance; use index for a specific child.
-• Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
+${COMPACT_SCHEDULE_GUIDANCE}
 
 ASYNC / WAIT:
 • ${SUBAGENT_ASYNC_GUIDANCE}
@@ -113,6 +117,7 @@ function warn(options: ToolDescriptionOptions | undefined, message: string): voi
 }
 
 export interface ToolDescriptionOptions {
+	schedulingDisabled?: boolean;
 	cwd?: string;
 	agentDir?: string;
 	warn?: (message: string) => void;
@@ -220,6 +225,13 @@ export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "tool
 		}
 	} else {
 		description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+	}
+	if (options?.schedulingDisabled) {
+		description = description
+			.replaceAll(SCHEDULE_GUIDANCE, "")
+			.replaceAll(COMPACT_SCHEDULE_GUIDANCE, "")
+			.replaceAll("/schedule*", "");
+		return `${description.trim()}\n\n${ACP_SCHEDULING_DISABLED}`;
 	}
 	return description;
 }

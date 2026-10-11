@@ -9,8 +9,7 @@
  * - read-only: mutating tools are hard-blocked.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
- * the synchronous `_toolCallGates` loop. beforeToolCall is already async, so
- * awaiting the approval dialog is fine.
+ * the awaited `_toolCallGates` loop, which can also request host approval.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
  * concurrent gateway chats do not share permission decisions.
