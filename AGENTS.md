@@ -190,7 +190,7 @@ Last updated: 2026-10-11 (v0.2.29 preparation). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- v0.2.29 preparation: all five offline package builds and the Node bundle pass. Read-only Biome, pinned dependencies, relative imports, shrinkwrap, installer lock, publication policy and browser-smoke checks pass. Full isolated tests are in progress; Agent passes 193 and AI passes 652 with 760 credential-gated skips. The three unchanged production-approved native archives pass checksum verification.
+- v0.2.29 preparation: all five offline package builds and the Node bundle pass. Read-only Biome, pinned dependencies, relative imports, shrinkwrap, installer lock, publication policy and browser-smoke checks pass. Full isolated tests pass Agent 193, AI 652 with 760 credential-gated skips, and TUI. Coding-agent passes 3,587 with 56 skips and one ACP inventory snapshot mismatch caused by newly merged `pr_watch`; that inline snapshot is refreshed and the focused ACP rerun is in progress. Combined CI reproduced only the same mismatch. The three unchanged production-approved native archives pass checksum verification.
 
 - Startup paint repair, 2026-10-06: 44 focused first-paint/status tests, all five offline package builds and the Node bundle, and compiled first-paint/first-request subagent/MCP/LSP/local-fetch checks pass in an isolated worktree/profile. Whole-package Biome and the pinned-dependency, relative-import, shrinkwrap, installer-lock, workflow-policy and browser-smoke checks pass. The new scoped-model frame assertions reproduced the screenshot before the fix. No installed CLI or live Windows terminal was changed or tested.
 
@@ -479,6 +479,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: add the newly merged `pr_watch` tool to the ACP profile snapshot because both reviewed features compose into the release inventory without a runtime change.
 
 - 2026-10-11: combine the already-reviewed PRs through merge ancestry in the patch-release PR so one combined CI run covers the release without another code review.
 

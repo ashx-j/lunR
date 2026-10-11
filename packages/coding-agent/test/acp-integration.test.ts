@@ -269,6 +269,7 @@ describe("compiled ACP stdio integration", () => {
 			    "memory_add",
 			    "memory_load",
 			    "memory_remove",
+			    "pr_watch",
 			    "present_plan",
 			    "read",
 			    "subagent",
