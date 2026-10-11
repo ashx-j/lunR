@@ -31,6 +31,7 @@ export function resolvePreloadLaunchMode(
 		parsed.export ||
 		parsed.listModels !== undefined ||
 		parsed.mode === "rpc" ||
+		parsed.mode === "acp" ||
 		parsed.mode === "json"
 	)
 		return "deferred";

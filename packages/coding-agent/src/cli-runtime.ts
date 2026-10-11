@@ -2,6 +2,7 @@
 import { enableCompileCache } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseArgs } from "./cli/args.ts";
 import { isNodeBundle } from "./config.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
@@ -9,7 +10,7 @@ import { markStartupMilestone } from "./startup/startup-milestones.ts";
 
 markStartupMilestone("process_entry");
 process.title = "lunr";
-if (process.stdout.isTTY) {
+if (process.stdout.isTTY && parseArgs(process.argv.slice(2)).mode !== "acp") {
 	process.stdout.write("\x1b]0;lunr\x07");
 }
 

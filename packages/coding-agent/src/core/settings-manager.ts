@@ -269,6 +269,8 @@ export type SettingsScope = "global" | "project";
 
 export interface SettingsManagerCreateOptions {
 	projectTrusted?: boolean;
+	/** load existing scopes, then retain changes only for this manager's lifetime. */
+	sessionOnly?: boolean;
 }
 
 export interface SettingsStorage {
@@ -366,6 +368,28 @@ export class InMemorySettingsStorage implements SettingsStorage {
 	}
 }
 
+// copy a scope on its first trusted read so later writes and reloads stay in memory.
+class SessionOnlySettingsStorage extends InMemorySettingsStorage {
+	private readonly copiedScopes = new Set<SettingsScope>();
+	private readonly source: SettingsStorage;
+
+	constructor(source: SettingsStorage) {
+		super();
+		this.source = source;
+	}
+
+	override withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+		if (!this.copiedScopes.has(scope)) {
+			this.source.withLock(scope, (current) => {
+				super.withLock(scope, () => current);
+				return undefined;
+			});
+			this.copiedScopes.add(scope);
+		}
+		super.withLock(scope, fn);
+	}
+}
+
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
@@ -412,6 +436,7 @@ export class SettingsManager {
 
 	/** Create a SettingsManager from an arbitrary storage backend */
 	static fromStorage(storage: SettingsStorage, options: SettingsManagerCreateOptions = {}): SettingsManager {
+		if (options.sessionOnly) storage = new SessionOnlySettingsStorage(storage);
 		const projectTrusted = options.projectTrusted ?? true;
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
 		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project", projectTrusted);

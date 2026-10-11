@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **ACP support (`feat/acp-support`, 2026-10-11):** `lunr --mode acp` adapts pi-acp for T3 Code and other ACP v1 clients. Separate RPC workers preserve native sessions, streamed text/reasoning, images, tool diffs, approvals, model/reasoning/mode controls, cancellation and injected MCP servers. Client selections stay session-local; host MCP configuration/cache stays temporary. Native child results and their parent continuation finish before the ACP turn closes. Approved plans restore write access; extension commands cannot replace client-owned sessions. Setup, limitations and overlapping T3 settings are in `packages/coding-agent/docs/acp.md`. Unreleased.
+
 - **v0.2.28 (2026-10-04):** PR #151 merged as `bc1ecabe` after fresh green CI. Release PR #152 merged as `c3666438`; tag `v0.2.28` triggered successful publication of all four public packages and three native payloads. All seven registry tarballs match their declared integrity; npm latest is 0.2.28. An isolated packed install reports 0.2.28 and passes first-request fixtures. The release contains the request-accounting fixes, and the gateway approval fixture now owns its profile and saved configuration. The pinned CuaDriver runtime and production approval are unchanged.
 
 - **Token accounting (`fix/token-accounting`, 2026-10-04):** conversation, title, compaction and branch-summary requests share durable request identities. Session, gateway and goal totals retain incurred parent and child usage through branch navigation; forks retain context without charging inherited history. Foreground and default async children include cache tokens, failed fallback attempts and auxiliary requests, with request receipts deduplicated through completion, wait and resume. Shared request-aware estimation includes system/tools and rejects obsolete usage after compaction or prefix changes. Failed Responses usage, native reasoning/cache retention, OpenRouter reported charges/image cache splits, reviewed Gemini long-context tiers in both shipped catalogs, missing measurements, labels and per-response TPS are corrected. Quota polling remains provider-defined.
@@ -174,6 +176,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 
 ## Build & run
 
+- ACP support, 2026-10-11: five offline package builds and the Node bundle pass. The 27 focused ACP tests cover actual compiled stdio sessions with an isolated scripted provider, injected MCP, native async children, delayed forms, settings isolation, approvals and cleanup. Related RPC, permission, settings and subagent suites pass. Normal terminal first-paint and first-request checks retain the existing tool fingerprints. Public package dry-run, exact dependency/installer locks, relative imports, touched TypeScript Biome and whitespace checks pass. Astra xhigh reviewed the implementation and follow-up repairs. No live T3 UI, live HTTP/SSE server, account, installed CLI or publication was used.
+
 - v0.2.28 qualification: all five offline package builds, read-only repository checks and seven real-payload public tarballs pass. Full isolated tests pass Agent 191, AI 652 with 760 credential skips, coding-agent 3,505 with 56 skips, TUI and Orchestrator. The packed CLI reports 0.2.28 and passes startup and first-request subagent/MCP/LSP/local-fetch fixtures. Both feature and release PR CI pass. All seven published tarballs match registry integrity, and npm latest reports 0.2.28. No live provider or native desktop qualification was performed.
 
 - Token accounting, 2026-10-04: five offline package compiles and the Node bundle pass. Full isolated tests pass: AI 649 with 760 credential skips, Agent 191, coding-agent 3,503 with 56 skips, TUI 741 and Orchestrator 32. Three added AI charge/zero cases and gateway combined-usage/non-ASCII consistency cases pass in focused follow-ups. Whole-package Biome, relative imports and bundled catalog integrity pass. Test profiles use an environment allowlist without account credentials; a short disposable prefix keeps nested intercom sockets within the POSIX limit. No original checkout, installed CLI, native desktop, live account or release was used.
@@ -298,6 +302,8 @@ Last updated: 2026-10-04 (v0.2.28 npm publication). Public npm is `@ashx-j/lunr@
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- ACP uses the existing model profile but keeps client-driven model/reasoning settings in memory and the session journal. Launch model/reasoning arguments apply only to new sessions. Child delegation strips temporary host MCP credentials; a full-access child approval authorizes its normal tools without individual ACP dialogs. Scheduled future jobs can outlive an ACP turn, so use T3's scheduler for work that must remain visible there. See `packages/coding-agent/docs/acp.md` for other client limitations.
 
 - The v0.2.28 GitHub binary workflow failed during cross-platform dependency installation with npm `edgesOut`, matching v0.2.27. This is separate from successful npm publication; no GitHub binary release exists for this tag.
 
@@ -425,6 +431,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: adapt pi-acp around one native RPC worker per ACP session so T3 can use lunR's existing tools and journals without duplicating its agent runtime or changing saved defaults.
 
 - 2026-10-04: verify each 0.2.28 registry tarball and npm latest after workflow success, because the CLI remained unavailable for about eight minutes after npm accepted publication.
 

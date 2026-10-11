@@ -157,7 +157,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
+function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "acp"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -551,6 +551,12 @@ export interface MainOptions {
 }
 
 export async function main(args: string[], options?: MainOptions) {
+	const initialArgs = parseArgs(args);
+	if (initialArgs.mode === "acp" && !initialArgs.help && !initialArgs.version) {
+		const { runAcpMode } = await import("./modes/acp/acp-mode.ts");
+		await runAcpMode(args);
+		return;
+	}
 	resetTimings();
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
@@ -559,7 +565,8 @@ export async function main(args: string[], options?: MainOptions) {
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
-	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const sessionOnly = Boolean(process.env.LUNR_ACP_WORKER_CONFIG);
+	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, sessionOnly });
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
@@ -643,7 +650,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
 	time("runMigrations");
 
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, sessionOnly });
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
 	// Register the model-tier bridge before extensions load so pi-subagents can read
@@ -682,7 +689,7 @@ export async function main(args: string[], options?: MainOptions) {
 		trustStore.get(cwd) ??
 		startupSettingsManager.getDefaultProjectTrust() === "always";
 	const lookupSettings = lookupTrusted
-		? SettingsManager.create(cwd, agentDir, { projectTrusted: true })
+		? SettingsManager.create(cwd, agentDir, { projectTrusted: true, sessionOnly })
 		: startupSettingsManager;
 	let sessionDir = explicitSessionDir ?? lookupSettings.getSessionDir();
 	let startupSelectionDeferred = false;
@@ -789,7 +796,7 @@ export async function main(args: string[], options?: MainOptions) {
 			: (cachedProjectTrust ??
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
-		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted, sessionOnly });
 		const skipMissingPackageInstall = isInitialRuntime && appMode === "interactive";
 		const services = await createAgentSessionServices({
 			cwd,

@@ -7,7 +7,7 @@
   <a href="https://github.com/ashx-j/lunR"><img alt="GitHub" src="https://img.shields.io/badge/github-ashx--j%2FlunR-181717?style=flat-square&logo=github" /></a>
 </p>
 
-lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
+lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, ACP, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
 
 Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle those as [packages](#packages) and share them via npm or git.
 
@@ -478,6 +478,13 @@ RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `
 
 See [docs/rpc.md](docs/rpc.md) for the protocol.
 
+### ACP clients
+
+To use lunR in T3 Code, add a **Local ACP command** provider with executable
+`lunr` and arguments `--mode acp`. Configure model access in lunR first.
+
+See [docs/acp.md](docs/acp.md) for setup, supported behavior and settings to consider with T3.
+
 ---
 
 ## Philosophy
@@ -533,6 +540,7 @@ lunr update --self                 # Same as lunr update
 | `-p`, `--print` | Print response and exit |
 | `--mode json` | Output all events as JSON lines (see [docs/json.md](docs/json.md)) |
 | `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
+| `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients (see [docs/acp.md](docs/acp.md)) |
 | `--export <in> [out]` | Export session to HTML |
 
 In print mode, lunR also reads piped stdin and merges it into the initial prompt:
