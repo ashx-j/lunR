@@ -10,6 +10,7 @@ import { browserEnabledDefault, notifyBrowserEnabledChange } from "./browser/set
 import { computerSettingsChanged } from "./computer-use/policy.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "./pr-watch/types.ts";
 import {
 	DEFAULT_SUBAGENT_SPINNER,
 	isSubagentSpinnerName,
@@ -153,6 +154,7 @@ export interface Settings {
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
 	reasoningDisplay?: ReasoningDisplay;
+	prWatchDurationMs?: number;
 	thinkingCollapse?: boolean; // default: true - collapse completed thinking blocks to "Thought for Xs" + first sentence
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
 	cacheRetention?: "none" | "short" | "long"; // default: unset - falls back to PI_CACHE_RETENTION env, then "short" (packages/ai)
@@ -1095,6 +1097,19 @@ export class SettingsManager {
 
 	getBrowserEnabled(): boolean {
 		return this.globalSettings.browserEnabled ?? browserEnabledDefault();
+	}
+
+	getPrWatchDurationMs(): number {
+		return validPrWatchDuration(this.globalSettings.prWatchDurationMs)
+			? this.globalSettings.prWatchDurationMs
+			: PR_WATCH_DEFAULT_DURATION_MS;
+	}
+
+	setPrWatchDurationMs(duration: number): void {
+		if (!validPrWatchDuration(duration)) throw new Error("PR watch duration must be positive and finite.");
+		this.globalSettings.prWatchDurationMs = duration;
+		this.markModified("prWatchDurationMs");
+		this.save();
 	}
 
 	setBrowserEnabled(enabled: boolean): void {

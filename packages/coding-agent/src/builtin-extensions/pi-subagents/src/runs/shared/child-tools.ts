@@ -18,6 +18,7 @@ import type { ChildPermission } from "../../../../../core/subagent-permission-in
 export const PARENT_OWNED_CHILD_TOOLS = [
 	...COMPUTER_TOOLS,
 	"cron",
+	"pr_watch",
 	"memory_add",
 	"memory_remove",
 	"memory_load",
