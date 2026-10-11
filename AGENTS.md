@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **v0.2.29 preparation, 2026-10-11:** release branch combines reviewed PRs #154 through #157 through merge ancestry, with startup paint repair, bounded GitHub PR watches, new defaults and upstream notices, and ACP support. All workspaces and installer locks target 0.2.29. Release validation is in progress; npm remains 0.2.28 until tag publication is verified.
+- **v0.2.29 (2026-10-11):** PRs #154 through #157 merged, with #155 through #157 retained through release PR #158 ancestry. Tag `v0.2.29` points to green release merge `de4db307`; npm publication workflow `38166722936` succeeded. All four public packages and three native payloads report 0.2.29 latest, and their registry tarballs match declared integrity. The release includes startup paint repair, bounded GitHub PR watches, new defaults and upstream notices, and ACP support. A fresh isolated public install reports 0.2.29 and passes startup and first-request fixtures. The native runtime pin and approval remain unchanged.
 
 - **Startup paint repair (`fix/terminal-paint-artifacts`, 2026-10-06):** model-scope startup messages now use the managed TUI after restored history instead of raw console output. This prevents cursor drift that left the smaller first-paint border above the session header. Terminal-emulator coverage checks complete frames with and without scoped models, including successful and failed deferred startup.
 
@@ -59,7 +59,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-11 (v0.2.29 preparation). Public npm is `@ashx-j/lunr@0.2.28`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-11 (v0.2.29 npm publication). Public npm is `@ashx-j/lunr@0.2.29`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -190,7 +190,7 @@ Last updated: 2026-10-11 (v0.2.29 preparation). Public npm is `@ashx-j/lunr@0.2.
 
 ## Build & run
 
-- v0.2.29 preparation: all five offline package builds and the Node bundle pass. Read-only Biome, pinned dependencies, relative imports, shrinkwrap, installer lock, publication policy and browser-smoke checks pass. Full isolated tests pass Agent 193, AI 652 with 760 credential-gated skips, and TUI. Coding-agent passes 3,587 with 56 skips and one ACP inventory snapshot mismatch caused by newly merged `pr_watch`; that inline snapshot is refreshed and the focused ACP rerun is in progress. Combined CI reproduced only the same mismatch. The three unchanged production-approved native archives pass checksum verification.
+- v0.2.29 qualification: all five offline package builds, the Node bundle, read-only source/lock checks and seven real-payload public tarballs pass. After refreshing the combined ACP inventory snapshot for `pr_watch`, all 11 ACP integration tests pass. Fresh release CI passes Agent 193, AI 652 with 760 credential skips, coding-agent 3,588 with 56 skips, and TUI; merged master CI also passes. An isolated packed install reports 0.2.29, retains both complete license notices, and passes startup and first-request subagent/MCP/LSP/local-fetch checks. The three production-approved CuaDriver archives retain their pinned checksums. All seven public registry tarballs match declared integrity and latest reports 0.2.29. A fresh isolated public npm install verifies the four package versions and complete notices, and passes startup and first-request subagent/MCP/LSP/local-fetch fixtures.
 
 - Startup paint repair, 2026-10-06: 44 focused first-paint/status tests, all five offline package builds and the Node bundle, and compiled first-paint/first-request subagent/MCP/LSP/local-fetch checks pass in an isolated worktree/profile. Whole-package Biome and the pinned-dependency, relative-import, shrinkwrap, installer-lock, workflow-policy and browser-smoke checks pass. The new scoped-model frame assertions reproduced the screenshot before the fix. No installed CLI or live Windows terminal was changed or tested.
 
@@ -198,7 +198,7 @@ Last updated: 2026-10-11 (v0.2.29 preparation). Public npm is `@ashx-j/lunr@0.2.
 
 - New-user defaults, 2026-10-11: all five offline package builds and 132 focused tests across settings, model instructions, permission gating, skill completion, footer, and first-paint suites pass in an isolated worktree with disposable test profiles. Changed TypeScript passes Biome; installed CLI and personal settings are untouched. Follow-up distribution, npm-name, and browser-install tests pass 19/19, including real npm pack file-list checks for both notices in all four public packages.
 
-- ACP CI packaging follow-up, 2026-10-11: reproduced all three CI failures after integrating current master, then all six distribution-asset tests passed with source-byte comparison. Touched-file Biome and whitespace checks pass. CI on the preceding head passed builds, first-request checks, lint, Agent 191 and AI 652 tests; coding-agent had 3,538 passes and only these three packaging failures. Fresh remote CI remains pending.
+- ACP CI packaging follow-up, 2026-10-11: reproduced all three CI failures after integrating current master, then all six distribution-asset tests passed with source-byte comparison. Touched-file Biome and whitespace checks pass. CI on the preceding head passed builds, first-request checks, lint, Agent 191 and AI 652 tests; coding-agent had 3,538 passes and only these three packaging failures. Follow-up CI and combined 0.2.29 release CI pass.
 
 - ACP automatic profile, 2026-10-11: coding-agent type build and Node bundle pass. All 144 focused tests pass across eight ACP, settings, system-prompt, deferred-extension and subagent suites. The compiled first-request inventory snapshot verifies disabled tools and scheduling parameters, while reload/resume, client mode selection, saved preference isolation, injected MCP and native async child completion remain covered. Touched-file Biome and whitespace checks pass. No live T3 UI, account, installed CLI or release was used.
 
@@ -331,6 +331,10 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Npm accepted the 0.2.29 CLI before its metadata and tarball became public, with about thirteen minutes of observed delay. Check registry availability and a fresh public install after workflow success.
+
+- The v0.2.29 GitHub binary workflow failed during dependency installation with npm `edgesOut`, matching v0.2.27 and v0.2.28. The separate npm publication workflow succeeded and accepted all seven packages.
+
 - PRs #155 through #157 overlap in project history notes; preserve each entry. The license-test conflict retains full source-byte comparison from ACP and the separate upstream notice checks from new-user defaults.
 
 - Once the startup view paints, raw console output moves the terminal cursor outside TUI bookkeeping. Render startup notices through managed components after history restoration; do not repair this by adding repeated full-screen clears.
@@ -381,7 +385,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Computer failure reporting tracks dispatch per call, not per workflow. A rejected token says nothing about earlier input. Pixel fingerprints reuse the existing decode before crop/resize; ordinary image callers leave hashing disabled.
 
 - Image-only means no application accessibility tree in model observations, not zero native accessibility calls for targeting/safety. Map returned image coordinates through the crop/resize exactly once to driver-image pixels. Keep screenshots in sessions; provider history still accumulates until normal compaction, because rolling pruning changes prompt-cache prefixes and has no measured cost evidence yet.
-- Computer runtime payload dependencies are release-staged, not workspace dependencies. `scripts/computer-use-release.json` owns the pin; regenerate `release.generated.ts` after changing it. CuaDriver 0.28.1 is approved for branch development only. Production requires separate approval and a new CLI version.
+- Computer runtime payload dependencies are release-staged, not workspace dependencies. `scripts/computer-use-release.json` owns the pin; regenerate `release.generated.ts` after changing it. CuaDriver 0.28.1 is production-approved; changing the pinned runtime requires separate approval and a new CLI version.
 - Gateway `ConversationBinding.owner` still identifies the requesting user; it is not an authorization tier. Keep requester checks and fresh access checks on delayed approvals and deliveries. Legacy `GatewayConfig.owners` entries are ordinary user grants.
 
 - For v0.2.25 dry-run pack verification, use `npm exec --yes --package=npm@10 -- node scripts/publish.mjs --dry-run`; npm 12 changed the `npm pack --json` output that this release script parses. npm accepted all four packages before the CLI metadata and tarball propagated; a fresh install confirmed it afterward.
@@ -479,6 +483,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-11: tag the green merged release commit for 0.2.29 and verify public registry artifacts plus a fresh install because npm acceptance precedes metadata propagation.
 
 - 2026-10-11: add the newly merged `pr_watch` tool to the ACP profile snapshot because both reviewed features compose into the release inventory without a runtime change.
 
