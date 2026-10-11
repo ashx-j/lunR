@@ -7,7 +7,7 @@
   <a href="https://github.com/ashx-j/lunR"><img alt="GitHub" src="https://img.shields.io/badge/github-ashx--j%2FlunR-181717?style=flat-square&logo=github" /></a>
 </p>
 
-lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
+lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, ACP, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
 
 Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle those as [packages](#packages) and share them via npm or git.
 
@@ -478,6 +478,13 @@ RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `
 
 See [docs/rpc.md](docs/rpc.md) for the protocol.
 
+### ACP clients
+
+To use lunR in T3 Code, add a **Local ACP command** provider with executable
+`lunr` and arguments `--mode acp`. Configure model access in lunR first.
+
+See [docs/acp.md](docs/acp.md) for setup, supported behavior and settings to consider with T3.
+
 ---
 
 ## Philosophy
@@ -485,7 +492,7 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 lunR keeps a small core and still lets you shape the product with [extensions](#extensions), [skills](#skills), and [packages](#packages). Unlike upstream pi, lunR **does** ship the workflows most coding agents expect:
 
 - **MCP** — `/mcp`, `/mcp-auth`
-- **Subagents** — always fresh; children use a configured tier by default, or an explicit model when the user names one; 3+ children receive one large-launch confirmation in yolo; default parallel concurrency is unlimited
+- **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
 - **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
 - **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
@@ -533,6 +540,7 @@ lunr update --self                 # Same as lunr update
 | `-p`, `--print` | Print response and exit |
 | `--mode json` | Output all events as JSON lines (see [docs/json.md](docs/json.md)) |
 | `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
+| `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients (see [docs/acp.md](docs/acp.md)) |
 | `--export <in> [out]` | Export session to HTML |
 
 In print mode, lunR also reads piped stdin and merges it into the initial prompt:
@@ -679,7 +687,7 @@ See [docs/development.md](docs/development.md) for setup, forking, and debugging
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE) for lunR and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the original pi license.
 
 ## See Also
 

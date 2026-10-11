@@ -107,6 +107,9 @@ export function rewritePackageJsonForNpm(pkg) {
 		throw new Error(`no lunR npm name for workspace package ${out.name}`);
 	}
 	out.name = mapped;
+	if (Array.isArray(out.files) && !out.files.includes("THIRD_PARTY_NOTICES")) {
+		out.files.push("THIRD_PARTY_NOTICES");
+	}
 
 	for (const field of DEP_FIELDS) {
 		const deps = out[field];

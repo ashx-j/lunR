@@ -3292,7 +3292,7 @@ export class InteractiveMode {
 				return;
 			}
 
-			// While streaming or settling a wait handoff, reserve normal Enter for subagent_wait when possible.
+			// While streaming or settling a wait handoff, normal Enter interrupts registered session waits.
 			// Extension commands keep their existing path.
 			if (this.session.isStreaming || this.session.isWaitPromptHandoffActive) {
 				if (!this.isExtensionCommand(text)) {
@@ -4918,6 +4918,7 @@ export class InteractiveMode {
 					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
 					automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
 					browserEnabled: this.settingsManager.getBrowserEnabled(),
+					prWatchDurationMs: this.settingsManager.getPrWatchDurationMs(),
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					todosEnabled: this.settingsManager.getTodosEnabled(),
@@ -5152,6 +5153,9 @@ export class InteractiveMode {
 					onBrowserEnabledChange: (enabled) => {
 						this.settingsManager.setBrowserEnabled(enabled);
 						this.session.refreshToolRegistry();
+					},
+					onPrWatchDurationChange: (durationMs) => {
+						this.settingsManager.setPrWatchDurationMs(durationMs);
 					},
 					onMemoryEnabledChange: (enabled) => {
 						this.settingsManager.setMemoryEnabled(enabled);

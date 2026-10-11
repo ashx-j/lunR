@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
+import { acpMcpServerOverlay, readAcpWorkerConfig } from "../../modes/acp/worker-config.ts";
 import type { McpConfig, ServerEntry, McpSettings, ImportKind, ServerProvenance } from "./types.ts";
 
 const GENERIC_GLOBAL_CONFIG_PATH = join(homedir(), ".config", "mcp", "mcp.json");
@@ -204,6 +205,11 @@ export function loadMcpConfig(overridePath?: string, cwd = process.cwd(), projec
     config = mergeConfigs(config, expandImports(loaded, cwd, projectTrusted));
   }
 
+  // host servers override existing entries in memory, without writing user configuration.
+  const workerConfig = readAcpWorkerConfig();
+  if (workerConfig) {
+    config = { ...config, mcpServers: { ...config.mcpServers, ...acpMcpServerOverlay(workerConfig) } };
+  }
   return config;
 }
 

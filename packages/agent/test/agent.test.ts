@@ -523,6 +523,36 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
+	it.each(["steer", "followUp"] as const)(
+		"removes one %s message without draining or reordering its neighbours",
+		async (queue) => {
+			const agent = new Agent({
+				steeringMode: "all",
+				followUpMode: "all",
+				streamFn: () => {
+					const stream = new MockAssistantStream();
+					queueMicrotask(() =>
+						stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Processed") }),
+					);
+					return stream;
+				},
+			});
+			const messages = ["first", "claimed", "last"].map((text) => ({
+				role: "user" as const,
+				content: text,
+				timestamp: Date.now(),
+			}));
+			for (const message of messages) agent[queue](message);
+			expect(agent.removeQueuedMessage(() => false)).toBe(false);
+			expect(agent.hasQueuedMessage((message) => message === messages[1])).toBe(true);
+			expect(agent.removeQueuedMessage((message) => message === messages[1])).toBe(true);
+			expect(agent.removeQueuedMessage((message) => message === messages[1])).toBe(false);
+			expect(agent.hasQueuedMessage((message) => message === messages[1])).toBe(false);
+			await agent.continueQueued();
+			expect(agent.state.messages.filter((message) => message.role === "user")).toEqual([messages[0], messages[2]]);
+		},
+	);
+
 	it("should handle abort controller", () => {
 		const agent = new Agent();
 

@@ -1,5 +1,7 @@
 export interface SubagentCancellation {
 	hasActiveRuns(): boolean;
+	/** includes completion messages held between terminal state and parent delivery. */
+	hasPendingWork?(): boolean;
 	stop(): Promise<{ requested: number; failed: number }>;
 }
 

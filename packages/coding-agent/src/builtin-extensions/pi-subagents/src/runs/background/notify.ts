@@ -76,7 +76,14 @@ export interface RegisterSubagentNotifyOptions {
 	batchConfig?: CompletionBatchConfig;
 	timers?: NotifyTimerApi;
 	now?: () => number;
+	onDelivered?: (runId: string) => void;
+	canTriggerTurn?: (runId: string) => boolean;
 }
+
+export type SubagentNotifyDisposer = (() => void) & {
+	hasPendingCompletions(): boolean;
+	discardPending(): void;
+};
 
 function formatSessionLine(details: SubagentNotifyDetails): string | undefined {
 	if (!details.sessionValue) return undefined;
@@ -143,7 +150,7 @@ export function formatGroupedCompletion(details: SubagentNotifyDetails[]): strin
 	return blocks.join("\n").trimEnd();
 }
 
-function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, details: SubagentNotifyDetails[]): void {
+function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, details: SubagentNotifyDetails[], allowTrigger = true): void {
 	if (details.length === 0) return;
 	const content = details.length === 1
 		? formatSingleCompletion(details[0]!)
@@ -155,7 +162,7 @@ function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, details: Subagent
 			display: true,
 			details: { children: details.flatMap((detail) => detail.children ?? []) },
 		},
-		{ triggerTurn: details.some((detail) => detail.status !== "stopped") },
+		{ triggerTurn: allowTrigger && details.some((detail) => detail.status !== "stopped") },
 	);
 }
 
@@ -224,16 +231,29 @@ export function buildCompletionDetails(result: SubagentResult): SubagentNotifyDe
 }
 
 export default function registerSubagentNotify(
-	pi: ExtensionAPI,
+	pi: Pick<ExtensionAPI, "sendMessage" | "events">,
 	state: Pick<SubagentState, "currentSessionId">,
 	options: RegisterSubagentNotifyOptions = {},
-): () => void {
+): SubagentNotifyDisposer {
 	let disposed = false;
 	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
 	const ttlMs = 10 * 60 * 1000;
 	const nowFn = options.now ?? Date.now;
 	const batchConfig = resolveCompletionBatchConfig(options.batchConfig);
 	const batchers = new Map<string, CompletionBatcher<SubagentNotifyDetails>>();
+	const pending = new Map<SubagentNotifyDetails, string | null>();
+	const emitCompletion = (items: SubagentNotifyDetails[]) => {
+		const allowTrigger = items.some((item) => {
+			const runId = pending.get(item);
+			return !runId || options.canTriggerTurn?.(runId) !== false;
+		});
+		sendCompletion(pi, items, allowTrigger);
+		for (const item of items) {
+			const runId = pending.get(item);
+			pending.delete(item);
+			if (runId) options.onDelivered?.(runId);
+		}
+	};
 	const handleComplete = (data: unknown) => {
 		if (disposed) return;
 		const result = data as SubagentResult;
@@ -243,8 +263,9 @@ export default function registerSubagentNotify(
 		if (markSeenWithTtl(seen, key, now, ttlMs)) return;
 
 		const details = buildCompletionDetails(result);
+		pending.set(details, result.id);
 		if (result.source === "foreground") {
-			sendCompletion(pi, [details]);
+			emitCompletion([details]);
 			return;
 		}
 		const batchKey = completionBatchKey(result);
@@ -253,7 +274,7 @@ export default function registerSubagentNotify(
 			batcher = createCompletionBatcher<SubagentNotifyDetails>({
 				config: batchConfig,
 				emit: (items) => {
-					if (!disposed && result.sessionId === state.currentSessionId) sendCompletion(pi, items);
+					if (!disposed && result.sessionId === state.currentSessionId) emitCompletion(items);
 				},
 				...(options.timers ? { timers: options.timers } : {}),
 				now: nowFn,
@@ -265,7 +286,7 @@ export default function registerSubagentNotify(
 			// successes for the same owner first so they are not stranded
 			// behind this signal, then emit the non-completion result immediately.
 			batcher.flush();
-			sendCompletion(pi, [details]);
+			emitCompletion([details]);
 			return;
 		}
 		batcher.push(details);
@@ -275,11 +296,16 @@ export default function registerSubagentNotify(
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_FOREGROUND_COMPLETE_EVENT, handleComplete),
 	].filter((unsubscribe): unsubscribe is () => void => typeof unsubscribe === "function");
-	return () => {
-		if (disposed) return;
-		disposed = true;
+	const discardPending = () => {
 		for (const batcher of batchers.values()) batcher.dispose();
 		batchers.clear();
+		pending.clear();
+	};
+	const dispose = () => {
+		if (disposed) return;
+		disposed = true;
+		discardPending();
 		for (const unsubscribe of unsubscribers) unsubscribe();
 	};
+	return Object.assign(dispose, { hasPendingCompletions: () => pending.size > 0, discardPending });
 }

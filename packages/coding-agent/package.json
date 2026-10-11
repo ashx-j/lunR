@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
-	"version": "0.2.28",
+	"version": "0.2.29",
 	"description": "lunR — terminal coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
@@ -43,17 +43,18 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run shrinkwrap"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "^0.2.28",
-		"@earendil-works/pi-ai": "^0.2.28",
-		"@earendil-works/pi-tui": "^0.2.28",
+		"@agentclientprotocol/sdk": "0.26.0",
+		"@earendil-works/pi-agent-core": "^0.2.29",
+		"@earendil-works/pi-ai": "^0.2.29",
+		"@earendil-works/pi-tui": "^0.2.29",
 		"@modelcontextprotocol/ext-apps": "1.7.4",
 		"@modelcontextprotocol/sdk": "1.30.0",
 		"@mozilla/readability": "0.6.0",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"@sinclair/typebox": "npm:typebox@1.1.38",
 		"chalk": "5.6.2",
-		"cross-spawn": "7.0.6",
 		"croner": "10.0.1",
+		"cross-spawn": "7.0.6",
 		"diff": "8.0.4",
 		"discord.js": "14.27.0",
 		"glob": "13.0.6",

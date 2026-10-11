@@ -26,6 +26,7 @@ import {
 	setPermissionMode,
 } from "../src/core/permissions.ts";
 import { READ_ONLY_MODE_BLOCK_MESSAGE } from "../src/core/plan-mode.ts";
+import { PR_WATCH_STATE_WRITE_BLOCK_REASON } from "../src/core/protected-targets.ts";
 
 beforeEach(() => {
 	resetAllPermissionContexts();
@@ -100,6 +101,7 @@ describe("permission modes", () => {
 			setPermissionMode(mode);
 			for (const [path, reason] of [
 				[join(root, "settings.json"), SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON],
+				[join(root, "pr-watches", "session.json"), PR_WATCH_STATE_WRITE_BLOCK_REASON],
 				[join(root, "agents", "AGENTS.md"), GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON],
 				[join(root, "..", "simple-memory", "memory.md"), MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON],
 			] as const) {

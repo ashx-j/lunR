@@ -197,6 +197,7 @@ registerHooks({load(url, context, nextLoad) {
 			"lsp_diagnostics",
 			"ast_search",
 			"cron",
+			"pr_watch",
 		]) {
 			assert(request.tools.includes(name), `First request is missing ${name}`);
 		}
@@ -207,8 +208,8 @@ registerHooks({load(url, context, nextLoad) {
 		assert.equal(
 			request.toolSchemaHash,
 			computerHost
-				? browserEnabled ? "6158cadbd24b82ff6f784b1b9f564b63e43be5ee64203bd3bd5cdd2b12085843" : "3150c9645be5f9fb9d01d27ea388948aaf204ba1830783aaab0ef807de24068d"
-				: browserEnabled ? "3c946de1c80065b45cd8f9395a11b1d369901152a0a407bda1bb4c0459d3ee9e" : "3964fef05effd849469127635b37c4aa695a307b1652f08097712609b2f7d64d",
+				? browserEnabled ? "78412611643b51cacd25d4f73de9da5bfcdceb7e825cb200a2e47b2c126ce617" : "4d60ea2bccee74df45e2ce81c6370987f0a22fc21a724dceca5d3db3877bc47d"
+				: browserEnabled ? "123a14a384ed9df18fdd473df9d2c7359eddb78f2aa888b9954bc4b8da3290d7" : "b28482bf988d85e600755e635f38b30ccda42e20e7b3779ca9447ff5a7b2a659",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);

@@ -9,8 +9,7 @@
  * - read-only: mutating tools are hard-blocked.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
- * the synchronous `_toolCallGates` loop. beforeToolCall is already async, so
- * awaiting the approval dialog is fine.
+ * the awaited `_toolCallGates` loop, which can also request host approval.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
  * concurrent gateway chats do not share permission decisions.
@@ -99,6 +98,7 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_rename",
 	"memory_load",
 	"subagent_wait",
+	"pr_watch",
 	"subagent_supervisor",
 	"intercom",
 	"contact_supervisor",
@@ -303,11 +303,9 @@ function largeLaunchTaskSummary(
 }
 
 /**
- * Aggregate launch gate. A launch above LARGE_SUBAGENT_LAUNCH_THRESHOLD
- * parallel subagents in one `tasks`/`chain.parallel` call, or that many same-turn
- * SINGLE `subagent` calls) requires user approval in yolo mode; auto
- * mode runs it unconditionally.
- * Fail-closed without an approval handler.
+ * when confirmation is enabled, launches above the large-launch threshold
+ * require approval in yolo, including aggregate same-turn single calls.
+ * auto bypasses confirmation. enabled confirmation fails closed without a handler.
  */
 async function gateLargeSubagentLaunch(
 	input: Record<string, unknown>,

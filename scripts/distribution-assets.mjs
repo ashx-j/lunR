@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Package staging runs outside the repository, so npm cannot inherit the root MIT notice. */
+/** staging runs outside the repository, so copy both project and upstream notices. */
 export function stagePackageNotice(destination) {
 	mkdirSync(destination, { recursive: true });
 	copyFileSync(join(repoRoot, "LICENSE"), join(destination, "LICENSE"));
+	copyFileSync(join(repoRoot, "THIRD_PARTY_NOTICES"), join(destination, "THIRD_PARTY_NOTICES"));
 }
 
 /** Ship the same licensed Python/helper files as the AI npm package, outside Bun's virtual filesystem. */
