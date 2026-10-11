@@ -8,6 +8,7 @@ import {
 	type ToolKind,
 } from "@agentclientprotocol/sdk";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import { parseSubagentNotifyContent } from "../../builtin-extensions/pi-subagents/src/runs/background/notify.ts";
 import type { CustomMessage } from "../../core/messages.ts";
 
 // adapted from svkozak/pi-acp's prompt and tool translators. see docs/acp.md for attribution.
@@ -102,6 +103,12 @@ export function customMessageUpdates(message: CustomMessage): SessionUpdate[] {
 	const content = customMessageContent(message);
 	if (!content.length) return [];
 	if (message.customType === "subagent-notify") {
+		const notice = parseSubagentNotifyContent(
+			content
+				.filter((block) => block.type === "text")
+				.map((block) => block.text)
+				.join("\n"),
+		);
 		// Journal restoration can change timestamps; content keeps the activity ID stable.
 		return [
 			{
@@ -109,7 +116,7 @@ export function customMessageUpdates(message: CustomMessage): SessionUpdate[] {
 				toolCallId: `lunr-subagent-notification-${createHash("sha256").update(JSON.stringify(message.content)).digest("hex")}`,
 				title: "lunR subagent notification",
 				kind: "other",
-				status: "completed",
+				status: notice && notice.status !== "completed" ? "failed" : "completed",
 				content: content.map((content) => ({ type: "content", content })),
 			},
 		];

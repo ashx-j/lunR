@@ -46,13 +46,16 @@ function scriptedStream(model: Model<Api>, context: Context, options?: SimpleStr
 				name: "subagent",
 				arguments: { action: "schedule-list" },
 			};
-		} else if (prompt === "delegate" && results.length === 0) {
+		} else if ((prompt === "delegate" || prompt === "delegate-fail") && results.length === 0) {
 			call = {
 				type: "toolCall",
 				id: `child-${Date.now()}`,
 				name: "subagent",
 				arguments: {
-					task: "ACP_CHILD_FIXTURE: return native child completed",
+					task:
+						prompt === "delegate-fail"
+							? "ACP_CHILD_FIXTURE ACP_CHILD_FAILURE: fail the native child"
+							: "ACP_CHILD_FIXTURE: return native child completed",
 					description: "fixture child",
 					model: "acp-fixture/test",
 					thinking: "off",
@@ -103,6 +106,12 @@ function scriptedStream(model: Model<Api>, context: Context, options?: SimpleStr
 			model: model.id,
 		};
 		stream.push({ type: "start", partial: message });
+		if (child && prompt.includes("ACP_CHILD_FAILURE")) {
+			message.stopReason = "error";
+			message.errorMessage = "native child failure fixture";
+			stream.push({ type: "error", reason: "error", error: message });
+			return stream;
+		}
 		if (call) {
 			message.content.push(call);
 			stream.push({ type: "toolcall_start", contentIndex: 0, partial: message });

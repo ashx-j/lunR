@@ -621,30 +621,37 @@ describe("compiled ACP stdio integration", () => {
 		expect(restored.configOptions?.find((option) => option.id === "thought_level")?.currentValue).toBe("high");
 	}, 90_000);
 
-	it("keeps native async child completion and the parent follow-up inside the ACP turn", async () => {
-		const fixture = await launch();
-		const { connection, project, updates } = fixture;
-		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
-		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
-		expect((await connection.prompt({ sessionId, prompt: [{ type: "text", text: "delegate" }] })).stopReason).toBe(
-			"end_turn",
-		);
-		expect(assistantText(updates)).toContain("fixture response model=test reasoning=medium images=0");
-		expect(assistantText(updates)).not.toContain("Background task completed:");
-		const notice = updates.find(
-			({ update }) => update.sessionUpdate === "tool_call" && update.title === "lunR subagent notification",
-		);
-		expect(notice?.update).toMatchObject({ status: "completed", kind: "other" });
-		expect(JSON.stringify(notice?.update)).toContain("native child completed");
-		await connection.closeSession({ sessionId });
-		const replayStart = updates.length;
-		await connection.loadSession({ sessionId, cwd: project, mcpServers: [] });
-		expect(assistantText(updates, replayStart)).not.toContain("Background task completed:");
-		expect(updates.slice(replayStart)).toContainEqual(notice);
-		expect(pids(fixture.workerPids).length).toBeGreaterThan(1);
-		await fixture.finish();
-		await vi.waitFor(() => expect(pids(fixture.workerPids).every((pid) => !alive(pid))).toBe(true), {
-			timeout: 10_000,
-		});
-	}, 90_000);
+	it.each([
+		{ prompt: "delegate", status: "completed", result: "native child completed" },
+		{ prompt: "delegate-fail", status: "failed", result: "native child failure fixture" },
+	])(
+		"keeps a $status native child notice and the parent follow-up inside the ACP turn",
+		async ({ prompt, status, result }) => {
+			const fixture = await launch();
+			const { connection, project, updates } = fixture;
+			await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+			const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+			expect((await connection.prompt({ sessionId, prompt: [{ type: "text", text: prompt }] })).stopReason).toBe(
+				"end_turn",
+			);
+			expect(assistantText(updates)).toContain("fixture response model=test reasoning=medium images=0");
+			expect(assistantText(updates)).not.toContain(`Background task ${status}:`);
+			const notice = updates.find(
+				({ update }) => update.sessionUpdate === "tool_call" && update.title === "lunR subagent notification",
+			);
+			expect(notice?.update).toMatchObject({ status, kind: "other" });
+			expect(JSON.stringify(notice?.update)).toContain(result);
+			await connection.closeSession({ sessionId });
+			const replayStart = updates.length;
+			await connection.loadSession({ sessionId, cwd: project, mcpServers: [] });
+			expect(assistantText(updates, replayStart)).not.toContain(`Background task ${status}:`);
+			expect(updates.slice(replayStart)).toContainEqual(notice);
+			expect(pids(fixture.workerPids).length).toBeGreaterThan(1);
+			await fixture.finish();
+			await vi.waitFor(() => expect(pids(fixture.workerPids).every((pid) => !alive(pid))).toBe(true), {
+				timeout: 10_000,
+			});
+		},
+		90_000,
+	);
 });

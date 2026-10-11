@@ -49,6 +49,8 @@ lunR's existing `yolo`, `auto` and `read-only` modes.
 Extension status notices, including MCP connection counts, appear as separate
 activity entries. Native subagent completion notices also appear there, including
 when loading history. These notices are not part of the assistant's streamed reply.
+Failed, paused and stopped children use ACP's failed activity status while the
+notice retains the native outcome.
 
 Each session runs a separate lunR RPC process. Sessions use lunR's normal
 journals. ACP records under `~/.lunr/agent/acp/sessions/` allow the client to
