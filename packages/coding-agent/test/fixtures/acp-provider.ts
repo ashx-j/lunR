@@ -39,6 +39,13 @@ function scriptedStream(model: Model<Api>, context: Context, options?: SimpleStr
 						? { summary: "write the approved fixture plan" }
 						: { path: "planned.txt", content: "plan approved\n" },
 			};
+		} else if (prompt === "schedule" && results.length === 0) {
+			call = {
+				type: "toolCall",
+				id: `schedule-${Date.now()}`,
+				name: "subagent",
+				arguments: { action: "schedule-list" },
+			};
 		} else if (prompt === "delegate" && results.length === 0) {
 			call = {
 				type: "toolCall",
@@ -71,11 +78,24 @@ function scriptedStream(model: Model<Api>, context: Context, options?: SimpleStr
 		const resultText = results
 			.flatMap((result) => result.content.filter((block) => block.type === "text").map((block) => block.text))
 			.join("\n");
-		const text = child
-			? "native child completed"
-			: results.length
-				? `tool result: ${resultText}`
-				: `fixture response model=${model.id} reasoning=${options?.reasoning ?? "off"} images=${images}`;
+		const subagent = context.tools?.find((tool) => tool.name === "subagent");
+		const profile = {
+			tools: context.tools?.map((tool) => tool.name).sort(),
+			subagentParameters: Object.keys(subagent?.parameters.properties ?? {}).sort(),
+			schedulesAdvertised: subagent?.description.includes("schedule-list"),
+			clientScheduling: subagent?.description.includes("Use the client's scheduler."),
+			automaticDelegation: context.systemPrompt?.includes("Orchestrate subagents with intent!"),
+			directWork: context.systemPrompt?.includes("Work on tasks directly."),
+			cronGuidance: context.systemPrompt?.includes("Use cron only"),
+		};
+		const text =
+			prompt === "profile"
+				? JSON.stringify(profile)
+				: child
+					? "native child completed"
+					: results.length
+						? `tool result: ${resultText}`
+						: `fixture response model=${model.id} reasoning=${options?.reasoning ?? "off"} images=${images}`;
 		const message: AssistantMessage = {
 			...fauxAssistantMessage([], { stopReason: call ? "toolUse" : "stop" }),
 			api: model.api,
@@ -104,6 +124,12 @@ function scriptedStream(model: Model<Api>, context: Context, options?: SimpleStr
 }
 
 export default function acpProvider(pi: ExtensionAPI): void {
+	pi.registerCommand("fixture-reload", {
+		description: "reload fixture resources",
+		async handler(_args, ctx) {
+			await ctx.reload();
+		},
+	});
 	pi.registerCommand("fixture-ask", {
 		description: "request fixture input",
 		async handler(_args, ctx) {

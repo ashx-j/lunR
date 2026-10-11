@@ -16,7 +16,8 @@ with arguments `/absolute/path/to/lunR/packages/coding-agent/dist/cli.js`,
 `--mode`, `acp`. This runs the checkout without replacing an installed CLI.
 
 Configure model access in lunR's terminal interface first. ACP uses the same
-credentials, model catalog, instructions, skills and enabled extensions.
+credentials, model catalog, instructions, skills and enabled extensions, with
+the ACP adjustments below.
 There is no separate ACP login or model account. Optional CLI arguments such as
 `--provider`, `--model`, `--thinking` and `--session-dir` apply to new workers.
 Model and reasoning choices made in the client stay in the session journal;
@@ -74,28 +75,30 @@ Audio, binary document attachments, additional workspace roots, conversation
 rewind and ACP v2 are not advertised. Client-side filesystem and terminal APIs
 are not required; lunR executes its own tools.
 
-## Settings to consider with T3
+## Automatic ACP settings
 
-- Prefer **Build** over **Autonomous** when you want lunR to ask questions.
-  Autonomous mode instructs it to decide without asking, even though tool
-  approval still belongs to the client.
-- Turn off **Automatic subagent delegation** if you want T3 to manage
-  delegation. lunR's subagents remain a separate system. Turn it on when you
-  intentionally want lunR to manage its own children.
-- Turn off lunR's **Browser** feature when you want it to use T3's collaborative
-  browser exclusively. Otherwise both toolsets can be available.
-- Prefer T3's scheduler for recurring work in T3. Avoid combining it with lunR
-  cron or scheduled subagent jobs, which can start turns after the original
-  ACP request has ended. Avoid a second goal loop for the same work.
-- No change to **Rollback** is needed. lunR's rollback runs only in its terminal
-  interface; ACP sessions use the client's checkpoint controls. T3's file
-  checkpoints do not rewind lunR's conversation history.
-- Keep MCP enabled to expose T3's supplied tools. Avoid duplicate manually
-  configured T3 servers. Keep normal project trust rules; granting T3 access to
-  a directory does not automatically trust its lunR extensions.
+ACP workers apply these settings for T3 and other ACP clients:
 
-The adapter does not change these saved settings. Terminal appearance settings
-have no effect on T3's interface.
+- New sessions start in **Build** mode, which allows questions. Mode changes in
+  the client still work, and reopening a session restores its selected mode.
+- **Automatic subagent delegation** guidance is off. Explicitly requested lunR
+  subagents still work; they remain separate from T3's delegated tasks.
+- lunR's **Browser**, **cron**, **goal loops** and **scheduled subagent runs** are
+  disabled. Use the client's browser and scheduler through its MCP tools.
+- **MCP** stays available, including servers supplied by the client.
+
+The profile survives reloads and model changes without editing saved global,
+project or subagent settings. Ordinary terminal sessions retain their settings.
+Custom instructions and third-party extensions still control their own behavior.
+
+No change to **Rollback** is needed. lunR's rollback runs only in its terminal
+interface; ACP sessions use the client's checkpoint controls. T3's file
+checkpoints do not rewind lunR's conversation history. Terminal appearance
+settings have no effect on T3's interface.
+
+Avoid duplicate manually configured T3 MCP servers. Keep normal project trust
+rules; granting T3 access to a directory does not automatically trust its lunR
+extensions.
 
 ## Upstream attribution
 

@@ -76,6 +76,12 @@ describe("buildSystemPrompt", () => {
 		expect(withoutTodos).not.toContain("Use todo for meaningful multi-step work.");
 	});
 
+	test("includes cron guidance only while the cron tool is active", () => {
+		const options = { cwd: process.cwd(), contextFiles: [], skills: [] };
+		expect(buildSystemPrompt({ ...options, selectedTools: ["read", "cron"] })).toContain("Use cron only");
+		expect(buildSystemPrompt({ ...options, selectedTools: ["read"] })).not.toContain("Use cron only");
+	});
+
 	test("does not duplicate API tool definitions or tool prompt metadata", () => {
 		const prompt = buildSystemPrompt({
 			modelSlug: "test/model",

@@ -48,7 +48,7 @@ function assistantText(updates: SessionNotification[], start = 0): string {
 		.join("");
 }
 
-async function launch(options: { lifecycle?: boolean; startupDialog?: boolean } = {}) {
+async function launch(options: { lifecycle?: boolean; startupDialog?: boolean; profile?: boolean } = {}) {
 	const directory = mkdtempSync(join(tmpdir(), "lunr-acp-integration-"));
 	const home = join(directory, "home");
 	const agentDir = join(home, ".lunr", "agent");
@@ -59,8 +59,13 @@ async function launch(options: { lifecycle?: boolean; startupDialog?: boolean } 
 	copyFileSync(providerPath, join(agentDir, "extensions", "acp-provider.ts"));
 	if (options.lifecycle) copyFileSync(lifecyclePath, join(agentDir, "extensions", "acp-lifecycle.ts"));
 	const settingsPath = join(agentDir, "settings.json");
-	const settings = `${JSON.stringify({ defaultProvider: "acp-fixture", defaultModel: "test", defaultThinkingLevel: "medium", compaction: { enabled: false }, retry: { enabled: false } }, null, 2)}\n`;
+	const settings = `${JSON.stringify({ ...(options.profile ? { browserEnabled: true, automaticSubagentDelegation: true, defaultPermissionMode: "auto" } : {}), defaultProvider: "acp-fixture", defaultModel: "test", defaultThinkingLevel: "medium", compaction: { enabled: false }, retry: { enabled: false } }, null, 2)}\n`;
 	writeFileSync(settingsPath, settings);
+	const subagentConfig = join(agentDir, "extensions", "subagent", "config.json");
+	if (options.profile) {
+		mkdirSync(join(agentDir, "extensions", "subagent"));
+		writeFileSync(subagentConfig, '{"scheduledRuns":{"enabled":true}}');
+	}
 	const sentinel = join(directory, "daily-driver-settings.json");
 	writeFileSync(sentinel, "daily-driver sentinel\n");
 	const workerPids = join(directory, "worker-pids");
@@ -127,6 +132,7 @@ async function launch(options: { lifecycle?: boolean; startupDialog?: boolean } 
 		directory,
 		agentDir,
 		project,
+		subagentConfig,
 		settingsPath,
 		settings,
 		sentinel,
@@ -183,6 +189,122 @@ afterEach(async () => {
 });
 
 describe("compiled ACP stdio integration", () => {
+	it("applies the ACP profile across reload and resume without changing saved preferences", async () => {
+		const fixture = await launch({ profile: true });
+		const { connection, project, updates } = fixture;
+		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+		const created = await connection.newSession({ cwd: project, mcpServers: [] });
+		const { sessionId } = created;
+		expect(created.modes?.currentModeId).toBe("yolo");
+		const profile = async () => {
+			const start = updates.length;
+			await connection.prompt({ sessionId, prompt: [{ type: "text", text: "profile" }] });
+			const result: unknown = JSON.parse(assistantText(updates, start));
+			return result;
+		};
+		const initial = await profile();
+		expect(initial).toMatchInlineSnapshot(`
+			{
+			  "automaticDelegation": false,
+			  "clientScheduling": true,
+			  "cronGuidance": false,
+			  "directWork": true,
+			  "schedulesAdvertised": false,
+			  "subagentParameters": [
+			    "acceptance",
+			    "action",
+			    "artifacts",
+			    "async",
+			    "chain",
+			    "chainDir",
+			    "clarify",
+			    "concurrency",
+			    "context",
+			    "control",
+			    "cwd",
+			    "description",
+			    "dir",
+			    "id",
+			    "includeProgress",
+			    "index",
+			    "lines",
+			    "maxRuntimeMs",
+			    "message",
+			    "model",
+			    "output",
+			    "outputMode",
+			    "permissions",
+			    "runId",
+			    "sessionDir",
+			    "share",
+			    "skill",
+			    "task",
+			    "tasks",
+			    "thinking",
+			    "tier",
+			    "timeoutMs",
+			    "toolBudget",
+			    "turnBudget",
+			    "view",
+			    "worktree",
+			  ],
+			  "tools": [
+			    "ast_search",
+			    "bash",
+			    "code_overview",
+			    "code_rewrite",
+			    "edit",
+			    "fetch_content",
+			    "get_search_content",
+			    "intercom",
+			    "lsp_code_actions",
+			    "lsp_completions",
+			    "lsp_definition",
+			    "lsp_diagnostics",
+			    "lsp_hover",
+			    "lsp_references",
+			    "lsp_rename",
+			    "lsp_symbols",
+			    "mcp",
+			    "memory_add",
+			    "memory_load",
+			    "memory_remove",
+			    "present_plan",
+			    "read",
+			    "subagent",
+			    "subagent_supervisor",
+			    "subagent_wait",
+			    "todo",
+			    "web_search",
+			    "write",
+			  ],
+			}
+		`);
+		expect(initial).toMatchObject({
+			schedulesAdvertised: false,
+			clientScheduling: true,
+			automaticDelegation: false,
+			directWork: true,
+			cronGuidance: false,
+		});
+		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "schedule" }] });
+		expect(assistantText(updates)).toContain(
+			"Scheduled subagents are disabled in ACP sessions. Use the client's scheduler.",
+		);
+		await connection.setSessionMode({ sessionId, modeId: "read-only" });
+		await connection.setSessionConfigOption({ sessionId, configId: "thought_level", value: "high" });
+		await connection.setSessionConfigOption({ sessionId, configId: "model", value: "acp-fixture/text-only" });
+		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "/fixture-reload" }] });
+		expect(await profile()).toEqual(initial);
+		await connection.closeSession({ sessionId });
+		const restored = await connection.loadSession({ sessionId, cwd: project, mcpServers: [] });
+		expect(restored.modes?.currentModeId).toBe("read-only");
+		expect(await profile()).toEqual(initial);
+		await fixture.finish();
+		expect(readFileSync(fixture.settingsPath, "utf8")).toBe(fixture.settings);
+		expect(readFileSync(fixture.subagentConfig, "utf8")).toBe('{"scheduledRuns":{"enabled":true}}');
+	}, 30_000);
+
 	it("declines startup dialogs before opening a usable session", async () => {
 		const fixture = await launch({ lifecycle: true, startupDialog: true });
 		const { connection, project, forms } = fixture;

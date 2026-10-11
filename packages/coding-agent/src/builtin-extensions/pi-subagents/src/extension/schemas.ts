@@ -342,6 +342,12 @@ const SubagentParamsSchema = Type.Object({
 
 export const SubagentParams = keepTopLevelParameterDescriptions(SubagentParamsSchema);
 
+const acpParams = Type.Omit(SubagentParamsSchema, ["schedule", "scheduleName"]);
+acpParams.properties.action = Type.Optional(Type.String({
+	description: "Control action only. Must be omitted for execution mode (single, parallel, or chain). Runtime: status, interrupt, stop, resume, steer, append-step, doctor, watchdog.*. Scheduling is unavailable in ACP; use the client's scheduler.",
+}));
+export const AcpSubagentParams = keepTopLevelParameterDescriptions(acpParams);
+
 const SubagentWaitParamsSchema = Type.Object({
 	id: Type.Optional(Type.String({
 		description: "Async run or remembered detached foreground run id/prefix to wait for one specific run. Omit to wait across every active async run started in this session.",

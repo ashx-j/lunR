@@ -51,6 +51,7 @@ import { applyInheritedSubagentPermissions } from "./core/subagent-permission-in
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
+import { ACP_DISABLED_BUILTINS, ACP_SETTINGS_OVERRIDES } from "./modes/acp/policy.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
@@ -566,7 +567,8 @@ export async function main(args: string[], options?: MainOptions) {
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
 	const sessionOnly = Boolean(process.env.LUNR_ACP_WORKER_CONFIG);
-	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, sessionOnly });
+	const settingsPolicy = { sessionOnly, runtimeOverrides: sessionOnly ? ACP_SETTINGS_OVERRIDES : undefined };
+	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, ...settingsPolicy });
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
@@ -650,7 +652,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
 	time("runMigrations");
 
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, sessionOnly });
+	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, ...settingsPolicy });
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
 	// Register the model-tier bridge before extensions load so pi-subagents can read
@@ -689,7 +691,7 @@ export async function main(args: string[], options?: MainOptions) {
 		trustStore.get(cwd) ??
 		startupSettingsManager.getDefaultProjectTrust() === "always";
 	const lookupSettings = lookupTrusted
-		? SettingsManager.create(cwd, agentDir, { projectTrusted: true, sessionOnly })
+		? SettingsManager.create(cwd, agentDir, { projectTrusted: true, ...settingsPolicy })
 		: startupSettingsManager;
 	let sessionDir = explicitSessionDir ?? lookupSettings.getSessionDir();
 	let startupSelectionDeferred = false;
@@ -765,7 +767,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
-	const builtinRoster = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const loadedBuiltins = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const builtinRoster = sessionOnly
+		? loadedBuiltins.filter((entry) => typeof entry === "function" || !ACP_DISABLED_BUILTINS.has(entry.name))
+		: loadedBuiltins;
 	const rememberAttachedFactories = (factories: InlineExtension[]) => {
 		const seen = new Set(
 			builtinRoster.map((entry) => (typeof entry === "function" ? undefined : entry.name)).filter(Boolean),
@@ -796,7 +801,7 @@ export async function main(args: string[], options?: MainOptions) {
 			: (cachedProjectTrust ??
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
-		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted, sessionOnly });
+		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted, ...settingsPolicy });
 		const skipMissingPackageInstall = isInitialRuntime && appMode === "interactive";
 		const services = await createAgentSessionServices({
 			cwd,

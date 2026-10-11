@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolCallGate } from "../src/core/agent-session.ts";
 import type { PermissionMode } from "../src/core/permissions.ts";
+import { ACP_SETTINGS_OVERRIDES } from "../src/modes/acp/policy.ts";
 import type { RpcAcpPermissionRequest } from "../src/modes/rpc/rpc-types.ts";
 
 const ACP_ENV = "LUNR_ACP_WORKER_CONFIG";
@@ -284,17 +285,54 @@ describe("ACP session-only settings", () => {
 		mkdirSync(join(projectDir, ".lunr"), { recursive: true });
 		const globalPath = join(agentDir, "settings.json");
 		const projectPath = join(projectDir, ".lunr", "settings.json");
-		const originalGlobal = JSON.stringify({ defaultProvider: "existing", defaultModel: "original" });
-		const originalProject = JSON.stringify({ defaultThinkingLevel: "low" });
+		const conflictingSettings = {
+			browserEnabled: true,
+			automaticSubagentDelegation: true,
+			defaultPermissionMode: "auto",
+		};
+		const originalGlobal = JSON.stringify({
+			...conflictingSettings,
+			defaultProvider: "existing",
+			defaultModel: "original",
+		});
+		const originalProject = JSON.stringify({ ...conflictingSettings, defaultThinkingLevel: "low" });
 		writeFileSync(globalPath, originalGlobal);
 		writeFileSync(projectPath, originalProject);
-		const settings = SettingsManager.create(projectDir, agentDir, { projectTrusted: false, sessionOnly: true });
+		const settings = SettingsManager.create(projectDir, agentDir, {
+			projectTrusted: false,
+			sessionOnly: true,
+			runtimeOverrides: ACP_SETTINGS_OVERRIDES,
+		});
+		const expectPolicy = () => {
+			expect(settings.getBrowserEnabled()).toBe(false);
+			expect(settings.getAutomaticSubagentDelegation()).toBe(false);
+			expect(settings.getDefaultPermissionMode()).toBe("yolo");
+		};
+		expectPolicy();
 		expect(settings.getProjectSettings()).toEqual({});
 		settings.setProjectTrusted(true);
 		expect(settings.getDefaultThinkingLevel()).toBe("low");
+		expectPolicy();
 		settings.setDefaultModelAndProvider("acp-fixture", "test");
+		settings.setBrowserEnabled(true);
+		settings.setAutomaticSubagentDelegation(true);
+		settings.setDefaultPermissionMode("auto");
+		expectPolicy();
 		await settings.flush();
 		await settings.reload();
+		expectPolicy();
+		settings.applyOverrides({
+			browserEnabled: true,
+			automaticSubagentDelegation: true,
+			defaultPermissionMode: "auto",
+		});
+		expectPolicy();
+		settings.setProjectTrusted(false);
+		expectPolicy();
+		const terminal = SettingsManager.create(projectDir, agentDir);
+		expect(terminal.getBrowserEnabled()).toBe(true);
+		expect(terminal.getAutomaticSubagentDelegation()).toBe(true);
+		expect(terminal.getDefaultPermissionMode()).toBe("auto");
 		expect(settings.getDefaultProvider()).toBe("acp-fixture");
 		expect(settings.getDefaultModel()).toBe("test");
 		expect(readFileSync(globalPath, "utf8")).toBe(originalGlobal);

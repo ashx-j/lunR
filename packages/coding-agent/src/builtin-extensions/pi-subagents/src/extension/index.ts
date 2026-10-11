@@ -14,6 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createSubagentCancellation, registerSubagentCancellation } from "../../../../core/subagent-cancellation.ts";
+import { ACP_SCHEDULING_DISABLED } from "../../../../modes/acp/policy.ts";
 import { readAcpWorkerConfig } from "../../../../modes/acp/worker-config.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -33,7 +34,7 @@ import {
 	SUBAGENT_PAINT_INTERVAL_MS,
 	subagentAnimSink,
 } from "../tui/render.ts";
-import { SubagentParams } from "./schemas.ts";
+import { AcpSubagentParams, SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveSubagentRequestParams } from "../runs/foreground/request-params.ts";
@@ -342,6 +343,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	cleanupOldChainDirs();
 
 	const config = normalizeAsyncLaunchConfig(loadConfig());
+	const acpWorker = Boolean(readAcpWorkerConfig());
+	if (acpWorker) config.scheduledRuns = { ...config.scheduledRuns, enabled: false };
+	const descriptionOptions = { schedulingDisabled: acpWorker };
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
@@ -402,6 +406,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	const scheduledRunManager = createScheduledRunManager({
 		config,
+		disabledReason: acpWorker ? ACP_SCHEDULING_DISABLED : undefined,
 		launch: (params, ctx, signal) => {
 			if (!executorExecute) {
 				return Promise.resolve({
@@ -529,11 +534,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		execute: (id, params, signal, onUpdate, ctx) => executor.execute(id, params, signal, onUpdate, ctx),
 	});
 
-	const tool: ToolDefinition<typeof SubagentParams, Details> = {
+	const tool: ToolDefinition<typeof SubagentParams | typeof AcpSubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		description: buildSubagentToolDescription(config),
-		parameters: SubagentParams,
+		description: buildSubagentToolDescription(config, descriptionOptions),
+		parameters: acpWorker ? AcpSubagentParams : SubagentParams,
 		// lunr: same-turn SINGLE calls overlap; sequential work uses chain.
 		executionMode: "parallel",
 
@@ -583,7 +588,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		| { registerToolDescriptionRefresher?: (refresher: () => void) => void }
 		| undefined;
 	modelTierBridge?.registerToolDescriptionRefresher?.(() => {
-		tool.description = buildSubagentToolDescription(config);
+		tool.description = buildSubagentToolDescription(config, descriptionOptions);
 		// pi.runtime is not on ExtensionAPI; registerTool refreshes the live registry.
 		pi.registerTool(tool);
 	});
