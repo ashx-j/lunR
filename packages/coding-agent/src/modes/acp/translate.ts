@@ -1,5 +1,12 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { type ContentBlock, RequestError, type ToolCallContent, type ToolKind } from "@agentclientprotocol/sdk";
+import {
+	type ContentBlock,
+	RequestError,
+	type SessionUpdate,
+	type ToolCallContent,
+	type ToolKind,
+} from "@agentclientprotocol/sdk";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { CustomMessage } from "../../core/messages.ts";
 
@@ -88,4 +95,24 @@ export function customMessageContent(message: CustomMessage) {
 	// slash subagent results normally update a tui card and hide the final journal entry.
 	if (!message.display && message.customType !== "subagent-slash-result") return [];
 	return typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content;
+}
+
+// Native child notices are activity, while extension command replies remain chat content.
+export function customMessageUpdates(message: CustomMessage): SessionUpdate[] {
+	const content = customMessageContent(message);
+	if (!content.length) return [];
+	if (message.customType === "subagent-notify") {
+		// Journal restoration can change timestamps; content keeps the activity ID stable.
+		return [
+			{
+				sessionUpdate: "tool_call",
+				toolCallId: `lunr-subagent-notification-${createHash("sha256").update(JSON.stringify(message.content)).digest("hex")}`,
+				title: "lunR subagent notification",
+				kind: "other",
+				status: "completed",
+				content: content.map((content) => ({ type: "content", content })),
+			},
+		];
+	}
+	return content.map((content) => ({ sessionUpdate: "agent_message_chunk", content }));
 }

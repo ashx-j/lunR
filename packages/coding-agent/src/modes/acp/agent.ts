@@ -30,7 +30,7 @@ import { PERMISSION_MODES } from "../../core/permissions.ts";
 import { AcpRpcProcess, type WorkerOptions } from "./process.ts";
 import { AcpSession } from "./session.ts";
 import { type AcpSessionRecord, AcpSessionStore } from "./store.ts";
-import { customMessageContent, promptTitle, promptToLunr, toolContent, toolKind, toolLocations } from "./translate.ts";
+import { customMessageUpdates, promptTitle, promptToLunr, toolContent, toolKind, toolLocations } from "./translate.ts";
 import { parseAcpWorkerConfig } from "./worker-config.ts";
 
 type SessionOwner = { session: AcpSession; directory: string; record: AcpSessionRecord; configSignature?: string };
@@ -353,8 +353,7 @@ export class LunrAcpAgent implements Agent {
 					content: toolContent(message),
 				});
 			} else if (message.role === "custom") {
-				for (const content of customMessageContent(message))
-					owner.session.emit({ sessionUpdate: "agent_message_chunk", content });
+				for (const update of customMessageUpdates(message)) owner.session.emit(update);
 			}
 		}
 		await owner.session.flush();
