@@ -30,11 +30,15 @@ Use `/logout` to remove the lunR connection. Most subscription providers store r
 
 ### Claude Pro/Max
 
-`/login anthropic` offers a Claude Code subscription connection. It checks for Python 3.10+ and Claude Code only after you select that option. If either is missing, setup asks before running an installer. You can also install them yourself from [Python](https://www.python.org/downloads/) and [Claude Code](https://code.claude.com/docs/en/setup), then retry. If logged out, confirm the terminal handoff to `claude auth login` and select a Claude subscription. The current bridge accepts Claude Code 2.1.263 only. Other versions fail closed until qualified.
+`/login anthropic` offers a Claude subscription connection that runs through Claude Code 2.1.263. The first time, lunR asks before downloading that exact Claude Code build (about 100 MB) from the npm registry into `~/.lunr/agent/claude-code/2.1.263/`. The download must match a hash pinned in lunR's source, or nothing is installed. You do not need Python or a separate Claude Code install, and lunR never changes another Claude Code on your machine.
 
-Claude Code owns your account session. lunR does not read its credentials or copy tokens into `auth.json`. Each lunR generation starts a separate Claude Code process with native tools disabled; lunR still runs its own tools and manages history. `/logout anthropic` removes only lunR's connection and cached provider models, not your Claude Code login or installed software. Existing lunR Anthropic OAuth tokens and `ANTHROPIC_OAUTH_TOKEN` require reconnecting; they cannot make direct Messages API requests. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
+lunR's copy uses Claude Code's normal sign-in, so an existing Claude Code login is reused. Otherwise, confirm the terminal handoff to `claude auth login` and pick a Claude subscription.
 
-The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Model routes are checked during setup using Claude Code's model picker. This work has not yet been qualified against a live account on every supported platform; do not assume cross-model signed-history replay or an arbitrary CLI version works.
+Claude Code owns your account session. lunR does not read its credentials or copy tokens into `auth.json`. For each generation, lunR builds the same Messages request it sends with an API key and starts one Claude Code process with its own tools turned off. Claude Code signs and sends the request. A local relay lets exactly one upstream request through per generation, so lunR still runs its own tools and manages history. Anthropic bills `claude -p` runs, which is how lunR uses Claude Code, as programmatic usage rather than interactive plan limits; check your plan for current credits.
+
+`/logout anthropic` removes only lunR's connection and cached provider models. Your Claude Code login stays, and so does the downloaded binary; delete `~/.lunr/agent/claude-code/` to remove it. Connections from the earlier Python-based setup, old lunR Anthropic OAuth tokens, and `ANTHROPIC_OAUTH_TOKEN` all need `/login anthropic` again. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
+
+The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Model routes come from Claude Code's model picker during setup. The route passes offline checks against the real Claude Code 2.1.263 binary but is not yet qualified against a live account on every platform.
 
 ### GitHub Copilot
 

@@ -2,16 +2,14 @@ import { describe, expect, it } from "vitest";
 import { stream as directMessages } from "../src/api/anthropic-messages.ts";
 import { ANTHROPIC_SETUP_REQUIRED, anthropicRequestRoute } from "../src/auth/anthropic-route.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
-import { isQualifiedClaudeCodeVersion } from "../src/auth/oauth/anthropic.ts";
 import type { AuthContext, ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { createModels } from "../src/models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
 
 const connection: ExternalClaudeCodeCredential = {
 	type: "external_claude_code",
-	version: 1,
+	version: 2,
 	manager: "claude-code",
-	python: "python3",
 	command: "/opt/claude",
 	accountFingerprint: "test-account",
 	routes: ["claude-sonnet-5[1m]"],
@@ -26,12 +24,6 @@ function configured(env: Record<string, string> = {}) {
 }
 
 describe("Anthropic subscription route", () => {
-	it("accepts only the qualified Claude Code version", () => {
-		expect(isQualifiedClaudeCodeVersion("2.1.263 (Claude Code)")).toBe(true);
-		expect(isQualifiedClaudeCodeVersion("2.1.2630")).toBe(false);
-		expect(isQualifiedClaudeCodeVersion("2.1.263-dev")).toBe(false);
-	});
-
 	it("preserves API-key HTTP auth and selects the external route only for the external record", async () => {
 		const { credentials, models } = configured();
 		await credentials.modify("anthropic", async () => connection);

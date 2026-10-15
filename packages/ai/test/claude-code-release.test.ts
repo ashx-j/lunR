@@ -1,0 +1,81 @@
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { gzipSync } from "node:zlib";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	claudeCodeRoute,
+	extractTarEntry,
+	installClaudeCode,
+	managedClaudeCodePath,
+} from "../src/utils/claude-code-release.ts";
+
+/** One ustar entry; tar readers only need name, size, type, and the 512-byte layout. */
+function tarEntry(name: string, body: Buffer, type = "0"): Buffer {
+	const header = Buffer.alloc(512);
+	header.write(name, 0, 100, "utf8");
+	header.write("0000755\0", 100);
+	header.write(`${body.length.toString(8).padStart(11, "0")}\0`, 124);
+	header.write(type, 156);
+	header.write("ustar\0" + "00", 257);
+	return Buffer.concat([header, body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
+}
+
+function tarball(...entries: Buffer[]): Buffer {
+	return Buffer.concat([...entries, Buffer.alloc(1024)]);
+}
+
+const directories: string[] = [];
+function temporaryDirectory(): string {
+	const directory = mkdtempSync(join(tmpdir(), "lunr-claude-code-release-"));
+	directories.push(directory);
+	return directory;
+}
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+	for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+describe("Claude Code release", () => {
+	it("maps lunR model ids and picker aliases onto the pinned routes", () => {
+		expect(claudeCodeRoute("claude-opus-4-8")).toBe("claude-opus-4-8[1m]");
+		expect(claudeCodeRoute("sonnet")).toBe("claude-sonnet-5[1m]");
+		expect(claudeCodeRoute("claude-haiku-4-5")).toBe("claude-haiku-4-5-20251001");
+		expect(claudeCodeRoute("claude-haiku-4-5[1m]")).toBeUndefined();
+		expect(claudeCodeRoute("claude-opus-4-1")).toBeUndefined();
+	});
+
+	it("keeps lunR's binary under the agent directory, apart from other installs", () => {
+		vi.stubEnv("PI_CODING_AGENT_DIR", "/agent");
+		expect(managedClaudeCodePath("linux-x64")).toBe(join("/agent", "claude-code", "2.1.263", "claude"));
+		expect(managedClaudeCodePath("win32-x64")).toBe(join("/agent", "claude-code", "2.1.263", "claude.exe"));
+		vi.unstubAllEnvs();
+	});
+
+	it("extracts only the requested file, following pax names across small chunks", async () => {
+		const binary = Buffer.alloc(1500, 7);
+		const archive = tarball(
+			tarEntry("package/README.md", Buffer.from("readme")),
+			tarEntry("PaxHeader", Buffer.from("28 path=package/claude-long\n"), "x"),
+			tarEntry("package/ignored-short-name", binary),
+			tarEntry("package/claude", Buffer.from("wrong file")),
+		);
+		const chunks = async function* () {
+			for (let offset = 0; offset < archive.length; offset += 97) yield archive.subarray(offset, offset + 97);
+		};
+		const target = join(temporaryDirectory(), "claude");
+		expect(await extractTarEntry(chunks(), "package/claude-long", target)).toBe(true);
+		expect(readFileSync(target)).toEqual(binary);
+	});
+
+	it("installs nothing when the download does not match the pinned integrity", async () => {
+		const archive = gzipSync(tarball(tarEntry("package/claude", Buffer.from("not claude"))));
+		vi.stubGlobal("fetch", async () => new Response(archive, { status: 200 }));
+		const directory = temporaryDirectory();
+		const target = join(directory, "claude");
+		await expect(installClaudeCode("linux-x64", target)).rejects.toThrow("pinned npm integrity");
+		expect(existsSync(target)).toBe(false);
+		expect(readdirSync(directory)).toEqual([]);
+	});
+});

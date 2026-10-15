@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.29`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Changed
+
+- `/login anthropic` downloads its own pinned Claude Code instead of requiring Python and a matching Claude Code install. Existing Claude subscription connections need `/login anthropic` once.
+
 ## [0.2.29] - 2026-10-11
 
 ### Added

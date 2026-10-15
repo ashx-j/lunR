@@ -111,9 +111,8 @@ describe("ModelRuntime auth options", () => {
 			credentials: AuthStorage.inMemory({
 				anthropic: {
 					type: "external_claude_code",
-					version: 1,
+					version: 2,
 					manager: "claude-code",
-					python: "python",
 					command: "claude",
 				},
 			}),
@@ -130,9 +129,8 @@ describe("ModelRuntime auth options", () => {
 			credentials: AuthStorage.inMemory({
 				anthropic: {
 					type: "external_claude_code",
-					version: 1,
+					version: 2,
 					manager: "claude-code",
-					python: "python",
 					command: "claude",
 				},
 			}),

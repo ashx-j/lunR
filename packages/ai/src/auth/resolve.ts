@@ -62,7 +62,7 @@ export async function resolveProviderAuth(
 		if (
 			stored.type === "external_claude_code" &&
 			provider.id === "anthropic" &&
-			stored.version === 1 &&
+			(stored.version === 1 || stored.version === 2) &&
 			stored.manager === "claude-code"
 		) {
 			const apiKey = await requestAuthContext.env("ANTHROPIC_API_KEY");

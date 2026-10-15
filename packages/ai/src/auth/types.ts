@@ -34,18 +34,24 @@ export interface OAuthCredential extends OAuthCredentials {
 	type: "oauth";
 }
 
-/** One type-tagged credential per provider — the shape of today's auth.json. */
+/**
+ * Non-secret record of a Claude subscription connection. Claude Code owns the sign-in; lunR stores where
+ * its pinned Claude Code binary lives and which model routes the account offers. Version 1 records came
+ * from the retired Python bridge and must be set up again with /login anthropic.
+ */
 export interface ExternalClaudeCodeCredential {
 	type: "external_claude_code";
-	version: 1;
+	version: 1 | 2;
 	manager: "claude-code";
+	/** Absolute path of the Claude Code binary. */
 	command: string;
-	python: string;
+	/** Claude Code configuration directory override (`CLAUDE_CONFIG_DIR`). */
 	configDir?: string;
 	accountFingerprint?: string;
 	routes?: string[];
 }
 
+/** One type-tagged credential per provider — the shape of today's auth.json. */
 export type Credential = ApiKeyCredential | OAuthCredential | ExternalClaudeCodeCredential;
 
 /** Non-secret credential metadata for account/status enumeration. */

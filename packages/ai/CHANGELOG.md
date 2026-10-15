@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Anthropic subscription requests run through a lunR-managed Claude Code 2.1.263, downloaded after confirmation and checked against a pinned npm hash. The Python bridge and its vendored transport are removed. Subscription turns reuse the Messages request builder and stream parser, so usage, signed thinking, and upstream errors match the API-key route. Connections from the Python-based setup need `/login anthropic` again.
+
 ## [0.2.29] - 2026-10-11
 
 - Align the package version with the lunR 0.2.29 release.

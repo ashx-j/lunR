@@ -798,14 +798,18 @@ function mapThinkingLevelToEffort(
 	}
 }
 
-export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOptions> = (
+export const streamSimple: StreamFunction<
+	"anthropic-messages",
+	SimpleStreamOptions & Pick<AnthropicOptions, "client">
+> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
-	options?: SimpleStreamOptions,
+	options?: SimpleStreamOptions & Pick<AnthropicOptions, "client">,
 ): AssistantMessageEventStream => {
-	assertRequestAuth(model.provider, options?.apiKey, options?.headers);
+	// An injected client brings its own transport and authentication.
+	if (!options?.client) assertRequestAuth(model.provider, options?.apiKey, options?.headers);
 
-	const base = buildBaseOptions(model, context, options, options?.apiKey);
+	const base = { ...buildBaseOptions(model, context, options, options?.apiKey), client: options?.client };
 	if (!options?.reasoning) {
 		return stream(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
 	}
