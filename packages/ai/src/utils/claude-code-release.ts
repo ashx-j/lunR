@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, type WriteStream } from "node:fs";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { arch, homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -181,34 +181,61 @@ export async function extractTarEntry(
 			}
 		}
 	} finally {
-		output?.destroy();
+		// Wait for the descriptor to close so the caller can delete the file on Windows.
+		if (output) {
+			output.destroy();
+			await finished(output).catch(() => {});
+		}
 	}
 	return found;
 }
 
+/** The download is aborted when no bytes arrive for this long. */
+const DOWNLOAD_STALL_TIMEOUT_MS = 60_000;
+
 /**
  * Downloads the pinned Claude Code binary for `platform` from the npm registry into `target`. The
- * tarball must match the pinned registry integrity before the binary moves into place.
+ * tarball must match the pinned registry integrity before the binary moves into place. A connection
+ * that sends nothing for `stallTimeoutMs` fails with a "stalled" error instead of hanging.
  */
 export async function installClaudeCode(
 	platform: ClaudeCodePlatform,
 	target: string,
-	options: { signal?: AbortSignal; onProgress?: (received: number, total: number | undefined) => void } = {},
+	options: {
+		signal?: AbortSignal;
+		stallTimeoutMs?: number;
+		onProgress?: (received: number, total: number | undefined) => void;
+	} = {},
 ): Promise<void> {
 	const url = `https://registry.npmjs.org/@anthropic-ai/claude-code-${platform}/-/claude-code-${platform}-${CLAUDE_CODE_VERSION}.tgz`;
-	const response = await fetch(url, { signal: options.signal });
-	if (!response.ok || !response.body) throw new Error(`Claude Code download failed with HTTP ${response.status}`);
-	const total = Number(response.headers.get("content-length")) || undefined;
-	await mkdir(dirname(target), { recursive: true });
+	const stallTimeoutMs = options.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS;
+	const stall = new AbortController();
+	const signal = options.signal ? AbortSignal.any([options.signal, stall.signal]) : stall.signal;
+	let stalled = false;
+	let stallTimer: NodeJS.Timeout | undefined;
+	// Restarted on every received chunk; also covers the wait for response headers.
+	const armStallTimer = () => {
+		clearTimeout(stallTimer);
+		stallTimer = setTimeout(() => {
+			stalled = true;
+			stall.abort();
+		}, stallTimeoutMs);
+	};
 	const temporary = `${target}.${process.pid}.${randomUUID()}.download`;
 	const hash = createHash("sha512");
 	let received = 0;
 	let found = false;
+	armStallTimer();
 	try {
+		const response = await fetch(url, { signal });
+		if (!response.ok || !response.body) throw new Error(`Claude Code download failed with HTTP ${response.status}`);
+		const total = Number(response.headers.get("content-length")) || undefined;
+		await mkdir(dirname(target), { recursive: true });
 		await pipeline(
 			Readable.fromWeb(response.body),
 			new Transform({
 				transform(chunk: Buffer, _encoding, callback) {
+					armStallTimer();
 					hash.update(chunk);
 					received += chunk.length;
 					options.onProgress?.(received, total);
@@ -219,13 +246,21 @@ export async function installClaudeCode(
 			async (source: AsyncIterable<Buffer>) => {
 				found = await extractTarEntry(source, `package/${binaryName(platform)}`, temporary);
 			},
-			{ signal: options.signal },
+			{ signal },
 		);
 		if (`sha512-${hash.digest("base64")}` !== PLATFORM_INTEGRITY[platform])
 			throw new Error("Claude Code download does not match the pinned npm integrity. Nothing was installed.");
 		if (!found) throw new Error("Claude Code download did not contain the expected binary");
 		await rename(temporary, target);
+	} catch (error) {
+		if (stalled && !options.signal?.aborted)
+			throw new Error(
+				`Claude Code download stalled: no data for ${Math.round(stallTimeoutMs / 1000)} seconds. Check the connection and retry.`,
+			);
+		throw error;
 	} finally {
-		if (existsSync(temporary)) await rm(temporary, { force: true });
+		clearTimeout(stallTimer);
+		// A cleanup failure must not hide the download error.
+		await rm(temporary, { force: true }).catch(() => {});
 	}
 }

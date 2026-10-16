@@ -1,4 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -77,5 +79,31 @@ describe("Claude Code release", () => {
 		await expect(installClaudeCode("linux-x64", target)).rejects.toThrow("pinned npm integrity");
 		expect(existsSync(target)).toBe(false);
 		expect(readdirSync(directory)).toEqual([]);
+	});
+
+	it("fails with a stall error and leaves no temporary file when the connection goes silent mid-download", async () => {
+		// Send roughly half of a valid archive, then stop writing without closing the connection.
+		const archive = gzipSync(tarball(tarEntry("package/claude", randomBytes(256 * 1024))));
+		const server = createServer((_request, response) => {
+			response.writeHead(200);
+			response.write(archive.subarray(0, archive.length / 2));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			if (!address || typeof address === "string") throw new Error("server did not bind a port");
+			const realFetch = fetch;
+			vi.stubGlobal("fetch", (_url: string, init?: RequestInit) =>
+				realFetch(`http://127.0.0.1:${address.port}/claude.tgz`, init),
+			);
+			const directory = temporaryDirectory();
+			const target = join(directory, "claude");
+			await expect(installClaudeCode("linux-x64", target, { stallTimeoutMs: 300 })).rejects.toThrow("stalled");
+			expect(existsSync(target)).toBe(false);
+			expect(readdirSync(directory)).toEqual([]);
+		} finally {
+			server.closeAllConnections();
+			await new Promise((resolve) => server.close(resolve));
+		}
 	});
 });
