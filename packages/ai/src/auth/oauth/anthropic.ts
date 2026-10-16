@@ -116,7 +116,13 @@ async function discoverRoutes(command: string): Promise<string[]> {
 		const routes = new Set<string>();
 		for (const line of output.split("\n")) {
 			if (!line.startsWith("{")) continue;
-			const event: unknown = JSON.parse(line);
+			let event: unknown;
+			try {
+				event = JSON.parse(line);
+			} catch {
+				// A truncated or garbled line must not hide the other lines; no routes still ends in a clear error.
+				continue;
+			}
 			if (!isRecord(event) || event.type !== "control_response" || !isRecord(event.response)) continue;
 			const reply = event.response.response;
 			const rows: unknown[] = isRecord(reply) && Array.isArray(reply.models) ? reply.models : [];
