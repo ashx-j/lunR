@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	buildCompletionDetails,
+	formatGroupedCompletion,
 	formatSingleCompletion,
 } from "../src/builtin-extensions/pi-subagents/src/runs/background/notify.ts";
 import { acpWorkerArgs } from "../src/modes/acp/args.ts";
@@ -93,5 +94,29 @@ describe("ACP command and content boundaries", () => {
 				timestamp: 0,
 			}),
 		).toEqual([expect.objectContaining({ sessionUpdate: "tool_call", status })]);
+	});
+
+	it("does not report an unrecognized child notice as completed", () => {
+		const notify = (content: string) =>
+			customMessageUpdates({ role: "custom", customType: "subagent-notify", content, display: true, timestamp: 0 });
+		expect(notify("Background task exploded: **fixture child**\n\nunexpected wording")).toEqual([
+			expect.objectContaining({ status: "failed" }),
+		]);
+		expect(notify("something else entirely")).toEqual([expect.objectContaining({ status: "failed" })]);
+	});
+
+	it("reports a grouped batch of completed children as completed", () => {
+		const details = ["first", "second"].map((agent) =>
+			buildCompletionDetails({ id: agent, agent, success: true, state: "complete", summary: "done", timestamp: 0 }),
+		);
+		expect(
+			customMessageUpdates({
+				role: "custom",
+				customType: "subagent-notify",
+				content: formatGroupedCompletion(details),
+				display: true,
+				timestamp: 0,
+			}),
+		).toEqual([expect.objectContaining({ sessionUpdate: "tool_call", status: "completed" })]);
 	});
 });
