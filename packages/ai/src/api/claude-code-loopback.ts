@@ -159,8 +159,9 @@ export class ClaudeCodeLoopback {
 	}
 
 	private handle(req: IncomingMessage, res: ServerResponse): void {
-		const url = new URL(req.url ?? "/", "http://127.0.0.1");
-		if (req.headers.origin) {
+		// Request targets such as `//` make URL parsing throw; an uncaught throw here would end lunR.
+		const url = URL.parse(req.url ?? "/", "http://127.0.0.1");
+		if (!url || req.headers.origin) {
 			res.writeHead(404).end();
 		} else if (url.pathname === `${this.prefix}/mcp`) {
 			this.handleMcp(req, res);

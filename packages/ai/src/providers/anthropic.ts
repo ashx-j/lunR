@@ -46,7 +46,11 @@ function subscriptionStream(
 ) {
 	return lazyStream(model, async () => {
 		if (!hasApi(model, "anthropic-messages")) throw new Error(`Claude Code cannot serve ${model.api} models`);
-		const { streamClaudeCode } = await import("../api/anthropic-claude-code-bridge.ts");
+		// A computed specifier keeps browser bundlers out of the Node-only bridge.
+		const specifier = import.meta.url.endsWith(".js")
+			? "../api/anthropic-claude-code-bridge.js"
+			: "../api/anthropic-claude-code-bridge.ts";
+		const { streamClaudeCode } = (await import(specifier)) as typeof import("../api/anthropic-claude-code-bridge.ts");
 		return streamClaudeCode(model, context, options, simple);
 	});
 }

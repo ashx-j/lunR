@@ -103,6 +103,8 @@ export async function extractTarEntry(
 	let pax: Buffer[] = [];
 	let paxPath: string | undefined;
 	let output: WriteStream | undefined;
+	// Disk errors (ENOSPC, EACCES) surface here instead of as an unhandled stream event.
+	let writeError: Error | undefined;
 	let found = false;
 	let ended = false;
 
@@ -126,8 +128,14 @@ export async function extractTarEntry(
 					pending = pending.subarray(body.length);
 					remaining -= body.length;
 					if (sink === "file" && output && !output.write(body)) {
-						await new Promise<void>((resolve) => output?.once("drain", resolve));
+						const stream = output;
+						await new Promise<void>((resolve, reject) => {
+							if (writeError) return reject(writeError);
+							stream.once("drain", resolve);
+							stream.once("error", reject);
+						});
 					} else if (sink === "pax") pax.push(body);
+					if (writeError) throw writeError;
 					if (remaining === 0) await finishEntry();
 					continue;
 				}
@@ -165,6 +173,9 @@ export async function extractTarEntry(
 					sink = "file";
 					found = true;
 					output = createWriteStream(target, { mode: 0o755 });
+					output.on("error", (error) => {
+						writeError = error;
+					});
 				}
 				if (remaining === 0) await finishEntry();
 			}

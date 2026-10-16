@@ -120,20 +120,18 @@ function claudeCodeRequest(body: unknown): ClaudeCodeRequest {
 						.join("\n\n")
 				: "";
 
-	const tools = (Array.isArray(body.tools) ? body.tools : []).map((tool): ClaudeCodeTool => {
-		if (
-			!isRecord(tool) ||
-			typeof tool.name !== "string" ||
-			!TOOL_NAME.test(tool.name) ||
-			!isRecord(tool.input_schema)
-		)
-			throw new Error(`Claude Code subscription cannot expose tool ${isRecord(tool) ? String(tool.name) : ""}`);
-		return {
-			name: tool.name,
-			description: typeof tool.description === "string" ? tool.description : "",
-			inputSchema: tool.input_schema,
-		};
-	});
+	// Claude Code's MCP names cap the length; one long or unusual tool name is left out rather than failing the turn.
+	const tools = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool): ClaudeCodeTool[] =>
+		isRecord(tool) && typeof tool.name === "string" && TOOL_NAME.test(tool.name) && isRecord(tool.input_schema)
+			? [
+					{
+						name: tool.name,
+						description: typeof tool.description === "string" ? tool.description : "",
+						inputSchema: tool.input_schema,
+					},
+				]
+			: [],
+	);
 
 	const maxTokens = typeof body.max_tokens === "number" ? body.max_tokens : undefined;
 	const thinking = isRecord(body.thinking) ? body.thinking : undefined;
@@ -269,7 +267,10 @@ async function runClaudeCode(
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open({ timeoutMs: idleMs, tools: request.tools, upstream });
-	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-"));
+	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
+		loopback.close();
+		throw error;
+	});
 	let pid: number | undefined;
 	let cleanup: Promise<void> | undefined;
 	const finish = () => {
@@ -297,6 +298,8 @@ async function runClaudeCode(
 			ANTHROPIC_BASE_URL: loopback.baseUrl,
 			...(request.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxTokens) } : {}),
 		};
+		// Cleanup that already ran during the writes above had no process to stop, so never start one.
+		if (signal?.aborted) throw new Error("Claude Code request cancelled");
 		const child = spawnClaudeCode(
 			connection.command,
 			[

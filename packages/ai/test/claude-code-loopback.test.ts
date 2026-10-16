@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClaudeCodeLoopback } from "../src/api/claude-code-loopback.ts";
 
@@ -44,6 +45,22 @@ const mcp = (loopback: ClaudeCodeLoopback, body: object) =>
 	});
 
 describe("Claude Code loopback", () => {
+	it("answers a malformed request target instead of throwing", async () => {
+		const loopback = await open();
+		const { port } = new URL(loopback.baseUrl);
+		const reply = await new Promise<string>((resolve, reject) => {
+			const socket = connect(Number(port), "127.0.0.1", () => socket.end("GET // HTTP/1.1\r\nHost: x\r\n\r\n"));
+			let text = "";
+			socket.on("data", (chunk) => {
+				text += chunk;
+			});
+			socket.on("end", () => resolve(text));
+			socket.on("error", reject);
+		});
+		expect(reply).toMatch(/^HTTP\/1\.1 404/);
+		expect((await mcp(loopback, { jsonrpc: "2.0", id: 1, method: "tools/list" })).status).toBe(200);
+	});
+
 	it("forwards one Messages request to both Claude Code and lunR, then refuses more", async () => {
 		const upstream = await fixtureUpstream();
 		const loopback = await open(upstream.url);
