@@ -536,6 +536,11 @@ export class ModelRuntime implements Models {
 		return this.credentials.list();
 	}
 
+	/** Stored credential for one provider, for UI that describes what removing it leaves behind. */
+	readCredential(providerId: string): Promise<Credential | undefined> {
+		return this.credentials.read(providerId);
+	}
+
 	getProviderAuthStatus(providerId: string): AuthStatus {
 		if (this.credentials.hasRuntimeApiKey(providerId)) return { configured: true, source: "runtime" };
 		if (this.snapshot.storedProviders.has(providerId)) return { configured: true, source: "stored" };
