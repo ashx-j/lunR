@@ -63,6 +63,7 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+import { formatClaudeSubscriptionLogoutNote } from "../../core/auth-guidance.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -6050,7 +6051,9 @@ export class InteractiveMode {
 		const options: AuthSelectorProvider[] = [];
 		for (const { providerId, type: credentialType } of await this.session.modelRuntime.listCredentials()) {
 			const type = credentialType === "external_claude_code" ? "oauth" : credentialType;
-			const name = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
+			const providerName = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
+			const name =
+				credentialType === "external_claude_code" ? `${providerName} (Claude subscription)` : providerName;
 			const status = { type, source: "stored credential" };
 			if (type === "api_key") {
 				const subs = await this.session.modelRuntime.subscriptionManager.list(providerId);
@@ -6500,12 +6503,15 @@ export class InteractiveMode {
 						// lunr: a plain entry can still have a lazy-imported pool — clear it so
 						// rotation cannot resurrect the removed credential.
 						await this.removeAllSubscriptions(providerOption.id);
+						const removed = await this.session.modelRuntime.readCredential(providerOption.id);
 						await this.session.modelRuntime.logout(providerOption.id);
 						await this.updateAvailableProviderCount();
 						const message =
-							providerOption.authType === "oauth"
-								? `Logged out of ${providerOption.name}`
-								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
+							removed?.type === "external_claude_code"
+								? `Logged out of ${providerOption.name}. ${formatClaudeSubscriptionLogoutNote(removed)}`
+								: providerOption.authType === "oauth"
+									? `Logged out of ${providerOption.name}`
+									: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
 						this.showStatus(message);
 					} catch (error: unknown) {
 						this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
