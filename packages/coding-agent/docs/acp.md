@@ -11,6 +11,18 @@ Use `lunr` as the executable, with `--mode` and `acp` as two separate arguments.
 The executable must be installed on the selected T3 environment's machine.
 An absolute executable path also works.
 
+On Windows, T3 launches the command without a shell, so npm's `lunr.cmd`
+shim cannot be the executable. Use `C:\Program Files\nodejs\node.exe`
+or your actual Node executable path, with these arguments in separate rows:
+
+```text
+C:\Users\<user>\AppData\Roaming\npm\node_modules\@ashx-j\lunr\dist\cli.js
+--mode
+acp
+```
+
+Adjust the first argument if your global npm directory is elsewhere.
+
 For a development checkout, build the packages, then use executable `node`
 with arguments `/absolute/path/to/lunR/packages/coding-agent/dist/cli.js`,
 `--mode`, `acp`. This runs the checkout without replacing an installed CLI.
@@ -33,6 +45,12 @@ It supports streamed replies and reasoning, tool activity and bounded file diffs
 images for models that accept them, text attachments, cancellation, model and
 reasoning selection, and lunR's Build, Autonomous and Plan modes. These map to
 lunR's existing `yolo`, `auto` and `read-only` modes.
+
+Extension status notices, including MCP connection counts, appear as separate
+activity entries. Native subagent completion notices also appear there, including
+when loading history. These notices are not part of the assistant's streamed reply.
+Failed, paused and stopped children use ACP's failed activity status while the
+notice retains the native outcome.
 
 Each session runs a separate lunR RPC process. Sessions use lunR's normal
 journals. ACP records under `~/.lunr/agent/acp/sessions/` allow the client to

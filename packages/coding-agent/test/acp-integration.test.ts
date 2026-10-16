@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -59,7 +60,7 @@ async function launch(options: { lifecycle?: boolean; startupDialog?: boolean; p
 	copyFileSync(providerPath, join(agentDir, "extensions", "acp-provider.ts"));
 	if (options.lifecycle) copyFileSync(lifecyclePath, join(agentDir, "extensions", "acp-lifecycle.ts"));
 	const settingsPath = join(agentDir, "settings.json");
-	const settings = `${JSON.stringify({ ...(options.profile ? { browserEnabled: true, automaticSubagentDelegation: true, defaultPermissionMode: "auto" } : {}), defaultProvider: "acp-fixture", defaultModel: "test", defaultThinkingLevel: "medium", compaction: { enabled: false }, retry: { enabled: false } }, null, 2)}\n`;
+	const settings = `${JSON.stringify({ ...(options.profile ? { browserEnabled: true, automaticSubagentDelegation: true, defaultPermissionMode: "auto" } : {}), computerUse: false, defaultProvider: "acp-fixture", defaultModel: "test", defaultThinkingLevel: "medium", compaction: { enabled: false }, retry: { enabled: false } }, null, 2)}\n`;
 	writeFileSync(settingsPath, settings);
 	const subagentConfig = join(agentDir, "extensions", "subagent", "config.json");
 	if (options.profile) {
@@ -183,7 +184,8 @@ afterEach(async () => {
 		try {
 			await fixture.finish();
 		} finally {
-			rmSync(fixture.directory, { recursive: true, force: true });
+			// Windows can retain worker file handles briefly after the close event.
+			await rm(fixture.directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 		}
 	}
 });
@@ -305,6 +307,26 @@ describe("compiled ACP stdio integration", () => {
 		expect(readFileSync(fixture.settingsPath, "utf8")).toBe(fixture.settings);
 		expect(readFileSync(fixture.subagentConfig, "utf8")).toBe('{"scheduledRuns":{"enabled":true}}');
 	}, 30_000);
+
+	it("keeps extension status notifications separate from streamed assistant text", async () => {
+		const fixture = await launch({ lifecycle: true });
+		const { connection, project, updates } = fixture;
+		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "hello" }] });
+		expect(assistantText(updates)).toBe("fixture response model=test reasoning=medium images=0");
+		expect(updates).toContainEqual({
+			sessionId,
+			update: expect.objectContaining({
+				sessionUpdate: "tool_call",
+				title: "lunR notification",
+				kind: "other",
+				status: "completed",
+				content: [{ type: "content", content: { type: "text", text: "MCP: 1 servers connected (83 tools)" } }],
+			}),
+		});
+		await fixture.finish();
+	}, 90_000);
 
 	it("declines startup dialogs before opening a usable session", async () => {
 		const fixture = await launch({ lifecycle: true, startupDialog: true });
@@ -599,19 +621,37 @@ describe("compiled ACP stdio integration", () => {
 		expect(restored.configOptions?.find((option) => option.id === "thought_level")?.currentValue).toBe("high");
 	}, 90_000);
 
-	it("keeps native async child completion and the parent follow-up inside the ACP turn", async () => {
-		const fixture = await launch();
-		const { connection, project, updates } = fixture;
-		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
-		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
-		expect((await connection.prompt({ sessionId, prompt: [{ type: "text", text: "delegate" }] })).stopReason).toBe(
-			"end_turn",
-		);
-		expect(assistantText(updates)).toContain("native child completed");
-		expect(pids(fixture.workerPids).length).toBeGreaterThan(1);
-		await fixture.finish();
-		await vi.waitFor(() => expect(pids(fixture.workerPids).every((pid) => !alive(pid))).toBe(true), {
-			timeout: 10_000,
-		});
-	}, 90_000);
+	it.each([
+		{ prompt: "delegate", status: "completed", result: "native child completed" },
+		{ prompt: "delegate-fail", status: "failed", result: "native child failure fixture" },
+	])(
+		"keeps a $status native child notice and the parent follow-up inside the ACP turn",
+		async ({ prompt, status, result }) => {
+			const fixture = await launch();
+			const { connection, project, updates } = fixture;
+			await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+			const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+			expect((await connection.prompt({ sessionId, prompt: [{ type: "text", text: prompt }] })).stopReason).toBe(
+				"end_turn",
+			);
+			expect(assistantText(updates)).toContain("fixture response model=test reasoning=medium images=0");
+			expect(assistantText(updates)).not.toContain(`Background task ${status}:`);
+			const notice = updates.find(
+				({ update }) => update.sessionUpdate === "tool_call" && update.title === "lunR subagent notification",
+			);
+			expect(notice?.update).toMatchObject({ status, kind: "other" });
+			expect(JSON.stringify(notice?.update)).toContain(result);
+			await connection.closeSession({ sessionId });
+			const replayStart = updates.length;
+			await connection.loadSession({ sessionId, cwd: project, mcpServers: [] });
+			expect(assistantText(updates, replayStart)).not.toContain(`Background task ${status}:`);
+			expect(updates.slice(replayStart)).toContainEqual(notice);
+			expect(pids(fixture.workerPids).length).toBeGreaterThan(1);
+			await fixture.finish();
+			await vi.waitFor(() => expect(pids(fixture.workerPids).every((pid) => !alive(pid))).toBe(true), {
+				timeout: 10_000,
+			});
+		},
+		90_000,
+	);
 });
