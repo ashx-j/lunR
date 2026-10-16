@@ -123,3 +123,27 @@ export function customMessageUpdates(message: CustomMessage): SessionUpdate[] {
 	}
 	return content.map((content) => ({ sessionUpdate: "agent_message_chunk", content }));
 }
+
+// Picker entries for the client's model selector. The value (`provider/id`) is what selection matches on;
+// the label adds the provider only when names collide, and the full `provider/id` when that still collides.
+export function modelOptions(
+	models: readonly { provider: string; id: string; name: string }[],
+): { value: string; name: string }[] {
+	const count = (labels: string[]) => {
+		const counts = new Map<string, number>();
+		for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+		return counts;
+	};
+	const names = count(models.map((model) => model.name));
+	const withProvider = models.map((model) =>
+		(names.get(model.name) ?? 0) > 1 ? `${model.name} (${model.provider})` : model.name,
+	);
+	const providerLabels = count(withProvider);
+	return models.map((model, index) => ({
+		value: `${model.provider}/${model.id}`,
+		name:
+			(providerLabels.get(withProvider[index]!) ?? 0) > 1
+				? `${model.name} (${model.provider}/${model.id})`
+				: withProvider[index]!,
+	}));
+}
