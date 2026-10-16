@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **ACP streaming, approvals and modes (`fix/acp-streaming-permissions-modes`, 2026-10-16):** streamed tool calls reach the client once at start and once with final input instead of on every delta. Core read-only tools plus `todo` run without a client approval. Clients can switch modes during a turn; switching to Plan while an approval is open still applies read-only rules to that tool. Model and reasoning changes remain idle-only.
+
 - **v0.2.31 (prepared 2026-10-16):** integration PR #178 merged PRs #164 through #177 with their ancestry. Claude subscription setup honors `CLAUDE_CONFIG_DIR`, replaces a broken managed Claude Code, aborts stalled downloads and skips malformed discovery lines. The relay keeps its secrets off argv with separate messages/MCP secrets and follows `HTTPS_PROXY`. Claude Code receives CA, display and XDG variables and gets a 2.5-second exit grace after upstream errors. Version 1 records leave `/model` early, and `/logout` explains what Claude Code keeps. ACP shows extension errors and held-question notes as activity, fails unrecognized child notices, and disambiguates same-provider model names. The binary workflow fetches clipboard packages by pinned integrity instead of a workspace `npm install`. No live subscription request was made.
 
 - **v0.2.30 (2026-10-16):** release PR #162 merged as `d9e61f9`; tag `v0.2.30` triggered successful npm publication. All four public packages and three native payloads report 0.2.30 latest, and all seven registry tarballs match declared integrity. A fresh isolated public install reports 0.2.30 for the CLI and its three dependencies and passes startup and first-request subagent/MCP/LSP/local-fetch checks. Ships PR #160 (ACP activity notices, failed child outcomes, model labels) and PR #161 (lunR-managed Claude Code for subscriptions). Review repairs before merge: the bridge import stays computed for browser bundles, the loopback relay answers malformed request targets instead of crashing, install write errors reject, unexposable tool names are skipped, an abort during setup never starts Claude Code, and ACP labels name the provider only on duplicate model names. No live subscription request has been made; signed-in macOS, Windows and ARM runs remain unqualified.
@@ -199,6 +201,8 @@ Last updated: 2026-10-16 (v0.2.31 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- ACP streaming/approvals/modes, 2026-10-16: offline tui → ai → agent builds and the coding-agent Node bundle pass. ACP translation/worker/integration suites pass 50/50 and permission/plan-mode suites 124/124 in a disposable profile; the four new or changed unit tests fail with the fixes reverted. Touched-file Biome and `git diff --check` pass. No live T3 session was run.
+
 - v0.2.31 preparation, 2026-10-16: integration PR #178 passed full CI. All five offline package builds and the Node bundle pass; the CLI reports 0.2.31. Read-only Biome, pinned-dependency, relative-import, shrinkwrap, installer-lock, publication-policy and browser checks pass. Compiled first-paint and first-request subagent/MCP/LSP/local-fetch checks pass. The production CuaDriver gate, manifest check and eight packaging tests pass, and an npm 10 dry run packs all seven public tarballs. Local AI runs also hit the host's Ollama daemon; those e2e failures are environmental.
 
 - v0.2.30 preparation, 2026-10-16: all five offline package builds and the Node bundle pass; the CLI reports 0.2.30. Read-only Biome, pinned-dependency, relative-import, shrinkwrap, installer-lock, publication-policy and browser checks pass. Compiled startup and first-request subagent/MCP/LSP/local-fetch checks pass. The production CuaDriver gate passes, the pinned archives verify, and an npm 10 dry run packs all seven public tarballs. Both feature PRs passed full CI before merging.
@@ -346,6 +350,8 @@ Last updated: 2026-10-16 (v0.2.31 release preparation). Public npm is `@ashx-j/l
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- ACP's no-approval tool list is core `READ_ONLY_TOOLS` plus `todo`; add new side-effect-free tools to the core list so read-only mode and ACP stay in sync. Streamed `toolcall_delta` events carry the full growing input, so ACP announces a tool on start and end only.
 
 - Login test fakes must answer `--version` with `CLAUDE_CODE_VERSION`: setup probes an existing managed Claude Code before reuse and treats any other reply as a broken binary.
 
@@ -508,6 +514,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-16: let ACP clients change modes mid-turn and re-check read-only after an open approval, because the spec allows it and lunR's gates already read the mode per tool call.
 
 - 2026-10-16: merge the fourteen open fixes through one integration PR so overlapping test files are resolved once and CI runs on the combined code before release.
 

@@ -420,9 +420,18 @@ export class LunrAcpAgent implements Agent {
 	}
 
 	async setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
+		if (typeof params.value !== "string") throw new RequestError(-32602, "Expected a selection value.");
+		if (params.configId === "mode") {
+			// acp allows mode changes during a turn; lunr's tool gates read the mode on each call.
+			const owner = this.get(params.sessionId);
+			const mode = PERMISSION_MODES.find((mode) => mode === params.value);
+			if (!mode) throw new RequestError(-32602, "Unknown lunr mode.");
+			await owner.session.process.request({ type: "set_permission_mode", mode });
+			owner.session.emit({ sessionUpdate: "current_mode_update", currentModeId: mode });
+			return this.publishConfigOptions(owner);
+		}
 		return this.whileIdle(params.sessionId, async (owner) => {
 			const worker = owner.session.process;
-			if (typeof params.value !== "string") throw new RequestError(-32602, "Expected a selection value.");
 			if (params.configId === "model") {
 				const {
 					data: { models },
@@ -437,17 +446,16 @@ export class LunrAcpAgent implements Agent {
 				if (!isValidThinkingLevel(params.value) || !levels.includes(params.value))
 					throw new RequestError(-32602, "Unsupported reasoning level.");
 				await worker.request({ type: "set_thinking_level", level: params.value });
-			} else if (params.configId === "mode") {
-				const mode = PERMISSION_MODES.find((mode) => mode === params.value);
-				if (!mode) throw new RequestError(-32602, "Unknown lunr mode.");
-				await worker.request({ type: "set_permission_mode", mode });
-				owner.session.emit({ sessionUpdate: "current_mode_update", currentModeId: mode });
 			} else throw new RequestError(-32602, "Unknown lunr configuration option.");
-			const { configOptions } = await this.configuration(owner);
-			owner.session.emit({ sessionUpdate: "config_option_update", configOptions });
-			await owner.session.flush();
-			return { configOptions };
+			return this.publishConfigOptions(owner);
 		});
+	}
+
+	private async publishConfigOptions(owner: SessionOwner): Promise<SetSessionConfigOptionResponse> {
+		const { configOptions } = await this.configuration(owner);
+		owner.session.emit({ sessionUpdate: "config_option_update", configOptions });
+		await owner.session.flush();
+		return { configOptions };
 	}
 
 	async dispose(): Promise<void> {

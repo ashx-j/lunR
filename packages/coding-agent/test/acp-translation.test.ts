@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import type { SessionNotification } from "@agentclientprotocol/sdk";
+import type { AssistantMessage, ToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
 	buildCompletionDetails,
@@ -6,6 +8,8 @@ import {
 	formatSingleCompletion,
 } from "../src/builtin-extensions/pi-subagents/src/runs/background/notify.ts";
 import { acpWorkerArgs } from "../src/modes/acp/args.ts";
+import type { AcpRpcProcess, WorkerEvent } from "../src/modes/acp/process.ts";
+import { AcpSession } from "../src/modes/acp/session.ts";
 import { customMessageContent, customMessageUpdates, modelOptions, promptToLunr } from "../src/modes/acp/translate.ts";
 
 describe("ACP command and content boundaries", () => {
@@ -151,5 +155,89 @@ describe("ACP command and content boundaries", () => {
 				"Same (b/y)",
 			]);
 		});
+	});
+});
+
+describe("ACP session updates", () => {
+	function streamingFixture() {
+		let send: (event: WorkerEvent) => void = () => {};
+		const worker = {
+			onEvent(listener: (event: WorkerEvent) => void) {
+				send = listener;
+				return () => {};
+			},
+			onExit: () => () => {},
+		};
+		const updates: SessionNotification["update"][] = [];
+		const session = new AcpSession(
+			"session",
+			"/project",
+			worker as unknown as AcpRpcProcess,
+			{
+				sessionUpdate: async ({ update }) => {
+					updates.push(update);
+				},
+				requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+				unstable_createElicitation: async () => ({ action: "cancel" }),
+			},
+			{},
+			async () => {},
+		);
+		const partial = (call: ToolCall): AssistantMessage => ({
+			role: "assistant",
+			content: [call],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "fixture",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 0,
+		});
+		return { session, updates, send, partial };
+	}
+
+	it("sends a streamed tool call once at start and once with its final input", async () => {
+		const { session, updates, send, partial } = streamingFixture();
+		const call = (content: string): ToolCall => ({
+			type: "toolCall",
+			id: "write-call",
+			name: "write",
+			arguments: { path: "big.txt", content },
+		});
+		const update = (
+			assistantMessageEvent: Extract<WorkerEvent, { type: "message_update" }>["assistantMessageEvent"],
+		) => send({ type: "message_update", message: assistantMessageEvent.partial, assistantMessageEvent });
+		update({ type: "toolcall_start", contentIndex: 0, partial: partial(call("")) });
+		for (let size = 1; size <= 200; size++)
+			update({ type: "toolcall_delta", contentIndex: 0, delta: "x", partial: partial(call("x".repeat(size))) });
+		const final = call("x".repeat(200));
+		update({ type: "toolcall_end", contentIndex: 0, toolCall: final, partial: partial(final) });
+		await session.flush();
+		expect(updates).toHaveLength(2);
+		expect(updates[0]).toMatchObject({ sessionUpdate: "tool_call", toolCallId: "write-call", status: "pending" });
+		expect(updates[1]).toMatchObject({
+			sessionUpdate: "tool_call_update",
+			toolCallId: "write-call",
+			rawInput: { path: "big.txt", content: "x".repeat(200) },
+		});
+	});
+
+	it("still announces a tool call when the provider streams deltas without a start event", async () => {
+		const { session, updates, send, partial } = streamingFixture();
+		const call: ToolCall = { type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "ls" } };
+		send({
+			type: "message_update",
+			message: partial(call),
+			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "ls", partial: partial(call) },
+		});
+		await session.flush();
+		expect(updates).toEqual([expect.objectContaining({ sessionUpdate: "tool_call", title: "ls" })]);
 	});
 });

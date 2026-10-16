@@ -604,7 +604,10 @@ describe("compiled ACP stdio integration", () => {
 		const count = permissions.length;
 		const pendingPrompt = connection.prompt({ sessionId, prompt: [{ type: "text", text: "write cancelled.txt" }] });
 		await vi.waitFor(() => expect(permissions.length).toBeGreaterThan(count), { timeout: 15_000 });
-		await expect(connection.setSessionMode({ sessionId, modeId: "auto" })).rejects.toThrow();
+		await connection.setSessionMode({ sessionId, modeId: "read-only" });
+		expect(updates).toContainEqual(
+			expect.objectContaining({ update: { sessionUpdate: "current_mode_update", currentModeId: "read-only" } }),
+		);
 		await connection.cancel({ sessionId });
 		expect((await pendingPrompt).stopReason).toBe("cancelled");
 		expect(existsSync(join(project, "cancelled.txt"))).toBe(false);
