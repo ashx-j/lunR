@@ -57,10 +57,16 @@ async function run(
 }
 
 /** Sign-in state from Claude Code's own credential store. Reading it makes no network request. */
-async function signInStatus(command: string): Promise<{ subscribed: boolean; accountFingerprint?: string }> {
+async function signInStatus(
+	command: string,
+	configDir: string | undefined,
+): Promise<{ subscribed: boolean; accountFingerprint?: string }> {
 	let status: unknown;
 	try {
-		const output = await run(command, ["auth", "status"], { allowFailure: true });
+		const output = await run(command, ["auth", "status"], {
+			env: claudeCodeEnvironment(configDir, false),
+			allowFailure: true,
+		});
 		status = output.startsWith("{") ? JSON.parse(output) : undefined;
 	} catch {
 		status = undefined;
@@ -79,7 +85,7 @@ async function signInStatus(command: string): Promise<{ subscribed: boolean; acc
  * The account's model routes from Claude Code's own picker. The `initialize` handshake answers without a
  * Messages request; a relay that counts upstream calls proves that before anything is saved.
  */
-async function discoverRoutes(command: string): Promise<string[]> {
+async function discoverRoutes(command: string, configDir: string | undefined): Promise<string[]> {
 	const loopback = await ClaudeCodeLoopback.open({ timeoutMs: 40_000 });
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-setup-"));
 	try {
@@ -106,7 +112,7 @@ async function discoverRoutes(command: string): Promise<string[]> {
 			],
 			{
 				input: `${JSON.stringify({ type: "control_request", request_id: "lunr-picker", request: { subtype: "initialize" } })}\n`,
-				env: { ...claudeCodeEnvironment(undefined, false), ANTHROPIC_BASE_URL: loopback.baseUrl },
+				env: { ...claudeCodeEnvironment(configDir, false), ANTHROPIC_BASE_URL: loopback.baseUrl },
 				cwd: directory,
 				timeoutMs: 40_000,
 				allowFailure: true,
@@ -174,7 +180,9 @@ async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCr
 		message: `lunR connects Claude Pro/Max through its own copy of Claude Code ${CLAUDE_CODE_VERSION}. Claude Code signs in and sends one generation per lunR request. lunR keeps tools, permissions, history, compaction, and subagents. If you already use Claude Code, its sign-in is reused. No credentials are copied into lunR.`,
 	});
 	const command = await ensureClaudeCode(interaction);
-	let status = await signInStatus(command);
+	// Claude Code keeps its sign-in under CLAUDE_CONFIG_DIR when set; every setup process and the saved record must agree.
+	const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() ? process.env.CLAUDE_CONFIG_DIR : undefined;
+	let status = await signInStatus(command, configDir);
 	if (!status.subscribed) {
 		if (!interaction.handoff)
 			throw new Error(
@@ -189,17 +197,18 @@ async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCr
 			],
 		});
 		if (choice !== "login") throw new Error("Anthropic subscription setup cancelled");
-		await interaction.handoff(command, ["auth", "login"], claudeCodeEnvironment(undefined, false));
-		status = await signInStatus(command);
+		await interaction.handoff(command, ["auth", "login"], claudeCodeEnvironment(configDir, false));
+		status = await signInStatus(command, configDir);
 		if (!status.subscribed) throw new Error("Claude Code is not signed in to a Claude subscription");
 	}
-	const routes = await discoverRoutes(command);
+	const routes = await discoverRoutes(command, configDir);
 	if (!routes.length) throw new Error("Claude Code did not list any models lunR can use. Setup not saved.");
 	return {
 		type: "external_claude_code",
 		version: 2,
 		manager: "claude-code",
 		command,
+		...(configDir && { configDir }),
 		accountFingerprint: status.accountFingerprint ?? randomUUID(),
 		routes,
 	};
