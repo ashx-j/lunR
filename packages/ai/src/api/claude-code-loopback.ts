@@ -9,6 +9,9 @@ import {
 	type ServerResponse,
 } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { HttpProxyAgent } from "http-proxy-agent";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 
 /** A lunR tool as Claude Code's MCP client sees it. */
 export interface ClaudeCodeTool {
@@ -180,6 +183,17 @@ export class ClaudeCodeLoopback {
 	private forward(req: IncomingMessage, res: ServerResponse, search: string): void {
 		const target = new URL(`${this.upstream.pathname.replace(/\/$/, "")}/v1/messages${search}`, this.upstream);
 		const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+		// Same HTTPS_PROXY/HTTP_PROXY/NO_PROXY handling as lunR's other provider requests.
+		let agent: HttpProxyAgent<string> | HttpsProxyAgent<string> | undefined;
+		try {
+			const proxyUrl = resolveHttpProxyUrlForTarget(target);
+			if (proxyUrl)
+				agent = target.protocol === "https:" ? new HttpsProxyAgent(proxyUrl) : new HttpProxyAgent(proxyUrl);
+		} catch (error) {
+			this.rejectResponse(error instanceof Error ? error : new Error(String(error)));
+			res.destroy();
+			return;
+		}
 		const fail = (error: Error) => {
 			this.rejectResponse(error);
 			res.destroy();
@@ -187,6 +201,7 @@ export class ClaudeCodeLoopback {
 		const outgoing = send(target, {
 			method: "POST",
 			headers: { ...keptHeaders(req.headers, DROPPED_REQUEST_HEADERS), "accept-encoding": "identity" },
+			agent,
 		});
 		this.outgoing = outgoing;
 		req.on("error", fail);

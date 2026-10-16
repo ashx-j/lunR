@@ -39,10 +39,18 @@ const ENV_ALLOWLIST = [
 	"no_proxy",
 ] as const;
 
+/** Appends loopback hosts to a NO_PROXY list, keeping any hosts the user already listed. */
+function withLoopbackNoProxy(existing: string | undefined): string {
+	const hosts = existing ? existing.split(",").map((host) => host.trim()) : [];
+	for (const loopback of ["127.0.0.1", "localhost"]) if (!hosts.includes(loopback)) hosts.push(loopback);
+	return hosts.filter(Boolean).join(",");
+}
+
 /**
  * Minimal environment for every Claude Code process lunR starts. Inherited API keys, endpoints, and
  * cloud backends would silently move a subscription request elsewhere, so `strict` refuses them.
- * Telemetry, error reporting, and self-updates stay off because lunR pins the binary.
+ * Telemetry, error reporting, and self-updates stay off because lunR pins the binary. Proxy settings
+ * pass through, with loopback added to NO_PROXY so the child's request to lunR's relay stays local.
  */
 export function claudeCodeEnvironment(configDir?: string, strict = true): Record<string, string> {
 	const conflicting = CONFLICTS.filter((name) => {
@@ -59,6 +67,8 @@ export function claudeCodeEnvironment(configDir?: string, strict = true): Record
 		if (value) env[name] = value;
 	}
 	if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+	// The child must reach lunR's loopback relay directly; a proxy cannot see this machine's 127.0.0.1.
+	for (const name of ["NO_PROXY", "no_proxy"]) env[name] = withLoopbackNoProxy(env[name]);
 	env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 	env.DISABLE_TELEMETRY = "1";
 	env.DISABLE_ERROR_REPORTING = "1";
