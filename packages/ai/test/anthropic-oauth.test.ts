@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { stream as directMessages } from "../src/api/anthropic-messages.ts";
-import { ANTHROPIC_SETUP_REQUIRED, anthropicRequestRoute } from "../src/auth/anthropic-route.ts";
+import {
+	ANTHROPIC_SETUP_REQUIRED,
+	anthropicRequestRoute,
+	CLAUDE_CODE_UPDATE_REQUIRED,
+} from "../src/auth/anthropic-route.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import type { AuthContext, ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { createModels } from "../src/models.ts";
@@ -41,6 +45,28 @@ describe("Anthropic subscription route", () => {
 		expect((await models.getAuth("anthropic"))?.auth.apiKey).toBe("sk-ant-ambient");
 		expect((await models.checkAuth("anthropic"))?.type).toBe("api_key");
 		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toContain("claude-opus-4-8");
+	});
+
+	it("reports a version 1 connection as needing /login before any request", async () => {
+		const { credentials, models } = configured();
+		const legacy: ExternalClaudeCodeCredential = { ...connection, version: 1 };
+		await credentials.modify("anthropic", async () => legacy);
+		expect(await models.checkAuth("anthropic")).toBeUndefined();
+		expect(await models.getAvailable("anthropic")).toEqual([]);
+		await expect(models.getAuth("anthropic")).rejects.toThrow(CLAUDE_CODE_UPDATE_REQUIRED);
+		// The record stays on disk so /login can replace it.
+		expect(await credentials.read("anthropic")).toEqual(legacy);
+	});
+
+	it("still serves API keys when a version 1 connection is stored", async () => {
+		const { credentials, models } = configured({ ANTHROPIC_API_KEY: "sk-ant-ambient" });
+		await credentials.modify("anthropic", async () => ({ ...connection, version: 1 as const }));
+		expect((await models.getAuth("anthropic"))?.auth.apiKey).toBe("sk-ant-ambient");
+		expect((await models.checkAuth("anthropic"))?.type).toBe("api_key");
+		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toContain("claude-opus-4-8");
+		const stored = configured();
+		await stored.credentials.modify("anthropic", async () => ({ type: "api_key", key: "sk-ant-api03-stored" }));
+		expect((await stored.models.checkAuth("anthropic"))?.type).toBe("api_key");
 	});
 
 	it("rejects legacy stored and ambient OAuth without refreshing or sending HTTP", async () => {

@@ -372,9 +372,9 @@ class ModelsImpl implements MutableModels {
 	): Promise<AuthCheck | undefined> {
 		if (provider.id === "anthropic" && credential?.type === "oauth") return undefined;
 		if (provider.id === "anthropic" && credential?.type === "external_claude_code") {
-			return (await this.authContext.env("ANTHROPIC_API_KEY"))
-				? { source: "ANTHROPIC_API_KEY", type: "api_key" }
-				: { source: "Claude Code subscription", type: "oauth" };
+			if (await this.authContext.env("ANTHROPIC_API_KEY")) return { source: "ANTHROPIC_API_KEY", type: "api_key" };
+			// A version 1 record is kept on disk but unusable until /login anthropic replaces it.
+			return credential.version === 1 ? undefined : { source: "Claude Code subscription", type: "oauth" };
 		}
 		if (credential?.type === "oauth") {
 			return provider.auth.oauth ? { source: "OAuth", type: "oauth" } : undefined;
