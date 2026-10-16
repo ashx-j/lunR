@@ -134,12 +134,33 @@ async function discoverRoutes(command: string): Promise<string[]> {
 	}
 }
 
-/** Downloads lunR's pinned Claude Code after the user agrees, reporting progress in coarse steps. */
+/** True when the binary starts and reports the pinned version. A spawn error, bad exit or timeout counts as broken. */
+async function claudeCodeRuns(command: string): Promise<boolean> {
+	try {
+		return (await run(command, ["--version"])).startsWith(CLAUDE_CODE_VERSION);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Returns lunR's pinned Claude Code, downloading it after the user agrees and reporting progress in
+ * coarse steps. An installed copy that no longer runs (truncated, wrong architecture) is removed and
+ * downloaded again, so a bad file never stays behind to be trusted by later sign-ins.
+ */
 async function ensureClaudeCode(interaction: AuthInteraction): Promise<string> {
 	const platform = claudeCodePlatform();
 	if (!platform) throw new Error(`Claude Code ${CLAUDE_CODE_VERSION} has no build for ${process.platform} ${arch()}`);
 	const command = managedClaudeCodePath(platform);
-	if (existsSync(command)) return command;
+	if (existsSync(command)) {
+		if (await claudeCodeRuns(command)) return command;
+		interaction.notify({
+			type: "info",
+			message: `The Claude Code copy at ${command} does not run on this machine. lunR will replace it with a fresh download.`,
+		});
+		// If removal fails (a Windows lock), the download below replaces the file anyway.
+		await rm(command, { force: true }).catch(() => {});
+	}
 	const choice = await interaction.prompt({
 		type: "select",
 		message: `Download Claude Code ${CLAUDE_CODE_VERSION} (about 100 MB) from the npm registry into ${dirname(command)}? lunR checks it against a pinned hash and leaves any other Claude Code install alone.`,
@@ -162,9 +183,11 @@ async function ensureClaudeCode(interaction: AuthInteraction): Promise<string> {
 			});
 		},
 	});
-	const version = await run(command, ["--version"]);
-	if (!version.startsWith(CLAUDE_CODE_VERSION))
-		throw new Error("The downloaded Claude Code does not run on this machine. Setup not saved.");
+	if (!(await claudeCodeRuns(command))) {
+		// The next sign-in re-checks the file, so a failed removal still self-heals.
+		await rm(command, { force: true }).catch(() => {});
+		throw new Error("The downloaded Claude Code does not run on this machine. It was removed. Setup not saved.");
+	}
 	return command;
 }
 
