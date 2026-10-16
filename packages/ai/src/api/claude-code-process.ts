@@ -16,6 +16,10 @@ const BACKEND_SWITCHES: ReadonlySet<string> = new Set([
 	"CLAUDE_CODE_USE_VERTEX",
 	"CLAUDE_CODE_USE_FOUNDRY",
 ]);
+// Variables Claude Code needs to run normally: paths, locale, user identity, XDG directories, the
+// display/session bus/BROWSER values `auth login` uses to open a browser on Linux, proxy settings, and
+// extra CA certificates for TLS-inspecting networks. Nothing here can carry credentials or redirect
+// requests; those stay on the CONFLICTS list above.
 const ENV_ALLOWLIST = [
 	"PATH",
 	"HOME",
@@ -31,6 +35,21 @@ const ENV_ALLOWLIST = [
 	"TMP",
 	"LANG",
 	"LC_ALL",
+	"TERM",
+	"USER",
+	"LOGNAME",
+	"DISPLAY",
+	"WAYLAND_DISPLAY",
+	"XDG_RUNTIME_DIR",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_STATE_HOME",
+	"DBUS_SESSION_BUS_ADDRESS",
+	"BROWSER",
+	"NODE_EXTRA_CA_CERTS",
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
 	"NO_PROXY",
