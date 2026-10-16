@@ -1,6 +1,14 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.31`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.32`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.32] - 2026-10-16
+
+### Fixed
+
+- ACP clients receive a streamed tool call once at start and once with its final input, instead of a growing copy on every streamed piece.
+- ACP no longer asks the client to approve todo updates or other tools lunR treats as read-only.
+- ACP clients can change modes during a turn. Switching to Plan while an approval is open still applies Plan's rules to that tool.
 
 ## [0.2.31] - 2026-10-16
 
