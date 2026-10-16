@@ -203,9 +203,13 @@ export class LunrAcpAgent implements Agent {
 				category: "model",
 				type: "select",
 				currentValue: state.model ? `${state.model.provider}/${state.model.id}` : "",
+				// Name the provider only when two providers share a model name.
 				options: models.map((model) => ({
 					value: `${model.provider}/${model.id}`,
-					name: model.name,
+					name:
+						models.filter((other) => other.name === model.name).length > 1
+							? `${model.name} (${model.provider})`
+							: model.name,
 				})),
 			},
 			{
