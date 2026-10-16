@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **v0.2.30 (prepared 2026-10-16):** ships PR #160 (ACP activity notices, failed child outcomes, model labels) and PR #161 (lunR-managed Claude Code for subscriptions). Review repairs before merge: the bridge import stays computed for browser bundles, the loopback relay answers malformed request targets instead of crashing, install write errors reject, unexposable tool names are skipped, an abort during setup never starts Claude Code, and ACP labels name the provider only on duplicate model names. No live subscription request has been made; signed-in macOS, Windows and ARM runs remain unqualified.
+
 - **ACP Windows/T3 validation (`fix/acp-windows-t3-live`, 2026-10-11):** live T3 nightly conversations verified discovery, text/reasoning, disposable file and shell tools, approve/decline, cancellation, extension questions, model/mode changes, native session reopening, injected T3 MCP and explicit native children. Extension status and native child completion notices now use separate ACP activity, including history replay, instead of contaminating assistant text. Model labels show the model name; provider-qualified IDs retain routing and session identity. Windows launch instructions use Node with the CLI path because T3 does not run npm command shims through a shell. A separate development provider was used; installed CLI and saved terminal settings remain unchanged. Native desktop automation was unavailable; browser control reached the actual Windows nightly server.
 
 - **ACP child outcomes:** unsuccessful native child notices use ACP's failed activity status in live delivery and history. The existing native notice parser retains failed, paused and stopped outcomes instead of displaying success.
@@ -65,7 +67,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-15 (managed Claude Code subscriptions). Public npm is `@ashx-j/lunr@0.2.29`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-16 (v0.2.30 release preparation). Public npm is `@ashx-j/lunr@0.2.29`; 0.2.30 prepared. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -181,7 +183,7 @@ Last updated: 2026-10-15 (managed Claude Code subscriptions). Public npm is `@as
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.26**; v0.2.27 prepared.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.29**; v0.2.30 prepared.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -194,6 +196,8 @@ Last updated: 2026-10-15 (managed Claude Code subscriptions). Public npm is `@as
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- v0.2.30 preparation, 2026-10-16: all five offline package builds and the Node bundle pass; the CLI reports 0.2.30. Read-only Biome, pinned-dependency, relative-import, shrinkwrap, installer-lock, publication-policy and browser checks pass. Compiled startup and first-request subagent/MCP/LSP/local-fetch checks pass. The production CuaDriver gate passes, the pinned archives verify, and an npm 10 dry run packs all seven public tarballs. Both feature PRs passed full CI before merging.
 
 - Managed Claude Code subscriptions, 2026-10-15: all five offline package builds, the Node bundle, and compiled first-paint plus first-turn subagent/MCP/LSP/fetch checks pass with unchanged tool payloads. Full isolated AI passes 646 with 760 credential skips; full coding-agent passes 3,583 with 56 skips (five fewer than 0.2.29: the removed Python worker-path cases). The AI npm dry-run pack contains no vendor or Python files. New release, loopback and bridge tests use a fake stream-json Claude Code and fail when the model stamp or one-request admission is removed. The installer downloaded the real linux-x64 2.1.263 package (97 MB), matched its integrity, and extracted a binary byte-identical to system `tar`. Offline checks against that real binary, with fake OAuth credentials in a disposable home and a dead outbound proxy, pass single, history, two-replay, 429 passthrough, signed-out, cancellation, and setup discovery paths with exactly one upstream request each (zero for discovery and signed-out). Claude Code identified itself as `claude-cli/2.1.263 (external, sdk-cli)`. No live subscription, installed CLI or original checkout was used.
 
@@ -496,6 +500,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-16: ship #160 and #161 together as 0.2.30 after review repairs and fresh CI; live Claude subscription qualification still needs an account and the owner's consent.
 
 - 2026-10-15: keep Claude subscriptions on Claude Code because Anthropic's current terms still forbid third-party Claude.ai login and identity impersonation; replace the Python bridge with a lunR-managed pinned binary so setup needs neither Python nor a matching Claude Code install.
 - 2026-10-15: inject Claude Code as the Anthropic SDK client's `fetch` so subscription turns reuse the Messages request builder and stream parser instead of a separate response format.

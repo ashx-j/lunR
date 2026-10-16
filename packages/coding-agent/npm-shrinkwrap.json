@@ -1,18 +1,18 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
-	"version": "0.2.29",
+	"version": "0.2.30",
 	"lockfileVersion": 3,
 	"requires": true,
 	"packages": {
 		"": {
 			"name": "@earendil-works/pi-coding-agent",
-			"version": "0.2.29",
+			"version": "0.2.30",
 			"license": "MIT",
 			"dependencies": {
 				"@agentclientprotocol/sdk": "0.26.0",
-				"@earendil-works/pi-agent-core": "^0.2.29",
-				"@earendil-works/pi-ai": "^0.2.29",
-				"@earendil-works/pi-tui": "^0.2.29",
+				"@earendil-works/pi-agent-core": "^0.2.30",
+				"@earendil-works/pi-ai": "^0.2.30",
+				"@earendil-works/pi-tui": "^0.2.30",
 				"@modelcontextprotocol/ext-apps": "1.7.4",
 				"@modelcontextprotocol/sdk": "1.30.0",
 				"@mozilla/readability": "0.6.0",
@@ -651,11 +651,11 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-agent-core": {
-			"version": "0.2.29",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-0.2.29.tgz",
+			"version": "0.2.30",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-0.2.30.tgz",
 			"license": "MIT",
 			"dependencies": {
-				"@earendil-works/pi-ai": "^0.2.29",
+				"@earendil-works/pi-ai": "^0.2.30",
 				"ignore": "7.0.5",
 				"typebox": "1.1.38",
 				"yaml": "2.9.0"
@@ -665,8 +665,8 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-ai": {
-			"version": "0.2.29",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.2.29.tgz",
+			"version": "0.2.30",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.2.30.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"@anthropic-ai/sdk": "0.91.1",
@@ -689,8 +689,8 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-tui": {
-			"version": "0.2.29",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.2.29.tgz",
+			"version": "0.2.30",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.2.30.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"get-east-asian-width": "1.6.0",

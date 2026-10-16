@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.30] - 2026-10-16
+
+- Align the package version with the lunR 0.2.30 release.
+
 ## [0.2.29] - 2026-10-11
 
 - Queued PR-watch notifications can transfer to a waiting tool without duplicate delivery or losing other queued messages.
