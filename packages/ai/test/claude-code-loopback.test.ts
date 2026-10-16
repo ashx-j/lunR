@@ -1,10 +1,11 @@
 import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCodeLoopback } from "../src/api/claude-code-loopback.ts";
 
 const closers: (() => void)[] = [];
 afterEach(() => {
+	vi.unstubAllEnvs();
 	for (const close of closers.splice(0)) close();
 });
 
@@ -35,6 +36,36 @@ async function open(upstream?: string): Promise<ClaudeCodeLoopback> {
 	});
 	closers.push(() => loopback.close());
 	return loopback;
+}
+
+// Records what reaches a fake HTTP proxy: plain requests by absolute URL, HTTPS tunnels by CONNECT target.
+async function fakeProxy(): Promise<{ url: string; seen: string[] }> {
+	const seen: string[] = [];
+	const server = createServer((req, res) => {
+		seen.push(`${req.method} ${req.url}`);
+		req.resume();
+		res.writeHead(200, { "content-type": "text/plain" });
+		res.end("via proxy");
+	});
+	server.on("connect", (req, socket) => {
+		seen.push(`CONNECT ${req.url}`);
+		socket.destroy();
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	closers.push(() => {
+		server.close();
+		server.closeAllConnections();
+	});
+	const address = server.address();
+	return { url: `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`, seen };
+}
+
+function setProxyEnv(proxy: string, noProxy = ""): void {
+	for (const name of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+		vi.stubEnv(name, name.toLowerCase().startsWith("all") ? "" : proxy);
+	}
+	vi.stubEnv("NO_PROXY", noProxy);
+	vi.stubEnv("no_proxy", "");
 }
 
 const mcp = (loopback: ClaudeCodeLoopback, body: object) =>
@@ -100,6 +131,22 @@ describe("Claude Code loopback", () => {
 		);
 	});
 
+	it("keeps the MCP and Messages secrets separate", async () => {
+		const upstream = await fixtureUpstream();
+		const loopback = await open(upstream.url);
+		const messagesSecret = new URL(loopback.baseUrl).pathname;
+		const mcpSecret = new URL(loopback.mcpUrl).pathname.replace(/\/mcp$/, "");
+		expect(mcpSecret).not.toBe(messagesSecret);
+
+		// The MCP secret does not admit Messages, and the Messages secret does not reach MCP.
+		const origin = new URL(loopback.baseUrl).origin;
+		expect((await fetch(`${origin}${mcpSecret}/v1/messages`, { method: "POST", body: "{}" })).status).toBe(404);
+		expect(loopback.admitted).toBe(false);
+		const mcpViaMessages = await fetch(`${origin}${messagesSecret}/mcp`, { method: "POST", body: "{}" });
+		expect(mcpViaMessages.status).toBe(404);
+		expect(upstream.requests).toEqual([]);
+	});
+
 	it("lists lunR's tools over MCP and refuses every call", async () => {
 		const loopback = await open();
 		const initialize = await mcp(loopback, {
@@ -117,5 +164,39 @@ describe("Claude Code loopback", () => {
 		).json();
 		expect(call.result.isError).toBe(true);
 		expect((await fetch(loopback.mcpUrl)).status).toBe(405);
+	});
+
+	describe("upstream proxy", () => {
+		const post = (loopback: ClaudeCodeLoopback) =>
+			fetch(`${loopback.baseUrl}/v1/messages`, { method: "POST", body: "{}" });
+
+		it("sends the upstream request through HTTP_PROXY", async () => {
+			const upstream = await fixtureUpstream();
+			const proxy = await fakeProxy();
+			setProxyEnv(proxy.url);
+			const loopback = await open(upstream.url);
+			expect(await (await post(loopback)).text()).toBe("via proxy");
+			expect(proxy.seen).toEqual([`POST ${upstream.url}/v1/messages`]);
+			expect(upstream.requests).toEqual([]);
+		});
+
+		it("tunnels HTTPS upstreams through HTTPS_PROXY with CONNECT", async () => {
+			const proxy = await fakeProxy();
+			setProxyEnv(proxy.url);
+			const loopback = await open("https://api.example.test");
+			await post(loopback).catch(() => {});
+			await expect(loopback.response).rejects.toThrow();
+			expect(proxy.seen).toEqual(["CONNECT api.example.test:443"]);
+		});
+
+		it("skips the proxy for hosts listed in NO_PROXY", async () => {
+			const upstream = await fixtureUpstream();
+			const proxy = await fakeProxy();
+			setProxyEnv(proxy.url, "127.0.0.1");
+			const loopback = await open(upstream.url);
+			expect(await (await post(loopback)).text()).toBe("event: ping\ndata: {}\n\n");
+			expect(proxy.seen).toEqual([]);
+			expect(upstream.requests).toHaveLength(1);
+		});
 	});
 });

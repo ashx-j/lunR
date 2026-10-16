@@ -30,7 +30,15 @@ import { PERMISSION_MODES } from "../../core/permissions.ts";
 import { AcpRpcProcess, type WorkerOptions } from "./process.ts";
 import { AcpSession } from "./session.ts";
 import { type AcpSessionRecord, AcpSessionStore } from "./store.ts";
-import { customMessageUpdates, promptTitle, promptToLunr, toolContent, toolKind, toolLocations } from "./translate.ts";
+import {
+	customMessageUpdates,
+	modelOptions,
+	promptTitle,
+	promptToLunr,
+	toolContent,
+	toolKind,
+	toolLocations,
+} from "./translate.ts";
 import { parseAcpWorkerConfig } from "./worker-config.ts";
 
 type SessionOwner = { session: AcpSession; directory: string; record: AcpSessionRecord; configSignature?: string };
@@ -203,14 +211,7 @@ export class LunrAcpAgent implements Agent {
 				category: "model",
 				type: "select",
 				currentValue: state.model ? `${state.model.provider}/${state.model.id}` : "",
-				// Name the provider only when two providers share a model name.
-				options: models.map((model) => ({
-					value: `${model.provider}/${model.id}`,
-					name:
-						models.filter((other) => other.name === model.name).length > 1
-							? `${model.name} (${model.provider})`
-							: model.name,
-				})),
+				options: modelOptions(models),
 			},
 			{
 				id: "thought_level",

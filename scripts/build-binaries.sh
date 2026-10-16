@@ -91,18 +91,43 @@ fi
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
-    # npm ci only installs optional deps for the current platform
-    # We need the base clipboard package and all platform bindings for bun cross-compilation
-    # Use --force to bypass platform checks (os/cpu restrictions in package.json)
-    # Install all in one command to avoid npm removing packages from previous installs
-    npm install --include=optional --no-save --package-lock=false --force --ignore-scripts \
-        @mariozechner/clipboard@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-darwin-arm64@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-darwin-x64@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-linux-x64-gnu@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-linux-arm64-gnu@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-win32-x64-msvc@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-win32-arm64-msvc@"$CLIPBOARD_VERSION"
+    # npm ci only installs optional deps for the current platform, but bun cross-compilation
+    # needs the base clipboard package and every platform binding. Do not `npm install` them
+    # into the workspace tree: with workspaces that crashes npm ("Cannot read properties of
+    # null (reading 'edgesOut')"). Download each tarball with `npm pack` from a scratch
+    # directory instead (no os/cpu checks apply), verify it against package-lock.json, and
+    # unpack it into node_modules.
+    CLIPBOARD_PACKAGES=(
+        clipboard
+        clipboard-darwin-arm64
+        clipboard-darwin-x64
+        clipboard-linux-x64-gnu
+        clipboard-linux-arm64-gnu
+        clipboard-win32-x64-msvc
+        clipboard-win32-arm64-msvc
+    )
+    REPO_ROOT="$(pwd)"
+    PACK_DIR="$(mktemp -d)"
+    trap 'rm -rf "$PACK_DIR"' EXIT
+    for name in "${CLIPBOARD_PACKAGES[@]}"; do
+        tarball=$(cd "$PACK_DIR" && npm pack "@mariozechner/$name@$CLIPBOARD_VERSION" --ignore-scripts --silent)
+        # Compare the tarball's sha512 with the integrity pinned in package-lock.json.
+        node -e '
+            const { createHash } = require("node:crypto");
+            const { readFileSync } = require("node:fs");
+            const [lockfile, tarball, name] = process.argv.slice(1);
+            const expected = require(lockfile).packages[`node_modules/@mariozechner/${name}`].integrity;
+            const actual = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+            if (actual !== expected) {
+                console.error(`Integrity mismatch for @mariozechner/${name}: lockfile ${expected}, downloaded ${actual}`);
+                process.exit(1);
+            }
+        ' "$REPO_ROOT/package-lock.json" "$PACK_DIR/$tarball" "$name"
+        dest="$REPO_ROOT/node_modules/@mariozechner/$name"
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        tar -xzf "$PACK_DIR/$tarball" --strip-components=1 -C "$dest"
+    done
 else
     echo "==> Skipping cross-platform native bindings (--skip-deps)"
 fi

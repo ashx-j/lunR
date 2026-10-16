@@ -98,12 +98,20 @@ export function customMessageContent(message: CustomMessage) {
 	return typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content;
 }
 
+// Native child notices carry no structured status, only text. Single notices name their status in the
+// header, and grouped batches ("Background tasks completed (N)") only ever hold completed results.
+// Anything else is reported as failed so an unrecognized notice is never shown as a success.
+function subagentNoticeStatus(text: string): "completed" | "failed" {
+	if (/^Background tasks completed \(\d+\):/.test(text)) return "completed";
+	return parseSubagentNotifyContent(text)?.status === "completed" ? "completed" : "failed";
+}
+
 // Native child notices are activity, while extension command replies remain chat content.
 export function customMessageUpdates(message: CustomMessage): SessionUpdate[] {
 	const content = customMessageContent(message);
 	if (!content.length) return [];
 	if (message.customType === "subagent-notify") {
-		const notice = parseSubagentNotifyContent(
+		const status = subagentNoticeStatus(
 			content
 				.filter((block) => block.type === "text")
 				.map((block) => block.text)
@@ -116,10 +124,34 @@ export function customMessageUpdates(message: CustomMessage): SessionUpdate[] {
 				toolCallId: `lunr-subagent-notification-${createHash("sha256").update(JSON.stringify(message.content)).digest("hex")}`,
 				title: "lunR subagent notification",
 				kind: "other",
-				status: notice && notice.status !== "completed" ? "failed" : "completed",
+				status,
 				content: content.map((content) => ({ type: "content", content })),
 			},
 		];
 	}
 	return content.map((content) => ({ sessionUpdate: "agent_message_chunk", content }));
+}
+
+// Picker entries for the client's model selector. The value (`provider/id`) is what selection matches on;
+// the label adds the provider only when names collide, and the full `provider/id` when that still collides.
+export function modelOptions(
+	models: readonly { provider: string; id: string; name: string }[],
+): { value: string; name: string }[] {
+	const count = (labels: string[]) => {
+		const counts = new Map<string, number>();
+		for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+		return counts;
+	};
+	const names = count(models.map((model) => model.name));
+	const withProvider = models.map((model) =>
+		(names.get(model.name) ?? 0) > 1 ? `${model.name} (${model.provider})` : model.name,
+	);
+	const providerLabels = count(withProvider);
+	return models.map((model, index) => ({
+		value: `${model.provider}/${model.id}`,
+		name:
+			(providerLabels.get(withProvider[index]!) ?? 0) > 1
+				? `${model.name} (${model.provider}/${model.id})`
+				: withProvider[index]!,
+	}));
 }

@@ -57,10 +57,16 @@ async function run(
 }
 
 /** Sign-in state from Claude Code's own credential store. Reading it makes no network request. */
-async function signInStatus(command: string): Promise<{ subscribed: boolean; accountFingerprint?: string }> {
+async function signInStatus(
+	command: string,
+	configDir: string | undefined,
+): Promise<{ subscribed: boolean; accountFingerprint?: string }> {
 	let status: unknown;
 	try {
-		const output = await run(command, ["auth", "status"], { allowFailure: true });
+		const output = await run(command, ["auth", "status"], {
+			env: claudeCodeEnvironment(configDir, false),
+			allowFailure: true,
+		});
 		status = output.startsWith("{") ? JSON.parse(output) : undefined;
 	} catch {
 		status = undefined;
@@ -79,7 +85,7 @@ async function signInStatus(command: string): Promise<{ subscribed: boolean; acc
  * The account's model routes from Claude Code's own picker. The `initialize` handshake answers without a
  * Messages request; a relay that counts upstream calls proves that before anything is saved.
  */
-async function discoverRoutes(command: string): Promise<string[]> {
+async function discoverRoutes(command: string, configDir: string | undefined): Promise<string[]> {
 	const loopback = await ClaudeCodeLoopback.open({ timeoutMs: 40_000 });
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-setup-"));
 	try {
@@ -106,7 +112,7 @@ async function discoverRoutes(command: string): Promise<string[]> {
 			],
 			{
 				input: `${JSON.stringify({ type: "control_request", request_id: "lunr-picker", request: { subtype: "initialize" } })}\n`,
-				env: { ...claudeCodeEnvironment(undefined, false), ANTHROPIC_BASE_URL: loopback.baseUrl },
+				env: { ...claudeCodeEnvironment(configDir, false), ANTHROPIC_BASE_URL: loopback.baseUrl },
 				cwd: directory,
 				timeoutMs: 40_000,
 				allowFailure: true,
@@ -116,7 +122,13 @@ async function discoverRoutes(command: string): Promise<string[]> {
 		const routes = new Set<string>();
 		for (const line of output.split("\n")) {
 			if (!line.startsWith("{")) continue;
-			const event: unknown = JSON.parse(line);
+			let event: unknown;
+			try {
+				event = JSON.parse(line);
+			} catch {
+				// A truncated or garbled line must not hide the other lines; no routes still ends in a clear error.
+				continue;
+			}
 			if (!isRecord(event) || event.type !== "control_response" || !isRecord(event.response)) continue;
 			const reply = event.response.response;
 			const rows: unknown[] = isRecord(reply) && Array.isArray(reply.models) ? reply.models : [];
@@ -134,12 +146,33 @@ async function discoverRoutes(command: string): Promise<string[]> {
 	}
 }
 
-/** Downloads lunR's pinned Claude Code after the user agrees, reporting progress in coarse steps. */
+/** True when the binary starts and reports the pinned version. A spawn error, bad exit or timeout counts as broken. */
+async function claudeCodeRuns(command: string): Promise<boolean> {
+	try {
+		return (await run(command, ["--version"])).startsWith(CLAUDE_CODE_VERSION);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Returns lunR's pinned Claude Code, downloading it after the user agrees and reporting progress in
+ * coarse steps. An installed copy that no longer runs (truncated, wrong architecture) is removed and
+ * downloaded again, so a bad file never stays behind to be trusted by later sign-ins.
+ */
 async function ensureClaudeCode(interaction: AuthInteraction): Promise<string> {
 	const platform = claudeCodePlatform();
 	if (!platform) throw new Error(`Claude Code ${CLAUDE_CODE_VERSION} has no build for ${process.platform} ${arch()}`);
 	const command = managedClaudeCodePath(platform);
-	if (existsSync(command)) return command;
+	if (existsSync(command)) {
+		if (await claudeCodeRuns(command)) return command;
+		interaction.notify({
+			type: "info",
+			message: `The Claude Code copy at ${command} does not run on this machine. lunR will replace it with a fresh download.`,
+		});
+		// If removal fails (a Windows lock), the download below replaces the file anyway.
+		await rm(command, { force: true }).catch(() => {});
+	}
 	const choice = await interaction.prompt({
 		type: "select",
 		message: `Download Claude Code ${CLAUDE_CODE_VERSION} (about 100 MB) from the npm registry into ${dirname(command)}? lunR checks it against a pinned hash and leaves any other Claude Code install alone.`,
@@ -162,9 +195,11 @@ async function ensureClaudeCode(interaction: AuthInteraction): Promise<string> {
 			});
 		},
 	});
-	const version = await run(command, ["--version"]);
-	if (!version.startsWith(CLAUDE_CODE_VERSION))
-		throw new Error("The downloaded Claude Code does not run on this machine. Setup not saved.");
+	if (!(await claudeCodeRuns(command))) {
+		// The next sign-in re-checks the file, so a failed removal still self-heals.
+		await rm(command, { force: true }).catch(() => {});
+		throw new Error("The downloaded Claude Code does not run on this machine. It was removed. Setup not saved.");
+	}
 	return command;
 }
 
@@ -174,7 +209,9 @@ async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCr
 		message: `lunR connects Claude Pro/Max through its own copy of Claude Code ${CLAUDE_CODE_VERSION}. Claude Code signs in and sends one generation per lunR request. lunR keeps tools, permissions, history, compaction, and subagents. If you already use Claude Code, its sign-in is reused. No credentials are copied into lunR.`,
 	});
 	const command = await ensureClaudeCode(interaction);
-	let status = await signInStatus(command);
+	// Claude Code keeps its sign-in under CLAUDE_CONFIG_DIR when set; every setup process and the saved record must agree.
+	const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() ? process.env.CLAUDE_CONFIG_DIR : undefined;
+	let status = await signInStatus(command, configDir);
 	if (!status.subscribed) {
 		if (!interaction.handoff)
 			throw new Error(
@@ -189,17 +226,18 @@ async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCr
 			],
 		});
 		if (choice !== "login") throw new Error("Anthropic subscription setup cancelled");
-		await interaction.handoff(command, ["auth", "login"], claudeCodeEnvironment(undefined, false));
-		status = await signInStatus(command);
+		await interaction.handoff(command, ["auth", "login"], claudeCodeEnvironment(configDir, false));
+		status = await signInStatus(command, configDir);
 		if (!status.subscribed) throw new Error("Claude Code is not signed in to a Claude subscription");
 	}
-	const routes = await discoverRoutes(command);
+	const routes = await discoverRoutes(command, configDir);
 	if (!routes.length) throw new Error("Claude Code did not list any models lunR can use. Setup not saved.");
 	return {
 		type: "external_claude_code",
 		version: 2,
 		manager: "claude-code",
 		command,
+		...(configDir && { configDir }),
 		accountFingerprint: status.accountFingerprint ?? randomUUID(),
 		routes,
 	};

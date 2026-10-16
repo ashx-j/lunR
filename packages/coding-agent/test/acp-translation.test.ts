@@ -2,10 +2,11 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	buildCompletionDetails,
+	formatGroupedCompletion,
 	formatSingleCompletion,
 } from "../src/builtin-extensions/pi-subagents/src/runs/background/notify.ts";
 import { acpWorkerArgs } from "../src/modes/acp/args.ts";
-import { customMessageContent, customMessageUpdates, promptToLunr } from "../src/modes/acp/translate.ts";
+import { customMessageContent, customMessageUpdates, modelOptions, promptToLunr } from "../src/modes/acp/translate.ts";
 
 describe("ACP command and content boundaries", () => {
 	it("resolves launch paths before switching to a client project", () => {
@@ -93,5 +94,62 @@ describe("ACP command and content boundaries", () => {
 				timestamp: 0,
 			}),
 		).toEqual([expect.objectContaining({ sessionUpdate: "tool_call", status })]);
+	});
+
+	it("does not report an unrecognized child notice as completed", () => {
+		const notify = (content: string) =>
+			customMessageUpdates({ role: "custom", customType: "subagent-notify", content, display: true, timestamp: 0 });
+		expect(notify("Background task exploded: **fixture child**\n\nunexpected wording")).toEqual([
+			expect.objectContaining({ status: "failed" }),
+		]);
+		expect(notify("something else entirely")).toEqual([expect.objectContaining({ status: "failed" })]);
+	});
+
+	it("reports a grouped batch of completed children as completed", () => {
+		const details = ["first", "second"].map((agent) =>
+			buildCompletionDetails({ id: agent, agent, success: true, state: "complete", summary: "done", timestamp: 0 }),
+		);
+		expect(
+			customMessageUpdates({
+				role: "custom",
+				customType: "subagent-notify",
+				content: formatGroupedCompletion(details),
+				display: true,
+				timestamp: 0,
+			}),
+		).toEqual([expect.objectContaining({ sessionUpdate: "tool_call", status: "completed" })]);
+	});
+
+	describe("model picker labels", () => {
+		const model = (provider: string, id: string, name: string) => ({ provider, id, name });
+		const labels = (models: ReturnType<typeof model>[]) => modelOptions(models).map((option) => option.name);
+
+		it("keeps unique names plain and values as provider/id", () => {
+			const options = modelOptions([model("a", "x", "Alpha"), model("b", "y", "Beta")]);
+			expect(options).toEqual([
+				{ value: "a/x", name: "Alpha" },
+				{ value: "b/y", name: "Beta" },
+			]);
+		});
+
+		it("adds the provider when a name appears under different providers", () => {
+			expect(labels([model("a", "x", "Same"), model("b", "x", "Same"), model("a", "z", "Other")])).toEqual([
+				"Same (a)",
+				"Same (b)",
+				"Other",
+			]);
+		});
+
+		it("adds the id when a name repeats within one provider", () => {
+			expect(labels([model("a", "x", "Same"), model("a", "y", "Same")])).toEqual(["Same (a/x)", "Same (a/y)"]);
+		});
+
+		it("disambiguates only the colliding entries in a three-way collision", () => {
+			expect(labels([model("a", "x", "Same"), model("b", "x", "Same"), model("b", "y", "Same")])).toEqual([
+				"Same (a)",
+				"Same (b/x)",
+				"Same (b/y)",
+			]);
+		});
 	});
 });

@@ -16,6 +16,10 @@ const BACKEND_SWITCHES: ReadonlySet<string> = new Set([
 	"CLAUDE_CODE_USE_VERTEX",
 	"CLAUDE_CODE_USE_FOUNDRY",
 ]);
+// Variables Claude Code needs to run normally: paths, locale, user identity, XDG directories, the
+// display/session bus/BROWSER values `auth login` uses to open a browser on Linux, proxy settings, and
+// extra CA certificates for TLS-inspecting networks. Nothing here can carry credentials or redirect
+// requests; those stay on the CONFLICTS list above.
 const ENV_ALLOWLIST = [
 	"PATH",
 	"HOME",
@@ -31,6 +35,21 @@ const ENV_ALLOWLIST = [
 	"TMP",
 	"LANG",
 	"LC_ALL",
+	"TERM",
+	"USER",
+	"LOGNAME",
+	"DISPLAY",
+	"WAYLAND_DISPLAY",
+	"XDG_RUNTIME_DIR",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_STATE_HOME",
+	"DBUS_SESSION_BUS_ADDRESS",
+	"BROWSER",
+	"NODE_EXTRA_CA_CERTS",
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
 	"NO_PROXY",
@@ -39,10 +58,18 @@ const ENV_ALLOWLIST = [
 	"no_proxy",
 ] as const;
 
+/** Appends loopback hosts to a NO_PROXY list, keeping any hosts the user already listed. */
+function withLoopbackNoProxy(existing: string | undefined): string {
+	const hosts = existing ? existing.split(",").map((host) => host.trim()) : [];
+	for (const loopback of ["127.0.0.1", "localhost"]) if (!hosts.includes(loopback)) hosts.push(loopback);
+	return hosts.filter(Boolean).join(",");
+}
+
 /**
  * Minimal environment for every Claude Code process lunR starts. Inherited API keys, endpoints, and
  * cloud backends would silently move a subscription request elsewhere, so `strict` refuses them.
- * Telemetry, error reporting, and self-updates stay off because lunR pins the binary.
+ * Telemetry, error reporting, and self-updates stay off because lunR pins the binary. Proxy settings
+ * pass through, with loopback added to NO_PROXY so the child's request to lunR's relay stays local.
  */
 export function claudeCodeEnvironment(configDir?: string, strict = true): Record<string, string> {
 	const conflicting = CONFLICTS.filter((name) => {
@@ -59,6 +86,8 @@ export function claudeCodeEnvironment(configDir?: string, strict = true): Record
 		if (value) env[name] = value;
 	}
 	if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+	// The child must reach lunR's loopback relay directly; a proxy cannot see this machine's 127.0.0.1.
+	for (const name of ["NO_PROXY", "no_proxy"]) env[name] = withLoopbackNoProxy(env[name]);
 	env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 	env.DISABLE_TELEMETRY = "1";
 	env.DISABLE_ERROR_REPORTING = "1";

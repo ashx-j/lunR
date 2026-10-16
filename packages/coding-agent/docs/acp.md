@@ -46,11 +46,13 @@ images for models that accept them, text attachments, cancellation, model and
 reasoning selection, and lunR's Build, Autonomous and Plan modes. These map to
 lunR's existing `yolo`, `auto` and `read-only` modes.
 
-Extension status notices, including MCP connection counts, appear as separate
-activity entries. Native subagent completion notices also appear there, including
-when loading history. These notices are not part of the assistant's streamed reply.
+Extension status notices, including MCP connection counts, extension errors and
+the note that a dismissed question is holding a turn open, appear as separate
+activity entries. Errors use ACP's failed status. Native subagent completion
+notices also appear there, including when loading history. These notices are not part of the assistant's streamed reply.
 Failed, paused and stopped children use ACP's failed activity status while the
-notice retains the native outcome.
+notice retains the native outcome. A notice lunR cannot recognize also shows as failed
+rather than completed.
 
 Each session runs a separate lunR RPC process. Sessions use lunR's normal
 journals. ACP records under `~/.lunr/agent/acp/sessions/` allow the client to

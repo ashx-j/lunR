@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
 import { claudeCodeRoute } from "../utils/claude-code-release.ts";
@@ -42,9 +43,10 @@ const REQUEST_ENV = {
 	CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
 } as const;
 const MAX_ERROR_BODY = 64 * 1024;
+/** How long Claude Code may keep running after an upstream error before its process tree is killed. */
+export const CLAUDE_CODE_EXIT_GRACE_MS = 2500;
 
-export const CLAUDE_CODE_UPDATE_REQUIRED =
-	"This Claude subscription connection was made with an older lunR setup. Run /login anthropic to update it.";
+export { CLAUDE_CODE_UPDATE_REQUIRED };
 
 type Block = Record<string, unknown>;
 
@@ -273,9 +275,23 @@ async function runClaudeCode(
 	});
 	let pid: number | undefined;
 	let cleanup: Promise<void> | undefined;
-	const finish = () => {
+	let exited: Promise<void> | undefined;
+	// With `graceful`, a Claude Code that is still saving its own state (for example a sign-in refreshed after
+	// a 401) gets CLAUDE_CODE_EXIT_GRACE_MS to exit before the tree is killed. A user abort ends the wait.
+	const finish = (graceful = false) => {
 		cleanup ??= (async () => {
 			loopback.close();
+			if (graceful && exited && !signal?.aborted) {
+				let timer: NodeJS.Timeout | undefined;
+				const aborted = new Promise<void>((resolve) =>
+					signal?.addEventListener("abort", () => resolve(), { once: true }),
+				);
+				const grace = new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, CLAUDE_CODE_EXIT_GRACE_MS);
+				});
+				await Promise.race([exited, grace, aborted]);
+				clearTimeout(timer);
+			}
 			await stopProcessTree(pid);
 			// Windows can hold the working directory briefly after the process tree ends.
 			await rm(directory, { recursive: true, force: true }).catch(() => {});
@@ -285,12 +301,18 @@ async function runClaudeCode(
 	// An abort while lunR reads the body must still end Claude Code and close the relay.
 	signal?.addEventListener("abort", () => void finish(), { once: true });
 	try {
-		await writeFile(join(directory, "system.md"), request.system, "utf8");
+		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
 		await writeFile(
 			join(directory, "settings.json"),
 			JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(request.extraBody) } }),
-			"utf8",
+			{ encoding: "utf8", mode: 0o600 },
+		);
+		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
+		await writeFile(
+			join(directory, "mcp.json"),
+			JSON.stringify({ mcpServers: { lunr: { type: "http", url: loopback.mcpUrl } } }),
+			{ encoding: "utf8", mode: 0o600 },
 		);
 		const env = {
 			...claudeCodeEnvironment(connection.configDir),
@@ -321,7 +343,7 @@ async function runClaudeCode(
 				"",
 				"--strict-mcp-config",
 				"--mcp-config",
-				JSON.stringify({ mcpServers: { lunr: { type: "http", url: loopback.mcpUrl } } }),
+				join(directory, "mcp.json"),
 				"--disable-slash-commands",
 				"--max-turns",
 				"1",
@@ -334,6 +356,7 @@ async function runClaudeCode(
 		);
 		pid = child.pid;
 		// Claude Code exits only after the relay has delivered the whole upstream answer, so cleanup is safe here too.
+		exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
 		child.once("close", () => void finish());
 		const interrupted = new Promise<never>((_, reject) => {
 			child.once("error", reject);
@@ -379,7 +402,7 @@ async function runClaudeCode(
 		if (response.status !== 200) {
 			// The upstream error keeps its status so retries and context-overflow handling match the API-key route.
 			const body = await readLimited(response.body, MAX_ERROR_BODY);
-			await finish();
+			await finish(true);
 			return new Response(body, { status: response.status, headers });
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
