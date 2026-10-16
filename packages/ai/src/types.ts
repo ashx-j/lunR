@@ -414,13 +414,6 @@ export interface AssistantMessage {
 	model: string;
 	responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
-	claudeCodeCarrier?: {
-		version: 1;
-		messages: unknown[];
-		projection: { content: string; tool_calls: unknown[] };
-		contentHash?: string;
-		accountFingerprint?: string;
-	};
 	diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
 	usage: Usage;
 	stopReason: StopReason;

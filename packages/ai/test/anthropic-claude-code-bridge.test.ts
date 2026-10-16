@@ -1,318 +1,272 @@
-import { EventEmitter } from "node:events";
-import { PassThrough, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { CLAUDE_CODE_UPDATE_REQUIRED, streamClaudeCode } from "../src/api/anthropic-claude-code-bridge.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
+import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
-import { isContextOverflow } from "../src/utils/overflow.ts";
+import type { Context, Message } from "../src/types.ts";
 import { isRetryableAssistantError } from "../src/utils/retry.ts";
 
-const mock = vi.hoisted(() => ({
-	response: null as Record<string, unknown> | null,
-	spawn: vi.fn(),
-	category: undefined as unknown,
-}));
-vi.mock("node:child_process", () => ({ spawn: mock.spawn }));
+/**
+ * Stand-in for Claude Code's stream-json mode: acknowledges replayed user turns with zero-turn results,
+ * records what it received next to itself, then sends one Messages request to ANTHROPIC_BASE_URL.
+ */
+const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const argv = process.argv.slice(2);
+const flag = (name) => argv[argv.indexOf(name) + 1];
+const frames = [];
+let buffer = "";
+const result = (fields) => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", ...fields }) + "\\n");
+process.stdin.on("data", (chunk) => {
+	buffer += chunk;
+	for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
+		const frame = JSON.parse(buffer.slice(0, index));
+		buffer = buffer.slice(index + 1);
+		frames.push(frame);
+		if (frame.shouldQuery === false) result({ num_turns: 0, is_error: false });
+	}
+});
+process.stdin.on("end", async () => {
+	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8") }));
+	if (__dirname.endsWith("signed-out")) {
+		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
+		process.exit(1);
+	}
+	const body = { ...extra, model: flag("--model"), messages: frames.map((frame) => frame.message), stream: true };
+	const response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", { method: "POST", body: JSON.stringify(body) });
+	await response.text();
+	result({ is_error: response.status !== 200, num_turns: 1 });
+});
+`;
 
-const connection: ExternalClaudeCodeCredential = {
-	type: "external_claude_code",
-	version: 1,
-	manager: "claude-code",
-	command: "fake-claude",
-	python: "fake-python",
-	accountFingerprint: "test-account",
-};
+const sse = (...events: object[]) =>
+	events.map((event) => `event: ${"type" in event ? event.type : ""}\ndata: ${JSON.stringify(event)}\n\n`).join("");
 
-function completion(text: string, tool = false): Record<string, unknown> {
-	const calls = tool
-		? [{ id: "tool_1", type: "function", function: { name: "read", arguments: '{"path":"x"}' } }]
-		: [];
-	const projection = {
-		content: text.trim(),
-		tool_calls: calls.map((call) => ({ id: call.id, name: call.function.name, input: { path: "x" } })),
-	};
-	return {
-		id: "msg_test",
-		choices: [
-			{
-				finish_reason: tool ? "tool_calls" : "stop",
-				message: {
-					content: text,
-					reasoning_content: "",
-					tool_calls: calls,
-					reasoning_details: [
-						{
-							type: "claude-subscription-directsdk-experimental.native_assistant",
-							version: 1,
-							messages: [{ role: "assistant", content: [{ type: "text", text }] }],
-							projection,
-						},
-					],
-				},
+function toolCallAnswer(toolName: string): string {
+	return sse(
+		{
+			type: "message_start",
+			message: {
+				id: "msg_fixture",
+				type: "message",
+				role: "assistant",
+				model: "claude-opus-4-8",
+				content: [],
+				stop_reason: null,
+				stop_sequence: null,
+				usage: { input_tokens: 10, output_tokens: 1 },
 			},
-		],
-		usage: {
-			prompt_tokens: 13,
-			completion_tokens: 5,
-			total_tokens: 18,
-			cache_creation_input_tokens: 2,
-			prompt_tokens_details: { cached_tokens: 3 },
-			native_admission: { upstream_requests: 1 },
 		},
-	};
+		{ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
+		{ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Next file." } },
+		{ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-new" } },
+		{ type: "content_block_stop", index: 0 },
+		{
+			type: "content_block_start",
+			index: 1,
+			content_block: { type: "tool_use", id: "toolu_2", name: toolName, input: {} },
+		},
+		{ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"path":"b.txt"}' } },
+		{ type: "content_block_stop", index: 1 },
+		{ type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 9 } },
+		{ type: "message_stop" },
+	);
 }
 
-function fakeWorker(text = "hello", splitUtf8 = false, nativePid?: number) {
-	const worker = Object.assign(new EventEmitter(), {
-		stdout: new PassThrough(),
-		stderr: new PassThrough(),
-		exitCode: null as number | null,
-		stdin: new Writable({
-			write(chunk, _encoding, callback) {
-				const request = JSON.parse(String(chunk)) as { requestId: string };
-				const send = (type: string, extra: Record<string, unknown> = {}) =>
-					worker.stdout.write(`${JSON.stringify({ v: 1, requestId: request.requestId, type, ...extra })}\n`);
-				queueMicrotask(() => {
-					send("ready");
-					if (nativePid) send("native_started", { pid: nativePid });
-					send("start");
-					if (splitUtf8) {
-						const delta = Buffer.from(
-							`${JSON.stringify({ v: 1, requestId: request.requestId, type: "text_delta", text })}\n`,
-						);
-						const boundary = delta.indexOf(0xc3) + 1;
-						worker.stdout.write(delta.subarray(0, boundary));
-						worker.stdout.write(delta.subarray(boundary));
-					} else send("text_delta", { text });
-					if (mock.category !== undefined)
-						send("error", { category: mock.category, message: "private prompt fake-token-secret" });
-					else if (mock.response) send("complete", { response: mock.response });
-					worker.exitCode = mock.response ? 0 : 1;
-					worker.emit("close", worker.exitCode);
-				});
-				callback();
-			},
-		}),
-		kill: vi.fn(),
-	});
-	return worker;
-}
-
-describe("Claude Code stream boundary", () => {
-	afterEach(() => {
-		mock.spawn.mockReset();
-		mock.response = null;
-		mock.category = undefined;
-	});
-
-	it.each([
-		["context_overflow", true, false],
-		["timeout", false, true],
-		["rate_limit", false, true],
-		["overloaded", false, true],
-		["transient", false, true],
-		["incomplete", false, true],
-		["private prompt fake-token-secret", false, false],
-		[{ timeout: "private" }, false, false],
-	])("sanitizes category %s while preserving recovery", async (category, overflow, retryable) => {
-		mock.category = category;
-		mock.spawn.mockImplementation(() => fakeWorker());
-		const model = anthropicProvider().getModels()[0]!;
-		const result = await anthropicProvider()
-			.streamSimple(model, { messages: [] }, { externalClaudeCode: connection })
-			.result();
-		expect(result.stopReason).toBe("error");
-		expect(isContextOverflow(result)).toBe(overflow);
-		expect(isRetryableAssistantError(result)).toBe(retryable);
-		expect(result.errorMessage).not.toMatch(/private|fake-token-secret/);
-	});
-
-	it("preserves a locally detected idle timeout as retryable", async () => {
-		vi.useFakeTimers();
-		const worker = Object.assign(new EventEmitter(), {
-			stdout: new PassThrough(),
-			stderr: new PassThrough(),
-			exitCode: null as number | null,
-			stdin: new Writable({
-				write(chunk, _encoding, callback) {
-					const record = JSON.parse(String(chunk)) as { type: string; requestId: string };
-					queueMicrotask(() => {
-						if (record.type === "start")
-							worker.stdout.write(`${JSON.stringify({ v: 1, requestId: record.requestId, type: "ready" })}\n`);
-						else {
-							worker.exitCode = 0;
-							worker.emit("close", 0);
-						}
-					});
-					callback();
-				},
-			}),
-			kill: vi.fn(),
-		});
-		mock.spawn.mockReturnValue(worker);
-		try {
-			const model = anthropicProvider().getModels()[0]!;
-			const pending = anthropicProvider()
-				.streamSimple(model, { messages: [] }, { externalClaudeCode: connection, timeoutMs: 1000 })
-				.result();
-			await vi.waitFor(() => expect(mock.spawn).toHaveBeenCalled());
-			await vi.advanceTimersByTimeAsync(1001);
-			const result = await pending;
-			expect(result.errorMessage).toBe("Claude Code request timed out.");
-			expect(isRetryableAssistantError(result)).toBe(true);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-	it("publishes native tool calls only after the validated completion", async () => {
-		mock.response = completion("hello", true);
-		mock.spawn.mockImplementation(() => fakeWorker());
-		const model = anthropicProvider()
-			.getModels()
-			.find((item) => item.id === "claude-sonnet-5")!;
-		const stream = anthropicProvider().streamSimple(
-			model,
-			{
-				messages: [{ role: "user", content: "go", timestamp: Date.now() }],
-				tools: [{ name: "read", description: "read", parameters: { type: "object" } as never }],
-			},
-			{ externalClaudeCode: connection },
-		);
-		const events = [];
-		for await (const event of stream) events.push(event.type);
-		const result = await stream.result();
-		expect(events).toEqual([
-			"start",
-			"text_start",
-			"text_delta",
-			"text_end",
-			"toolcall_start",
-			"toolcall_end",
-			"done",
-		]);
-		expect(result.stopReason).toBe("toolUse");
-		expect(result.content.at(-1)).toMatchObject({ type: "toolCall", name: "read" });
-		expect(result.claudeCodeCarrier?.messages).toHaveLength(1);
-		expect(result.usage).toMatchObject({ input: 8, output: 5, cacheRead: 3, cacheWrite: 2 });
-	});
-
-	it("preserves UTF-8 characters split across worker chunks", async () => {
-		mock.response = completion("héllo");
-		mock.spawn.mockImplementation(() => fakeWorker("héllo", true));
-		const model = anthropicProvider().getModels()[0]!;
-		const stream = anthropicProvider().streamSimple(
-			model,
-			{ messages: [{ role: "user", content: "go", timestamp: Date.now() }] },
-			{ externalClaudeCode: connection },
-		);
-		for await (const _event of stream) {
-		}
-		const result = await stream.result();
-		expect(result.stopReason).toBe("stop");
-		expect(result.content).toMatchObject([{ type: "text", text: "héllo" }]);
-	});
-
-	it("cleans up a native PID after its worker exits abnormally", async () => {
-		const nativePid = 4242423;
-		const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
-		mock.spawn.mockImplementation((command: string) => {
-			if (command === "taskkill") {
-				const killer = Object.assign(new EventEmitter(), { kill: vi.fn() });
-				queueMicrotask(() => killer.emit("close", 0));
-				return killer;
-			}
-			return fakeWorker("hello", false, nativePid);
-		});
-		try {
-			const model = anthropicProvider().getModels()[0]!;
-			const result = await anthropicProvider()
-				.streamSimple(
-					model,
-					{ messages: [{ role: "user", content: "go", timestamp: Date.now() }] },
-					{
-						externalClaudeCode: connection,
-					},
-				)
-				.result();
-			expect(result.stopReason).toBe("error");
-			if (process.platform === "win32") {
-				await vi.waitFor(() =>
-					expect(mock.spawn).toHaveBeenCalledWith(
-						"taskkill",
-						["/F", "/T", "/PID", String(nativePid)],
-						expect.anything(),
-					),
-				);
-			} else await vi.waitFor(() => expect(kill).toHaveBeenCalledWith(-nativePid, "SIGKILL"));
-		} finally {
-			kill.mockRestore();
-		}
-	});
-
-	it("discards partial text and never exposes tools on a truncated worker stream", async () => {
-		mock.spawn.mockImplementation(() => fakeWorker());
-		const model = anthropicProvider().getModels()[0]!;
-		const stream = anthropicProvider().streamSimple(
-			model,
-			{ messages: [{ role: "user", content: "go", timestamp: Date.now() }] },
-			{ externalClaudeCode: connection },
-		);
-		const events = [];
-		for await (const event of stream) events.push(event.type);
-		const result = await stream.result();
-		expect(events).not.toContain("toolcall_end");
-		expect(result.stopReason).toBe("error");
-		expect(result.content).toEqual([]);
-	});
+const directories: string[] = [];
+const closers: (() => void)[] = [];
+afterEach(() => {
+	for (const close of closers.splice(0)) close();
+	for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-describe("subscription usage accounting", () => {
-	it("preserves reasoning and prices one-hour cache writes", async () => {
-		mock.response = completion("hello");
-		mock.response.usage = {
-			prompt_tokens: 1000100,
-			completion_tokens: 200,
-			total_tokens: 1000300,
-			cache_creation_input_tokens: 1000000,
-			prompt_tokens_details: { cached_tokens: 0 },
-			completion_tokens_details: { reasoning_tokens: 150 },
-			native_usage: {
-				input_tokens: 100,
-				output_tokens: 200,
-				cache_creation_input_tokens: 1000000,
-				cache_creation: { ephemeral_5m_input_tokens: 600000, ephemeral_1h_input_tokens: 400000 },
-				output_tokens_details: { thinking_tokens: 150 },
-			},
-			native_admission: { upstream_requests: 1 },
-		};
-		mock.spawn.mockImplementation(() => fakeWorker());
-		const model = anthropicProvider()
-			.getModels()
-			.find((model) => model.id === "claude-opus-4-8")!;
-		const result = await anthropicProvider()
-			.streamSimple(model, { messages: [] }, { externalClaudeCode: connection })
-			.result();
-		expect(result.stopReason).toBe("stop");
-		expect(result.usage.reasoning).toBe(150);
-		expect(result.usage.cacheWrite1h).toBe(400000);
-		expect(result.usage.cost.cacheWrite).toBe(7.75);
-	});
-	it("retains native usage when carrier validation rejects the response", async () => {
-		mock.response = completion("hello");
-		const choices = mock.response.choices as Array<{ message: Record<string, unknown> }>;
-		choices[0].message.reasoning_details = [];
-		mock.spawn.mockImplementation(() => fakeWorker());
-		const model = anthropicProvider().getModels()[0]!;
-		const result = await anthropicProvider()
-			.streamSimple(model, { messages: [] }, { externalClaudeCode: connection })
-			.result();
-		expect(result.stopReason).toBe("error");
-		expect(result.usage).toMatchObject({
-			input: 8,
-			output: 5,
-			cacheRead: 3,
-			cacheWrite: 2,
-			totalTokens: 18,
-			measurement: "reported",
+/** Starts a fixture upstream and a fake Claude Code; `name` ending in "signed-out" makes the fake stop early. */
+async function setup(
+	upstreamAnswer: { status: number; body: string },
+	name = "claude-code",
+): Promise<{ connection: ExternalClaudeCodeCredential; upstream: string; directory: string }> {
+	const root = mkdtempSync(join(tmpdir(), "lunr-claude-bridge-"));
+	directories.push(root);
+	const directory = join(root, name);
+	mkdirSync(directory);
+	const command = join(directory, "claude");
+	writeFileSync(command, FAKE_CLAUDE_CODE);
+	chmodSync(command, 0o755);
+	const server = createServer((req, res) => {
+		req.resume();
+		req.on("end", () => {
+			res.writeHead(upstreamAnswer.status, {
+				"content-type": upstreamAnswer.status === 200 ? "text/event-stream" : "application/json",
+			});
+			res.end(upstreamAnswer.body);
 		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	closers.push(() => server.close());
+	const address = server.address();
+	return {
+		connection: { type: "external_claude_code", version: 2, manager: "claude-code", command },
+		upstream: `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`,
+		directory,
+	};
+}
+
+const usage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+const history: Message[] = [
+	{ role: "user", content: "Read a.txt", timestamp: 1 },
+	{
+		role: "assistant",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-opus-4-8",
+		content: [
+			{ type: "thinking", thinking: "Need a.txt.", thinkingSignature: "sig-old" },
+			{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a.txt" } },
+		],
+		usage,
+		stopReason: "toolUse",
+		timestamp: 2,
+	},
+	{
+		role: "toolResult",
+		toolCallId: "toolu_1",
+		toolName: "read",
+		content: [{ type: "text", text: "contents of a" }],
+		isError: false,
+		timestamp: 3,
+	},
+	{ role: "user", content: "Now b.txt", timestamp: 4 },
+];
+const context: Context = {
+	systemPrompt: "You are lunR.",
+	messages: history,
+	tools: [
+		{
+			name: "read",
+			description: "Read a file",
+			parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+		},
+	],
+};
+const model = ANTHROPIC_MODELS["claude-opus-4-8"];
+
+describe.skipIf(process.platform === "win32")("Claude Code subscription bridge", () => {
+	it("replays history through Claude Code and returns the upstream turn with lunR tool names", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ reasoning: "high", externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toEqual([
+			{ type: "thinking", thinking: "Next file.", thinkingSignature: "sig-new" },
+			{ type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "b.txt" } },
+		]);
+
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.argv).toEqual(expect.arrayContaining(["--model", "claude-opus-4-8[1m]", "--max-turns", "1"]));
+		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("");
+		expect(JSON.parse(record.argv[record.argv.indexOf("--mcp-config") + 1]).mcpServers.lunr.type).toBe("http");
+		expect(record.system).toBe("You are lunR.");
+		expect(
+			record.frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
+		).toEqual([
+			["user", false],
+			["assistant", undefined],
+			["user", undefined],
+		]);
+		// Claude Code keeps signed thinking only when the replayed turn names its model.
+		expect(record.frames[1].message).toEqual({
+			role: "assistant",
+			model: "claude-opus-4-8",
+			content: [
+				{ type: "thinking", thinking: "Need a.txt.", signature: "sig-old" },
+				{ type: "tool_use", id: "toolu_1", name: "mcp__lunr__read", input: { path: "a.txt" } },
+			],
+		});
+		expect(record.frames[2].message.content.map((block: { type: string }) => block.type)).toEqual([
+			"tool_result",
+			"text",
+		]);
+		expect(record.extra.tools.map((tool: { name: string }) => tool.name)).toEqual(["mcp__lunr__read"]);
+		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
+	it("accepts an explicit automatic tool choice", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const options = { externalClaudeCode: connection, toolChoice: "auto" as const };
+		const result = await streamClaudeCode(model, context, options, false, upstream).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("toolUse");
+	});
+
+	it("passes upstream errors through with their status so retries match the API-key route", async () => {
+		const { connection, upstream } = await setup({
+			status: 429,
+			body: JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "Slow down" } }),
+		});
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toMatch(/^429 .*rate_limit_error/);
+		expect(isRetryableAssistantError(result)).toBe(true);
+	});
+
+	it("explains a Claude Code exit before any upstream request without passing native text through", async () => {
+		const { connection, upstream } = await setup({ status: 500, body: "unreachable" }, "signed-out");
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Claude Code is not signed in to a Claude subscription. Run /login anthropic.");
+	});
+
+	it("rejects tool calls for tools lunR did not offer", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__bash") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("outside lunR's tool list");
+	});
+
+	it("asks connections from the retired Python bridge to set up again", async () => {
+		const result = await anthropicProvider()
+			.streamSimple(model, context, {
+				externalClaudeCode: { type: "external_claude_code", version: 1, manager: "claude-code", command: "/x" },
+			})
+			.result();
+		expect(result.errorMessage).toBe(CLAUDE_CODE_UPDATE_REQUIRED);
 	});
 });

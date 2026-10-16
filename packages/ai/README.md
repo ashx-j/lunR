@@ -1457,11 +1457,11 @@ await models.logout('github-copilot');
 
 ### Anthropic subscriptions
 
-Anthropic API keys use the Messages API. Claude subscription setup instead returns an `external_claude_code` credential. It requires Python 3.10+ and Claude Code 2.1.263, and checks the existing Claude Code subscription login and supported model routes. Missing dependency installers require explicit confirmation. Claude Code owns authentication; lunR stores the executable paths and route metadata, without copying subscription tokens.
+Anthropic API keys use the Messages API. Claude subscription setup instead returns an `external_claude_code` credential. After confirmation, setup downloads Claude Code 2.1.263 from the npm registry into `<agent dir>/claude-code/2.1.263/` and checks it against a pinned hash. It then reads Claude Code's existing subscription sign-in and supported model routes. Claude Code owns authentication; lunR stores the binary path and route metadata without copying subscription tokens.
 
 Use `/login anthropic` in lunR for the terminal setup flow. SDK applications can call `models.login('anthropic', 'oauth', interaction)` after registering `anthropicProvider()`. Their `AuthInteraction` must handle selection prompts and can supply `handoff` for Claude Code login. Without a handoff, setup asks the user to log in to Claude Code separately. Select a model through `models.getAvailable('anthropic')` after setup so its route matches the connected account.
 
-Legacy Anthropic OAuth credentials fail closed. `ANTHROPIC_OAUTH_TOKEN` does not configure this provider. Run setup again rather than attempting to refresh those credentials. Subscription requests use the vendored Python bridge and Claude Code CLI; they need a local Node environment and those external executables. Live subscription and cross-platform operation remain qualification limits. See the [provider guide](https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/docs/providers.md) for the integration limits.
+Subscription requests build the normal Messages request, then an injected SDK client hands it to that Claude Code binary instead of sending HTTPS. They need a local Node or Bun environment that can start processes. Legacy Anthropic OAuth credentials, connections from the earlier Python-based setup, and `ANTHROPIC_OAUTH_TOKEN` fail closed; run setup again instead. Live subscription and cross-platform operation remain qualification limits. See the [provider guide](https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/docs/providers.md) for the integration limits.
 
 ### Vertex AI
 
