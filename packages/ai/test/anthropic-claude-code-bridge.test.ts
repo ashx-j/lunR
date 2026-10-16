@@ -1,9 +1,13 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CLAUDE_CODE_UPDATE_REQUIRED, streamClaudeCode } from "../src/api/anthropic-claude-code-bridge.ts";
+import {
+	CLAUDE_CODE_EXIT_GRACE_MS,
+	CLAUDE_CODE_UPDATE_REQUIRED,
+	streamClaudeCode,
+} from "../src/api/anthropic-claude-code-bridge.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -13,6 +17,8 @@ import { isRetryableAssistantError } from "../src/utils/retry.ts";
 /**
  * Stand-in for Claude Code's stream-json mode: acknowledges replayed user turns with zero-turn results,
  * records what it received next to itself, then sends one Messages request to ANTHROPIC_BASE_URL.
+ * A directory ending in "lingers" keeps running briefly after the answer and then writes "exited-cleanly";
+ * one ending in "hangs" never exits. Both leave a "responded" marker once the answer has been read.
  */
 const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
 const { readFileSync, writeFileSync } = require("node:fs");
@@ -33,6 +39,7 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
+	writeFileSync(join(__dirname, "pid"), String(process.pid));
 	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8") }));
 	if (__dirname.endsWith("signed-out")) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
@@ -41,7 +48,13 @@ process.stdin.on("end", async () => {
 	const body = { ...extra, model: flag("--model"), messages: frames.map((frame) => frame.message), stream: true };
 	const response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", { method: "POST", body: JSON.stringify(body) });
 	await response.text();
-	result({ is_error: response.status !== 200, num_turns: 1 });
+	writeFileSync(join(__dirname, "responded"), "");
+	if (__dirname.endsWith("lingers")) {
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		writeFileSync(join(__dirname, "exited-cleanly"), "");
+	}
+	if (__dirname.endsWith("hangs")) setInterval(() => {}, 1000);
+	else result({ is_error: response.status !== 200, num_turns: 1 });
 });
 `;
 
@@ -246,6 +259,73 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Claude Code is not signed in to a Claude subscription. Run /login anthropic.");
+	});
+
+	describe("stopping Claude Code after an upstream error", () => {
+		const unauthorized = {
+			status: 401,
+			body: JSON.stringify({ type: "error", error: { type: "authentication_error" } }),
+		};
+		const alive = (pidFile: string) => {
+			try {
+				process.kill(Number(readFileSync(pidFile, "utf8")), 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		const until = async (condition: () => boolean) => {
+			for (let waited = 0; !condition() && waited < 5000; waited += 20) await new Promise((r) => setTimeout(r, 20));
+		};
+
+		it("lets Claude Code finish its own exit before killing it", async () => {
+			const { connection, upstream, directory } = await setup(unauthorized, "lingers");
+			const result = await streamClaudeCode(
+				model,
+				context,
+				{ externalClaudeCode: connection },
+				true,
+				upstream,
+			).result();
+			expect(result.errorMessage).toMatch(/^401 /);
+			// A kill right after the error body would have ended the process before it wrote this.
+			expect(existsSync(join(directory, "exited-cleanly"))).toBe(true);
+		});
+
+		it("kills a Claude Code that is still running after the grace period", async () => {
+			const { connection, upstream, directory } = await setup(unauthorized, "hangs");
+			const started = Date.now();
+			const result = await streamClaudeCode(
+				model,
+				context,
+				{ externalClaudeCode: connection },
+				true,
+				upstream,
+			).result();
+			expect(result.errorMessage).toMatch(/^401 /);
+			expect(Date.now() - started).toBeGreaterThanOrEqual(CLAUDE_CODE_EXIT_GRACE_MS - 100);
+			await until(() => !alive(join(directory, "pid")));
+			expect(alive(join(directory, "pid"))).toBe(false);
+		}, 15_000);
+
+		it("kills Claude Code promptly when the user aborts during the grace period", async () => {
+			const { connection, upstream, directory } = await setup(unauthorized, "hangs");
+			const controller = new AbortController();
+			const running = streamClaudeCode(
+				model,
+				context,
+				{ externalClaudeCode: connection, signal: controller.signal },
+				true,
+				upstream,
+			).result();
+			await until(() => existsSync(join(directory, "responded")));
+			const aborted = Date.now();
+			controller.abort();
+			await running;
+			expect(Date.now() - aborted).toBeLessThan(CLAUDE_CODE_EXIT_GRACE_MS / 2);
+			await until(() => !alive(join(directory, "pid")));
+			expect(alive(join(directory, "pid"))).toBe(false);
+		}, 15_000);
 	});
 
 	it("rejects tool calls for tools lunR did not offer", async () => {
