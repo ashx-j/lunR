@@ -1,6 +1,18 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.30`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.31`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.31] - 2026-10-16
+
+### Fixed
+
+- `/login anthropic` honors `CLAUDE_CONFIG_DIR`, replaces a downloaded Claude Code that no longer runs, gives up on a download that stalls for 60 seconds, and ignores a malformed model-discovery line.
+- Claude subscription requests work behind `HTTPS_PROXY`, and Claude Code receives custom CA certificates and the display settings `auth login` needs to open a browser.
+- The Claude Code relay secret no longer appears on the command line, where other local users could read it.
+- After an upstream error, Claude Code gets 2.5 seconds to save a refreshed sign-in before lunR stops it.
+- Connections saved by lunR 0.2.29 drop out of `/model` and ask for `/login anthropic` before the first request.
+- `/logout` labels the Claude subscription and says that Claude Code's own sign-in and downloaded copy stay in place.
+- ACP clients show extension errors and held-question notes as activity instead of assistant text, show unrecognized subagent notices as failed, and tell apart same-name models from one provider.
 
 ## [0.2.30] - 2026-10-16
 
