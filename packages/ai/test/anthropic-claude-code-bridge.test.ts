@@ -33,7 +33,7 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8") }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
 	if (__dirname.endsWith("signed-out")) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -184,7 +184,14 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
 		expect(record.argv).toEqual(expect.arrayContaining(["--model", "claude-opus-4-8[1m]", "--max-turns", "1"]));
 		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("");
-		expect(JSON.parse(record.argv[record.argv.indexOf("--mcp-config") + 1]).mcpServers.lunr.type).toBe("http");
+		// The MCP config is a file, and neither endpoint's secret path appears on the command line.
+		const mcpUrl = new URL(JSON.parse(record.mcp).mcpServers.lunr.url);
+		const messagesSecret = new URL(record.baseUrl).pathname.slice(1);
+		const mcpSecret = mcpUrl.pathname.split("/")[1];
+		expect(mcpUrl.pathname).toBe(`/${mcpSecret}/mcp`);
+		expect(mcpSecret).not.toBe(messagesSecret);
+		expect(record.argv.join("\n")).not.toContain(mcpSecret);
+		expect(record.argv.join("\n")).not.toContain(messagesSecret);
 		expect(record.system).toBe("You are lunR.");
 		expect(
 			record.frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
