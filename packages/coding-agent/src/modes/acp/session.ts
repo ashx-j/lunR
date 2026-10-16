@@ -10,7 +10,7 @@ import {
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { RpcAcpPermissionRequest, RpcExtensionUIRequest } from "../rpc/rpc-types.ts";
 import type { AcpRpcProcess, WorkerEvent } from "./process.ts";
-import { customMessageContent, toolContent, toolKind, toolLocations } from "./translate.ts";
+import { customMessageUpdates, toolContent, toolKind, toolLocations } from "./translate.ts";
 
 type Turn = {
 	resolve: (reason: StopReason) => void;
@@ -316,8 +316,7 @@ export class AcpSession {
 			}
 			case "message_end": {
 				if (event.message.role === "custom") {
-					for (const content of customMessageContent(event.message))
-						this.emit({ sessionUpdate: "agent_message_chunk", content });
+					for (const update of customMessageUpdates(event.message)) this.emit(update);
 				}
 				if (event.message.role === "assistant" && this.turn) {
 					if (event.message.stopReason === "error")
@@ -479,7 +478,15 @@ export class AcpSession {
 
 	private async dialog(event: RpcExtensionUIRequest): Promise<void> {
 		if (event.method === "notify") {
-			this.emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${event.message}\n` } });
+			// ACP clients concatenate assistant chunks, so extension notices belong in activity.
+			this.emit({
+				sessionUpdate: "tool_call",
+				toolCallId: `lunr-notification-${event.id}`,
+				title: "lunR notification",
+				kind: "other",
+				status: event.notifyType === "error" ? "failed" : "completed",
+				content: [{ type: "content", content: { type: "text", text: event.message } }],
+			});
 			return;
 		}
 		if (

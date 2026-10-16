@@ -22,6 +22,10 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **ACP Windows/T3 validation (`fix/acp-windows-t3-live`, 2026-10-11):** live T3 nightly conversations verified discovery, text/reasoning, disposable file and shell tools, approve/decline, cancellation, extension questions, model/mode changes, native session reopening, injected T3 MCP and explicit native children. Extension status and native child completion notices now use separate ACP activity, including history replay, instead of contaminating assistant text. Model labels show the model name; provider-qualified IDs retain routing and session identity. Windows launch instructions use Node with the CLI path because T3 does not run npm command shims through a shell. A separate development provider was used; installed CLI and saved terminal settings remain unchanged. Native desktop automation was unavailable; browser control reached the actual Windows nightly server.
+
+- **ACP child outcomes:** unsuccessful native child notices use ACP's failed activity status in live delivery and history. The existing native notice parser retains failed, paused and stopped outcomes instead of displaying success.
+
 - **v0.2.29 (2026-10-11):** PRs #154 through #157 merged, with #155 through #157 retained through release PR #158 ancestry. Tag `v0.2.29` points to green release merge `de4db307`; npm publication workflow `38166722936` succeeded. All four public packages and three native payloads report 0.2.29 latest, and their registry tarballs match declared integrity. The release includes startup paint repair, bounded GitHub PR watches, new defaults and upstream notices, and ACP support. A fresh isolated public install reports 0.2.29 and passes startup and first-request fixtures. The native runtime pin and approval remain unchanged.
 
 - **Managed Claude Code subscriptions (`feat/anthropic-managed-claude-code`, 2026-10-15):** `/login anthropic` downloads Claude Code 2.1.263 from npm into `~/.lunr/agent/claude-code/2.1.263/` after confirmation, verifies the pinned per-platform registry integrity, and reuses Claude Code's own sign-in. Python, the vendored Hermes transport and `scripts/verify-claude-vendor.mjs` are removed. Subscription turns build the normal Messages request; an injected SDK client's `fetch` replays history into `claude -p` stream-json, exposes lunR tools through a loopback HTTP MCP inventory, and admits exactly one upstream request through a loopback relay. Version 1 (Python) connections ask for `/login anthropic` again. Native/direct OAuth stays out: Anthropic's terms still bar third-party Claude.ai login and Claude Code impersonation. No live account was used.
@@ -193,6 +197,8 @@ Last updated: 2026-10-15 (managed Claude Code subscriptions). Public npm is `@as
 
 - Managed Claude Code subscriptions, 2026-10-15: all five offline package builds, the Node bundle, and compiled first-paint plus first-turn subagent/MCP/LSP/fetch checks pass with unchanged tool payloads. Full isolated AI passes 646 with 760 credential skips; full coding-agent passes 3,583 with 56 skips (five fewer than 0.2.29: the removed Python worker-path cases). The AI npm dry-run pack contains no vendor or Python files. New release, loopback and bridge tests use a fake stream-json Claude Code and fail when the model stamp or one-request admission is removed. The installer downloaded the real linux-x64 2.1.263 package (97 MB), matched its integrity, and extracted a binary byte-identical to system `tar`. Offline checks against that real binary, with fake OAuth credentials in a disposable home and a dead outbound proxy, pass single, history, two-replay, 429 passthrough, signed-out, cancellation, and setup discovery paths with exactly one upstream request each (zero for discovery and signed-out). Claude Code identified itself as `claude-cli/2.1.263 (external, sdk-cli)`. No live subscription, installed CLI or original checkout was used.
 
+- ACP Windows/T3 validation, 2026-10-11: 40 focused ACP integration, worker and translation tests pass on Windows, including red-before-fix notification checks and successful/failed native child history replay. Offline package type builds and the coding-agent Node bundle pass; touched TypeScript Biome and whitespace checks pass. The model-label follow-up rebuilt coding-agent, passed the compiled configuration/selection test, and verified a model-only T3 picker label with the original provider-qualified model ID on a successful live turn. The child-outcome follow-up rebuilt coding-agent and reproduced the incorrect success status before passing unit and compiled delivery/replay tests. Live nightly tests used an isolated development provider and disposable folders. `agent-build` was unavailable, so heavy checks ran sequentially.
+
 - v0.2.29 qualification: all five offline package builds, the Node bundle, read-only source/lock checks and seven real-payload public tarballs pass. After refreshing the combined ACP inventory snapshot for `pr_watch`, all 11 ACP integration tests pass. Fresh release CI passes Agent 193, AI 652 with 760 credential skips, coding-agent 3,588 with 56 skips, and TUI; merged master CI also passes. An isolated packed install reports 0.2.29, retains both complete license notices, and passes startup and first-request subagent/MCP/LSP/local-fetch checks. The three production-approved CuaDriver archives retain their pinned checksums. All seven public registry tarballs match declared integrity and latest reports 0.2.29. A fresh isolated public npm install verifies the four package versions and complete notices, and passes startup and first-request subagent/MCP/LSP/local-fetch fixtures.
 
 - Startup paint repair, 2026-10-06: 44 focused first-paint/status tests, all five offline package builds and the Node bundle, and compiled first-paint/first-request subagent/MCP/LSP/local-fetch checks pass in an isolated worktree/profile. Whole-package Biome and the pinned-dependency, relative-import, shrinkwrap, installer-lock, workflow-policy and browser-smoke checks pass. The new scoped-model frame assertions reproduced the screenshot before the fix. No installed CLI or live Windows terminal was changed or tested.
@@ -332,6 +338,11 @@ Last updated: 2026-10-15 (managed Claude Code subscriptions). Public npm is `@as
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- The AI package loads the Claude Code bridge through a computed import specifier. A literal path lets browser bundlers follow it into Node-only modules and fails the browser smoke check.
+
+- T3 composer model/mode choices remain draft selections until a UI message is sent. MCP `t3_thread_send` uses the thread's saved selection; configure it explicitly when testing through MCP.
+- ACP child-notice activity IDs use message content because journal restoration can change the runtime timestamp. The Windows ACP fixture disables optional computer tools for a portable inventory and retries asynchronous cleanup after worker closure.
 
 - Npm accepted the 0.2.29 CLI before its metadata and tarball became public, with about thirteen minutes of observed delay. Check registry availability and a fresh public install after workflow success.
 
@@ -488,6 +499,12 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - 2026-10-15: keep Claude subscriptions on Claude Code because Anthropic's current terms still forbid third-party Claude.ai login and identity impersonation; replace the Python bridge with a lunR-managed pinned binary so setup needs neither Python nor a matching Claude Code install.
 - 2026-10-15: inject Claude Code as the Anthropic SDK client's `fetch` so subscription turns reuse the Messages request builder and stream parser instead of a separate response format.
+
+- 2026-10-11: keep ACP model labels to the model name while retaining provider-qualified IDs so the client picker hides internal routing details; name the provider only when two providers share a model name, so duplicates stay distinguishable.
+
+- 2026-10-11: parse native child notices with the existing renderer parser so ACP activity and history retain unsuccessful outcomes instead of reporting success.
+
+- 2026-10-11: translate ACP status and native child completion notices into activity because T3 concatenates assistant chunks; retain extension command replies as chat content.
 
 - 2026-10-11: tag the green merged release commit for 0.2.29 and verify public registry artifacts plus a fresh install because npm acceptance precedes metadata propagation.
 

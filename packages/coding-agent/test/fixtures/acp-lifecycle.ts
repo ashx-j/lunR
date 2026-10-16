@@ -41,6 +41,7 @@ export default function lifecycleFixture(pi: ExtensionAPI): void {
 	});
 	let abortTimer: ReturnType<typeof setInterval> | undefined;
 	pi.on("before_agent_start", (_event, ctx) => {
+		ctx.ui.notify("MCP: 1 servers connected (83 tools)", "info");
 		abortTimer = setInterval(() => {
 			if (!existsSync(join(ctx.cwd, "abort-approval"))) return;
 			clearInterval(abortTimer);
