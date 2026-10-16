@@ -309,7 +309,9 @@ export class AcpSession {
 					update.type === "toolcall_end"
 				) {
 					const call = update.partial.content[update.contentIndex];
-					if (call?.type === "toolCall") this.startTool(call.id, call.name, call.arguments, "pending");
+					// deltas carry the whole growing input, so resending each one floods the client with large writes.
+					if (call?.type !== "toolCall" || (update.type === "toolcall_delta" && this.tools.has(call.id))) break;
+					this.startTool(call.id, call.name, call.arguments, "pending");
 				}
 				break;
 			}

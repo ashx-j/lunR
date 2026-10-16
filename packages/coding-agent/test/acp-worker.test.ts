@@ -77,6 +77,8 @@ describe("ACP rpc worker", () => {
 		bridge.respond({ type: "extension_ui_response", id: output[1].id, confirmed: true });
 		await expect(edit).resolves.toBeUndefined();
 		await expect(gate("read", { path: "file.ts" }, "read-call")).resolves.toBeUndefined();
+		await expect(gate("todo", { todos: [] }, "todo-call")).resolves.toBeUndefined();
+		await expect(gate("lsp_code_actions", {}, "lsp-call")).resolves.toBeUndefined();
 		expect(output).toHaveLength(2);
 		bridge.dispose();
 	});
@@ -138,15 +140,24 @@ describe("ACP rpc worker", () => {
 		bridge.dispose();
 	});
 
-	it("validates permission modes and refuses active session changes", async () => {
+	it("validates permission modes and accepts changes during a turn", async () => {
 		const { setRpcPermissionMode } = await import("../src/modes/acp/worker.ts");
 		const setPermissionMode = vi.fn<(mode: PermissionMode) => void>();
-		const session = { isIdle: true, isCompacting: false, isRetrying: false, isBashRunning: false, setPermissionMode };
-		for (const mode of ["yolo", "auto", "read-only"]) setRpcPermissionMode(session, mode);
+		for (const mode of ["yolo", "auto", "read-only"]) setRpcPermissionMode({ setPermissionMode }, mode);
 		expect(setPermissionMode).toHaveBeenCalledTimes(3);
-		expect(() => setRpcPermissionMode(session, "manual")).toThrow("Invalid permission mode");
-		expect(() => setRpcPermissionMode({ ...session, isIdle: false }, "yolo")).toThrow("session is active");
-		expect(() => setRpcPermissionMode({ ...session, isBashRunning: true }, "auto")).toThrow("session is active");
+		expect(() => setRpcPermissionMode({ setPermissionMode }, "manual")).toThrow("Invalid permission mode");
+	});
+
+	it("applies a switch to read-only made while an approval is open", async () => {
+		const { bridge, gate, output, permissionState } = await bridgeFixture();
+		const write = gate("write", { path: "file.ts", content: "new" }, "write-call");
+		const listing = gate("bash", { command: "ls" }, "bash-call");
+		permissionState.mode = "read-only";
+		bridge.respond({ type: "extension_ui_response", id: output[0].id, confirmed: true });
+		bridge.respond({ type: "extension_ui_response", id: output[1].id, confirmed: true });
+		await expect(write).resolves.toMatchObject({ block: true });
+		await expect(listing).resolves.toBeUndefined();
+		bridge.dispose();
 	});
 
 	it("restores writable mode only after plan approval", async () => {

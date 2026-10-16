@@ -72,8 +72,8 @@ export type ApprovalResponse =
 	| { decision: "reject"; feedback: string }
 	| { decision: "approve"; feedback?: string };
 
-/** Read-only tools that never need approval. */
-const READ_ONLY_TOOLS = new Set([
+/** Read-only tools that never need approval. ACP extends this list for its client approval gate. */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"read",
 	"grep",
 	"find",
@@ -412,39 +412,49 @@ export async function gateToolCall(
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
-	if (ctx.mode === "read-only") {
-		const reason = readOnlyModeBlockReason(toolName, input);
-		if (reason) return { block: true, reason };
-		if (toolName === "mcp") {
-			if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
-				return { block: true, reason: "Read-only mode blocks MCP tool calls, connections, and authentication." };
-			}
-			return undefined;
-		}
-		if (toolName === "subagent") {
-			const action = input.action;
-			if (
-				getRequestedChildLaunches(input).some((child) => child.permissions === "full") ||
-				action === "resume" ||
-				action === "steer" ||
-				action === "append-step" ||
-				action === "schedule" ||
-				action === "schedule-cancel"
-			) {
-				return {
-					block: true,
-					reason: "Read-only mode cannot launch full-access children or change running children.",
-				};
-			}
-			return undefined;
-		}
-		if (toolName.startsWith("computer_")) return undefined;
-		if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
-		return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
-	}
+	if (ctx.mode === "read-only") return readOnlyModeBlock(toolName, input);
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);
 		if (launchResult) return launchResult;
 	}
 	return undefined;
+}
+
+/**
+ * Read-only mode's verdict for one tool call. ACP reuses it when the client
+ * switches to read-only while an approval for that call is still open.
+ */
+export function readOnlyModeBlock(
+	toolName: string,
+	input: Record<string, unknown>,
+): { block: true; reason: string } | undefined {
+	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
+	const reason = readOnlyModeBlockReason(toolName, input);
+	if (reason) return { block: true, reason };
+	if (toolName === "mcp") {
+		if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
+			return { block: true, reason: "Read-only mode blocks MCP tool calls, connections, and authentication." };
+		}
+		return undefined;
+	}
+	if (toolName === "subagent") {
+		const action = input.action;
+		if (
+			getRequestedChildLaunches(input).some((child) => child.permissions === "full") ||
+			action === "resume" ||
+			action === "steer" ||
+			action === "append-step" ||
+			action === "schedule" ||
+			action === "schedule-cancel"
+		) {
+			return {
+				block: true,
+				reason: "Read-only mode cannot launch full-access children or change running children.",
+			};
+		}
+		return undefined;
+	}
+	if (toolName.startsWith("computer_")) return undefined;
+	if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
+	return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
 }

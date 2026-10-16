@@ -3,6 +3,8 @@ import type { AgentSession } from "../../core/agent-session.ts";
 import {
 	PERMISSION_MODES,
 	type PermissionMode,
+	READ_ONLY_TOOLS,
+	readOnlyModeBlock,
 	registerApprovalHandler,
 	restorePermissionModeAfterPlan,
 } from "../../core/permissions.ts";
@@ -10,32 +12,8 @@ import { getSubagentCancellation } from "../../core/subagent-cancellation.ts";
 import type { RpcAcpPermissionRequest, RpcExtensionUIResponse } from "../rpc/rpc-types.ts";
 import { ACP_WORKER_CONFIG_ENV, readAcpWorkerConfig } from "./worker-config.ts";
 
-const READ_TOOLS = new Set([
-	"read",
-	"grep",
-	"find",
-	"ls",
-	"web_search",
-	"web_fetch",
-	"fetch_content",
-	"get_search_content",
-	"sourcegraph",
-	"repo_map",
-	"symbol_outline",
-	"read_block",
-	"code_overview",
-	"ast_search",
-	"lsp_diagnostics",
-	"lsp_hover",
-	"lsp_definition",
-	"lsp_references",
-	"lsp_symbols",
-	"lsp_completions",
-	"memory_load",
-	"subagent_wait",
-	"structured_output",
-	"present_plan",
-]);
+// tools that run without a client approval: core read-only tools plus session-local todo updates.
+const APPROVAL_FREE_TOOLS: ReadonlySet<string> = new Set([...READ_ONLY_TOOLS, "todo"]);
 
 export function assertRpcConfigurationIdle(
 	session: Pick<AgentSession, "isIdle" | "isCompacting" | "isRetrying" | "isBashRunning">,
@@ -45,13 +23,10 @@ export function assertRpcConfigurationIdle(
 	}
 }
 
-export function setRpcPermissionMode(
-	session: Pick<AgentSession, "isIdle" | "isCompacting" | "isRetrying" | "isBashRunning" | "setPermissionMode">,
-	mode: unknown,
-): void {
+// tool gates read the mode on each call, so it can change mid-turn like shift+tab in the tui.
+export function setRpcPermissionMode(session: Pick<AgentSession, "setPermissionMode">, mode: unknown): void {
 	const validatedMode = PERMISSION_MODES.find((allowed) => allowed === mode);
 	if (!validatedMode) throw new Error("Invalid permission mode.");
-	assertRpcConfigurationIdle(session);
 	session.setPermissionMode(validatedMode);
 }
 
@@ -113,14 +88,15 @@ export function createAcpWorkerBridge(
 	};
 	const removeGate = session.addToolCallGate(async (toolName, input, toolCallId) => {
 		if (cancelled) return { block: true, reason: "ACP request cancelled." };
-		if (READ_TOOLS.has(toolName)) return undefined;
+		if (APPROVAL_FREE_TOOLS.has(toolName)) return undefined;
 		const description =
 			toolName === "subagent"
 				? "Approving full-access delegation authorizes the child's tools without individual ACP permission requests."
 				: undefined;
-		return (await approve(toolCallId, toolName, input, description))
-			? undefined
-			: { block: true, reason: cancelled ? "ACP request cancelled." : "Tool execution denied by ACP client." };
+		if (!(await approve(toolCallId, toolName, input, description)))
+			return { block: true, reason: cancelled ? "ACP request cancelled." : "Tool execution denied by ACP client." };
+		// the client can switch to read-only while this approval is open; apply that mode before the tool runs.
+		return session.permissionMode === "read-only" ? readOnlyModeBlock(toolName, input) : undefined;
 	});
 	registerApprovalHandler(async (request) => {
 		const approved = await approve(

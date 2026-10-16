@@ -61,9 +61,15 @@ it does not delete their conversations. Listing covers conversations created
 through this adapter.
 
 Mutating and unknown tools request permission through the client before they
-execute. The client may approve automatically according to its own settings.
-lunR's existing read-only restrictions remain in force. lunR also forwards plan
-approval and large subagent launch approval to the client.
+execute. Tools that lunR treats as read-only, plus todo list updates, run
+without a request. The client may approve automatically according to its own
+settings. lunR's existing read-only restrictions remain in force. lunR also
+forwards plan approval and large subagent launch approval to the client.
+
+The client can change modes during a turn; lunR applies the new mode to the
+next tool call. Switching to Plan while an approval is open still blocks that
+tool if Plan would block it. Model and reasoning changes wait until the turn
+finishes.
 
 Approving a full-access subagent launch authorizes that child's tools without
 individual ACP dialogs. The child retains lunR's normal permission inheritance.
