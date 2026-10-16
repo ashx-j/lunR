@@ -1,12 +1,17 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.29`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.30`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
-## [Unreleased]
+## [0.2.30] - 2026-10-16
 
 ### Changed
 
 - `/login anthropic` downloads its own pinned Claude Code instead of requiring Python and a matching Claude Code install. Existing Claude subscription connections need `/login anthropic` once.
+
+### Fixed
+
+- ACP clients such as T3 Code show extension status and native subagent completion notices as separate activity instead of inside the assistant reply, including after reopening a session. Failed, paused and stopped children no longer show as successful.
+- ACP model pickers show the model name, adding the provider only when two providers offer a model with the same name.
 
 ## [0.2.29] - 2026-10-11
 
