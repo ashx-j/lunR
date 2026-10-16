@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthInteraction } from "../src/auth/types.ts";
+import { CLAUDE_CODE_VERSION } from "../src/utils/claude-code-release.ts";
 
 type SpawnCall = { args: readonly string[]; env: Record<string, string> };
 const spawned: SpawnCall[] = [];
@@ -11,22 +12,26 @@ vi.mock("../src/api/claude-code-process.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../src/api/claude-code-process.ts")>()),
 	stopProcessTree: async () => {},
 	spawnClaudeCode: (_command: string, args: readonly string[], env: Record<string, string>) => {
-		spawned.push({ args, env });
+		// The pinned-version probe runs before setup reads CLAUDE_CONFIG_DIR, so only later calls are recorded.
+		const probe = args.includes("--version");
+		if (!probe) spawned.push({ args, env });
 		const stdout = new EventEmitter();
 		const child = Object.assign(new EventEmitter(), {
 			pid: 1,
 			stdout,
 			stdin: {
 				end: () => {
-					const output = args.includes("status")
-						? JSON.stringify(
-								signedIn
-									? { loggedIn: true, subscriptionType: "max", email: "a@example.com" }
-									: { loggedIn: false },
-							)
-						: args.includes("-p")
-							? `${JSON.stringify({ type: "control_response", response: { response: { models: [{ value: "sonnet" }] } } })}\n`
-							: "";
+					const output = probe
+						? `${CLAUDE_CODE_VERSION} (Claude Code)`
+						: args.includes("status")
+							? JSON.stringify(
+									signedIn
+										? { loggedIn: true, subscriptionType: "max", email: "a@example.com" }
+										: { loggedIn: false },
+								)
+							: args.includes("-p")
+								? `${JSON.stringify({ type: "control_response", response: { response: { models: [{ value: "sonnet" }] } } })}\n`
+								: "";
 					queueMicrotask(() => {
 						stdout.emit("data", Buffer.from(output));
 						child.emit("close", 0);
