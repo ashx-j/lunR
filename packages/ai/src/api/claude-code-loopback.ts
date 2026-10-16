@@ -74,8 +74,9 @@ function keptHeaders(headers: IncomingHttpHeaders, dropped: ReadonlySet<string>)
  * - `<mcpUrl>`: an inventory-only MCP endpoint listing lunR's tools so Claude Code accepts their
  *   `tool_use` blocks. Calls are always refused; lunR runs tools itself.
  *
- * Request credentials pass through in memory only; nothing is logged or stored. A random path prefix
- * and the Origin check keep other local clients and web pages out.
+ * Request credentials pass through in memory only; nothing is logged or stored. Each endpoint has its
+ * own random path prefix, so the MCP URL (written to a private config file) never admits a Messages
+ * request. Keep both prefixes off command lines. The Origin check keeps web pages out.
  */
 export class ClaudeCodeLoopback {
 	readonly baseUrl: string;
@@ -86,7 +87,8 @@ export class ClaudeCodeLoopback {
 	denied = 0;
 
 	private readonly server: Server;
-	private readonly prefix: string;
+	private readonly messagesPrefix: string;
+	private readonly mcpPrefix: string;
 	private readonly upstream: URL;
 	private readonly tools: readonly ClaudeCodeTool[];
 	private readonly timeoutMs: number;
@@ -98,20 +100,22 @@ export class ClaudeCodeLoopback {
 
 	private constructor(
 		server: Server,
-		prefix: string,
+		messagesPrefix: string,
+		mcpPrefix: string,
 		upstream: URL,
 		tools: readonly ClaudeCodeTool[],
 		timeoutMs: number,
 	) {
 		this.server = server;
-		this.prefix = prefix;
+		this.messagesPrefix = messagesPrefix;
+		this.mcpPrefix = mcpPrefix;
 		this.upstream = upstream;
 		this.tools = tools;
 		this.timeoutMs = timeoutMs;
 		const address = server.address();
 		const port = address && typeof address === "object" ? address.port : 0;
-		this.baseUrl = `http://127.0.0.1:${port}${prefix}`;
-		this.mcpUrl = `${this.baseUrl}/mcp`;
+		this.baseUrl = `http://127.0.0.1:${port}${messagesPrefix}`;
+		this.mcpUrl = `http://127.0.0.1:${port}${mcpPrefix}/mcp`;
 		this.response = new Promise((resolve, reject) => {
 			this.resolveResponse = resolve;
 			this.rejectResponse = reject;
@@ -138,6 +142,7 @@ export class ClaudeCodeLoopback {
 		return new ClaudeCodeLoopback(
 			server,
 			`/${randomBytes(32).toString("base64url")}`,
+			`/${randomBytes(32).toString("base64url")}`,
 			upstream,
 			options.tools ?? [],
 			options.timeoutMs,
@@ -163,9 +168,9 @@ export class ClaudeCodeLoopback {
 		const url = URL.parse(req.url ?? "/", "http://127.0.0.1");
 		if (!url || req.headers.origin) {
 			res.writeHead(404).end();
-		} else if (url.pathname === `${this.prefix}/mcp`) {
+		} else if (url.pathname === `${this.mcpPrefix}/mcp`) {
 			this.handleMcp(req, res);
-		} else if (req.method !== "POST" || url.pathname !== `${this.prefix}/v1/messages`) {
+		} else if (req.method !== "POST" || url.pathname !== `${this.messagesPrefix}/v1/messages`) {
 			res.writeHead(404).end();
 		} else if (this.closed || this.used) {
 			this.denied++;

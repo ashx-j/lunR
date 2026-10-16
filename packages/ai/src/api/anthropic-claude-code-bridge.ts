@@ -285,12 +285,18 @@ async function runClaudeCode(
 	// An abort while lunR reads the body must still end Claude Code and close the relay.
 	signal?.addEventListener("abort", () => void finish(), { once: true });
 	try {
-		await writeFile(join(directory, "system.md"), request.system, "utf8");
+		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
 		await writeFile(
 			join(directory, "settings.json"),
 			JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(request.extraBody) } }),
-			"utf8",
+			{ encoding: "utf8", mode: 0o600 },
+		);
+		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
+		await writeFile(
+			join(directory, "mcp.json"),
+			JSON.stringify({ mcpServers: { lunr: { type: "http", url: loopback.mcpUrl } } }),
+			{ encoding: "utf8", mode: 0o600 },
 		);
 		const env = {
 			...claudeCodeEnvironment(connection.configDir),
@@ -321,7 +327,7 @@ async function runClaudeCode(
 				"",
 				"--strict-mcp-config",
 				"--mcp-config",
-				JSON.stringify({ mcpServers: { lunr: { type: "http", url: loopback.mcpUrl } } }),
+				join(directory, "mcp.json"),
 				"--disable-slash-commands",
 				"--max-turns",
 				"1",

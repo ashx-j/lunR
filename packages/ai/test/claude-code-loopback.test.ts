@@ -100,6 +100,22 @@ describe("Claude Code loopback", () => {
 		);
 	});
 
+	it("keeps the MCP and Messages secrets separate", async () => {
+		const upstream = await fixtureUpstream();
+		const loopback = await open(upstream.url);
+		const messagesSecret = new URL(loopback.baseUrl).pathname;
+		const mcpSecret = new URL(loopback.mcpUrl).pathname.replace(/\/mcp$/, "");
+		expect(mcpSecret).not.toBe(messagesSecret);
+
+		// The MCP secret does not admit Messages, and the Messages secret does not reach MCP.
+		const origin = new URL(loopback.baseUrl).origin;
+		expect((await fetch(`${origin}${mcpSecret}/v1/messages`, { method: "POST", body: "{}" })).status).toBe(404);
+		expect(loopback.admitted).toBe(false);
+		const mcpViaMessages = await fetch(`${origin}${messagesSecret}/mcp`, { method: "POST", body: "{}" });
+		expect(mcpViaMessages.status).toBe(404);
+		expect(upstream.requests).toEqual([]);
+	});
+
 	it("lists lunR's tools over MCP and refuses every call", async () => {
 		const loopback = await open();
 		const initialize = await mcp(loopback, {
