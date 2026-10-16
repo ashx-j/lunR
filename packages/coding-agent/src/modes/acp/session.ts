@@ -35,6 +35,7 @@ export class AcpSession {
 	private settling = false;
 	private settleTimer?: ReturnType<typeof setTimeout>;
 	private output = Promise.resolve();
+	private noticeCount = 0;
 	private readonly tools = new Map<string, "pending" | "in_progress" | "completed" | "failed">();
 	private readonly snapshots = new Map<string, { path: string; oldText: string | null }>();
 	private readonly dialogs = new Map<string, { cancel: () => void; closed: Promise<void> }>();
@@ -141,17 +142,15 @@ export class AcpSession {
 			try {
 				if (this.dialogs.size && !turn.clientCancelled && !this.disposed) {
 					// acp v1 cannot retract host requests; keep them inside the turn until the client closes them.
-					this.emit({
-						sessionUpdate: "agent_message_chunk",
-						content: {
-							type: "text",
-							text: "This question or approval is no longer needed. Dismiss it or stop the turn to finish.\n",
-						},
-					});
+					const notice = this.notice(
+						"This question or approval is no longer needed. Dismiss it or stop the turn to finish.",
+						"in_progress",
+					);
 					await Promise.race([
 						Promise.all([...this.dialogs.values()].map((dialog) => dialog.closed)),
 						turn.hostCancellation,
 					]);
+					this.emit({ sessionUpdate: "tool_call_update", toolCallId: notice, status: "completed" });
 				}
 				await this.flush();
 				if (turn.cancelled) turn.resolve("cancelled");
@@ -387,10 +386,7 @@ export class AcpSession {
 				}
 				break;
 			case "extension_error":
-				this.emit({
-					sessionUpdate: "agent_message_chunk",
-					content: { type: "text", text: `Extension error: ${event.error}\n` },
-				});
+				this.notice(`Extension error: ${event.error}`, "failed");
 				break;
 		}
 	}
@@ -476,17 +472,31 @@ export class AcpSession {
 		}
 	}
 
+	// ACP clients concatenate assistant chunks, so notices belong in separate activity entries.
+	// Returns the activity id so a caller can update its status later.
+	private notice(
+		text: string,
+		status: "in_progress" | "completed" | "failed",
+		id = `lunr-notice-${++this.noticeCount}`,
+	) {
+		this.emit({
+			sessionUpdate: "tool_call",
+			toolCallId: id,
+			title: "lunR notification",
+			kind: "other",
+			status,
+			content: [{ type: "content", content: { type: "text", text } }],
+		});
+		return id;
+	}
+
 	private async dialog(event: RpcExtensionUIRequest): Promise<void> {
 		if (event.method === "notify") {
-			// ACP clients concatenate assistant chunks, so extension notices belong in activity.
-			this.emit({
-				sessionUpdate: "tool_call",
-				toolCallId: `lunr-notification-${event.id}`,
-				title: "lunR notification",
-				kind: "other",
-				status: event.notifyType === "error" ? "failed" : "completed",
-				content: [{ type: "content", content: { type: "text", text: event.message } }],
-			});
+			this.notice(
+				event.message,
+				event.notifyType === "error" ? "failed" : "completed",
+				`lunr-notification-${event.id}`,
+			);
 			return;
 		}
 		if (

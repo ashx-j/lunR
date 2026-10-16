@@ -49,7 +49,20 @@ function assistantText(updates: SessionNotification[], start = 0): string {
 		.join("");
 }
 
-async function launch(options: { lifecycle?: boolean; startupDialog?: boolean; profile?: boolean } = {}) {
+// text of lunR notification activity entries, which ACP clients show apart from the reply.
+function noticeText(updates: SessionNotification[]): string[] {
+	return updates.flatMap(({ update }) =>
+		update.sessionUpdate === "tool_call" && update.title === "lunR notification"
+			? (update.content ?? []).flatMap((item) =>
+					item.type === "content" && item.content.type === "text" ? [item.content.text] : [],
+				)
+			: [],
+	);
+}
+
+async function launch(
+	options: { lifecycle?: boolean; startupDialog?: boolean; profile?: boolean; extensionError?: boolean } = {},
+) {
 	const directory = mkdtempSync(join(tmpdir(), "lunr-acp-integration-"));
 	const home = join(directory, "home");
 	const agentDir = join(home, ".lunr", "agent");
@@ -86,6 +99,7 @@ async function launch(options: { lifecycle?: boolean; startupDialog?: boolean; p
 		ACP_FIXTURE_WORKER_PIDS: workerPids,
 		ACP_FIXTURE_MCP_PIDS: mcpPids,
 		...(options.startupDialog ? { ACP_FIXTURE_STARTUP_DIALOG: "1" } : {}),
+		...(options.extensionError ? { ACP_FIXTURE_EXTENSION_ERROR: "1" } : {}),
 		NO_COLOR: "1",
 	};
 	const child: ChildProcessWithoutNullStreams = spawn(
@@ -328,6 +342,31 @@ describe("compiled ACP stdio integration", () => {
 		await fixture.finish();
 	}, 90_000);
 
+	it("reports an extension error as failed activity instead of assistant text", async () => {
+		const fixture = await launch({ lifecycle: true, extensionError: true });
+		const { connection, project, updates } = fixture;
+		await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
+		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "hello" }] });
+		expect(assistantText(updates)).toBe("fixture response model=test reasoning=medium images=0");
+		expect(updates).toContainEqual({
+			sessionId,
+			update: expect.objectContaining({
+				sessionUpdate: "tool_call",
+				title: "lunR notification",
+				kind: "other",
+				status: "failed",
+				content: [
+					{
+						type: "content",
+						content: { type: "text", text: expect.stringContaining("fixture extension failure") },
+					},
+				],
+			}),
+		});
+		await fixture.finish();
+	}, 90_000);
+
 	it("declines startup dialogs before opening a usable session", async () => {
 		const fixture = await launch({ lifecycle: true, startupDialog: true });
 		const { connection, project, forms } = fixture;
@@ -384,7 +423,8 @@ describe("compiled ACP stdio integration", () => {
 					finished = true;
 				});
 			await vi.waitFor(() => expect(forms).toHaveLength(1));
-			await vi.waitFor(() => expect(assistantText(updates)).toContain("Dismiss it or stop the turn"));
+			await vi.waitFor(() => expect(noticeText(updates).join("\n")).toContain("Dismiss it or stop the turn"));
+			expect(assistantText(updates)).not.toContain("Dismiss it");
 			expect(readFileSync(join(project, `${kind}-answer`), "utf8")).toBe("cancelled");
 			expect(finished).toBe(false);
 			await expect(connection.prompt({ sessionId, prompt: [{ type: "text", text: "report" }] })).rejects.toThrow();
@@ -415,7 +455,8 @@ describe("compiled ACP stdio integration", () => {
 		});
 		await vi.waitFor(() => expect(permissions).toHaveLength(1));
 		writeFileSync(join(project, "abort-approval"), "abort this plan");
-		await vi.waitFor(() => expect(assistantText(updates)).toContain("Dismiss it or stop the turn"));
+		await vi.waitFor(() => expect(noticeText(updates).join("\n")).toContain("Dismiss it or stop the turn"));
+		expect(assistantText(updates)).not.toContain("Dismiss it");
 		expect(finished).toBe(false);
 		fixture.answerPermission();
 		await prompt;
@@ -614,7 +655,8 @@ describe("compiled ACP stdio integration", () => {
 			),
 		).toBe(true);
 		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "/fixture-new" }] });
-		expect(assistantText(updates)).toContain("ACP client owns session selection");
+		expect(noticeText(updates).join("\n")).toContain("ACP client owns session selection");
+		expect(assistantText(updates)).not.toContain("ACP client owns session selection");
 		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "report" }] });
 		await connection.closeSession({ sessionId });
 		const restored = await connection.loadSession({ sessionId, cwd: project, mcpServers: [] });

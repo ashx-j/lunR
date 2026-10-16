@@ -49,6 +49,9 @@ export default function lifecycleFixture(pi: ExtensionAPI): void {
 		}, 20);
 	});
 	pi.on("agent_end", () => {
+		if (process.env.ACP_FIXTURE_EXTENSION_ERROR) throw new Error("fixture extension failure");
+	});
+	pi.on("agent_end", () => {
 		if (abortTimer) clearInterval(abortTimer);
 	});
 }
