@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **v0.2.31 (prepared 2026-10-16):** integration PR #178 merged PRs #164 through #177 with their ancestry. Claude subscription setup honors `CLAUDE_CONFIG_DIR`, replaces a broken managed Claude Code, aborts stalled downloads and skips malformed discovery lines. The relay keeps its secrets off argv with separate messages/MCP secrets and follows `HTTPS_PROXY`. Claude Code receives CA, display and XDG variables and gets a 2.5-second exit grace after upstream errors. Version 1 records leave `/model` early, and `/logout` explains what Claude Code keeps. ACP shows extension errors and held-question notes as activity, fails unrecognized child notices, and disambiguates same-provider model names. The binary workflow fetches clipboard packages by pinned integrity instead of a workspace `npm install`. No live subscription request was made.
+
 - **v0.2.30 (2026-10-16):** release PR #162 merged as `d9e61f9`; tag `v0.2.30` triggered successful npm publication. All four public packages and three native payloads report 0.2.30 latest, and all seven registry tarballs match declared integrity. A fresh isolated public install reports 0.2.30 for the CLI and its three dependencies and passes startup and first-request subagent/MCP/LSP/local-fetch checks. Ships PR #160 (ACP activity notices, failed child outcomes, model labels) and PR #161 (lunR-managed Claude Code for subscriptions). Review repairs before merge: the bridge import stays computed for browser bundles, the loopback relay answers malformed request targets instead of crashing, install write errors reject, unexposable tool names are skipped, an abort during setup never starts Claude Code, and ACP labels name the provider only on duplicate model names. No live subscription request has been made; signed-in macOS, Windows and ARM runs remain unqualified.
 
 - **ACP Windows/T3 validation (`fix/acp-windows-t3-live`, 2026-10-11):** live T3 nightly conversations verified discovery, text/reasoning, disposable file and shell tools, approve/decline, cancellation, extension questions, model/mode changes, native session reopening, injected T3 MCP and explicit native children. Extension status and native child completion notices now use separate ACP activity, including history replay, instead of contaminating assistant text. Model labels show the model name; provider-qualified IDs retain routing and session identity. Windows launch instructions use Node with the CLI path because T3 does not run npm command shims through a shell. A separate development provider was used; installed CLI and saved terminal settings remain unchanged. Native desktop automation was unavailable; browser control reached the actual Windows nightly server.
@@ -67,7 +69,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-16 (v0.2.30 npm publication). Public npm is `@ashx-j/lunr@0.2.30`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-16 (v0.2.31 release preparation). Public npm is `@ashx-j/lunr@0.2.30`; 0.2.31 prepared. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -183,7 +185,7 @@ Last updated: 2026-10-16 (v0.2.30 npm publication). Public npm is `@ashx-j/lunr@
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.30**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.30**; v0.2.31 prepared.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -196,6 +198,8 @@ Last updated: 2026-10-16 (v0.2.30 npm publication). Public npm is `@ashx-j/lunr@
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- v0.2.31 preparation, 2026-10-16: integration PR #178 passed full CI. All five offline package builds and the Node bundle pass; the CLI reports 0.2.31. Read-only Biome, pinned-dependency, relative-import, shrinkwrap, installer-lock, publication-policy and browser checks pass. Compiled first-paint and first-request subagent/MCP/LSP/local-fetch checks pass. The production CuaDriver gate, manifest check and eight packaging tests pass, and an npm 10 dry run packs all seven public tarballs. Local AI runs also hit the host's Ollama daemon; those e2e failures are environmental.
 
 - v0.2.30 preparation, 2026-10-16: all five offline package builds and the Node bundle pass; the CLI reports 0.2.30. Read-only Biome, pinned-dependency, relative-import, shrinkwrap, installer-lock, publication-policy and browser checks pass. Compiled startup and first-request subagent/MCP/LSP/local-fetch checks pass. The production CuaDriver gate passes, the pinned archives verify, and an npm 10 dry run packs all seven public tarballs. Both feature PRs passed full CI before merging.
 
@@ -342,6 +346,8 @@ Last updated: 2026-10-16 (v0.2.30 npm publication). Public npm is `@ashx-j/lunr@
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- Login test fakes must answer `--version` with `CLAUDE_CODE_VERSION`: setup probes an existing managed Claude Code before reuse and treats any other reply as a broken binary.
 
 - The v0.2.30 GitHub binary workflow failed with the same npm `edgesOut` install error as v0.2.27 through v0.2.29; npm publication is separate and succeeded. The win32-arm64 tarball returned 404 for about two and a half minutes after its metadata reported latest.
 
@@ -502,6 +508,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-16: merge the fourteen open fixes through one integration PR so overlapping test files are resolved once and CI runs on the combined code before release.
 
 - 2026-10-16: ship #160 and #161 together as 0.2.30 after review repairs and fresh CI; live Claude subscription qualification still needs an account and the owner's consent.
 

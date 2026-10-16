@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.31] - 2026-10-16
+
+### Fixed
+
+- Claude subscription setup honors `CLAUDE_CONFIG_DIR`, re-downloads a Claude Code binary that fails its version check, aborts a download that stalls for 60 seconds, and skips malformed discovery lines.
+- The Claude Code relay uses separate secrets for messages and MCP, passes MCP configuration through a private file instead of argv, and follows `HTTPS_PROXY`/`NO_PROXY`.
+- Claude Code receives CA certificate, display, browser, user and XDG directory variables.
+- After a non-success upstream response, Claude Code has 2.5 seconds to exit before its process tree is stopped.
+- Version 1 Claude subscription records report as unavailable and resolve to the `/login anthropic` update message.
+
 ## [0.2.30] - 2026-10-16
 
 ### Changed
