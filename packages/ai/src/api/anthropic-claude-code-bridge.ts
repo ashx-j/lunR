@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
 import { claudeCodeRoute } from "../utils/claude-code-release.ts";
@@ -43,8 +44,7 @@ const REQUEST_ENV = {
 } as const;
 const MAX_ERROR_BODY = 64 * 1024;
 
-export const CLAUDE_CODE_UPDATE_REQUIRED =
-	"This Claude subscription connection was made with an older lunR setup. Run /login anthropic to update it.";
+export { CLAUDE_CODE_UPDATE_REQUIRED };
 
 type Block = Record<string, unknown>;
 

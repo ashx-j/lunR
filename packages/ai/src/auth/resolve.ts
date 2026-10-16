@@ -1,5 +1,5 @@
 import type { ProviderEnv } from "../types.ts";
-import { ANTHROPIC_SETUP_REQUIRED, isAnthropicOAuthToken } from "./anthropic-route.ts";
+import { ANTHROPIC_SETUP_REQUIRED, CLAUDE_CODE_UPDATE_REQUIRED, isAnthropicOAuthToken } from "./anthropic-route.ts";
 import type {
 	ApiKeyAuth,
 	ApiKeyCredential,
@@ -73,6 +73,7 @@ export async function resolveProviderAuth(
 				});
 			if (await requestAuthContext.env("ANTHROPIC_OAUTH_TOKEN"))
 				throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
+			if (stored.version === 1) throw new ModelsError("auth", CLAUDE_CODE_UPDATE_REQUIRED);
 			return { auth: { externalClaudeCode: stored }, source: "Claude Code subscription" };
 		}
 		if (stored.type === "oauth" && provider.auth.oauth) {
