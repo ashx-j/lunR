@@ -16,26 +16,39 @@ vi.mock("../src/api/claude-code-process.ts", async (importOriginal) => ({
 		const probe = args.includes("--version");
 		if (!probe) spawned.push({ args, env });
 		const stdout = new EventEmitter();
+		const emit = (text: string) => queueMicrotask(() => stdout.emit("data", Buffer.from(text)));
 		const child = Object.assign(new EventEmitter(), {
 			pid: 1,
 			stdout,
 			stdin: {
+				on: () => {},
+				// Discovery's control channel: the picker lists Sonnet, which reports a 200K window.
+				write: (line: string) => {
+					const { request_id, request } = JSON.parse(line);
+					const response =
+						request.subtype === "initialize"
+							? { models: [{ value: "sonnet", resolvedModel: "claude-sonnet-5" }] }
+							: request.subtype === "get_context_usage"
+								? { maxTokens: 200_000 }
+								: {};
+					emit(
+						`${JSON.stringify({ type: "control_response", response: { subtype: "success", request_id, response } })}\n`,
+					);
+				},
 				end: () => {
-					const output = probe
-						? `${CLAUDE_CODE_VERSION} (Claude Code)`
-						: args.includes("status")
-							? JSON.stringify(
-									signedIn
-										? { loggedIn: true, subscriptionType: "max", email: "a@example.com" }
-										: { loggedIn: false },
-								)
-							: args.includes("-p")
-								? `${JSON.stringify({ type: "control_response", response: { response: { models: [{ value: "sonnet" }] } } })}\n`
-								: "";
-					queueMicrotask(() => {
-						stdout.emit("data", Buffer.from(output));
-						child.emit("close", 0);
-					});
+					if (!args.includes("-p"))
+						emit(
+							probe
+								? `${CLAUDE_CODE_VERSION} (Claude Code)`
+								: args.includes("status")
+									? JSON.stringify(
+											signedIn
+												? { loggedIn: true, subscriptionType: "max", email: "a@example.com" }
+												: { loggedIn: false },
+										)
+									: "",
+						);
+					queueMicrotask(() => queueMicrotask(() => child.emit("close", 0)));
 				},
 			},
 		});
@@ -75,7 +88,7 @@ describe("Anthropic subscription login with CLAUDE_CONFIG_DIR", () => {
 	it("runs sign-in status and discovery against the custom directory and saves it", async () => {
 		process.env.CLAUDE_CONFIG_DIR = "/custom/claude";
 		const credential = await anthropicOAuth.login!(interaction);
-		expect(credential).toMatchObject({ type: "external_claude_code", version: 2, configDir: "/custom/claude" });
+		expect(credential).toMatchObject({ type: "external_claude_code", version: 3, configDir: "/custom/claude" });
 		expect(spawned.map((call) => call.args[0])).toEqual(["auth", "-p"]);
 		for (const call of spawned) expect(call.env.CLAUDE_CONFIG_DIR).toBe("/custom/claude");
 	});

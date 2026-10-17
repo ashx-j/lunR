@@ -6,7 +6,7 @@ import type { AuthResult } from "./types.ts";
 export const ANTHROPIC_SETUP_REQUIRED =
 	"Anthropic subscription authentication now requires Claude Code. Run /login anthropic and choose the subscription option. Direct OAuth tokens are no longer supported.";
 
-/** Version 1 connections came from the retired Python bridge and cannot serve requests. */
+/** Connections older than version 3 lack Claude Code's model routes and windows, so they cannot serve requests. */
 export const CLAUDE_CODE_UPDATE_REQUIRED =
 	"This Claude subscription connection was made with an older lunR setup. Run /login anthropic to update it.";
 

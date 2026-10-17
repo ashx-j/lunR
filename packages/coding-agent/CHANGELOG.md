@@ -6,7 +6,7 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.36`**. Versioned
 
 ### Fixed
 
-- Claude Opus 5 through a Claude subscription now stays on your plan. lunR used Claude Code's 1M-context Opus, which Claude Code bills from usage credits; it now uses the standard 200K window and compacts before reaching it. No new `/login` is needed.
+- Claude Opus 5 through a Claude subscription now stays on your plan. lunR used Claude Code's 1M-context Opus, which Claude Code bills from usage credits. `/login anthropic` now asks Claude Code which variant of each model stays on the plan and how large its window is, and lunR compacts before that window. Run `/login anthropic` once after updating.
 
 ## [0.2.36] - 2026-10-17
 

@@ -128,9 +128,10 @@ describe("createAgentSession stream options", () => {
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 		await authStorage.modify("anthropic", async () => ({
 			type: "external_claude_code",
-			version: 2,
+			version: 3,
 			manager: "claude-code",
 			command: "claude",
+			models: [{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 }],
 		}));
 		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
 		const runtime = getModelRuntime(modelRegistry);

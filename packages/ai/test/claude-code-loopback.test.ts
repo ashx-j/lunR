@@ -101,4 +101,14 @@ describe("Claude Code tripwire", () => {
 		expect(reply).toBe("");
 		expect(tripwire.tripped).toBe(false);
 	});
+
+	it("drops get_context_usage token counts uncounted but still counts a generation", async () => {
+		const tripwire = await ClaudeCodeTripwire.open();
+		closers.push(() => tripwire.close());
+		const port = Number(new URL(tripwire.baseUrl).port);
+		await rawRequest(port, "POST /v1/messages/count_tokens?beta=true HTTP/1.1\r\nHost: x\r\n\r\n{}");
+		expect(tripwire.tripped).toBe(false);
+		await rawRequest(port, "POST /v1/messages?beta=true HTTP/1.1\r\nHost: x\r\n\r\n{}");
+		expect(tripwire.tripped).toBe(true);
+	});
 });

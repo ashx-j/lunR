@@ -121,14 +121,19 @@ export class ClaudeCodeLoopback {
 	}
 }
 
-/** Claude Code's startup warm-up: a bare HEAD with no credentials or body, sent unless a proxy is set. */
-const WARM_UP = Buffer.from("HEAD /api/hello ");
+/**
+ * Requests that are not model generations: Claude Code's startup warm-up (a bare HEAD with no credentials
+ * or body, sent unless a proxy is set) and the token counts `get_context_usage` asks for. Dropping a
+ * token count makes Claude Code fall back to estimates; the context window it reports is unaffected.
+ */
+const HARMLESS = [Buffer.from("HEAD /api/hello "), Buffer.from("POST /v1/messages/count_tokens")];
+const HEAD_LENGTH = Math.max(...HARMLESS.map((prefix) => prefix.length));
 
 /**
  * Base URL for Claude Code runs that must never send a model request, such as setup's model discovery.
- * Each connection is dropped as soon as its first bytes show whether it is the warm-up. Anything else
- * is counted, so a request that should not happen fails on the spot. Only those first bytes are
- * compared; the rest, including any credentials, is discarded uninspected.
+ * Each connection is dropped as soon as its first bytes show whether it is one of the harmless requests
+ * above. Anything else is counted, so a request that should not happen fails on the spot. Only those
+ * first bytes are compared; the rest, including any credentials, is discarded uninspected.
  */
 export class ClaudeCodeTripwire {
 	private requests = 0;
@@ -139,9 +144,13 @@ export class ClaudeCodeTripwire {
 		socket.on("close", () => this.sockets.delete(socket));
 		let head = Buffer.alloc(0);
 		socket.on("data", (chunk: Buffer) => {
-			head = Buffer.concat([head, chunk]).subarray(0, WARM_UP.length);
-			if (head.length < WARM_UP.length && head.equals(WARM_UP.subarray(0, head.length))) return;
-			if (!head.equals(WARM_UP)) this.requests++;
+			head = Buffer.concat([head, chunk]).subarray(0, HEAD_LENGTH);
+			const matches = HARMLESS.filter((prefix) =>
+				head.subarray(0, prefix.length).equals(prefix.subarray(0, head.length)),
+			);
+			// Wait for more bytes while the head is still the start of a harmless prefix but not yet all of one.
+			if (matches.length && !matches.some((prefix) => head.length >= prefix.length)) return;
+			if (!matches.length) this.requests++;
 			socket.destroy();
 		});
 		// Claude Code may reset first; that is expected here.

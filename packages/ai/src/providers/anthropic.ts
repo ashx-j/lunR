@@ -4,7 +4,6 @@ import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
 import { loadAnthropicOAuth } from "../auth/oauth/load.ts";
 import { createProvider, hasApi, type Provider } from "../models.ts";
 import type { Api, Context, Model, ProviderStreams, SimpleStreamOptions, StreamOptions } from "../types.ts";
-import { claudeCodeContextWindow } from "../utils/claude-code-routes.ts";
 import { ANTHROPIC_MODELS } from "./anthropic.models.ts";
 
 export function anthropicProvider(): Provider<"anthropic-messages"> {
@@ -28,20 +27,18 @@ export function anthropicProvider(): Provider<"anthropic-messages"> {
 			oauth: lazyOAuth({ name: "Anthropic (Claude Pro/Max)", load: loadAnthropicOAuth }),
 		},
 		models: Object.values(ANTHROPIC_MODELS),
-		filterModels: (models, credential) => {
-			if (credential?.type !== "external_claude_code") return models;
-			const routes = credential.routes ?? [];
-			const rank = (id: string) => routes.findIndex((route) => route === id || route === `${id}[1m]`);
-			// Claude Code's picker order, so its default for the plan comes first. A route with a smaller
-			// window than the catalog's (Opus 5) caps the model so compaction runs before Claude Code's limit.
-			return models
-				.filter((model) => rank(model.id) >= 0)
-				.sort((a, b) => rank(a.id) - rank(b.id))
-				.map((model) => {
-					const window = claudeCodeContextWindow(model.id);
-					return window && window < model.contextWindow ? { ...model, contextWindow: window } : model;
-				});
-		},
+		// A subscription lists only what Claude Code offered at setup, in its picker order, with the window
+		// Claude Code reported for each route so compaction runs before Claude Code's limit.
+		filterModels: (models, credential) =>
+			credential?.type === "external_claude_code"
+				? (credential.models ?? []).flatMap((offered) => {
+						const model = models.find((candidate) => candidate.id === offered.id);
+						if (!model) return [];
+						return model.contextWindow === offered.contextWindow
+							? [model]
+							: [{ ...model, contextWindow: offered.contextWindow }];
+					})
+				: models,
 		api,
 	});
 }

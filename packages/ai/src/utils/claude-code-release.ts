@@ -26,9 +26,6 @@ const PLATFORM_INTEGRITY = {
 	"win32-arm64": "sha512-koscGNDJ0qMXQIAse9zqeQ70EL8qoMkDnMSrAbW8ussrLCyTvfgNny+N9GFic382XegSAIhcInF+oqJnaBSyxA==",
 } as const;
 
-// The route table stays free of Node imports so the browser-safe Anthropic provider can read it.
-export { claudeCodeRoute } from "./claude-code-routes.ts";
-
 export type ClaudeCodePlatform = keyof typeof PLATFORM_INTEGRITY;
 
 function isClaudeCodePlatform(value: string): value is ClaudeCodePlatform {
