@@ -90,4 +90,15 @@ describe("Claude Code tripwire", () => {
 		expect(reply).toBe("");
 		expect(tripwire.tripped).toBe(true);
 	});
+
+	it("lets Claude Code's warm-up through uncounted", async () => {
+		const tripwire = await ClaudeCodeTripwire.open();
+		closers.push(() => tripwire.close());
+		const reply = await rawRequest(
+			Number(new URL(tripwire.baseUrl).port),
+			"HEAD /api/hello HTTP/1.1\r\nHost: x\r\n\r\n",
+		);
+		expect(reply).toBe("");
+		expect(tripwire.tripped).toBe(false);
+	});
 });
