@@ -42,7 +42,18 @@ const REQUEST_ENV = {
 	// lunR owns token budgets; Claude Code's replayed reminder would invalidate cached history.
 	CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
 } as const;
-const MAX_ERROR_BODY = 64 * 1024;
+const NOT_SIGNED_IN = "Claude Code is not signed in to a Claude subscription. Run /login anthropic.";
+/** Anthropic's error type for each HTTP status, used when rebuilding an error Claude Code reported. */
+const ERROR_TYPES: Readonly<Record<number, string>> = {
+	400: "invalid_request_error",
+	401: "authentication_error",
+	403: "permission_error",
+	404: "not_found_error",
+	413: "request_too_large",
+	429: "rate_limit_error",
+	500: "api_error",
+	529: "overloaded_error",
+};
 /** How long Claude Code may keep running after an upstream error before its process tree is killed. */
 export const CLAUDE_CODE_EXIT_GRACE_MS = 2500;
 
@@ -166,89 +177,96 @@ async function nextResult(events: AsyncGenerator<ClaudeCodeEvent>): Promise<Clau
 	return undefined;
 }
 
+/** Reads events up to the next raw Messages stream event or `result`, or undefined when Claude Code's output ends first. */
+async function nextAnswerEvent(events: AsyncGenerator<ClaudeCodeEvent>): Promise<ClaudeCodeEvent | undefined> {
+	for (let next = await events.next(); !next.done; next = await events.next()) {
+		if (next.value.type === "result" || (next.value.type === "stream_event" && isRecord(next.value.event)))
+			return next.value;
+	}
+	return undefined;
+}
+
 /** Explains a Claude Code exit that never reached Anthropic, without passing native text through. */
 function stoppedBeforeRequest(result: ClaudeCodeEvent | undefined): string {
 	if (!result) return "Claude Code exited before contacting Anthropic. Run /login anthropic to check the connection.";
 	const detail = typeof result.result === "string" ? result.result : "";
-	if (/log ?in|authenticat|oauth|credential|api key/i.test(detail))
-		return "Claude Code is not signed in to a Claude subscription. Run /login anthropic.";
+	if (/log ?in|authenticat|oauth|credential|api key/i.test(detail)) return NOT_SIGNED_IN;
 	return `Claude Code stopped before contacting Anthropic (${String(result.subtype)}). Run /login anthropic to check the connection.`;
 }
 
-/** Strips the MCP prefix from tool calls in one SSE event and rejects tools lunR did not offer. */
-function renameToolEvent(event: string, inventory: ReadonlySet<string>): string {
-	if (!event.includes('"tool_use"')) return event;
-	return event.replace(/^data: ?(.*)$/m, (line, json: string) => {
-		const data: unknown = JSON.parse(json);
-		if (
-			!isRecord(data) ||
-			data.type !== "content_block_start" ||
-			!isRecord(data.content_block) ||
-			data.content_block.type !== "tool_use"
-		)
-			return line;
-		const name = data.content_block.name;
-		const tool = typeof name === "string" && name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : "";
-		if (!inventory.has(tool)) throw new Error("Claude Code returned a tool outside lunR's tool list");
-		return `data: ${JSON.stringify({ ...data, content_block: { ...data.content_block, name: tool } })}`;
-	});
+/**
+ * Rebuilds Anthropic's error body for an API error Claude Code reported in its `result`, so retries and
+ * context-overflow handling match the API-key route. Undefined when the result carries no HTTP status.
+ */
+function apiError(result: ClaudeCodeEvent): { status: number; body: string } | undefined {
+	const status = result.api_error_status;
+	if (result.is_error !== true || typeof status !== "number" || !Number.isInteger(status) || status < 400)
+		return undefined;
+	const message = status === 401 ? NOT_SIGNED_IN : typeof result.result === "string" ? result.result : "";
+	const body = { type: "error", error: { type: ERROR_TYPES[status] ?? "api_error", message } };
+	return { status, body: JSON.stringify(body) };
 }
 
-/** Passes the upstream SSE body through, renaming tool calls event by event and cleaning up once it ends. */
-function renameToolCalls(
-	body: ReadableStream<Uint8Array>,
+/** Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. */
+function renameToolCall(event: Record<string, unknown>, inventory: ReadonlySet<string>): Record<string, unknown> {
+	const block = event.content_block;
+	if (event.type !== "content_block_start" || !isRecord(block) || block.type !== "tool_use") return event;
+	const name = block.name;
+	const tool = typeof name === "string" && name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : "";
+	if (!inventory.has(tool)) throw new Error("Claude Code returned a tool outside lunR's tool list");
+	return { ...event, content_block: { ...block, name: tool } };
+}
+
+const sseEvent = (type: string, data: string) => `event: ${type}\ndata: ${data}\n\n`;
+
+/**
+ * Turns Claude Code's stream-json output into the Messages SSE body lunR's Anthropic client expects.
+ * Each `stream_event` line carries one raw upstream event. The stream ends at `message_stop`; a `result`
+ * before then becomes an SSE error. Cleanup runs once the stream ends, fails, or is cancelled.
+ */
+function answerStream(
+	first: ClaudeCodeEvent,
+	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
-	finish: () => Promise<void>,
+	finish: (graceful?: boolean) => Promise<void>,
 ): ReadableStream<Uint8Array> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
 	const encoder = new TextEncoder();
-	let pending = "";
-	const rename = (text: string) =>
-		text
-			.split(/(\r?\n\r?\n)/)
-			.map((part, index) => (index % 2 ? part : renameToolEvent(part, inventory)))
-			.join("");
+	let pending: ClaudeCodeEvent | undefined = first;
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
-				const { done, value } = await reader.read();
-				if (done) {
-					pending += decoder.decode();
-					if (pending) controller.enqueue(encoder.encode(rename(pending)));
+				const event = pending ?? (await next());
+				pending = undefined;
+				if (!event || event.type === "result") {
+					const error = event && apiError(event);
+					const body =
+						error?.body ??
+						JSON.stringify({
+							type: "error",
+							error: { type: "api_error", message: "Claude Code stream ended before message_stop" },
+						});
+					controller.enqueue(encoder.encode(sseEvent("error", body)));
 					controller.close();
-					await finish();
+					await finish(!!error);
 					return;
 				}
-				pending += decoder.decode(value, { stream: true });
-				let boundary = -1;
-				for (const match of pending.matchAll(/\r?\n\r?\n/g)) boundary = match.index + match[0].length;
-				if (boundary > 0) {
-					controller.enqueue(encoder.encode(rename(pending.slice(0, boundary))));
-					pending = pending.slice(boundary);
+				if (!isRecord(event.event) || typeof event.event.type !== "string") return;
+				const data = renameToolCall(event.event, inventory);
+				controller.enqueue(encoder.encode(sseEvent(event.event.type, JSON.stringify(data))));
+				if (data.type === "message_stop") {
+					// The answer is complete; stopping now also keeps Claude Code from any further request.
+					controller.close();
+					await finish();
 				}
 			} catch (error) {
 				controller.error(error);
-				await reader.cancel().catch(() => {});
 				await finish();
 			}
 		},
-		async cancel(reason) {
-			await reader.cancel(reason).catch(() => {});
+		async cancel() {
 			await finish();
 		},
 	});
-}
-
-async function readLimited(body: ReadableStream<Uint8Array>, limit: number): Promise<Uint8Array> {
-	const chunks: Uint8Array[] = [];
-	let size = 0;
-	for await (const chunk of body) {
-		if (size >= limit) continue;
-		chunks.push(chunk.subarray(0, limit - size));
-		size += chunks[chunks.length - 1].length;
-	}
-	return Buffer.concat(chunks);
 }
 
 /** Failures before any upstream answer travel as an SSE error event, so the Messages stream reports the text unchanged. */
@@ -268,7 +286,7 @@ async function runClaudeCode(
 ): Promise<Response> {
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
-	const loopback = await ClaudeCodeLoopback.open({ timeoutMs: idleMs, tools: request.tools, upstream });
+	const loopback = await ClaudeCodeLoopback.open(request.tools);
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
 		loopback.close();
 		throw error;
@@ -298,7 +316,7 @@ async function runClaudeCode(
 		})();
 		return cleanup;
 	};
-	// An abort while lunR reads the body must still end Claude Code and close the relay.
+	// An abort while lunR reads the body must still end Claude Code and close the MCP endpoint.
 	signal?.addEventListener("abort", () => void finish(), { once: true });
 	try {
 		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
@@ -317,7 +335,8 @@ async function runClaudeCode(
 		const env = {
 			...claudeCodeEnvironment(connection.configDir),
 			...REQUEST_ENV,
-			ANTHROPIC_BASE_URL: loopback.baseUrl,
+			// Unset outside tests, so Claude Code sends its request to Anthropic directly.
+			...(upstream ? { ANTHROPIC_BASE_URL: upstream } : {}),
 			...(request.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxTokens) } : {}),
 		};
 		// Cleanup that already ran during the writes above had no process to stop, so never start one.
@@ -333,6 +352,8 @@ async function runClaudeCode(
 				"--output-format",
 				"stream-json",
 				"--verbose",
+				// Emits each raw Messages stream event, which lunR replays as the SSE body.
+				"--include-partial-messages",
 				"--tools",
 				"",
 				"--system-prompt-file",
@@ -355,7 +376,7 @@ async function runClaudeCode(
 			directory,
 		);
 		pid = child.pid;
-		// Claude Code exits only after the relay has delivered the whole upstream answer, so cleanup is safe here too.
+		// Output already written stays readable after the process closes, so cleanup is safe here too.
 		exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
 		child.once("close", () => void finish());
 		const interrupted = new Promise<never>((_, reject) => {
@@ -388,25 +409,24 @@ async function runClaudeCode(
 		}
 		child.stdin.end();
 
-		const outcome = await within(
-			Promise.race([
-				loopback.response.then((response) => ({ response })),
-				nextResult(events).then((result) => ({ result })),
-			]),
-			"Claude Code request timed out.",
-		);
-		if (!("response" in outcome)) throw new Error(stoppedBeforeRequest(outcome.result));
-		const { response } = outcome;
-		const headers = new Headers(response.headers);
-		headers.delete("content-length");
-		if (response.status !== 200) {
-			// The upstream error keeps its status so retries and context-overflow handling match the API-key route.
-			const body = await readLimited(response.body, MAX_ERROR_BODY);
+		const first = await within(nextAnswerEvent(events), "Claude Code request timed out.");
+		if (first?.type !== "stream_event") {
+			const error = first && apiError(first);
+			// An API error without an HTTP status means Claude Code never got an answer, such as a refused connection.
+			if (!error && first?.terminal_reason === "api_error")
+				throw new Error(
+					`Claude Code network error: ${typeof first.result === "string" ? first.result : "no answer"}`,
+				);
+			if (!error) throw new Error(stoppedBeforeRequest(first));
 			await finish(true);
-			return new Response(body, { status: response.status, headers });
+			return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
-		return new Response(renameToolCalls(response.body, inventory, finish), { status: 200, headers });
+		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
+		return new Response(answerStream(first, next, inventory, finish), {
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+		});
 	} catch (error) {
 		await finish();
 		throw error;
@@ -429,13 +449,7 @@ export function claudeCodeFetch(
 			return await runClaudeCode(connection, claudeCodeRequest(body), signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
-			const message = error instanceof Error ? error.message : String(error);
-			// Node's connection errors read like "connect ECONNREFUSED"; name them so lunR's retry rules see a network error.
-			return localFailure(
-				/^(?:connect|getaddrinfo|read|write) E[A-Z]+|socket hang up/.test(message)
-					? `Claude Code network error: ${message}`
-					: message,
-			);
+			return localFailure(error instanceof Error ? error.message : String(error));
 		}
 	};
 }

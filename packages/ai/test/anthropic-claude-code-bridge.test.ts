@@ -15,10 +15,14 @@ import type { Context, Message } from "../src/types.ts";
 import { isRetryableAssistantError } from "../src/utils/retry.ts";
 
 /**
- * Stand-in for Claude Code's stream-json mode: acknowledges replayed user turns with zero-turn results,
- * records what it received next to itself, then sends one Messages request to ANTHROPIC_BASE_URL.
- * A directory ending in "lingers" keeps running briefly after the answer and then writes "exited-cleanly";
- * one ending in "hangs" never exits. Both leave a "responded" marker once the answer has been read.
+ * Stand-in for Claude Code 2.1.263's stream-json mode, matching what the real binary printed against a
+ * fixture upstream: replayed user turns get zero-turn results; the Messages request goes straight to
+ * ANTHROPIC_BASE_URL; each raw SSE event comes back as a `stream_event` line among other status lines;
+ * an HTTP error ends in a `result` carrying `api_error_status`, and a refused connection in one without.
+ * It records what it received next to itself. With no ANTHROPIC_BASE_URL (or a directory ending in
+ * "signed-out") it stops as signed out. A directory ending in "lingers" keeps running briefly after the
+ * answer and then writes "exited-cleanly"; one ending in "hangs" never exits. Both leave a "responded"
+ * marker once the answer has been read.
  */
 const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
 const { readFileSync, writeFileSync } = require("node:fs");
@@ -27,7 +31,8 @@ const argv = process.argv.slice(2);
 const flag = (name) => argv[argv.indexOf(name) + 1];
 const frames = [];
 let buffer = "";
-const result = (fields) => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", ...fields }) + "\\n");
+const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const result = (fields) => line({ type: "result", subtype: "success", ...fields });
 process.stdin.on("data", (chunk) => {
 	buffer += chunk;
 	for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
@@ -41,20 +46,37 @@ process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
 	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
-	if (__dirname.endsWith("signed-out")) {
+	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
 	}
+	line({ type: "system", subtype: "status", status: "requesting" });
 	const body = { ...extra, model: flag("--model"), messages: frames.map((frame) => frame.message), stream: true };
-	const response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", { method: "POST", body: JSON.stringify(body) });
-	await response.text();
+	let response;
+	try {
+		response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", { method: "POST", body: JSON.stringify(body) });
+	} catch {
+		result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: null, result: "API Error: Connection refused" });
+		process.exit(1);
+	}
+	const text = await response.text();
 	writeFileSync(join(__dirname, "responded"), "");
+	if (response.status === 200) {
+		for (const event of text.split("\\n\\n")) {
+			const data = event.split("\\n").find((row) => row.startsWith("data: "));
+			if (data) line({ type: "stream_event", event: JSON.parse(data.slice(6)), parent_tool_use_id: null });
+			line({ type: "system", subtype: "thinking_tokens" });
+		}
+	} else {
+		line({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error" }] }, error: "unknown" });
+	}
+	if (response.status === 200) result({ is_error: false, num_turns: 1 });
+	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + JSON.parse(text).error.type });
 	if (__dirname.endsWith("lingers")) {
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		writeFileSync(join(__dirname, "exited-cleanly"), "");
 	}
 	if (__dirname.endsWith("hangs")) setInterval(() => {}, 1000);
-	else result({ is_error: response.status !== 200, num_turns: 1 });
 });
 `;
 
@@ -195,16 +217,17 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		]);
 
 		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
-		expect(record.argv).toEqual(expect.arrayContaining(["--model", "claude-opus-4-8[1m]", "--max-turns", "1"]));
+		expect(record.argv).toEqual(
+			expect.arrayContaining(["--model", "claude-opus-4-8[1m]", "--max-turns", "1", "--include-partial-messages"]),
+		);
 		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("");
-		// The MCP config is a file, and neither endpoint's secret path appears on the command line.
+		// Claude Code reaches the upstream itself; lunR is not in between.
+		expect(record.baseUrl).toBe(upstream);
+		// The MCP config is a file, and its secret path does not appear on the command line.
 		const mcpUrl = new URL(JSON.parse(record.mcp).mcpServers.lunr.url);
-		const messagesSecret = new URL(record.baseUrl).pathname.slice(1);
 		const mcpSecret = mcpUrl.pathname.split("/")[1];
 		expect(mcpUrl.pathname).toBe(`/${mcpSecret}/mcp`);
-		expect(mcpSecret).not.toBe(messagesSecret);
 		expect(record.argv.join("\n")).not.toContain(mcpSecret);
-		expect(record.argv.join("\n")).not.toContain(messagesSecret);
 		expect(record.system).toBe("You are lunR.");
 		expect(
 			record.frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
@@ -252,6 +275,43 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toMatch(/^429 .*rate_limit_error/);
+		expect(isRetryableAssistantError(result)).toBe(true);
+	});
+
+	it("leaves Claude Code's own Anthropic endpoint in place outside tests", async () => {
+		const { connection, directory } = await setup({ status: 500, body: "unreachable" });
+		const result = await streamClaudeCode(model, context, { externalClaudeCode: connection }, true).result();
+		expect(result.errorMessage).toBe("Claude Code is not signed in to a Claude subscription. Run /login anthropic.");
+		expect(JSON.parse(readFileSync(join(directory, "record.json"), "utf8")).baseUrl).toBeUndefined();
+	});
+
+	it("reports a connection Claude Code could not make as a retryable network error", async () => {
+		const { connection } = await setup({ status: 200, body: "" });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			"http://127.0.0.1:1",
+		).result();
+		expect(result.errorMessage).toMatch(/^Claude Code network error: /);
+		expect(isRetryableAssistantError(result)).toBe(true);
+	});
+
+	it("ends an answer that stops before message_stop as a retryable error", async () => {
+		const answer = toolCallAnswer("mcp__lunr__read");
+		const { connection, upstream } = await setup({
+			status: 200,
+			body: answer.slice(0, answer.indexOf("event: content_block_start")),
+		});
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.stopReason).toBe("error");
 		expect(isRetryableAssistantError(result)).toBe(true);
 	});
 

@@ -11,7 +11,7 @@ const fake = vi.hoisted(() => ({
 	managedPath: "",
 	statuses: [] as unknown[],
 	discovery: "",
-	admitted: false,
+	tripped: false,
 	calls: [] as string[][],
 	installs: 0,
 }));
@@ -45,8 +45,8 @@ vi.mock("../src/api/claude-code-process.ts", async (importOriginal) => ({
 	},
 }));
 vi.mock("../src/api/claude-code-loopback.ts", () => ({
-	ClaudeCodeLoopback: {
-		open: async () => ({ baseUrl: "http://127.0.0.1:1", admitted: fake.admitted, close: () => {} }),
+	ClaudeCodeTripwire: {
+		open: async () => ({ baseUrl: "http://127.0.0.1:1", tripped: fake.tripped, close: () => {} }),
 	},
 }));
 vi.mock("../src/utils/claude-code-release.ts", async (importOriginal) => ({
@@ -93,7 +93,7 @@ describe("Anthropic subscription login", () => {
 		fake.managedPath = process.execPath;
 		fake.statuses = [subscriber];
 		fake.discovery = picker("sonnet", "haiku");
-		fake.admitted = false;
+		fake.tripped = false;
 		fake.calls = [];
 		fake.installs = 0;
 		delete process.env.CLAUDE_CONFIG_DIR;
@@ -175,10 +175,10 @@ describe("Anthropic subscription login", () => {
 		expect(await credentials.read("anthropic")).toBeUndefined();
 	});
 
-	it("saves nothing when discovery contacts Anthropic", async () => {
-		fake.admitted = true;
+	it("saves nothing when discovery tries to contact Anthropic", async () => {
+		fake.tripped = true;
 		const { credentials, login } = runtime();
-		await expect(login(interaction([]).value)).rejects.toThrow("contacted Anthropic");
+		await expect(login(interaction([]).value)).rejects.toThrow("tried to contact Anthropic");
 		expect(await credentials.read("anthropic")).toBeUndefined();
 	});
 

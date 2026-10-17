@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { arch, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { ClaudeCodeLoopback } from "../../api/claude-code-loopback.ts";
+import { ClaudeCodeTripwire } from "../../api/claude-code-loopback.ts";
 import { claudeCodeEnvironment, spawnClaudeCode, stopProcessTree } from "../../api/claude-code-process.ts";
 import {
 	CLAUDE_CODE_VERSION,
@@ -83,10 +83,10 @@ async function signInStatus(
 
 /**
  * The account's model routes from Claude Code's own picker. The `initialize` handshake answers without a
- * Messages request; a relay that counts upstream calls proves that before anything is saved.
+ * Messages request; a tripwire base URL proves that before anything is saved.
  */
 async function discoverRoutes(command: string, configDir: string | undefined): Promise<string[]> {
-	const loopback = await ClaudeCodeLoopback.open({ timeoutMs: 40_000 });
+	const tripwire = await ClaudeCodeTripwire.open();
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-setup-"));
 	try {
 		const output = await run(
@@ -112,13 +112,13 @@ async function discoverRoutes(command: string, configDir: string | undefined): P
 			],
 			{
 				input: `${JSON.stringify({ type: "control_request", request_id: "lunr-picker", request: { subtype: "initialize" } })}\n`,
-				env: { ...claudeCodeEnvironment(configDir, false), ANTHROPIC_BASE_URL: loopback.baseUrl },
+				env: { ...claudeCodeEnvironment(configDir, false), ANTHROPIC_BASE_URL: tripwire.baseUrl },
 				cwd: directory,
 				timeoutMs: 40_000,
 				allowFailure: true,
 			},
 		);
-		if (loopback.admitted) throw new Error("Claude Code model discovery contacted Anthropic. Setup not saved.");
+		if (tripwire.tripped) throw new Error("Claude Code model discovery tried to contact Anthropic. Setup not saved.");
 		const routes = new Set<string>();
 		for (const line of output.split("\n")) {
 			if (!line.startsWith("{")) continue;
@@ -141,7 +141,7 @@ async function discoverRoutes(command: string, configDir: string | undefined): P
 		}
 		return [...routes];
 	} finally {
-		loopback.close();
+		tripwire.close();
 		await rm(directory, { recursive: true, force: true }).catch(() => {});
 	}
 }

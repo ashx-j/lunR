@@ -27,8 +27,8 @@ const PLATFORM_INTEGRITY = {
 } as const;
 
 /**
- * Context windows of the models the pinned release can route. 1M models need the explicit `[1m]`
- * route suffix because requests reach Anthropic through a loopback base URL.
+ * Context windows of the models the pinned release can route. 1M models use the explicit `[1m]` route
+ * suffix so Claude Code always asks for the 1M window.
  */
 const ROUTE_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
 	"claude-sonnet-5": 1_000_000,
