@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Claude subscription Opus 5 uses Claude Code's standard 200K route instead of the 1M route, which Claude Code bills from usage credits rather than the plan. The subscription model reports that 200K window.
+
 ## [0.2.36] - 2026-10-17
 
 - Align the package version with the lunR 0.2.36 release.
