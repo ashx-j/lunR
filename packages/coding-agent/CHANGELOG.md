@@ -1,6 +1,16 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.33`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.34`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.34] - 2026-10-17
+
+### Added
+
+- `/settings` Scoped models in apps: T3 Code and other connected apps can list only your `/scoped-models` picks instead of every connected model.
+
+### Fixed
+
+- `/login anthropic` no longer fails with "Claude Code model discovery tried to contact Anthropic" when Claude Code is already signed in.
 
 ## [0.2.33] - 2026-10-17
 

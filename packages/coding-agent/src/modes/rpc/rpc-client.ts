@@ -258,7 +258,7 @@ export class RpcClient {
 	}
 
 	/**
-	 * Get list of available models.
+	 * Get list of available models, narrowed to the scoped models when `clientScopedModelsOnly` is on.
 	 */
 	async getAvailableModels(): Promise<ModelInfo[]> {
 		const response = await this.send({ type: "get_available_models" });

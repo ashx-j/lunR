@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.34] - 2026-10-17
+
+### Fixed
+
+- Claude subscription setup no longer fails with "model discovery tried to contact Anthropic" for signed-in accounts. The discovery tripwire now lets Claude Code's credential-free `HEAD /api/hello` warm-up through and still trips on any other request.
+
 ## [0.2.33] - 2026-10-17
 
 ### Fixed

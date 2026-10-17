@@ -22,9 +22,12 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **v0.2.34 (2026-10-17):** PR #185 merged as `b12036b` and PR #186 as `b3bce5c`, then release PR #187 as `8c8ffc0`, all after green CI. Tag `v0.2.34` triggered successful npm publication; all four public packages and three native payloads report 0.2.34 latest. The release ships the Claude Code discovery warm-up fix for `/login anthropic` and `/settings` Scoped models in apps. No live subscription request was made.
+
 - **v0.2.33 (2026-10-17):** PR #182 merged as `e81d441` and release PR #183 as `e0254fd`, both after green CI. Tag `v0.2.33` triggered successful npm publication; all four public packages and three native payloads report 0.2.33 latest. The release ships the direct Claude Code upstream: subscription requests go from Claude Code straight to Anthropic with no lunR relay. No live subscription request was made.
 
-- **Direct Claude Code upstream (`fix/claude-code-direct-upstream`, 2026-10-17):** subscription turns no longer pass through a lunR relay. Claude Code sends its Messages request straight to Anthropic; lunR rebuilds the SSE body from `--include-partial-messages` `stream_event` lines, ends at `message_stop` by stopping Claude Code, and rebuilds HTTP errors from the `result` line's `api_error_status`. A `result` with `terminal_reason: api_error` and no status is a retryable network error. The loopback keeps only the MCP tool inventory. Setup's model discovery points Claude Code at a TCP tripwire that counts and drops connections unread. No live subscription request was made.
+- **Scoped models in apps (`feat/client-scoped-models`, 2026-10-17):** `/settings` Scoped models in apps (`clientScopedModelsOnly`, default off) narrows RPC `get_available_models`, and so the ACP model picker T3 shows, to the session's `/scoped-models` picks plus the current model. With no scoped model available, apps still list every connected model, like `/model`. Workers read the setting at startup, so it applies to app sessions started after the change.
+- **Direct Claude Code upstream (`fix/claude-code-direct-upstream`, 2026-10-17):** subscription turns no longer pass through a lunR relay. Claude Code sends its Messages request straight to Anthropic; lunR rebuilds the SSE body from `--include-partial-messages` `stream_event` lines, ends at `message_stop` by stopping Claude Code, and rebuilds HTTP errors from the `result` line's `api_error_status`. A `result` with `terminal_reason: api_error` and no status is a retryable network error. The loopback keeps only the MCP tool inventory. Setup's model discovery points Claude Code at a TCP tripwire that compares each connection's first 16 bytes, lets the credential-free `HEAD /api/hello` warm-up through, and counts anything else before dropping it. No live subscription request was made.
 
 - **v0.2.32 (prepared 2026-10-16):** PR #180 merged as `74da1b4` after green CI. The release ships ACP tool-call streaming without growing per-delta copies, approval-free core read-only tools plus `todo`, and mid-turn mode changes with a read-only re-check of open approvals.
 
@@ -77,7 +80,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-17 (v0.2.33 shipped). Public npm is `@ashx-j/lunr@0.2.33`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-17 (v0.2.34 shipped). Public npm is `@ashx-j/lunr@0.2.34`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -193,7 +196,7 @@ Last updated: 2026-10-17 (v0.2.33 shipped). Public npm is `@ashx-j/lunr@0.2.33`.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.33**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.34**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -207,6 +210,9 @@ Last updated: 2026-10-17 (v0.2.33 shipped). Public npm is `@ashx-j/lunr@0.2.33`.
 
 ## Build & run
 
+- v0.2.34 release (2026-10-17): release checks (Biome, pinned deps, TS imports, shrinkwrap, install lock, publish-workflow policy, browser smoke) and the offline five-package build pass; `packages/ai` stays clean and the built CLI reports 0.2.34. The publish dry run packs all seven packages with the staged computer-use payloads. Publication workflow `39031727840` succeeded from tag `v0.2.34`. A fresh isolated npm install reports 0.2.34 and contains the warm-up tripwire and `clientScopedModelsOnly`. The tag was again created and pushed manually because of the Windows `publish-tag` quoting bug.
+- Scoped models in apps (2026-10-17): coding-agent `tsgo --noEmit`, touched-file Biome and focused model-resolver + settings-manager Vitest (93/93) pass. Offline tui → ai → agent → coding-agent builds pass with `packages/ai` clean. An isolated profile with a four-model fixture provider and two scoped models lists 2 ACP model options with the setting on and 4 with it off. No model request was made.
+- Discovery warm-up fix (2026-10-17): with a real signed-in account and a local base URL, Claude Code 2.1.263 sent only `HEAD /api/hello` during discovery; the fixed tripwire stays untripped and lists 7 models. The offline fake-credential control still trips on a real prompt (fails with `ECONNRESET` after about 3 minutes of retries). Loopback and both login suites pass 18/18 on Windows; AI `tsgo --noEmit` and touched-file Biome pass. No model request was made.
 - v0.2.33 release (2026-10-17): release checks (Biome, pinned deps, TS imports, shrinkwrap, install lock, publish-workflow policy, browser smoke) and the offline five-package build pass; `packages/ai` stays clean. The publish dry run packs all seven packages after staging the pinned computer-use payloads. Publication workflow `39023382020` succeeded from tag `v0.2.33`. A fresh isolated npm install reports 0.2.33 and contains the direct-upstream bridge. On Windows, `scripts/release.mjs publish-tag` fails at `git tag -m` because its shell spawn splits the message; the tag was created and pushed manually with the same commands.
 
 - Direct Claude Code upstream (2026-10-17): AI `tsgo --noEmit` and touched-file Biome pass. The eight Claude Code suites pass 44/44 on Linux (homeserver); on Windows the bridge suite skips and one existing `NO_PROXY` case fails because Windows environment names are case-insensitive. Full Linux AI suite: 680 passed, 754 skipped, 6 failed, all Ollama end-to-end tests reaching the server's local Ollama. Offline Windows checks with the real pinned 2.1.263 binary, fake credentials and a dead outbound proxy pass success with history replay, 429, 400 overflow, 401, 529 and refused-connection paths, each with exactly one upstream request (zero when refused). Discovery stays untripped and a real prompt trips the tripwire. No live subscription request was made.
@@ -360,6 +366,10 @@ Last updated: 2026-10-17 (v0.2.33 shipped). Public npm is `@ashx-j/lunr@0.2.33`.
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- T3 Code caches each ACP agent's model list from a probe and keeps it until the provider is refreshed or T3 restarts. Logging out of lunR providers does not shrink T3's list until then.
+
+- Claude Code 2.1.263 sends a credential-free `HEAD /api/hello` warm-up to `ANTHROPIC_BASE_URL` at startup unless an HTTP(S) proxy, Unix socket or client certificate is configured. Offline fixtures with a dead proxy never see it; a real signed-in run does.
 
 - ACP's no-approval tool list is core `READ_ONLY_TOOLS` plus `todo`; add new side-effect-free tools to the core list so read-only mode and ACP stay in sync. Streamed `toolcall_delta` events carry the full growing input, so ACP announces a tool on start and end only.
 
@@ -525,6 +535,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-17: narrow the app model list in RPC `get_available_models` behind an opt-in setting, so ACP (T3) and the native RPC provider share one rule and lunR's own `/model` stays unchanged.
+- 2026-10-17: let the discovery tripwire pass only the exact `HEAD /api/hello ` prefix and judge by a connection's first 16 bytes, because counting every connection blocked every signed-in setup and nothing past that prefix needs inspecting.
 - 2026-10-17: let Claude Code send subscription requests straight to Anthropic and read its `stream_event` output instead of relaying, because Anthropic's terms bar developers from intermediating Claude.ai session tokens while allowing users to sign in to unmodified Claude Code.
 - 2026-10-16: let ACP clients change modes mid-turn and re-check read-only after an open approval, because the spec allows it and lunR's gates already read the mode per tool call.
 

@@ -335,6 +335,20 @@ export async function resolveModelScopeWithDiagnostics(
 	return { scopedModels, diagnostics };
 }
 
+/**
+ * Narrows an app's model list to the scoped models it contains, plus the current model so it stays
+ * selected. With no scoped model in the list, every model stays, like `/model` without a scope.
+ */
+export function narrowToScope<T extends Model<Api>>(
+	available: readonly T[],
+	scopedModels: readonly { model: Model<Api> }[],
+	current: Model<Api> | undefined,
+): readonly T[] {
+	const inScope = (model: T) => scopedModels.some((scoped) => modelsAreEqual(scoped.model, model));
+	if (!available.some(inScope)) return available;
+	return available.filter((model) => inScope(model) || modelsAreEqual(model, current));
+}
+
 export async function resolveModelScope(patterns: string[], modelRuntime: ModelRuntime): Promise<ScopedModel[]> {
 	const { scopedModels, diagnostics } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime);
 	for (const diagnostic of diagnostics) {

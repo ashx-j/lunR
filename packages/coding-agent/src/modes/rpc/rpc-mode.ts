@@ -19,6 +19,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import { narrowToScope } from "../../core/model-resolver.ts";
 import {
 	flushRawStdout,
 	takeOverStdout,
@@ -549,7 +550,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "get_available_models": {
-				const models = await session.modelRuntime.getAvailable();
+				const available = await session.modelRuntime.getAvailable();
+				// ACP model pickers (T3) read this list; /settings can narrow it to the /scoped-models picks.
+				const models = session.settingsManager.getClientScopedModelsOnly()
+					? narrowToScope(available, session.scopedModels, session.model)
+					: available;
 				return success(id, "get_available_models", { models });
 			}
 
