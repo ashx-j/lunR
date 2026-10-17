@@ -810,14 +810,18 @@ export class ModelRuntime implements Models {
 		);
 		this.lastOfficial = loaded;
 		const evicted = this.userModels.evictOfficial(officialModelKeys(loaded.catalog));
-		const templateByProvider = new Map<string, Model<Api> | undefined>();
+		const bakedInByProvider = new Map<string, Model<Api>[]>();
 		const officialModels = loaded.catalog.models
 			.filter((entry) => storedProviders.has(entry.provider))
 			.map((entry) => {
-				if (!templateByProvider.has(entry.provider)) {
-					templateByProvider.set(entry.provider, this.bakedInModels(entry.provider)[0]);
+				let bakedIn = bakedInByProvider.get(entry.provider);
+				if (!bakedIn) {
+					bakedIn = this.bakedInModels(entry.provider);
+					bakedInByProvider.set(entry.provider, bakedIn);
 				}
-				return officialEntryToModel(entry, templateByProvider.get(entry.provider));
+				// A row without compat or a thinking map falls back to its own baked-in model first. Another
+				// model's settings can be wrong for it: Anthropic's first model would give Haiku 4.5 adaptive thinking.
+				return officialEntryToModel(entry, bakedIn.find((model) => model.id === entry.id) ?? bakedIn[0]);
 			});
 		this.overlay.setOfficial(officialModels);
 		this.overlay.setUser(this.userModelsForStoredProviders(storedProviders));

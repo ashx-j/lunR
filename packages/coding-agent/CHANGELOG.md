@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.35`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Fixed
+
+- Claude Haiku 4.5 now works with a Claude subscription or API key. It no longer asks for adaptive thinking, which Anthropic rejected with "adaptive thinking is not supported on this model", and thinking off is really off.
+
 ## [0.2.35] - 2026-10-17
 
 ### Fixed

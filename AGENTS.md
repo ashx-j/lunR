@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Catalog own-model template (`fix/catalog-own-model-template`, 2026-10-17):** official rows without their own compat or thinking map fall back to the same-id baked-in model before the provider's first model. Claude Haiku 4.5 no longer requests adaptive thinking. Test: model-runtime-official-template.
+
 - **v0.2.35 (prepared 2026-10-17):** PR #188 merged as `e22123e` and PR #189 merged as `163459a` after green CI. The release ships the startup scope-warning fix and the post-login model fallback.
 
 - **Startup scope warnings (`fix/startup-scope-warnings`, 2026-10-17):** unmatched `/scoped-models` patterns join the runtime diagnostics instead of `console.warn`, so first-paint startup shows each as its own TUI warning row and no longer leaves a second boot header behind. Startup warnings use `showWarning` (statuses replace each other); info diagnostics stay status. The `/scoped-models` picker no longer writes to the console. Test: startup-scope-warnings.
@@ -216,6 +218,7 @@ Last updated: 2026-10-17 (v0.2.35 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- Catalog own-model template (2026-10-17): model-runtime-official-template fails on the old code and passes; official-catalog, catalog, live-catalog and model-runtime suites pass 78/78. Intercepting the CLI's Claude Code handoff shows Haiku 4.5 sends `thinking: disabled` for off and budget thinking for low (before: adaptive + effort low). Two live Haiku 4.5 subscription messages (thinking off and low) returned the expected answers in 2-3 s.
 - v0.2.35 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.35. `publish:dry` packs all seven packages. With a temp profile holding the real Claude subscription record, the ACP model list shows 4 Claude models in Claude Code's order with Scoped models in apps off and the 2 scoped ones with it on (no model request).
 - Startup scope warnings + login fallback (2026-10-17): new startup-scope-warnings, interactive-mode-login-model and anthropic-oauth order tests fail on the old code and pass. Related startup/resolver suites pass 142/142; Anthropic login/route suites 21 passed (bridge suite skips on Windows). A simulated 100x30 terminal with three unmatched picks shows one boot header and three warnings.
 - Scoped models in apps (2026-10-17): coding-agent `tsgo --noEmit`, touched-file Biome and focused model-resolver + settings-manager Vitest (93/93) pass. Offline tui → ai → agent → coding-agent builds pass with `packages/ai` clean. An isolated profile with a four-model fixture provider and two scoped models lists 2 ACP model options with the setting on and 4 with it off. No model request was made.
@@ -373,7 +376,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 # Notes
 
 - Anything written to stdout/stderr while the first-paint TUI owns the screen (runtime creation in `main.ts`, or later inside the TUI) shifts the terminal under it and leaves stale rows, such as a second boot header. Route startup output through runtime diagnostics.
-- Official catalog rows without `compat`/`thinkingLevelMap` inherit them from the provider's first baked-in model (`refreshOfficialCatalog` template). For Anthropic that is Claude Fable 5, so Haiku 4.5 gets adaptive thinking and Anthropic answers 400 "adaptive thinking is not supported on this model"; `--thinking off` also becomes effort low. Fix pending in a separate PR.
+- Official catalog rows without `compat`/`thinkingLevelMap` take them from a baked-in template in `refreshOfficialCatalog`. Use the same-id baked-in model first: the provider's first model (Anthropic: Claude Fable 5) gave Haiku 4.5 adaptive thinking, which Anthropic rejects with a 400, and turned `--thinking off` into effort low. Ids missing from the built-in list still use the first model.
 - Pinned Claude Code 2.1.263's picker offers Sonnet 5 (default), Fable 5.1, Opus 5 and Haiku 4.5 on the tested account; no Haiku 5.5. It labels `opus[1m]` as drawing from usage credits, and `claudeCodeRoute` always routes Opus 5 as `claude-opus-5[1m]`. Unresolved.
 - T3 Code caches each ACP agent's model list from a probe and keeps it until the provider is refreshed or T3 restarts. Logging out of lunR providers does not shrink T3's list until then.
 
@@ -543,6 +546,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-17: official catalog rows fall back to their own baked-in model before the provider's first one, because compat and thinking maps are per model and Fable 5's adaptive thinking broke Haiku 4.5.
 - 2026-10-17: send unmatched scope patterns through the runtime diagnostics, because console writes land behind the first-paint TUI and corrupt its screen.
 - 2026-10-17: after `/login`, fall back to the provider's first offered model and order Claude subscription models by Claude Code's picker, so plans without the hardcoded default still get Claude Code's own default.
 - 2026-10-17: narrow the app model list in RPC `get_available_models` behind an opt-in setting, so ACP (T3) and the native RPC provider share one rule and lunR's own `/model` stays unchanged.
