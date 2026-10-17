@@ -275,7 +275,7 @@ The `model` field is a full [Model](#model) object.
 
 #### get_available_models
 
-List all configured models.
+List all configured models. With `clientScopedModelsOnly` on in settings and at least one scoped model available, the list holds only the scoped models plus the current model.
 
 ```json
 {"type": "get_available_models"}

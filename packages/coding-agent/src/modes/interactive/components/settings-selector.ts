@@ -114,6 +114,7 @@ export interface SettingsConfig {
 	globalInstructionsPath: string;
 	modelInstructionsPath: string;
 	confirmLargeSubagentLaunches: boolean;
+	clientScopedModelsOnly: boolean;
 	computerUse?: boolean;
 	computerForeground?: boolean;
 	subagentCommunicationEnabled: boolean;
@@ -187,6 +188,7 @@ export interface SettingsCallbacks {
 	onModelInstructionsEnabledChange: (enabled: boolean) => void;
 	onModelInstructionsModeChange: (mode: "both" | "model-only") => void;
 	onConfirmLargeSubagentLaunchesChange: (enabled: boolean) => void;
+	onClientScopedModelsOnlyChange: (enabled: boolean) => void;
 	onSubagentCommunicationChange: (enabled: boolean) => void;
 	onAutomaticSubagentDelegationChange: (enabled: boolean) => void;
 	getTierThinkingLevels: (tier: ModelTierName) => ThinkingLevel[];
@@ -1713,6 +1715,13 @@ export class SettingsSelectorComponent extends Container {
 				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
 			},
 			{
+				id: "client-scoped-models",
+				label: "Scoped models in apps",
+				description: "T3 and other connected apps list only /scoped-models",
+				currentValue: config.clientScopedModelsOnly ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "subagent-communication",
 				label: "Subagent communication",
 				description: "Allow parent and child to exchange messages during a task",
@@ -2048,6 +2057,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "confirm-large-subagent-launches":
 						callbacks.onConfirmLargeSubagentLaunchesChange(newValue === "on");
+						break;
+					case "client-scoped-models":
+						callbacks.onClientScopedModelsOnlyChange(newValue === "on");
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

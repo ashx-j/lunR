@@ -212,6 +212,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `enabledModels` | string[] | - | Model patterns for Ctrl+P cycling (same format as `--models` CLI flag) |
+| `clientScopedModelsOnly` | boolean | `false` | Apps connected over ACP or RPC, such as T3 Code, list only the `enabledModels` scope. The current model stays listed. With no scoped model available, apps list every model. Applies to app sessions started after the change |
 
 ```json
 {
