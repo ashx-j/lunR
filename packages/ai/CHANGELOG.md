@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.33] - 2026-10-17
+
+### Fixed
+
+- Claude subscription turns no longer pass through a lunR relay. Claude Code sends each request straight to Anthropic, and lunR reads the answer from Claude Code's own stream output. Setup's model discovery uses a tripwire that drops connections without reading them.
+
 ## [0.2.32] - 2026-10-16
 
 - Align the package version with the lunR 0.2.32 release.
