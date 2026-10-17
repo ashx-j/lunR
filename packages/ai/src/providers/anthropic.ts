@@ -27,12 +27,13 @@ export function anthropicProvider(): Provider<"anthropic-messages"> {
 			oauth: lazyOAuth({ name: "Anthropic (Claude Pro/Max)", load: loadAnthropicOAuth }),
 		},
 		models: Object.values(ANTHROPIC_MODELS),
-		filterModels: (models, credential) =>
-			credential?.type === "external_claude_code"
-				? models.filter(
-						(model) => credential.routes?.includes(model.id) || credential.routes?.includes(`${model.id}[1m]`),
-					)
-				: models,
+		filterModels: (models, credential) => {
+			if (credential?.type !== "external_claude_code") return models;
+			const routes = credential.routes ?? [];
+			const rank = (id: string) => routes.findIndex((route) => route === id || route === `${id}[1m]`);
+			// Claude Code's picker order, so its default for the plan comes first.
+			return models.filter((model) => rank(model.id) >= 0).sort((a, b) => rank(a.id) - rank(b.id));
+		},
 		api,
 	});
 }

@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.34`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Fixed
+
+- `/login anthropic` selects Claude Code's default model for your plan instead of failing with "default model claude-opus-4-8 is not available". Any provider whose default is not offered now gets its first available model, as at startup.
+
 ## [0.2.34] - 2026-10-17
 
 ### Added

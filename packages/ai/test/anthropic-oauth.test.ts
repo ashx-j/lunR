@@ -39,6 +39,18 @@ describe("Anthropic subscription route", () => {
 		expect((await models.getAuth("anthropic", { apiKey: "sk-ant-api-key" }))?.auth.apiKey).toBe("sk-ant-api-key");
 	});
 
+	it("lists subscription models in Claude Code's picker order", async () => {
+		const { credentials, models } = configured();
+		await credentials.modify("anthropic", async () => ({
+			...connection,
+			routes: ["claude-sonnet-5[1m]", "claude-haiku-4-5-20251001"],
+		}));
+		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toEqual([
+			"claude-sonnet-5",
+			"claude-haiku-4-5-20251001",
+		]);
+	});
+
 	it("routes an ambient genuine API key to HTTP even with a stored subscription connection", async () => {
 		const { credentials, models } = configured({ ANTHROPIC_API_KEY: "sk-ant-ambient" });
 		await credentials.modify("anthropic", async () => connection);
