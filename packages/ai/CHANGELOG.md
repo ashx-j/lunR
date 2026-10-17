@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Claude subscription models are listed in Claude Code's own picker order, so its default for the plan comes first.
+
 ## [0.2.34] - 2026-10-17
 
 ### Fixed

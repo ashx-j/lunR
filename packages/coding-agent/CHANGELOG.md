@@ -6,6 +6,7 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.34`**. Versioned
 
 ### Fixed
 
+- `/login anthropic` selects Claude Code's default model for your plan instead of failing with "default model claude-opus-4-8 is not available". Any provider whose default is not offered now gets its first available model, as at startup.
 - Startup no longer draws a second boot header when a `/scoped-models` pick has no matching model, such as after logging out of its provider. Each unmatched pick now shows as its own warning in the chat.
 
 ## [0.2.34] - 2026-10-17
