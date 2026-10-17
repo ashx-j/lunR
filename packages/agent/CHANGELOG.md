@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.35] - 2026-10-17
+
+- Align the package version with the lunR 0.2.35 release.
+
 ## [0.2.34] - 2026-10-17
 
 - Align the package version with the lunR 0.2.34 release.
