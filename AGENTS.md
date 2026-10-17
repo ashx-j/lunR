@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **v0.2.36 (prepared 2026-10-17):** PR #191 merged as `8e8da36` after green CI. The release ships the catalog own-model template fix, so Claude Haiku 4.5 no longer requests adaptive thinking.
+
 - **Catalog own-model template (`fix/catalog-own-model-template`, 2026-10-17):** official rows without their own compat or thinking map fall back to the same-id baked-in model before the provider's first model. Claude Haiku 4.5 no longer requests adaptive thinking. Test: model-runtime-official-template.
 
 - **v0.2.35 (prepared 2026-10-17):** PR #188 merged as `e22123e` and PR #189 merged as `163459a` after green CI. The release ships the startup scope-warning fix and the post-login model fallback.
@@ -88,7 +90,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-17 (v0.2.35 release preparation). Public npm is `@ashx-j/lunr@0.2.34`; 0.2.35 prepared. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-17 (v0.2.36 release preparation). Public npm is `@ashx-j/lunr@0.2.35`; 0.2.36 prepared. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -204,7 +206,7 @@ Last updated: 2026-10-17 (v0.2.35 release preparation). Public npm is `@ashx-j/l
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.34**; v0.2.35 prepared.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.35**; v0.2.36 prepared.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -218,6 +220,7 @@ Last updated: 2026-10-17 (v0.2.35 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- v0.2.36 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.36. `publish:dry` packs all seven packages. v0.2.35 published from tag `v0.2.35` at `308fdd5`; all seven packages resolve as npm latest and a fresh install reports 0.2.35 with both fixes.
 - Catalog own-model template (2026-10-17): model-runtime-official-template fails on the old code and passes; official-catalog, catalog, live-catalog and model-runtime suites pass 78/78. Intercepting the CLI's Claude Code handoff shows Haiku 4.5 sends `thinking: disabled` for off and budget thinking for low (before: adaptive + effort low). Two live Haiku 4.5 subscription messages (thinking off and low) returned the expected answers in 2-3 s.
 - v0.2.35 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.35. `publish:dry` packs all seven packages. With a temp profile holding the real Claude subscription record, the ACP model list shows 4 Claude models in Claude Code's order with Scoped models in apps off and the 2 scoped ones with it on (no model request).
 - Startup scope warnings + login fallback (2026-10-17): new startup-scope-warnings, interactive-mode-login-model and anthropic-oauth order tests fail on the old code and pass. Related startup/resolver suites pass 142/142; Anthropic login/route suites 21 passed (bridge suite skips on Windows). A simulated 100x30 terminal with three unmatched picks shows one boot header and three warnings.
