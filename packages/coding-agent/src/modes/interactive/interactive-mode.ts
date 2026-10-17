@@ -100,7 +100,11 @@ import {
 	upsertCustomProvider,
 } from "../../core/model-config-writer.ts";
 import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/model-instructions.ts";
-import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+import {
+	defaultModelPerProvider,
+	findExactModelReferenceMatch,
+	resolveModelScopeWithDiagnostics,
+} from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
@@ -951,7 +955,11 @@ export class InteractiveMode {
 			this.showStatus(`Model scope: ${modelList}${cycleHint}`);
 		}
 		this.ui.requestRender();
-		for (const diagnostic of this.options.startupDiagnostics ?? []) this.showStatus(diagnostic.message);
+		// Warnings keep their own rows, as before the TUI took over startup; consecutive statuses replace each other.
+		for (const diagnostic of this.options.startupDiagnostics ?? []) {
+			if (diagnostic.type === "warning") this.showWarning(diagnostic.message);
+			else this.showStatus(diagnostic.message);
+		}
 		for (const warning of this.options.deprecationWarnings ?? []) this.showWarning(warning);
 		this.deferredBuiltinAttachPromise = this.attachDeferredBuiltinExtensions();
 		this.startupReadyPromise = this.deferredBuiltinAttachPromise.then(() => {
@@ -5685,7 +5693,8 @@ export class InteractiveMode {
 			// Fall back to settings
 			const patterns = this.settingsManager.getEnabledModels();
 			if (patterns !== undefined && patterns.length > 0) {
-				const scopedModels = await resolveModelScope(patterns, this.session.modelRuntime);
+				// Unmatched patterns stay unchecked here; a console warning would draw over the TUI.
+				const { scopedModels } = await resolveModelScopeWithDiagnostics(patterns, this.session.modelRuntime);
 				currentEnabledIds = scopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
 			}
 		}
@@ -5694,7 +5703,10 @@ export class InteractiveMode {
 		const updateSessionModels = async (enabledIds: string[] | null) => {
 			currentEnabledIds = enabledIds === null ? null : [...enabledIds];
 			if (enabledIds && enabledIds.length > 0 && enabledIds.length < allModels.length) {
-				const newScopedModels = await resolveModelScope(enabledIds, this.session.modelRuntime);
+				const { scopedModels: newScopedModels } = await resolveModelScopeWithDiagnostics(
+					enabledIds,
+					this.session.modelRuntime,
+				);
 				this.session.setScopedModels(
 					newScopedModels.map((sm) => ({
 						model: sm.model,
