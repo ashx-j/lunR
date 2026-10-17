@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createServer as createTcpServer, type Server as TcpServer } from "node:net";
+import { createServer as createTcpServer, type Socket, type Server as TcpServer } from "node:net";
 
 /** A lunR tool as Claude Code's MCP client sees it. */
 export interface ClaudeCodeTool {
@@ -121,17 +121,31 @@ export class ClaudeCodeLoopback {
 	}
 }
 
+/** Claude Code's startup warm-up: a bare HEAD with no credentials or body, sent unless a proxy is set. */
+const WARM_UP = Buffer.from("HEAD /api/hello ");
+
 /**
  * Base URL for Claude Code runs that must never send a model request, such as setup's model discovery.
- * Each connection is counted and dropped before a single byte is read, so a request that should not
- * happen fails on the spot and its credentials are never received.
+ * Each connection is dropped as soon as its first bytes show whether it is the warm-up. Anything else
+ * is counted, so a request that should not happen fails on the spot. Only those first bytes are
+ * compared; the rest, including any credentials, is discarded uninspected.
  */
 export class ClaudeCodeTripwire {
-	private connections = 0;
+	private requests = 0;
 	private port = 0;
+	private readonly sockets = new Set<Socket>();
 	private readonly server: TcpServer = createTcpServer((socket) => {
-		this.connections++;
-		socket.destroy();
+		this.sockets.add(socket);
+		socket.on("close", () => this.sockets.delete(socket));
+		let head = Buffer.alloc(0);
+		socket.on("data", (chunk: Buffer) => {
+			head = Buffer.concat([head, chunk]).subarray(0, WARM_UP.length);
+			if (head.length < WARM_UP.length && head.equals(WARM_UP.subarray(0, head.length))) return;
+			if (!head.equals(WARM_UP)) this.requests++;
+			socket.destroy();
+		});
+		// Claude Code may reset first; that is expected here.
+		socket.on("error", () => {});
 	});
 
 	private constructor() {}
@@ -146,12 +160,14 @@ export class ClaudeCodeTripwire {
 		return `http://127.0.0.1:${this.port}`;
 	}
 
-	/** Whether Claude Code tried to send a request. */
+	/** Whether Claude Code sent any request other than its warm-up. */
 	get tripped(): boolean {
-		return this.connections > 0;
+		return this.requests > 0;
 	}
 
+	/** Stops listening and drops connections that never sent enough bytes to judge. */
 	close(): void {
 		this.server.close();
+		for (const socket of this.sockets) socket.destroy();
 	}
 }
