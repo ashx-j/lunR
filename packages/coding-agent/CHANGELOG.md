@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.36`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Fixed
+
+- Claude Opus 5 through a Claude subscription now stays on your plan. lunR used Claude Code's 1M-context Opus, which Claude Code bills from usage credits; it now uses the standard 200K window and compacts before reaching it. No new `/login` is needed.
+
 ## [0.2.36] - 2026-10-17
 
 ### Fixed

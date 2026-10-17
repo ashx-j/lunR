@@ -26,37 +26,8 @@ const PLATFORM_INTEGRITY = {
 	"win32-arm64": "sha512-koscGNDJ0qMXQIAse9zqeQ70EL8qoMkDnMSrAbW8ussrLCyTvfgNny+N9GFic382XegSAIhcInF+oqJnaBSyxA==",
 } as const;
 
-/**
- * Context windows of the models the pinned release can route. 1M models use the explicit `[1m]` route
- * suffix so Claude Code always asks for the 1M window.
- */
-const ROUTE_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
-	"claude-sonnet-5": 1_000_000,
-	"claude-haiku-4-5-20251001": 200_000,
-	"claude-opus-5": 1_000_000,
-	"claude-opus-4-8": 1_000_000,
-	"claude-fable-5-1": 1_000_000,
-};
-const ROUTE_ALIASES: Readonly<Record<string, string>> = {
-	sonnet: "claude-sonnet-5",
-	haiku: "claude-haiku-4-5-20251001",
-	"claude-haiku-4-5": "claude-haiku-4-5-20251001",
-	opus: "claude-opus-5",
-	fable: "claude-fable-5-1",
-};
-
-/**
- * Claude Code `--model` route for a lunR model id or a Claude Code picker value, or undefined when the
- * pinned release does not know the model.
- */
-export function claudeCodeRoute(model: string): string | undefined {
-	const base = model.replace(/\[1m\]$/, "");
-	const canonical = ROUTE_ALIASES[base] ?? base;
-	const window = ROUTE_CONTEXT_WINDOWS[canonical];
-	if (window === undefined) return undefined;
-	if (window < 1_000_000 && model.endsWith("[1m]")) return undefined;
-	return window >= 1_000_000 ? `${canonical}[1m]` : canonical;
-}
+// The route table stays free of Node imports so the browser-safe Anthropic provider can read it.
+export { claudeCodeRoute } from "./claude-code-routes.ts";
 
 export type ClaudeCodePlatform = keyof typeof PLATFORM_INTEGRITY;
 

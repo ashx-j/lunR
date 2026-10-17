@@ -48,6 +48,14 @@ describe("Claude Code release", () => {
 		expect(claudeCodeRoute("claude-opus-4-1")).toBeUndefined();
 	});
 
+	it("keeps Opus 5 off the 1M route that Claude Code bills from usage credits", () => {
+		expect(claudeCodeRoute("claude-opus-5")).toBe("claude-opus-5");
+		expect(claudeCodeRoute("opus")).toBe("claude-opus-5");
+		// Discovery skips the picker's 1M row instead of saving it as a route.
+		expect(claudeCodeRoute("opus[1m]")).toBeUndefined();
+		expect(claudeCodeRoute("claude-opus-5[1m]")).toBeUndefined();
+	});
+
 	it("keeps lunR's binary under the agent directory, apart from other installs", () => {
 		vi.stubEnv("PI_CODING_AGENT_DIR", "/agent");
 		expect(managedClaudeCodePath("linux-x64")).toBe(join("/agent", "claude-code", "2.1.263", "claude"));

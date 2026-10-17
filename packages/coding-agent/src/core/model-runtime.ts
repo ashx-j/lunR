@@ -410,7 +410,12 @@ export class ModelRuntime implements Models {
 	}
 
 	getModel(providerId: string, modelId: string): Model<Api> | undefined {
-		return this.models.getModel(providerId, modelId);
+		// Available rows carry limits that depend on the stored credential, such as Claude Code's
+		// window for a Claude subscription; the plain catalog row does not.
+		return (
+			this.snapshot.available.find((model) => model.provider === providerId && model.id === modelId) ??
+			this.models.getModel(providerId, modelId)
+		);
 	}
 
 	async checkAuth(providerId: string): Promise<AuthCheck | undefined> {

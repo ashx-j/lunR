@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Opus 5 standard route (`fix/claude-opus-standard-route`, 2026-10-17):** Claude subscription Opus 5 routes as `claude-opus-5` (200K) instead of `claude-opus-5[1m]`, which Claude Code bills from usage credits. The subscription model reports 200K through `/model` and lookups by id, so compaction runs first. Records saved with the old 1M route keep working without `/login`. Tests: claude-code-release + anthropic-oauth + model-runtime-subscription-window.
+
 - **v0.2.36 (prepared 2026-10-17):** PR #191 merged as `8e8da36` after green CI. The release ships the catalog own-model template fix, so Claude Haiku 4.5 no longer requests adaptive thinking.
 
 - **Catalog own-model template (`fix/catalog-own-model-template`, 2026-10-17):** official rows without their own compat or thinking map fall back to the same-id baked-in model before the provider's first model. Claude Haiku 4.5 no longer requests adaptive thinking. Test: model-runtime-official-template.
@@ -220,6 +222,7 @@ Last updated: 2026-10-17 (v0.2.36 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- Opus 5 standard route (2026-10-17): new route, provider-window and runtime-lookup tests fail without their fix and pass; Anthropic suites 28 passed (bridge skips on Windows) and 15 related coding-agent files pass 124/124. AI/agent/coding-agent builds, browser-smoke and ts-imports pass. With the real saved record (old `claude-opus-5[1m]` route), `--list-models` shows Opus 5 at 200K and the intercepted handoff routes `claude-opus-5`. No Opus request was made.
 - v0.2.36 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.36. `publish:dry` packs all seven packages. v0.2.35 published from tag `v0.2.35` at `308fdd5`; all seven packages resolve as npm latest and a fresh install reports 0.2.35 with both fixes.
 - Catalog own-model template (2026-10-17): model-runtime-official-template fails on the old code and passes; official-catalog, catalog, live-catalog and model-runtime suites pass 78/78. Intercepting the CLI's Claude Code handoff shows Haiku 4.5 sends `thinking: disabled` for off and budget thinking for low (before: adaptive + effort low). Two live Haiku 4.5 subscription messages (thinking off and low) returned the expected answers in 2-3 s.
 - v0.2.35 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.35. `publish:dry` packs all seven packages. With a temp profile holding the real Claude subscription record, the ACP model list shows 4 Claude models in Claude Code's order with Scoped models in apps off and the 2 scoped ones with it on (no model request).
@@ -380,7 +383,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - Anything written to stdout/stderr while the first-paint TUI owns the screen (runtime creation in `main.ts`, or later inside the TUI) shifts the terminal under it and leaves stale rows, such as a second boot header. Route startup output through runtime diagnostics.
 - Official catalog rows without `compat`/`thinkingLevelMap` take them from a baked-in template in `refreshOfficialCatalog`. Use the same-id baked-in model first: the provider's first model (Anthropic: Claude Fable 5) gave Haiku 4.5 adaptive thinking, which Anthropic rejects with a 400, and turned `--thinking off` into effort low. Ids missing from the built-in list still use the first model.
-- Pinned Claude Code 2.1.263's picker offers Sonnet 5 (default), Fable 5.1, Opus 5 and Haiku 4.5 on the tested account; no Haiku 5.5. It labels `opus[1m]` as drawing from usage credits, and `claudeCodeRoute` always routes Opus 5 as `claude-opus-5[1m]`. Unresolved.
+- Pinned Claude Code 2.1.263's picker offers Sonnet 5 (default), Fable 5.1, Opus 5 and Haiku 4.5 on the tested account; no Haiku 5.5. For every subscriber it labels `opus[1m]` "Draws from usage credits"; Sonnet 5 and Fable 5.1 at 1M carry no such label. With fake credentials, `claude-opus-5` reports 200K and no `context-1m` beta, `claude-opus-5[1m]` reports 1M with it. Keep Opus 5 on the standard route.
+- `ModelRuntime.getModel` prefers the row in the available snapshot, which carries credential-specific limits (Claude subscription windows) from `filterModels`. The plain catalog row is only the fallback. The route table lives in Node-free `packages/ai/src/utils/claude-code-routes.ts` because the Anthropic provider must stay browser-safe.
 - T3 Code caches each ACP agent's model list from a probe and keeps it until the provider is refreshed or T3 restarts. Logging out of lunR providers does not shrink T3's list until then.
 
 - Claude Code 2.1.263 sends a credential-free `HEAD /api/hello` warm-up to `ANTHROPIC_BASE_URL` at startup unless an HTTP(S) proxy, Unix socket or client certificate is configured. Offline fixtures with a dead proxy never see it; a real signed-in run does.
@@ -549,6 +553,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-17: keep subscription Opus 5 on Claude Code's standard 200K route because its 1M route bills usage credits for every subscriber, and make id lookups return the credential-aware row so that window holds everywhere.
 - 2026-10-17: official catalog rows fall back to their own baked-in model before the provider's first one, because compat and thinking maps are per model and Fable 5's adaptive thinking broke Haiku 4.5.
 - 2026-10-17: send unmatched scope patterns through the runtime diagnostics, because console writes land behind the first-paint TUI and corrupt its screen.
 - 2026-10-17: after `/login`, fall back to the provider's first offered model and order Claude subscription models by Claude Code's picker, so plans without the hardcoded default still get Claude Code's own default.
