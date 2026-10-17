@@ -30,7 +30,7 @@ import type { InlineExtension, ProjectTrustContext } from "./core/extensions/typ
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { ModelRegistry } from "./core/model-registry.ts";
-import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
+import { resolveCliModel, resolveModelScopeWithDiagnostics, type ScopedModel } from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
 import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
@@ -924,8 +924,13 @@ export async function main(args: string[], options?: MainOptions) {
 		];
 
 		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
-		const scopedModels =
-			modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRuntime) : [];
+		// Unmatched patterns join the diagnostics: a console write would land behind the first-paint TUI.
+		const modelScope =
+			modelPatterns && modelPatterns.length > 0
+				? await resolveModelScopeWithDiagnostics(modelPatterns, modelRuntime)
+				: undefined;
+		const scopedModels = modelScope?.scopedModels ?? [];
+		diagnostics.push(...(modelScope?.diagnostics ?? []));
 		const {
 			options: sessionOptions,
 			cliThinkingFromModel,
