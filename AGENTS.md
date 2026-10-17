@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **v0.2.33 (prepared 2026-10-17):** PR #182 merged as `e81d441` after green CI. The release ships the direct Claude Code upstream: subscription requests go from Claude Code straight to Anthropic with no lunR relay.
+- **v0.2.33 (2026-10-17):** PR #182 merged as `e81d441` and release PR #183 as `e0254fd`, both after green CI. Tag `v0.2.33` triggered successful npm publication; all four public packages and three native payloads report 0.2.33 latest. The release ships the direct Claude Code upstream: subscription requests go from Claude Code straight to Anthropic with no lunR relay. No live subscription request was made.
 
 - **Direct Claude Code upstream (`fix/claude-code-direct-upstream`, 2026-10-17):** subscription turns no longer pass through a lunR relay. Claude Code sends its Messages request straight to Anthropic; lunR rebuilds the SSE body from `--include-partial-messages` `stream_event` lines, ends at `message_stop` by stopping Claude Code, and rebuilds HTTP errors from the `result` line's `api_error_status`. A `result` with `terminal_reason: api_error` and no status is a retryable network error. The loopback keeps only the MCP tool inventory. Setup's model discovery points Claude Code at a TCP tripwire that counts and drops connections unread. No live subscription request was made.
 
@@ -77,7 +77,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 - **Image-only computer use (`feat/image-only-computer-use`):** PR #77 now integrates v0.2.24 master while retaining native computer use and its ownership fixes. Application observations now send one bounded image and allowlisted metadata, with crop mapping and one action plus post-image. Source-review repairs normalize equivalent clicks, paginate discovery, and preserve validated partial-typing recovery. Recovery distinguishes pre-dispatch rejection from uncertain input, drops unparseable driver text, and compares decoded pixels across PNG encodings. Smooth cursor animation still awaits a separate scope decision; `--no-overlay` is unchanged. Before changing capture/input, history retention, native ownership, or distribution, read `packages/coding-agent/docs/computer-use.md`. Focused validation and real-payload packaging pass; reproduced master CI failures still block a clean merge-ready claim. A user-authorized Windows Notepad smoke verifies launch, capture and background typing. A later Ctrl+A attempt reproduced pinned Windows XAML `hotkey` ignoring foreground mode; routing foreground modifier shortcuts through `press_key`/SendInput passed a live Windows x64 retry on an owned Notepad scratch. In-flight text cancellation stopped after six of 2048 characters, closed the runtime and lease, and allowed a fresh observation. Held modifier/button release, broader hardware acceptance and provider-driven use remain unverified; the owner separately approved publishing the pinned runtime in v0.2.26.
 - **Gateway approved access (`fix/gateway-approved-access`):** paired and allowlisted users use the same authorization for chat, projects, saved sessions, permissions, downloads, and Discord suggestions. No separate owner grant or re-pairing is required. Legacy owners/`--owner` remain compatible. Requester-bound buttons, revocation checks, approved paths, and session-transfer protections remain.
 
-Last updated: 2026-10-17 (v0.2.33 release preparation). Public npm is `@ashx-j/lunr@0.2.32`; 0.2.33 prepared. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-17 (v0.2.33 shipped). Public npm is `@ashx-j/lunr@0.2.33`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 - **v0.2.25:** PR #119 merged without conflicts as `af3eaf6`; release PR #120 merged as `1f323a3`. Tag `v0.2.25` shipped the four public npm packages. The release contains gateway usability and recovery fixes; no live gateway or account request was made.
 - **Gateway setup menus:** PC setup uses the existing TUI SelectList with scrolling, arrow keys, Enter, and Escape. Saved credentials, owners, folders, startup, provider, model, and confirmations are selections; new tokens, IDs, and custom paths remain text input. No readline listener runs beside the TUI.
@@ -193,7 +193,7 @@ Last updated: 2026-10-17 (v0.2.33 release preparation). Public npm is `@ashx-j/l
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.32**; v0.2.33 prepared.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.33**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 
@@ -206,6 +206,8 @@ Last updated: 2026-10-17 (v0.2.33 release preparation). Public npm is `@ashx-j/l
 - Unrelated local study material and review artifacts remain untracked.
 
 ## Build & run
+
+- v0.2.33 release (2026-10-17): release checks (Biome, pinned deps, TS imports, shrinkwrap, install lock, publish-workflow policy, browser smoke) and the offline five-package build pass; `packages/ai` stays clean. The publish dry run packs all seven packages after staging the pinned computer-use payloads. Publication workflow `39023382020` succeeded from tag `v0.2.33`. A fresh isolated npm install reports 0.2.33 and contains the direct-upstream bridge. On Windows, `scripts/release.mjs publish-tag` fails at `git tag -m` because its shell spawn splits the message; the tag was created and pushed manually with the same commands.
 
 - Direct Claude Code upstream (2026-10-17): AI `tsgo --noEmit` and touched-file Biome pass. The eight Claude Code suites pass 44/44 on Linux (homeserver); on Windows the bridge suite skips and one existing `NO_PROXY` case fails because Windows environment names are case-insensitive. Full Linux AI suite: 680 passed, 754 skipped, 6 failed, all Ollama end-to-end tests reaching the server's local Ollama. Offline Windows checks with the real pinned 2.1.263 binary, fake credentials and a dead outbound proxy pass success with history replay, 429, 400 overflow, 401, 529 and refused-connection paths, each with exactly one upstream request (zero when refused). Discovery stays untripped and a real prompt trips the tripwire. No live subscription request was made.
 
