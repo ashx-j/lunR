@@ -51,6 +51,20 @@ describe("Anthropic subscription route", () => {
 		]);
 	});
 
+	it("gives subscription Opus 5 the standard window its route uses, and leaves API keys alone", () => {
+		const provider = anthropicProvider();
+		const opus5 = { ...provider.getModels()[0], id: "claude-opus-5", contextWindow: 1_000_000 };
+		const sonnet5 = provider.getModels().find((model) => model.id === "claude-sonnet-5")!;
+		// Records saved before this fix still list Opus 5 under its old 1M route.
+		const subscription = { ...connection, routes: ["claude-opus-5[1m]", "claude-sonnet-5[1m]"] };
+		const listed = provider.filterModels!([opus5, sonnet5], subscription);
+		expect(listed.map((model) => [model.id, model.contextWindow])).toEqual([
+			["claude-opus-5", 200_000],
+			["claude-sonnet-5", sonnet5.contextWindow],
+		]);
+		expect(provider.filterModels!([opus5], undefined)[0].contextWindow).toBe(1_000_000);
+	});
+
 	it("routes an ambient genuine API key to HTTP even with a stored subscription connection", async () => {
 		const { credentials, models } = configured({ ANTHROPIC_API_KEY: "sk-ant-ambient" });
 		await credentials.modify("anthropic", async () => connection);
