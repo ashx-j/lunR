@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.33`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Added
+
+- `/settings` Scoped models in apps: T3 Code and other connected apps can list only your `/scoped-models` picks instead of every connected model.
+
 ## [0.2.33] - 2026-10-17
 
 ### Fixed

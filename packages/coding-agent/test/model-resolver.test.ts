@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
 	findInitialModel,
+	narrowToScope,
 	parseModelPattern,
 	resolveCliModel,
 	resolveModelScope,
@@ -254,6 +255,21 @@ describe("resolveModelScopeWithDiagnostics", () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+describe("narrowToScope", () => {
+	const [sonnet, gpt, qwen] = allModels;
+
+	test("keeps scoped models and the current model, in list order", () => {
+		expect(narrowToScope(allModels, [{ model: qwen }, { model: sonnet }], gpt)).toEqual([sonnet, gpt, qwen]);
+		expect(narrowToScope(allModels, [{ model: qwen }], undefined)).toEqual([qwen]);
+	});
+
+	test("keeps every model when no scoped model is in the list", () => {
+		const elsewhere = { ...sonnet, provider: "anthropic-vertex" };
+		expect(narrowToScope(allModels, [], gpt)).toBe(allModels);
+		expect(narrowToScope(allModels, [{ model: elsewhere }], gpt)).toBe(allModels);
 	});
 });
 

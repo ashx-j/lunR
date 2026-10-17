@@ -4914,6 +4914,7 @@ export class InteractiveMode {
 						this.session.model?.id ?? "no-model-selected",
 					),
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
+					clientScopedModelsOnly: this.settingsManager.getClientScopedModelsOnly(),
 					computerUse: this.settingsManager.getComputerUse(),
 					computerForeground: this.settingsManager.getComputerForeground(),
 					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
@@ -5129,6 +5130,9 @@ export class InteractiveMode {
 					},
 					onConfirmLargeSubagentLaunchesChange: (enabled) => {
 						this.settingsManager.setConfirmLargeSubagentLaunches(enabled);
+					},
+					onClientScopedModelsOnlyChange: (enabled) => {
+						this.settingsManager.setClientScopedModelsOnly(enabled);
 					},
 					onSubagentCommunicationChange: (enabled) => {
 						this.settingsManager.setSubagentCommunicationEnabled(enabled);

@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **v0.2.33 (prepared 2026-10-17):** PR #182 merged as `e81d441` after green CI. The release ships the direct Claude Code upstream: subscription requests go from Claude Code straight to Anthropic with no lunR relay.
 
+- **Scoped models in apps (`feat/client-scoped-models`, 2026-10-17):** `/settings` Scoped models in apps (`clientScopedModelsOnly`, default off) narrows RPC `get_available_models`, and so the ACP model picker T3 shows, to the session's `/scoped-models` picks plus the current model. With no scoped model available, apps still list every connected model, like `/model`. Workers read the setting at startup, so it applies to app sessions started after the change.
 - **Direct Claude Code upstream (`fix/claude-code-direct-upstream`, 2026-10-17):** subscription turns no longer pass through a lunR relay. Claude Code sends its Messages request straight to Anthropic; lunR rebuilds the SSE body from `--include-partial-messages` `stream_event` lines, ends at `message_stop` by stopping Claude Code, and rebuilds HTTP errors from the `result` line's `api_error_status`. A `result` with `terminal_reason: api_error` and no status is a retryable network error. The loopback keeps only the MCP tool inventory. Setup's model discovery points Claude Code at a TCP tripwire that counts and drops connections unread. No live subscription request was made.
 
 - **v0.2.32 (prepared 2026-10-16):** PR #180 merged as `74da1b4` after green CI. The release ships ACP tool-call streaming without growing per-delta copies, approval-free core read-only tools plus `todo`, and mid-turn mode changes with a read-only re-check of open approvals.
@@ -207,6 +208,7 @@ Last updated: 2026-10-17 (v0.2.33 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- Scoped models in apps (2026-10-17): coding-agent `tsgo --noEmit`, touched-file Biome and focused model-resolver + settings-manager Vitest (93/93) pass. Offline tui → ai → agent → coding-agent builds pass with `packages/ai` clean. An isolated profile with a four-model fixture provider and two scoped models lists 2 ACP model options with the setting on and 4 with it off. No model request was made.
 - Direct Claude Code upstream (2026-10-17): AI `tsgo --noEmit` and touched-file Biome pass. The eight Claude Code suites pass 44/44 on Linux (homeserver); on Windows the bridge suite skips and one existing `NO_PROXY` case fails because Windows environment names are case-insensitive. Full Linux AI suite: 680 passed, 754 skipped, 6 failed, all Ollama end-to-end tests reaching the server's local Ollama. Offline Windows checks with the real pinned 2.1.263 binary, fake credentials and a dead outbound proxy pass success with history replay, 429, 400 overflow, 401, 529 and refused-connection paths, each with exactly one upstream request (zero when refused). Discovery stays untripped and a real prompt trips the tripwire. No live subscription request was made.
 
 - ACP streaming/approvals/modes, 2026-10-16: offline tui → ai → agent builds and the coding-agent Node bundle pass. ACP translation/worker/integration suites pass 50/50 and permission/plan-mode suites 124/124 in a disposable profile; the four new or changed unit tests fail with the fixes reverted. Touched-file Biome and `git diff --check` pass. No live T3 session was run.
@@ -358,6 +360,8 @@ Last updated: 2026-10-17 (v0.2.33 release preparation). Public npm is `@ashx-j/l
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- T3 Code caches each ACP agent's model list from a probe and keeps it until the provider is refreshed or T3 restarts. Logging out of lunR providers does not shrink T3's list until then.
 
 - ACP's no-approval tool list is core `READ_ONLY_TOOLS` plus `todo`; add new side-effect-free tools to the core list so read-only mode and ACP stay in sync. Streamed `toolcall_delta` events carry the full growing input, so ACP announces a tool on start and end only.
 
@@ -523,6 +527,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-17: narrow the app model list in RPC `get_available_models` behind an opt-in setting, so ACP (T3) and the native RPC provider share one rule and lunR's own `/model` stays unchanged.
 - 2026-10-17: let Claude Code send subscription requests straight to Anthropic and read its `stream_event` output instead of relaying, because Anthropic's terms bar developers from intermediating Claude.ai session tokens while allowing users to sign in to unmodified Claude Code.
 - 2026-10-16: let ACP clients change modes mid-turn and re-check read-only after an open approval, because the spec allows it and lunR's gates already read the mode per tool call.
 
