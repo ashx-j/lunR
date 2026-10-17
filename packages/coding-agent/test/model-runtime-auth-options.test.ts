@@ -111,9 +111,10 @@ describe("ModelRuntime auth options", () => {
 			credentials: AuthStorage.inMemory({
 				anthropic: {
 					type: "external_claude_code",
-					version: 2,
+					version: 3,
 					manager: "claude-code",
 					command: "claude",
+					models: [{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 }],
 				},
 			}),
 			modelsPath: null,
@@ -129,9 +130,10 @@ describe("ModelRuntime auth options", () => {
 			credentials: AuthStorage.inMemory({
 				anthropic: {
 					type: "external_claude_code",
-					version: 2,
+					version: 3,
 					manager: "claude-code",
 					command: "claude",
+					models: [{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 }],
 				},
 			}),
 			modelsPath: null,

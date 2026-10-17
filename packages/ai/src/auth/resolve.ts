@@ -62,7 +62,7 @@ export async function resolveProviderAuth(
 		if (
 			stored.type === "external_claude_code" &&
 			provider.id === "anthropic" &&
-			(stored.version === 1 || stored.version === 2) &&
+			(stored.version === 1 || stored.version === 2 || stored.version === 3) &&
 			stored.manager === "claude-code"
 		) {
 			const apiKey = await requestAuthContext.env("ANTHROPIC_API_KEY");
@@ -73,7 +73,7 @@ export async function resolveProviderAuth(
 				});
 			if (await requestAuthContext.env("ANTHROPIC_OAUTH_TOKEN"))
 				throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);
-			if (stored.version === 1) throw new ModelsError("auth", CLAUDE_CODE_UPDATE_REQUIRED);
+			if (stored.version !== 3) throw new ModelsError("auth", CLAUDE_CODE_UPDATE_REQUIRED);
 			return { auth: { externalClaudeCode: stored }, source: "Claude Code subscription" };
 		}
 		if (stored.type === "oauth" && provider.auth.oauth) {

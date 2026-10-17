@@ -12,11 +12,11 @@ import { anthropicProvider } from "../src/providers/anthropic.ts";
 
 const connection: ExternalClaudeCodeCredential = {
 	type: "external_claude_code",
-	version: 2,
+	version: 3,
 	manager: "claude-code",
 	command: "/opt/claude",
 	accountFingerprint: "test-account",
-	routes: ["claude-sonnet-5[1m]"],
+	models: [{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 }],
 };
 
 function configured(env: Record<string, string> = {}) {
@@ -39,15 +39,18 @@ describe("Anthropic subscription route", () => {
 		expect((await models.getAuth("anthropic", { apiKey: "sk-ant-api-key" }))?.auth.apiKey).toBe("sk-ant-api-key");
 	});
 
-	it("lists subscription models in Claude Code's picker order", async () => {
+	it("lists the models Claude Code offered in its picker order, with the windows it reported", async () => {
 		const { credentials, models } = configured();
 		await credentials.modify("anthropic", async () => ({
 			...connection,
-			routes: ["claude-sonnet-5[1m]", "claude-haiku-4-5-20251001"],
+			models: [
+				{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 },
+				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001", contextWindow: 150_000 },
+			],
 		}));
-		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toEqual([
-			"claude-sonnet-5",
-			"claude-haiku-4-5-20251001",
+		expect((await models.getAvailable("anthropic")).map((model) => [model.id, model.contextWindow])).toEqual([
+			["claude-sonnet-5", 1_000_000],
+			["claude-haiku-4-5-20251001", 150_000],
 		]);
 	});
 
@@ -59,9 +62,9 @@ describe("Anthropic subscription route", () => {
 		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toContain("claude-opus-4-8");
 	});
 
-	it("reports a version 1 connection as needing /login before any request", async () => {
+	it.each([1, 2] as const)("reports a version %i connection as needing /login before any request", async (version) => {
 		const { credentials, models } = configured();
-		const legacy: ExternalClaudeCodeCredential = { ...connection, version: 1 };
+		const legacy: ExternalClaudeCodeCredential = { ...connection, version };
 		await credentials.modify("anthropic", async () => legacy);
 		expect(await models.checkAuth("anthropic")).toBeUndefined();
 		expect(await models.getAvailable("anthropic")).toEqual([]);

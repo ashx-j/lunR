@@ -27,10 +27,10 @@ export function formatNoApiKeyFoundMessage(provider: string): string {
 
 /**
  * What /logout leaves behind for a Claude subscription. Removing lunR's record does not sign out of
- * Claude Code, and the copy lunR downloaded (version 2 setup) stays on disk.
+ * Claude Code, and the copy lunR downloaded (version 2 setup onward) stays on disk.
  */
 export function formatClaudeSubscriptionLogoutNote(credential: ExternalClaudeCodeCredential): string {
 	const signIn = "Claude Code's own sign-in is unchanged.";
-	if (credential.version !== 2) return signIn;
+	if (credential.version === 1) return signIn;
 	return `${signIn} lunR's downloaded copy (about 100 MB) stays in ${dirname(credential.command)}. Delete that folder to remove it, or run "${credential.command}" auth logout first to sign out of Claude Code too.`;
 }

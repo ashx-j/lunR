@@ -5,12 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-	claudeCodeRoute,
-	extractTarEntry,
-	installClaudeCode,
-	managedClaudeCodePath,
-} from "../src/utils/claude-code-release.ts";
+import { extractTarEntry, installClaudeCode, managedClaudeCodePath } from "../src/utils/claude-code-release.ts";
 
 /** One ustar entry; tar readers only need name, size, type, and the 512-byte layout. */
 function tarEntry(name: string, body: Buffer, type = "0"): Buffer {
@@ -40,14 +35,6 @@ afterEach(() => {
 });
 
 describe("Claude Code release", () => {
-	it("maps lunR model ids and picker aliases onto the pinned routes", () => {
-		expect(claudeCodeRoute("claude-opus-4-8")).toBe("claude-opus-4-8[1m]");
-		expect(claudeCodeRoute("sonnet")).toBe("claude-sonnet-5[1m]");
-		expect(claudeCodeRoute("claude-haiku-4-5")).toBe("claude-haiku-4-5-20251001");
-		expect(claudeCodeRoute("claude-haiku-4-5[1m]")).toBeUndefined();
-		expect(claudeCodeRoute("claude-opus-4-1")).toBeUndefined();
-	});
-
 	it("keeps lunR's binary under the agent directory, apart from other installs", () => {
 		vi.stubEnv("PI_CODING_AGENT_DIR", "/agent");
 		expect(managedClaudeCodePath("linux-x64")).toBe(join("/agent", "claude-code", "2.1.263", "claude"));

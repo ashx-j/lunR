@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Claude subscription setup now reads each model's routes and context windows from Claude Code itself instead of a built-in table. It keeps the largest window Claude Code offers on the plan and skips variants Claude Code labels as drawing from usage credits, so Opus 5 uses its standard 200K route instead of the credit-billed 1M one. Setup records are now version 3; older ones need `/login anthropic` once.
+- Claude Code's `get_context_usage` token counts during setup reach only the discovery tripwire, which drops them without counting them as a request.
+
 ## [0.2.36] - 2026-10-17
 
 - Align the package version with the lunR 0.2.36 release.

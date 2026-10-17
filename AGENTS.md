@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Claude Code routes from discovery (`fix/claude-opus-standard-route`, 2026-10-17):** setup reads Claude Code's picker (`initialize`), then `set_model` + `get_context_usage` per route, and saves a version 3 record with `models: [{ id, route, contextWindow }]` in picker order. Each model keeps its largest window that Claude Code does not label "usage credits", so Opus 5 uses `claude-opus-5` (200K), not the credit-billed `[1m]`. The provider lists exactly those models with those windows, the bridge sends the saved route, and `ModelRuntime.getModel` returns the same credential-aware row. The hardcoded route table is gone. Version 1 and 2 records need `/login anthropic`. Tests: anthropic-subscription-login + anthropic-oauth + claude-code-loopback + model-runtime-subscription-window.
+
 - **v0.2.36 (prepared 2026-10-17):** PR #191 merged as `8e8da36` after green CI. The release ships the catalog own-model template fix, so Claude Haiku 4.5 no longer requests adaptive thinking.
 
 - **Catalog own-model template (`fix/catalog-own-model-template`, 2026-10-17):** official rows without their own compat or thinking map fall back to the same-id baked-in model before the provider's first model. Claude Haiku 4.5 no longer requests adaptive thinking. Test: model-runtime-official-template.
@@ -220,6 +222,7 @@ Last updated: 2026-10-17 (v0.2.36 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- Claude Code routes from discovery (2026-10-17): Anthropic suites pass 33 (bridge skips on Windows) and 15 related coding-agent files pass 128/128; AI/agent/coding-agent builds, browser-smoke and ts-imports pass. Real setup discovery against the signed-in account took 3.3 s with the tripwire untripped and saved Sonnet 5 `[1m]` 1M, Fable 5.1 `[1m]` 1M, Opus 5 standard 200K and Haiku 4.5 200K. With that record the built CLI lists those windows, the intercepted handoff routes Opus 5 as `claude-opus-5` and Sonnet 5 as `claude-sonnet-5[1m]`, and a live Haiku 4.5 message returned in 2 s.
 - v0.2.36 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.36. `publish:dry` packs all seven packages. v0.2.35 published from tag `v0.2.35` at `308fdd5`; all seven packages resolve as npm latest and a fresh install reports 0.2.35 with both fixes.
 - Catalog own-model template (2026-10-17): model-runtime-official-template fails on the old code and passes; official-catalog, catalog, live-catalog and model-runtime suites pass 78/78. Intercepting the CLI's Claude Code handoff shows Haiku 4.5 sends `thinking: disabled` for off and budget thinking for low (before: adaptive + effort low). Two live Haiku 4.5 subscription messages (thinking off and low) returned the expected answers in 2-3 s.
 - v0.2.35 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.35. `publish:dry` packs all seven packages. With a temp profile holding the real Claude subscription record, the ACP model list shows 4 Claude models in Claude Code's order with Scoped models in apps off and the 2 scoped ones with it on (no model request).
@@ -380,7 +383,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - Anything written to stdout/stderr while the first-paint TUI owns the screen (runtime creation in `main.ts`, or later inside the TUI) shifts the terminal under it and leaves stale rows, such as a second boot header. Route startup output through runtime diagnostics.
 - Official catalog rows without `compat`/`thinkingLevelMap` take them from a baked-in template in `refreshOfficialCatalog`. Use the same-id baked-in model first: the provider's first model (Anthropic: Claude Fable 5) gave Haiku 4.5 adaptive thinking, which Anthropic rejects with a 400, and turned `--thinking off` into effort low. Ids missing from the built-in list still use the first model.
-- Pinned Claude Code 2.1.263's picker offers Sonnet 5 (default), Fable 5.1, Opus 5 and Haiku 4.5 on the tested account; no Haiku 5.5. It labels `opus[1m]` as drawing from usage credits, and `claudeCodeRoute` always routes Opus 5 as `claude-opus-5[1m]`. Unresolved.
+- Pinned Claude Code 2.1.263's picker offers Sonnet 5 (default), Fable 5.1, Opus 5 and Haiku 4.5 on the tested account; no Haiku 5.5. For every subscriber it labels `opus[1m]` "Draws from usage credits"; Sonnet 5 and Fable 5.1 at 1M carry no such label. With fake credentials, `claude-opus-5` reports 200K and no `context-1m` beta, `claude-opus-5[1m]` reports 1M with it. Setup skips any variant whose picker description mentions usage credits; there is no structured billing field. `get_context_usage` reports the window per route and sends `count_tokens` requests, which the tripwire drops uncounted.
+- `ModelRuntime.getModel` prefers the row in the available snapshot, which carries credential-specific limits (Claude subscription windows) from `filterModels`. The plain catalog row is only the fallback.
 - T3 Code caches each ACP agent's model list from a probe and keeps it until the provider is refreshed or T3 restarts. Logging out of lunR providers does not shrink T3's list until then.
 
 - Claude Code 2.1.263 sends a credential-free `HEAD /api/hello` warm-up to `ANTHROPIC_BASE_URL` at startup unless an HTTP(S) proxy, Unix socket or client certificate is configured. Offline fixtures with a dead proxy never see it; a real signed-in run does.
@@ -549,6 +553,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-17: derive Claude subscription routes and windows from Claude Code's own picker and `get_context_usage` at setup, skipping variants it labels as usage credits, because a hardcoded route table goes stale with every Claude Code model change and had routed Opus 5 to credit billing.
 - 2026-10-17: official catalog rows fall back to their own baked-in model before the provider's first one, because compat and thinking maps are per model and Fable 5's adaptive thinking broke Haiku 4.5.
 - 2026-10-17: send unmatched scope patterns through the runtime diagnostics, because console writes land behind the first-paint TUI and corrupt its screen.
 - 2026-10-17: after `/login`, fall back to the provider's first offered model and order Claude subscription models by Claude Code's picker, so plans without the hardcoded default still get Claude Code's own default.

@@ -6,7 +6,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
-import { claudeCodeRoute } from "../utils/claude-code-release.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
 import { ClaudeCodeLoopback, type ClaudeCodeTool } from "./claude-code-loopback.ts";
@@ -113,15 +112,18 @@ function historyFrames(messages: unknown[], model: string): Frame[] {
 	return frames;
 }
 
-/** Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. */
-function claudeCodeRequest(body: unknown): ClaudeCodeRequest {
+/**
+ * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. The
+ * route is the one setup saved for the model, so Claude Code gets exactly the variant discovery chose.
+ */
+function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredential): ClaudeCodeRequest {
 	if (!isRecord(body) || typeof body.model !== "string" || !Array.isArray(body.messages))
 		throw new Error("Invalid Claude Code request");
 	const unsupported = Object.keys(body).filter((key) => !SUPPORTED_PARAMS.has(key));
 	if (unsupported.length) throw new Error(`Claude Code subscription does not support ${unsupported.join(", ")}`);
 	if (body.tool_choice !== undefined && !(isRecord(body.tool_choice) && body.tool_choice.type === "auto"))
 		throw new Error("Claude Code subscription does not support forced tool choice");
-	const route = claudeCodeRoute(body.model);
+	const route = connection.models?.find((model) => model.id === body.model)?.route;
 	if (!route) throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
 
 	const system =
@@ -446,7 +448,7 @@ export function claudeCodeFetch(
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body), signal, idleMs, upstream);
+			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -511,7 +513,7 @@ export function streamClaudeCode(
 	validateOptions(model, options);
 	const connection = options.externalClaudeCode;
 	if (!connection) throw new Error("Claude Code subscription setup is required. Run /login anthropic.");
-	if (connection.version !== 2) throw new Error(CLAUDE_CODE_UPDATE_REQUIRED);
+	if (connection.version !== 3) throw new Error(CLAUDE_CODE_UPDATE_REQUIRED);
 	const idleMs = Math.min(300_000, Math.max(1000, options.timeoutMs ?? 180_000));
 	const client = new Anthropic({
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.

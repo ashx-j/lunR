@@ -8,11 +8,10 @@ import { claudeCodeEnvironment, spawnClaudeCode, stopProcessTree } from "../../a
 import {
 	CLAUDE_CODE_VERSION,
 	claudeCodePlatform,
-	claudeCodeRoute,
 	installClaudeCode,
 	managedClaudeCodePath,
 } from "../../utils/claude-code-release.ts";
-import type { AuthInteraction, ExternalClaudeCodeCredential, OAuthAuth } from "../types.ts";
+import type { AuthInteraction, ClaudeCodeModelRoute, ExternalClaudeCodeCredential, OAuthAuth } from "../types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
@@ -81,66 +80,118 @@ async function signInStatus(
 	};
 }
 
-/**
- * The account's model routes from Claude Code's own picker. The `initialize` handshake answers without a
- * Messages request; a tripwire base URL proves that before anything is saved.
- */
-async function discoverRoutes(command: string, configDir: string | undefined): Promise<string[]> {
-	const tripwire = await ClaudeCodeTripwire.open();
-	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-setup-"));
-	try {
-		const output = await run(
-			command,
-			[
-				"-p",
-				"--model",
-				"sonnet",
-				"--input-format",
-				"stream-json",
-				"--output-format",
-				"stream-json",
-				"--verbose",
-				"--tools",
-				"",
-				"--setting-sources",
-				"",
-				"--strict-mcp-config",
-				"--mcp-config",
-				'{"mcpServers":{}}',
-				"--disable-slash-commands",
-				"--no-session-persistence",
-			],
-			{
-				input: `${JSON.stringify({ type: "control_request", request_id: "lunr-picker", request: { subtype: "initialize" } })}\n`,
-				env: { ...claudeCodeEnvironment(configDir, false), ANTHROPIC_BASE_URL: tripwire.baseUrl },
-				cwd: directory,
-				timeoutMs: 40_000,
-				allowFailure: true,
-			},
-		);
-		if (tripwire.tripped) throw new Error("Claude Code model discovery tried to contact Anthropic. Setup not saved.");
-		const routes = new Set<string>();
-		for (const line of output.split("\n")) {
-			if (!line.startsWith("{")) continue;
+/** Claude Code's control channel over stream-json stdio: one request at a time, answered by request id. */
+function controlChannel(child: ReturnType<typeof spawnClaudeCode>) {
+	const pending = new Map<string, { resolve: (response: unknown) => void; reject: (error: Error) => void }>();
+	let buffer = "";
+	let next = 0;
+	const failAll = (error: Error) => {
+		for (const waiter of pending.values()) waiter.reject(error);
+		pending.clear();
+	};
+	child.stdout.on("data", (chunk: Buffer) => {
+		buffer += chunk.toString("utf8");
+		for (let end = buffer.indexOf("\n"); end >= 0; end = buffer.indexOf("\n")) {
+			const line = buffer.slice(0, end);
+			buffer = buffer.slice(end + 1);
 			let event: unknown;
 			try {
-				event = JSON.parse(line);
+				event = line.startsWith("{") ? JSON.parse(line) : undefined;
 			} catch {
-				// A truncated or garbled line must not hide the other lines; no routes still ends in a clear error.
+				// A garbled line is not a control response; its request times out instead.
 				continue;
 			}
 			if (!isRecord(event) || event.type !== "control_response" || !isRecord(event.response)) continue;
-			const reply = event.response.response;
-			const rows: unknown[] = isRecord(reply) && Array.isArray(reply.models) ? reply.models : [];
-			for (const row of rows) {
-				if (!isRecord(row)) continue;
-				const value = typeof row.resolvedModel === "string" && row.resolvedModel ? row.resolvedModel : row.value;
-				const route = typeof value === "string" ? claudeCodeRoute(value) : undefined;
-				if (route) routes.add(route);
-			}
+			const id = event.response.request_id;
+			const waiter = typeof id === "string" ? pending.get(id) : undefined;
+			if (!waiter) continue;
+			pending.delete(id as string);
+			if (event.response.subtype === "success") waiter.resolve(event.response.response);
+			else waiter.reject(new Error("Claude Code rejected a setup request"));
 		}
-		return [...routes];
+	});
+	child.on("close", () => failAll(new Error("Claude Code exited during setup")));
+	child.on("error", (error) => failAll(error));
+	// A request written as Claude Code exits fails through `close`; the pipe error itself is expected.
+	child.stdin.on("error", () => {});
+	return {
+		request(request: Record<string, unknown>): Promise<unknown> {
+			const id = `lunr-${++next}`;
+			return new Promise((resolve, reject) => {
+				pending.set(id, { resolve, reject });
+				child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: id, request })}\n`);
+			});
+		},
+		failAll,
+	};
+}
+
+/** Claude Code's own label for a model variant billed from usage credits instead of the plan. */
+const USAGE_CREDITS = /usage credits/i;
+
+/**
+ * The account's models from Claude Code itself, with no Messages request. The `initialize` handshake lists
+ * the picker; `set_model` plus `get_context_usage` report each route's context window. A tripwire base URL
+ * proves no other request was sent before anything is saved. Each model keeps the largest window Claude
+ * Code offers on the plan, skipping variants it labels as drawing from usage credits, and the list keeps
+ * Claude Code's picker order so its default for the plan comes first.
+ */
+async function discoverModels(command: string, configDir: string | undefined): Promise<ClaudeCodeModelRoute[]> {
+	const tripwire = await ClaudeCodeTripwire.open();
+	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-setup-"));
+	const child = spawnClaudeCode(
+		command,
+		[
+			"-p",
+			"--model",
+			"sonnet",
+			"--input-format",
+			"stream-json",
+			"--output-format",
+			"stream-json",
+			"--verbose",
+			"--tools",
+			"",
+			"--setting-sources",
+			"",
+			"--strict-mcp-config",
+			"--mcp-config",
+			'{"mcpServers":{}}',
+			"--disable-slash-commands",
+			"--no-session-persistence",
+		],
+		{ ...claudeCodeEnvironment(configDir, false), ANTHROPIC_BASE_URL: tripwire.baseUrl },
+		directory,
+	);
+	const channel = controlChannel(child);
+	const timer = setTimeout(() => channel.failAll(new Error("Claude Code setup check timed out")), 60_000);
+	try {
+		const picker = await channel.request({ subtype: "initialize" });
+		const rows = isRecord(picker) && Array.isArray(picker.models) ? picker.models : [];
+		const routes = new Map<string, boolean>();
+		for (const row of rows) {
+			if (!isRecord(row)) continue;
+			const resolved = typeof row.resolvedModel === "string" && row.resolvedModel ? row.resolvedModel : row.value;
+			if (typeof resolved !== "string" || !resolved.startsWith("claude-") || routes.has(resolved)) continue;
+			routes.set(resolved, typeof row.description === "string" && USAGE_CREDITS.test(row.description));
+		}
+		const models = new Map<string, ClaudeCodeModelRoute>();
+		for (const [route, usageCredits] of routes) {
+			if (usageCredits) continue;
+			await channel.request({ subtype: "set_model", model: route });
+			const usage = await channel.request({ subtype: "get_context_usage" });
+			const contextWindow = isRecord(usage) ? usage.maxTokens : undefined;
+			if (typeof contextWindow !== "number" || !Number.isInteger(contextWindow) || contextWindow <= 0) continue;
+			const id = route.replace(/\[1m\]$/, "");
+			// Replacing an existing key keeps its first picker position.
+			if (contextWindow > (models.get(id)?.contextWindow ?? 0)) models.set(id, { id, route, contextWindow });
+		}
+		if (tripwire.tripped) throw new Error("Claude Code model discovery tried to contact Anthropic. Setup not saved.");
+		return [...models.values()];
 	} finally {
+		clearTimeout(timer);
+		child.stdin.end();
+		await stopProcessTree(child.pid).catch(() => {});
 		tripwire.close();
 		await rm(directory, { recursive: true, force: true }).catch(() => {});
 	}
@@ -230,16 +281,16 @@ async function login(interaction: AuthInteraction): Promise<ExternalClaudeCodeCr
 		status = await signInStatus(command, configDir);
 		if (!status.subscribed) throw new Error("Claude Code is not signed in to a Claude subscription");
 	}
-	const routes = await discoverRoutes(command, configDir);
-	if (!routes.length) throw new Error("Claude Code did not list any models lunR can use. Setup not saved.");
+	const models = await discoverModels(command, configDir);
+	if (!models.length) throw new Error("Claude Code did not list any models lunR can use. Setup not saved.");
 	return {
 		type: "external_claude_code",
-		version: 2,
+		version: 3,
 		manager: "claude-code",
 		command,
 		...(configDir && { configDir }),
 		accountFingerprint: status.accountFingerprint ?? randomUUID(),
-		routes,
+		models,
 	};
 }
 

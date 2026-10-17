@@ -146,7 +146,13 @@ async function setup(
 	closers.push(() => server.close());
 	const address = server.address();
 	return {
-		connection: { type: "external_claude_code", version: 2, manager: "claude-code", command },
+		connection: {
+			type: "external_claude_code",
+			version: 3,
+			manager: "claude-code",
+			command,
+			models: [{ id: "claude-opus-4-8", route: "claude-opus-4-8[1m]", contextWindow: 1_000_000 }],
+		},
 		upstream: `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`,
 		directory,
 	};
@@ -408,12 +414,14 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(result.errorMessage).toContain("outside lunR's tool list");
 	});
 
-	it("asks connections from the retired Python bridge to set up again", async () => {
-		const result = await anthropicProvider()
-			.streamSimple(model, context, {
-				externalClaudeCode: { type: "external_claude_code", version: 1, manager: "claude-code", command: "/x" },
-			})
-			.result();
-		expect(result.errorMessage).toBe(CLAUDE_CODE_UPDATE_REQUIRED);
+	it("asks connections without saved routes and windows to set up again", async () => {
+		for (const version of [1, 2] as const) {
+			const result = await anthropicProvider()
+				.streamSimple(model, context, {
+					externalClaudeCode: { type: "external_claude_code", version, manager: "claude-code", command: "/x" },
+				})
+				.result();
+			expect(result.errorMessage).toBe(CLAUDE_CODE_UPDATE_REQUIRED);
+		}
 	});
 });
