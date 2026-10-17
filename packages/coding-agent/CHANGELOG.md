@@ -1,6 +1,12 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.32`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.33`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [0.2.33] - 2026-10-17
+
+### Fixed
+
+- Claude subscription requests now go straight from Claude Code to Anthropic, so your Claude sign-in never passes through lunR. Each generation is still exactly one request.
 
 ## [0.2.32] - 2026-10-16
 
