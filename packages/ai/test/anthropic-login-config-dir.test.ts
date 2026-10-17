@@ -43,7 +43,7 @@ vi.mock("../src/api/claude-code-process.ts", async (importOriginal) => ({
 	},
 }));
 vi.mock("../src/api/claude-code-loopback.ts", () => ({
-	ClaudeCodeLoopback: { open: async () => ({ baseUrl: "http://127.0.0.1:1", admitted: false, close: () => {} }) },
+	ClaudeCodeTripwire: { open: async () => ({ baseUrl: "http://127.0.0.1:1", tripped: false, close: () => {} }) },
 }));
 // process.execPath exists on disk, so setup treats it as an already-downloaded Claude Code.
 vi.mock("../src/utils/claude-code-release.ts", async (importOriginal) => ({
