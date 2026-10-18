@@ -14,6 +14,10 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned
 ### Added
 
 - `/settings` Notifications rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. It stays quiet while the terminal reports that lunR's window has focus. Off by default.
+### Added
+
+- `lunr doctor` checks Node, the config folder, saved logins, the default model, the model catalog's age, a Claude subscription's managed Claude Code, Chromium and the gateway, and prints a fix for each problem. It never prints credentials.
+- `lunr doctor keys` asks for Shift+Enter, Alt+Enter and the image-paste key and says which ones reached lunR and what the terminal sent instead.
 
 ## [0.2.37] - 2026-10-17
 

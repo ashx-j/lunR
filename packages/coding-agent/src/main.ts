@@ -577,6 +577,11 @@ export async function main(args: string[], options?: MainOptions) {
 		if (await handleInstallCli(args)) return;
 	}
 
+	if (args[0] === "doctor") {
+		const { handleDoctorCli } = await import("./cli/doctor-cli.ts");
+		if (await handleDoctorCli(args)) return;
+	}
+
 	if (args[0] === "update") {
 		const { handleUpdateCli } = await import("./cli/update-cli.ts");
 		if (await handleUpdateCli(args)) return;

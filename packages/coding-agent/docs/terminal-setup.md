@@ -2,6 +2,8 @@
 
 lunR uses the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) for reliable modifier key detection. Most modern terminals support this protocol, but some require configuration.
 
+Run `lunr doctor keys` to check your terminal. It asks for Shift+Enter, Alt+Enter and the image-paste key, then says which ones reached lunR and what arrived instead.
+
 ## Kitty, iTerm2
 
 Work out of the box.
