@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { WaitToolConfig } from "../../shared/types.ts";
 
 export const WAIT_TOOL_ENABLED_ENV = "PI_SUBAGENT_WAIT_TOOL_ENABLED";

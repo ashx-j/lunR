@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ActivityState, AsyncJobStep } from "./types.ts";
 
 type StepStatusLike = Pick<AsyncJobStep, "status">;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ResolvedWatchdogConfig, WatchdogLspConfig } from "./types.ts";
 
 export const CHILD_WATCHDOG_CONFIG_ENV = "PI_SUBAGENT_WATCHDOG_CHILD_CONFIG";

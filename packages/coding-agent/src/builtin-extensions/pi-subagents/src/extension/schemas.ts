@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * TypeBox schemas for subagent tool parameters
  */

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared task mutation-intent classifier.
  *

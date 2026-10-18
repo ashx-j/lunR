@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Subagent completion notifications.
  *

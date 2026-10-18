@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ResolvedControlConfig } from "../../shared/types.ts";
 
 interface LongRunningNoticeMetrics {
