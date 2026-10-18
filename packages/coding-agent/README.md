@@ -517,6 +517,8 @@ lunr [options] [@files...] [messages...]
 lunr setup                         # Install Chromium and configure optional features
 lunr browser install               # Repair missing Chromium after a skipped/failed install
 lunr features [list|enable|disable]
+lunr doctor                        # Check logins, default model, catalog, browser, Claude Code and gateway
+lunr doctor keys                   # Test whether Shift+Enter, Alt+Enter and image paste reach lunR
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Remove this lunR install (keeps ~/.lunr/agent unless --purge)
 lunr uninstall <source> [-l]       # Remove an extension package (alias for remove)
