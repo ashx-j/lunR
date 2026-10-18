@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Removed
+
+- The experimental first-run screen that asked to share anonymous usage data. lunR never sent any. The unused `enableAnalytics` and `trackingId` settings and the `FirstTimeSetupComponent` SDK export are gone too; existing values in settings.json are ignored.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed
