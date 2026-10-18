@@ -22,6 +22,10 @@ export const READ_ONLY_MODE_BLOCK_MESSAGE = "Read-only mode is active; no change
 
 const BLOCKED_TOOLS = new Set(["edit", "write", "memory_add", "memory_remove", "cron"]);
 
+/** Env assignments that can make a read-only command run another program. */
+const CODE_RUNNING_ENV =
+	/^(GIT_[A-Z0-9_]+|[A-Z0-9_]*PAGER|[A-Z0-9_]*EDITOR|LESSOPEN|LESSCLOSE|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|BASH_ENV|ENV|PROMPT_COMMAND|NODE_OPTIONS|PYTHONSTARTUP|PERL5OPT|RUBYOPT)=/;
+
 /** Small allowlist of read-only commands permitted in read-only mode. Everything else is rejected. */
 const ALLOWED_COMMANDS = new Set([
 	"ls",
@@ -322,6 +326,8 @@ function isMutatingSegment(segment: string): boolean {
 	if (!tokens) return true;
 	// Skip leading env assignments (FOO=bar cmd …) and command wrappers we can't see through.
 	while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) {
+		// Some variables make an informational command run another program (git's external diff, pagers, preloads).
+		if (CODE_RUNNING_ENV.test(tokens[0])) return true;
 		tokens = tokens.slice(1);
 	}
 	if (tokens.length === 0) return false;
@@ -335,9 +341,21 @@ function isMutatingSegment(segment: string): boolean {
 		return args.some((a) => a === "-i" || a.startsWith("-i") || a.startsWith("--in-place") || /^-[^-]*i/.test(a));
 	}
 	if (command === "find") {
-		return args.some((a) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(a));
+		return args.some((a) =>
+			["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(a),
+		);
+	}
+	if (command === "rg") {
+		// --pre runs a program on every searched file.
+		return args.some((a) => a === "--pre" || a.startsWith("--pre="));
+	}
+	if (command === "uniq") {
+		// uniq [options] [input [output]] writes the output operand.
+		return args.filter((a) => !a.startsWith("-")).length >= 2;
 	}
 	if (command === "git") {
+		// git grep -O/--open-files-in-pager runs a pager program on the matches.
+		if (args.some((a) => /^-O/.test(a) || a.startsWith("--open-files-in-pager"))) return true;
 		return isMutatingGit(args);
 	}
 	if (command === "gh") {

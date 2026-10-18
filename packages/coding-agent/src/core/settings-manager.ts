@@ -1304,9 +1304,12 @@ export class SettingsManager {
 		this.save();
 	}
 
-	/** The user's chosen auto-mode review model, or undefined to use the provider's own reviewer. */
+	/**
+	 * The user's chosen auto-mode review model, or undefined to use the provider's own reviewer.
+	 * Global only, so a repository's .lunr/settings.json can't pick its own reviewer.
+	 */
 	getAutoReviewModel(): string | undefined {
-		const value = this.settings.autoReviewModel;
+		const value = this.globalSettings.autoReviewModel;
 		return typeof value === "string" && value.includes("/") ? value : undefined;
 	}
 

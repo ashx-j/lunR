@@ -91,14 +91,25 @@ async function createApprovalPrompt(
 	const title =
 		req.kind === "large-subagent-launch"
 			? `Approve large subagent launch?\n${req.detail}`
-			: `Approve ${req.toolName}?\n${req.detail}`;
-	const rows: ButtonSpec[][] = [
-		[
-			{ label: "✓ Approve once", data: makeCallbackData(id, "once") },
-			{ label: "✓ Approve session", data: makeCallbackData(id, "session") },
-		],
-		[{ label: "✗ Reject", data: makeCallbackData(id, "reject") }],
-	];
+			: req.kind === "auto-review"
+				? `Auto review stopped a ${req.toolName} call. Run it anyway?\n${req.detail}`
+				: `Approve ${req.toolName}?\n${req.detail}`;
+	// An auto-review decision covers this one action, so it has no session-wide approval.
+	const rows: ButtonSpec[][] =
+		req.kind === "auto-review"
+			? [
+					[
+						{ label: "✓ Run it once", data: makeCallbackData(id, "once") },
+						{ label: "✗ Keep it blocked", data: makeCallbackData(id, "reject") },
+					],
+				]
+			: [
+					[
+						{ label: "✓ Approve once", data: makeCallbackData(id, "once") },
+						{ label: "✓ Approve session", data: makeCallbackData(id, "session") },
+					],
+					[{ label: "✗ Reject", data: makeCallbackData(id, "reject") }],
+				];
 
 	return new Promise<ApprovalResponse>((resolve, reject) => {
 		let messageId: string | undefined;

@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **Reviewed auto mode (`feat/reviewed-auto-mode`, 2026-10-18):** `core/auto-review.ts` decides which calls need review (anything read-only mode would block, minus in-project `edit`/`write`/`code_rewrite` after symlink resolution and `todo`/`goal_*`), picks the reviewer (parent ref, `autoReviewModel`, provider default: Anthropic `claude-sonnet-5`, else the session model for openai, openai-codex, xai and the four qwen ids) and parses `{"decision"}` JSON. AgentSession reviews in its tool gate, records `auto-review` request usage, and after 3 consecutive or 20 total blocks (or with no reviewer) asks through the `auto-review` approval kind. "No questions" moved to `AgentSession.setAutonomous` (`/goal`, children, ACP auto). Children get the parent's reviewer through `PI_SUBAGENT_CHILD_AUTO_REVIEW`.
+- **Reviewed auto mode (`feat/reviewed-auto-mode`, 2026-10-18):** `core/auto-review.ts` decides which calls need review (anything read-only mode would block, plus `web_fetch`/`fetch_content`, browser `navigate`/`tabs` and env-prefixed bash, minus `todo`/`goal_*` and edits to non-hidden files inside the project resolved with `resolveToCwd` + `canonicalizeTargetPath`), picks the reviewer (parent ref, `autoReviewModel`, provider default: Anthropic `claude-sonnet-5`, else the session model for openai, openai-codex, xai and the four qwen ids) and parses `{"decision"}` JSON. AgentSession reviews in its tool gate, records `auto-review` request usage, and after 3 consecutive or 20 total blocks (or with no reviewer) asks through the `auto-review` approval kind. "No questions" moved to `AgentSession.setAutonomous` (`/goal`, children, ACP auto). Children get the parent's reviewer through `PI_SUBAGENT_CHILD_AUTO_REVIEW`.
 
 - **v0.2.37 (prepared 2026-10-17):** PR #193 merged as `a223db9` after green CI. The release ships Claude Code routes and windows from discovery, so subscription Opus 5 stays on the plan; existing Claude connections need `/login anthropic` once.
 
@@ -379,7 +379,7 @@ Last updated: 2026-10-17 (v0.2.37 release preparation). Public npm is `@ashx-j/l
 - **Cron:** `core/cron` in TUI (live session) and gateway (fresh headless session). One `jobs.json` `~/.lunr/agent/cron/`. `runWithOrigin` ALS. Gateway fallback: `cronFallbackModels`.
 - **Gateway:** Telegram long-poll + Discord (mention-gated, no GuildMembers intent). Authz fail-closed. `ADAPTER_FACTORIES`.
 - **Footer:** ashxj-tui `setFooter` only. Toggles are render-time `CustomizeBridge` reads.
-- **Permissions:** `manual | yolo | plan | auto`; Shift+Tab cycles that order. Plan = `gateToolCall` + `PLAN_MODE_ADDENDUM`. Fail-closed without handler. 3+ children in one `tasks`/`chain.parallel` call, or that many same-turn SINGLE `subagent` calls, share one confirmation in manual AND yolo when `/settings` Confirm large subagent launches is on, which defaults off. Auto bypasses it. There is no `/swarm` command.
+- **Permissions:** `yolo | auto | read-only`; Shift+Tab cycles that order. Read-only = `gateToolCall` + `READ_ONLY_MODE_ADDENDUM`; auto = yolo plus the AgentSession review step (`core/auto-review.ts`). Fail-closed without handler. 3+ children in one `tasks`/`chain.parallel` call, or that many same-turn SINGLE `subagent` calls, share one confirmation in yolo when `/settings` Confirm large subagent launches is on, which defaults off. Auto and autonomous sessions bypass it. There is no `/swarm` command.
 - **Rollback:** per-turn snapshots; `/rollback` forks and restores files. `/undo` and `/edit` stay in the same session via `navigateTree` (no fork).
 
 # Renamed vs still "pi"
@@ -388,6 +388,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- The reviewer prompt clips long actions head-and-tail with an omitted-characters marker and lists `path`/`command`/`url` first, so a long input can't hide where it lands. AGENTS.md and extension-sent user messages (tracked in a WeakSet by object identity, lost after reload) are labeled as context that can't authorize anything. An aborted review returns early and never counts toward the ask-the-user limit.
 - ACP workers call `setAutoReviewEnabled(false)` and tie autonomy to ACP's `auto` (Autonomous), because the ACP client approves every tool itself. Don't route ACP sessions through the reviewer.
 - Auto review runs in `AgentSession` after `gateToolCall`, not inside `permissions.ts`, because it needs the model runtime, messages and session usage. Keep `needsAutoReview` derived from `readOnlyModeBlock` so new tools default to reviewed.
 

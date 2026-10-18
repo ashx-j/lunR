@@ -267,7 +267,26 @@ describe("read-only execution spellings", () => {
 		"git remote --verbose",
 		"echo '$(printf probe)'",
 		'echo "\\$(printf probe)"',
+		"rg --type ts foo",
+		"uniq sorted.txt",
+		"NO_COLOR=1 ls",
+		"LC_ALL=C sort input.txt",
 	])("keeps informational form %s usable", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+
+	it.each([
+		"rg --pre sh x payload.sh",
+		"rg --pre=./run.sh x",
+		"git grep -Ovim foo",
+		"git grep --open-files-in-pager=vim foo",
+		"find . -fprint ~/.profile",
+		"find . -fls out.txt",
+		"uniq input.txt output.txt",
+		"GIT_EXTERNAL_DIFF=./x.sh git diff",
+		"PAGER=./x.sh git log",
+		"LD_PRELOAD=./evil.so ls",
+	])("treats %s as able to run code or write files", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
 	});
 });

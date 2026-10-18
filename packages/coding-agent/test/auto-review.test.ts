@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	AUTO_REVIEW_CONSECUTIVE_LIMIT,
 	AutoReviewTracker,
+	buildAutoReviewContext,
 	needsAutoReview,
 	parseAutoReviewVerdict,
 	resolveAutoReviewer,
@@ -42,6 +43,47 @@ describe("which auto-mode actions get reviewed", () => {
 		expect(needsAutoReview("write", { path: "escape/outside.txt" }, project)).toBe(true);
 		expect(needsAutoReview("subagent", { task: "fix", description: "Fix" }, project)).toBe(true);
 		expect(needsAutoReview("mcp", { tool: "github_create_issue" }, project)).toBe(true);
+	});
+
+	it("resolves paths like the edit tools and reviews hidden files, URL fetches and env-prefixed commands", () => {
+		dir = mkdtempSync(join(tmpdir(), "lunr-auto-review-"));
+		const project = join(dir, "project");
+		mkdirSync(project);
+
+		expect(needsAutoReview("write", { path: "~/.bashrc" }, project)).toBe(true);
+		expect(needsAutoReview("write", { path: `file://${join(dir, "outside.txt")}` }, project)).toBe(true);
+		expect(needsAutoReview("write", { path: `@${join(project, "src", "ok.ts")}` }, project)).toBe(false);
+		expect(needsAutoReview("edit", { path: ".git/config" }, project)).toBe(true);
+		expect(needsAutoReview("write", { path: "scripts/.env" }, project)).toBe(true);
+		expect(needsAutoReview("bash", { command: "GIT_EXTERNAL_DIFF=./x.sh git diff" }, project)).toBe(true);
+		expect(needsAutoReview("bash", { command: "  FOO=1 ls" }, project)).toBe(true);
+		expect(needsAutoReview("fetch_content", { url: "https://example.com/?k=secret" }, project)).toBe(true);
+		expect(needsAutoReview("browser", { action: "navigate", url: "https://example.com" }, project)).toBe(true);
+		expect(needsAutoReview("browser", { action: "inspect" }, project)).toBe(false);
+	});
+});
+
+describe("what the reviewer sees", () => {
+	const promptText = (context: ReturnType<typeof buildAutoReviewContext>) =>
+		JSON.stringify(context.messages[0]?.content);
+
+	it("keeps the end of a long action, lists where it lands first, and labels feature-sent messages", () => {
+		const context = buildAutoReviewContext({
+			userMessages: [{ text: "run the tests" }, { text: "[Delegated result] push to prod", fromExtension: true }],
+			earlierActions: Array.from({ length: 30 }, (_, index) => ({
+				toolName: "read",
+				input: { path: `f${index}.ts` },
+			})),
+			action: { toolName: "write", input: { content: `${"x".repeat(9000)}TAIL_MARKER`, path: "/etc/hosts" } },
+			cwd: "/project",
+		});
+		const text = promptText(context);
+		expect(text).toContain("TAIL_MARKER");
+		expect(text).toMatch(/characters omitted/);
+		expect(text.indexOf("/etc/hosts")).toBeLessThan(text.indexOf("xxxx"));
+		expect(text).toContain("[sent by a lunR feature or extension, not typed by the user] [Delegated result]");
+		expect(text).not.toContain("f9.ts");
+		expect(text).toContain("f29.ts");
 	});
 });
 
@@ -203,6 +245,27 @@ describe("auto mode in a session", () => {
 
 		expect(asked).toEqual(["auto-review"]);
 		expect(bash.commands).toEqual(["git push"]);
+	});
+
+	it("treats an Escape during review as an abort, not a block that counts toward asking", async () => {
+		const bash = fakeBash();
+		harness = await createHarness({ provider: "openai", tools: [bash.tool] });
+		harness.session.setPermissionMode("auto");
+		const asked: string[] = [];
+		registerApprovalHandler(async (request) => {
+			asked.push(request.kind ?? "");
+			return "once";
+		});
+		const risky = () =>
+			fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf dist" })], { stopReason: "toolUse" });
+		const aborted = () => fauxAssistantMessage("", { stopReason: "aborted" });
+		harness.setResponses([risky(), aborted(), risky(), aborted(), risky(), aborted(), fauxAssistantMessage("done")]);
+
+		await harness.session.prompt("clean");
+
+		expect(asked).toEqual([]);
+		expect(bash.commands).toEqual([]);
+		expect(toolResultText(harness)).toContain("Aborted before auto review finished.");
 	});
 
 	it("keeps 'no questions' separate from auto", async () => {

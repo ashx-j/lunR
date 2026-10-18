@@ -44,7 +44,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	},
 	{ name: "read", description: "Activate read-only permission mode" },
 	{ name: "yolo", description: "Activate YOLO permission mode (auto-approve tools)" },
-	{ name: "auto", description: "Activate auto permission mode (fully autonomous, no questions)" },
+	{ name: "auto", description: "Activate auto permission mode (a review model checks risky actions)" },
 	{ name: "processes", description: "View and manage background processes started this session" },
 	{ name: "rollback", description: "Undo the last turn's file changes and rewind the conversation" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },

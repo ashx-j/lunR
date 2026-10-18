@@ -68,6 +68,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
 	});
+	let warnedAboutReviewer = false;
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
@@ -100,6 +101,18 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				console.error(`Extension error (${err.extensionPath}): ${err.error}`);
 			},
 		});
+
+		// Print runs have nobody to answer questions, which a saved auto default meant before auto was reviewed.
+		if (session.permissionMode === "auto") {
+			session.setAutonomous(true);
+			const reviewer = session.resolveAutoReviewer();
+			if (reviewer.kind !== "ready" && !warnedAboutReviewer) {
+				warnedAboutReviewer = true;
+				console.error(
+					`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so risky actions will be blocked. Set one in /settings, Auto review model.`,
+				);
+			}
+		}
 
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {

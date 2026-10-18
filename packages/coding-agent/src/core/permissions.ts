@@ -4,12 +4,15 @@
  * Per-session only, with a configurable default for new sessions.
  *
  * - yolo: auto-approve tools; the agent may still ask questions.
- * - auto: fully autonomous; a system-prompt addendum steers the model to
- *         self-decide, and rollback is force-enabled for the session.
+ * - auto: like yolo, but AgentSession sends risky calls to a review model
+ *         first (see auto-review.ts), and rollback is force-enabled for the session.
  * - read-only: mutating tools are hard-blocked.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
  * the awaited `_toolCallGates` loop, which can also request host approval.
+ *
+ * "Autonomous" (no questions, AUTONOMOUS_ADDENDUM) is a separate per-session
+ * flag for /goal, subagents and ACP Autonomous, not a mode.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
  * concurrent gateway chats do not share permission decisions.

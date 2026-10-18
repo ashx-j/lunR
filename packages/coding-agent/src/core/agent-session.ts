@@ -290,6 +290,8 @@ export interface WaitPromptHandoff {
 interface PreparedPromptInput {
 	text: string;
 	images?: ImageContent[];
+	/** Sent by an extension (sendUserMessage), not typed by the user. */
+	fromExtension?: boolean;
 }
 
 interface ActiveSubagentWait {
@@ -490,6 +492,8 @@ export class AgentSession {
 	// lunr: a subagent reviews with the reviewer its auto-mode parent resolved.
 	private _parentAutoReviewRef: string | undefined;
 	private _unregisterAutoReviewSnapshot: (() => void) | undefined;
+	// lunr: user-role messages an extension sent, so the reviewer doesn't treat them as the user's words.
+	private _extensionUserMessages = new WeakSet<object>();
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -1305,6 +1309,9 @@ export class AgentSession {
 					{ signal: this.agent.signal, ...(reviewer.model.reasoning ? { reasoning: "low" as const } : {}) },
 				);
 				this.sessionManager.appendRequestUsage("auto-review", response);
+				// An Escape mid-review ends the turn; it isn't a block and must not open the decision dialog.
+				if (response.stopReason === "aborted" || this.agent.signal?.aborted)
+					return "Aborted before auto review finished.";
 				const verdict = response.stopReason === "error" ? undefined : parseAutoReviewVerdict(response);
 				if (verdict?.decision === "allow") {
 					this._autoReviewTracker.recordAllow();
@@ -1333,7 +1340,7 @@ export class AgentSession {
 		return `Auto mode's review model blocked this action: ${reason} Don't reach the same result another way. Choose a clearly safer approach or ask the user.`;
 	}
 
-	private _autoReviewUserMessages(): string[] {
+	private _autoReviewUserMessages(): Array<{ text: string; fromExtension: boolean }> {
 		return this.agent.state.messages.flatMap((message) => {
 			if (message.role !== "user") return [];
 			const text =
@@ -1343,7 +1350,7 @@ export class AgentSession {
 							.filter((block): block is { type: "text"; text: string } => block.type === "text")
 							.map((block) => block.text)
 							.join("\n");
-			return text.trim() ? [text] : [];
+			return text.trim() ? [{ text, fromExtension: this._extensionUserMessages.has(message) }] : [];
 		});
 	}
 
@@ -1781,8 +1788,9 @@ export class AgentSession {
 				return;
 			}
 			if (wasStreaming && this.isStreaming) {
-				if (options?.streamingBehavior === "followUp") await this._queueFollowUp(prepared.text, prepared.images);
-				else await this._queueSteer(prepared.text, prepared.images);
+				if (options?.streamingBehavior === "followUp")
+					await this._queueFollowUp(prepared.text, prepared.images, prepared.fromExtension);
+				else await this._queueSteer(prepared.text, prepared.images, prepared.fromExtension);
 				accepted = true;
 				options?.preflightResult?.(true);
 				return;
@@ -1864,7 +1872,7 @@ export class AgentSession {
 			currentText = this._expandSkillCommand(currentText);
 			currentText = expandPromptTemplate(currentText, [...this.promptTemplates]);
 		}
-		return { text: currentText, images: currentImages };
+		return { text: currentText, images: currentImages, fromExtension: options?.source === "extension" };
 	}
 
 	private async _createPromptMessages(input: PreparedPromptInput): Promise<AgentMessage[]> {
@@ -1890,14 +1898,9 @@ export class AgentSession {
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: input.text }];
 		if (input.images) userContent.push(...input.images);
-		const messages: AgentMessage[] = [
-			{
-				role: "user",
-				content: userContent,
-				timestamp: Date.now(),
-			},
-			...this._pendingNextTurnMessages,
-		];
+		const userMessage: AgentMessage = { role: "user", content: userContent, timestamp: Date.now() };
+		if (input.fromExtension) this._extensionUserMessages.add(userMessage);
+		const messages: AgentMessage[] = [userMessage, ...this._pendingNextTurnMessages];
 		this._pendingNextTurnMessages = [];
 
 		const result = await this._extensionRunner.emitBeforeAgentStart(
@@ -2140,35 +2143,31 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueSteer(text: string, images?: ImageContent[], fromExtension = false): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (fromExtension) this._extensionUserMessages.add(message);
+		this.agent.steer(message);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, images?: ImageContent[], fromExtension = false): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (fromExtension) this._extensionUserMessages.add(message);
+		this.agent.followUp(message);
 	}
 
 	/**

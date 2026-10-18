@@ -904,7 +904,8 @@ export class InteractiveMode {
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
 					const target = this.restoreTargetAfterPlan();
-					this.applyPermissionMode(target === "read-only" ? "yolo" : target);
+					// The plan is approved either way; cancelling the reviewer picker must not leave it blocked in read.
+					this.applyPermissionMode(target === "read-only" ? "yolo" : target, { cancelMode: "yolo" });
 				}
 				return resp;
 			}
@@ -4471,7 +4472,10 @@ export class InteractiveMode {
 	}
 
 	private cyclePermissionMode(): void {
-		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), { silent: true, cycling: true });
+		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), {
+			silent: true,
+			cancelMode: nextPermissionMode("auto"),
+		});
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -7691,12 +7695,13 @@ export class InteractiveMode {
 		if (this.session.permissionMode !== "auto") disableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
-	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean; cycling?: boolean }): void {
+	/** `cancelMode` is where to go if auto needs a review model and the user cancels the picker. */
+	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean; cancelMode?: PermissionMode }): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		if (mode === "auto") {
 			const reviewer = this.session.resolveAutoReviewer();
 			if (reviewer.kind !== "ready") {
-				this.showAutoReviewModelPicker(reviewer, opts?.cycling);
+				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode);
 				return;
 			}
 		}
@@ -7729,9 +7734,12 @@ export class InteractiveMode {
 
 	/**
 	 * Opens the model list so the user can pick the auto review model, then enters auto. With a
-	 * `reviewer` it first explains why auto needs one. Cancelling while cycling moves on to read.
+	 * `reviewer` it first explains why auto needs one. Cancelling switches to `cancelMode` if given.
 	 */
-	private showAutoReviewModelPicker(reviewer?: Exclude<AutoReviewer, { kind: "ready" }>, cycling?: boolean): void {
+	private showAutoReviewModelPicker(
+		reviewer?: Exclude<AutoReviewer, { kind: "ready" }>,
+		cancelMode?: PermissionMode,
+	): void {
 		if (reviewer) {
 			this.showWarning(
 				reviewer.kind === "missing"
@@ -7754,7 +7762,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					if (reviewer && cycling) this.applyPermissionMode(nextPermissionMode("auto"), { silent: true });
+					if (reviewer && cancelMode) this.applyPermissionMode(cancelMode, { silent: cancelMode !== "yolo" });
 					this.ui.requestRender();
 				},
 				undefined,
