@@ -141,6 +141,8 @@ export interface SettingsConfig {
 	planUsageWindow: "5h" | "weekly";
 	// lunr: permission mode default
 	defaultPermissionMode: DefaultPermissionMode;
+	/** "provider/model", or undefined for the provider's own reviewer. */
+	autoReviewModel: string | undefined;
 	// lunr: rollback settings
 	rollbackEnabled: boolean;
 	rollbackTurns: number;
@@ -217,6 +219,9 @@ export interface SettingsCallbacks {
 	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
+	onAutoReviewModelChange: (ref: string | undefined) => void;
+	/** Closes /settings and opens the model list for the auto review model. */
+	onChooseAutoReviewModel: () => void;
 	onGatewayAction?: (action: string) => void;
 	// lunr: rollback callbacks
 	onRollbackEnabledChange: (enabled: boolean) => void;
@@ -1653,6 +1658,37 @@ export class SettingsSelectorComponent extends Container {
 				description: "Starting permission mode for new sessions",
 				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
 				values: ["yolo", "auto", "read"],
+			},
+			{
+				id: "auto-review-model",
+				label: "Auto review model",
+				description: "Model that checks risky actions in auto mode",
+				currentValue: config.autoReviewModel ?? "provider default",
+				submenu: (_currentValue, done) =>
+					new SelectSubmenu(
+						"Auto review model",
+						"Checks shell commands, outside writes and other risky actions before they run in auto mode",
+						[
+							{
+								value: "default",
+								label: "Provider default",
+								description:
+									"Sonnet 5 for Anthropic; the session model for OpenAI, xAI and Qwen. Other providers need a chosen model.",
+							},
+							{ value: "choose", label: "Choose a model", description: "Opens the model list" },
+						],
+						config.autoReviewModel ? "choose" : "default",
+						(value) => {
+							if (value === "default") {
+								callbacks.onAutoReviewModelChange(undefined);
+								done("provider default");
+							} else {
+								done();
+								callbacks.onChooseAutoReviewModel();
+							}
+						},
+						() => done(),
+					),
 			},
 			{
 				id: "double-escape-action",

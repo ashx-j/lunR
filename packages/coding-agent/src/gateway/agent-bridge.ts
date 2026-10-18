@@ -109,6 +109,7 @@ export interface BridgeSessionStatus {
  */
 export interface BridgeSession {
 	promptWithCompletion?: AgentSession["promptWithCompletion"];
+	resolveAutoReviewer?: AgentSession["resolveAutoReviewer"];
 	drain?: AgentSession["drain"];
 	prompt(text: string, options?: { source?: "extension"; images?: ImageContent[] }): Promise<void>;
 	abort(): Promise<void> | void;

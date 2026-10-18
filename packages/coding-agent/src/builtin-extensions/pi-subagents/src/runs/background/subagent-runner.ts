@@ -1127,6 +1127,7 @@ export async function runSingleStep(
 			childWatchdog,
 			waitToolEnabled: step.waitToolEnabled,
 			parentPermissionMode,
+			parentAutoReview: step.parentAutoReview,
 		});
 		const usageBeforeAttempt = parseSessionUsage(step.sessionFile ?? sessionDir);
 		const run = await runPiStreaming(

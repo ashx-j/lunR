@@ -44,7 +44,9 @@ The adapter negotiates ACP v1, including when a client initially requests v2.
 It supports streamed replies and reasoning, tool activity and bounded file diffs,
 images for models that accept them, text attachments, cancellation, model and
 reasoning selection, and lunR's Build, Autonomous and Plan modes. These map to
-lunR's existing `yolo`, `auto` and `read-only` modes.
+lunR's existing `yolo`, `auto` and `read-only` modes. In ACP, Autonomous means
+working without questions; the client still approves each tool, so lunR's auto
+review model is not used there.
 
 Extension status notices, including MCP connection counts, extension errors and
 the note that a dismissed question is holding a turn open, appear as separate

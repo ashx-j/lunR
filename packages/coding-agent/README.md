@@ -177,11 +177,11 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
-| `/mode` | Set permission mode: `yolo`, `auto`, or `read` (Shift+Tab cycles) |
+| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read` (Shift+Tab cycles) |
 | `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
 | `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
-| `/goal` | Session goal (forces session auto permission mode) |
+| `/goal` | Session goal (works without asking questions, in your current mode) |
 | `/processes` | Background processes started this session |
 | `/usage` | This-session token totals, context, and every stored subscription plan |
 | `/fast` | Toggle Fast mode for OpenAI Codex subscriptions |

@@ -46,6 +46,8 @@ export function createAcpWorkerBridge(
 		agent?: Pick<AgentSession["agent"], "signal">;
 		permissionMode?: PermissionMode;
 		setPermissionMode?: AgentSession["setPermissionMode"];
+		setAutonomous?: AgentSession["setAutonomous"];
+		setAutoReviewEnabled?: AgentSession["setAutoReviewEnabled"];
 		settingsManager?: Pick<AgentSession["settingsManager"], "getDefaultPermissionMode">;
 	},
 	output: (request: RpcAcpPermissionRequest) => void,
@@ -55,7 +57,10 @@ export function createAcpWorkerBridge(
 	const pending = new Map<string, (approved: boolean) => void>();
 	let cancelled = false;
 	let previousWritableMode: PermissionMode | undefined;
+	// ACP's "auto" is Autonomous: no questions, while the client still approves each tool, so no auto review.
+	session.setAutoReviewEnabled?.(false);
 	const permissionModeChanged = () => {
+		session.setAutonomous?.(session.permissionMode === "auto");
 		if (session.permissionMode && session.permissionMode !== "read-only")
 			previousWritableMode = session.permissionMode;
 	};
