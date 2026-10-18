@@ -25,6 +25,9 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned
 
 - The npm package is about 550 KB smaller. It no longer ships an unused upstream announcement image and other code nothing loads.
 - The experimental first-run screen that asked to share anonymous usage data. lunR never sent any. The unused `enableAnalytics` and `trackingId` settings and the `FirstTimeSetupComponent` SDK export are gone too; existing values in settings.json are ignored.
+### Fixed
+
+- The MCP setup panel, `/mcp` messages, the invalid-session error and the old extension-folder warning now say lunR instead of Pi. That warning links to lunR's extension docs instead of upstream pi's.
 
 ## [0.2.37] - 2026-10-17
 

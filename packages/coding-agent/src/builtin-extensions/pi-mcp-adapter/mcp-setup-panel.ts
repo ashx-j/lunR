@@ -133,15 +133,15 @@ export class McpSetupPanel {
       actions.push({ id: "run-setup", label: "Run setup", description: "Inspect detected configs, adopt imports, and scaffold a minimal `.mcp.json`." });
     }
     if (this.discovery.imports.length > 0) {
-      actions.push({ id: "adopt-imports", label: "Adopt detected compatibility imports", description: `Choose which host-specific MCP configs Pi should import into its own override file. ${this.discovery.imports.length} source${this.discovery.imports.length === 1 ? "" : "s"} found.` });
+      actions.push({ id: "adopt-imports", label: "Adopt detected compatibility imports", description: `Choose which host-specific MCP configs lunR should import into its own override file. ${this.discovery.imports.length} source${this.discovery.imports.length === 1 ? "" : "s"} found.` });
     }
     actions.push({ id: "view-example", label: "View example `.mcp.json`", description: "Preview a working shared MCP config you can paste or adapt." });
     if (!this.discovery.sources.some((source) => source.id === "shared-project" && source.exists)) {
-      actions.push({ id: "scaffold-project", label: "Scaffold project `.mcp.json`", description: "Write a minimal project config using the standard shared MCP file path, then reload Pi." });
+      actions.push({ id: "scaffold-project", label: "Scaffold project `.mcp.json`", description: "Write a minimal project config using the standard shared MCP file path, then reload lunR." });
     }
-    actions.push({ id: "show-precedence", label: "Explain config precedence", description: "Show the read order and where Pi writes compatibility settings." });
+    actions.push({ id: "show-precedence", label: "Explain config precedence", description: "Show the read order and where lunR writes compatibility settings." });
     if (this.getDetectedPaths().length > 0) {
-      actions.push({ id: "open-paths", label: "Open detected config paths", description: "Browse the actual config files that Pi discovered on this machine." });
+      actions.push({ id: "open-paths", label: "Open detected config paths", description: "Browse the actual config files that lunR discovered on this machine." });
     }
     if (!this.discovery.repoPrompt.configured && this.discovery.repoPrompt.executablePath && this.discovery.repoPrompt.targetPath && this.discovery.repoPrompt.entry && this.discovery.repoPrompt.serverName) {
       actions.push({ id: "add-repoprompt", label: "Add RepoPrompt to shared MCP config", description: "Write a standard MCP entry for RepoPrompt to the recommended shared target, then reload MCP in-session." });
@@ -285,7 +285,7 @@ export class McpSetupPanel {
       await this.runBusy(async () => {
         const result = await this.callbacks.scaffoldProjectConfig();
         this.callbacks.markSetupCompleted();
-        this.notice = { text: `Wrote starter config to ${result.path}. Pi will reload after this panel closes.`, tone: "success" };
+        this.notice = { text: `Wrote starter config to ${result.path}. lunR will reload after this panel closes.`, tone: "success" };
       });
       return;
     }
@@ -293,7 +293,7 @@ export class McpSetupPanel {
       await this.runBusy(async () => {
         const result = await this.callbacks.addRepoPrompt();
         this.callbacks.markSetupCompleted();
-        this.notice = { text: `Added ${result.serverName} to ${result.path}. Pi will reload after this panel closes.`, tone: "success" };
+        this.notice = { text: `Added ${result.serverName} to ${result.path}. lunR will reload after this panel closes.`, tone: "success" };
       });
       return;
     }
@@ -319,7 +319,7 @@ export class McpSetupPanel {
       const result = await this.callbacks.adoptImports(selected);
       this.callbacks.markSetupCompleted();
       this.notice = result.added.length > 0
-        ? { text: `Added ${result.added.join(", ")} to ${result.path}. Pi will reload after this panel closes.`, tone: "success" }
+        ? { text: `Added ${result.added.join(", ")} to ${result.path}. lunR will reload after this panel closes.`, tone: "success" }
         : { text: `No changes needed in ${result.path}.`, tone: "muted" };
       this.screen = this.discovery.hasAnyConfig ? "setup" : "empty";
       this.actionCursor = 0;
@@ -434,12 +434,12 @@ export class McpSetupPanel {
     }
 
     if (this.discovery.totalServerCount === 0 && (this.discovery.imports.length > 0 || !!this.discovery.repoPrompt.executablePath)) {
-      return fg(this.t.warning, "Pi found MCP-related setup options, but none are active in Pi yet.");
+      return fg(this.t.warning, "lunR found MCP-related setup options, but none are active in lunR yet.");
     }
 
     const shared = this.discovery.sources.filter((source) => source.kind === "shared" && source.serverCount > 0).length;
     const piOwned = this.discovery.sources.filter((source) => source.kind === "pi" && source.serverCount > 0).length;
-    return fg(this.t.hint, `Detected ${this.discovery.totalServerCount} configured servers across ${shared} shared and ${piOwned} Pi-owned source${shared + piOwned === 1 ? "" : "s"}.`);
+    return fg(this.t.hint, `Detected ${this.discovery.totalServerCount} configured servers across ${shared} shared and ${piOwned} lunR-owned source${shared + piOwned === 1 ? "" : "s"}.`);
   }
 
   private secondarySummaryLine(): string {
@@ -447,9 +447,9 @@ export class McpSetupPanel {
       return "Create a shared `.mcp.json`, adopt host imports, or quick-add RepoPrompt from this screen.";
     }
     if (this.discovery.totalServerCount === 0 && this.discovery.imports.length > 0) {
-      return `Detected ${this.discovery.imports.length} compatibility import source${this.discovery.imports.length === 1 ? "" : "s"}. Adopt them into Pi or inspect the underlying files.`;
+      return `Detected ${this.discovery.imports.length} compatibility import source${this.discovery.imports.length === 1 ? "" : "s"}. Adopt them into lunR or inspect the underlying files.`;
     }
-    return "Shared MCP files are preferred. Pi-owned files are only for compatibility imports and adapter-specific overrides.";
+    return "Shared MCP files are preferred. lunR-owned files are only for compatibility imports and adapter-specific overrides.";
   }
 
   private getActionPreview(action: ActionId): string[] {
@@ -464,7 +464,7 @@ export class McpSetupPanel {
           this.callbacks.previewImports(this.discovery.imports.filter((entry) => this.selectedImports.has(entry.kind)).map((entry) => entry.kind)),
           [
             `Detected imports: ${this.discovery.imports.map((entry) => `${entry.kind} (${entry.serverCount} servers)`).join(", ")}`,
-            "Selected imports are written into the Pi agent dir config as Pi-owned compatibility state.",
+            "Selected imports are written into the lunR agent dir config as lunR-owned compatibility state.",
           ],
         );
       case "view-example":
@@ -485,10 +485,10 @@ export class McpSetupPanel {
         return this.formatPreview([
           "Read order:",
           "1. ~/.config/mcp/mcp.json",
-          "2. <Pi agent dir>/mcp.json",
+          "2. <lunR agent dir>/mcp.json",
           "3. .mcp.json",
           "4. .lunr/mcp.json (legacy read fallback: .pi/mcp.json)", // lunr: was ".pi/mcp.json"
-          "Pi writes compatibility imports and adapter-only overrides to Pi-owned files.",
+          "lunR writes compatibility imports and adapter-only overrides to lunR-owned files.",
         ]);
       case "open-paths":
         return this.formatPreview(this.getDetectedPaths().length > 0
