@@ -46,7 +46,11 @@ export interface TerminalSettings {
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
 	clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
+	attentionNotification?: AttentionNotification; // default: "off"
 }
+
+/** How lunR asks for attention when a run finishes or waits for the user while the terminal is unfocused. */
+export type AttentionNotification = "off" | "bell" | "desktop";
 
 export interface ImageSettings {
 	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
@@ -1575,6 +1579,20 @@ export class SettingsManager {
 		}
 		this.globalSettings.terminal.showTerminalProgress = enabled;
 		this.markModified("terminal", "showTerminalProgress");
+		this.save();
+	}
+
+	getAttentionNotification(): AttentionNotification {
+		const value = this.settings.terminal?.attentionNotification;
+		return value === "bell" || value === "desktop" ? value : "off";
+	}
+
+	setAttentionNotification(mode: AttentionNotification): void {
+		if (!this.globalSettings.terminal) {
+			this.globalSettings.terminal = {};
+		}
+		this.globalSettings.terminal.attentionNotification = mode;
+		this.markModified("terminal", "attentionNotification");
 		this.save();
 	}
 

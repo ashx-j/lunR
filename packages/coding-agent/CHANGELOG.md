@@ -11,6 +11,9 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned
 ### Fixed
 
 - `/settings` no longer offers the `shadow-git` rollback capture mode. It was never built: the menu said it fell back to `copies`, but `/rollback` deleted files like `hybrid` does. A saved `shadow-git` value now behaves as `copies`.
+### Added
+
+- `/settings` Notifications rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. It stays quiet while the terminal reports that lunR's window has focus. Off by default.
 
 ## [0.2.37] - 2026-10-17
 
