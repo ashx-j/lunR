@@ -1,14 +1,14 @@
 // @ts-nocheck
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, enqueueStepSteer, steerAcksDir, steerCapabilityPath, stepSteerInboxDir, watchAsyncControlInbox, type SteerAck, type SteerCapability, type SteerRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
-import { PI_CODING_AGENT_PACKAGE, getPiSpawnCommand, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
+import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, injectSingleOutputInstruction, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	type ActivityState,
@@ -126,7 +126,6 @@ interface SubagentRunConfig {
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig?: Partial<ArtifactConfig>;
-	share?: boolean;
 	sessionDir?: string;
 	asyncDir: string;
 	sessionId?: string | null;
@@ -811,52 +810,6 @@ function runPiStreaming(
 	});
 }
 
-function resolvePiPackageRootFallback(): string {
-	const root = resolveInstalledPiPackageRoot();
-	if (root) return root;
-	throw new Error(`Could not resolve ${PI_CODING_AGENT_PACKAGE} package root`);
-}
-
-async function exportSessionHtml(sessionFile: string, outputDir: string, piPackageRoot?: string): Promise<string> {
-	const pkgRoot = piPackageRoot ?? resolvePiPackageRootFallback();
-	const exportModulePath = path.join(pkgRoot, "dist", "core", "export-html", "index.js");
-	const moduleUrl = pathToFileURL(exportModulePath).href;
-	const mod = await import(moduleUrl);
-	const exportFromFile = (mod as { exportFromFile?: (inputPath: string, options?: { outputPath?: string }) => string })
-		.exportFromFile;
-	if (typeof exportFromFile !== "function") {
-		throw new Error("exportFromFile not available");
-	}
-	const outputPath = path.join(outputDir, `${path.basename(sessionFile, ".jsonl")}.html`);
-	return exportFromFile(sessionFile, { outputPath });
-}
-
-function createShareLink(htmlPath: string): { shareUrl: string; gistUrl: string } | { error: string } {
-	try {
-		const auth = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-		if (auth.status !== 0) {
-			return { error: "GitHub CLI is not logged in. Run 'gh auth login' first." };
-		}
-	} catch {
-		return { error: "GitHub CLI (gh) is not installed." };
-	}
-
-	try {
-		const result = spawnSync("gh", ["gist", "create", htmlPath], { encoding: "utf-8" });
-		if (result.status !== 0) {
-			const err = (result.stderr || "").trim() || "Failed to create gist.";
-			return { error: err };
-		}
-		const gistUrl = (result.stdout || "").trim();
-		const gistId = gistUrl.split("/").pop();
-		if (!gistId) return { error: "Failed to parse gist ID." };
-		const shareUrl = `https://shittycodingagent.ai/session/?${gistId}`;
-		return { shareUrl, gistUrl };
-	} catch (err) {
-		return { error: String(err) };
-	}
-}
-
 function formatDuration(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
@@ -882,8 +835,6 @@ function writeRunLog(
 		truncated: boolean;
 		artifactsDir?: string;
 		sessionFile?: string;
-		shareUrl?: string;
-		shareError?: string;
 	},
 ): void {
 	const lines: string[] = [];
@@ -895,8 +846,6 @@ function writeRunLog(
 	lines.push(`- **Ended:** ${new Date(input.endedAt).toISOString()}`);
 	lines.push(`- **Duration:** ${formatDuration(input.endedAt - input.startedAt)}`);
 	if (input.sessionFile) lines.push(`- **Session:** ${input.sessionFile}`);
-	if (input.shareUrl) lines.push(`- **Share:** ${input.shareUrl}`);
-	if (input.shareError) lines.push(`- **Share error:** ${input.shareError}`);
 	if (input.artifactsDir) lines.push(`- **Artifacts:** ${input.artifactsDir}`);
 	lines.push("");
 	lines.push("## Steps");
@@ -1443,9 +1392,6 @@ type RunnerStatusPayload = Omit<AsyncStatus, "steps" | "parallelGroups" | "pid" 
 	steps: RunnerStatusStep[];
 	lastUpdate: number;
 	artifactsDir?: string;
-	shareUrl?: string;
-	gistUrl?: string;
-	shareError?: string;
 	error?: string;
 };
 
@@ -1601,7 +1547,6 @@ async function runSubagent(
 	const outputs: ChainOutputMap = {};
 	const results: StepResult[] = [];
 	const overallStartTime = Date.now();
-	const shareEnabled = config.share === true;
 	const asyncDir = config.asyncDir;
 	const statusPath = path.join(asyncDir, "status.json");
 	const eventsPath = path.join(asyncDir, "events.jsonl");
@@ -1705,7 +1650,6 @@ async function runSubagent(
 		}
 	}
 	const sessionEnabled = Boolean(config.sessionDir)
-		|| shareEnabled
 		|| flatSteps.some((step) => Boolean(step.sessionFile));
 	const statusPayload: RunnerStatusPayload = {
 		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -3562,36 +3506,6 @@ async function runSubagent(
 		: resultMode === "parallel"
 			? `parallel:${finalFlatAgents.join("+")}`
 			: `chain:${finalFlatAgents.join("->")}`;
-	let sessionFile: string | undefined;
-	let shareUrl: string | undefined;
-	let gistUrl: string | undefined;
-	let shareError: string | undefined;
-
-	if (shareEnabled) {
-		sessionFile = config.sessionDir
-			? (findLatestSessionFile(config.sessionDir) ?? undefined)
-			: undefined;
-		if (!sessionFile && latestSessionFile) {
-			sessionFile = latestSessionFile;
-		}
-		if (sessionFile) {
-			try {
-				const exportDir = config.sessionDir ?? path.dirname(sessionFile);
-				const htmlPath = await exportSessionHtml(sessionFile, exportDir, config.piPackageRoot);
-				const share = createShareLink(htmlPath);
-				if ("error" in share) shareError = share.error;
-				else {
-					shareUrl = share.shareUrl;
-					gistUrl = share.gistUrl;
-				}
-			} catch (err) {
-				shareError = String(err);
-			}
-		} else {
-			shareError = "Session file not found.";
-		}
-	}
-
 	if (activityTimer) {
 		clearInterval(activityTimer);
 		activityTimer = undefined;
@@ -3604,7 +3518,7 @@ async function runSubagent(
 	closeSteerInbox(asyncDir, statusPayload.state);
 	disposeControlInbox();
 	for (const request of consumeSteerRequests(asyncDir)) deliverSteerRequest(request);
-	const effectiveSessionFile = sessionFile ?? latestSessionFile;
+	const effectiveSessionFile = latestSessionFile;
 	const steeringLifecycle = steeringStatus(statusPayload);
 	for (const request of steeringLifecycle.recent) {
 		let changed = false;
@@ -3635,9 +3549,6 @@ async function runSubagent(
 	statusPayload.lastUpdate = runEndedAt;
 	statusPayload.sessionFile = effectiveSessionFile;
 	statusPayload.totalCost = finalTotalCost;
-	statusPayload.shareUrl = shareUrl;
-	statusPayload.gistUrl = gistUrl;
-	statusPayload.shareError = shareError;
 	if (statusPayload.state === "failed" && !statusPayload.error) {
 		const failedStep = statusPayload.steps.find((s) => s.status === "failed");
 		if (failedStep?.agent) {
@@ -3673,8 +3584,6 @@ async function runSubagent(
 		truncated,
 		artifactsDir,
 		sessionFile: effectiveSessionFile,
-		shareUrl,
-		shareError,
 	});
 
 	try {
@@ -3747,9 +3656,6 @@ async function runSubagent(
 			sessionId: config.sessionId,
 			sessionFile: effectiveSessionFile,
 			intercomTarget: config.controlIntercomTarget,
-			shareUrl,
-			gistUrl,
-			shareError,
 			...(taskIndex !== undefined && { taskIndex }),
 			...(totalTasks !== undefined && { totalTasks }),
 		});

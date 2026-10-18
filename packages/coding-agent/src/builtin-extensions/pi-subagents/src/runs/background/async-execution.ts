@@ -132,7 +132,6 @@ interface AsyncChainParams {
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
-	shareEnabled: boolean;
 	sessionRoot?: string;
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
@@ -169,7 +168,6 @@ interface AsyncSingleParams {
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
-	shareEnabled: boolean;
 	sessionRoot?: string;
 	sessionDir?: string;
 	sessionFile?: string;
@@ -799,7 +797,6 @@ export function executeAsyncChain(
 		maxOutput,
 		artifactsDir,
 		artifactConfig,
-		shareEnabled,
 		sessionRoot,
 		sessionFilesByFlatIndex,
 		thinkingOverridesByFlatIndex,
@@ -889,7 +886,6 @@ export function executeAsyncChain(
 				maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
-				share: shareEnabled,
 				sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
 				asyncDir,
 				sessionId: ctx.currentSessionId,
@@ -1065,7 +1061,6 @@ export function executeAsyncSingle(
 		maxOutput,
 		artifactsDir,
 		artifactConfig,
-		shareEnabled,
 		sessionRoot,
 		sessionFile,
 		maxSubagentDepth,
@@ -1170,7 +1165,6 @@ export function executeAsyncSingle(
 		...(resolvedToolBudget.budget ? { initialToolBudget: resolvedToolBudget.budget } : {}),
 		maxSubagentDepth,
 		...(maxOutput ? { maxOutput } : {}),
-		share: shareEnabled,
 		...(resolvedSessionDir ? { sessionDir: resolvedSessionDir } : {}),
 		...(artifactsDir ? { artifactsDir } : {}),
 		artifactConfig,
@@ -1222,7 +1216,6 @@ export function executeAsyncSingle(
 				maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
-				share: shareEnabled,
 				sessionDir: resolvedSessionDir,
 				asyncDir,
 				sessionId: ctx.currentSessionId,

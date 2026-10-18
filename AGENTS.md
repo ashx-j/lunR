@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **Subagent `share` removed (`fix/remove-subagent-share`, 2026-10-18):** the model-facing `share` option, its gist upload to pi's hosted viewer and the `shareEnabled` plumbing are gone. Recovery descriptors still accept a legacy `share` field and ignore it. First-request tool hashes are refreshed for all four host/browser combinations.
+
 - **v0.2.37 (prepared 2026-10-17):** PR #193 merged as `a223db9` after green CI. The release ships Claude Code routes and windows from discovery, so subscription Opus 5 stays on the plan; existing Claude connections need `/login anthropic` once.
 
 - **Claude Code routes from discovery (`fix/claude-opus-standard-route`, 2026-10-17):** setup reads Claude Code's picker (`initialize`), then `set_model` + `get_context_usage` per route, and saves a version 3 record with `models: [{ id, route, contextWindow }]` in picker order. Each model keeps its largest window that Claude Code does not label "usage credits", so Opus 5 uses `claude-opus-5` (200K), not the credit-billed `[1m]`. The provider lists exactly those models with those windows, the bridge sends the saved route, and `ModelRuntime.getModel` returns the same credential-aware row. The hardcoded route table is gone. Version 1 and 2 records need `/login anthropic`. Tests: anthropic-subscription-login + anthropic-oauth + claude-code-loopback + model-runtime-subscription-window.
@@ -224,6 +226,8 @@ Last updated: 2026-10-17 (v0.2.37 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- Subagent `share` removal, 2026-10-18: five offline package builds, the Node bundle, 24 subagent/ACP suites (250 tests) and the first-paint/first-turn check pass in an isolated Linux worktree. With `@ts-nocheck` temporarily off for the nine touched pi-subagents files, tsgo reports the same 227 errors before and after. The Windows/macOS hashes come from the startup benchmark with only the computer-use chunk seeing `process.platform === "win32"`; that method reproduced all four master hashes before the change. No native Windows/macOS run.
+
 - v0.2.37 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.37. `publish:dry` packs all seven packages. v0.2.36 published from tag `v0.2.36` at `e3cc961`; all seven packages resolve as npm latest and a fresh install reports 0.2.36 with the catalog template fix.
 - Claude Code routes from discovery (2026-10-17): Anthropic suites pass 33 (bridge skips on Windows) and 15 related coding-agent files pass 128/128; AI/agent/coding-agent builds, browser-smoke and ts-imports pass. Real setup discovery against the signed-in account took 3.3 s with the tripwire untripped and saved Sonnet 5 `[1m]` 1M, Fable 5.1 `[1m]` 1M, Opus 5 standard 200K and Haiku 4.5 200K. With that record the built CLI lists those windows, the intercepted handoff routes Opus 5 as `claude-opus-5` and Sonnet 5 as `claude-sonnet-5[1m]`, and a live Haiku 4.5 message returned in 2 s.
 - v0.2.36 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.36. `publish:dry` packs all seven packages. v0.2.35 published from tag `v0.2.35` at `308fdd5`; all seven packages resolve as npm latest and a fresh install reports 0.2.35 with both fixes.
@@ -383,6 +387,8 @@ Last updated: 2026-10-17 (v0.2.37 release preparation). Public npm is `@ashx-j/l
 Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
 
 # Notes
+
+- To refresh the Windows/macOS first-request hashes from Linux, run the startup benchmark (`PI_STARTUP_BENCHMARK=1`) with an `--import` preload that returns `win32` for `process.platform` only when the stack includes `lunr-computer-use`. Check that it reproduces master's pinned hashes before trusting new ones.
 
 - Anything written to stdout/stderr while the first-paint TUI owns the screen (runtime creation in `main.ts`, or later inside the TUI) shifts the terminal under it and leaves stale rows, such as a second boot header. Route startup output through runtime diagnostics.
 - Official catalog rows without `compat`/`thinkingLevelMap` take them from a baked-in template in `refreshOfficialCatalog`. Use the same-id baked-in model first: the provider's first model (Anthropic: Claude Fable 5) gave Haiku 4.5 adaptive thinking, which Anthropic rejects with a 400, and turned `--thinking off` into effort low. Ids missing from the built-in list still use the first model.
@@ -555,6 +561,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-18: remove the subagent `share` option with `/share`, because both uploaded sessions to a gist viewed on pi's site; keep accepting the old descriptor field so saved runs still resume.
 
 - 2026-10-17: derive Claude subscription routes and windows from Claude Code's own picker and `get_context_usage` at setup, skipping variants it labels as usage credits, because a hardcoded route table goes stale with every Claude Code model change and had routed Opus 5 to credit billing.
 - 2026-10-17: official catalog rows fall back to their own baked-in model before the provider's first one, because compat and thinking maps are per model and Fable 5's adaptive thinking broke Haiku 4.5.

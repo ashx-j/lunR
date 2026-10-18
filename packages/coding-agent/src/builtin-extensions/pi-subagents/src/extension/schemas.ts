@@ -309,10 +309,7 @@ const SubagentParamsSchema = Type.Object({
 	cwd: Type.Optional(Type.String()),
 	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts (default: true)" })),
 	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress in result (default: false)" })),
-	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist for sharing (default: false)" })),
-	sessionDir: Type.Optional(
-		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
-	),
+	sessionDir: Type.Optional(Type.String({ description: "Directory to store session logs (default: temp)" })),
 	// Clarification TUI
 	clarify: Type.Optional(Type.Boolean({ description: "Show the interactive TUI preview/editor before execution. clarify:true keeps the run foreground even when async is omitted or true." })),
 	control: Type.Optional(ControlOverrides),

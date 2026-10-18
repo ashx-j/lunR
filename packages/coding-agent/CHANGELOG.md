@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Removed
+
+- The subagent tool's `share` option. It uploaded a child session to a GitHub gist and linked to pi's hosted viewer, which lunR does not run. Child session files stay on disk as before, and runs saved with the old option still resume.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed

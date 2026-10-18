@@ -115,7 +115,6 @@ interface ParallelChainRunInput {
 	sessionFileForIndex?: (idx?: number) => string | undefined;
 	sessionFileForTask?: (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
 	thinkingOverrideForTask?: (agentName: string, idx?: number, modelOverride?: string) => ChildRuntimeConfig["thinking"] | undefined;
-	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	signal?: AbortSignal;
@@ -342,7 +341,6 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				sessionFile: input.sessionFileForTask?.(task.agent, input.globalTaskIndex + taskIndex, effectiveModel)
 					?? input.sessionFileForIndex?.(input.globalTaskIndex + taskIndex),
 				thinkingOverride: input.thinkingOverrideForTask?.(task.agent, input.globalTaskIndex + taskIndex, effectiveModel),
-				share: input.shareEnabled,
 				artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 				artifactConfig: input.artifactConfig,
 				outputPath,
@@ -449,7 +447,6 @@ interface ChainExecutionParams {
 	signal?: AbortSignal;
 	runId: string;
 	cwd?: string;
-	shareEnabled: boolean;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
 	sessionFileForTask?: (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
@@ -518,7 +515,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		signal,
 		runId,
 		cwd,
-		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
 		sessionFileForTask,
@@ -758,7 +754,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					sessionFileForIndex,
 					sessionFileForTask,
 					thinkingOverrideForTask,
-					shareEnabled,
 					artifactConfig,
 					artifactsDir,
 					signal,
@@ -980,7 +975,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				sessionFileForIndex,
 				sessionFileForTask,
 				thinkingOverrideForTask,
-				shareEnabled,
 				artifactConfig,
 				artifactsDir,
 				signal,
@@ -1238,7 +1232,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				sessionFile: sessionFileForTask?.(seqStep.agent, childIndex, effectiveModel)
 					?? sessionFileForIndex?.(childIndex),
 				thinkingOverride: thinkingOverrideForTask?.(seqStep.agent, childIndex, effectiveModel),
-				share: shareEnabled,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
 				outputPath,

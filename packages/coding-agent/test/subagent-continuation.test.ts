@@ -146,7 +146,6 @@ function writeDescriptor(
 		acceptance,
 		controlConfig: CONTROL_CONFIG,
 		maxSubagentDepth: 2,
-		share: false,
 		sessionDir: path.join(dir, "session"),
 		artifactsDir: path.join(dir, "artifacts"),
 		artifactConfig: ARTIFACT_CONFIG,
@@ -272,6 +271,16 @@ describe("async recovery descriptor reader", () => {
 			});
 			const parsed = readAsyncRecoveryDescriptor(dir);
 			expect(parsed?.initialTurnBudget).toEqual({ maxTurns: 8, graceTurns: 1 });
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("still resumes descriptors written while session sharing existed", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-recovery-share-"));
+		try {
+			writeDescriptor(dir, { share: true });
+			expect(readAsyncRecoveryDescriptor(dir)?.childId).toBe("4970b7a6-0");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
