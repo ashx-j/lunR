@@ -57,6 +57,17 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+import {
+	type AutoReviewer,
+	AutoReviewTracker,
+	buildAutoReviewContext,
+	missingReviewerReason,
+	needsAutoReview,
+	parseAutoReviewVerdict,
+	registerAutoReviewSnapshot,
+	resolveAutoReviewer,
+	SUBAGENT_CHILD_AUTO_REVIEW_ENV,
+} from "./auto-review.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
@@ -106,12 +117,14 @@ import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-in
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import {
-	AUTO_MODE_ADDENDUM,
+	AUTONOMOUS_ADDENDUM,
 	deletePermissionContext,
 	gateToolCall,
 	getPermissionMode,
 	initializePermissionContext,
 	type PermissionMode,
+	requestAutoReviewDecision,
+	setPermissionAutonomous,
 	setPermissionMode,
 } from "./permissions.ts";
 import { READ_ONLY_MODE_ADDENDUM } from "./plan-mode.ts";
@@ -469,19 +482,39 @@ export class AgentSession {
 	private _systemPromptAppend?: string;
 	// lunr: core-owned tool-call gates (read-only mode) checked before extension tool_call handlers
 	private _toolCallGates: ToolCallGate[] = [];
+	// lunr: "no questions" for /goal, subagents and ACP Autonomous, separate from the permission mode.
+	private _autonomous = false;
+	// lunr: ACP clients approve tools themselves, so their sessions skip auto review.
+	private _autoReviewEnabled = true;
+	private _autoReviewTracker = new AutoReviewTracker();
+	// lunr: a subagent reviews with the reviewer its auto-mode parent resolved.
+	private _parentAutoReviewRef: string | undefined;
+	private _unregisterAutoReviewSnapshot: (() => void) | undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		const childProcess = isSubagentChildProcess();
+		const parentAutoReview = childProcess ? process.env[SUBAGENT_CHILD_AUTO_REVIEW_ENV] : undefined;
 		const permissionMode =
 			config.permissionMode ??
-			(isSubagentChildProcess()
-				? resolveChildRuntimePermissionMode(process.env[SUBAGENT_CHILD_PERMISSION_ENV])
+			(childProcess
+				? resolveChildRuntimePermissionMode(process.env[SUBAGENT_CHILD_PERMISSION_ENV], parentAutoReview)
 				: undefined) ??
 			this.sessionManager.getPermissionMode() ??
 			this.settingsManager.getDefaultPermissionMode();
 		initializePermissionContext(this.sessionId, permissionMode, config.permissionMode);
+		if (childProcess) {
+			this._autonomous = true;
+			setPermissionAutonomous(true, this.sessionId);
+			this._parentAutoReviewRef = parentAutoReview && parentAutoReview !== "-" ? parentAutoReview : undefined;
+		}
+		this._unregisterAutoReviewSnapshot = registerAutoReviewSnapshot(this.sessionId, () => {
+			if (this.permissionMode !== "auto" || !this._autoReviewEnabled) return "";
+			const reviewer = this.resolveAutoReviewer();
+			return reviewer.kind === "ready" ? reviewer.ref : "-";
+		});
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -610,6 +643,14 @@ export class AgentSession {
 			);
 			if (permBlock) {
 				return { block: true, reason: permBlock.reason };
+			}
+			if (
+				this.permissionMode === "auto" &&
+				this._autoReviewEnabled &&
+				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd)
+			) {
+				const reviewBlock = await this._reviewAutoAction(toolCall.name, args, toolCall.id);
+				if (reviewBlock) return { block: true, reason: reviewBlock };
 			}
 
 			// lunr: await host gates before snapshots, extension handlers or tool execution.
@@ -1122,6 +1163,7 @@ export class AgentSession {
 		if (this._disposed) return;
 		this._disposed = true;
 		for (const unregister of this._unregisterSubagentWaitInterruptionOwners.splice(0)) unregister();
+		this._unregisterAutoReviewSnapshot?.();
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -1202,7 +1244,124 @@ export class AgentSession {
 	}
 
 	private _permissionAddendum(mode: PermissionMode): string | undefined {
-		return mode === "read-only" ? READ_ONLY_MODE_ADDENDUM : mode === "auto" ? AUTO_MODE_ADDENDUM : undefined;
+		if (mode === "read-only") return READ_ONLY_MODE_ADDENDUM;
+		return this._autonomous ? AUTONOMOUS_ADDENDUM : undefined;
+	}
+
+	/** True when the session works without asking the user: /goal, subagents and ACP Autonomous. */
+	get autonomous(): boolean {
+		return this._autonomous;
+	}
+
+	/** Turns "no questions" on or off. Independent of the permission mode and of auto review. */
+	setAutonomous(autonomous: boolean): void {
+		if (this._autonomous === autonomous) return;
+		this._autonomous = autonomous;
+		setPermissionAutonomous(autonomous, this.sessionId);
+		this.agent.state.systemPrompt = this._withSystemPromptAppend(
+			this._systemPromptOverride ?? this._baseSystemPrompt,
+		);
+	}
+
+	/** ACP clients approve each tool themselves, so their workers turn auto review off. */
+	setAutoReviewEnabled(enabled: boolean): void {
+		this._autoReviewEnabled = enabled;
+	}
+
+	/** The model that would review auto-mode actions right now, or why there is none. */
+	resolveAutoReviewer(): AutoReviewer {
+		return resolveAutoReviewer({
+			parentRef: this._parentAutoReviewRef,
+			configuredRef: this.settingsManager.getAutoReviewModel(),
+			sessionModel: this.model,
+			getModel: (provider, modelId) => this._modelRuntime.getModel(provider, modelId),
+		});
+	}
+
+	/**
+	 * Asks the review model about one auto-mode action. Returns the block reason, or undefined to
+	 * let it run. Repeated blocks and a missing reviewer hand the decision to the user when an
+	 * approval channel exists; otherwise the action stays blocked.
+	 */
+	private async _reviewAutoAction(toolName: string, args: unknown, toolCallId: string): Promise<string | undefined> {
+		const reviewer = this.resolveAutoReviewer();
+		let reason: string;
+		if (reviewer.kind !== "ready") {
+			reason = missingReviewerReason(reviewer);
+		} else {
+			try {
+				const response = await this._modelRuntime.completeSimple(
+					reviewer.model,
+					buildAutoReviewContext({
+						userMessages: this._autoReviewUserMessages(),
+						earlierActions: this._autoReviewEarlierActions(toolCallId),
+						action: { toolName, input: args },
+						cwd: this._cwd,
+						projectInstructions: this._resourceLoader
+							.getAgentsFiles()
+							.agentsFiles.map((file) => file.content)
+							.join("\n\n"),
+					}),
+					{ signal: this.agent.signal, ...(reviewer.model.reasoning ? { reasoning: "low" as const } : {}) },
+				);
+				this.sessionManager.appendRequestUsage("auto-review", response);
+				const verdict = response.stopReason === "error" ? undefined : parseAutoReviewVerdict(response);
+				if (verdict?.decision === "allow") {
+					this._autoReviewTracker.recordAllow();
+					return undefined;
+				}
+				reason =
+					verdict?.reason ??
+					(response.stopReason === "error"
+						? `The review model failed: ${response.errorMessage ?? "unknown error"}.`
+						: "The review model gave no clear answer.");
+			} catch (error) {
+				if (this.agent.signal?.aborted) return "Aborted before auto review finished.";
+				reason = `The review model failed: ${error instanceof Error ? error.message : String(error)}.`;
+			}
+		}
+		const limitReached = this._autoReviewTracker.recordBlock();
+		if (limitReached || reviewer.kind !== "ready") {
+			const decision = await requestAutoReviewDecision(
+				{ toolName, detail: `${reason}\n\n${toolName} ${JSON.stringify(args, null, 2).slice(0, 2000)}` },
+				this.sessionId,
+			);
+			if (decision) this._autoReviewTracker.userDecided();
+			if (decision === "allow") return undefined;
+			if (decision === "reject") return `The user blocked this action after auto review flagged it: ${reason}`;
+		}
+		return `Auto mode's review model blocked this action: ${reason} Don't reach the same result another way. Choose a clearly safer approach or ask the user.`;
+	}
+
+	private _autoReviewUserMessages(): string[] {
+		return this.agent.state.messages.flatMap((message) => {
+			if (message.role !== "user") return [];
+			const text =
+				typeof message.content === "string"
+					? message.content
+					: message.content
+							.filter((block): block is { type: "text"; text: string } => block.type === "text")
+							.map((block) => block.text)
+							.join("\n");
+			return text.trim() ? [text] : [];
+		});
+	}
+
+	/** Tool calls since the last user message, without their results. */
+	private _autoReviewEarlierActions(currentToolCallId: string): Array<{ toolName: string; input: unknown }> {
+		const messages = this.agent.state.messages;
+		let start = messages.length;
+		while (start > 0 && messages[start - 1].role !== "user") start--;
+		const actions: Array<{ toolName: string; input: unknown }> = [];
+		for (const message of messages.slice(start)) {
+			if (message.role !== "assistant") continue;
+			for (const block of message.content) {
+				if (block.type === "toolCall" && block.id !== currentToolCallId) {
+					actions.push({ toolName: block.name, input: block.arguments });
+				}
+			}
+		}
+		return actions;
 	}
 
 	/** Update the same permission context consulted by headless and interactive tools. */

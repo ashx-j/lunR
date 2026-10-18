@@ -211,6 +211,7 @@ export interface Settings {
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
+	autoReviewModel?: string; // "provider/model" that reviews auto-mode actions; unset = the provider's own reviewer
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
@@ -1300,6 +1301,18 @@ export class SettingsManager {
 	setDefaultProjectTrust(defaultProjectTrust: DefaultProjectTrust): void {
 		this.globalSettings.defaultProjectTrust = defaultProjectTrust;
 		this.markModified("defaultProjectTrust");
+		this.save();
+	}
+
+	/** The user's chosen auto-mode review model, or undefined to use the provider's own reviewer. */
+	getAutoReviewModel(): string | undefined {
+		const value = this.settings.autoReviewModel;
+		return typeof value === "string" && value.includes("/") ? value : undefined;
+	}
+
+	setAutoReviewModel(ref: string | undefined): void {
+		this.globalSettings.autoReviewModel = ref;
+		this.markModified("autoReviewModel");
 		this.save();
 	}
 

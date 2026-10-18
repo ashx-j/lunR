@@ -64,6 +64,7 @@ import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../.
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import { formatClaudeSubscriptionLogoutNote } from "../../core/auth-guidance.ts";
+import type { AutoReviewer } from "../../core/auto-review.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -907,6 +908,7 @@ export class InteractiveMode {
 				}
 				return resp;
 			}
+			if (req.kind === "auto-review") return this.showAutoReviewDecisionDialog(req);
 			return "reject";
 		});
 
@@ -914,6 +916,7 @@ export class InteractiveMode {
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
 		this.syncPermissionModeEffects(this.session.permissionMode);
+		this.warnIfAutoHasNoReviewer();
 
 		await this.themeController.applyFromSettings();
 
@@ -4468,7 +4471,7 @@ export class InteractiveMode {
 	}
 
 	private cyclePermissionMode(): void {
-		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), { silent: true });
+		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), { silent: true, cycling: true });
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -4946,6 +4949,7 @@ export class InteractiveMode {
 					footerPlanBar: this.settingsManager.getFooterPlanBar(),
 					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
 					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
+					autoReviewModel: this.settingsManager.getAutoReviewModel(),
 					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
 					rollbackTurns: this.settingsManager.getRollbackTurns(),
 					rollbackCapture: this.settingsManager.getRollbackCapture(),
@@ -5254,6 +5258,13 @@ export class InteractiveMode {
 					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);
+					},
+					onAutoReviewModelChange: (ref) => {
+						this.settingsManager.setAutoReviewModel(ref);
+					},
+					onChooseAutoReviewModel: () => {
+						done();
+						this.showAutoReviewModelPicker();
 					},
 					onRollbackEnabledChange: (enabled) => {
 						this.settingsManager.setRollbackEnabled(enabled);
@@ -7633,7 +7644,7 @@ export class InteractiveMode {
 
 		const options = [
 			"YOLO — auto-approve tools, agent may still ask",
-			"Auto — fully autonomous, no questions",
+			"Auto — a review model checks risky actions",
 			"Read — inspect without making changes",
 		];
 		void this.showExtensionSelector("Permission mode", options).then((choice) => {
@@ -7659,25 +7670,36 @@ export class InteractiveMode {
 		if (mode === "auto") enableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
-	// lunr: `/goal` forces session auto without writing settings.
+	// lunr: `/goal` works without questions in the current mode (read-only steps up to yolo), without writing settings.
 	private enterGoalAuto(): void {
 		const next = nextModeForGoal(this.session.permissionMode, "enter", this.preGoalPermissionMode);
 		this.preGoalPermissionMode = next.saved;
 		if (next.mode !== this.session.permissionMode) {
 			this.applyPermissionMode(next.mode, { silent: true });
 		}
+		this.session.setAutonomous(true);
+		enableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
 	private leaveGoalAuto(): void {
 		const next = nextModeForGoal(this.session.permissionMode, "leave", this.preGoalPermissionMode);
 		this.preGoalPermissionMode = next.saved;
+		this.session.setAutonomous(false);
 		if (next.mode !== this.session.permissionMode) {
 			this.applyPermissionMode(next.mode, { silent: true });
 		}
+		if (this.session.permissionMode !== "auto") disableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
-	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean }): void {
+	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean; cycling?: boolean }): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		if (mode === "auto") {
+			const reviewer = this.session.resolveAutoReviewer();
+			if (reviewer.kind !== "ready") {
+				this.showAutoReviewModelPicker(reviewer, opts?.cycling);
+				return;
+			}
+		}
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const prev = this.session.permissionMode;
 		if (mode === "read-only" && prev !== "read-only") {
@@ -7695,12 +7717,83 @@ export class InteractiveMode {
 		if (opts?.silent) return;
 
 		if (mode === "auto" && prev !== "auto") {
-			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
+			const reviewer = this.session.resolveAutoReviewer();
+			const by = reviewer.kind === "ready" ? reviewer.ref : "the review model";
+			this.showStatus(`Auto mode active. ${by} checks risky actions. Rollback enabled for this session.`);
 		} else if (mode === "read-only") {
 			this.showStatus("Read mode active. Changes are blocked.");
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
 		}
+	}
+
+	/**
+	 * Opens the model list so the user can pick the auto review model, then enters auto. With a
+	 * `reviewer` it first explains why auto needs one. Cancelling while cycling moves on to read.
+	 */
+	private showAutoReviewModelPicker(reviewer?: Exclude<AutoReviewer, { kind: "ready" }>, cycling?: boolean): void {
+		if (reviewer) {
+			this.showWarning(
+				reviewer.kind === "missing"
+					? `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one. Pick the model that should check risky actions.`
+					: `Auto review model ${reviewer.ref} isn't available. Pick another model to check risky actions.`,
+			);
+		}
+		this.showSelector((done) => {
+			const selector = new ModelSelectorComponent(
+				this.ui,
+				this.resolveModelReference(this.settingsManager.getAutoReviewModel()),
+				this.settingsManager,
+				this.session.modelRuntime,
+				this.session.scopedModels,
+				(model) => {
+					done();
+					this.settingsManager.setAutoReviewModel(`${model.provider}/${model.id}`);
+					if (reviewer) this.applyPermissionMode("auto");
+					else this.showStatus(`Auto review model: ${model.provider}/${model.id}`);
+				},
+				() => {
+					done();
+					if (reviewer && cycling) this.applyPermissionMode(nextPermissionMode("auto"), { silent: true });
+					this.ui.requestRender();
+				},
+				undefined,
+				{ persistDefault: false },
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	/** Startup check for a session that opens in auto without a usable review model. */
+	private warnIfAutoHasNoReviewer(): void {
+		if (this.session.permissionMode !== "auto") return;
+		const reviewer = this.session.resolveAutoReviewer();
+		if (reviewer.kind === "ready") return;
+		this.showWarning(
+			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /auto to pick one.`,
+		);
+	}
+
+	// Dialog when auto mode's review model kept blocking, or couldn't review, one action.
+	private async showAutoReviewDecisionDialog(req: { toolName: string; detail: string }): Promise<ApprovalResponse> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					`Auto review stopped a ${req.toolName} call. Run it anyway?`,
+					["Run it once", "Keep it blocked"],
+					(option) => {
+						done();
+						resolve(option === "Run it once" ? "once" : "reject");
+					},
+					() => {
+						done();
+						resolve("reject");
+					},
+					{ message: req.detail.slice(0, 800) },
+				);
+				return { component: selector, focus: selector };
+			});
+		});
 	}
 
 	// Approval dialog for one subagent call launching more than two children.

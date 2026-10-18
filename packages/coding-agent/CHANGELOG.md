@@ -2,6 +2,13 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Changed
+
+- Auto mode now has a review model check risky actions before they run: shell commands that aren't plain reads, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches. Anthropic uses Claude Sonnet 5, as Claude Code does. OpenAI, xAI and Qwen use the session model. Other providers ask you to pick a reviewer when you enter auto. After 3 blocks in a row or 20 in a session, lunR asks you instead. `/settings` → Auto review model changes the reviewer.
+- "Work without asking questions" is no longer tied to auto. `/goal`, subagents and the ACP Autonomous mode keep it in any permission mode, and subagents follow their parent's mode. A goal no longer switches yolo to auto; read-only still steps up to yolo for the goal.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed

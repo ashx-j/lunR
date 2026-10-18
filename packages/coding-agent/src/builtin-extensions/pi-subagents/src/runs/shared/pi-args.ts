@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { snapshotParentAutoReview, SUBAGENT_CHILD_AUTO_REVIEW_ENV } from "../../../../../core/auto-review.ts";
 import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
 import { getAgentDir } from "../../shared/utils.ts";
 import { encodeNestedPathEnv, parseNestedPathEnv, type NestedPathEntry } from "./nested-path.ts";
@@ -99,6 +100,8 @@ interface BuildPiArgsInput {
 	childWatchdog?: ChildWatchdogConfig;
 	waitToolEnabled?: boolean;
 	parentPermissionMode?: string;
+	/** Parent's auto-review snapshot for async runners, which can't see the parent session. */
+	parentAutoReview?: string;
 	childPermission?: "full" | "read-only";
 	excludeTools?: string[];
 	childId?: string;
@@ -233,6 +236,10 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	env[SUBAGENT_CHILD_PERMISSION_ENV] = input.childPermission
 		?? (input.parentPermissionMode === "read-only" ? "read-only" : "full");
 	env[SUBAGENT_PARENT_PERMISSION_MODE_ENV] = "";
+	// lunr: a full-access child of an auto-mode parent runs in auto with the parent's reviewer.
+	env[SUBAGENT_CHILD_AUTO_REVIEW_ENV] = env[SUBAGENT_CHILD_PERMISSION_ENV] === "full"
+		? input.parentAutoReview ?? snapshotParentAutoReview(input.parentSessionId)
+		: "";
 	env[SUBAGENT_FANOUT_CHILD_ENV] = fanoutAuthorized ? "1" : "0";
 	if (input.waitToolEnabled !== undefined) {
 		env[WAIT_TOOL_ENABLED_ENV] = input.waitToolEnabled ? "true" : "false";

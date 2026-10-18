@@ -5,6 +5,8 @@ export interface RunnerSubagentStep {
 	parentSessionId?: string;
 	/** Live parent permission mode snapshotted at spawn. */
 	parentPermissionMode?: string;
+	/** Parent auto-review snapshot (see core/auto-review.ts) taken with the permission mode. */
+	parentAutoReview?: string;
 	agent?: string;
 	childId?: string;
 	description?: string;

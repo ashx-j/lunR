@@ -4,8 +4,8 @@ import type { PermissionMode } from "./permissions.ts";
  * lunR: permission-mode control bridge for the goal extension.
  *
  * Exposed on `globalThis` under `Symbol.for("@lunr/permission-mode-control")`
- * so the vendored goal extension can force session auto while a goal is
- * active without importing InteractiveMode.
+ * so the vendored goal extension can make the session work without questions
+ * while a goal is active, without importing InteractiveMode.
  */
 
 export const PERMISSION_MODE_CONTROL_SYMBOL = Symbol.for("@lunr/permission-mode-control");
@@ -18,8 +18,9 @@ export interface PermissionModeControlBridge {
 export type GoalPermissionEvent = "enter" | "leave";
 
 /**
- * Pure save/restore helper for `/goal` forcing session auto.
- * `saved` is the mode in effect before the goal stretch (undefined = none).
+ * Pure save/restore helper for `/goal`. A goal works without asking questions (AgentSession
+ * autonomy) in the user's current mode. Read-only can't make progress, so it switches to yolo
+ * for the goal and comes back afterwards; `saved` holds that read-only mode while a goal runs.
  */
 export function nextModeForGoal(
 	current: PermissionMode,
@@ -27,12 +28,11 @@ export function nextModeForGoal(
 	saved: PermissionMode | undefined,
 ): { mode: PermissionMode; saved: PermissionMode | undefined } {
 	if (event === "enter") {
-		if (current === "auto") return { mode: "auto", saved };
-		// Already inside a goal stretch: keep a hand-changed mode (yolo/plan/manual).
+		// Already inside a goal stretch: keep a hand-changed mode.
 		if (saved !== undefined) return { mode: current, saved };
-		return { mode: "auto", saved: current };
+		return current === "read-only" ? { mode: "yolo", saved: current } : { mode: current, saved: undefined };
 	}
-	if (current === "auto" && saved !== undefined) {
+	if (current === "yolo" && saved !== undefined) {
 		return { mode: saved, saved: undefined };
 	}
 	return { mode: current, saved: undefined };
