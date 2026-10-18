@@ -38,7 +38,7 @@ Configure via `package.json`:
 }
 ```
 
-Change `name`, `configDir`, and `bin` for a fork. That affects the CLI banner and config directory. Environment variable names stay pinned: `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_PACKAGE_DIR`, `PI_OFFLINE`, `PI_SHARE_VIEWER_URL`. Do not invent `LUNR_*` replacements for those.
+Change `name`, `configDir`, and `bin` for a fork. That affects the CLI banner and config directory. Environment variable names stay pinned: `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_PACKAGE_DIR`, `PI_OFFLINE`. Do not invent `LUNR_*` replacements for those.
 
 ## Path Resolution
 

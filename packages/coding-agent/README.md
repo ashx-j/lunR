@@ -201,7 +201,6 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/paste-image` | Paste an image from the clipboard |
 | `/export [file]` | Export session to HTML or JSONL |
 | `/import <file>` | Import and resume a JSONL session |
-| `/share` | Upload as a private GitHub gist (HTML viewer still defaults to https://pi.dev/session/ — leftover, not lunR-hosted) |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/init` | Generate a starter AGENTS.md |
@@ -673,7 +672,6 @@ These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
 | `PI_CODING_AGENT_SESSION_DIR` | Override session storage directory (overridden by `--session-dir`) |
 | `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `PI_OFFLINE` | Disable startup network operations when set to `1`/`true`/`yes` |
-| `PI_SHARE_VIEWER_URL` | Base URL for `/share` HTML viewer (default: `https://pi.dev/session/` — leftover) |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
 

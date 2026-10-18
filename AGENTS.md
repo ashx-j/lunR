@@ -22,6 +22,8 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **`/share` removed (`chore/remove-share`, 2026-10-18):** the command, `PI_SHARE_VIEWER_URL`, `getShareViewerUrl` and the docs are gone; `/share` linked to pi's hosted viewer at pi.dev. `/export` still writes HTML. The subagent tool's separate `share` option, which links to pi's viewer too, is unchanged.
+
 - **v0.2.37 (prepared 2026-10-17):** PR #193 merged as `a223db9` after green CI. The release ships Claude Code routes and windows from discovery, so subscription Opus 5 stays on the plan; existing Claude connections need `/login anthropic` once.
 
 - **Claude Code routes from discovery (`fix/claude-opus-standard-route`, 2026-10-17):** setup reads Claude Code's picker (`initialize`), then `set_model` + `get_context_usage` per route, and saves a version 3 record with `models: [{ id, route, contextWindow }]` in picker order. Each model keeps its largest window that Claude Code does not label "usage credits", so Opus 5 uses `claude-opus-5` (200K), not the credit-billed `[1m]`. The provider lists exactly those models with those windows, the bridge sends the saved route, and `ModelRuntime.getModel` returns the same credential-aware row. The hardcoded route table is gone. Version 1 and 2 records need `/login anthropic`. Tests: anthropic-subscription-login + anthropic-oauth + claude-code-loopback + model-runtime-subscription-window.
@@ -224,6 +226,8 @@ Last updated: 2026-10-17 (v0.2.37 release preparation). Public npm is `@ashx-j/l
 
 ## Build & run
 
+- `/share` removal, 2026-10-18: coding-agent tsgo, the Node bundle, touched-file Biome, five focused suites (65 tests: slash commands, project trust, ACP integration/worker, prompt workflows) and the first-paint/first-turn subagent/MCP/LSP/fetch check pass in an isolated Linux worktree. Slash commands are not model tools, so first-request tool hashes are unchanged.
+
 - v0.2.37 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.37. `publish:dry` packs all seven packages. v0.2.36 published from tag `v0.2.36` at `e3cc961`; all seven packages resolve as npm latest and a fresh install reports 0.2.36 with the catalog template fix.
 - Claude Code routes from discovery (2026-10-17): Anthropic suites pass 33 (bridge skips on Windows) and 15 related coding-agent files pass 128/128; AI/agent/coding-agent builds, browser-smoke and ts-imports pass. Real setup discovery against the signed-in account took 3.3 s with the tripwire untripped and saved Sonnet 5 `[1m]` 1M, Fable 5.1 `[1m]` 1M, Opus 5 standard 200K and Haiku 4.5 200K. With that record the built CLI lists those windows, the intercepted handoff routes Opus 5 as `claude-opus-5` and Sonnet 5 as `claude-sonnet-5[1m]`, and a live Haiku 4.5 message returned in 2 s.
 - v0.2.36 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.36. `publish:dry` packs all seven packages. v0.2.35 published from tag `v0.2.35` at `308fdd5`; all seven packages resolve as npm latest and a fresh install reports 0.2.35 with both fixes.
@@ -380,7 +384,7 @@ Last updated: 2026-10-17 (v0.2.37 release preparation). Public npm is `@ashx-j/l
 
 # Renamed vs still "pi"
 
-Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`, `/share` default `https://pi.dev/session/`.
+Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `@earendil-works/pi-*` scopes, `PI_CODING_AGENT*` env, `getPiUserAgent`.
 
 # Notes
 
@@ -555,6 +559,8 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Intercom broker spawn prefers sibling `broker.js` with node. `tsx` + `broker.ts` only when the TypeScript source is what exists. Broker stderr is under the intercom dir.
 
 # Decisions (keep; why in one line)
+
+- 2026-10-18: remove `/share` instead of hosting a viewer, because it sent shared sessions to pi's site and `/export` already covers local HTML.
 
 - 2026-10-17: derive Claude subscription routes and windows from Claude Code's own picker and `get_context_usage` at setup, skipping variants it labels as usage credits, because a hardcoded route table goes stale with every Claude Code model change and had routed Opus 5 to credit billing.
 - 2026-10-17: official catalog rows fall back to their own baked-in model before the provider's first one, because compat and thinking maps are per model and Fable 5's adaptive thinking broke Haiku 4.5.
@@ -816,7 +822,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - Gateway cold first slash after daemon start can hang minutes; local scripted-provider first-use flow passes but does not establish a cold-start latency bound.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
-- Scope rename; `PI_CODING_AGENT*` rename; `/share` still pi.dev.
+- Scope rename; `PI_CODING_AGENT*` rename.
 - **`~/.pi` leakage (vendored copies only):** mcp-adapter, intercom broker, web-access keys/settings, pi-goal-state, simple-pi-memory (+ rollback snapshots that path), TUI crash log `~/.pi/agent/pi-crash.log`. Fix: route through `getAgentDir()` / set `PI_CODING_AGENT_DIR` at startup + migrate. Catalog no longer hits pi.dev.
 - Rollback: shadow-git, gateway rollback (B7), orphan GC, symlink escape.
 - Cron: script/`no_agent` jobs; more gateway platforms; process-tree for `nohup` grandchildren.

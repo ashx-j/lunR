@@ -19,7 +19,6 @@ export const RESERVED_COMMAND_NAMES = new Set([
 	"model",
 	"scoped-models",
 	"export",
-	"share",
 	"copy",
 	"name",
 	"session",
