@@ -30,7 +30,7 @@ function createFakeMode(isIdle: boolean) {
 		clearStatusIndicator: vi.fn(),
 		flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
 		checkShutdownRequested: vi.fn().mockResolvedValue(undefined),
-		settingsManager: { getShowTerminalProgress: () => false },
+		settingsManager: { getShowTerminalProgress: () => false, getAttentionNotification: () => "off" },
 		ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 	};
 	Object.setPrototypeOf(fakeThis, InteractiveMode.prototype);
