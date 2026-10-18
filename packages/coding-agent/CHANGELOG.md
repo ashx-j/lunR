@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Fixed
+
+- `/settings` no longer offers the `shadow-git` rollback capture mode. It was never built: the menu said it fell back to `copies`, but `/rollback` deleted files like `hybrid` does. A saved `shadow-git` value now behaves as `copies`.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed

@@ -251,7 +251,7 @@ Customize these from `/settings` → Customize as well. The same menu controls `
 | `cronFallbackModels` | string[] | - | `provider/modelId` entries tried in order when a gateway cron fire fails. Hand-edited |
 | `rollbackEnabled` | boolean | `false` | Enable `/rollback` snapshots |
 | `rollbackTurns` | number | `2` | How many user-turns of snapshots to retain |
-| `rollbackCapture` | string | `"copies"` | Snapshot capture mode |
+| `rollbackCapture` | string | `"copies"` | Snapshot capture mode: `"copies"`, or `"hybrid"`, which also deletes files created outside tools when `rollbackScope` is `"tree"` |
 | `rollbackScope` | string | `"tools"` | What to snapshot |
 | `autoManageSubscriptions` | boolean | `false` | When true, subscription key switching is fully automatic (no manual picker) |
 

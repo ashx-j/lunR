@@ -10,7 +10,6 @@
  *  - copies:  snapshot pre-write content; restore = write back + delete files
  *             the agent created with edit/write.
  *  - hybrid:  copies + also delete files created OUTSIDE tools (tree scope).
- *  - shadow-git: hidden git repo (deferred — behaves like copies).
  *
  * Scope (setting `rollbackScope`):
  *  - tools: only edit/write tool changes.
@@ -265,7 +264,7 @@ export function captureTreeChanges(cwd: string, sessionId?: string): void {
 		try {
 			if (status === "??" || status.includes("R")) {
 				// lunr: untracked now (or rename dest) and not in the baseline — created
-				// during this turn (deleted on restore under hybrid/shadow-git).
+				// during this turn (deleted on restore under hybrid).
 				turn.files.set(abs, { existed: false, createdByTool: false });
 				persistSnapshot(ctx, turn, abs);
 				// lunr: rename source existed at HEAD and is gone now — restore its
@@ -649,7 +648,7 @@ export function rollbackLastTurn(
 					result.restored.push(absPath);
 				}
 			} else {
-				const shouldDelete = snap.createdByTool || capture === "hybrid" || capture === "shadow-git";
+				const shouldDelete = snap.createdByTool || capture === "hybrid";
 				if (shouldDelete && existsSync(absPath)) {
 					unlinkSync(absPath);
 					result.deleted.push(absPath);

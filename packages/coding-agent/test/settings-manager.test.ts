@@ -41,6 +41,11 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getReasoningDisplay()).toBe("auto");
 	});
 
+	it("reads the removed shadow-git rollback capture as copies", () => {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ rollbackCapture: "shadow-git" }));
+		expect(SettingsManager.create(projectDir, agentDir).getRollbackCapture()).toBe("copies");
+	});
+
 	it("defaults todos on and persists the toggle", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getTodosEnabled()).toBe(true);

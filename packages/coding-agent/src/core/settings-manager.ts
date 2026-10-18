@@ -91,7 +91,7 @@ export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "$";
 export function parseSkillTagCharacter(value: unknown): SkillTagCharacter {
 	return value === "+" || value === "~" || value === "$" ? value : DEFAULT_SKILL_TAG_CHARACTER;
 }
-export type RollbackCapture = "copies" | "shadow-git" | "hybrid";
+export type RollbackCapture = "copies" | "hybrid";
 export type RollbackScope = "tools" | "tree";
 
 export type TransportSetting = Transport;
@@ -1343,7 +1343,8 @@ export class SettingsManager {
 
 	getRollbackCapture(): RollbackCapture {
 		const value = this.settings.rollbackCapture;
-		return value === "copies" || value === "shadow-git" || value === "hybrid" ? value : "copies";
+		// Unknown values, including the removed "shadow-git" placeholder, read as copies.
+		return value === "copies" || value === "hybrid" ? value : "copies";
 	}
 
 	setRollbackCapture(mode: RollbackCapture): void {
