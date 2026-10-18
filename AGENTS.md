@@ -22,6 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
+- **PI_OFFLINE values (`fix/pi-offline-flag`):** `PI_OFFLINE=0` no longer disables live catalog lookups; model runtime, package manager and tool installer share `isOfflineModeEnabled()` in `config.ts`.
 - **v0.2.37 (prepared 2026-10-17):** PR #193 merged as `a223db9` after green CI. The release ships Claude Code routes and windows from discovery, so subscription Opus 5 stays on the plan; existing Claude connections need `/login anthropic` once.
 
 - **Claude Code routes from discovery (`fix/claude-opus-standard-route`, 2026-10-17):** setup reads Claude Code's picker (`initialize`), then `set_model` + `get_context_usage` per route, and saves a version 3 record with `models: [{ id, route, contextWindow }]` in picker order. Each model keeps its largest window that Claude Code does not label "usage credits", so Opus 5 uses `claude-opus-5` (200K), not the credit-billed `[1m]`. The provider lists exactly those models with those windows, the bridge sends the saved route, and `ModelRuntime.getModel` returns the same credential-aware row. The hardcoded route table is gone. Version 1 and 2 records need `/login anthropic`. Tests: anthropic-subscription-login + anthropic-oauth + claude-code-loopback + model-runtime-subscription-window.
@@ -384,6 +385,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- Read `PI_OFFLINE` through `isOfflineModeEnabled()` (1/true/yes). A raw `!== undefined` check treated `0` as offline in `ModelRuntime.create`.
 - Anything written to stdout/stderr while the first-paint TUI owns the screen (runtime creation in `main.ts`, or later inside the TUI) shifts the terminal under it and leaves stale rows, such as a second boot header. Route startup output through runtime diagnostics.
 - Official catalog rows without `compat`/`thinkingLevelMap` take them from a baked-in template in `refreshOfficialCatalog`. Use the same-id baked-in model first: the provider's first model (Anthropic: Claude Fable 5) gave Haiku 4.5 adaptive thinking, which Anthropic rejects with a 400, and turned `--thinking off` into effort low. Ids missing from the built-in list still use the first model.
 - Pinned Claude Code 2.1.263's picker offers Sonnet 5 (default), Fable 5.1, Opus 5 and Haiku 4.5 on the tested account; no Haiku 5.5. For every subscriber it labels `opus[1m]` "Draws from usage credits"; Sonnet 5 and Fable 5.1 at 1M carry no such label. With fake credentials, `claude-opus-5` reports 200K and no `context-1m` beta, `claude-opus-5[1m]` reports 1M with it. Setup skips any variant whose picker description mentions usage credits; there is no structured billing field. `get_context_usage` reports the window per route and sends `count_tokens` requests, which the tripwire drops uncounted.

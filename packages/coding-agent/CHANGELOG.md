@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Fixed
+
+- `PI_OFFLINE=0` no longer blocks `/refresh` and other live model-catalog lookups. Only `1`, `true` or `yes` turn on offline mode, as the docs say.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed
