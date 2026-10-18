@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Container, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import type { WatchdogWarningDetails } from "./types.ts";
 

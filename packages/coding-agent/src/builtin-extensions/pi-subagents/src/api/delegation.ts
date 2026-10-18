@@ -1,4 +1,3 @@
-// @ts-nocheck
 export const SUBAGENT_DELEGATION_PROTOCOL_VERSION = 2 as const;
 
 // This is the established extension-to-extension transport. The public API

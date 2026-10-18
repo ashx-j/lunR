@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ACP_SCHEDULING_DISABLED } from "../../../../modes/acp/policy.ts";

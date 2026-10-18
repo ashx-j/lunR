@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Central permission-to-tool resolver for prompt-driven children.
  *

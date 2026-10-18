@@ -1,4 +1,3 @@
-// @ts-nocheck
 export const BACKGROUND_WORK_PROTOCOL_VERSION = 1;
 export const BACKGROUND_WORK_REGISTRY_KEY = "pi-subagents.background-work.v1";
 

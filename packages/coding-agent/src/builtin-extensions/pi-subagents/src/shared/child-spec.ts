@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Normalize model-authored delegated tasks into ChildSpec before validation,
  * rendering, persistence, or process spawning.

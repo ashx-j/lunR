@@ -1,4 +1,3 @@
-// @ts-nocheck
 interface SessionIdentityManager {
 	getSessionFile(): string | null | undefined;
 	getSessionId(): string | null | undefined;

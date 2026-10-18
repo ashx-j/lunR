@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { WatchdogSeverity, WatchdogWarning } from "./types.ts";
 
 export type WatchdogEmissionSuppressionReason = "content-free" | "duplicate" | "max-warnings" | "update-budget";

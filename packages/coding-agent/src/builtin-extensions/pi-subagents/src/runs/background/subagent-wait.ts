@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * `subagent_wait` tool: block the current turn until outstanding async runs
  * or a named remembered detached foreground run finishes.

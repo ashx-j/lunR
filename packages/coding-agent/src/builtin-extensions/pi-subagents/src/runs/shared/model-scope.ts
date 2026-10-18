@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Optional model-scope enforcement for subagent model resolution.
  *

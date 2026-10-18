@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * General utility functions for the subagent extension
  */

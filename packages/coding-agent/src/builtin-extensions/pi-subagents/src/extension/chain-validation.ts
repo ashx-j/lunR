@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Friendly chain parameter validation.
  *
