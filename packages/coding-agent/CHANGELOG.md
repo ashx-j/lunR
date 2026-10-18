@@ -4,35 +4,30 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned
 
 ## [Unreleased]
 
+### Added
+
+- `/settings` Notifications rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. It stays quiet while the terminal reports that lunR's window has focus. Off by default.
+- `lunr doctor` checks Node, the config folder, saved logins, the default model, the model catalog's age, a Claude subscription's managed Claude Code, Chromium and the gateway, and prints a fix for each problem. It never prints credentials.
+- `lunr doctor keys` asks for Shift+Enter, Alt+Enter and the image-paste key and says which ones reached lunR and what the terminal sent instead.
+
+### Changed
+
+- The npm package is about 550 KB smaller. It no longer ships an unused upstream announcement image and other code nothing loads.
+- Auto mode now has a review model check risky actions before they run: shell commands that aren't plain reads, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches. Anthropic uses Claude Sonnet 5, as Claude Code does. OpenAI, xAI and Qwen use the session model. Other providers ask you to pick a reviewer when you enter auto. After 3 blocks in a row or 20 in a session, lunR asks you instead. `/settings` → Auto review model changes the reviewer.
+- "Work without asking questions" is no longer tied to auto. `/goal`, subagents and the ACP Autonomous mode keep it in any permission mode, and subagents follow their parent's mode. A goal no longer switches yolo to auto; read-only still steps up to yolo for the goal.
+
+### Fixed
+
+- `/settings` no longer offers the `shadow-git` rollback capture mode. It was never built: the menu said it fell back to `copies`, but `/rollback` deleted files like `hybrid` does. A saved `shadow-git` value now behaves as `copies`.
+- `PI_OFFLINE=0` no longer blocks `/refresh` and other live model-catalog lookups. Only `1`, `true` or `yes` turn on offline mode, as the docs say.
+- The MCP setup panel, `/mcp` messages, the invalid-session error and the old extension-folder warning now say lunR instead of Pi. That warning links to lunR's extension docs instead of upstream pi's.
+- Read mode no longer treats `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` with an output file, or env variables such as `GIT_EXTERNAL_DIFF`, `PAGER` and `LD_PRELOAD` as read-only, since each can run a program or write a file.
+
 ### Removed
 
 - `/share` and `PI_SHARE_VIEWER_URL`. `/share` uploaded the session to a GitHub gist and linked to pi's hosted viewer at pi.dev, which lunR does not run. Use `/export` to write the session to an HTML file instead.
 - The subagent tool's `share` option. It uploaded a child session to a GitHub gist and linked to pi's hosted viewer, which lunR does not run. Child session files stay on disk as before, and runs saved with the old option still resume.
-### Fixed
-
-- `/settings` no longer offers the `shadow-git` rollback capture mode. It was never built: the menu said it fell back to `copies`, but `/rollback` deleted files like `hybrid` does. A saved `shadow-git` value now behaves as `copies`.
-### Added
-
-- `/settings` Notifications rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. It stays quiet while the terminal reports that lunR's window has focus. Off by default.
-### Added
-
-- `lunr doctor` checks Node, the config folder, saved logins, the default model, the model catalog's age, a Claude subscription's managed Claude Code, Chromium and the gateway, and prints a fix for each problem. It never prints credentials.
-- `lunr doctor keys` asks for Shift+Enter, Alt+Enter and the image-paste key and says which ones reached lunR and what the terminal sent instead.
-### Fixed
-
-- `PI_OFFLINE=0` no longer blocks `/refresh` and other live model-catalog lookups. Only `1`, `true` or `yes` turn on offline mode, as the docs say.
-### Changed
-
-- The npm package is about 550 KB smaller. It no longer ships an unused upstream announcement image and other code nothing loads.
 - The experimental first-run screen that asked to share anonymous usage data. lunR never sent any. The unused `enableAnalytics` and `trackingId` settings and the `FirstTimeSetupComponent` SDK export are gone too; existing values in settings.json are ignored.
-### Fixed
-
-- The MCP setup panel, `/mcp` messages, the invalid-session error and the old extension-folder warning now say lunR instead of Pi. That warning links to lunR's extension docs instead of upstream pi's.
-### Changed
-
-- Auto mode now has a review model check risky actions before they run: shell commands that aren't plain reads, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches. Anthropic uses Claude Sonnet 5, as Claude Code does. OpenAI, xAI and Qwen use the session model. Other providers ask you to pick a reviewer when you enter auto. After 3 blocks in a row or 20 in a session, lunR asks you instead. `/settings` → Auto review model changes the reviewer.
-- Read mode no longer treats `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` with an output file, or env variables such as `GIT_EXTERNAL_DIFF`, `PAGER` and `LD_PRELOAD` as read-only, since each can run a program or write a file.
-- "Work without asking questions" is no longer tied to auto. `/goal`, subagents and the ACP Autonomous mode keep it in any permission mode, and subagents follow their parent's mode. A goal no longer switches yolo to auto; read-only still steps up to yolo for the goal.
 - Two easter eggs inherited from pi: the sponsor tribute card that appeared after picking `opencode/kimi-k2.5`, and the hidden `/arminsayshi` command. Their components are no longer exported.
 
 ## [0.2.37] - 2026-10-17
