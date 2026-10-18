@@ -235,7 +235,7 @@ function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSou
 
   sources.push({
     id: "pi-global",
-    label: "Pi global override",
+    label: "lunR global override",
     readPath: userPath,
     writePath: userPath,
     kind: "user",
@@ -258,7 +258,7 @@ function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSou
   if (projectPiPath !== userPath && projectPiPath !== projectPath) {
     sources.push({
       id: "pi-project",
-      label: "project Pi override",
+      label: "project lunR override",
       readPath: projectPiReadPath,
       writePath: projectPiPath,
       kind: "project",

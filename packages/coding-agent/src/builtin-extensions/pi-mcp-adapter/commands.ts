@@ -239,7 +239,7 @@ function buildSharedConfigNoticeLines(configOverridePath: string | undefined, cw
   return {
     lines: [
       `Using standard MCP config from ${sourceList}.`,
-      "Pi only writes compatibility imports and adapter-specific overrides into Pi-owned files when needed.",
+      "lunR only writes compatibility imports and adapter-specific overrides into lunR-owned files when needed.",
     ],
     fingerprint: discovery.fingerprint,
   };
@@ -373,7 +373,7 @@ export async function openMcpPanel(
           if (!result.cancelled && result.changes.size > 0) {
             writeDirectToolsConfig(result.changes, provenanceMap, config);
             configChanged = true;
-            ctx.ui.notify("Direct tools updated. Pi will reload after this panel closes.", "info");
+            ctx.ui.notify("Direct tools updated. lunR will reload after this panel closes.", "info");
           }
           done(undefined);
           resolve();

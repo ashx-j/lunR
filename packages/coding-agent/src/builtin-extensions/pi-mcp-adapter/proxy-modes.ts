@@ -714,7 +714,7 @@ export async function executeCall(
       : undefined;
     if (nativeTool) {
       return {
-        content: [{ type: "text" as const, text: `"${toolName}" is a native Pi tool. Call ${toolName} directly instead of using mcp({ tool: "${toolName}" }).` }],
+        content: [{ type: "text" as const, text: `"${toolName}" is a native lunR tool. Call ${toolName} directly instead of using mcp({ tool: "${toolName}" }).` }],
         details: { mode: "call", error: "native_tool", requestedTool: toolName },
       };
     }

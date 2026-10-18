@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Fixed
+
+- The MCP setup panel, `/mcp` messages, the invalid-session error and the old extension-folder warning now say lunR instead of Pi. That warning links to lunR's extension docs instead of upstream pi's.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed
