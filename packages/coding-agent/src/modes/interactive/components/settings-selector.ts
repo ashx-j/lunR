@@ -794,11 +794,6 @@ class RollbackSubmenu extends Container {
 								label: "hybrid",
 								description: "Track files created outside tools with tree scope",
 							},
-							{
-								value: "shadow-git",
-								label: "shadow-git",
-								description: "Reserved mode; currently falls back to copies",
-							},
 						],
 						currentValue,
 						(value) => {

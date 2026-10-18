@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **`/share` removed (`chore/remove-share`, 2026-10-18):** the command, `PI_SHARE_VIEWER_URL`, `getShareViewerUrl` and the docs are gone; `/share` linked to pi's hosted viewer at pi.dev. `/export` still writes HTML. The subagent tool's separate `share` option, which links to pi's viewer too, is unchanged.
 - **Subagent `share` removed (`fix/remove-subagent-share`, 2026-10-18):** the model-facing `share` option, its gist upload to pi's hosted viewer and the `shareEnabled` plumbing are gone. Recovery descriptors still accept a legacy `share` field and ignore it. First-request tool hashes are refreshed for all four host/browser combinations.
+- **Rollback `shadow-git` option removed (`fix/rollback-shadow-git-option`, 2026-10-18):** the unbuilt capture mode is gone from the type, `/settings` and rollback. It was labeled as falling back to copies but restored like hybrid, deleting files created outside tools. Saved `shadow-git` reads as `copies` without rewriting settings.
 
 - **v0.2.37 (prepared 2026-10-17):** PR #193 merged as `a223db9` after green CI. The release ships Claude Code routes and windows from discovery, so subscription Opus 5 stays on the plan; existing Claude connections need `/login anthropic` once.
 
@@ -229,6 +230,7 @@ Last updated: 2026-10-17 (v0.2.37 release preparation). Public npm is `@ashx-j/l
 
 - `/share` removal, 2026-10-18: coding-agent tsgo, the Node bundle, touched-file Biome, five focused suites (65 tests: slash commands, project trust, ACP integration/worker, prompt workflows) and the first-paint/first-turn subagent/MCP/LSP/fetch check pass in an isolated Linux worktree. Slash commands are not model tools, so first-request tool hashes are unchanged.
 - Subagent `share` removal, 2026-10-18: five offline package builds, the Node bundle, 24 subagent/ACP suites (250 tests) and the first-paint/first-turn check pass in an isolated Linux worktree. With `@ts-nocheck` temporarily off for the nine touched pi-subagents files, tsgo reports the same 227 errors before and after. The Windows/macOS hashes come from the startup benchmark with only the computer-use chunk seeing `process.platform === "win32"`; that method reproduced all four master hashes before the change. No native Windows/macOS run.
+- Rollback `shadow-git` removal, 2026-10-18: tui → ai → agent → coding-agent tsgo, touched-file Biome and the settings-manager, rollback and rollback-recovery suites pass (80 tests, 1 Windows-only skip) in an isolated Linux worktree.
 
 - v0.2.37 release (2026-10-17): Biome on `packages/`, pinned-deps, ts-imports, shrinkwrap, installer lock, workflow-publish and browser-smoke checks pass. Offline tui → ai → agent → coding-agent → orchestrator builds pass with `packages/ai` clean; the built CLI reports 0.2.37. `publish:dry` packs all seven packages. v0.2.36 published from tag `v0.2.36` at `e3cc961`; all seven packages resolve as npm latest and a fresh install reports 0.2.36 with the catalog template fix.
 - Claude Code routes from discovery (2026-10-17): Anthropic suites pass 33 (bridge skips on Windows) and 15 related coding-agent files pass 128/128; AI/agent/coding-agent builds, browser-smoke and ts-imports pass. Real setup discovery against the signed-in account took 3.3 s with the tripwire untripped and saved Sonnet 5 `[1m]` 1M, Fable 5.1 `[1m]` 1M, Opus 5 standard 200K and Haiku 4.5 200K. With that record the built CLI lists those windows, the intercepted handoff routes Opus 5 as `claude-opus-5` and Sonnet 5 as `claude-sonnet-5[1m]`, and a live Haiku 4.5 message returned in 2 s.
@@ -566,6 +568,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 - 2026-10-18: remove `/share` instead of hosting a viewer, because it sent shared sessions to pi's site and `/export` already covers local HTML.
 - 2026-10-18: remove the subagent `share` option with `/share`, because both uploaded sessions to a gist viewed on pi's site; keep accepting the old descriptor field so saved runs still resume.
+- 2026-10-18: read legacy `shadow-git` rollback capture as `copies`, because that is what the menu promised and it deletes fewer files than the hybrid behavior it actually had.
 
 - 2026-10-17: derive Claude subscription routes and windows from Claude Code's own picker and `get_context_usage` at setup, skipping variants it labels as usage credits, because a hardcoded route table goes stale with every Claude Code model change and had routed Opus 5 to credit billing.
 - 2026-10-17: official catalog rows fall back to their own baked-in model before the provider's first one, because compat and thinking maps are per model and Fable 5's adaptive thinking broke Haiku 4.5.
@@ -829,5 +832,5 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Scope rename; `PI_CODING_AGENT*` rename.
 - **`~/.pi` leakage (vendored copies only):** mcp-adapter, intercom broker, web-access keys/settings, pi-goal-state, simple-pi-memory (+ rollback snapshots that path), TUI crash log `~/.pi/agent/pi-crash.log`. Fix: route through `getAgentDir()` / set `PI_CODING_AGENT_DIR` at startup + migrate. Catalog no longer hits pi.dev.
-- Rollback: shadow-git, gateway rollback (B7), orphan GC, symlink escape.
+- Rollback: shadow-git capture (option removed until built), gateway rollback (B7), orphan GC, symlink escape.
 - Cron: script/`no_agent` jobs; more gateway platforms; process-tree for `nohup` grandchildren.
