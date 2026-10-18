@@ -166,7 +166,6 @@ import { processImage } from "../../utils/image-process.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
-import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
@@ -176,7 +175,6 @@ import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
-import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
@@ -3266,11 +3264,6 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/arminsayshi") {
-				this.handleArminSaysHi();
-				this.editor.setText("");
-				return;
-			}
 			if (text === "/resume" || text === "/sessions") {
 				this.showSessionSelector();
 				this.editor.setText("");
@@ -5358,7 +5351,6 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
@@ -5575,7 +5567,6 @@ export class InteractiveMode {
 						done();
 						this.showStatus(`Model: ${model.id}`);
 						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-						this.checkDaxnutsEasterEgg(model);
 						// lunr: offer manual subscription switching for pooled providers.
 						await this.maybeShowSubscriptionPicker(model.provider);
 					} catch (error) {
@@ -6616,7 +6607,6 @@ export class InteractiveMode {
 		if (selectedModel) {
 			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedNote}`);
 			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
-			this.checkDaxnutsEasterEgg(selectedModel);
 		} else {
 			this.showStatus(`${actionLabel}. ${savedNote}`);
 			if (selectionError) {
@@ -8140,24 +8130,6 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 			new Text(`${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
 		this.ui.requestRender();
-	}
-
-	private handleArminSaysHi(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private handleDaxnuts(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private checkDaxnutsEasterEgg(model: { provider: string; id: string }): void {
-		if (model.provider === "opencode" && model.id.toLowerCase().includes("kimi-k2.5")) {
-			this.handleDaxnuts();
-		}
 	}
 
 	private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
