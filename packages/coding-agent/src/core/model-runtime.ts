@@ -31,7 +31,7 @@ import {
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
-import { getAgentDir } from "../config.ts";
+import { getAgentDir, isOfflineModeEnabled } from "../config.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { catalogCacheScope } from "./catalog-cache-scope.ts";
 import { CatalogOverlaySource, knownModelKeys, withCatalogOverlay } from "./catalog-merge.ts";
@@ -223,7 +223,7 @@ export class ModelRuntime implements Models {
 			modelsPath,
 			modelsStore,
 			providers,
-			options.allowModelNetwork ?? process.env.PI_OFFLINE === undefined,
+			options.allowModelNetwork ?? !isOfflineModeEnabled(),
 			subscriptionManager,
 			catalogDir,
 			grokHome,

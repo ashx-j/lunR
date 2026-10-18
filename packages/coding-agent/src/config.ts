@@ -165,6 +165,12 @@ export const VERSION: string = pkg.version || "0.0.0";
 export const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 export const ENV_SESSION_DIR = "PI_CODING_AGENT_SESSION_DIR";
 
+/** Offline mode is on when PI_OFFLINE is 1, true, or yes (case-insensitive); other values such as 0 leave it off. */
+export function isOfflineModeEnabled(): boolean {
+	const value = process.env.PI_OFFLINE?.toLowerCase();
+	return value === "1" || value === "true" || value === "yes";
+}
+
 export function expandTildePath(path: string): string {
 	return normalizePath(path);
 }

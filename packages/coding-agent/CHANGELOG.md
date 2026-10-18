@@ -18,6 +18,9 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned
 
 - `lunr doctor` checks Node, the config folder, saved logins, the default model, the model catalog's age, a Claude subscription's managed Claude Code, Chromium and the gateway, and prints a fix for each problem. It never prints credentials.
 - `lunr doctor keys` asks for Shift+Enter, Alt+Enter and the image-paste key and says which ones reached lunR and what the terminal sent instead.
+### Fixed
+
+- `PI_OFFLINE=0` no longer blocks `/refresh` and other live model-catalog lookups. Only `1`, `true` or `yes` turn on offline mode, as the docs say.
 
 ## [0.2.37] - 2026-10-17
 

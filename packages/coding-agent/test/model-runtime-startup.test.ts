@@ -20,9 +20,27 @@ function cachedXaiModel(id: string): Model<"openai-completions"> {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
 });
 
 describe("ModelRuntime.create startup", () => {
+	it.each([
+		[undefined, true],
+		["0", true],
+		["false", true],
+		["1", false],
+		["TRUE", false],
+		["yes", false],
+	])("allows catalog network access when PI_OFFLINE is %s: %s", async (value, allowed) => {
+		vi.stubEnv("PI_OFFLINE", value);
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory({}),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+		});
+		expect(runtime.isNetworkAllowed()).toBe(allowed);
+	});
+
 	it("does not wait on a hung remote catalog fetch", async () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
 		const started = Date.now();
