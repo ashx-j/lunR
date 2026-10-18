@@ -675,8 +675,8 @@ export async function main(args: string[], options?: MainOptions) {
 	// lunr: same for the simple-pi-memory character cap — extensions read it via the
 	// bridge at load/runtime; re-pointed to the runtime settings manager below.
 	registerMemoryCapBridge(startupSettingsManager);
-	// lunr: TUI customize settings (spinner, dividers, rail, prompt symbol) read by
-	// ashxj-spinners and ashxj-tui via the bridge; re-pointed to runtime below.
+	// lunr: TUI customize settings (footer toggles, subagent spinner, Fast mode,
+	// thinking visibility) read by built-in extensions via the bridge; re-pointed to runtime below.
 	registerCustomizeBridge(startupSettingsManager);
 
 	// Experimental first-time setup: theme choice and analytics opt-in.
