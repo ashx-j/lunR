@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Removed
+
+- Two easter eggs inherited from pi: the sponsor tribute card that appeared after picking `opencode/kimi-k2.5`, and the hidden `/arminsayshi` command. Their components are no longer exported.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed
