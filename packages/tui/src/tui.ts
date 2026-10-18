@@ -373,6 +373,9 @@ export class TUI extends Container {
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
 	private terminalColorSchemeNotificationsEnabled = false;
+	private focusReportingEnabled = false;
+	// Last focus report from the terminal; undefined until one arrives or when reporting is off.
+	private focusState: boolean | undefined;
 
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
@@ -1008,6 +1011,9 @@ export class TUI extends Container {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
 		}
+		if (this.focusReportingEnabled) {
+			this.terminal.write("\x1b[?1004h");
+		}
 		this.queryCellSize();
 		this.requestRender();
 	}
@@ -1040,6 +1046,41 @@ export class TUI extends Container {
 		}
 	}
 
+	/**
+	 * Turns terminal focus reports (DECSET 1004) on or off. While on, `isTerminalFocused`
+	 * reflects the terminal's latest focus-in/focus-out report.
+	 */
+	setFocusReporting(enabled: boolean): void {
+		if (this.focusReportingEnabled === enabled) {
+			return;
+		}
+		this.focusReportingEnabled = enabled;
+		this.focusState = undefined;
+		if (!this.stopped) {
+			this.terminal.write(enabled ? "\x1b[?1004h" : "\x1b[?1004l");
+		}
+	}
+
+	/** True or false once the terminal has reported focus; undefined when unknown. */
+	isTerminalFocused(): boolean | undefined {
+		return this.focusState;
+	}
+
+	/**
+	 * Asks the terminal for the user's attention. "bell" rings the terminal bell; "desktop"
+	 * sends an OSC 9 notification with `message`, which terminals without OSC 9 ignore.
+	 */
+	notify(kind: "bell" | "desktop", message: string): void {
+		if (this.stopped) return;
+		if (kind === "bell") {
+			this.terminal.write("\x07");
+			return;
+		}
+		// OSC text ends at BEL or ESC, so strip control characters from the message.
+		const text = message.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim();
+		this.terminal.write(`\x1b]9;${text}\x07`);
+	}
+
 	private queryCellSize(): void {
 		// Only query if terminal supports images (cell size is only used for image rendering)
 		if (!getCapabilities().images) {
@@ -1059,6 +1100,9 @@ export class TUI extends Container {
 		}
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
+		}
+		if (this.focusReportingEnabled) {
+			this.terminal.write("\x1b[?1004l");
 		}
 		this.disableMouseTracking();
 		if (this.alternateScreenActive) {
@@ -1268,6 +1312,10 @@ export class TUI extends Container {
 			return;
 		}
 		if (this.consumeTerminalColorSchemeReport(data)) {
+			return;
+		}
+		if (data === "\x1b[I" || data === "\x1b[O") {
+			if (this.focusReportingEnabled) this.focusState = data === "\x1b[I";
 			return;
 		}
 

@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Added
+
+- `/settings` Notifications rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. It stays quiet while the terminal reports that lunR's window has focus. Off by default.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed

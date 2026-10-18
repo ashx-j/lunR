@@ -20,6 +20,7 @@ import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } fro
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "../../../core/pr-watch/types.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import {
+	type AttentionNotification,
 	type DefaultPermissionMode,
 	type DefaultProjectTrust,
 	type ModelInstructionsSettings,
@@ -109,6 +110,7 @@ export interface SettingsConfig {
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
+	attentionNotification: AttentionNotification;
 	modelTiers: ModelTiersSettings;
 	modelInstructions: Required<ModelInstructionsSettings>;
 	globalInstructionsPath: string;
@@ -182,6 +184,7 @@ export interface SettingsCallbacks {
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
+	onAttentionNotificationChange: (mode: AttentionNotification) => void;
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onModelTierThinkingChange: (tier: ModelTierName, level: ThinkingLevel | undefined) => void;
@@ -1908,6 +1911,13 @@ export class SettingsSelectorComponent extends Container {
 			currentValue: config.showTerminalProgress ? "true" : "false",
 			values: ["true", "false"],
 		});
+		items.splice(clearOnShrinkIndex + 2, 0, {
+			id: "attention-notification",
+			label: "Notifications",
+			description: "Bell or desktop notice when a run ends or needs you while the terminal is unfocused",
+			currentValue: config.attentionNotification,
+			values: ["off", "bell", "desktop"],
+		});
 
 		// Add borders
 		this.addChild(new DynamicBorder());
@@ -2051,6 +2061,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "terminal-progress":
 						callbacks.onShowTerminalProgressChange(newValue === "true");
+						break;
+					case "attention-notification":
+						callbacks.onAttentionNotificationChange(newValue as AttentionNotification);
 						break;
 					case "auto-manage-subscriptions":
 						callbacks.onAutoManageSubscriptionsChange(newValue === "on");

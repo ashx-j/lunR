@@ -621,6 +621,7 @@ export class InteractiveMode {
 		this.version = VERSION;
 		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
 		registerPermissionModeBridge(() => this.session.permissionMode);
@@ -894,6 +895,7 @@ export class InteractiveMode {
 
 		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
+			this.notifyAttention("input");
 			if (req.kind === "large-subagent-launch") {
 				return this.showLargeSubagentLaunchApprovalDialog(req);
 			}
@@ -1909,6 +1911,7 @@ export class InteractiveMode {
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
 		this.ui.setClearOnShrink(clearOnShrink);
+		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 		if (!clearOnShrink && !this.activeStatusIndicator) {
 			this.statusContainer.clear();
 		}
@@ -2361,9 +2364,18 @@ export class InteractiveMode {
 
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
-			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
-			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
+			select: (title, options, opts) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionSelector(title, options, opts);
+			},
+			confirm: (title, message, opts) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionConfirm(title, message, opts);
+			},
+			input: (title, placeholder, opts) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionInput(title, placeholder, opts);
+			},
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -2384,7 +2396,10 @@ export class InteractiveMode {
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
-			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			editor: (title, prefill) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionEditor(title, prefill);
+			},
 			addAutocompleteProvider: (factory) => {
 				this.autocompleteProviderWrappers.push(factory);
 				this.setupAutocompleteProvider();
@@ -3715,6 +3730,7 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				this.notifyAttention("finished");
 				if (this.pendingCompactionRender) {
 					const result = this.pendingCompactionRender;
 					this.pendingCompactionRender = undefined;
@@ -4914,6 +4930,7 @@ export class InteractiveMode {
 					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
+					attentionNotification: this.settingsManager.getAttentionNotification(),
 					modelTiers: this.settingsManager.getModelTiers(),
 					modelInstructions: this.settingsManager.getModelInstructions(),
 					globalInstructionsPath: getGlobalInstructionsPath(getAgentDir()),
@@ -5117,6 +5134,10 @@ export class InteractiveMode {
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
 						if (!enabled) this.ui.terminal.setProgress(false);
+					},
+					onAttentionNotificationChange: (mode) => {
+						this.settingsManager.setAttentionNotification(mode);
+						this.ui.setFocusReporting(mode !== "off");
 					},
 					onModelTiersEnabledChange: (enabled) => {
 						this.settingsManager.setModelTiersEnabled(enabled);
@@ -7073,6 +7094,7 @@ export class InteractiveMode {
 			this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 			const clearOnShrink = this.settingsManager.getClearOnShrink();
 			this.ui.setClearOnShrink(clearOnShrink);
+			this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 			if (!clearOnShrink && !this.activeStatusIndicator) {
 				this.statusContainer.clear();
 			}
@@ -7701,6 +7723,21 @@ export class InteractiveMode {
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
 		}
+	}
+
+	/**
+	 * Rings the bell or sends a desktop notice, per the Notifications setting, when a run
+	 * finishes or waits for the user. Skipped while the terminal reports it has focus.
+	 */
+	private notifyAttention(reason: "finished" | "input"): void {
+		const mode = this.settingsManager.getAttentionNotification();
+		if (mode === "off" || this.ui.isTerminalFocused() === true) return;
+		this.ui.notify(mode, reason === "finished" ? "lunR finished" : "lunR needs your input");
+	}
+
+	/** Extension questions only count as waiting for the user while a run is in progress. */
+	private notifyAttentionIfRunning(): void {
+		if (this.session.isStreaming) this.notifyAttention("input");
 	}
 
 	// Approval dialog for one subagent call launching more than two children.
