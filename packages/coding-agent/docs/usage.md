@@ -60,7 +60,6 @@ Built-in commands (from `slash-commands.ts`):
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/export` | Export session (HTML default, or `.html`/`.jsonl` path) |
 | `/import` | Import and resume a session from a JSONL file |
-| `/share` | Share session as a secret GitHub gist. HTML viewer still defaults to https://pi.dev/session/ (leftover, not lunR-hosted). Override with `PI_SHARE_VIEWER_URL`. |
 | `/copy` | Copy last agent message to clipboard |
 | `/paste-image` | Paste an image from the clipboard |
 | `/name`, `/title` | Set session display name |
@@ -166,11 +165,9 @@ If no extension or saved decision applies, `defaultProjectTrust` controls the fa
 
 Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.lunr/agent/trust.json` only; the current session is not reloaded, so restart lunR for changes to take effect.
 
-## Exporting and Sharing Sessions
+## Exporting Sessions
 
 Use `/export [file]` to write a session to HTML.
-
-Use `/share` to upload a private GitHub gist. The HTML viewer URL still defaults to https://pi.dev/session/ — that is an intentional leftover, not a lunR-hosted viewer. Set `PI_SHARE_VIEWER_URL` to point elsewhere.
 
 ## CLI Reference
 
@@ -341,7 +338,6 @@ These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
 | `PI_CODING_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
 | `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
 | `PI_OFFLINE` | Disable startup network operations, including the npm update check and package update checks |
-| `PI_SHARE_VIEWER_URL` | Base URL for `/share` HTML viewer (default: `https://pi.dev/session/`) |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
 

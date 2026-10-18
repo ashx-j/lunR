@@ -2,6 +2,12 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Removed
+
+- `/share` and `PI_SHARE_VIEWER_URL`. `/share` uploaded the session to a GitHub gist and linked to pi's hosted viewer at pi.dev, which lunR does not run. Use `/export` to write the session to an HTML file instead.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed
