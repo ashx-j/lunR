@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.38] - 2026-10-18
+
+- `TUI.setFocusReporting()` turns terminal focus reports on or off, `TUI.isTerminalFocused()` returns the last report, and `TUI.notify()` rings the bell or sends an OSC 9 notice. Focus reports are always consumed instead of reaching the focused component.
+
 ## [0.2.37] - 2026-10-17
 
 - Align the package version with the lunR 0.2.37 release.

@@ -22,19 +22,19 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **v0.2.37 (2026-10-17):** latest npm release. Claude subscription routes and context windows come from Claude Code's own discovery, so Opus 5 stays on the plan; existing Claude connections need `/login anthropic` once. Earlier releases and per-PR history: git log.
-- **Unreleased on master (2026-10-18):** PRs #195 to #207. Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
+- **v0.2.38 (prepared 2026-10-18):** integration PR #208 merges PRs #195 to #207. Earlier releases and per-PR history: git log.
+- **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
      /\_/\
     ( ˃ᴗ˂ )
   ```
 
-Last updated: 2026-10-18 (trimmed shipped history). Public npm is `@ashx-j/lunr@0.2.37`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-18 (trimmed shipped history). Public npm is `@ashx-j/lunr@0.2.37` until v0.2.38 publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.37**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.37**; v0.2.38 prepared.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 - A release publishes seven packages: the four public packages plus three native CuaDriver payloads. `npm run publish:dry` packs all seven; `scripts/publish.mjs` accepts both npm 10 array and npm 12 keyed `npm pack --json` output.

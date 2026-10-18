@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.38] - 2026-10-18
+
+- Align the package version with the lunR 0.2.38 release.
+
 ## [0.2.37] - 2026-10-17
 
 ### Fixed
