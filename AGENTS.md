@@ -22,7 +22,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **v0.2.38 (prepared 2026-10-18):** integration PR #208 merges PRs #195 to #207. Earlier releases and per-PR history: git log.
+- **v0.2.38 (2026-10-18):** latest npm release. Integration PR #208 merged PRs #195 to #207 and release PR #209 merged as `4cc8c4e`; tag `v0.2.38` published all four public packages and three native payloads, and the binary workflow succeeded. All seven tarballs match registry integrity, and a fresh isolated install reports 0.2.38 for the CLI and its three dependencies and passes the first-paint/first-turn check. Earlier releases and per-PR history: git log.
 - **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
@@ -30,11 +30,11 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
     ( ˃ᴗ˂ )
   ```
 
-Last updated: 2026-10-18 (trimmed shipped history). Public npm is `@ashx-j/lunr@0.2.37` until v0.2.38 publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-18 (trimmed shipped history). Public npm is `@ashx-j/lunr@0.2.38`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.37**; v0.2.38 prepared.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.38**.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 - A release publishes seven packages: the four public packages plus three native CuaDriver payloads. `npm run publish:dry` packs all seven; `scripts/publish.mjs` accepts both npm 10 array and npm 12 keyed `npm pack --json` output.
@@ -71,6 +71,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Notes
 
+- `cron-ownership.test.ts` ("an initially empty owner sees later external jobs...") can fail on CI runners because two schedulers race for one lease; it failed once on #208 and passed on rerun and in the full local run. Rerun before suspecting a change.
 - Auto review runs in `AgentSession` after `gateToolCall`, not in `permissions.ts`, because it needs the model runtime, messages and session usage. Keep `needsAutoReview` derived from `readOnlyModeBlock` so new tools default to reviewed. It also reviews `web_fetch`/`fetch_content`, browser `navigate`/`tabs`, env-prefixed bash and hidden or outside paths (resolved with `resolveToCwd` + `canonicalizeTargetPath`).
 - The reviewer never sees tool results. It clips long actions head-and-tail with a marker and lists `path`/`command`/`url` first. AGENTS.md and extension-sent user messages (tracked in a WeakSet by identity, lost after reload) are labelled as context that can't authorize anything. An aborted review returns early and never counts toward the ask-the-user limit. `autoReviewModel` is read from global settings only.
 - ACP workers call `setAutoReviewEnabled(false)` and tie autonomy to ACP's `auto` (Autonomous), because the ACP client approves every tool itself. `-p` and gateway cron sessions in auto also set autonomy, preserving what a saved auto default meant before.
