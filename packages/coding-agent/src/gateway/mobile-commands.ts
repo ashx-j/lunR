@@ -4,6 +4,7 @@ import type { ExtensionUIDialogOptions } from "../core/extensions/types.ts";
 import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from "../core/permissions.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
+import type { BridgeSession } from "./agent-bridge.ts";
 import { isAuthorized, requireAuthorized } from "./authz.ts";
 import {
 	createPicker,
@@ -276,8 +277,13 @@ async function performContinue(ctx: MobileContext, file: string, signal: AbortSi
 				["Keep read-only", `Use ${requested}`],
 			)) === `Use ${requested}`
 		) {
-			setPermissionMode(requested, id);
-			session?.sessionManager?.setPermissionMode?.(requested);
+			const problem = requested === "auto" ? autoReviewerProblem(session) : undefined;
+			if (problem) {
+				await ctx.adapter.send(ctx.event.source.chatId, `${problem} Staying in read-only.`);
+			} else {
+				setPermissionMode(requested, id);
+				session?.sessionManager?.setPermissionMode?.(requested);
+			}
 		}
 	}
 	await ctx.adapter.send(
@@ -515,6 +521,11 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	const mode = requested === "read" ? "read-only" : requested;
 	if (!PERMISSION_MODES.includes(mode as (typeof PERMISSION_MODES)[number]))
 		throw new Error("Choose yolo, auto, or read-only.");
+	const problem = mode === "auto" ? autoReviewerProblem(session) : undefined;
+	if (problem) {
+		await ctx.adapter.send(ctx.event.source.chatId, problem);
+		return true;
+	}
 	setPermissionMode(mode as (typeof PERMISSION_MODES)[number], id);
 	session.sessionManager?.setPermissionMode?.(mode as (typeof PERMISSION_MODES)[number]);
 	await ctx.adapter.send(ctx.event.source.chatId, `Permission mode: ${mode}`);
@@ -523,4 +534,13 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 		return false;
 	}
 	return true;
+}
+
+/** Auto mode needs a review model. A phone can't open the model list, so point to /settings on the computer. */
+function autoReviewerProblem(session: BridgeSession | null | undefined): string | undefined {
+	const reviewer = session?.resolveAutoReviewer?.();
+	if (!reviewer || reviewer.kind === "ready") return undefined;
+	return reviewer.kind === "missing"
+		? `Auto mode needs a review model, and ${reviewer.provider}'s own coding agent doesn't offer one. Pick one on your computer in /settings, Auto review model.`
+		: `Auto mode's review model ${reviewer.ref} isn't available. Pick another on your computer in /settings, Auto review model.`;
 }

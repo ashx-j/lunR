@@ -41,6 +41,21 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getReasoningDisplay()).toBe("auto");
 	});
 
+	it("reads the removed shadow-git rollback capture as copies", () => {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ rollbackCapture: "shadow-git" }));
+		expect(SettingsManager.create(projectDir, agentDir).getRollbackCapture()).toBe("copies");
+	});
+
+	it("defaults notifications off and reads unknown values as off", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getAttentionNotification()).toBe("off");
+		manager.setAttentionNotification("desktop");
+		await manager.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getAttentionNotification()).toBe("desktop");
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ terminal: { attentionNotification: "loud" } }));
+		expect(SettingsManager.create(projectDir, agentDir).getAttentionNotification()).toBe("off");
+	});
+
 	it("defaults todos on and persists the toggle", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
 		expect(manager.getTodosEnabled()).toBe(true);

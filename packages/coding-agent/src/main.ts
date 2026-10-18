@@ -15,8 +15,16 @@ import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
-import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { APP_NAME, appendDebugLog, ENV_SESSION_DIR, expandTildePath, getAgentDir, VERSION } from "./config.ts";
+import { showStartupSelector } from "./cli/startup-ui.ts";
+import {
+	APP_NAME,
+	appendDebugLog,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	isOfflineModeEnabled,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -559,7 +567,7 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 	resetTimings();
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+	const offlineMode = args.includes("--offline") || isOfflineModeEnabled();
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
 	}
@@ -575,6 +583,11 @@ export async function main(args: string[], options?: MainOptions) {
 	if (["setup", "features", "uninstall", "browser"].includes(args[0])) {
 		const { handleInstallCli } = await import("./cli/install-cli.ts");
 		if (await handleInstallCli(args)) return;
+	}
+
+	if (args[0] === "doctor") {
+		const { handleDoctorCli } = await import("./cli/doctor-cli.ts");
+		if (await handleDoctorCli(args)) return;
 	}
 
 	if (args[0] === "update") {
@@ -662,18 +675,9 @@ export async function main(args: string[], options?: MainOptions) {
 	// lunr: same for the simple-pi-memory character cap — extensions read it via the
 	// bridge at load/runtime; re-pointed to the runtime settings manager below.
 	registerMemoryCapBridge(startupSettingsManager);
-	// lunr: TUI customize settings (spinner, dividers, rail, prompt symbol) read by
-	// ashxj-spinners and ashxj-tui via the bridge; re-pointed to runtime below.
+	// lunr: TUI customize settings (footer toggles, subagent spinner, Fast mode,
+	// thinking visibility) read by built-in extensions via the bridge; re-pointed to runtime below.
 	registerCustomizeBridge(startupSettingsManager);
-
-	// Experimental first-time setup: theme choice and analytics opt-in.
-	// Runs before any runtime services are created so the chosen settings apply everywhere.
-	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
-		startupView?.pause();
-		await showFirstTimeSetup(startupSettingsManager);
-		startupView?.resume();
-		time("firstTimeSetup");
-	}
 
 	// Decide the final runtime cwd before creating cwd-bound runtime services.
 	// --session and --resume may select a session from another project, so project-local

@@ -1,6 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Transport } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -46,7 +45,11 @@ export interface TerminalSettings {
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
 	clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
+	attentionNotification?: AttentionNotification; // default: "off"
 }
+
+/** How lunR asks for attention when a run finishes or waits for the user while the terminal is unfocused. */
+export type AttentionNotification = "off" | "bell" | "desktop";
 
 export interface ImageSettings {
 	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
@@ -91,7 +94,7 @@ export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "$";
 export function parseSkillTagCharacter(value: unknown): SkillTagCharacter {
 	return value === "+" || value === "~" || value === "$" ? value : DEFAULT_SKILL_TAG_CHARACTER;
 }
-export type RollbackCapture = "copies" | "shadow-git" | "hybrid";
+export type RollbackCapture = "copies" | "hybrid";
 export type RollbackScope = "tools" | "tree";
 
 export type TransportSetting = Transport;
@@ -166,8 +169,6 @@ export interface Settings {
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
-	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
-	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
@@ -211,6 +212,7 @@ export interface Settings {
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
+	autoReviewModel?: string; // "provider/model" that reviews auto-mode actions; unset = the provider's own reviewer
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
@@ -1303,6 +1305,21 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/**
+	 * The user's chosen auto-mode review model, or undefined to use the provider's own reviewer.
+	 * Global only, so a repository's .lunr/settings.json can't pick its own reviewer.
+	 */
+	getAutoReviewModel(): string | undefined {
+		const value = this.globalSettings.autoReviewModel;
+		return typeof value === "string" && value.includes("/") ? value : undefined;
+	}
+
+	setAutoReviewModel(ref: string | undefined): void {
+		this.globalSettings.autoReviewModel = ref;
+		this.markModified("autoReviewModel");
+		this.save();
+	}
+
 	// lunr: default permission mode (startup default; per-session mode is in-memory)
 	getDefaultPermissionMode(): DefaultPermissionMode {
 		const value: unknown = this.settings.defaultPermissionMode;
@@ -1343,7 +1360,8 @@ export class SettingsManager {
 
 	getRollbackCapture(): RollbackCapture {
 		const value = this.settings.rollbackCapture;
-		return value === "copies" || value === "shadow-git" || value === "hybrid" ? value : "copies";
+		// Unknown values, including the removed "shadow-git" placeholder, read as copies.
+		return value === "copies" || value === "hybrid" ? value : "copies";
 	}
 
 	setRollbackCapture(mode: RollbackCapture): void {
@@ -1391,25 +1409,6 @@ export class SettingsManager {
 	setNpmCommand(command: string[] | undefined): void {
 		this.globalSettings.npmCommand = command ? [...command] : undefined;
 		this.markModified("npmCommand");
-		this.save();
-	}
-
-	getEnableAnalytics(): boolean {
-		return this.settings.enableAnalytics ?? false;
-	}
-
-	getTrackingId(): string | undefined {
-		return this.settings.trackingId;
-	}
-
-	/** Set the analytics opt-in preference; generates a tracking identifier on first opt-in */
-	setEnableAnalytics(enabled: boolean): void {
-		this.globalSettings.enableAnalytics = enabled;
-		this.markModified("enableAnalytics");
-		if (enabled && !this.globalSettings.trackingId) {
-			this.globalSettings.trackingId = randomUUID();
-			this.markModified("trackingId");
-		}
 		this.save();
 	}
 
@@ -1574,6 +1573,20 @@ export class SettingsManager {
 		}
 		this.globalSettings.terminal.showTerminalProgress = enabled;
 		this.markModified("terminal", "showTerminalProgress");
+		this.save();
+	}
+
+	getAttentionNotification(): AttentionNotification {
+		const value = this.settings.terminal?.attentionNotification;
+		return value === "bell" || value === "desktop" ? value : "off";
+	}
+
+	setAttentionNotification(mode: AttentionNotification): void {
+		if (!this.globalSettings.terminal) {
+			this.globalSettings.terminal = {};
+		}
+		this.globalSettings.terminal.attentionNotification = mode;
+		this.markModified("terminal", "attentionNotification");
 		this.save();
 	}
 

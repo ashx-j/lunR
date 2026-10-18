@@ -177,11 +177,11 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
-| `/mode` | Set permission mode: `yolo`, `auto`, or `read` (Shift+Tab cycles) |
+| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read` (Shift+Tab cycles) |
 | `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
 | `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
-| `/goal` | Session goal (forces session auto permission mode) |
+| `/goal` | Session goal (works without asking questions, in your current mode) |
 | `/processes` | Background processes started this session |
 | `/usage` | This-session token totals, context, and every stored subscription plan |
 | `/fast` | Toggle Fast mode for OpenAI Codex subscriptions |
@@ -201,7 +201,6 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/paste-image` | Paste an image from the clipboard |
 | `/export [file]` | Export session to HTML or JSONL |
 | `/import <file>` | Import and resume a JSONL session |
-| `/share` | Upload as a private GitHub gist (HTML viewer still defaults to https://pi.dev/session/ — leftover, not lunR-hosted) |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/init` | Generate a starter AGENTS.md |
@@ -517,6 +516,8 @@ lunr [options] [@files...] [messages...]
 lunr setup                         # Install Chromium and configure optional features
 lunr browser install               # Repair missing Chromium after a skipped/failed install
 lunr features [list|enable|disable]
+lunr doctor                        # Check logins, default model, catalog, browser, Claude Code and gateway
+lunr doctor keys                   # Test whether Shift+Enter, Alt+Enter and image paste reach lunR
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Remove this lunR install (keeps ~/.lunr/agent unless --purge)
 lunr uninstall <source> [-l]       # Remove an extension package (alias for remove)
@@ -673,7 +674,6 @@ These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
 | `PI_CODING_AGENT_SESSION_DIR` | Override session storage directory (overridden by `--session-dir`) |
 | `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `PI_OFFLINE` | Disable startup network operations when set to `1`/`true`/`yes` |
-| `PI_SHARE_VIEWER_URL` | Base URL for `/share` HTML viewer (default: `https://pi.dev/session/` — leftover) |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
 

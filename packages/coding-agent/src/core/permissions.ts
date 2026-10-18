@@ -4,12 +4,15 @@
  * Per-session only, with a configurable default for new sessions.
  *
  * - yolo: auto-approve tools; the agent may still ask questions.
- * - auto: fully autonomous; a system-prompt addendum steers the model to
- *         self-decide, and rollback is force-enabled for the session.
+ * - auto: like yolo, but AgentSession sends risky calls to a review model
+ *         first (see auto-review.ts), and rollback is force-enabled for the session.
  * - read-only: mutating tools are hard-blocked.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
  * the awaited `_toolCallGates` loop, which can also request host approval.
+ *
+ * "Autonomous" (no questions, AUTONOMOUS_ADDENDUM) is a separate per-session
+ * flag for /goal, subagents and ACP Autonomous, not a mode.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
  * concurrent gateway chats do not share permission decisions.
@@ -54,13 +57,14 @@ export function restorePermissionModeAfterPlan(
 
 export interface ApprovalRequest {
 	toolName: string;
-	/** "large-subagent-launch" or "plan" approval. */
+	/** "large-subagent-launch", "plan" or "auto-review" approval. */
 	action: string;
 	detail: string;
 	/** "large-subagent-launch" for aggregate child confirmation, "plan" for the
 	 *  present_plan plan-approval prompt — the UI renders a dedicated dialog
-	 *  for each instead of the generic tool dialog. */
-	kind?: "large-subagent-launch" | "plan";
+	 *  for each instead of the generic tool dialog. "auto-review" asks the user to
+	 *  decide an action after auto mode's review model kept blocking. */
+	kind?: "large-subagent-launch" | "plan" | "auto-review";
 }
 
 export type ApprovalDecision = "once" | "session" | "reject";
@@ -114,6 +118,8 @@ const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 interface PermissionContext {
 	allowApprovals?: boolean;
 	mode: PermissionMode;
+	/** Set for /goal, subagents and ACP Autonomous: work without asking the user. */
+	autonomous?: boolean;
 	approvals: Set<string>;
 }
 
@@ -158,6 +164,11 @@ export function setPermissionMode(mode: PermissionMode, sessionId?: string): voi
 	getContext(sessionId).mode = mode;
 }
 
+/** Marks a session as working without asking the user, which also skips the large-launch confirmation. */
+export function setPermissionAutonomous(autonomous: boolean, sessionId?: string): void {
+	getContext(sessionId).autonomous = autonomous;
+}
+
 export function resetPermissions(defaultMode: PermissionMode = "yolo", sessionId?: string): void {
 	if (sessionId) {
 		contexts.set(sessionId, { mode: defaultMode, approvals: new Set() });
@@ -194,6 +205,26 @@ export function planApprovalResultText(resp: ApprovalResponse): string {
  * show the dialog to, so the plan is presented and the user replies in chat
  * instead of deadlocking the turn. Everything else keeps fail-closed.
  */
+/**
+ * Asks the user to decide an action auto mode's reviewer kept blocking or couldn't review.
+ * Returns undefined when no approval channel exists, so the caller keeps the block.
+ */
+export async function requestAutoReviewDecision(
+	request: { toolName: string; detail: string },
+	sessionId?: string,
+): Promise<"allow" | "reject" | undefined> {
+	const ctx = getContext(sessionId);
+	if (!approvalHandler || ctx.allowApprovals === false) return undefined;
+	const response = await approvalHandler({
+		toolName: request.toolName,
+		action: "auto-review",
+		detail: request.detail,
+		kind: "auto-review",
+	});
+	const decision = typeof response === "string" ? response : response.decision;
+	return decision === "reject" ? "reject" : "allow";
+}
+
 export async function requestPlanApproval(summary: string): Promise<string> {
 	if (!approvalHandler) return PLAN_PASS_THROUGH_TEXT;
 	let resp: ApprovalResponse;
@@ -219,7 +250,7 @@ export function resetAllPermissionContexts(): void {
 }
 
 /** Appended to the system prompt while auto mode is active. */
-export const AUTO_MODE_ADDENDUM =
+export const AUTONOMOUS_ADDENDUM =
 	"You are running fully autonomously. Do not ask the user questions or wait for confirmation; make reasonable decisions and complete the task end-to-end.";
 
 function protectedFileWriteReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
@@ -305,14 +336,15 @@ function largeLaunchTaskSummary(
 /**
  * when confirmation is enabled, launches above the large-launch threshold
  * require approval in yolo, including aggregate same-turn single calls.
- * auto bypasses confirmation. enabled confirmation fails closed without a handler.
+ * auto (where the reviewer checks launches) and autonomous sessions bypass
+ * confirmation. enabled confirmation fails closed without a handler.
  */
 async function gateLargeSubagentLaunch(
 	input: Record<string, unknown>,
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
-	if (ctx.mode === "auto") return undefined;
+	if (ctx.mode === "auto" || ctx.autonomous) return undefined;
 	if (options?.confirmLargeSubagentLaunches === false) return undefined;
 	const count = effectiveLargeSubagentLaunchCountForTurn(input, options?.assistantMessage);
 	if (count <= LARGE_SUBAGENT_LAUNCH_THRESHOLD) return undefined;

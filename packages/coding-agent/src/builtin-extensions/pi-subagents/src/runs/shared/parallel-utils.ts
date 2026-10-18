@@ -1,10 +1,11 @@
-// @ts-nocheck
 export interface RunnerSubagentStep {
 	completionTask?: string;
 	/** Session id of the direct parent session for permission-system ask forwarding. */
 	parentSessionId?: string;
 	/** Live parent permission mode snapshotted at spawn. */
 	parentPermissionMode?: string;
+	/** Parent auto-review snapshot (see core/auto-review.ts) taken with the permission mode. */
+	parentAutoReview?: string;
 	agent?: string;
 	childId?: string;
 	description?: string;

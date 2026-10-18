@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Type definitions for the subagent extension
  */
@@ -385,7 +384,6 @@ export interface SteeringRecoveryDescriptor {
 	initialToolBudget?: ResolvedToolBudget;
 	maxSubagentDepth: number;
 	maxOutput?: MaxOutputConfig;
-	share: boolean;
 	sessionDir?: string;
 	artifactsDir?: string;
 	artifactConfig?: ArtifactConfig;
@@ -1192,7 +1190,6 @@ export interface RunSyncOptions {
 	index?: number;
 	sessionDir?: string;
 	sessionFile?: string;
-	share?: boolean;
 	outputPath?: string;
 	outputMode?: OutputMode;
 	maxSubagentDepth?: number;

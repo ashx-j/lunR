@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { computeWatchdogRepoChangeSignature, eventIndicatesRepoEdit, type WatchdogRepoChangeSignature } from "./change-signature.ts";

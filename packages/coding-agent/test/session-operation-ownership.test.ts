@@ -565,7 +565,9 @@ describe("session operation ownership", () => {
 		expect(read.session.permissionMode).toBe("read-only");
 		vi.stubEnv("PI_SUBAGENT_CHILD_PERMISSION", "full");
 		const full = await harness({ settings: { defaultPermissionMode: "read-only" } });
-		expect(full.session.permissionMode).toBe("auto");
+		expect(full.session.permissionMode).toBe("yolo");
+		// A parent in auto passes its reviewer, so the full child runs in auto too.
+		vi.stubEnv("PI_SUBAGENT_CHILD_AUTO_REVIEW", "anthropic/claude-sonnet-5");
 		const manager = SessionManager.inMemory(full.tempDir);
 		manager.setPermissionMode("read-only");
 		const { session } = await createAgentSession({

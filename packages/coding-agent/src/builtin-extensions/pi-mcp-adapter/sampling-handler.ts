@@ -158,7 +158,7 @@ async function resolveSamplingModel(
   if (errors.length > 0) {
     throw new Error(`No configured auth for MCP sampling model. ${errors.join("; ")}`);
   }
-  throw new Error("No Pi model is available for MCP sampling");
+  throw new Error("No lunR model is available for MCP sampling");
 }
 
 function addSamplingCandidate(candidates: Model<Api>[], model: Model<Api>): void {

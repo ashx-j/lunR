@@ -47,7 +47,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import {
 	APP_NAME,
 	APP_TITLE,
@@ -57,13 +57,13 @@ import {
 	getAuthPath,
 	getDebugLogPath,
 	getDocsPath,
-	getShareViewerUrl,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import { formatClaudeSubscriptionLogoutNote } from "../../core/auth-guidance.ts";
+import type { AutoReviewer } from "../../core/auto-review.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -166,18 +166,15 @@ import { processImage } from "../../utils/image-process.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
-import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
-import { BorderedLoader } from "./components/bordered-loader.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
-import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
@@ -621,6 +618,7 @@ export class InteractiveMode {
 		this.version = VERSION;
 		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
 		registerPermissionModeBridge(() => this.session.permissionMode);
@@ -894,6 +892,7 @@ export class InteractiveMode {
 
 		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
+			this.notifyAttention("input");
 			if (req.kind === "large-subagent-launch") {
 				return this.showLargeSubagentLaunchApprovalDialog(req);
 			}
@@ -903,10 +902,12 @@ export class InteractiveMode {
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
 					const target = this.restoreTargetAfterPlan();
-					this.applyPermissionMode(target === "read-only" ? "yolo" : target);
+					// The plan is approved either way; cancelling the reviewer picker must not leave it blocked in read.
+					this.applyPermissionMode(target === "read-only" ? "yolo" : target, { cancelMode: "yolo" });
 				}
 				return resp;
 			}
+			if (req.kind === "auto-review") return this.showAutoReviewDecisionDialog(req);
 			return "reject";
 		});
 
@@ -914,6 +915,7 @@ export class InteractiveMode {
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
 		this.syncPermissionModeEffects(this.session.permissionMode);
+		this.warnIfAutoHasNoReviewer();
 
 		await this.themeController.applyFromSettings();
 
@@ -1909,6 +1911,7 @@ export class InteractiveMode {
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
 		this.ui.setClearOnShrink(clearOnShrink);
+		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 		if (!clearOnShrink && !this.activeStatusIndicator) {
 			this.statusContainer.clear();
 		}
@@ -2361,9 +2364,18 @@ export class InteractiveMode {
 
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
-			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
-			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
+			select: (title, options, opts) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionSelector(title, options, opts);
+			},
+			confirm: (title, message, opts) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionConfirm(title, message, opts);
+			},
+			input: (title, placeholder, opts) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionInput(title, placeholder, opts);
+			},
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -2384,7 +2396,10 @@ export class InteractiveMode {
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
-			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			editor: (title, prefill) => {
+				this.notifyAttentionIfRunning();
+				return this.showExtensionEditor(title, prefill);
+			},
 			addAutocompleteProvider: (factory) => {
 				this.autocompleteProviderWrappers.push(factory);
 				this.setupAutocompleteProvider();
@@ -3115,11 +3130,6 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/share") {
-				await this.handleShareCommand();
-				this.editor.setText("");
-				return;
-			}
 			if (text === "/copy") {
 				await this.handleCopyCommand();
 				this.editor.setText("");
@@ -3251,11 +3261,6 @@ export class InteractiveMode {
 			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/arminsayshi") {
-				this.handleArminSaysHi();
 				this.editor.setText("");
 				return;
 			}
@@ -3715,6 +3720,7 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				this.notifyAttention("finished");
 				if (this.pendingCompactionRender) {
 					const result = this.pendingCompactionRender;
 					this.pendingCompactionRender = undefined;
@@ -4468,7 +4474,10 @@ export class InteractiveMode {
 	}
 
 	private cyclePermissionMode(): void {
-		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), { silent: true });
+		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), {
+			silent: true,
+			cancelMode: nextPermissionMode("auto"),
+		});
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -4914,6 +4923,7 @@ export class InteractiveMode {
 					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
+					attentionNotification: this.settingsManager.getAttentionNotification(),
 					modelTiers: this.settingsManager.getModelTiers(),
 					modelInstructions: this.settingsManager.getModelInstructions(),
 					globalInstructionsPath: getGlobalInstructionsPath(getAgentDir()),
@@ -4946,6 +4956,7 @@ export class InteractiveMode {
 					footerPlanBar: this.settingsManager.getFooterPlanBar(),
 					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
 					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
+					autoReviewModel: this.settingsManager.getAutoReviewModel(),
 					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
 					rollbackTurns: this.settingsManager.getRollbackTurns(),
 					rollbackCapture: this.settingsManager.getRollbackCapture(),
@@ -5118,6 +5129,10 @@ export class InteractiveMode {
 						this.settingsManager.setShowTerminalProgress(enabled);
 						if (!enabled) this.ui.terminal.setProgress(false);
 					},
+					onAttentionNotificationChange: (mode) => {
+						this.settingsManager.setAttentionNotification(mode);
+						this.ui.setFocusReporting(mode !== "off");
+					},
 					onModelTiersEnabledChange: (enabled) => {
 						this.settingsManager.setModelTiersEnabled(enabled);
 						getModelTiersBridge()?.refreshToolDescription();
@@ -5255,6 +5270,13 @@ export class InteractiveMode {
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);
 					},
+					onAutoReviewModelChange: (ref) => {
+						this.settingsManager.setAutoReviewModel(ref);
+					},
+					onChooseAutoReviewModel: () => {
+						done();
+						this.showAutoReviewModelPicker();
+					},
 					onRollbackEnabledChange: (enabled) => {
 						this.settingsManager.setRollbackEnabled(enabled);
 					},
@@ -5329,7 +5351,6 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
@@ -5546,7 +5567,6 @@ export class InteractiveMode {
 						done();
 						this.showStatus(`Model: ${model.id}`);
 						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-						this.checkDaxnutsEasterEgg(model);
 						// lunr: offer manual subscription switching for pooled providers.
 						await this.maybeShowSubscriptionPicker(model.provider);
 					} catch (error) {
@@ -6587,7 +6607,6 @@ export class InteractiveMode {
 		if (selectedModel) {
 			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedNote}`);
 			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
-			this.checkDaxnutsEasterEgg(selectedModel);
 		} else {
 			this.showStatus(`${actionLabel}. ${savedNote}`);
 			if (selectionError) {
@@ -7073,6 +7092,7 @@ export class InteractiveMode {
 			this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 			const clearOnShrink = this.settingsManager.getClearOnShrink();
 			this.ui.setClearOnShrink(clearOnShrink);
+			this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 			if (!clearOnShrink && !this.activeStatusIndicator) {
 				this.statusContainer.clear();
 			}
@@ -7189,100 +7209,6 @@ export class InteractiveMode {
 				return;
 			}
 			await this.handleFatalRuntimeError("Failed to import session", error);
-		}
-	}
-
-	private async handleShareCommand(): Promise<void> {
-		// Check if gh is available and logged in
-		try {
-			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-			if (authResult.status !== 0) {
-				this.showError("GitHub CLI is not logged in. Run 'gh auth login' first.");
-				return;
-			}
-		} catch {
-			this.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
-			return;
-		}
-
-		// Export to a temp file
-		const tmpFile = path.join(os.tmpdir(), "session.html");
-		try {
-			await this.session.exportToHtml(tmpFile);
-		} catch (error: unknown) {
-			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-			return;
-		}
-
-		// Show cancellable loader, replacing the editor
-		const loader = new BorderedLoader(this.ui, theme, "Creating gist...");
-		this.editorContainer.clear();
-		this.editorContainer.addChild(loader);
-		this.ui.setFocus(loader);
-		this.ui.requestRender();
-
-		const restoreEditor = () => {
-			loader.dispose();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			try {
-				fs.unlinkSync(tmpFile);
-			} catch {
-				// Ignore cleanup errors
-			}
-		};
-
-		// Create a secret gist asynchronously
-		let proc: ReturnType<typeof spawn> | null = null;
-
-		loader.onAbort = () => {
-			proc?.kill();
-			restoreEditor();
-			this.showStatus("Share cancelled");
-		};
-
-		try {
-			const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
-				proc = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
-				let stdout = "";
-				let stderr = "";
-				proc.stdout?.on("data", (data) => {
-					stdout += data.toString();
-				});
-				proc.stderr?.on("data", (data) => {
-					stderr += data.toString();
-				});
-				proc.on("close", (code) => resolve({ stdout, stderr, code }));
-			});
-
-			if (loader.signal.aborted) return;
-
-			restoreEditor();
-
-			if (result.code !== 0) {
-				const errorMsg = result.stderr?.trim() || "Unknown error";
-				this.showError(`Failed to create gist: ${errorMsg}`);
-				return;
-			}
-
-			// Extract gist ID from the URL returned by gh
-			// gh returns something like: https://gist.github.com/username/GIST_ID
-			const gistUrl = result.stdout?.trim();
-			const gistId = gistUrl?.split("/").pop();
-			if (!gistId) {
-				this.showError("Failed to parse gist ID from gh output");
-				return;
-			}
-
-			// Create the preview URL
-			const previewUrl = getShareViewerUrl(gistId);
-			this.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
-		} catch (error: unknown) {
-			if (!loader.signal.aborted) {
-				restoreEditor();
-				this.showError(`Failed to create gist: ${error instanceof Error ? error.message : "Unknown error"}`);
-			}
 		}
 	}
 
@@ -7633,7 +7559,7 @@ export class InteractiveMode {
 
 		const options = [
 			"YOLO — auto-approve tools, agent may still ask",
-			"Auto — fully autonomous, no questions",
+			"Auto — a review model checks risky actions",
 			"Read — inspect without making changes",
 		];
 		void this.showExtensionSelector("Permission mode", options).then((choice) => {
@@ -7659,25 +7585,37 @@ export class InteractiveMode {
 		if (mode === "auto") enableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
-	// lunr: `/goal` forces session auto without writing settings.
+	// lunr: `/goal` works without questions in the current mode (read-only steps up to yolo), without writing settings.
 	private enterGoalAuto(): void {
 		const next = nextModeForGoal(this.session.permissionMode, "enter", this.preGoalPermissionMode);
 		this.preGoalPermissionMode = next.saved;
 		if (next.mode !== this.session.permissionMode) {
 			this.applyPermissionMode(next.mode, { silent: true });
 		}
+		this.session.setAutonomous(true);
+		enableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
 	private leaveGoalAuto(): void {
 		const next = nextModeForGoal(this.session.permissionMode, "leave", this.preGoalPermissionMode);
 		this.preGoalPermissionMode = next.saved;
+		this.session.setAutonomous(false);
 		if (next.mode !== this.session.permissionMode) {
 			this.applyPermissionMode(next.mode, { silent: true });
 		}
+		if (this.session.permissionMode !== "auto") disableRollbackForSession(this.sessionManager.getSessionId());
 	}
 
-	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean }): void {
+	/** `cancelMode` is where to go if auto needs a review model and the user cancels the picker. */
+	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean; cancelMode?: PermissionMode }): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		if (mode === "auto") {
+			const reviewer = this.session.resolveAutoReviewer();
+			if (reviewer.kind !== "ready") {
+				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode);
+				return;
+			}
+		}
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const prev = this.session.permissionMode;
 		if (mode === "read-only" && prev !== "read-only") {
@@ -7695,12 +7633,101 @@ export class InteractiveMode {
 		if (opts?.silent) return;
 
 		if (mode === "auto" && prev !== "auto") {
-			this.showStatus("Auto mode active — fully autonomous. Rollback enabled for this session.");
+			const reviewer = this.session.resolveAutoReviewer();
+			const by = reviewer.kind === "ready" ? reviewer.ref : "the review model";
+			this.showStatus(`Auto mode active. ${by} checks risky actions. Rollback enabled for this session.`);
 		} else if (mode === "read-only") {
 			this.showStatus("Read mode active. Changes are blocked.");
 		} else {
 			this.showStatus(`Permission mode: ${mode}`);
 		}
+	}
+
+	/**
+	 * Rings the bell or sends a desktop notice, per the Notifications setting, when a run
+	 * finishes or waits for the user. Skipped while the terminal reports it has focus.
+	 */
+	private notifyAttention(reason: "finished" | "input"): void {
+		const mode = this.settingsManager.getAttentionNotification();
+		if (mode === "off" || this.ui.isTerminalFocused() === true) return;
+		this.ui.notify(mode, reason === "finished" ? "lunR finished" : "lunR needs your input");
+	}
+
+	/** Extension questions only count as waiting for the user while a run is in progress. */
+	private notifyAttentionIfRunning(): void {
+		if (this.session.isStreaming) this.notifyAttention("input");
+	}
+
+	/**
+	 * Opens the model list so the user can pick the auto review model, then enters auto. With a
+	 * `reviewer` it first explains why auto needs one. Cancelling switches to `cancelMode` if given.
+	 */
+	private showAutoReviewModelPicker(
+		reviewer?: Exclude<AutoReviewer, { kind: "ready" }>,
+		cancelMode?: PermissionMode,
+	): void {
+		if (reviewer) {
+			this.showWarning(
+				reviewer.kind === "missing"
+					? `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one. Pick the model that should check risky actions.`
+					: `Auto review model ${reviewer.ref} isn't available. Pick another model to check risky actions.`,
+			);
+		}
+		this.showSelector((done) => {
+			const selector = new ModelSelectorComponent(
+				this.ui,
+				this.resolveModelReference(this.settingsManager.getAutoReviewModel()),
+				this.settingsManager,
+				this.session.modelRuntime,
+				this.session.scopedModels,
+				(model) => {
+					done();
+					this.settingsManager.setAutoReviewModel(`${model.provider}/${model.id}`);
+					if (reviewer) this.applyPermissionMode("auto");
+					else this.showStatus(`Auto review model: ${model.provider}/${model.id}`);
+				},
+				() => {
+					done();
+					if (reviewer && cancelMode) this.applyPermissionMode(cancelMode, { silent: cancelMode !== "yolo" });
+					this.ui.requestRender();
+				},
+				undefined,
+				{ persistDefault: false },
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	/** Startup check for a session that opens in auto without a usable review model. */
+	private warnIfAutoHasNoReviewer(): void {
+		if (this.session.permissionMode !== "auto") return;
+		const reviewer = this.session.resolveAutoReviewer();
+		if (reviewer.kind === "ready") return;
+		this.showWarning(
+			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /auto to pick one.`,
+		);
+	}
+
+	// Dialog when auto mode's review model kept blocking, or couldn't review, one action.
+	private async showAutoReviewDecisionDialog(req: { toolName: string; detail: string }): Promise<ApprovalResponse> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					`Auto review stopped a ${req.toolName} call. Run it anyway?`,
+					["Run it once", "Keep it blocked"],
+					(option) => {
+						done();
+						resolve(option === "Run it once" ? "once" : "reject");
+					},
+					() => {
+						done();
+						resolve("reject");
+					},
+					{ message: req.detail.slice(0, 800) },
+				);
+				return { component: selector, focus: selector };
+			});
+		});
 	}
 
 	// Approval dialog for one subagent call launching more than two children.
@@ -8103,24 +8130,6 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 			new Text(`${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
 		this.ui.requestRender();
-	}
-
-	private handleArminSaysHi(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private handleDaxnuts(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private checkDaxnutsEasterEgg(model: { provider: string; id: string }): void {
-		if (model.provider === "opencode" && model.id.toLowerCase().includes("kimi-k2.5")) {
-			this.handleDaxnuts();
-		}
 	}
 
 	private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {

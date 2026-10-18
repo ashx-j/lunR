@@ -640,7 +640,6 @@ describe("async recovery artifacts", () => {
 					cwd: process.cwd(),
 					outputMode: "inline",
 					maxSubagentDepth: 1,
-					share: false,
 				}),
 			);
 			const descriptor = readAsyncRecoveryDescriptor(dir);
@@ -695,7 +694,6 @@ describe("async recovery artifacts", () => {
 					cwd: process.cwd(),
 					outputMode: "inline",
 					maxSubagentDepth: 1,
-					share: false,
 				}),
 			);
 			const descriptor = readAsyncRecoveryDescriptor(dir);
@@ -733,7 +731,6 @@ describe("async recovery artifacts", () => {
 					cwd: process.cwd(),
 					outputMode: "inline",
 					maxSubagentDepth: 1,
-					share: false,
 				}),
 			);
 			expect(() => readAsyncRecoveryDescriptor(dir)).toThrow(/version must be 4/);

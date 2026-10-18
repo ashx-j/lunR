@@ -14,6 +14,7 @@ import { normalizeChildSpec } from "../../shared/child-spec.ts";
 import { SUBAGENT_ASYNC_GUIDANCE } from "../../shared/async-guidance.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
+import { snapshotParentAutoReview } from "../../../../../core/auto-review.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
@@ -132,7 +133,6 @@ interface AsyncChainParams {
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
-	shareEnabled: boolean;
 	sessionRoot?: string;
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
@@ -169,7 +169,6 @@ interface AsyncSingleParams {
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
-	shareEnabled: boolean;
 	sessionRoot?: string;
 	sessionDir?: string;
 	sessionFile?: string;
@@ -626,6 +625,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		return {
 			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 			parentPermissionMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
+			parentAutoReview: snapshotParentAutoReview(ctx.parentSessionId ?? ctx.currentSessionId),
 			childId: spec.childId,
 			description: spec.description,
 			permissions: spec.effectivePermissions,
@@ -799,7 +799,6 @@ export function executeAsyncChain(
 		maxOutput,
 		artifactsDir,
 		artifactConfig,
-		shareEnabled,
 		sessionRoot,
 		sessionFilesByFlatIndex,
 		thinkingOverridesByFlatIndex,
@@ -889,7 +888,6 @@ export function executeAsyncChain(
 				maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
-				share: shareEnabled,
 				sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
 				asyncDir,
 				sessionId: ctx.currentSessionId,
@@ -1065,7 +1063,6 @@ export function executeAsyncSingle(
 		maxOutput,
 		artifactsDir,
 		artifactConfig,
-		shareEnabled,
 		sessionRoot,
 		sessionFile,
 		maxSubagentDepth,
@@ -1170,7 +1167,6 @@ export function executeAsyncSingle(
 		...(resolvedToolBudget.budget ? { initialToolBudget: resolvedToolBudget.budget } : {}),
 		maxSubagentDepth,
 		...(maxOutput ? { maxOutput } : {}),
-		share: shareEnabled,
 		...(resolvedSessionDir ? { sessionDir: resolvedSessionDir } : {}),
 		...(artifactsDir ? { artifactsDir } : {}),
 		artifactConfig,
@@ -1189,6 +1185,7 @@ export function executeAsyncSingle(
 					{
 						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 						parentPermissionMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
+						parentAutoReview: snapshotParentAutoReview(ctx.parentSessionId ?? ctx.currentSessionId),
 						childId: spec.childId,
 						description: spec.description,
 						permissions: spec.effectivePermissions,
@@ -1222,7 +1219,6 @@ export function executeAsyncSingle(
 				maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
-				share: shareEnabled,
 				sessionDir: resolvedSessionDir,
 				asyncDir,
 				sessionId: ctx.currentSessionId,

@@ -43,7 +43,6 @@ import {
 } from "../shared/subagent-control.ts";
 import {
 	getFinalOutput,
-	findLatestSessionFile,
 	detectSubagentError,
 	extractToolArgsPreview,
 	extractTextFromContent,
@@ -1328,7 +1327,6 @@ export async function runSync(
 		};
 	}
 
-	const shareEnabled = options.share === true;
 	const effectiveAcceptance = resolveEffectiveAcceptance({
 		explicit: options.acceptance ?? spec.acceptance,
 		permissions: spec.effectivePermissions,
@@ -1340,7 +1338,7 @@ export async function runSync(
 	});
 	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance);
 	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
-	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
+	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir);
 	const skillNames = options.skills ?? (spec.skill === false ? [] : (normalizeSkillInput(spec.skill) || []));
 	const skillCwd = options.cwd ?? spec.cwd ?? runtimeCwd;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
@@ -1573,9 +1571,6 @@ export async function runSync(
 
 	if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
 		result.sessionFile = options.sessionFile;
-	} else if (shareEnabled && options.sessionDir) {
-		const sessionFile = findLatestSessionFile(options.sessionDir);
-		if (sessionFile) result.sessionFile = sessionFile;
 	}
 
 	const childWrittenOutput = options.outputPath

@@ -125,6 +125,8 @@ async function defaultCronSessionFactory(job: CronJob, modelOverride?: CronModel
 	const { session } = await createAgentSessionFromServices({ services, sessionManager, model });
 	const permissionId = sessionManager.getSessionId();
 	createPermissionContext(permissionId, settingsManager.getDefaultPermissionMode(), false);
+	// Nobody answers questions during a cron run; a saved auto default kept meaning that before auto was reviewed.
+	if (session.permissionMode === "auto") session.setAutonomous(true);
 	const dispose = session.dispose.bind(session);
 	session.dispose = () => {
 		deletePermissionContext(permissionId);

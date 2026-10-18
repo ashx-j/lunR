@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Subagent completion notifications.
  *
@@ -58,9 +57,6 @@ interface SubagentResult {
 	cwd?: string;
 	asyncDir?: string;
 	sessionFile?: string;
-	shareUrl?: string;
-	gistUrl?: string;
-	shareError?: string;
 	results?: ChainStepResult[];
 	taskIndex?: number;
 	totalTasks?: number;
@@ -188,14 +184,7 @@ export function buildCompletionDetails(result: SubagentResult): SubagentNotifyDe
 			? ` (${result.taskIndex + 1}/${result.totalTasks})`
 			: undefined;
 
-	const session =
-		result.shareUrl
-			? { label: "Session", value: result.shareUrl }
-			: result.shareError
-				? { label: "Session share error", value: result.shareError }
-				: result.sessionFile
-					? { label: "Session file", value: result.sessionFile }
-					: undefined;
+	const session = result.sessionFile ? { label: "Session file", value: result.sessionFile } : undefined;
 
 	return {
 		agent,

@@ -108,26 +108,6 @@ export function getExamplesPath(): string {
 	return resolve(join(getPackageDir(), "examples"));
 }
 
-/**
- * Get path to built-in interactive assets directory.
- * - For Bun binary: assets/ next to executable
- * - For Node.js (dist/): dist/modes/interactive/assets/
- * - For tsx (src/): src/modes/interactive/assets/
- */
-export function getInteractiveAssetsDir(): string {
-	if (isBunBinary) {
-		return join(getPackageDir(), "assets");
-	}
-	const packageDir = getPackageDir();
-	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-	return join(packageDir, srcOrDist, "modes", "interactive", "assets");
-}
-
-/** Get path to a bundled interactive asset */
-export function getBundledInteractiveAssetPath(name: string): string {
-	return join(getInteractiveAssetsDir(), name);
-}
-
 // =============================================================================
 // App Config (from package.json piConfig)
 // =============================================================================
@@ -165,16 +145,14 @@ export const VERSION: string = pkg.version || "0.0.0";
 export const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 export const ENV_SESSION_DIR = "PI_CODING_AGENT_SESSION_DIR";
 
-export function expandTildePath(path: string): string {
-	return normalizePath(path);
+/** Offline mode is on when PI_OFFLINE is 1, true, or yes (case-insensitive); other values such as 0 leave it off. */
+export function isOfflineModeEnabled(): boolean {
+	const value = process.env.PI_OFFLINE?.toLowerCase();
+	return value === "1" || value === "true" || value === "yes";
 }
 
-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
-
-/** Get the share viewer URL for a gist ID */
-export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
-	return `${baseUrl}#${gistId}`;
+export function expandTildePath(path: string): string {
+	return normalizePath(path);
 }
 
 // =============================================================================

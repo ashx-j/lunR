@@ -20,6 +20,7 @@ import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } fro
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "../../../core/pr-watch/types.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import {
+	type AttentionNotification,
 	type DefaultPermissionMode,
 	type DefaultProjectTrust,
 	type ModelInstructionsSettings,
@@ -109,6 +110,7 @@ export interface SettingsConfig {
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
+	attentionNotification: AttentionNotification;
 	modelTiers: ModelTiersSettings;
 	modelInstructions: Required<ModelInstructionsSettings>;
 	globalInstructionsPath: string;
@@ -139,6 +141,8 @@ export interface SettingsConfig {
 	planUsageWindow: "5h" | "weekly";
 	// lunr: permission mode default
 	defaultPermissionMode: DefaultPermissionMode;
+	/** "provider/model", or undefined for the provider's own reviewer. */
+	autoReviewModel: string | undefined;
 	// lunr: rollback settings
 	rollbackEnabled: boolean;
 	rollbackTurns: number;
@@ -182,6 +186,7 @@ export interface SettingsCallbacks {
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
+	onAttentionNotificationChange: (mode: AttentionNotification) => void;
 	onModelTiersEnabledChange: (enabled: boolean) => void;
 	onModelTierModelChange: (tier: ModelTierName, model: string) => void;
 	onModelTierThinkingChange: (tier: ModelTierName, level: ThinkingLevel | undefined) => void;
@@ -214,6 +219,9 @@ export interface SettingsCallbacks {
 	onPlanUsageWindowChange: (window: "5h" | "weekly") => void;
 	// lunr: permission mode default
 	onDefaultPermissionModeChange: (mode: DefaultPermissionMode) => void;
+	onAutoReviewModelChange: (ref: string | undefined) => void;
+	/** Closes /settings and opens the model list for the auto review model. */
+	onChooseAutoReviewModel: () => void;
 	onGatewayAction?: (action: string) => void;
 	// lunr: rollback callbacks
 	onRollbackEnabledChange: (enabled: boolean) => void;
@@ -793,11 +801,6 @@ class RollbackSubmenu extends Container {
 								value: "hybrid",
 								label: "hybrid",
 								description: "Track files created outside tools with tree scope",
-							},
-							{
-								value: "shadow-git",
-								label: "shadow-git",
-								description: "Reserved mode; currently falls back to copies",
 							},
 						],
 						currentValue,
@@ -1657,6 +1660,37 @@ export class SettingsSelectorComponent extends Container {
 				values: ["yolo", "auto", "read"],
 			},
 			{
+				id: "auto-review-model",
+				label: "Auto review model",
+				description: "Model that checks risky actions in auto mode",
+				currentValue: config.autoReviewModel ?? "provider default",
+				submenu: (_currentValue, done) =>
+					new SelectSubmenu(
+						"Auto review model",
+						"Checks shell commands, outside writes and other risky actions before they run in auto mode",
+						[
+							{
+								value: "default",
+								label: "Provider default",
+								description:
+									"Sonnet 5 for Anthropic; the session model for OpenAI, xAI and Qwen. Other providers need a chosen model.",
+							},
+							{ value: "choose", label: "Choose a model", description: "Opens the model list" },
+						],
+						config.autoReviewModel ? "choose" : "default",
+						(value) => {
+							if (value === "default") {
+								callbacks.onAutoReviewModelChange(undefined);
+								done("provider default");
+							} else {
+								done();
+								callbacks.onChooseAutoReviewModel();
+							}
+						},
+						() => done(),
+					),
+			},
+			{
 				id: "double-escape-action",
 				label: "Double-escape action",
 				description: "Action for double Escape in an empty editor",
@@ -1908,6 +1942,13 @@ export class SettingsSelectorComponent extends Container {
 			currentValue: config.showTerminalProgress ? "true" : "false",
 			values: ["true", "false"],
 		});
+		items.splice(clearOnShrinkIndex + 2, 0, {
+			id: "attention-notification",
+			label: "Notifications",
+			description: "Bell or desktop notice when a run ends or needs you while the terminal is unfocused",
+			currentValue: config.attentionNotification,
+			values: ["off", "bell", "desktop"],
+		});
 
 		// Add borders
 		this.addChild(new DynamicBorder());
@@ -2051,6 +2092,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "terminal-progress":
 						callbacks.onShowTerminalProgressChange(newValue === "true");
+						break;
+					case "attention-notification":
+						callbacks.onAttentionNotificationChange(newValue as AttentionNotification);
 						break;
 					case "auto-manage-subscriptions":
 						callbacks.onAutoManageSubscriptionsChange(newValue === "on");
