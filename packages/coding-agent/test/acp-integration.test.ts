@@ -252,7 +252,6 @@ describe("compiled ACP stdio integration", () => {
 			    "permissions",
 			    "runId",
 			    "sessionDir",
-			    "share",
 			    "skill",
 			    "task",
 			    "tasks",

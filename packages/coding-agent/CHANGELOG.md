@@ -7,6 +7,7 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.37`**. Versioned
 ### Removed
 
 - `/share` and `PI_SHARE_VIEWER_URL`. `/share` uploaded the session to a GitHub gist and linked to pi's hosted viewer at pi.dev, which lunR does not run. Use `/export` to write the session to an HTML file instead.
+- The subagent tool's `share` option. It uploaded a child session to a GitHub gist and linked to pi's hosted viewer, which lunR does not run. Child session files stay on disk as before, and runs saved with the old option still resume.
 
 ## [0.2.37] - 2026-10-17
 

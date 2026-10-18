@@ -66,7 +66,6 @@ describe("chain child handoff prompt", () => {
 					sessionManager: { getSessionId: () => "session" },
 				} as never,
 				runId: "handoff",
-				shareEnabled: false,
 				sessionDirForIndex: () => undefined,
 				artifactsDir: dir,
 				artifactConfig: { enabled: false },
