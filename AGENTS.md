@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **v0.2.38 (2026-10-18):** latest npm release. Integration PR #208 merged PRs #195 to #207 and release PR #209 merged as `4cc8c4e`; tag `v0.2.38` published all four public packages and three native payloads, and the binary workflow succeeded. All seven tarballs match registry integrity, and a fresh isolated install reports 0.2.38 for the CLI and its three dependencies and passes the first-paint/first-turn check. Earlier releases and per-PR history: git log.
 - **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
+- **Unreleased on master:** Ctrl+D on an empty editor exits only on a second press within 1.5s; the first press shows `Press Ctrl+D again to exit`.
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
      /\_/\
@@ -92,6 +93,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Sticky chat + alt-screen has no native scrollback. While pinned, SGR 1000+1006 mouse tracking is on: wheel scrolls (Ctrl+wheel pages), left-drag does nothing, click expands/collapses a thinking run or tool card, Shift+drag is native selection, the last-column scrollbar drags. Do not use DECSET 1007 (collides with editor history).
 - Pinned chat scroll reuses the last chat layout; do not re-layout or sync-render in `setChatScroll`. The overflow gutter is sticky. A scrolled-up view anchors matching rendered line sequences and falls back to the previous line position after width reflow.
 - Selectors: keybinding layer (`tui.select.cancel`), never raw `\x1b` (Kitty CSI-u).
+- `app.exit` (Ctrl+D) runs through `ExitConfirmation` (`modes/interactive/exit-confirmation.ts`) in both the startup view and `InteractiveMode`, which share one instance across hydration; keep both handlers using it. After a startup failure the startup view leaves the error text in place and shows no hint.
 - Win32: Ctrl+V is the terminal's; image paste is `Alt+V`. lunR cannot see keys the host never sends, so VS Code must forward it with `sendSequence` `\u001b[118;3u` (leaked `ESC v` also works) or use `/paste-image`. Paste inserts `[image_n]` chips, not a temp path; do not expand them back to paths on submit. The first-paint editor releases its startup paste callback at activation.
 - Smooth streaming is interactive-TUI only (`smooth-streaming.ts` + timer in `interactive-mode.ts`). Segment state lives on content-block objects, not the shallow-copied AssistantMessage, because providers append into the same block instances.
 - Live thinking uses `reasoningDisplay`: auto is one line for `openai-codex`, four lines otherwise. One-line mode leaves its bottom unpadded because the working Loader already prepends a blank row; four-line tails do not pad. Both use the revealed prefix when smoothing; collapse needs provider completion and full reveal. Collapsed Codex snippets strip `**` at display only.
@@ -169,6 +171,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-20: Ctrl+D needs two presses within 1.5s on an empty editor, because Ctrl+D also deletes forward and one press on an empty line quit lunR.
 - 2026-10-18: auto is reviewed and "no questions" is a separate session flag, so goals and subagents keep working unattended under yolo without paying for reviews.
 - 2026-10-18: default reviewers come only from providers whose own agents ship one (Claude Code, Codex, Grok Build, Qwen Code); other providers must pick a model, because choosing a safety reviewer is the user's call.
 - 2026-10-18: remove `/share` and the subagent `share` option instead of hosting a viewer, because both sent sessions to pi's site; keep accepting the old descriptor field so saved runs resume.

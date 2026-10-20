@@ -218,6 +218,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 |-----|--------|
 | Ctrl+C | Clear editor |
 | Ctrl+C twice | Quit |
+| Ctrl+D twice | Quit (empty editor only, within 1.5s) |
 | Escape | Cancel/abort |
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
