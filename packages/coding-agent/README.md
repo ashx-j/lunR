@@ -174,7 +174,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/model` | Switch models (stored-cred providers) |
 | `/refresh` | Refresh model catalogs |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
-| `/settings` | Theme, thinking, agent memory, message delivery, transport |
+| `/settings` | Theme, thinking, agent memory, message delivery; Advanced holds transport, prompt cache and terminal layout |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
 | `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read` (Shift+Tab cycles) |
