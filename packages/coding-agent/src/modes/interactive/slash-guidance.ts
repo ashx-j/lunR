@@ -40,19 +40,18 @@ export function findUnknownSlashCommand(
 }
 
 /**
- * Picks up to two command names for an unknown one, ranked by the slash picker's fuzzy matcher. That
- * matcher needs the letters in order, so typos like `/modle` fall back to edit distance (at most 2).
+ * Picks up to two command names for an unknown one. Close typos (edit distance at most 2, like `/modle`
+ * or `/models`) rank first; the slash picker's fuzzy matcher fills any remaining slot.
  */
 export function suggestSlashCommands(name: string, candidates: Iterable<string>): string[] {
 	const names = [...new Set(candidates)].filter((candidate) => candidate !== name);
-	const fuzzy = fuzzyFilter(names, name, (candidate) => candidate);
-	if (fuzzy.length > 0) return fuzzy.slice(0, 2);
-	return names
+	const close = names
 		.map((candidate) => ({ candidate, distance: editDistance(name, candidate) }))
 		.filter(({ distance }) => distance <= 2)
 		.sort((a, b) => a.distance - b.distance)
-		.slice(0, 2)
 		.map(({ candidate }) => candidate);
+	const fuzzy = fuzzyFilter(names, name, (candidate) => candidate);
+	return [...new Set([...close, ...fuzzy])].slice(0, 2);
 }
 
 // Damerau-Levenshtein distance (optimal string alignment): insertions, deletions, substitutions and

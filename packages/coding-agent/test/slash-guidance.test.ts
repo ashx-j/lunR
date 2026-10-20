@@ -67,8 +67,9 @@ describe("unknown command status", () => {
 		expect(suggestSlashCommands("zzz", candidates)).toEqual([]);
 	});
 
-	it("falls back to edit distance for typos the fuzzy matcher misses", () => {
-		const candidates = ["model", "mode", "help", "hotkeys", "settings", "new"];
+	it("ranks close typos ahead of looser fuzzy matches", () => {
+		const candidates = ["model", "mode", "help", "hotkeys", "settings", "new", "scoped-models"];
+		expect(suggestSlashCommands("models", candidates)[0]).toBe("model");
 		expect(suggestSlashCommands("modle", candidates)).toEqual(["model", "mode"]);
 		expect(suggestSlashCommands("hepl", candidates)).toEqual(["help"]);
 		expect(suggestSlashCommands("settigns", candidates)).toEqual(["settings"]);
