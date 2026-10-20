@@ -192,7 +192,7 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(tools.has("web_search")).toBe(true);
 		expect(tools.has("fetch_content")).toBe(true);
 		expect(tools.has("get_search_content")).toBe(true);
-		expect(commands.has("websearch")).toBe(true);
+		expect(commands.get("websearch")).toMatchObject({ hidden: true });
 		expect(commands.has("curator")).toBe(true);
 		expect(commands.has("google-account")).toBe(true);
 		expect(commands.has("search")).toBe(true);

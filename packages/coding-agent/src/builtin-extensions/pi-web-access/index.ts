@@ -2095,8 +2095,10 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("websearch", {
-		description: "Open web search curator",
+	// lunr: /search is the visible entry for the curator; /websearch stays a hidden alias for one release.
+	const searchCuratorCommand = {
+		description: "Open web search curator (alias of /search)",
+		hidden: true,
 		handler: async (args, ctx) => {
 			const generation = sessionGeneration;
 			const sessionSignal = sessionAbort.signal;
@@ -2357,7 +2359,8 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Failed to open curator: ${message}`, "error");
 			}
 		},
-	});
+	};
+	pi.registerCommand("websearch", searchCuratorCommand);
 
 	pi.registerCommand("curator", {
 		description: "Toggle or configure the search curator workflow",
@@ -2440,13 +2443,15 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// lunr: `/search <queries>` opens the curator with those queries. Bare `/search` opens an empty
+	// curator, or lists stored results with a "New web search" row first when there are any.
+	const NEW_SEARCH_OPTION = "New web search";
 	pi.registerCommand("search", {
-		description: "Browse stored web search results",
-		handler: async (_args, ctx) => {
+		description: "Search the web (comma-separate queries); with no query, browse stored results",
+		handler: async (args, ctx) => {
 			const results = getAllResults();
-
-			if (results.length === 0) {
-				ctx.ui.notify("No stored search results", "info");
+			if (args.trim() || results.length === 0) {
+				await searchCuratorCommand.handler(args, ctx);
 				return;
 			}
 
@@ -2463,8 +2468,12 @@ export default function (pi: ExtensionAPI) {
 				return `[${r.id.slice(0, 6)}] ${r.type} - ${ageStr}`;
 			});
 
-			const choice = await ctx.ui.select("Stored Search Results", options);
+			const choice = await ctx.ui.select("Stored Search Results", [NEW_SEARCH_OPTION, ...options]);
 			if (!choice) return;
+			if (choice === NEW_SEARCH_OPTION) {
+				await searchCuratorCommand.handler("", ctx);
+				return;
+			}
 
 			const match = choice.match(/^\[([a-z0-9]+)\]/);
 			if (!match) return;
