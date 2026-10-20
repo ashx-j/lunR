@@ -88,17 +88,10 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
-import { hasGrokCliXaiAuth } from "../../core/grok-cli-auth.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
-import {
-	isValidProviderBaseUrl,
-	parseModelIds,
-	slugifyProviderId,
-	upsertCustomProvider,
-} from "../../core/model-config-writer.ts";
 import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/model-instructions.ts";
 import {
 	defaultModelPerProvider,
@@ -189,6 +182,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { buildOnboardingOptions, OnboardingComponent, shouldShowOnboarding } from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
@@ -214,13 +208,29 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { ExitConfirmation } from "./exit-confirmation.ts";
 import {
 	orderedExtensionWidgets,
 	replaceExtensionWidget,
 	widgetSeparatorNeedsSpacer,
 } from "./extension-widget-order.ts";
+import {
+	getLoginProviderOptions,
+	type LoginFlowHost,
+	showCustomProviderWizard,
+	showLoginAuthTypeSelector,
+	showLoginProviderSelector,
+} from "./login-flow.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
+import { findSlashCommandHandler, type SlashCommandHost } from "./slash-dispatch.ts";
+import {
+	buildHelpLines,
+	findUnknownSlashCommand,
+	formatUnknownSlashCommandStatus,
+	INTERACTIVE_BUILTIN_COMMAND_NAMES,
+	suggestSlashCommands,
+} from "./slash-guidance.ts";
 import {
 	computeSmoothRevealStep,
 	countGraphemesBeforeToolCall,
@@ -243,7 +253,6 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
-import { wrapThinkingLevelSlashCommands } from "./thinking-level-slash.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -304,10 +313,6 @@ function isDeadTerminalError(error: unknown): boolean {
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
 	"Claude Code handles Anthropic subscription authentication. lunR retains tool execution and conversation state. Check your Claude account for usage and any extra charges.";
-
-// lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
-const ANTHROPIC_TOS_DISCLAIMER =
-	"Connecting an Anthropic subscription through Claude Code may be subject to Anthropic's Terms of Service (https://www.anthropic.com/legal/consumer-terms). Claude Code authenticates each lunR generation; lunR keeps its own tools and history. Continue?";
 
 const INIT_PROMPT = `Analyze this codebase and write a starter AGENTS.md in the project root.
 Scan: package manifests, directory layout, build/test/lint scripts, CI config,
@@ -462,6 +467,7 @@ export class InteractiveMode {
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
 	private lastSigintTime = 0;
+	private readonly exitConfirmation: ExitConfirmation;
 	private lastEscapeTime = 0;
 	private readonly subagentEscape = new SubagentEscapeSequence();
 	private anthropicSubscriptionWarningShown = false;
@@ -469,6 +475,7 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	private lastNotice: { kind: "error" | "warning"; message: string; text: Text; count: number } | undefined;
 
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
@@ -573,6 +580,10 @@ export class InteractiveMode {
 	private startupReadyPromise?: Promise<void>;
 	private startupFeatureError?: Error;
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
+	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
+	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
+	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
+	private readonly slashCommandHost: SlashCommandHost = this.createSlashCommandHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -636,6 +647,8 @@ export class InteractiveMode {
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = options.startupView?.statusContainer ?? new Container();
+		// Share the startup view's window so a Ctrl+D pressed just before hydration still counts.
+		this.exitConfirmation = options.startupView?.exitConfirmation ?? new ExitConfirmation();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = options.startupView?.keybindings ?? KeybindingsManager.create();
@@ -726,12 +739,14 @@ export class InteractiveMode {
 	}
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
-		// Define commands for autocomplete
-		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
-			name: command.name,
-			description: command.description,
-			...(command.argumentHint && { argumentHint: command.argumentHint }),
-		}));
+		// Define commands for autocomplete. Hidden builtins still dispatch from the submit chain.
+		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.filter((command) => !command.hidden).map(
+			(command) => ({
+				name: command.name,
+				description: command.description,
+				...(command.argumentHint && { argumentHint: command.argumentHint }),
+			}),
+		);
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
@@ -761,7 +776,7 @@ export class InteractiveMode {
 		}
 
 		const loginArgCompletions = (prefix: string): AutocompleteItem[] | null => {
-			const providers = getLoginProviderCompletionOptions(this.getLoginProviderOptions());
+			const providers = getLoginProviderCompletionOptions(getLoginProviderOptions(this.session.modelRuntime));
 			return createFuzzyAutocompleteItems(providers, prefix, getLoginProviderSearchText, (provider) => ({
 				value: provider.id,
 				label: provider.id,
@@ -772,11 +787,6 @@ export class InteractiveMode {
 		if (loginCommand) {
 			loginCommand.getArgumentCompletions = loginArgCompletions;
 		}
-		// lunr: /auth shares /login's provider argument completions.
-		const authCommand = slashCommands.find((command) => command.name === "auth");
-		if (authCommand) {
-			authCommand.getArgumentCompletions = loginArgCompletions;
-		}
 
 		// Convert prompt templates to SlashCommand format for autocomplete
 		const templateCommands: SlashCommand[] = this.session.promptTemplates.map((cmd) => ({
@@ -785,11 +795,11 @@ export class InteractiveMode {
 			...(cmd.argumentHint && { argumentHint: cmd.argumentHint }),
 		}));
 
-		// Convert extension commands to SlashCommand format
-		const builtinCommandNames = new Set(slashCommands.map((c) => c.name));
+		// Convert extension commands to SlashCommand format. Hidden builtins still shadow extension commands.
+		const builtinCommandNames = new Set(BUILTIN_SLASH_COMMANDS.map((c) => c.name));
 		const extensionCommands: SlashCommand[] = this.session.extensionRunner
 			.getRegisteredCommands()
-			.filter((cmd) => !builtinCommandNames.has(cmd.name))
+			.filter((cmd) => !cmd.hidden && !builtinCommandNames.has(cmd.name))
 			.map((cmd) => ({
 				name: cmd.invocationName,
 				description: this.prefixAutocompleteDescription(cmd.description, cmd.sourceInfo),
@@ -827,9 +837,7 @@ export class InteractiveMode {
 	}
 
 	private setupAutocompleteProvider(): void {
-		let provider = wrapThinkingLevelSlashCommands(this.createBaseAutocompleteProvider(), () =>
-			this.session.getAvailableThinkingLevels(),
-		);
+		let provider = this.createBaseAutocompleteProvider();
 		const triggerCharacters: string[] = [...(provider.triggerCharacters ?? [])];
 		for (const wrapProvider of this.autocompleteProviderWrappers) {
 			provider = wrapProvider(provider);
@@ -1108,9 +1116,9 @@ export class InteractiveMode {
 			this.showError(`models.json error: ${modelsJsonError}`);
 		}
 
-		if (modelFallbackMessage) {
-			this.showWarning(modelFallbackMessage);
-		}
+		void this.showModelSetupGuidance(modelFallbackMessage).catch((error: unknown) =>
+			this.showError(error instanceof Error ? error.message : String(error)),
+		);
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
@@ -1145,6 +1153,52 @@ export class InteractiveMode {
 				this.showError(errorMessage);
 			}
 		}
+	}
+
+	/**
+	 * Startup model guidance. With no saved credential and no usable model, shows onboarding once the
+	 * deferred builtins have attached (so the /login provider list is complete); otherwise shows the
+	 * model fallback warning, if any. Escape or Skip closes onboarding for this launch only.
+	 */
+	private async showModelSetupGuidance(modelFallbackMessage: string | undefined): Promise<void> {
+		const credentials = await this.session.modelRuntime.listCredentials();
+		if (!shouldShowOnboarding(credentials, this.session.model)) {
+			if (modelFallbackMessage) this.showWarning(modelFallbackMessage);
+			return;
+		}
+		await this.waitForDeferredBuiltins();
+		await this.session.modelRuntime.getAvailable();
+		// Leave a selector or dialog the user opened in the meantime (such as /login) alone.
+		if (this.editorContainer.children[0] !== this.editor) return;
+		this.showOnboarding();
+	}
+
+	// Each onboarding choice hands off to the /login flow; a login then opens /model if no model is set.
+	private showOnboarding(): void {
+		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
+		this.showSelector((done) => {
+			const onboarding = new OnboardingComponent(options, (choice) => {
+				done();
+				if (choice === "skip") {
+					this.showStatus("No provider yet. Run /login when you are ready.");
+				} else if (choice === "custom") {
+					void showCustomProviderWizard(this.loginFlowHost).catch((error: unknown) =>
+						this.showError(error instanceof Error ? error.message : String(error)),
+					);
+				} else {
+					showLoginProviderSelector(this.loginFlowHost, choice);
+				}
+			});
+			return { component: onboarding, focus: onboarding };
+		});
+	}
+
+	/** After a login, opens /model when the session still has no model and there is one to pick. */
+	private async openModelSelectorIfUnset(): Promise<void> {
+		const model = this.session.model;
+		if (model && !isUnknownModel(model)) return;
+		if ((await this.session.modelRuntime.getAvailable()).length === 0) return;
+		await this.showModelSelector(undefined, "Ready. Type a message, or /help for commands.");
 	}
 
 	private async checkTmuxKeyboardSetup(): Promise<string | undefined> {
@@ -3034,8 +3088,8 @@ export class InteractiveMode {
 	}
 
 	private setupEditorSubmitHandler(): void {
-		this.defaultEditor.onSubmit = async (text: string) => {
-			text = text.trim();
+		this.defaultEditor.onSubmit = async (submittedText: string, rawText?: string) => {
+			const text = submittedText.trim();
 			if (text === "/reclaim" || text === "/reclaim stop") {
 				const file = this.sessionManager.getSessionFile();
 				try {
@@ -3079,7 +3133,7 @@ export class InteractiveMode {
 				text &&
 				!this.runtimeHost.isDetached &&
 				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|off|minimal|low|medium|high|xhigh|max|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
 						text,
 					))
 			) {
@@ -3093,188 +3147,16 @@ export class InteractiveMode {
 				this.consumeStagedSubmitImages() ?? (await this.loadImageAttachments(this.takeSubmittedImages(text)));
 			this.ui.setChatScroll(0);
 
-			// Handle commands
-			if (text === "/paste-image") {
-				this.editor.setText("");
-				await this.handleClipboardPaste({ textFallback: false });
+			// Handle builtin commands
+			const slashCommand = findSlashCommandHandler(text);
+			if (slashCommand) {
+				await slashCommand.run(this.slashCommandHost, text);
 				return;
 			}
-			if (text === "/settings") {
-				void this.showSettingsSelector();
-				this.editor.setText("");
+
+			// A mistyped command goes back to the editor instead of to the model as a prompt.
+			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? submittedText, { images })))
 				return;
-			}
-			if (text === "/scoped-models") {
-				this.editor.setText("");
-				await this.showModelsSelector();
-				return;
-			}
-			if (text === "/model" || text.startsWith("/model ")) {
-				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
-				this.editor.setText("");
-				await this.handleModelCommand(searchTerm);
-				return;
-			}
-			if (text === "/refresh") {
-				this.editor.setText("");
-				await this.handleRefreshCommand();
-				return;
-			}
-			if (text === "/export" || text.startsWith("/export ")) {
-				await this.handleExportCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/import" || text.startsWith("/import ")) {
-				await this.handleImportCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/copy") {
-				await this.handleCopyCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/name" || text.startsWith("/name ") || text === "/title" || text.startsWith("/title ")) {
-				this.handleNameCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/session") {
-				this.handleSessionCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/usage") {
-				this.editor.setText("");
-				await this.handleUsageCommand();
-				return;
-			}
-			if (text === "/fast" || text.startsWith("/fast ")) {
-				this.editor.setText("");
-				this.handleFastCommand(text === "/fast" ? "" : text.slice(6).trim());
-				return;
-			}
-			if (text === "/context") {
-				this.editor.setText("");
-				this.handleContextCommand();
-				return;
-			}
-			if (text === "/plan" || text.startsWith("/plan ")) {
-				this.editor.setText("");
-				await this.handlePlanCommand(text === "/plan" ? "" : text.slice(6).trim());
-				return;
-			}
-			if (text === "/hotkeys") {
-				this.handleHotkeysCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/fork") {
-				this.showUserMessageSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/clone") {
-				this.editor.setText("");
-				await this.handleCloneCommand();
-				return;
-			}
-			if (text === "/tree") {
-				this.showTreeSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/undo") {
-				this.editor.setText("");
-				await this.handleUndoCommand();
-				return;
-			}
-			if (text === "/edit") {
-				this.editor.setText("");
-				await this.handleEditCommand();
-				return;
-			}
-			if (text === "/redo") {
-				this.editor.setText("");
-				await this.handleRedoCommand();
-				return;
-			}
-			if (text === "/mode" || text.startsWith("/mode ")) {
-				this.editor.setText("");
-				this.handleModeCommand(text === "/mode" ? "" : text.slice(6).trim());
-				return;
-			}
-			if (text === "/read" || text === "/yolo" || text === "/auto") {
-				this.editor.setText("");
-				this.applyPermissionMode(text === "/read" ? "read-only" : (text.slice(1) as PermissionMode));
-				return;
-			}
-			if (text === "/processes") {
-				this.editor.setText("");
-				this.showProcessesSelector();
-				return;
-			}
-			if (text === "/rollback") {
-				this.editor.setText("");
-				await this.handleRollbackCommand();
-				return;
-			}
-			if (text === "/trust") {
-				this.showTrustSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/login" || text === "/auth" || text.startsWith("/login ") || text.startsWith("/auth ")) {
-				// lunr: /auth is an alias of /login; the provider arg follows the first space.
-				const providerRef = text.includes(" ") ? text.slice(text.indexOf(" ") + 1).trim() : undefined;
-				this.editor.setText("");
-				await this.handleLoginCommand(providerRef);
-				return;
-			}
-			if (text === "/logout" || text === "/deauth") {
-				// lunr: /deauth is an alias of /logout.
-				this.showOAuthSelector("logout");
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/new") {
-				this.editor.setText("");
-				await this.handleClearCommand();
-				return;
-			}
-			if (text === "/compact" || text.startsWith("/compact ")) {
-				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
-				this.editor.setText("");
-				await this.handleCompactCommand(customInstructions);
-				return;
-			}
-			if (text === "/reload") {
-				this.editor.setText("");
-				await this.handleReloadCommand();
-				return;
-			}
-			if (text === "/init") {
-				this.editor.setText("");
-				await this.handleInitCommand();
-				return;
-			}
-			if (text === "/debug") {
-				this.handleDebugCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/resume" || text === "/sessions") {
-				this.showSessionSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/quit" || text === "/exit") {
-				// lunr: /exit is an alias of /quit.
-				this.editor.setText("");
-				await this.shutdown();
-				return;
-			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
@@ -4202,8 +4084,12 @@ export class InteractiveMode {
 	}
 
 	private handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor)
-		void this.shutdown();
+		// Only called when editor is empty (enforced by CustomEditor). The first press only warns.
+		if (this.exitConfirmation.press()) {
+			void this.shutdown();
+			return;
+		}
+		this.showStatus(this.exitConfirmation.hint);
 	}
 
 	/**
@@ -4407,8 +4293,11 @@ export class InteractiveMode {
 			this.showError("Use /reclaim before sending more work. Draft retained.");
 			return;
 		}
-		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
+		const rawText = this.editor.getExpandedText?.() ?? this.editor.getText();
+		const text = rawText.trim();
 		if (!text) return;
+		// Same unknown command check as Enter; the draft stays in the editor.
+		if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText))) return;
 
 		// Queue input during compaction (extension commands execute immediately)
 		if (this.session.isCompacting) {
@@ -4438,7 +4327,7 @@ export class InteractiveMode {
 			const images = await this.loadImageAttachments(this.takeSubmittedImages(text));
 			this.stagedSubmitImages = images;
 			this.editor.setText("");
-			this.editor.onSubmit(text);
+			this.editor.onSubmit(text, rawText);
 		}
 	}
 
@@ -4661,14 +4550,26 @@ export class InteractiveMode {
 	}
 
 	showError(errorMessage: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
-		this.ui.requestRender();
+		this.showNotice("error", `Error: ${errorMessage}`);
 	}
 
 	showWarning(warningMessage: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		this.showNotice("warning", `Warning: ${warningMessage}`);
+	}
+
+	// An error or warning identical to the chat's last entry bumps a " (×N)" count on that entry
+	// instead of appending a copy. Only consecutive duplicates collapse.
+	private showNotice(kind: "error" | "warning", message: string): void {
+		const last = this.lastNotice;
+		if (last && last.kind === kind && last.message === message && this.chatContainer.children.at(-1) === last.text) {
+			last.count++;
+			last.text.setText(theme.fg(kind, `${message} (×${last.count})`));
+		} else {
+			const text = new Text(theme.fg(kind, message), 1, 0);
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(text);
+			this.lastNotice = { kind, message, text, count: 1 };
+		}
 		this.ui.requestRender();
 	}
 
@@ -4754,6 +4655,41 @@ export class InteractiveMode {
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
 		this.showStatus("Queued message for after compaction");
+	}
+
+	/**
+	 * Reports an unknown slash command with suggestions and returns true. `cleared` means submit already
+	 * emptied the editor, so the draft goes back with its images; Alt+Enter omits it because its draft
+	 * is still in the editor. Recognition comes from dispatch, so commands autocomplete hides still
+	 * count. Waits for deferred builtins before deciding, since their commands (such as /run and /goal)
+	 * register after first paint.
+	 */
+	private async bounceUnknownSlashCommand(
+		text: string,
+		rawText: string,
+		cleared?: { images?: ImageContent[] },
+	): Promise<boolean> {
+		const isKnown = (name: string): boolean =>
+			INTERACTIVE_BUILTIN_COMMAND_NAMES.has(name) ||
+			!!this.session.extensionRunner.getCommand(name) ||
+			this.session.promptTemplates.some((template) => template.name === name);
+		const cwd = this.sessionManager.getCwd();
+		if (!findUnknownSlashCommand(rawText, isKnown, cwd)) return false;
+		await this.awaitDeferredBuiltinsForPrompt();
+		const name = findUnknownSlashCommand(rawText, isKnown, cwd);
+		if (!name) return false;
+		// Suggest only what autocomplete lists, so aliases like /title are never offered.
+		const candidates = [
+			...BUILTIN_SLASH_COMMANDS.filter((command) => !command.hidden).map((command) => command.name),
+			...this.session.extensionRunner
+				.getRegisteredCommands()
+				.filter((command) => !command.hidden)
+				.map((command) => command.invocationName),
+			...this.session.promptTemplates.map((template) => template.name),
+		];
+		if (cleared) this.restoreEditorDraft(text, cleared.images);
+		this.showStatus(formatUnknownSlashCommandStatus(name, suggestSlashCommands(name, candidates)));
+		return true;
 	}
 
 	private isExtensionCommand(text: string): boolean {
@@ -5548,7 +5484,8 @@ export class InteractiveMode {
 		});
 	}
 
-	private async showModelSelector(initialSearchInput?: string): Promise<void> {
+	// `selectedStatus` replaces the "Model: <id>" status after a pick (the post-login picker prints a ready line).
+	private async showModelSelector(initialSearchInput?: string, selectedStatus?: string): Promise<void> {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		// lunr: prefetch active subscription names so row rendering stays synchronous.
 		const subscriptionNames = await this.getActiveSubscriptionNames();
@@ -5565,7 +5502,7 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						done();
-						this.showStatus(`Model: ${model.id}`);
+						this.showStatus(selectedStatus ?? `Model: ${model.id}`);
 						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 						// lunr: offer manual subscription switching for pooled providers.
 						await this.maybeShowSubscriptionPicker(model.provider);
@@ -6049,38 +5986,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
-		const options: AuthSelectorProvider[] = [];
-		for (const provider of this.session.modelRuntime.getProviders()) {
-			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
-			const status = authStatus.configured
-				? {
-						type: this.session.modelRuntime.isUsingOAuth(provider.id) ? ("oauth" as const) : ("api_key" as const),
-						source: authStatus.label ?? authStatus.source,
-					}
-				: undefined;
-			if ((!authType || authType === "oauth") && provider.auth.oauth) {
-				options.push({
-					id: provider.id,
-					name: provider.name,
-					authType: "oauth",
-					method: provider.auth.oauth,
-					status,
-				});
-			}
-			if ((!authType || authType === "api_key") && provider.auth.apiKey) {
-				options.push({
-					id: provider.id,
-					name: provider.name,
-					authType: "api_key",
-					method: provider.auth.apiKey,
-					status,
-				});
-			}
-		}
-		return options.sort((a, b) => a.name.localeCompare(b.name));
-	}
-
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
 		// lunr: providers with a multi-key pool list one entry per subscription plus an
 		// "all subscriptions" entry, encoding the target as "<providerId>#<subId|all>".
@@ -6121,87 +6026,78 @@ export class InteractiveMode {
 		}
 	}
 
-	private findLoginProviderOptions(providerRef: string): AuthSelectorProvider[] {
-		const normalizedProviderRef = providerRef.trim().toLowerCase();
-		if (!normalizedProviderRef) {
-			return [];
-		}
-
-		return this.getLoginProviderOptions().filter(
-			(provider) =>
-				provider.id.toLowerCase() === normalizedProviderRef ||
-				provider.name.toLowerCase() === normalizedProviderRef,
-		);
+	// Builds the LoginFlowHost without making InteractiveMode members public. `session` stays a
+	// getter because /new, /resume and /fork replace the session.
+	private createLoginFlowHost(): LoginFlowHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			showSelector: (create) => this.showSelector(create),
+			showStatus: (message) => this.showStatus(message),
+			showError: (message) => this.showError(message),
+			confirmDisclaimer: (title, message) => this.confirmDisclaimer(title, message),
+			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
+			requestRender: () => this.ui.requestRender(),
+			showLoginDialog: (providerId, providerName) => this.showLoginDialog(providerId, providerName),
+			showApiKeyLoginDialog: (providerId, providerName) => this.showApiKeyLoginDialog(providerId, providerName),
+			showAmbientAuthDialog: (providerOption) => this.showAmbientAuthDialog(providerOption),
+			completeProviderAuthentication: (providerId, providerName, authType, previousModel, overrides) =>
+				this.completeProviderAuthentication(providerId, providerName, authType, previousModel, overrides),
+			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
+			invalidateFooter: () => this.footer.invalidate(),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
+		};
 	}
 
-	private async handleLoginCommand(providerRef?: string): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
-		if (!providerRef) {
-			this.showLoginAuthTypeSelector();
-			return;
-		}
-
-		const providerOptions = this.findLoginProviderOptions(providerRef);
-		if (providerOptions.length === 1) {
-			await this.startProviderLogin(providerOptions[0]!);
-			return;
-		}
-
-		if (providerOptions.length > 1) {
-			const providerIds = new Set(providerOptions.map((provider) => provider.id));
-			if (providerIds.size === 1) {
-				this.showLoginAuthTypeSelector(providerOptions);
-				return;
-			}
-		}
-
-		this.showLoginProviderSelector(undefined, providerRef);
-	}
-
-	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {
-		// lunr: gate Anthropic OAuth (subscription) login with a ToS disclaimer.
-		if (providerOption.id === "anthropic" && providerOption.authType === "oauth") {
-			const confirmed = await this.confirmDisclaimer("Anthropic Terms of Service", ANTHROPIC_TOS_DISCLAIMER);
-			if (!confirmed) {
-				this.showStatus("Login cancelled.");
-				return;
-			}
-		}
-		if (providerOption.authType === "oauth") {
-			if (providerOption.id === "xai" && hasGrokCliXaiAuth()) {
-				const choice = await this.showExtensionSelector("xAI SuperGrok is already signed in via Grok CLI.", [
-					"Use existing Grok CLI login",
-					"Sign in again",
-				]);
-				if (choice === undefined) return;
-				if (choice === "Use existing Grok CLI login") {
-					try {
-						const imported = await this.session.modelRuntime.importGrokCliXaiAuth();
-						if (!imported) {
-							this.showError("Could not read the Grok CLI SuperGrok session. Run /login xai again.");
-							return;
-						}
-						await this.completeProviderAuthentication(
-							providerOption.id,
-							providerOption.name,
-							"oauth",
-							this.session.model,
-							{ actionLabel: "Imported Grok CLI login", savedNote: "Using ~/.grok/auth.json" },
-						);
-					} catch (error: unknown) {
-						this.showError(
-							`Failed to import Grok CLI login: ${error instanceof Error ? error.message : String(error)}`,
-						);
-					}
-					return;
-				}
-			}
-			await this.showLoginDialog(providerOption.id, providerOption.name);
-		} else if (providerOption.method?.login) {
-			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name);
-		} else {
-			this.showAmbientAuthDialog(providerOption);
-		}
+	// Builds the SlashCommandHost without making InteractiveMode members public. `editor` stays a
+	// getter because extensions can replace the editor.
+	private createSlashCommandHost(): SlashCommandHost {
+		const mode = this;
+		return {
+			get editor() {
+				return mode.editor;
+			},
+			loginFlowHost: this.loginFlowHost,
+			handleClipboardPaste: (options) => this.handleClipboardPaste(options),
+			showSettingsSelector: () => this.showSettingsSelector(),
+			showModelsSelector: () => this.showModelsSelector(),
+			handleModelCommand: (searchTerm) => this.handleModelCommand(searchTerm),
+			handleRefreshCommand: () => this.handleRefreshCommand(),
+			handleExportCommand: (text) => this.handleExportCommand(text),
+			handleImportCommand: (text) => this.handleImportCommand(text),
+			handleCopyCommand: () => this.handleCopyCommand(),
+			handleNameCommand: (text) => this.handleNameCommand(text),
+			handleSessionCommand: () => this.handleSessionCommand(),
+			handleUsageCommand: () => this.handleUsageCommand(),
+			handleFastCommand: (arg) => this.handleFastCommand(arg),
+			handleContextCommand: () => this.handleContextCommand(),
+			handlePlanCommand: (args) => this.handlePlanCommand(args),
+			handleHotkeysCommand: () => this.handleHotkeysCommand(),
+			handleHelpCommand: () => this.handleHelpCommand(),
+			showUserMessageSelector: () => this.showUserMessageSelector(),
+			handleCloneCommand: () => this.handleCloneCommand(),
+			showTreeSelector: () => this.showTreeSelector(),
+			handleUndoCommand: () => this.handleUndoCommand(),
+			handleEditCommand: () => this.handleEditCommand(),
+			handleRedoCommand: () => this.handleRedoCommand(),
+			handleModeCommand: (args) => this.handleModeCommand(args),
+			applyPermissionMode: (permissionMode) => this.applyPermissionMode(permissionMode),
+			showProcessesSelector: () => this.showProcessesSelector(),
+			handleRollbackCommand: () => this.handleRollbackCommand(),
+			showTrustSelector: () => this.showTrustSelector(),
+			showOAuthSelector: (oauthMode) => this.showOAuthSelector(oauthMode),
+			handleClearCommand: () => this.handleClearCommand(),
+			handleCompactCommand: (customInstructions) => this.handleCompactCommand(customInstructions),
+			handleReloadCommand: () => this.handleReloadCommand(),
+			handleInitCommand: () => this.handleInitCommand(),
+			handleDebugCommand: () => this.handleDebugCommand(),
+			showSessionSelector: () => this.showSessionSelector(),
+			shutdown: () => this.shutdown(),
+		};
 	}
 
 	/** lunr: show a Yes/No disclaimer dialog using the existing selector pattern. */
@@ -6257,240 +6153,9 @@ export class InteractiveMode {
 		});
 	}
 
-	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
-		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
-		const oauthLoginLabel =
-			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
-		const subscriptionLabel = oauthLoginLabel ?? "Sign in with an account";
-		const apiKeyLabel = "Sign in with an API key";
-		const availableAuthTypes = providerOptions
-			? new Set(providerOptions.map((provider) => provider.authType))
-			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
-		const options: string[] = [];
-		if (availableAuthTypes.has("oauth")) {
-			options.push(subscriptionLabel);
-		}
-		if (availableAuthTypes.has("api_key")) {
-			options.push(apiKeyLabel);
-		}
-		// lunr: custom-endpoint wizard is only offered from the top-level auth-type menu
-		// (no provider chosen yet), not when re-authenticating a specific provider.
-		const customProviderLabel = "Connect a custom API endpoint…";
-		if (!providerOptions) {
-			options.push(customProviderLabel);
-		}
-
-		if (options.length === 0) {
-			this.showStatus("No login methods available.");
-			return;
-		}
-
-		if (providerOptions && options.length === 1) {
-			const providerOption = providerOptions[0];
-			if (providerOption) {
-				void this.startProviderLogin(providerOption);
-			}
-			return;
-		}
-
-		const title = providerOptions?.[0]
-			? `Select authentication method for ${providerOptions[0].name}:`
-			: "Select authentication method:";
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					done();
-					// lunr: intercept before the oauth/api_key label mapping below.
-					if (option === customProviderLabel) {
-						void this.showCustomProviderWizard();
-						return;
-					}
-					const authType = option === subscriptionLabel ? "oauth" : "api_key";
-					if (providerOptions) {
-						const providerOption = providerOptions.find((provider) => provider.authType === authType);
-						if (providerOption) {
-							void this.startProviderLogin(providerOption);
-						}
-						return;
-					}
-					this.showLoginProviderSelector(authType);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string): void {
-		const providerOptions = this.getLoginProviderOptions(authType);
-		if (providerOptions.length === 0) {
-			const message =
-				authType === "oauth"
-					? "No subscription providers available."
-					: authType === "api_key"
-						? "No API key providers available."
-						: "No login providers available.";
-			this.showStatus(message);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				"login",
-				providerOptions,
-				async (providerId, selectedAuthType) => {
-					done();
-
-					const providerOption = providerOptions.find(
-						(provider) => provider.id === providerId && provider.authType === selectedAuthType,
-					);
-					if (!providerOption) {
-						return;
-					}
-
-					await this.startProviderLogin(providerOption);
-				},
-				() => {
-					done();
-					if (authType) {
-						this.showLoginAuthTypeSelector();
-					} else {
-						this.ui.requestRender();
-					}
-				},
-				initialSearchInput,
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	// lunr: /login "Connect a custom API endpoint…" wizard. Writes the provider to
-	// models.json via upsertCustomProvider, then stores the key through the standard
-	// api_key login route (auth.json) once reloadConfig has composed the provider.
-	private async showCustomProviderWizard(): Promise<void> {
-		const cancelled = () => this.showStatus("Custom provider setup cancelled.");
-
-		const nameInput = await this.showExtensionInput("Custom provider — display name:", "My Provider");
-		const name = nameInput?.trim();
-		if (!name) {
-			cancelled();
-			return;
-		}
-		const existingIds = this.session.modelRuntime.getProviders().map((provider) => provider.id);
-		const providerId = slugifyProviderId(name, existingIds);
-
-		const baseUrlInput = await this.showExtensionInput(`Base URL for ${name}:`, "https://api.example.com/v1");
-		if (baseUrlInput === undefined) {
-			cancelled();
-			return;
-		}
-		const baseUrl = baseUrlInput.trim();
-		if (!isValidProviderBaseUrl(baseUrl)) {
-			this.showError(`Invalid base URL "${baseUrl}" — it must start with http:// or https://.`);
-			return;
-		}
-
-		const api = await this.showExtensionSelector(`API protocol for ${name}:`, [
-			"openai-completions",
-			"openai-responses",
-			"anthropic-messages",
-			"google-generative-ai",
-		]);
-		if (!api) {
-			cancelled();
-			return;
-		}
-
-		const modelIdsInput = await this.showExtensionInput(
-			`Model IDs exposed by ${name} (comma-separated):`,
-			"model-a, model-b",
-		);
-		if (modelIdsInput === undefined) {
-			cancelled();
-			return;
-		}
-		const modelIds = parseModelIds(modelIdsInput);
-		if (modelIds.length === 0) {
-			this.showError("At least one model ID is required.");
-			return;
-		}
-
-		const apiKeyInput = await this.showExtensionInput(`API key for ${name}:`);
-		const apiKey = apiKeyInput?.trim();
-		if (!apiKey) {
-			cancelled();
-			return;
-		}
-
-		const modelsJsonPath = path.join(getAgentDir(), "models.json");
-		try {
-			await upsertCustomProvider(modelsJsonPath, providerId, {
-				name,
-				baseUrl,
-				api,
-				models: modelIds.map((id) => ({ id })),
-			});
-			await this.session.modelRuntime.reloadConfig();
-		} catch (error: unknown) {
-			this.showError(`Failed to add custom provider: ${error instanceof Error ? error.message : String(error)}`);
-			return;
-		}
-
-		try {
-			// The composed provider's fabricated apiKey.login persists via credentials.modify
-			// (auth.json) — the same storage route showApiKeyLoginDialog uses.
-			await this.session.modelRuntime.login(providerId, "api_key", {
-				prompt: () => Promise.resolve(apiKey),
-				notify: () => {},
-			});
-		} catch (error: unknown) {
-			await this.updateAvailableProviderCount();
-			this.showError(
-				`Custom provider '${name}' was added to models.json, but saving its API key failed: ${error instanceof Error ? error.message : String(error)}. Use /login to store a key.`,
-			);
-			return;
-		}
-
-		await this.updateAvailableProviderCount();
-		this.footer.invalidate();
-		this.updateEditorBorderColor();
-
-		const refineNote = `Refine contextWindow/cost by editing ${modelsJsonPath}.`;
-		const modelCount = modelIds.length;
-		if (modelCount === 1) {
-			const modelId = modelIds[0];
-			const model = modelId ? this.session.modelRuntime.getModel(providerId, modelId) : undefined;
-			if (model) {
-				const choice = await this.showExtensionSelector(
-					`Custom provider '${name}' added. Select ${model.id} as the active model?`,
-					["Select model", "Skip"],
-				);
-				if (choice === "Select model") {
-					try {
-						await this.session.setModel(model);
-						this.showStatus(`Custom provider '${name}' added (1 model). Selected ${model.id}. ${refineNote}`);
-						return;
-					} catch (error: unknown) {
-						this.showError(
-							`Selecting ${model.id} failed: ${error instanceof Error ? error.message : String(error)}. Use /model to select a model.`,
-						);
-					}
-				}
-			}
-		}
-		this.showStatus(
-			`Custom provider '${name}' added (${modelCount} model${modelCount === 1 ? "" : "s"}). ${refineNote}`,
-		);
-	}
-
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
 		if (mode === "login") {
-			this.showLoginAuthTypeSelector();
+			showLoginAuthTypeSelector(this.loginFlowHost);
 			return;
 		}
 
@@ -6615,6 +6280,7 @@ export class InteractiveMode {
 				void this.maybeWarnAboutAnthropicSubscriptionAuth();
 			}
 		}
+		await this.openModelSelectorIfUnset();
 	}
 
 	private showAmbientAuthDialog(providerOption: AuthSelectorProvider): void {
@@ -7704,7 +7370,7 @@ export class InteractiveMode {
 		const reviewer = this.session.resolveAutoReviewer();
 		if (reviewer.kind === "ready") return;
 		this.showWarning(
-			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /auto to pick one.`,
+			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
 		);
 	}
 
@@ -7952,6 +7618,22 @@ export class InteractiveMode {
 		return keyDisplayText(action);
 	}
 
+	/** Prints the short /help block: the commands and keys a new user needs first. */
+	private handleHelpCommand(): void {
+		const lines = buildHelpLines(
+			{
+				cyclePermissionMode: this.getAppKeyDisplay("app.mode.cycle"),
+				interrupt: this.getAppKeyDisplay("app.interrupt"),
+			},
+			(title) => theme.bold(theme.fg("accent", title)),
+		);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.ui.requestRender();
+	}
+
 	private handleHotkeysCommand(): void {
 		// Navigation keybindings
 		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
@@ -8029,7 +7711,7 @@ export class InteractiveMode {
 | \`${tab}\` | Path completion / accept autocomplete |
 | \`${interrupt}\` | Cancel autocomplete / abort streaming |
 | \`${clear}\` | Clear editor (first) / exit (second) |
-| \`${exit}\` | Exit (when editor is empty) |
+| \`${exit}\` twice | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cyclePermissionMode}\` | Cycle permission mode |
 ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |

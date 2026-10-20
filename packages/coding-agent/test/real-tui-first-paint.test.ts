@@ -93,7 +93,7 @@ describe("real TUI first paint", () => {
 		expect(view.editor.onPasteImage).toBeTypeOf("function");
 		terminal.input("!");
 		view.activate();
-		expect(submit).toHaveBeenCalledExactlyOnceWith("hello!");
+		expect(submit).toHaveBeenCalledExactlyOnceWith("hello!", "hello!");
 		expect(view.editor.onPasteImage).toBeUndefined();
 	});
 

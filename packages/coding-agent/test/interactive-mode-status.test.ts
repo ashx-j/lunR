@@ -6,7 +6,6 @@ import { type Component, Container, type Focusable, TUI } from "../../tui/src/tu
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
-import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
 import { InteractiveMode, startInteractiveToolInstalls } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -431,6 +430,58 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 });
 
 describe("InteractiveMode.createBaseAutocompleteProvider", () => {
+	test("leaves hidden builtin and extension commands out of the slash list", async () => {
+		type FakeCommand = { name: string; invocationName: string; hidden?: boolean };
+		type FakeInteractiveMode = {
+			session: {
+				scopedModels: [];
+				modelRuntime: { getAvailable: () => [] };
+				promptTemplates: [];
+				extensionRunner: { getRegisteredCommands: () => FakeCommand[] };
+				resourceLoader: { getSkills: () => { skills: [] } };
+			};
+			settingsManager: { getEnableSkillCommands: () => boolean; getSkillTagCharacter: () => "+" };
+			skillCommands: Map<string, string>;
+			sessionManager: { getCwd: () => string };
+			fdPath: null;
+			prefixAutocompleteDescription: (description: string | undefined) => string | undefined;
+		};
+		const createBaseAutocompleteProvider = (
+			InteractiveMode as unknown as {
+				prototype: { createBaseAutocompleteProvider(this: FakeInteractiveMode): AutocompleteProvider };
+			}
+		).prototype.createBaseAutocompleteProvider;
+		const fakeThis: FakeInteractiveMode = {
+			session: {
+				scopedModels: [],
+				modelRuntime: { getAvailable: () => [] },
+				promptTemplates: [],
+				extensionRunner: {
+					getRegisteredCommands: () => [
+						{ name: "goal", invocationName: "goal" },
+						{ name: "effort", invocationName: "effort", hidden: true },
+						// An extension command named like a hidden builtin stays shadowed.
+						{ name: "title", invocationName: "title" },
+					],
+				},
+				resourceLoader: { getSkills: () => ({ skills: [] }) },
+			},
+			settingsManager: { getEnableSkillCommands: () => false, getSkillTagCharacter: () => "+" },
+			skillCommands: new Map(),
+			sessionManager: { getCwd: () => "/tmp" },
+			fdPath: null,
+			prefixAutocompleteDescription: (description) => description,
+		};
+
+		const provider = createBaseAutocompleteProvider.call(fakeThis);
+		const suggestions = await provider.getSuggestions(["/"], 0, 1, { signal: new AbortController().signal });
+		const names = suggestions?.items.map((item) => item.value) ?? [];
+		expect(names).toEqual(expect.arrayContaining(["name", "mode", "login", "goal"]));
+		for (const hidden of ["title", "auth", "deauth", "exit", "sessions", "read", "yolo", "auto", "debug", "effort"]) {
+			expect(names).not.toContain(hidden);
+		}
+	});
+
 	test("matches model command arguments across provider/model order", async () => {
 		type TestModel = { id: string; provider: string; name: string };
 		type FakeInteractiveMode = {
@@ -483,10 +534,16 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 	});
 
 	test("matches login command arguments by provider id and name", async () => {
+		type FakeProvider = { id: string; name: string; auth: { oauth?: { name: string }; apiKey?: { name: string } } };
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: [];
-				modelRuntime: { getAvailable: () => [] };
+				modelRuntime: {
+					getAvailable: () => [];
+					getProviders: () => FakeProvider[];
+					getProviderAuthStatus: () => { configured: false };
+					isUsingOAuth: () => false;
+				};
 				promptTemplates: [];
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
@@ -495,7 +552,6 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
-			getLoginProviderOptions: () => AuthSelectorProvider[];
 		};
 
 		const createBaseAutocompleteProvider = (
@@ -506,7 +562,19 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		const fakeThis: FakeInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRuntime: { getAvailable: () => [] },
+				modelRuntime: {
+					getAvailable: () => [],
+					getProviders: () => [
+						{
+							id: "anthropic",
+							name: "Anthropic",
+							auth: { oauth: { name: "Anthropic subscription" }, apiKey: { name: "Anthropic API key" } },
+						},
+						{ id: "openai", name: "OpenAI", auth: { apiKey: { name: "OpenAI API key" } } },
+					],
+					getProviderAuthStatus: () => ({ configured: false }),
+					isUsingOAuth: () => false,
+				},
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
@@ -515,11 +583,6 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
-			getLoginProviderOptions: () => [
-				{ id: "anthropic", name: "Anthropic", authType: "oauth" },
-				{ id: "anthropic", name: "Anthropic", authType: "api_key" },
-				{ id: "openai", name: "OpenAI", authType: "api_key" },
-			],
 		};
 
 		const provider = createBaseAutocompleteProvider.call(fakeThis);

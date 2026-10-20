@@ -2,6 +2,28 @@
 
 lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.38`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
+## [Unreleased]
+
+### Added
+
+- First launch without a provider shows an onboarding screen: sign in with an account, sign in with an API key, connect a custom OpenAI-compatible endpoint, or skip. It returns on every launch until a login exists and no usable model is set. After a login with no default model, `/model` opens on its own.
+- `/help` prints the commands and keys you need most.
+- An unknown `/word` goes back to the editor with suggestions instead of being sent to the model. Start with a space to send it as a message. Paths like `/tmp` still go through.
+
+### Changed
+
+- `/settings` groups its rows under Model, Agent, Display, Features and Terminal headings. Transport, HTTP idle timeout, prompt cache, hardware cursor, padding, autocomplete and clear-on-shrink rows moved into a new Advanced submenu at the bottom. Search still matches setting names, not headings; searching for an Advanced setting shows the Advanced row with the matching names.
+- Ctrl+D on an empty editor quits only on a second press within 1.5 seconds. The first press shows `Press Ctrl+D again to exit`.
+- The `/` list is shorter. Aliases (`/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title`, `/exit`), `/read`, `/yolo`, `/auto` and `/debug` still work when typed but are hidden. `/search` now also runs a web search (`/websearch` is a hidden alias for one release). `/chain` runs workflows and prompt-template chains by name (`/chain-workflows` and `/chain-prompts` are hidden aliases for one release).
+- The no-key message is two lines: run `/login`, then `/model`, plus a docs link.
+- Identical errors or warnings in a row collapse into one line ending in `(×N)`.
+- With no model, the chatbox shows `no model` and the footer shows `no model · /login`.
+- `lunr --help` starts with a Common options block and no longer claims `--provider` defaults to google.
+
+### Removed
+
+- `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh` and `/max`. Use `/thinking <level>` or Ctrl+T.
+
 ## [0.2.38] - 2026-10-18
 
 ### Added

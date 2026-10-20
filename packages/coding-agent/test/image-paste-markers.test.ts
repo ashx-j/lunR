@@ -36,10 +36,12 @@ type SubmitContext = {
 	loadImageAttachments: (
 		attachments: Array<{ id: number; path: string; mimeType: string }>,
 	) => Promise<Array<{ type: "image"; mimeType: string; data: string }> | undefined>;
+	slashCommandHost?: unknown;
 };
 
 type InteractiveModePrivate = {
 	setupEditorSubmitHandler(this: SubmitContext): void;
+	createSlashCommandHost(this: SubmitContext): unknown;
 	loadImageAttachments(
 		this: {
 			settingsManager: { getImageAutoResize: () => boolean };
@@ -154,6 +156,7 @@ describe("InteractiveMode image paste chips", () => {
 			loadImageAttachments: vi.fn(async () => undefined),
 		};
 
+		context.slashCommandHost = proto.createSlashCommandHost.call(context);
 		proto.setupEditorSubmitHandler.call(context);
 		await context.defaultEditor.onSubmit?.("/paste-image");
 

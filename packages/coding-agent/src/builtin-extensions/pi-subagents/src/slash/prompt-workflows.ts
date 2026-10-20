@@ -298,29 +298,65 @@ export function registerPromptWorkflowCommands(input: {
 
 	pi.registerCommand("chain-workflows", {
 		description: "Run prompt workflows as a native subagent chain: /chain-workflows analyze -> fix -- args",
-		handler: async (rawArgs, ctx) => {
-			const { declaration, argsText } = splitChainDeclaration(rawArgs);
-			const workflows = discoverPromptWorkflows(ctx.cwd);
-			if (!declaration || declaration === "list") {
-				pi.sendMessage({ content: formatWorkflowList(workflows), display: true });
-				return;
-			}
-			const runtime = parseRuntimeOptions(shellWords(argsText));
-			const names = splitPromptChain(declaration);
-			if (names.length === 0) {
-				ctx.ui.notify("Usage: /chain-workflows prompt-a -> prompt-b -- args", "error");
-				return;
-			}
-			try {
-				const chain = names.map((name) => {
-					const workflow = findWorkflow(workflows, name);
-					if (!workflow) throw new Error(`Unknown prompt workflow: ${name}`);
-					return workflowChainStep(workflow, runtime.args, runtime);
-				});
-				await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.async !== undefined ? { async: runtime.async } : {}) }, ctx);
-			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-			}
-		},
+		hidden: true,
+		handler: (rawArgs, ctx) => runWorkflowChain(pi, run, rawArgs, ctx),
 	});
+}
+
+/**
+ * Runs `analyze -> fix -- args` as a native subagent chain of prompt workflows. Used by `/chain` when
+ * every step names a workflow, and by the hidden `/chain-workflows` alias.
+ */
+export async function runWorkflowChain(
+	pi: ExtensionAPI,
+	run: PromptWorkflowRunner,
+	rawArgs: string,
+	ctx: ExtensionContext,
+): Promise<void> {
+	const { declaration, argsText } = splitChainDeclaration(rawArgs);
+	const workflows = discoverPromptWorkflows(ctx.cwd);
+	if (!declaration || declaration === "list") {
+		pi.sendMessage({ content: formatWorkflowList(workflows), display: true });
+		return;
+	}
+	const runtime = parseRuntimeOptions(shellWords(argsText));
+	const names = splitPromptChain(declaration);
+	if (names.length === 0) {
+		ctx.ui.notify("Usage: /chain prompt-a -> prompt-b -- args", "error");
+		return;
+	}
+	try {
+		const chain = names.map((name) => {
+			const workflow = findWorkflow(workflows, name);
+			if (!workflow) throw new Error(`Unknown prompt workflow: ${name}`);
+			return workflowChainStep(workflow, runtime.args, runtime);
+		});
+		await run({ chain, task: runtime.args.join(" "), clarify: false, ...(runtime.async !== undefined ? { async: runtime.async } : {}) }, ctx);
+	} catch (error) {
+		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+	}
+}
+
+export type ChainRoute = "task" | "workflow" | "template";
+
+/**
+ * Picks the engine for `/chain <args>` from the argument shape:
+ * - Task chain when the first token carries inline config (`scout[tier=light]`) or opens a parallel
+ *   group `(`. Every valid task chain has one of these, so a task step named like a workflow or
+ *   template can never be rerouted.
+ * - Workflow chain when each ` -> ` step before ` -- ` is a single workflow name.
+ * - Template chain when every step names a chain prompt template (`isTemplateChain`).
+ * - Anything else stays a task chain, which reports its usual usage errors.
+ */
+export function chooseChainRoute(
+	args: string,
+	isWorkflow: (name: string) => boolean,
+	isTemplateChain: () => boolean,
+): ChainRoute {
+	const input = args.trim();
+	const first = input.split(/\s/, 1)[0] ?? "";
+	if (!first || first.includes("[") || first.startsWith("(")) return "task";
+	const steps = splitPromptChain(splitChainDeclaration(input).declaration);
+	if (steps.length > 0 && steps.every((step) => !/\s/.test(step) && isWorkflow(step))) return "workflow";
+	return isTemplateChain() ? "template" : "task";
 }

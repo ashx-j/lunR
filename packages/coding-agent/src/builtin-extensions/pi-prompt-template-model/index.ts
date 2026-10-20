@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { bindPromptTemplateChains } from "../../core/prompt-chain-bridge.ts";
 import { getPromptResources } from "../../core/prompt-resource-bridge.ts";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
@@ -1734,22 +1735,27 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		};
 	});
 
+	// Strips the chain flags and parses the steps. Shared by the chain runner and the /chain lookup.
+	function parseChainCommandArgs(args: string) {
+		const subagent = extractSubagentOverride(args);
+		const worktreeExtraction = extractWorktreeFlag(subagent.args);
+		const extracted = extractChainContextFlag(worktreeExtraction.args);
+		const loop = extractLoopCount(extracted.args);
+		const cleanedArgs = loop ? loop.args : extracted.args;
+		return { subagent, worktreeExtraction, extracted, loop, ...parseChainSteps(cleanedArgs) };
+	}
+
 	async function runChainCommand(args: string, ctx: ExtensionCommandContext) {
 		storedCommandCtx = ctx;
 		refreshPrompts(ctx.cwd, ctx);
 
-		const subagent = extractSubagentOverride(args);
+		const { subagent, worktreeExtraction, extracted, loop, steps, sharedArgs, invalidSegments } =
+			parseChainCommandArgs(args);
 		const runtimeCwd = subagent.cwd ? expandCwdPath(subagent.cwd) : undefined;
 		if (subagent.cwd && !runtimeCwd) {
 			notify(ctx, `Invalid --cwd path: must be absolute`, "error");
 			return;
 		}
-		const worktreeExtraction = extractWorktreeFlag(subagent.args);
-		const extracted = extractChainContextFlag(worktreeExtraction.args);
-		const loop = extractLoopCount(extracted.args);
-		const cleanedArgs = loop ? loop.args : extracted.args;
-
-		const { steps, sharedArgs, invalidSegments } = parseChainSteps(cleanedArgs);
 		if (invalidSegments.length > 0) {
 			notify(ctx, `Invalid chain step: ${invalidSegments[0]}`, "error");
 			return;
@@ -1777,8 +1783,23 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 
 	if (toolManager.isEnabled()) toolManager.ensureRegistered();
 
+	// lunr: /chain (pi-subagents) runs template chains through this bridge when every step names a
+	// chain template. /chain-prompts stays a hidden alias for one release.
+	bindPromptTemplateChains(pi.events, {
+		matches(args, ctx) {
+			refreshPrompts(ctx.cwd, ctx);
+			const { steps, invalidSegments } = parseChainCommandArgs(args);
+			if (steps.length === 0 || invalidSegments.length > 0) return false;
+			return steps
+				.flatMap((step) => (isParallelChainStep(step) ? step.parallel : [step]))
+				.every((step) => chainPrompts.has(step.name));
+		},
+		run: runChainCommand,
+	});
+
 	pi.registerCommand("chain-prompts", {
 		description: "Chain prompt templates sequentially: /chain-prompts analyze -> fix [--loop N] [--chain-context]",
+		hidden: true,
 		handler: async (args, ctx) => {
 			await runChainCommand(args, ctx);
 		},

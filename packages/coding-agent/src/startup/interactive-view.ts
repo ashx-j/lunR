@@ -20,6 +20,7 @@ import { registerPermissionModeBridge } from "../core/permission-mode.ts";
 import type { SessionInfo, SessionListProgress } from "../core/session-manager.ts";
 import type { Settings } from "../core/settings-manager.ts";
 import { BootScreenComponent } from "../modes/interactive/components/boot-screen.ts";
+import { ExitConfirmation } from "../modes/interactive/exit-confirmation.ts";
 import { getEditorTheme, getThemeName, initTheme, theme } from "../modes/interactive/theme/theme.ts";
 import { markStartupMilestone } from "./startup-milestones.ts";
 
@@ -82,6 +83,8 @@ export class InteractiveView {
 	private handedOff = false;
 	private exitRequested = false;
 	private lastClearAt = 0;
+	readonly exitConfirmation = new ExitConfirmation();
+	private failed = false;
 	private currentEditor: () => EditorComponent = () => this.editor;
 
 	constructor() {
@@ -203,8 +206,9 @@ export class InteractiveView {
 
 	showError(error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
+		this.failed = true;
 		this.status.setText(
-			`Startup failed: ${message}\nYour draft is intact. Press Ctrl+C twice or Ctrl+D on an empty draft to exit.`,
+			`Startup failed: ${message}\nYour draft is intact. Press Ctrl+C twice, or Ctrl+D twice on an empty draft, to exit.`,
 		);
 		this.editor.disableSubmit = true;
 		this.statusContainer.clear();
@@ -341,7 +345,16 @@ export class InteractiveView {
 			this.editor.setText("");
 			this.lastClearAt = now;
 		});
-		this.editor.onCtrlD = () => this.stop();
+		this.editor.onCtrlD = () => {
+			if (this.exitConfirmation.press()) {
+				this.stop();
+				return;
+			}
+			// After a startup failure the error text already explains how to exit; keep it visible.
+			if (this.failed) return;
+			this.status.setText(theme.fg("dim", this.exitConfirmation.hint));
+			this.ui.requestRender();
+		};
 		this.editor.onPasteImage = () => void this.pasteClipboard();
 		this.inputUnsubscribe = this.ui.addInputListener((data) => {
 			const editor = this.currentEditor();

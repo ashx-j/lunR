@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { getPromptTemplateChains } from "../../../../core/prompt-chain-bridge.ts";
 import { collectUsageRequests, totalRequestUsage, collectChildUsage } from "../../../../core/usage-accounting.ts";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
@@ -15,7 +16,7 @@ import { SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import { assertJsonSchemaObject } from "../runs/shared/structured-output.ts";
 import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
-import { registerPromptWorkflowCommands } from "./prompt-workflows.ts";
+import { chooseChainRoute, discoverPromptWorkflows, registerPromptWorkflowCommands, runWorkflowChain } from "./prompt-workflows.ts";
 import { openSubagentFleet } from "../tui/fleet.ts";
 import {
 	applySlashUpdate,
@@ -946,8 +947,24 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run prompt-defined children as an async sequence; add --foreground to wait inline",
+		description: "Run children, prompt workflows or prompt templates in sequence; add --foreground to wait inline",
 		handler: async (args, ctx) => {
+			// lunr: /chain also runs workflow and template chains (formerly /chain-workflows and /chain-prompts).
+			let workflowNames: Set<string> | undefined;
+			const templateChains = getPromptTemplateChains(pi.events);
+			const route = chooseChainRoute(
+				args,
+				(name) => (workflowNames ??= new Set(discoverPromptWorkflows(ctx.cwd).map((workflow) => workflow.name))).has(name),
+				() => templateChains?.matches(args, ctx) ?? false,
+			);
+			if (route === "workflow") {
+				await runWorkflowChain(pi, (params, runCtx) => runSlashSubagent(pi, runCtx, params), args, ctx);
+				return;
+			}
+			if (route === "template" && templateChains) {
+				await templateChains.run(args, ctx);
+				return;
+			}
 			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const built = buildChainExpressionSteps(state, cleanedArgs, ctx);
 			if (!built) return;
