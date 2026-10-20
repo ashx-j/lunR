@@ -6,7 +6,7 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.38`**. Versioned
 
 ### Changed
 
-- `/settings` groups its rows under Model, Agent, Display, Features and Terminal headings. Transport, HTTP idle timeout, prompt cache, hardware cursor, padding, autocomplete and clear-on-shrink rows moved into a new Advanced submenu at the bottom. Search still matches setting names, not headings.
+- `/settings` groups its rows under Model, Agent, Display, Features and Terminal headings. Transport, HTTP idle timeout, prompt cache, hardware cursor, padding, autocomplete and clear-on-shrink rows moved into a new Advanced submenu at the bottom. Search still matches setting names, not headings; searching for an Advanced setting shows the Advanced row with the matching names.
 
 ## [0.2.38] - 2026-10-18
 

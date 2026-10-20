@@ -1953,6 +1953,8 @@ export class SettingsSelectorComponent extends Container {
 				label: "Advanced",
 				description: "Connection, prompt cache and terminal layout options",
 				currentValue: "configure",
+				// Top-level search finds Advanced rows by name and lands on this row.
+				searchTerms: advancedItems.map((item) => item.label),
 				submenu: (_currentValue, done) => new AdvancedSubmenu(advancedItems, onSettingChange, done),
 			},
 		];

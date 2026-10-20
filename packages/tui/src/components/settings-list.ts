@@ -19,6 +19,11 @@ export interface SettingItem {
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
 	/** If true, the row is rendered dimmed and cannot be activated. Evaluated at render/activation time. */
 	disabled?: () => boolean;
+	/**
+	 * Extra names search matches besides the label, such as the rows inside a submenu.
+	 * While a search matches some of them, the row shows those names in place of its value.
+	 */
+	searchTerms?: string[];
 	/** Never set on a setting row; keeps it apart from a SettingSection in a mixed row list. */
 	kind?: never;
 }
@@ -61,6 +66,8 @@ export class SettingsList implements Component, Focusable {
 	// Selectable rows only. Navigation, search and the (n/total) counter all work on these.
 	private items: SettingItem[];
 	private filteredItems: SettingItem[];
+	// Search terms the current query matched, per row. Empty when the query is blank.
+	private matchedTerms = new Map<SettingItem, string[]>();
 	private sectionOf = new Map<SettingItem, SettingSection>();
 	private theme: SettingsListTheme;
 	private selectedIndex = 0;
@@ -202,9 +209,10 @@ export class SettingsList implements Component, Focusable {
 			const usedWidth = prefixWidth + maxLabelWidth + visibleWidth(separator);
 			const valueMaxWidth = width - usedWidth - 2;
 
+			const value = this.matchedTerms.get(item)?.join(", ") ?? item.currentValue;
 			const valueText = isDisabled
-				? this.theme.disabled(truncateToWidth(item.currentValue, valueMaxWidth, ""))
-				: this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
+				? this.theme.disabled(truncateToWidth(value, valueMaxWidth, ""))
+				: this.theme.value(truncateToWidth(value, valueMaxWidth, ""), isSelected);
 
 			lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
 		}
@@ -299,9 +307,23 @@ export class SettingsList implements Component, Focusable {
 		}
 	}
 
+	// Matches each row's label and search terms separately, so a row ranks by its best match.
 	private applyFilter(query: string): void {
-		this.filteredItems = fuzzyFilter(this.items, query, (item) => item.label);
+		this.matchedTerms = new Map();
 		this.selectedIndex = 0;
+		if (!query.trim()) {
+			this.filteredItems = this.items;
+			return;
+		}
+		const candidates = this.items.flatMap((item) => [
+			{ item, text: item.label, isTerm: false },
+			...(item.searchTerms ?? []).map((text) => ({ item, text, isTerm: true })),
+		]);
+		const matches = fuzzyFilter(candidates, query, (candidate) => candidate.text);
+		for (const { item, text, isTerm } of matches) {
+			if (isTerm) this.matchedTerms.set(item, [...(this.matchedTerms.get(item) ?? []), text]);
+		}
+		this.filteredItems = [...new Set(matches.map((match) => match.item))];
 	}
 
 	private addHintLine(lines: string[], width: number): void {
