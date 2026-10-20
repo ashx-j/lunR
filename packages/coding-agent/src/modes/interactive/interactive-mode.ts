@@ -1175,9 +1175,9 @@ export class InteractiveMode {
 				if (choice === "skip") {
 					this.showStatus("No provider yet. Run /login when you are ready.");
 				} else if (choice === "custom") {
-					void showCustomProviderWizard(this.loginFlowHost)
-						.then(() => this.openModelSelectorIfUnset())
-						.catch((error: unknown) => this.showError(error instanceof Error ? error.message : String(error)));
+					void showCustomProviderWizard(this.loginFlowHost).catch((error: unknown) =>
+						this.showError(error instanceof Error ? error.message : String(error)),
+					);
 				} else {
 					showLoginProviderSelector(this.loginFlowHost, choice);
 				}
@@ -5607,7 +5607,7 @@ export class InteractiveMode {
 		});
 	}
 
-	// `selectedStatus` replaces the "Model: <id>" status after a pick (onboarding prints a ready line).
+	// `selectedStatus` replaces the "Model: <id>" status after a pick (the post-login picker prints a ready line).
 	private async showModelSelector(initialSearchInput?: string, selectedStatus?: string): Promise<void> {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		// lunr: prefetch active subscription names so row rendering stays synchronous.
@@ -6172,6 +6172,7 @@ export class InteractiveMode {
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
 		};
 	}
 
