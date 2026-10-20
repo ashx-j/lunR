@@ -3088,8 +3088,8 @@ export class InteractiveMode {
 	}
 
 	private setupEditorSubmitHandler(): void {
-		this.defaultEditor.onSubmit = async (text: string, rawText?: string) => {
-			text = text.trim();
+		this.defaultEditor.onSubmit = async (submittedText: string, rawText?: string) => {
+			const text = submittedText.trim();
 			if (text === "/reclaim" || text === "/reclaim stop") {
 				const file = this.sessionManager.getSessionFile();
 				try {
@@ -3336,7 +3336,7 @@ export class InteractiveMode {
 			}
 
 			// A mistyped command goes back to the editor instead of to the model as a prompt.
-			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? text, { images }))) return;
+			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? submittedText, { images }))) return;
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
