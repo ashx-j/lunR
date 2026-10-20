@@ -56,7 +56,7 @@ cd /path/to/project
 lunr
 ```
 
-Until you sign in to a provider, lunR opens an onboarding screen at launch that walks you through `/login`.
+If no provider is set up, lunR opens an onboarding screen at launch that walks you through `/login`.
 
 Authenticate with an API key:
 
@@ -215,7 +215,7 @@ There is no `/changelog` or `/token-usage` command.
 
 `yolo` is the default. Every tool call runs without an approval prompt.
 
-`auto` works like `yolo`, but a reviewer model checks risky calls, such as shell commands and writes outside the project, before they run. Pick the reviewer in `/settings` under Auto review model.
+`auto` works like `yolo`, but a reviewer model checks risky calls before they run, such as shell commands that change things, writes outside the project or to hidden files, and web fetches. Pick the reviewer in `/settings` under Auto review model.
 
 `read-only` blocks writes and other changes. The footer shows it as `read`. `/plan` switches to it while you plan a task.
 
