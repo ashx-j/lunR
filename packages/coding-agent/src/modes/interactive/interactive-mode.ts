@@ -3336,7 +3336,8 @@ export class InteractiveMode {
 			}
 
 			// A mistyped command goes back to the editor instead of to the model as a prompt.
-			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? submittedText, { images }))) return;
+			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? submittedText, { images })))
+				return;
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
