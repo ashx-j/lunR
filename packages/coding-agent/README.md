@@ -7,7 +7,7 @@
   <a href="https://github.com/ashx-j/lunR"><img alt="GitHub" src="https://img.shields.io/badge/github-ashx--j%2FlunR-181717?style=flat-square&logo=github" /></a>
 </p>
 
-lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, ACP, and SDK modes, plus baked-in MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway.
+lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, ACP, and SDK modes, plus baked-in MCP, subagents, permission modes, planning in read-only mode (shown as `read` in the footer), todos, cron, and a Telegram/Discord gateway.
 
 Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle those as [packages](#packages) and share them via npm or git.
 
@@ -19,6 +19,7 @@ Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt 
   - [Editor](#editor)
   - [Copyable response blocks](#copyable-response-blocks)
   - [Commands](#commands)
+  - [Permission modes](#permission-modes)
   - [Keyboard Shortcuts](#keyboard-shortcuts)
   - [Message Queue](#message-queue)
 - [Sessions](#sessions)
@@ -55,6 +56,8 @@ cd /path/to/project
 lunr
 ```
 
+If no provider is set up, lunR opens an onboarding screen at launch that walks you through `/login`.
+
 Authenticate with an API key:
 
 ```bash
@@ -69,7 +72,7 @@ lunr
 /login  # Then select provider
 ```
 
-First-run setup installs Chromium and offers the optional Telegram/Discord gateway:
+Optional: install Chromium and configure the chat gateway:
 
 ```bash
 lunr setup
@@ -177,7 +180,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/settings` | Theme, thinking, agent memory, message delivery, transport |
 | `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
 | `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
-| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read` (Shift+Tab cycles) |
+| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read-only` (Shift+Tab cycles) |
 | `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
 | `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
@@ -207,6 +210,16 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/quit`, `/exit` | Quit lunR |
 
 There is no `/changelog` or `/token-usage` command.
+
+### Permission modes
+
+`yolo` is the default. Every tool call runs without an approval prompt.
+
+`auto` works like `yolo`, but a reviewer model checks risky calls before they run, such as shell commands that change things, writes outside the project or to hidden files, and web fetches. Pick the reviewer in `/settings` under Auto review model.
+
+`read-only` blocks writes and other changes. The footer shows it as `read`. `/plan` switches to it while you plan a task.
+
+Shift+Tab cycles `yolo`, `auto` and `read-only`. `/mode`, `/yolo`, `/auto` and `/read` switch directly.
 
 ### Keyboard Shortcuts
 
@@ -492,7 +505,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 
 - **MCP** — `/mcp`, `/mcp-auth`
 - **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
-- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
+- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (see [Permission modes](#permission-modes))
 - **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`

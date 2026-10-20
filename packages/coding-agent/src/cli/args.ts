@@ -220,7 +220,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
+	console.log(`${chalk.bold(APP_NAME)} - terminal coding agent with multi-provider models, subagents, cron and chat gateways
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
@@ -229,7 +229,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} setup                      Install Chromium and configure optional features
   ${APP_NAME} browser install            Repair Chromium after offline or ignored-script installs
   ${APP_NAME} features [list|enable|disable]
-  ${APP_NAME} doctor [keys]                Check logins, models, browser and gateway; keys tests shortcuts
+  ${APP_NAME} doctor [keys]              Check logins, models, browser and gateway; keys tests shortcuts
   ${APP_NAME} uninstall                  Remove this ${APP_NAME} install (keeps agent dir unless --purge)
   ${APP_NAME} uninstall <source> [-l]    Remove an extension package (alias for remove)
   ${APP_NAME} install <source> [-l]      Install extension source and add to settings
@@ -239,8 +239,16 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} gateway […]                Chat gateway daemon (requires chat-platforms feature)
   ${APP_NAME} <command> --help           Show help for install/remove/uninstall/list/config
 
-${chalk.bold("Options:")}
-  --provider <name>              Provider name (default: google)
+${chalk.bold("Common options:")}
+  --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
+  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
+  --print, -p                    Non-interactive mode: process prompt and exit
+  --continue, -c                 Continue previous session
+  --resume, -r                   Select a session to resume
+  --mode <mode>                  Output mode: text (default), json, rpc, or acp
+
+${chalk.bold("All options:")}
+  --provider <name>              Provider to search for --model (default: any provider)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
