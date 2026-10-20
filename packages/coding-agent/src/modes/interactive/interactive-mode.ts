@@ -3336,7 +3336,7 @@ export class InteractiveMode {
 			}
 
 			// A mistyped command goes back to the editor instead of to the model as a prompt.
-			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? text, images))) return;
+			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? text, { images }))) return;
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
@@ -4472,6 +4472,8 @@ export class InteractiveMode {
 		const rawText = this.editor.getExpandedText?.() ?? this.editor.getText();
 		const text = rawText.trim();
 		if (!text) return;
+		// Same unknown command check as Enter; the draft stays in the editor.
+		if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText))) return;
 
 		// Queue input during compaction (extension commands execute immediately)
 		if (this.session.isCompacting) {
@@ -4832,11 +4834,17 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Puts an unknown slash command back in the editor with suggestions and returns true. Recognition
-	 * comes from dispatch, so commands autocomplete hides still count. Waits for deferred builtins
-	 * before deciding, since their commands (such as /run and /goal) register after first paint.
+	 * Reports an unknown slash command with suggestions and returns true. `cleared` means submit already
+	 * emptied the editor, so the draft goes back with its images; Alt+Enter omits it because its draft
+	 * is still in the editor. Recognition comes from dispatch, so commands autocomplete hides still
+	 * count. Waits for deferred builtins before deciding, since their commands (such as /run and /goal)
+	 * register after first paint.
 	 */
-	private async bounceUnknownSlashCommand(text: string, rawText: string, images?: ImageContent[]): Promise<boolean> {
+	private async bounceUnknownSlashCommand(
+		text: string,
+		rawText: string,
+		cleared?: { images?: ImageContent[] },
+	): Promise<boolean> {
 		const isKnown = (name: string): boolean =>
 			INTERACTIVE_BUILTIN_COMMAND_NAMES.has(name) ||
 			!!this.session.extensionRunner.getCommand(name) ||
@@ -4851,7 +4859,7 @@ export class InteractiveMode {
 			...this.session.extensionRunner.getRegisteredCommands().map((command) => command.invocationName),
 			...this.session.promptTemplates.map((template) => template.name),
 		];
-		this.restoreEditorDraft(text, images);
+		if (cleared) this.restoreEditorDraft(text, cleared.images);
 		this.showStatus(formatUnknownSlashCommandStatus(name, suggestSlashCommands(name, candidates)));
 		return true;
 	}
