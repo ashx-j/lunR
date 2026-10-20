@@ -48,6 +48,8 @@ export interface LoginFlowHost {
 	updateAvailableProviderCount(): Promise<void>;
 	invalidateFooter(): void;
 	updateEditorBorderColor(): void;
+	/** Opens /model when the session still has no model and one is available to pick. */
+	openModelSelectorIfUnset(): Promise<void>;
 }
 
 /**
@@ -224,7 +226,9 @@ export function showLoginAuthTypeSelector(host: LoginFlowHost, providerOptions?:
 				done();
 				// lunr: intercept before the oauth/api_key label mapping below.
 				if (option === customProviderLabel) {
-					void showCustomProviderWizard(host);
+					void showCustomProviderWizard(host).catch((error: unknown) =>
+						host.showError(error instanceof Error ? error.message : String(error)),
+					);
 					return;
 				}
 				const authType = option === subscriptionLabel ? "oauth" : "api_key";
@@ -300,6 +304,7 @@ export function showLoginProviderSelector(
 // lunr: /login "Connect a custom API endpoint…" wizard. Writes the provider to
 // models.json via upsertCustomProvider, then stores the key through the standard
 // api_key login route (auth.json) once reloadConfig has composed the provider.
+// Ends in /model when no model got selected. Callers report a rejection with showError.
 export async function showCustomProviderWizard(host: LoginFlowHost): Promise<void> {
 	const cancelled = () => host.showStatus("Custom provider setup cancelled.");
 
@@ -414,4 +419,5 @@ export async function showCustomProviderWizard(host: LoginFlowHost): Promise<voi
 	host.showStatus(
 		`Custom provider '${name}' added (${modelCount} model${modelCount === 1 ? "" : "s"}). ${refineNote}`,
 	);
+	await host.openModelSelectorIfUnset();
 }
