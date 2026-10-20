@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **v0.2.38 (2026-10-18):** latest npm release. Integration PR #208 merged PRs #195 to #207 and release PR #209 merged as `4cc8c4e`; tag `v0.2.38` published all four public packages and three native payloads, and the binary workflow succeeded. All seven tarballs match registry integrity, and a fresh isolated install reports 0.2.38 for the CLI and its three dependencies and passes the first-paint/first-turn check. Earlier releases and per-PR history: git log.
 - **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
+- **Unreleased on master:** `/settings` groups rows under Model, Agent, Display, Features and Terminal sections, and an Advanced submenu holds transport, prompt cache and terminal layout rows.
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
      /\_/\
@@ -107,6 +108,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - `/plan <task>` enters read-only if needed and sends `Create a plan for: <task>`; `/plan off` restores the previous mode. `present_plan` stays available in read-only.
 - Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. In Customize, Plan usage hides the segment while Plan bar hides only the █░ fill. The TPS counter is its own toggle; feature statuses only gate plan/goal.
 - Skill tag is a mention (`$pdf-tools`; character `+`/`~`/`$`, default `$`). Do not expand it into a `<skill>` block; `/skill:name` force-loads. Open the picker only at a token start. With `~`, `~/` and `~\` stay paths.
+- `/settings` sections are `SettingSection` rows in `SettingsList` (`packages/tui`). They are not selectable, search and the `(n/total)` counter skip them, and a filtered row keeps its section label. A section without a label only adds a blank row (used before Advanced). Advanced rows are not searchable from the top level; the submenu shares the main change handler and item objects.
 - Settings menu descriptions name the feature, not every control. Keep choice-specific limits beside the choice. Factory defaults apply to missing keys; explicit saved values win and no migration rewrites them.
 - Global behavior is optional `~/.lunr/agent/agents/AGENTS.md`: never auto-create it, add an in-app editor, or let model file tools modify it. A leftover `~/.lunr/agent/AGENTS.md` migrates there when the new path is empty. Per-model files are `~/.lunr/agent/agents/<model>/AGENTS.md` behind `/settings` Model instructions. Context breakdown labels it `Global AGENTS.md`. `behavior.md` is inert.
 - Memory (`~/.lunr/simple-memory/memory.md`) is durable facts only; the toggle removes injection/tools but keeps the file. `core/protected-targets.ts` blocks direct file-tool writes to global instructions, memory, settings.json, `pr-watches/` and `install-features.json`.
@@ -169,6 +171,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-20: group `/settings` into sections and move nine rarely changed rows into an Advanced submenu, because a flat 53-row list was hard to scan; descriptions and handlers stayed the same.
 - 2026-10-18: auto is reviewed and "no questions" is a separate session flag, so goals and subagents keep working unattended under yolo without paying for reviews.
 - 2026-10-18: default reviewers come only from providers whose own agents ship one (Claude Code, Codex, Grok Build, Qwen Code); other providers must pick a model, because choosing a safety reviewer is the user's call.
 - 2026-10-18: remove `/share` and the subagent `share` option instead of hosting a viewer, because both sent sessions to pi's site; keep accepting the old descriptor field so saved runs resume.

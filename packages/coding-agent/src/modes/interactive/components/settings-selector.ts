@@ -10,6 +10,7 @@ import {
 	SelectList,
 	type SelectListLayoutOptions,
 	type SettingItem,
+	type SettingSection,
 	SettingsList,
 	Spacer,
 	Text,
@@ -748,6 +749,22 @@ class CustomizeSubmenu extends Container {
 	}
 }
 
+// lunr: Advanced submenu — rarely changed connection, prompt cache and terminal layout rows.
+// The settings selector owns the rows and their change handler.
+class AdvancedSubmenu extends Container {
+	private settingsList: SettingsList;
+
+	constructor(items: SettingItem[], onChange: (id: string, newValue: string) => void, done: () => void) {
+		super();
+		this.settingsList = new SettingsList(items, Math.min(items.length, 10), getSettingsListTheme(), onChange, done);
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
 // lunr: Rollback submenu — enable, turns, capture mode, scope.
 class RollbackSubmenu extends Container {
 	private settingsList: SettingsList;
@@ -1458,28 +1475,9 @@ export class SettingsSelectorComponent extends Container {
 		const followUpKey = keyDisplayText("app.message.followUp");
 		const curatorAvailable = config.searchCurator !== undefined;
 
-		const items: SettingItem[] = [
-			{
-				id: "autocompact",
-				label: "Auto-compact",
-				description: "Compact context before it reaches the model limit",
-				currentValue: config.autoCompact ? "true" : "false",
-				values: ["true", "false"],
-			},
-			{
-				id: "steering-mode",
-				label: "Steering mode",
-				description: "How new messages interrupt a streaming response",
-				currentValue: config.steeringMode,
-				values: ["one-at-a-time", "all"],
-			},
-			{
-				id: "follow-up-mode",
-				label: "Follow-up mode",
-				description: `How ${followUpKey} messages run after the current response`,
-				currentValue: config.followUpMode,
-				values: ["one-at-a-time", "all"],
-			},
+		// Rarely changed rows live in the Advanced submenu. It reuses these item objects, so
+		// values changed there still show when it is reopened.
+		const advancedItems: SettingItem[] = [
 			{
 				id: "transport",
 				label: "Transport",
@@ -1495,39 +1493,6 @@ export class SettingsSelectorComponent extends Container {
 				values: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => choice.label),
 			},
 			{
-				id: "hide-thinking",
-				label: "Hide thinking",
-				description: "Thinking block visibility",
-				currentValue: config.hideThinkingBlock ? "true" : "false",
-				values: ["true", "false"],
-			},
-			{
-				// lunr: collapsible reasoning — completed thinking runs render as
-				// "✻ Thought for Xs" + first sentence. Disabled when thinking is hidden.
-				id: "thinking-collapse",
-				label: "Collapse thinking",
-				description: "Short summaries for completed thinking",
-				currentValue: config.thinkingCollapse ? "true" : "false",
-				values: ["true", "false"],
-				disabled: () => config.hideThinkingBlock,
-			},
-			{
-				id: "reasoning-display",
-				label: "Reasoning display",
-				description:
-					"Auto uses one line for OpenAI Codex, four lines for other models. One line has a soft moving highlight.",
-				currentValue: config.reasoningDisplay ?? "auto",
-				values: ["auto", "one-line", "four-lines"],
-				disabled: () => config.hideThinkingBlock,
-			},
-			{
-				id: "cache-miss-notices",
-				label: "Cache miss notices",
-				description: "Prompt cache miss notices in the transcript",
-				currentValue: config.showCacheMissNotices ? "true" : "false",
-				values: ["true", "false"],
-			},
-			{
 				// lunr: unset settings stay undefined so PI_CACHE_RETENTION still
 				// applies; the row displays "short" as the implicit default.
 				id: "cache-retention",
@@ -1537,127 +1502,94 @@ export class SettingsSelectorComponent extends Container {
 				values: ["short", "long", "none"],
 			},
 			{
-				id: "quiet-startup",
-				label: "Quiet startup",
-				description: "Startup log visibility",
-				currentValue: config.quietStartup ? "true" : "false",
+				id: "cache-miss-notices",
+				label: "Cache miss notices",
+				description: "Prompt cache miss notices in the transcript",
+				currentValue: config.showCacheMissNotices ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
-				id: "smooth-streaming",
-				label: "Smooth streaming",
-				description: "Typewriter-style response streaming",
-				currentValue: config.smoothStreaming ? "true" : "false",
+				id: "show-hardware-cursor",
+				label: "Show hardware cursor",
+				description: "Terminal cursor for input method editors",
+				currentValue: config.showHardwareCursor ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
-				id: "computer-use",
-				label: "Computer use",
-				description: "Control this computer with native desktop tools",
-				currentValue: config.computerUse !== false ? "on" : "off",
-				values: ["on", "off"],
+				id: "editor-padding",
+				label: "Editor padding",
+				description: "Horizontal editor padding",
+				currentValue: String(config.editorPaddingX),
+				values: ["0", "1", "2", "3"],
 			},
 			{
-				id: "computer-foreground",
-				label: "Allow foreground control",
-				description: "Allow desktop tools to change focus when background control fails",
-				currentValue: config.computerForeground !== false ? "on" : "off",
-				values: ["on", "off"],
+				id: "output-padding",
+				label: "Output padding",
+				description: "Horizontal message padding",
+				currentValue: String(config.outputPad),
+				values: ["0", "1"],
 			},
 			{
-				id: "browser-enabled",
-				label: "Browser",
-				description:
-					"Browse JavaScript pages and interact with websites. Off closes the browser and hides its tool.",
-				currentValue: config.browserEnabled ? "on" : "off",
-				values: ["on", "off"],
+				id: "autocomplete-max-visible",
+				label: "Autocomplete max items",
+				description: "Visible autocomplete items",
+				currentValue: String(config.autocompleteMaxVisible),
+				values: ["3", "5", "7", "10", "15", "20"],
 			},
 			{
-				id: "agent-memory",
-				label: "Agent memory",
-				description: "Durable facts the agent can manage",
-				currentValue: config.memoryEnabled ? "on" : "off",
-				values: ["on", "off"],
+				id: "clear-on-shrink",
+				label: "Clear on shrink",
+				description: "Clear leftover terminal rows when content shrinks",
+				currentValue: config.clearOnShrink ? "true" : "false",
+				values: ["true", "false"],
 			},
-			{
-				id: "pr-watch-duration",
-				label: "PR watch duration",
-				description: "Finite GitHub monitoring window for new watches",
-				currentValue: `${(config.prWatchDurationMs ?? PR_WATCH_DEFAULT_DURATION_MS) / 60_000} minutes`,
-				submenu: (value, done) =>
-					new PrWatchDurationSubmenu(Number.parseFloat(value) * 60_000, (selected) =>
-						done(selected ? `${Number(selected) / 60_000} minutes` : undefined),
-					),
-			},
-			{
-				id: "todos",
-				label: "Todos",
-				description: "Agent task list and todo tool",
-				currentValue: config.todosEnabled ? "on" : "off",
-				values: ["on", "off"],
-			},
-			{
-				id: "memory-char-cap",
-				label: "Memory character cap",
-				description: "Maximum agent memory size",
-				currentValue: String(config.memoryCharCap),
-				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
-			},
-			{
-				id: "search-curator",
-				label: "Search curator",
-				description: curatorAvailable
-					? "Web search review and summary mode"
-					: "Unavailable because web access is not loaded",
-				currentValue: config.searchCurator ?? "unavailable",
-				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
-			},
-			{
-				id: "session-retention-days",
-				label: "Session retention",
-				description: "How long session files are kept",
-				currentValue: String(config.sessionRetentionDays),
-				values: ["0", "7", "14", "30", "60", "90", "365"],
-			},
-			{
-				id: "default-project-trust",
-				label: "Default project trust",
-				description: "Trust choice when a project has no saved decision",
-				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
-				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
-			},
-			{
-				id: "gateway",
-				label: "Gateway",
-				description: "Phone access and automatic startup",
-				currentValue: "manage",
-				submenu: (_value, done) =>
-					new SelectSubmenu(
-						"Gateway",
-						"Boot startup may require administrator permission. Setup manages bot accounts and approved folders.",
-						[
-							{ value: "setup", label: "Set up Telegram or Discord" },
-							{ value: "status", label: "Show gateway status" },
-							{ value: "start", label: "Start gateway" },
-							{ value: "stop", label: "Stop gateway" },
-							{ value: "autostart login", label: "Start automatically at login" },
-							{ value: "autostart boot", label: "Start automatically at boot" },
-							{ value: "autostart off", label: "Disable automatic startup" },
-						],
-						"",
-						(action) => {
-							done();
-							callbacks.onGatewayAction?.(action);
-						},
-						() => done(),
-					),
-			},
+		];
+
+		const subscriptionCallbacks = callbacks.subscriptions;
+		const items: (SettingItem | SettingSection)[] = [
+			{ kind: "section", label: "Model" },
 			{
 				id: "default-permission-mode",
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
 				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
 				values: ["yolo", "auto", "read"],
+			},
+			{
+				id: "thinking",
+				label: "Thinking level",
+				description: "Reasoning level for supported models",
+				currentValue: config.thinkingLevel,
+				submenu: (currentValue, done) =>
+					new SelectSubmenu(
+						"Thinking Level",
+						"Reasoning level for supported models",
+						config.availableThinkingLevels.map((level) => ({
+							value: level,
+							label: level,
+							description: THINKING_DESCRIPTIONS[level],
+						})),
+						currentValue,
+						(value) => {
+							callbacks.onThinkingLevelChange(value as ThinkingLevel);
+							done(value);
+						},
+						() => done(),
+					),
+			},
+			{
+				id: "model-tiers",
+				label: "Model tiers",
+				description: "Subagent model routing",
+				currentValue: config.modelTiers.enabled ? "on" : "off",
+				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
+			},
+			{
+				id: "model-instructions",
+				label: "Model instructions",
+				description: "Global and selected-model AGENTS.md loading",
+				currentValue: config.modelInstructions.enabled ? "on" : "off",
+				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
 			},
 			{
 				id: "auto-review-model",
@@ -1690,69 +1622,77 @@ export class SettingsSelectorComponent extends Container {
 						() => done(),
 					),
 			},
+			// lunr: Subscriptions submenu — one row per pooled API key (live manager accessors).
+			...(subscriptionCallbacks
+				? [
+						{
+							id: "subscriptions",
+							label: "Subscriptions",
+							description: "Saved API key management",
+							currentValue:
+								config.subscriptionCount === 0
+									? "none"
+									: `${config.subscriptionCount} key${config.subscriptionCount === 1 ? "" : "s"}`,
+							submenu: (_currentValue, done) => new SubscriptionsSubmenu(subscriptionCallbacks, done),
+						} satisfies SettingItem,
+					]
+				: []),
+			// lunr: multi-subscription pools
 			{
-				id: "double-escape-action",
-				label: "Double-escape action",
-				description: "Action for double Escape in an empty editor",
-				currentValue: config.doubleEscapeAction,
-				values: ["tree", "fork", "none"],
-			},
-			{
-				id: "tree-filter-mode",
-				label: "Tree filter mode",
-				description: "Default /tree filter",
-				currentValue: config.treeFilterMode,
-				values: ["default", "no-tools", "user-only", "labeled-only", "all"],
-			},
-			{
-				id: "thinking",
-				label: "Thinking level",
-				description: "Reasoning level for supported models",
-				currentValue: config.thinkingLevel,
-				submenu: (currentValue, done) =>
-					new SelectSubmenu(
-						"Thinking Level",
-						"Reasoning level for supported models",
-						config.availableThinkingLevels.map((level) => ({
-							value: level,
-							label: level,
-							description: THINKING_DESCRIPTIONS[level],
-						})),
-						currentValue,
-						(value) => {
-							callbacks.onThinkingLevelChange(value as ThinkingLevel);
-							done(value);
-						},
-						() => done(),
-					),
-			},
-			{
-				id: "theme",
-				label: "Theme",
-				description: "Interface color theme",
-				currentValue: config.currentTheme,
-				submenu: (currentValue, done) =>
-					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
-			},
-			{
-				id: "model-tiers",
-				label: "Model tiers",
-				description: "Subagent model routing",
-				currentValue: config.modelTiers.enabled ? "on" : "off",
-				submenu: (currentValue, done) => new ModelTiersSubmenu(currentValue, config.modelTiers, callbacks, done),
-			},
-			{
-				id: "model-instructions",
-				label: "Model instructions",
-				description: "Global and selected-model AGENTS.md loading",
-				currentValue: config.modelInstructions.enabled ? "on" : "off",
-				submenu: (_currentValue, done) => new ModelInstructionsSubmenu(config, callbacks, done),
+				id: "auto-manage-subscriptions",
+				label: "Auto-manage subscriptions",
+				description: "Automatic API key rotation after usage limits",
+				currentValue: config.autoManageSubscriptions ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "client-scoped-models",
 				label: "Scoped models in apps",
 				description: "T3 and other connected apps list only /scoped-models",
 				currentValue: config.clientScopedModelsOnly ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "plan-usage-window",
+				label: "Plan usage window",
+				description: "Subscription usage period shown in the footer",
+				currentValue: config.planUsageWindow,
+				values: ["5h", "weekly"],
+			},
+			{ kind: "section", label: "Agent" },
+			{
+				id: "autocompact",
+				label: "Auto-compact",
+				description: "Compact context before it reaches the model limit",
+				currentValue: config.autoCompact ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "steering-mode",
+				label: "Steering mode",
+				description: "How new messages interrupt a streaming response",
+				currentValue: config.steeringMode,
+				values: ["one-at-a-time", "all"],
+			},
+			{
+				id: "follow-up-mode",
+				label: "Follow-up mode",
+				description: `How ${followUpKey} messages run after the current response`,
+				currentValue: config.followUpMode,
+				values: ["one-at-a-time", "all"],
+			},
+			{
+				id: "agent-memory",
+				label: "Agent memory",
+				description: "Durable facts the agent can manage",
+				currentValue: config.memoryEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "todos",
+				label: "Todos",
+				description: "Agent task list and todo tool",
+				currentValue: config.todosEnabled ? "on" : "off",
 				values: ["on", "off"],
 			},
 			{
@@ -1776,21 +1716,6 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.confirmLargeSubagentLaunches ? "on" : "off",
 				values: ["on", "off"],
 			},
-			{
-				id: "plan-usage-window",
-				label: "Plan usage window",
-				description: "Subscription usage period shown in the footer",
-				currentValue: config.planUsageWindow,
-				values: ["5h", "weekly"],
-			},
-			// lunr: Customize submenu — lunR TUI toggles (rail, prompt symbol, footer segments)
-			{
-				id: "customize",
-				label: "Customize",
-				description: "Interface and footer options",
-				currentValue: "configure",
-				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
-			},
 			// lunr: Rollback submenu
 			{
 				id: "rollback",
@@ -1800,319 +1725,399 @@ export class SettingsSelectorComponent extends Container {
 				submenu: (currentValue, done) =>
 					new RollbackSubmenu(currentValue, config, callbacks, callbacks.isRollbackSessionForceEnabled(), done),
 			},
-			// lunr: multi-subscription pools
 			{
-				id: "auto-manage-subscriptions",
-				label: "Auto-manage subscriptions",
-				description: "Automatic API key rotation after usage limits",
-				currentValue: config.autoManageSubscriptions ? "on" : "off",
+				id: "pr-watch-duration",
+				label: "PR watch duration",
+				description: "Finite GitHub monitoring window for new watches",
+				currentValue: `${(config.prWatchDurationMs ?? PR_WATCH_DEFAULT_DURATION_MS) / 60_000} minutes`,
+				submenu: (value, done) =>
+					new PrWatchDurationSubmenu(Number.parseFloat(value) * 60_000, (selected) =>
+						done(selected ? `${Number(selected) / 60_000} minutes` : undefined),
+					),
+			},
+			{
+				id: "memory-char-cap",
+				label: "Memory character cap",
+				description: "Maximum agent memory size",
+				currentValue: String(config.memoryCharCap),
+				submenu: (currentValue, submenuDone) => new MemoryCharCapSubmenu(currentValue, submenuDone),
+			},
+			{
+				id: "default-project-trust",
+				label: "Default project trust",
+				description: "Trust choice when a project has no saved decision",
+				currentValue: DEFAULT_PROJECT_TRUST_LABELS[config.defaultProjectTrust],
+				values: Object.values(DEFAULT_PROJECT_TRUST_LABELS),
+			},
+			{
+				id: "session-retention-days",
+				label: "Session retention",
+				description: "How long session files are kept",
+				currentValue: String(config.sessionRetentionDays),
+				values: ["0", "7", "14", "30", "60", "90", "365"],
+			},
+			{ kind: "section", label: "Display" },
+			{
+				id: "theme",
+				label: "Theme",
+				description: "Interface color theme",
+				currentValue: config.currentTheme,
+				submenu: (currentValue, done) =>
+					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
+			},
+			// lunr: Customize submenu — lunR TUI toggles (rail, prompt symbol, footer segments)
+			{
+				id: "customize",
+				label: "Customize",
+				description: "Interface and footer options",
+				currentValue: "configure",
+				submenu: (_currentValue, done) => new CustomizeSubmenu(config, callbacks, done),
+			},
+			{
+				id: "hide-thinking",
+				label: "Hide thinking",
+				description: "Thinking block visibility",
+				currentValue: config.hideThinkingBlock ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				// lunr: collapsible reasoning — completed thinking runs render as
+				// "✻ Thought for Xs" + first sentence. Disabled when thinking is hidden.
+				id: "thinking-collapse",
+				label: "Collapse thinking",
+				description: "Short summaries for completed thinking",
+				currentValue: config.thinkingCollapse ? "true" : "false",
+				values: ["true", "false"],
+				disabled: () => config.hideThinkingBlock,
+			},
+			{
+				id: "reasoning-display",
+				label: "Reasoning display",
+				description:
+					"Auto uses one line for OpenAI Codex, four lines for other models. One line has a soft moving highlight.",
+				currentValue: config.reasoningDisplay ?? "auto",
+				values: ["auto", "one-line", "four-lines"],
+				disabled: () => config.hideThinkingBlock,
+			},
+			{
+				id: "smooth-streaming",
+				label: "Smooth streaming",
+				description: "Typewriter-style response streaming",
+				currentValue: config.smoothStreaming ? "true" : "false",
+				values: ["true", "false"],
+			},
+			// Only show inline image rows if the terminal supports them
+			...(supportsImages
+				? [
+						{
+							id: "show-images",
+							label: "Show images",
+							description: "Inline terminal image rendering",
+							currentValue: config.showImages ? "true" : "false",
+							values: ["true", "false"],
+						},
+						{
+							id: "image-width-cells",
+							label: "Image width",
+							description: "Inline image width in terminal cells",
+							currentValue: String(config.imageWidthCells),
+							values: ["60", "80", "120"],
+						},
+					]
+				: []),
+			{
+				id: "auto-resize-images",
+				label: "Auto-resize images",
+				description: "Limit images to 2000 x 2000 pixels",
+				currentValue: config.autoResizeImages ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "block-images",
+				label: "Block images",
+				description: "Prevent images from reaching model providers",
+				currentValue: config.blockImages ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "tree-filter-mode",
+				label: "Tree filter mode",
+				description: "Default /tree filter",
+				currentValue: config.treeFilterMode,
+				values: ["default", "no-tools", "user-only", "labeled-only", "all"],
+			},
+			{
+				id: "quiet-startup",
+				label: "Quiet startup",
+				description: "Startup log visibility",
+				currentValue: config.quietStartup ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{ kind: "section", label: "Features" },
+			{
+				id: "browser-enabled",
+				label: "Browser",
+				description:
+					"Browse JavaScript pages and interact with websites. Off closes the browser and hides its tool.",
+				currentValue: config.browserEnabled ? "on" : "off",
 				values: ["on", "off"],
+			},
+			{
+				id: "computer-use",
+				label: "Computer use",
+				description: "Control this computer with native desktop tools",
+				currentValue: config.computerUse !== false ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "computer-foreground",
+				label: "Allow foreground control",
+				description: "Allow desktop tools to change focus when background control fails",
+				currentValue: config.computerForeground !== false ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
+				id: "search-curator",
+				label: "Search curator",
+				description: curatorAvailable
+					? "Web search review and summary mode"
+					: "Unavailable because web access is not loaded",
+				currentValue: config.searchCurator ?? "unavailable",
+				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
+			},
+			{
+				id: "gateway",
+				label: "Gateway",
+				description: "Phone access and automatic startup",
+				currentValue: "manage",
+				submenu: (_value, done) =>
+					new SelectSubmenu(
+						"Gateway",
+						"Boot startup may require administrator permission. Setup manages bot accounts and approved folders.",
+						[
+							{ value: "setup", label: "Set up Telegram or Discord" },
+							{ value: "status", label: "Show gateway status" },
+							{ value: "start", label: "Start gateway" },
+							{ value: "stop", label: "Stop gateway" },
+							{ value: "autostart login", label: "Start automatically at login" },
+							{ value: "autostart boot", label: "Start automatically at boot" },
+							{ value: "autostart off", label: "Disable automatic startup" },
+						],
+						"",
+						(action) => {
+							done();
+							callbacks.onGatewayAction?.(action);
+						},
+						() => done(),
+					),
+			},
+			{
+				id: "skill-commands",
+				label: "Skill commands",
+				description: "Skills as /skill:name commands",
+				currentValue: config.enableSkillCommands ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "skill-tag-character",
+				label: "Skill tag",
+				description: "After a space, this character lists skills to tag in the message",
+				currentValue: config.skillTagCharacter,
+				values: [...SKILL_TAG_CHARACTERS],
+			},
+			{ kind: "section", label: "Terminal" },
+			{
+				id: "attention-notification",
+				label: "Notifications",
+				description: "Bell or desktop notice when a run ends or needs you while the terminal is unfocused",
+				currentValue: config.attentionNotification,
+				values: ["off", "bell", "desktop"],
+			},
+			{
+				id: "terminal-progress",
+				label: "Terminal progress",
+				description: "Progress in supported terminal tabs",
+				currentValue: config.showTerminalProgress ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "double-escape-action",
+				label: "Double-escape action",
+				description: "Action for double Escape in an empty editor",
+				currentValue: config.doubleEscapeAction,
+				values: ["tree", "fork", "none"],
+			},
+			{ kind: "section" },
+			{
+				id: "advanced",
+				label: "Advanced",
+				description: "Connection, prompt cache and terminal layout options",
+				currentValue: "configure",
+				submenu: (_currentValue, done) => new AdvancedSubmenu(advancedItems, onSettingChange, done),
 			},
 		];
 
-		// lunr: Subscriptions submenu — one row per pooled API key (live manager accessors).
-		const subscriptionCallbacks = callbacks.subscriptions;
-		if (subscriptionCallbacks) {
-			items.push({
-				id: "subscriptions",
-				label: "Subscriptions",
-				description: "Saved API key management",
-				currentValue:
-					config.subscriptionCount === 0
-						? "none"
-						: `${config.subscriptionCount} key${config.subscriptionCount === 1 ? "" : "s"}`,
-				submenu: (_currentValue, done) => new SubscriptionsSubmenu(subscriptionCallbacks, done),
-			});
-		}
-
-		// Only show image toggle if terminal supports it
-		if (supportsImages) {
-			// Insert after autocompact
-			items.splice(1, 0, {
-				id: "show-images",
-				label: "Show images",
-				description: "Inline terminal image rendering",
-				currentValue: config.showImages ? "true" : "false",
-				values: ["true", "false"],
-			});
-			items.splice(2, 0, {
-				id: "image-width-cells",
-				label: "Image width",
-				description: "Inline image width in terminal cells",
-				currentValue: String(config.imageWidthCells),
-				values: ["60", "80", "120"],
-			});
-		}
-
-		// Image auto-resize toggle (always available, affects both attached and read images)
-		items.splice(supportsImages ? 3 : 1, 0, {
-			id: "auto-resize-images",
-			label: "Auto-resize images",
-			description: "Limit images to 2000 x 2000 pixels",
-			currentValue: config.autoResizeImages ? "true" : "false",
-			values: ["true", "false"],
-		});
-
-		// Block images toggle (always available, insert after auto-resize-images)
-		const autoResizeIndex = items.findIndex((item) => item.id === "auto-resize-images");
-		items.splice(autoResizeIndex + 1, 0, {
-			id: "block-images",
-			label: "Block images",
-			description: "Prevent images from reaching model providers",
-			currentValue: config.blockImages ? "true" : "false",
-			values: ["true", "false"],
-		});
-
-		// Skill commands toggle (insert after block-images)
-		const blockImagesIndex = items.findIndex((item) => item.id === "block-images");
-		items.splice(blockImagesIndex + 1, 0, {
-			id: "skill-commands",
-			label: "Skill commands",
-			description: "Skills as /skill:name commands",
-			currentValue: config.enableSkillCommands ? "true" : "false",
-			values: ["true", "false"],
-		});
-
-		// Skill tag character (insert after skill-commands)
-		const skillCommandsIndex = items.findIndex((item) => item.id === "skill-commands");
-		items.splice(skillCommandsIndex + 1, 0, {
-			id: "skill-tag-character",
-			label: "Skill tag",
-			description: "After a space, this character lists skills to tag in the message",
-			currentValue: config.skillTagCharacter,
-			values: [...SKILL_TAG_CHARACTERS],
-		});
-
-		// Hardware cursor toggle (insert after skill-tag-character)
-		const skillTagIndex = items.findIndex((item) => item.id === "skill-tag-character");
-		items.splice(skillTagIndex + 1, 0, {
-			id: "show-hardware-cursor",
-			label: "Show hardware cursor",
-			description: "Terminal cursor for input method editors",
-			currentValue: config.showHardwareCursor ? "true" : "false",
-			values: ["true", "false"],
-		});
-
-		// Editor padding toggle (insert after show-hardware-cursor)
-		const hardwareCursorIndex = items.findIndex((item) => item.id === "show-hardware-cursor");
-		items.splice(hardwareCursorIndex + 1, 0, {
-			id: "editor-padding",
-			label: "Editor padding",
-			description: "Horizontal editor padding",
-			currentValue: String(config.editorPaddingX),
-			values: ["0", "1", "2", "3"],
-		});
-
-		// Output padding toggle (insert after editor-padding)
-		const editorPaddingIndex = items.findIndex((item) => item.id === "editor-padding");
-		items.splice(editorPaddingIndex + 1, 0, {
-			id: "output-padding",
-			label: "Output padding",
-			description: "Horizontal message padding",
-			currentValue: String(config.outputPad),
-			values: ["0", "1"],
-		});
-
-		// Autocomplete max visible toggle (insert after output-padding)
-		const outputPaddingIndex = items.findIndex((item) => item.id === "output-padding");
-		items.splice(outputPaddingIndex + 1, 0, {
-			id: "autocomplete-max-visible",
-			label: "Autocomplete max items",
-			description: "Visible autocomplete items",
-			currentValue: String(config.autocompleteMaxVisible),
-			values: ["3", "5", "7", "10", "15", "20"],
-		});
-
-		// Clear on shrink toggle (insert after autocomplete-max-visible)
-		const autocompleteIndex = items.findIndex((item) => item.id === "autocomplete-max-visible");
-		items.splice(autocompleteIndex + 1, 0, {
-			id: "clear-on-shrink",
-			label: "Clear on shrink",
-			description: "Clear leftover terminal rows when content shrinks",
-			currentValue: config.clearOnShrink ? "true" : "false",
-			values: ["true", "false"],
-		});
-
-		// Terminal progress toggle (insert after clear-on-shrink)
-		const clearOnShrinkIndex = items.findIndex((item) => item.id === "clear-on-shrink");
-		items.splice(clearOnShrinkIndex + 1, 0, {
-			id: "terminal-progress",
-			label: "Terminal progress",
-			description: "Progress in supported terminal tabs",
-			currentValue: config.showTerminalProgress ? "true" : "false",
-			values: ["true", "false"],
-		});
-		items.splice(clearOnShrinkIndex + 2, 0, {
-			id: "attention-notification",
-			label: "Notifications",
-			description: "Bell or desktop notice when a run ends or needs you while the terminal is unfocused",
-			currentValue: config.attentionNotification,
-			values: ["off", "bell", "desktop"],
-		});
+		// Applies a change from the main list or the Advanced submenu.
+		const onSettingChange = (id: string, newValue: string) => {
+			switch (id) {
+				case "autocompact":
+					callbacks.onAutoCompactChange(newValue === "true");
+					break;
+				case "show-images":
+					callbacks.onShowImagesChange(newValue === "true");
+					break;
+				case "image-width-cells":
+					callbacks.onImageWidthCellsChange(parseInt(newValue, 10));
+					break;
+				case "auto-resize-images":
+					callbacks.onAutoResizeImagesChange(newValue === "true");
+					break;
+				case "block-images":
+					callbacks.onBlockImagesChange(newValue === "true");
+					break;
+				case "skill-commands":
+					callbacks.onEnableSkillCommandsChange(newValue === "true");
+					break;
+				case "skill-tag-character":
+					callbacks.onSkillTagCharacterChange(newValue as SkillTagCharacter);
+					break;
+				case "steering-mode":
+					callbacks.onSteeringModeChange(newValue as "all" | "one-at-a-time");
+					break;
+				case "follow-up-mode":
+					callbacks.onFollowUpModeChange(newValue as "all" | "one-at-a-time");
+					break;
+				case "transport":
+					callbacks.onTransportChange(newValue as Transport);
+					break;
+				case "http-idle-timeout": {
+					const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.label === newValue);
+					if (choice) {
+						callbacks.onHttpIdleTimeoutMsChange(choice.timeoutMs);
+					}
+					break;
+				}
+				case "hide-thinking":
+					callbacks.onHideThinkingBlockChange(newValue === "true");
+					break;
+				case "thinking-collapse":
+					callbacks.onThinkingCollapseChange(newValue === "true");
+					break;
+				case "reasoning-display":
+					if (newValue === "auto" || newValue === "one-line" || newValue === "four-lines") {
+						callbacks.onReasoningDisplayChange(newValue);
+					}
+					break;
+				case "cache-miss-notices":
+					callbacks.onShowCacheMissNoticesChange(newValue === "true");
+					break;
+				case "cache-retention":
+					callbacks.onCacheRetentionChange(newValue as "none" | "short" | "long");
+					break;
+				case "quiet-startup":
+					callbacks.onQuietStartupChange(newValue === "true");
+					break;
+				case "smooth-streaming":
+					callbacks.onSmoothStreamingChange(newValue === "true");
+					break;
+				case "subagent-communication":
+					callbacks.onSubagentCommunicationChange(newValue === "on");
+					break;
+				case "automatic-subagent-delegation":
+					callbacks.onAutomaticSubagentDelegationChange(newValue === "on");
+					break;
+				case "plan-usage-window":
+					callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");
+					break;
+				case "memory-char-cap":
+					callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
+					break;
+				case "computer-use":
+					callbacks.onComputerUseChange?.(newValue === "on");
+					break;
+				case "computer-foreground":
+					callbacks.onComputerForegroundChange?.(newValue === "on");
+					break;
+				case "browser-enabled":
+					callbacks.onBrowserEnabledChange(newValue === "on");
+					break;
+				case "pr-watch-duration":
+					callbacks.onPrWatchDurationChange?.(Number.parseFloat(newValue) * 60_000);
+					break;
+				case "agent-memory":
+					callbacks.onMemoryEnabledChange(newValue === "on");
+					break;
+				case "todos":
+					callbacks.onTodosEnabledChange(newValue === "on");
+					break;
+				case "search-curator":
+					callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
+					break;
+				case "session-retention-days":
+					callbacks.onSessionRetentionDaysChange(parseInt(newValue, 10));
+					break;
+				case "default-project-trust": {
+					const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);
+					if (defaultProjectTrust) {
+						callbacks.onDefaultProjectTrustChange(defaultProjectTrust);
+					}
+					break;
+				}
+				case "default-permission-mode":
+					callbacks.onDefaultPermissionModeChange(
+						newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode),
+					);
+					break;
+				case "double-escape-action":
+					callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");
+					break;
+				case "tree-filter-mode":
+					callbacks.onTreeFilterModeChange(
+						newValue as "default" | "no-tools" | "user-only" | "labeled-only" | "all",
+					);
+					break;
+				case "show-hardware-cursor":
+					callbacks.onShowHardwareCursorChange(newValue === "true");
+					break;
+				case "editor-padding":
+					callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
+					break;
+				case "output-padding":
+					callbacks.onOutputPadChange(newValue === "0" ? 0 : 1);
+					break;
+				case "autocomplete-max-visible":
+					callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
+					break;
+				case "clear-on-shrink":
+					callbacks.onClearOnShrinkChange(newValue === "true");
+					break;
+				case "terminal-progress":
+					callbacks.onShowTerminalProgressChange(newValue === "true");
+					break;
+				case "attention-notification":
+					callbacks.onAttentionNotificationChange(newValue as AttentionNotification);
+					break;
+				case "auto-manage-subscriptions":
+					callbacks.onAutoManageSubscriptionsChange(newValue === "on");
+					break;
+				case "confirm-large-subagent-launches":
+					callbacks.onConfirmLargeSubagentLaunchesChange(newValue === "on");
+					break;
+				case "client-scoped-models":
+					callbacks.onClientScopedModelsOnlyChange(newValue === "on");
+					break;
+				case "theme":
+					callbacks.onThemeChange(newValue);
+					break;
+			}
+		};
 
 		// Add borders
 		this.addChild(new DynamicBorder());
 
-		this.settingsList = new SettingsList(
-			items,
-			10,
-			getSettingsListTheme(),
-			(id, newValue) => {
-				switch (id) {
-					case "autocompact":
-						callbacks.onAutoCompactChange(newValue === "true");
-						break;
-					case "show-images":
-						callbacks.onShowImagesChange(newValue === "true");
-						break;
-					case "image-width-cells":
-						callbacks.onImageWidthCellsChange(parseInt(newValue, 10));
-						break;
-					case "auto-resize-images":
-						callbacks.onAutoResizeImagesChange(newValue === "true");
-						break;
-					case "block-images":
-						callbacks.onBlockImagesChange(newValue === "true");
-						break;
-					case "skill-commands":
-						callbacks.onEnableSkillCommandsChange(newValue === "true");
-						break;
-					case "skill-tag-character":
-						callbacks.onSkillTagCharacterChange(newValue as SkillTagCharacter);
-						break;
-					case "steering-mode":
-						callbacks.onSteeringModeChange(newValue as "all" | "one-at-a-time");
-						break;
-					case "follow-up-mode":
-						callbacks.onFollowUpModeChange(newValue as "all" | "one-at-a-time");
-						break;
-					case "transport":
-						callbacks.onTransportChange(newValue as Transport);
-						break;
-					case "http-idle-timeout": {
-						const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.label === newValue);
-						if (choice) {
-							callbacks.onHttpIdleTimeoutMsChange(choice.timeoutMs);
-						}
-						break;
-					}
-					case "hide-thinking":
-						callbacks.onHideThinkingBlockChange(newValue === "true");
-						break;
-					case "thinking-collapse":
-						callbacks.onThinkingCollapseChange(newValue === "true");
-						break;
-					case "reasoning-display":
-						if (newValue === "auto" || newValue === "one-line" || newValue === "four-lines") {
-							callbacks.onReasoningDisplayChange(newValue);
-						}
-						break;
-					case "cache-miss-notices":
-						callbacks.onShowCacheMissNoticesChange(newValue === "true");
-						break;
-					case "cache-retention":
-						callbacks.onCacheRetentionChange(newValue as "none" | "short" | "long");
-						break;
-					case "quiet-startup":
-						callbacks.onQuietStartupChange(newValue === "true");
-						break;
-					case "smooth-streaming":
-						callbacks.onSmoothStreamingChange(newValue === "true");
-						break;
-					case "subagent-communication":
-						callbacks.onSubagentCommunicationChange(newValue === "on");
-						break;
-					case "automatic-subagent-delegation":
-						callbacks.onAutomaticSubagentDelegationChange(newValue === "on");
-						break;
-					case "plan-usage-window":
-						callbacks.onPlanUsageWindowChange(newValue === "5h" ? "5h" : "weekly");
-						break;
-					case "memory-char-cap":
-						callbacks.onMemoryCharCapChange(parseInt(newValue, 10));
-						break;
-					case "computer-use":
-						callbacks.onComputerUseChange?.(newValue === "on");
-						break;
-					case "computer-foreground":
-						callbacks.onComputerForegroundChange?.(newValue === "on");
-						break;
-					case "browser-enabled":
-						callbacks.onBrowserEnabledChange(newValue === "on");
-						break;
-					case "pr-watch-duration":
-						callbacks.onPrWatchDurationChange?.(Number.parseFloat(newValue) * 60_000);
-						break;
-					case "agent-memory":
-						callbacks.onMemoryEnabledChange(newValue === "on");
-						break;
-					case "todos":
-						callbacks.onTodosEnabledChange(newValue === "on");
-						break;
-					case "search-curator":
-						callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);
-						break;
-					case "session-retention-days":
-						callbacks.onSessionRetentionDaysChange(parseInt(newValue, 10));
-						break;
-					case "default-project-trust": {
-						const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);
-						if (defaultProjectTrust) {
-							callbacks.onDefaultProjectTrustChange(defaultProjectTrust);
-						}
-						break;
-					}
-					case "default-permission-mode":
-						callbacks.onDefaultPermissionModeChange(
-							newValue === "read" ? "read-only" : (newValue as DefaultPermissionMode),
-						);
-						break;
-					case "double-escape-action":
-						callbacks.onDoubleEscapeActionChange(newValue as "fork" | "tree");
-						break;
-					case "tree-filter-mode":
-						callbacks.onTreeFilterModeChange(
-							newValue as "default" | "no-tools" | "user-only" | "labeled-only" | "all",
-						);
-						break;
-					case "show-hardware-cursor":
-						callbacks.onShowHardwareCursorChange(newValue === "true");
-						break;
-					case "editor-padding":
-						callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
-						break;
-					case "output-padding":
-						callbacks.onOutputPadChange(newValue === "0" ? 0 : 1);
-						break;
-					case "autocomplete-max-visible":
-						callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
-						break;
-					case "clear-on-shrink":
-						callbacks.onClearOnShrinkChange(newValue === "true");
-						break;
-					case "terminal-progress":
-						callbacks.onShowTerminalProgressChange(newValue === "true");
-						break;
-					case "attention-notification":
-						callbacks.onAttentionNotificationChange(newValue as AttentionNotification);
-						break;
-					case "auto-manage-subscriptions":
-						callbacks.onAutoManageSubscriptionsChange(newValue === "on");
-						break;
-					case "confirm-large-subagent-launches":
-						callbacks.onConfirmLargeSubagentLaunchesChange(newValue === "on");
-						break;
-					case "client-scoped-models":
-						callbacks.onClientScopedModelsOnlyChange(newValue === "on");
-						break;
-					case "theme":
-						callbacks.onThemeChange(newValue);
-						break;
-				}
-			},
-			callbacks.onCancel,
-			{ enableSearch: true },
-		);
+		this.settingsList = new SettingsList(items, 10, getSettingsListTheme(), onSettingChange, callbacks.onCancel, {
+			enableSearch: true,
+		});
 
 		this.addChild(this.settingsList);
 		this.addChild(new DynamicBorder());
