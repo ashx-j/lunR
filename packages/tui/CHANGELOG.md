@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.39] - 2026-10-20
+
 - `SettingsList` accepts `{ kind: "section", label }` rows. They render as dim headings, navigation, search and the row counter skip them, and a section without a label adds a blank row.
 - `SettingItem.searchTerms` lists extra names search matches, such as a submenu's rows. While a query matches some of them, the row shows those names in place of its value.
 - `Editor.onSubmit` receives the untrimmed text as a second argument, so callers can tell a leading space apart.
