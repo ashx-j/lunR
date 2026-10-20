@@ -21,6 +21,10 @@ describe("shouldShowOnboarding", () => {
 		expect(shouldShowOnboarding(savedLogin, placeholderModel)).toBe(false);
 	});
 
+	it("skips onboarding without credentials when a model is usable", () => {
+		expect(shouldShowOnboarding([], { provider: "ollama-local", id: "llama3.2" })).toBe(false);
+	});
+
 	it("skips onboarding when a credential and a model exist", () => {
 		expect(shouldShowOnboarding(savedLogin, { provider: "anthropic", id: "claude-sonnet-4-5" })).toBe(false);
 	});
