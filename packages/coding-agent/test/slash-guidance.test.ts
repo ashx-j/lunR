@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import {
 	findUnknownSlashCommand,
 	formatUnknownSlashCommandStatus,
@@ -8,17 +11,21 @@ import {
 
 // Stands in for dispatch: builtins plus one extension command and one prompt template.
 const isKnown = (name: string) => INTERACTIVE_BUILTIN_COMMAND_NAMES.has(name) || name === "run" || name === "review";
+// Session cwd with one directory in it, so `/scratch` names a path relative to the project.
+const cwd = mkdtempSync(join(tmpdir(), "slash-guidance-"));
+mkdirSync(join(cwd, "scratch"));
+afterAll(() => rmSync(cwd, { recursive: true, force: true }));
 
 describe("findUnknownSlashCommand", () => {
 	it("flags a command-shaped first token that nothing dispatches", () => {
-		expect(findUnknownSlashCommand("/modle", isKnown)).toBe("modle");
-		expect(findUnknownSlashCommand("/does-not-exist with args", isKnown)).toBe("does-not-exist");
-		expect(findUnknownSlashCommand("/foo\nsecond line", isKnown)).toBe("foo");
+		expect(findUnknownSlashCommand("/modle", isKnown, cwd)).toBe("modle");
+		expect(findUnknownSlashCommand("/does-not-exist with args", isKnown, cwd)).toBe("does-not-exist");
+		expect(findUnknownSlashCommand("/foo\nsecond line", isKnown, cwd)).toBe("foo");
 	});
 
 	it("leaves dispatchable commands alone, including ones only the submit chain handles", () => {
 		for (const text of ["/model", "/settings extra", "/debug", "/help", "/run task", "/review"]) {
-			expect(findUnknownSlashCommand(text, isKnown)).toBeUndefined();
+			expect(findUnknownSlashCommand(text, isKnown, cwd)).toBeUndefined();
 		}
 	});
 
@@ -37,8 +44,17 @@ describe("findUnknownSlashCommand", () => {
 			"/1password",
 			"hello /modle",
 		]) {
-			expect(findUnknownSlashCommand(text, isKnown)).toBeUndefined();
+			expect(findUnknownSlashCommand(text, isKnown, cwd)).toBeUndefined();
 		}
+	});
+
+	it("treats a single-segment token that exists on disk as a path", () => {
+		expect(findUnknownSlashCommand("/scratch is full, clean it up", isKnown, cwd)).toBeUndefined();
+		expect(findUnknownSlashCommand("/scratchy", isKnown, cwd)).toBe("scratchy");
+	});
+
+	it.skipIf(process.platform === "win32")("treats a root directory such as /tmp as a path", () => {
+		expect(findUnknownSlashCommand("/tmp is full, clean it up", isKnown, cwd)).toBeUndefined();
 	});
 });
 

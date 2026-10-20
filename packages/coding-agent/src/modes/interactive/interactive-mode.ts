@@ -4841,9 +4841,10 @@ export class InteractiveMode {
 			INTERACTIVE_BUILTIN_COMMAND_NAMES.has(name) ||
 			!!this.session.extensionRunner.getCommand(name) ||
 			this.session.promptTemplates.some((template) => template.name === name);
-		if (!findUnknownSlashCommand(rawText, isKnown)) return false;
+		const cwd = this.sessionManager.getCwd();
+		if (!findUnknownSlashCommand(rawText, isKnown, cwd)) return false;
 		await this.awaitDeferredBuiltinsForPrompt();
-		const name = findUnknownSlashCommand(rawText, isKnown);
+		const name = findUnknownSlashCommand(rawText, isKnown, cwd);
 		if (!name) return false;
 		const candidates = [
 			...BUILTIN_SLASH_COMMANDS.map((command) => command.name),

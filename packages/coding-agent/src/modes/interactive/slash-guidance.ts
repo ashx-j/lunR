@@ -3,6 +3,8 @@
  * mistyped slash command from going to the model as a prompt.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 
@@ -23,11 +25,18 @@ const COMMAND_TOKEN = /^\/([a-z][a-z0-9-]*)$/;
  * Returns the command name when `rawText` starts with a slash command nothing dispatches, else
  * undefined. `rawText` is the editor text before trimming, so a leading space opts out and sends the
  * text as a message. `isKnown` must answer from dispatch (builtins, extension commands, prompt
- * templates), not from what autocomplete shows.
+ * templates), not from what autocomplete shows. A token naming something on disk, at the filesystem
+ * root (`/tmp`) or under `cwd`, is a path; the check costs at most two `existsSync` calls and runs only
+ * for unknown names.
  */
-export function findUnknownSlashCommand(rawText: string, isKnown: (name: string) => boolean): string | undefined {
+export function findUnknownSlashCommand(
+	rawText: string,
+	isKnown: (name: string) => boolean,
+	cwd: string,
+): string | undefined {
 	const name = COMMAND_TOKEN.exec(rawText.split(/\s/, 1)[0] ?? "")?.[1];
-	return name && !isKnown(name) ? name : undefined;
+	if (!name || isKnown(name)) return undefined;
+	return existsSync(`/${name}`) || existsSync(join(cwd, name)) ? undefined : name;
 }
 
 /** Picks up to two command names for an unknown one, ranked by the slash picker's fuzzy matcher. */
