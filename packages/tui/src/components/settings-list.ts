@@ -19,6 +19,8 @@ export interface SettingItem {
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
 	/** If true, the row is rendered dimmed and cannot be activated. Evaluated at render/activation time. */
 	disabled?: () => boolean;
+	/** Never set on a setting row; keeps it apart from a SettingSection in a mixed row list. */
+	kind?: never;
 }
 
 /**
@@ -83,7 +85,7 @@ export class SettingsList implements Component, Focusable {
 		const items: SettingItem[] = [];
 		let section: SettingSection | undefined;
 		for (const row of rows) {
-			if ("kind" in row) {
+			if (row.kind === "section") {
 				section = row;
 				continue;
 			}
