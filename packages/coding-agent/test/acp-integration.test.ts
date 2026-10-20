@@ -648,7 +648,7 @@ describe("compiled ACP stdio integration", () => {
 		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "/fixture-note" }] });
 		expect(assistantText(updates)).toContain("fixture final child report");
 		expect(assistantText(updates)).not.toContain("hidden journal context");
-		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "/high" }] });
+		await connection.prompt({ sessionId, prompt: [{ type: "text", text: "/thinking high" }] });
 		expect(
 			updates.some(
 				({ update }) =>

@@ -7,7 +7,7 @@
  *
  * `/thinking [level]` slash command to view or set the reasoning level,
  * plus `/thinking show|hide|toggle` for thinking-block visibility.
- * `/effort` and `/reasoning` are full-parity aliases.
+ * `/effort` and `/reasoning` are hidden full-parity aliases.
  *
  * Registered as a built-in lunR extension and compiled with the coding-agent package.
  *
@@ -71,6 +71,7 @@ interface ExtensionCommandContextLike extends ExtensionContextLike {
 interface ExtensionAPI {
 	registerCommand(name: string, options: {
 		description?: string;
+		hidden?: boolean;
 		getArgumentCompletions?(prefix: string): AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 		handler(args: string, ctx: ExtensionCommandContextLike): Promise<void> | void;
 	}): void;
@@ -377,33 +378,18 @@ export default function (pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("thinking", thinkingSpec);
-	// lunr: /effort and /reasoning are full-parity aliases (same handler + completions).
+	// lunr: /effort and /reasoning are hidden full-parity aliases (same handler + completions).
+	// `/thinking <level>` is the only level entry point; the per-level commands were removed.
 	pi.registerCommand("effort", {
 		...thinkingSpec,
 		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
+		hidden: true,
 	});
 	pi.registerCommand("reasoning", {
 		...thinkingSpec,
 		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
+		hidden: true,
 	});
-
-	for (const level of ALL_LEVELS) {
-		pi.registerCommand(level, {
-			description: `Set thinking level to ${level}`,
-			handler: async (_args, ctx) => {
-				const levels = availableLevelsFor(ctx.model);
-				if (!levels.includes(level)) {
-					ctx.ui.notify(
-						`Invalid thinking level: "${level}". Valid: ${levels.join(", ")}`,
-						"error",
-					);
-					return;
-				}
-				if (pi.getThinkingLevel() === level) return;
-				pi.setThinkingLevel(level);
-			},
-		});
-	}
 }
 
 // ---------------------------------------------------------------------------

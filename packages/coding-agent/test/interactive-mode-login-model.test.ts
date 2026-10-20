@@ -13,6 +13,7 @@ type LoginContext = {
 	showStatus: (message: string) => void;
 	showError: (message: string) => void;
 	maybeWarnAboutAnthropicSubscriptionAuth: () => Promise<void>;
+	openModelSelectorIfUnset: () => Promise<void>;
 };
 
 type InteractiveModePrototype = {
@@ -40,6 +41,7 @@ async function logIn(available: Model<"anthropic-messages">[]) {
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(async () => {}),
+		openModelSelectorIfUnset: vi.fn(async () => {}),
 	};
 	await prototype.completeProviderAuthentication.call(context, "anthropic", "Anthropic", "oauth", unknownModel, {
 		savedNote: "Saved.",

@@ -172,26 +172,24 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 
 | Command | Description |
 |---------|-------------|
-| `/login`, `/auth` | Configure provider authentication |
-| `/logout`, `/deauth` | Remove provider authentication |
+| `/login` | Configure provider authentication |
+| `/logout` | Remove provider authentication |
 | `/model` | Switch models (stored-cred providers) |
 | `/refresh` | Refresh model catalogs |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, thinking, agent memory, message delivery; Advanced holds transport, prompt cache and terminal layout |
-| `/thinking`, `/effort`, `/reasoning` | Set thinking level (`xhigh`/`max` are opt-in when the model supports them) |
-| `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, `/max` | Set that thinking level when the current model supports it |
+| `/thinking [level]` | Set thinking level, for example `/thinking high` (`xhigh`/`max` are opt-in when the model supports them) |
 | `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read-only` (Shift+Tab cycles) |
 | `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
-| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (works without asking questions, in your current mode) |
 | `/processes` | Background processes started this session |
 | `/usage` | This-session token totals, context, and every stored subscription plan |
 | `/fast` | Toggle Fast mode for OpenAI Codex subscriptions |
 | `/context` | Estimated context-window breakdown |
-| `/resume`, `/sessions` | Pick from previous sessions |
+| `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |
-| `/name`, `/title` | Set session display name |
+| `/name` | Set session display name |
 | `/session` | Show session info |
 | `/tree` | Jump to any point in the session (`ctrl+o` cycles filters) |
 | `/undo`, `/edit`, `/redo` | Same-session rewind; `/edit` pastes the last prompt |
@@ -205,11 +203,12 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/export [file]` | Export session to HTML or JSONL |
 | `/import <file>` | Import and resume a JSONL session |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
+| `/help` | Show the commands and keys you need most |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/init` | Generate a starter AGENTS.md |
-| `/quit`, `/exit` | Quit lunR |
+| `/quit` | Quit lunR |
 
-There is no `/changelog` or `/token-usage` command.
+Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`, which writes the rendered screen to the debug log. There is no `/changelog` or `/token-usage` command.
 
 ### Permission modes
 
@@ -219,7 +218,7 @@ There is no `/changelog` or `/token-usage` command.
 
 `read-only` blocks writes and other changes. The footer shows it as `read`. `/plan` switches to it while you plan a task.
 
-Shift+Tab cycles `yolo`, `auto` and `read-only`. `/mode`, `/yolo`, `/auto` and `/read` switch directly.
+Shift+Tab cycles `yolo`, `auto` and `read-only`. `/mode yolo`, `/mode auto` and `/mode read` switch directly.
 
 ### Keyboard Shortcuts
 
@@ -507,7 +506,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 - **MCP** — `/mcp`, `/mcp-auth`
 - **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
 - **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (see [Permission modes](#permission-modes))
-- **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
+- **Read-only mode** — `/mode read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)

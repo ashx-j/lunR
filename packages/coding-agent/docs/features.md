@@ -16,7 +16,7 @@ Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The
 - **No questions** is separate from the permission mode. `/goal`, subagents and the ACP Autonomous mode work without stopping to ask you and skip the large-launch confirmation. Subagents follow their parent's mode: reviewed in auto, unreviewed in yolo.
 - **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
 
-Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
+Use `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
 
 ## Subagents
 
@@ -32,9 +32,11 @@ In the interactive TUI, normal Enter during an executing `subagent_wait` release
 
 The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remain accepted but no longer change launch mode. Omitted `async` resolves to async, while explicit `async:false`, `clarify:true`, and internal `foregroundOnly` calls stay foreground. RPC and scheduled launches remain always async.
 
-`/prompt-workflow <name> [args]` runs a prompt workflow with a declared `tier` through native subagents. `/chain-workflows analyze -> fix -- auth --foreground` runs those workflows as a native chain with shared arguments. Omit `--foreground` to run in the background. Use `/prompt-workflow list` or `/chain-workflows list` to list available workflows.
+`/prompt-workflow <name> [args]` runs a prompt workflow with a declared `tier` through native subagents. `/chain analyze -> fix -- auth --foreground` runs those workflows as a native chain with shared arguments. Omit `--foreground` to run in the background. Use `/prompt-workflow list` to list available workflows.
 
-`/chain-prompts analyze -> fix --loop 3 --chain-context` belongs to the separate prompt-template engine. It supports template model selection, loops, and delegated step summaries. The optional `run-prompt` tool uses this same engine and queues commands until the current turn ends. A successful queue receipt confirms acceptance. Disabled, busy, uninitialized, empty, or already-queued requests return tool errors. `/prompt-tool on` enables the tool, and `/prompt-tool off` disables it.
+`/chain analyze -> fix --loop 3 --chain-context` runs prompt templates through the separate prompt-template engine. It supports template model selection, loops, and delegated step summaries. The optional `run-prompt` tool uses this same engine and queues commands until the current turn ends. A successful queue receipt confirms acceptance. Disabled, busy, uninitialized, empty, or already-queued requests return tool errors. `/prompt-tool on` enables the tool, and `/prompt-tool off` disables it.
+
+`/chain` picks its engine from the arguments. A first step with inline `[tier=...]` or `[model=...]` config, or one that opens a `(` parallel group, runs a subagent task chain, so a task step named like a workflow always stays a task chain. Otherwise, when every step is a single workflow name, it runs those workflows; when every step names a prompt template, it runs the template chain. Anything else is treated as a task chain and gets its usual usage error. A workflow wins when a name is both. `/chain-workflows` and `/chain-prompts` still work as hidden aliases for one release.
 
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
@@ -187,7 +189,7 @@ All concurrent writers must use a lunR version with session ownership support. O
 
 - **MCP** — `/mcp`, `/mcp-auth`. Footer MCP segment is on by default (`footerMcp`).
 - **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
-- **Web search** — `/websearch` (and related search commands). Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+- **Web search** — `/search <query>[, query...]` opens the search curator; `/search` alone lists stored results. Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
 
 Stored web results belong to the current session. `get_search_content` returns pages of at most 50 KiB and 2,000 lines, including selector lists and errors. Start with `responseId` and a query or URL selector. If the page is truncated, repeat the same call with `offset` set to the returned `nextOffset`. Offsets count UTF-8 bytes. Direct HTTP extraction limits decoded bodies to 5 MiB for text and 20 MiB for PDFs before parsing.
 
@@ -201,7 +203,7 @@ See [Headless browser](browser.md) for action parameters, installation exception
 
 ## Thinking, usage, streaming, UI
 
-- `/thinking`, `/effort`, and `/reasoning` are full-parity aliases. `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, and `/max` set a level when the current model supports it. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
+- `/thinking <level>` sets the level when the current model supports it; `/effort` and `/reasoning` are hidden aliases. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
 - `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth. There is no `/token-usage`.
 - `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
