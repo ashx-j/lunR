@@ -1,14 +1,13 @@
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { ExternalClaudeCodeCredential } from "@earendil-works/pi-ai";
-import { getDocsPath } from "../config.ts";
 
 const UNKNOWN_PROVIDER = "unknown";
 
+/** Two-line pointer to /login, /model and the provider docs, shared by every no-model/no-key message. */
 export function getProviderLoginHelp(): string {
 	return [
-		"Use /login to log into a provider via OAuth or API key. See:",
-		`  ${join(getDocsPath(), "providers.md")}`,
-		`  ${join(getDocsPath(), "models.md")}`,
+		"Run /login to add a provider, then /model to pick a model.",
+		"Docs: https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/docs/providers.md",
 	].join("\n");
 }
 
@@ -17,7 +16,7 @@ export function formatNoModelsAvailableMessage(): string {
 }
 
 export function formatNoModelSelectedMessage(): string {
-	return `No model selected.\n\n${getProviderLoginHelp()}\n\nThen use /model to select a model.`;
+	return `No model selected.\n\n${getProviderLoginHelp()}`;
 }
 
 export function formatNoApiKeyFoundMessage(provider: string): string {
