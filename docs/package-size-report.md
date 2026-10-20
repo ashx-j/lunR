@@ -23,7 +23,7 @@ Unpacked, by type:
 | `examples` | 0.98 MB |
 | `CHANGELOG.md`, shrinkwrap, install-lock, other assets | about 0.8 MB |
 
-A global install is much larger than the tarball. `npm i -g @ashx-j/lunr@0.2.38 --ignore-scripts` (npm 11.19.1, Linux x64) writes 561 MB and 33,324 files. 211 MB of that is other platforms' optional packages: `recheck-macos-arm64`, `recheck-macos-x64`, `recheck-windows-x64` and the `lunr-computer-darwin-arm64`, `lunr-computer-win32-arm64` and `lunr-computer-win32-x64` payloads. Their `os`/`cpu` fields are correct in `npm-shrinkwrap.json`, but npm installs them anyway. I did not investigate the cause. Fixing it would save more than any `files` change below.
+A global install is much larger than the tarball. `npm i -g @ashx-j/lunr@0.2.38 --ignore-scripts` (npm 11.19.1, Linux x64) writes 561 MB and 33,324 files. 211 MB of that is other platforms' optional packages: `recheck-macos-arm64`, `recheck-macos-x64`, `recheck-windows-x64` and the `lunr-computer-darwin-arm64`, `lunr-computer-win32-arm64` and `lunr-computer-win32-x64` payloads. Their `os`/`cpu` fields are correct in the published `npm-shrinkwrap.json`, but npm installs them anyway. I did not investigate the cause. Fixing it would save more than any `files` change below.
 
 ## What the entry points load
 
