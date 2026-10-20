@@ -214,6 +214,7 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { ExitConfirmation } from "./exit-confirmation.ts";
 import {
 	orderedExtensionWidgets,
 	replaceExtensionWidget,
@@ -462,6 +463,7 @@ export class InteractiveMode {
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
 	private lastSigintTime = 0;
+	private readonly exitConfirmation: ExitConfirmation;
 	private lastEscapeTime = 0;
 	private readonly subagentEscape = new SubagentEscapeSequence();
 	private anthropicSubscriptionWarningShown = false;
@@ -636,6 +638,8 @@ export class InteractiveMode {
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = options.startupView?.statusContainer ?? new Container();
+		// Share the startup view's window so a Ctrl+D pressed just before hydration still counts.
+		this.exitConfirmation = options.startupView?.exitConfirmation ?? new ExitConfirmation();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = options.startupView?.keybindings ?? KeybindingsManager.create();
@@ -4202,8 +4206,12 @@ export class InteractiveMode {
 	}
 
 	private handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor)
-		void this.shutdown();
+		// Only called when editor is empty (enforced by CustomEditor). The first press only warns.
+		if (this.exitConfirmation.press()) {
+			void this.shutdown();
+			return;
+		}
+		this.showStatus(this.exitConfirmation.hint);
 	}
 
 	/**
@@ -8029,7 +8037,7 @@ export class InteractiveMode {
 | \`${tab}\` | Path completion / accept autocomplete |
 | \`${interrupt}\` | Cancel autocomplete / abort streaming |
 | \`${clear}\` | Clear editor (first) / exit (second) |
-| \`${exit}\` | Exit (when editor is empty) |
+| \`${exit}\` twice | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cyclePermissionMode}\` | Cycle permission mode |
 ${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
