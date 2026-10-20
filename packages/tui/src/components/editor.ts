@@ -382,7 +382,8 @@ export class Editor implements Component, Focusable {
 		images: snapshot.images,
 	}));
 
-	public onSubmit?: (text: string) => void;
+	/** Receives the trimmed text and the untrimmed text, so callers can see a leading space. */
+	public onSubmit?: (text: string, rawText?: string) => void;
 	public onChange?: (text: string) => void;
 	public disableSubmit: boolean = false;
 
@@ -1380,7 +1381,8 @@ export class Editor implements Component, Focusable {
 
 	private submitValue(): void {
 		this.cancelAutocomplete();
-		const result = this.expandPasteMarkers(this.state.lines.join("\n")).trim();
+		const rawText = this.expandPasteMarkers(this.state.lines.join("\n"));
+		const result = rawText.trim();
 		// Snapshot before the editor is cleared so onSubmit can still attach files.
 		this.submittedImages = this.getPendingImages();
 
@@ -1395,7 +1397,7 @@ export class Editor implements Component, Focusable {
 		this.lastAction = null;
 
 		if (this.onChange) this.onChange("");
-		if (this.onSubmit) this.onSubmit(result);
+		if (this.onSubmit) this.onSubmit(result, rawText);
 	}
 
 	private handleBackspace(): void {
