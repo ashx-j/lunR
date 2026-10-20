@@ -523,12 +523,18 @@ function colorEffort(theme: Theme | undefined, level: ThinkingLevel, text: strin
 	return painted;
 }
 
+// The agent's placeholder model (`unknown`/`unknown`) stands in when nothing is selected.
+function hasNoModel(model: ModelLike | undefined): boolean {
+	return !model || (model.provider === "unknown" && model.id === "unknown");
+}
+
 function buildChip(ctx: ExtensionContextLike, pi: ExtensionAPI): { left: string; effort: string; level: ThinkingLevel } {
+	const level = pi.getThinkingLevel();
+	if (hasNoModel(ctx.model)) return { left: "no model", effort: "", level };
 	const modelId = ctx.model?.id ?? "no-model";
 	const provider = ctx.model?.provider;
 	const providerLabel = formatProviderLabel(provider);
 	const fast = provider === "openai-codex" && lunrCustomizeBridge()?.getOpenAIFastMode?.() ? " · fast" : "";
-	const level = pi.getThinkingLevel();
 	const effort = formatChipEffort(level);
 	return { left: `${modelId}${fast} · ${providerLabel} · `, effort, level };
 }
@@ -757,8 +763,10 @@ export function renderStatsLine(
 		}
 	}
 
-	// 2) Context usage: `pct/window` (lunr: gated on footerContext).
-	if (footerToggles.context) {
+	// 2) Context usage: `pct/window` (lunr: gated on footerContext). Without a model it points at /login.
+	if (footerToggles.context && hasNoModel(ctx.model)) {
+		parts.push(color(theme, "dim", "no model · /login"));
+	} else if (footerToggles.context) {
 		const usage = ctx.getContextUsage();
 		const win = ctx.model?.contextWindow ?? usage?.contextWindow ?? 0;
 		const pct = usage?.percent == null ? "?" : `${Math.round(usage.percent)}%`;
