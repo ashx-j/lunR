@@ -39,11 +39,38 @@ export function findUnknownSlashCommand(
 	return existsSync(`/${name}`) || existsSync(join(cwd, name)) ? undefined : name;
 }
 
-/** Picks up to two command names for an unknown one, ranked by the slash picker's fuzzy matcher. */
+/**
+ * Picks up to two command names for an unknown one, ranked by the slash picker's fuzzy matcher. That
+ * matcher needs the letters in order, so typos like `/modle` fall back to edit distance (at most 2).
+ */
 export function suggestSlashCommands(name: string, candidates: Iterable<string>): string[] {
-	return fuzzyFilter([...new Set(candidates)], name, (candidate) => candidate)
-		.filter((candidate) => candidate !== name)
-		.slice(0, 2);
+	const names = [...new Set(candidates)].filter((candidate) => candidate !== name);
+	const fuzzy = fuzzyFilter(names, name, (candidate) => candidate);
+	if (fuzzy.length > 0) return fuzzy.slice(0, 2);
+	return names
+		.map((candidate) => ({ candidate, distance: editDistance(name, candidate) }))
+		.filter(({ distance }) => distance <= 2)
+		.sort((a, b) => a.distance - b.distance)
+		.slice(0, 2)
+		.map(({ candidate }) => candidate);
+}
+
+// Damerau-Levenshtein distance (optimal string alignment): insertions, deletions, substitutions and
+// adjacent swaps each cost 1.
+function editDistance(a: string, b: string): number {
+	const rows = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+	for (let j = 1; j <= b.length; j++) rows[0]![j] = j;
+	for (let i = 1; i <= a.length; i++) {
+		for (let j = 1; j <= b.length; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+			let best = Math.min(rows[i - 1]![j]! + 1, rows[i]![j - 1]! + 1, rows[i - 1]![j - 1]! + cost);
+			if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+				best = Math.min(best, rows[i - 2]![j - 2]! + 1);
+			}
+			rows[i]![j] = best;
+		}
+	}
+	return rows[a.length]![b.length]!;
 }
 
 /** Status line shown when a submitted unknown command is put back in the editor. */
