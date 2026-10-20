@@ -35,12 +35,31 @@ describe("OnboardingComponent", () => {
 		setKeybindings(new KeybindingsManager());
 	});
 
+	// Part of the real /login list, in its name order, including the local servers lunr-local-providers adds.
 	const providers = [
-		...["Anthropic", "ChatGPT", "GitHub Copilot", "Google", "xAI"].map((name) => ({
-			name,
-			authType: "oauth" as const,
-		})),
-		...["Anthropic", "OpenAI", "OpenRouter"].map((name) => ({ name, authType: "api_key" as const })),
+		...(
+			[
+				["anthropic", "Anthropic"],
+				["github-copilot", "GitHub Copilot"],
+				["lm-studio", "LM Studio (local)"],
+				["ollama-local", "Ollama (local)"],
+				["openai-codex", "OpenAI Codex"],
+				["radius", "Radius"],
+				["xai", "xAI"],
+			] as const
+		).map(([id, name]) => ({ id, name, authType: "oauth" as const })),
+		...(
+			[
+				["amazon-bedrock", "Amazon Bedrock"],
+				["ant-ling", "Ant Ling"],
+				["anthropic", "Anthropic"],
+				["azure-openai-responses", "Azure OpenAI"],
+				["google", "Google"],
+				["openai", "OpenAI"],
+				["openrouter", "OpenRouter"],
+				["xai", "xAI"],
+			] as const
+		).map(([id, name]) => ({ id, name, authType: "api_key" as const })),
 	];
 
 	it.each([80, 120])("renders the welcome box at %i columns", (width) => {
@@ -50,17 +69,16 @@ describe("OnboardingComponent", () => {
 		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 		expect(text[0]).toBe("─".repeat(width));
 		// Text wraps at 80 columns whatever the chat width.
-		expect(text.slice(2, 16)).toEqual([
+		expect(text.slice(2, 15)).toEqual([
 			" Welcome to lunR",
 			"",
 			" lunR needs a model provider before it can do anything.",
 			" Pick how you want to sign in. You can add more later with /login.",
 			"",
-			" → Sign in with an account        Anthropic, ChatGPT, GitHub Copilot, Google",
+			" → Sign in with an account        Anthropic, OpenAI Codex, xAI, GitHub Copilot",
 			"                                  and 1 more",
-			"   Sign in with an API key        Anthropic, OpenAI and OpenRouter",
-			"   Connect a custom API endpoint  Ollama, LM Studio or any OpenAI-compatible",
-			"                                  server",
+			"   Sign in with an API key        Anthropic, OpenAI, xAI, Google and 4 more",
+			"   Connect a custom API endpoint  Any OpenAI-compatible server",
 			"   Skip for now                   Open the chat without a model",
 			"",
 			" ↑↓ navigate  enter select  escape/ctrl+c skip",

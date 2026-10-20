@@ -5,6 +5,7 @@
 
 import type { CredentialInfo } from "@earendil-works/pi-ai";
 import { type Component, getKeybindings, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { LOCAL_SERVERS } from "../../../builtin-extensions/lunr-local-providers/local-servers.ts";
 import { theme } from "../theme/theme.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 import type { AuthSelectorProvider } from "./oauth-selector.ts";
@@ -22,6 +23,10 @@ const MAX_TEXT_WIDTH = 80;
 /** Below this many description columns, each description moves under its label. */
 const MIN_DESCRIPTION_WIDTH = 24;
 const PROVIDER_NAME_LIMIT = 4;
+/** Providers both rows name first, in this order; the rest keep /login's name order. */
+const FEATURED_PROVIDER_IDS = ["anthropic", "openai-codex", "openai", "xai", "google"];
+/** Keyless local servers (Ollama, LM Studio) sign in through the account flow but are not accounts. */
+const LOCAL_PROVIDER_IDS = new Set(LOCAL_SERVERS.map((server) => server.providerId));
 
 /**
  * Whether startup should show onboarding: no saved credential for any provider (the list
@@ -47,13 +52,21 @@ function formatProviderNames(names: readonly string[]): string {
 
 /**
  * Builds the onboarding choices from the /login provider list (`getLoginProviderOptions`), so the
- * provider names cannot go stale. Account and API-key rows are left out when no provider offers them.
+ * provider names cannot go stale. Both rows name the featured providers first and skip local servers.
+ * Account and API-key rows are left out when no provider offers them.
  */
 export function buildOnboardingOptions(
-	providers: readonly Pick<AuthSelectorProvider, "name" | "authType">[],
+	providers: readonly Pick<AuthSelectorProvider, "id" | "name" | "authType">[],
 ): OnboardingOption[] {
+	const featuredRank = (id: string) => {
+		const rank = FEATURED_PROVIDER_IDS.indexOf(id);
+		return rank === -1 ? FEATURED_PROVIDER_IDS.length : rank;
+	};
 	const namesFor = (authType: AuthSelectorProvider["authType"]) =>
-		providers.filter((provider) => provider.authType === authType).map((provider) => provider.name);
+		providers
+			.filter((provider) => provider.authType === authType && !LOCAL_PROVIDER_IDS.has(provider.id))
+			.sort((a, b) => featuredRank(a.id) - featuredRank(b.id))
+			.map((provider) => provider.name);
 	const subscriptions = namesFor("oauth");
 	const apiKeys = namesFor("api_key");
 	const options: OnboardingOption[] = [];
@@ -71,7 +84,7 @@ export function buildOnboardingOptions(
 		{
 			choice: "custom",
 			label: "Connect a custom API endpoint",
-			description: "Ollama, LM Studio or any OpenAI-compatible server",
+			description: "Any OpenAI-compatible server",
 		},
 		{ choice: "skip", label: "Skip for now", description: "Open the chat without a model" },
 	);
