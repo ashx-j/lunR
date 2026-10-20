@@ -492,7 +492,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 - **MCP** — `/mcp`, `/mcp-auth`
 - **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
 - **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (read-only appears as `read` in the TUI)
-- **Read-only mode** — `/read` blocks changes; `/plan` and `present_plan` handle plan approval
+- **Read-only mode** — `/mode read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
 - **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)

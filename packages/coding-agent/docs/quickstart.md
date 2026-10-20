@@ -152,7 +152,7 @@ The command output is sent to the model. Use `!!command` to run a command withou
 
 ### Switch models
 
-Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle permission mode (yolo → auto → read). Use `/thinking`, `/effort`, `/reasoning`, or `/settings` to change thinking level. `xhigh` and `max` are opt-in when the model supports them. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models. Catalog refresh is `/refresh`, not `lunr update`.
+Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle permission mode (yolo → auto → read-only). Use `/thinking` or `/settings` to change thinking level. `xhigh` and `max` are opt-in when the model supports them. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models. Catalog refresh is `/refresh`, not `lunr update`.
 
 ### Continue later
 

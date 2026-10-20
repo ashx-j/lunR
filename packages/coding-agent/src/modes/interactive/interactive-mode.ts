@@ -7362,7 +7362,7 @@ export class InteractiveMode {
 		const reviewer = this.session.resolveAutoReviewer();
 		if (reviewer.kind === "ready") return;
 		this.showWarning(
-			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /auto to pick one.`,
+			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
 		);
 	}
 
