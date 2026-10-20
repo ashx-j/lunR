@@ -22,20 +22,20 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 # Current State
 
-- **v0.2.38 (2026-10-18):** latest npm release. Integration PR #208 merged PRs #195 to #207 and release PR #209 merged as `4cc8c4e`; tag `v0.2.38` published all four public packages and three native payloads, and the binary workflow succeeded. All seven tarballs match registry integrity, and a fresh isolated install reports 0.2.38 for the CLI and its three dependencies and passes the first-paint/first-turn check. Earlier releases and per-PR history: git log.
+- **v0.2.39 (prepared 2026-10-20):** integration PR #221 merged PRs #211 to #220. Earlier releases and per-PR history: git log.
 - **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files. Repo-wide, 182 files still carry `@ts-nocheck`, all in coding-agent `builtin-extensions/`: pi-mcp-adapter 41, pi-subagents 39 (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`), pi-lsp-extension 31, pi-web-access 29, pi-prompt-template-model 17, pi-intercom 12, narumiruna-pi-goal 9, and one each in lunr-cron, lunr-plan-tools, lunr-todos and ashxj-thinking. `npm run check:ts-nocheck` fails if the count rises; lower its constant when the count drops.
-- **Unreleased (integration PR for 0.2.39, PRs #211 to #220):** onboarding screen when no login and no usable model; `/help`; unknown `/word` bounces to the editor with suggestions; `/settings` sections plus an Advanced submenu; Ctrl+D twice to quit; hidden slash commands (63 visible at `/` with a clean profile, down from about 83) with `/off`…`/max` removed and `/websearch`, `/chain-workflows`, `/chain-prompts` merged into `/search` and `/chain`; `/login` code in `login-flow.ts` and builtin slash dispatch in `slash-dispatch.ts`; `lunr --help` Common options; `@ts-nocheck` count check (182); package size report in `docs/package-size-report.md`.
+- **In 0.2.39:** Onboarding screen when there is no saved login and no usable model; `/help`; an unknown `/word` goes back to the editor with suggestions; `/settings` sections plus an Advanced submenu; Ctrl+D twice to quit; hidden slash commands (63 visible at `/` with a clean profile, down from about 83) with `/off`…`/max` removed and `/websearch`, `/chain-workflows`, `/chain-prompts` merged into `/search` and `/chain`; `/login` code in `login-flow.ts` and builtin slash dispatch in `slash-dispatch.ts`; `lunr --help` Common options; `@ts-nocheck` count check (182); package size report in `docs/package-size-report.md`.
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
      /\_/\
     ( ˃ᴗ˂ )
   ```
 
-Last updated: 2026-10-18 (trimmed shipped history). Public npm is `@ashx-j/lunr@0.2.38`. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+Last updated: 2026-10-20. Public npm is `@ashx-j/lunr@0.2.38` until v0.2.39 publishes. **NEVER MERGE `archive/extension-absorption-DO-NOT-MERGE`.** Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
 
 ## Installer
 
-- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.38**.
+- **Install:** `npm i -g @ashx-j/lunr` (Node ≥ 22.19). Current published: **0.2.38**; v0.2.39 prepared.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough — `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` + `secrets.NPM_TOKEN`. Never publish `@earendil-works/*`.
 - A release publishes seven packages: the four public packages plus three native CuaDriver payloads. `npm run publish:dry` packs all seven; `scripts/publish.mjs` accepts both npm 10 array and npm 12 keyed `npm pack --json` output.
