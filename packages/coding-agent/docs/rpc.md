@@ -791,7 +791,7 @@ The current session name is available via `get_state` in the `sessionName` field
 
 #### get_commands
 
-Get available commands (extension commands, prompt templates, and skills). These can be invoked via the `prompt` command by prefixing with `/`.
+Get available commands (extension commands, prompt templates, and skills). These can be invoked via the `prompt` command by prefixing with `/`. Hidden extension commands (compatibility aliases such as `/effort`) are left out but still run through `prompt`.
 
 ```json
 {"type": "get_commands"}

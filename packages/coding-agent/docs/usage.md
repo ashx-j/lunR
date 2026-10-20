@@ -62,14 +62,13 @@ Built-in commands (from `slash-commands.ts`):
 | `/import` | Import and resume a session from a JSONL file |
 | `/copy` | Copy last agent message to clipboard |
 | `/paste-image` | Paste an image from the clipboard |
-| `/name`, `/title` | Set session display name |
+| `/name` | Set session display name |
 | `/session` | Show session info and stats |
 | `/usage` | This-session token totals, context, and every stored subscription plan (no `/token-usage`) |
 | `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
 | `/plan` | Switch to read-only mode, or `/plan <task>` to plan a task |
 | `/mode` | Set permission mode: `yolo`, `auto`, or `read` |
-| `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/processes` | View and manage background processes started this session |
 | `/rollback` | Undo the last turn's file changes and rewind the conversation |
 | `/help` | Show the commands and keys you need most |
@@ -81,18 +80,18 @@ Built-in commands (from `slash-commands.ts`):
 | `/edit` | Rewind the last turn and put its text in the chat box |
 | `/redo` | Restore a turn undone with `/undo` |
 | `/trust` | Save project trust decision for future sessions |
-| `/login`, `/auth` | Configure provider authentication |
-| `/logout`, `/deauth` | Remove provider authentication |
+| `/login` | Configure provider authentication |
+| `/logout` | Remove provider authentication |
 | `/new` | Start a new session |
 | `/init` | Generate a starter AGENTS.md for this project |
 | `/compact` | Manually compact the session context |
-| `/resume`, `/sessions` | Browse and resume sessions |
+| `/resume` | Browse and resume sessions |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
-| `/quit`, `/exit` | Quit lunR |
+| `/quit` | Quit lunR |
 
-There is no `/changelog` command.
+Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`. Extensions can hide their own commands with `hidden: true` in `registerCommand`. There is no `/changelog` command.
 
-Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/effort`, `/reasoning`, `/off` through `/max`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/websearch`. See [Built-in features](features.md).
+Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`. See [Built-in features](features.md).
 
 ## Message Queue
 

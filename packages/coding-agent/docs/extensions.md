@@ -1532,9 +1532,11 @@ pi.registerCommand("deploy", {
 });
 ```
 
+Set `hidden: true` for aliases you keep for compatibility. A hidden command still runs when typed, but it stays out of `/` autocomplete, `pi.getCommands()` and RPC `get_commands`.
+
 ### pi.getCommands()
 
-Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands, prompt templates, and skill commands.
+Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands that are not hidden, prompt templates, and skill commands.
 The list matches the RPC `get_commands` ordering: extensions first, then templates, then skills.
 
 ```typescript
