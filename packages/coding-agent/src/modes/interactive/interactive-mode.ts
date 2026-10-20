@@ -1175,7 +1175,9 @@ export class InteractiveMode {
 				if (choice === "skip") {
 					this.showStatus("No provider yet. Run /login when you are ready.");
 				} else if (choice === "custom") {
-					void showCustomProviderWizard(this.loginFlowHost).then(() => this.openModelSelectorIfUnset());
+					void showCustomProviderWizard(this.loginFlowHost)
+						.then(() => this.openModelSelectorIfUnset())
+						.catch((error: unknown) => this.showError(error instanceof Error ? error.message : String(error)));
 				} else {
 					showLoginProviderSelector(this.loginFlowHost, choice);
 				}
