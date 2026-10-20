@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **v0.2.38 (2026-10-18):** latest npm release. Integration PR #208 merged PRs #195 to #207 and release PR #209 merged as `4cc8c4e`; tag `v0.2.38` published all four public packages and three native payloads, and the binary workflow succeeded. All seven tarballs match registry integrity, and a fresh isolated install reports 0.2.38 for the CLI and its three dependencies and passes the first-paint/first-turn check. Earlier releases and per-PR history: git log.
 - **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
+- **Unreleased (first-run docs):** `lunr --help` opens with a Common options block before All options and no longer claims `--provider` defaults to google. The npm README has a Permission modes section, says `lunr setup` is optional and mentions the onboarding screen.
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
      /\_/\
@@ -77,6 +78,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - ACP workers call `setAutoReviewEnabled(false)` and tie autonomy to ACP's `auto` (Autonomous), because the ACP client approves every tool itself. `-p` and gateway cron sessions in auto also set autonomy, preserving what a saved auto default meant before.
 - To refresh the Windows/macOS first-request hashes from Linux, run the startup benchmark (`PI_STARTUP_BENCHMARK=1`) with an `--import` preload that returns `win32` for `process.platform` only when the stack includes `lunr-computer-use`. Check that it reproduces master's pinned hashes before trusting new ones.
 - New top-level CLI subcommands must be added to `DEFERRED_COMMANDS` in `startup/launch-routing.ts`; otherwise a TTY launch paints the chat TUI first and its editor also consumes the command's input.
+- `--provider` only narrows `--model` lookup (`resolveCliModel`); it has no default and does nothing alone. Without `--model` the saved default model applies.
 - Terminal notifications enable DECSET 1004 only while `terminal.attentionNotification` is on; TUI consumes `ESC [ I`/`ESC [ O` always. pty harnesses must write such reports in one write, or lunR reads a lone Escape plus typed text.
 - Read `PI_OFFLINE` through `isOfflineModeEnabled()` (1/true/yes); a raw `!== undefined` check treated `0` as offline.
 - To measure errors in `@ts-nocheck` files, rewrite each first line to `// @ts-nocheck-OFF`, run `tsgo --noEmit`, group errors by file, then restore. The directive only hides that file's diagnostics, so one run counts every file.
@@ -169,6 +171,7 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 
 # Decisions (keep; why in one line)
 
+- 2026-10-20: help describes `--provider` as narrowing `--model`, not as having a default, because the code never falls back to a saved or built-in provider for that flag.
 - 2026-10-18: auto is reviewed and "no questions" is a separate session flag, so goals and subagents keep working unattended under yolo without paying for reviews.
 - 2026-10-18: default reviewers come only from providers whose own agents ship one (Claude Code, Codex, Grok Build, Qwen Code); other providers must pick a model, because choosing a safety reviewer is the user's call.
 - 2026-10-18: remove `/share` and the subagent `share` option instead of hosting a viewer, because both sent sessions to pi's site; keep accepting the old descriptor field so saved runs resume.
