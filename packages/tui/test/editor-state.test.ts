@@ -189,3 +189,54 @@ describe("settings search focus", () => {
 		assert.ok(!parent.render(40).join("").includes(CURSOR_MARKER));
 	});
 });
+
+describe("settings sections", () => {
+	const createSectionedList = (onChange: (id: string, value: string) => void = () => {}) =>
+		new SettingsList(
+			[
+				{ kind: "section", label: "Display" },
+				{ id: "theme", label: "Theme", currentValue: "moon" },
+				{ id: "width", label: "Width", currentValue: "80" },
+				{ kind: "section", label: "Terminal" },
+				{ id: "bell", label: "Bell", currentValue: "off", values: ["off", "on"] },
+				{ id: "progress", label: "Progress", currentValue: "off" },
+			],
+			3,
+			theme,
+			onChange,
+			() => {},
+			{ enableSearch: true },
+		);
+
+	it("skips section rows in navigation and the counter", () => {
+		const changes: string[] = [];
+		const list = createSectionedList((id, value) => changes.push(`${id}=${value}`));
+		const initial = list.render(60);
+		assert.ok(initial.includes("  Display"));
+		assert.ok(initial.some((line) => line.startsWith("> Theme")));
+		assert.ok(initial.includes("  (1/4)"));
+
+		list.handleInput("\x1b[B");
+		list.handleInput("\x1b[B");
+		const lines = list.render(60);
+		const terminalIndex = lines.indexOf("  Terminal");
+		assert.equal(lines[terminalIndex - 1], "");
+		assert.ok(lines[terminalIndex + 1]?.startsWith("> Bell"));
+		assert.ok(lines.includes("  (3/4)"));
+		list.handleInput("\r");
+		assert.deepEqual(changes, ["bell=on"]);
+	});
+
+	it("filters rows by label and keeps the matching rows' section", () => {
+		const list = createSectionedList();
+		list.handleInput("prog");
+		const lines = list.render(60);
+		assert.ok(lines.includes("  Terminal"));
+		assert.ok(lines.some((line) => line.startsWith("> Progress")));
+		assert.ok(!lines.includes("  Display"));
+
+		const sectionOnly = createSectionedList();
+		sectionOnly.handleInput("Displ");
+		assert.ok(sectionOnly.render(60).includes("  No matching settings"));
+	});
+});

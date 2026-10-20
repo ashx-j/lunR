@@ -21,6 +21,15 @@ export interface SettingItem {
 	disabled?: () => boolean;
 }
 
+/**
+ * Non-selectable heading that groups the setting rows after it, up to the next section.
+ * Without a label it only separates the rows after it with a blank line.
+ */
+export interface SettingSection {
+	kind: "section";
+	label?: string;
+}
+
 export interface SettingsListTheme {
 	label: (text: string, selected: boolean) => string;
 	value: (text: string, selected: boolean) => string;
@@ -47,8 +56,10 @@ export class SettingsList implements Component, Focusable {
 		this.syncChildFocus();
 	}
 
+	// Selectable rows only. Navigation, search and the (n/total) counter all work on these.
 	private items: SettingItem[];
 	private filteredItems: SettingItem[];
+	private sectionOf = new Map<SettingItem, SettingSection>();
 	private theme: SettingsListTheme;
 	private selectedIndex = 0;
 	private maxVisible: number;
@@ -62,13 +73,23 @@ export class SettingsList implements Component, Focusable {
 	private submenuItemIndex: number | null = null;
 
 	constructor(
-		items: SettingItem[],
+		rows: (SettingItem | SettingSection)[],
 		maxVisible: number,
 		theme: SettingsListTheme,
 		onChange: (id: string, newValue: string) => void,
 		onCancel: () => void,
 		options: SettingsListOptions = {},
 	) {
+		const items: SettingItem[] = [];
+		let section: SettingSection | undefined;
+		for (const row of rows) {
+			if ("kind" in row) {
+				section = row;
+				continue;
+			}
+			items.push(row);
+			if (section) this.sectionOf.set(row, section);
+		}
 		this.items = items;
 		this.filteredItems = items;
 		this.maxVisible = maxVisible;
@@ -152,10 +173,18 @@ export class SettingsList implements Component, Focusable {
 		// Calculate max label width for alignment
 		const maxLabelWidth = Math.min(30, Math.max(...this.items.map((item) => visibleWidth(item.label))));
 
-		// Render visible items
+		// Render visible items. A section label goes above the first visible row and above
+		// every row whose section differs from the row before it, so filtered results keep theirs.
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = displayItems[i];
 			if (!item) continue;
+
+			const section = this.sectionOf.get(item);
+			const previous = i === startIndex ? undefined : displayItems[i - 1];
+			if (!previous || this.sectionOf.get(previous) !== section) {
+				if (previous) lines.push("");
+				if (section?.label) lines.push(truncateToWidth(this.theme.hint(`  ${section.label}`), width));
+			}
 
 			const isSelected = i === this.selectedIndex;
 			const isDisabled = item.disabled?.() ?? false;
