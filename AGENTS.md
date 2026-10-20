@@ -250,3 +250,4 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Scope rename; `PI_CODING_AGENT*` rename.
 - Rollback: shadow-git capture (option removed until built), gateway rollback (B7), orphan GC, symlink escape. Orchestrator timeouts from closed PR #41 remain unshipped.
 - Cron: script/`no_agent` jobs; more gateway platforms; process-tree for `nohup` grandchildren.
+- Package size: `docs/package-size-report.md` lists which `files` entries are safe to drop (maps, `exy.png` and catalog extras take the tarball from 10.96 to 5.30 MB) and the 211 MB of other-platform optional packages npm installs. Nothing is cut yet.
