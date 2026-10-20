@@ -182,6 +182,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { buildOnboardingOptions, OnboardingComponent, shouldShowOnboarding } from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
@@ -216,7 +217,9 @@ import {
 	getLoginProviderOptions,
 	handleLoginCommand,
 	type LoginFlowHost,
+	showCustomProviderWizard,
 	showLoginAuthTypeSelector,
+	showLoginProviderSelector,
 } from "./login-flow.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
@@ -464,6 +467,7 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	private lastNotice: { kind: "error" | "warning"; message: string; text: Text; count: number } | undefined;
 
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
@@ -1105,9 +1109,9 @@ export class InteractiveMode {
 			this.showError(`models.json error: ${modelsJsonError}`);
 		}
 
-		if (modelFallbackMessage) {
-			this.showWarning(modelFallbackMessage);
-		}
+		void this.showModelSetupGuidance(modelFallbackMessage).catch((error: unknown) =>
+			this.showError(error instanceof Error ? error.message : String(error)),
+		);
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
@@ -1142,6 +1146,50 @@ export class InteractiveMode {
 				this.showError(errorMessage);
 			}
 		}
+	}
+
+	/**
+	 * Startup model guidance. With no saved credential and no usable model, shows onboarding once the
+	 * deferred builtins have attached (so the /login provider list is complete); otherwise shows the
+	 * model fallback warning, if any. Escape or Skip closes onboarding for this launch only.
+	 */
+	private async showModelSetupGuidance(modelFallbackMessage: string | undefined): Promise<void> {
+		const credentials = await this.session.modelRuntime.listCredentials();
+		if (!shouldShowOnboarding(credentials, this.session.model)) {
+			if (modelFallbackMessage) this.showWarning(modelFallbackMessage);
+			return;
+		}
+		await this.waitForDeferredBuiltins();
+		await this.session.modelRuntime.getAvailable();
+		// Leave a selector or dialog the user opened in the meantime (such as /login) alone.
+		if (this.editorContainer.children[0] !== this.editor) return;
+		this.showOnboarding();
+	}
+
+	// Each onboarding choice hands off to the /login flow; a login then opens /model if no model is set.
+	private showOnboarding(): void {
+		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
+		this.showSelector((done) => {
+			const onboarding = new OnboardingComponent(options, (choice) => {
+				done();
+				if (choice === "skip") {
+					this.showStatus("No provider yet. Run /login when you are ready.");
+				} else if (choice === "custom") {
+					void showCustomProviderWizard(this.loginFlowHost).then(() => this.openModelSelectorIfUnset());
+				} else {
+					showLoginProviderSelector(this.loginFlowHost, choice);
+				}
+			});
+			return { component: onboarding, focus: onboarding };
+		});
+	}
+
+	/** After a login, opens /model when the session still has no model and there is one to pick. */
+	private async openModelSelectorIfUnset(): Promise<void> {
+		const model = this.session.model;
+		if (model && !isUnknownModel(model)) return;
+		if ((await this.session.modelRuntime.getAvailable()).length === 0) return;
+		await this.showModelSelector(undefined, "Ready. Type a message, or /help for commands.");
 	}
 
 	private async checkTmuxKeyboardSetup(): Promise<string | undefined> {
@@ -4658,14 +4706,26 @@ export class InteractiveMode {
 	}
 
 	showError(errorMessage: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
-		this.ui.requestRender();
+		this.showNotice("error", `Error: ${errorMessage}`);
 	}
 
 	showWarning(warningMessage: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		this.showNotice("warning", `Warning: ${warningMessage}`);
+	}
+
+	// An error or warning identical to the chat's last entry bumps a " (×N)" count on that entry
+	// instead of appending a copy. Only consecutive duplicates collapse.
+	private showNotice(kind: "error" | "warning", message: string): void {
+		const last = this.lastNotice;
+		if (last && last.kind === kind && last.message === message && this.chatContainer.children.at(-1) === last.text) {
+			last.count++;
+			last.text.setText(theme.fg(kind, `${message} (×${last.count})`));
+		} else {
+			const text = new Text(theme.fg(kind, message), 1, 0);
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(text);
+			this.lastNotice = { kind, message, text, count: 1 };
+		}
 		this.ui.requestRender();
 	}
 
@@ -5545,7 +5605,8 @@ export class InteractiveMode {
 		});
 	}
 
-	private async showModelSelector(initialSearchInput?: string): Promise<void> {
+	// `selectedStatus` replaces the "Model: <id>" status after a pick (onboarding prints a ready line).
+	private async showModelSelector(initialSearchInput?: string, selectedStatus?: string): Promise<void> {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		// lunr: prefetch active subscription names so row rendering stays synchronous.
 		const subscriptionNames = await this.getActiveSubscriptionNames();
@@ -5562,7 +5623,7 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						done();
-						this.showStatus(`Model: ${model.id}`);
+						this.showStatus(selectedStatus ?? `Model: ${model.id}`);
 						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 						// lunr: offer manual subscription switching for pooled providers.
 						await this.maybeShowSubscriptionPicker(model.provider);
@@ -6292,6 +6353,7 @@ export class InteractiveMode {
 				void this.maybeWarnAboutAnthropicSubscriptionAuth();
 			}
 		}
+		await this.openModelSelectorIfUnset();
 	}
 
 	private showAmbientAuthDialog(providerOption: AuthSelectorProvider): void {
