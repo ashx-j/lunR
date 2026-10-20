@@ -886,6 +886,8 @@ Fired when user input is received, after extension commands are checked but befo
 4. If not handled: prompt templates (`/template`) expanded to template content
 5. Agent processing begins (`before_agent_start`, etc.)
 
+Interactive mode reports a `/word` that no extension command, prompt template or builtin claims as an unknown command before the `input` event fires, so handle slash commands with `registerCommand`, not in an `input` handler.
+
 ```typescript
 pi.on("input", async (event, ctx) => {
   // event.text - raw input (before skill/template expansion)

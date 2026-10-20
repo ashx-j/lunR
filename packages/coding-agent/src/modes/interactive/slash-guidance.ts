@@ -3,6 +3,8 @@
  * mistyped slash command from going to the model as a prompt.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 
@@ -22,18 +24,51 @@ const COMMAND_TOKEN = /^\/([a-z][a-z0-9-]*)$/;
  * Returns the command name when `rawText` starts with a slash command nothing dispatches, else
  * undefined. `rawText` is the editor text before trimming, so a leading space opts out and sends the
  * text as a message. `isKnown` must answer from dispatch (builtins, extension commands, prompt
- * templates), not from what autocomplete shows.
+ * templates), not from what autocomplete shows. A token naming something on disk, at the filesystem
+ * root (`/tmp`) or under `cwd`, is a path; the check costs at most two `existsSync` calls and runs only
+ * for unknown names.
  */
-export function findUnknownSlashCommand(rawText: string, isKnown: (name: string) => boolean): string | undefined {
+export function findUnknownSlashCommand(
+	rawText: string,
+	isKnown: (name: string) => boolean,
+	cwd: string,
+): string | undefined {
 	const name = COMMAND_TOKEN.exec(rawText.split(/\s/, 1)[0] ?? "")?.[1];
-	return name && !isKnown(name) ? name : undefined;
+	if (!name || isKnown(name)) return undefined;
+	return existsSync(`/${name}`) || existsSync(join(cwd, name)) ? undefined : name;
 }
 
-/** Picks up to two command names for an unknown one, ranked by the slash picker's fuzzy matcher. */
+/**
+ * Picks up to two command names for an unknown one. Close typos (edit distance at most 2, like `/modle`
+ * or `/models`) rank first; the slash picker's fuzzy matcher fills any remaining slot.
+ */
 export function suggestSlashCommands(name: string, candidates: Iterable<string>): string[] {
-	return fuzzyFilter([...new Set(candidates)], name, (candidate) => candidate)
-		.filter((candidate) => candidate !== name)
-		.slice(0, 2);
+	const names = [...new Set(candidates)].filter((candidate) => candidate !== name);
+	const close = names
+		.map((candidate) => ({ candidate, distance: editDistance(name, candidate) }))
+		.filter(({ distance }) => distance <= 2)
+		.sort((a, b) => a.distance - b.distance)
+		.map(({ candidate }) => candidate);
+	const fuzzy = fuzzyFilter(names, name, (candidate) => candidate);
+	return [...new Set([...close, ...fuzzy])].slice(0, 2);
+}
+
+// Damerau-Levenshtein distance (optimal string alignment): insertions, deletions, substitutions and
+// adjacent swaps each cost 1.
+function editDistance(a: string, b: string): number {
+	const rows = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+	for (let j = 1; j <= b.length; j++) rows[0]![j] = j;
+	for (let i = 1; i <= a.length; i++) {
+		for (let j = 1; j <= b.length; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+			let best = Math.min(rows[i - 1]![j]! + 1, rows[i]![j - 1]! + 1, rows[i - 1]![j - 1]! + cost);
+			if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+				best = Math.min(best, rows[i - 2]![j - 2]! + 1);
+			}
+			rows[i]![j] = best;
+		}
+	}
+	return rows[a.length]![b.length]!;
 }
 
 /** Status line shown when a submitted unknown command is put back in the editor. */
