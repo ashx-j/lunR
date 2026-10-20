@@ -6,10 +6,12 @@ import * as deterministicStep from "../src/builtin-extensions/pi-prompt-template
 import promptModelExtension from "../src/builtin-extensions/pi-prompt-template-model/index.ts";
 import { createToolManager } from "../src/builtin-extensions/pi-prompt-template-model/tool-manager.ts";
 import {
+	chooseChainRoute,
 	discoverPromptWorkflows,
 	registerPromptWorkflowCommands,
 } from "../src/builtin-extensions/pi-subagents/src/slash/prompt-workflows.ts";
 import type { ExtensionCommandContext } from "../src/core/extensions/types.ts";
+import { getPromptTemplateChains } from "../src/core/prompt-chain-bridge.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createHarnessWithExtensions, type Harness } from "./test-harness.ts";
 
@@ -44,6 +46,10 @@ describe("builtin prompt command routing", () => {
 		const runner = harness.session.extensionRunner!;
 		expect(runner.getCommand("chain-prompts")?.description).toContain("prompt templates");
 		expect(runner.getCommand("chain-workflows")?.description).toContain("native subagent chain");
+		expect([runner.getCommand("chain-prompts")?.hidden, runner.getCommand("chain-workflows")?.hidden]).toEqual([
+			true,
+			true,
+		]);
 		expect(runner.getRegisteredCommands().map((command) => command.invocationName)).toEqual([
 			"chain-prompts",
 			"prompt-tool",
@@ -119,6 +125,75 @@ describe("builtin prompt command routing", () => {
 		]);
 		expect(run).not.toHaveBeenCalled();
 		expect(harness.faux.callCount).toBe(0);
+	});
+
+	it("routes /chain by argument shape without rerouting task chains named like workflows", () => {
+		const isWorkflow = (name: string) => ["analyze", "fix"].includes(name);
+		const isTemplateChain = vi.fn(() => true);
+		expect(chooseChainRoute('analyze[tier=light] "scan" -> fix[tier=standard]', isWorkflow, isTemplateChain)).toBe(
+			"task",
+		);
+		expect(chooseChainRoute("analyze[tier=light] fix[tier=light] -- auth", isWorkflow, isTemplateChain)).toBe("task");
+		expect(
+			chooseChainRoute('(analyze[tier=light] "a" | fix[tier=light] "b") -> fix', isWorkflow, isTemplateChain),
+		).toBe("task");
+		expect(isTemplateChain).not.toHaveBeenCalled();
+		expect(chooseChainRoute("analyze -> fix -- auth --foreground", isWorkflow, isTemplateChain)).toBe("workflow");
+		expect(chooseChainRoute("analyze -> fix --loop 3", isWorkflow, isTemplateChain)).toBe("template");
+		expect(chooseChainRoute("analyze -> review -- auth", isWorkflow, () => false)).toBe("task");
+	});
+
+	it("lets /chain hand template chains to the template engine", async () => {
+		const execute = vi
+			.spyOn(deterministicStep, "runDeterministicStep")
+			.mockImplementation(async (_prompt, step, cwd) => ({
+				execution: step.execution,
+				cwd,
+				nonInteractive: true,
+				exitCode: 0,
+				stdout: "",
+				stdoutTotalChars: 0,
+				stdoutTotalLines: 0,
+				stdoutTruncated: false,
+				stderr: "",
+				stderrTotalChars: 0,
+				stderrTotalLines: 0,
+				stderrTruncated: false,
+				durationMs: 0,
+				timedOut: false,
+			}));
+		const promptsDir = join(profile, "prompts");
+		mkdirSync(promptsDir);
+		for (const name of ["analyze", "fix"]) {
+			writeFileSync(join(promptsDir, `${name}.md`), `---\nrun: inert-${name}\nhandoff: never\n---\nTemplate body`);
+		}
+		const matches: boolean[] = [];
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: profile,
+			agentDir: profile,
+			extensionFactories: [
+				promptModelExtension,
+				(pi) =>
+					pi.registerCommand("probe", {
+						handler: async (args, ctx) => {
+							const chains = getPromptTemplateChains(pi.events);
+							matches.push(chains?.matches(args, ctx) ?? false);
+							if (args === "analyze -> fix") await chains?.run(args, ctx);
+						},
+					}),
+			],
+		});
+		await resourceLoader.reload();
+		harness = await createHarnessWithExtensions({ resourceLoader });
+		await harness.session.extensionRunner!.emit({ type: "session_start", reason: "startup" });
+		await harness.session.prompt('/probe analyze[tier=light] "scan" -> fix[tier=light]');
+		await harness.session.prompt("/probe analyze -> missing");
+		await harness.session.prompt("/probe analyze -> fix");
+		expect(matches).toEqual([false, false, true]);
+		expect(execute.mock.calls.map(([prompt]) => prompt.filePath)).toEqual([
+			join(promptsDir, "analyze.md"),
+			join(promptsDir, "fix.md"),
+		]);
 	});
 
 	it("reserves both chain commands against native workflow filenames", () => {
