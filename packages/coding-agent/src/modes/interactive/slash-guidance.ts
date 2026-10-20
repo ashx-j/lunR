@@ -7,13 +7,12 @@ import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 
 /**
- * Builtin names the interactive submit chain dispatches: the whole builtin table plus `debug`, which
- * the chain handles without a table entry. Keep entries here even when autocomplete hides them.
+ * Builtin names the interactive submit chain dispatches: the whole builtin table, hidden entries
+ * included, because hidden commands still run when typed.
  */
-export const INTERACTIVE_BUILTIN_COMMAND_NAMES: ReadonlySet<string> = new Set([
-	...BUILTIN_SLASH_COMMANDS.map((command) => command.name),
-	"debug",
-]);
+export const INTERACTIVE_BUILTIN_COMMAND_NAMES: ReadonlySet<string> = new Set(
+	BUILTIN_SLASH_COMMANDS.map((command) => command.name),
+);
 
 // Only plain command-shaped tokens. A second `/` or a `.` means a path; `:` covers `/skill:name` and
 // duplicate extension names like `/foo:2`, which the session resolves or passes through itself.

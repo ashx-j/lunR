@@ -14,6 +14,8 @@ export interface BuiltinSlashCommand {
 	name: string;
 	description: string;
 	argumentHint?: string;
+	/** Runs when typed but stays out of autocomplete and suggestions (aliases and shortcuts). */
+	hidden?: boolean;
 }
 
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
@@ -26,7 +28,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "copy", description: "Copy last agent message to clipboard" },
 	{ name: "paste-image", description: "Paste an image from the clipboard" },
 	{ name: "name", description: "Set session display name" },
-	{ name: "title", description: "Set session display name (alias of /name)" },
+	{ name: "title", description: "Set session display name (alias of /name)", hidden: true },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "usage", description: "Show token totals, context, and plan usage" },
 	{ name: "fast", description: "Toggle OpenAI Codex subscription Fast mode", argumentHint: "[on|off|status]" },
@@ -41,13 +43,14 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 		description: "Set permission mode: yolo, auto, or read",
 		argumentHint: "[yolo|auto|read]",
 	},
-	{ name: "read", description: "Activate read-only permission mode" },
-	{ name: "yolo", description: "Activate YOLO permission mode (auto-approve tools)" },
-	{ name: "auto", description: "Activate auto permission mode (a review model checks risky actions)" },
+	{ name: "read", description: "Activate read-only permission mode", hidden: true },
+	{ name: "yolo", description: "Activate YOLO permission mode (auto-approve tools)", hidden: true },
+	{ name: "auto", description: "Activate auto permission mode (a review model checks risky actions)", hidden: true },
 	{ name: "processes", description: "View and manage background processes started this session" },
 	{ name: "rollback", description: "Undo the last turn's file changes and rewind the conversation" },
 	{ name: "help", description: "Show the commands and keys you need most" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
+	{ name: "debug", description: "Write the rendered screen to the debug log", hidden: true },
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "tree", description: "Navigate session tree (switch branches)" },
@@ -56,17 +59,22 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "redo", description: "Restore a turn undone with /undo" },
 	{ name: "trust", description: "Save project trust decision for future sessions" },
 	{ name: "login", description: "Configure provider authentication", argumentHint: "<provider>" },
-	{ name: "auth", description: "Configure provider authentication (alias of /login)", argumentHint: "<provider>" },
+	{
+		name: "auth",
+		description: "Configure provider authentication (alias of /login)",
+		argumentHint: "<provider>",
+		hidden: true,
+	},
 	{ name: "logout", description: "Remove provider authentication" },
-	{ name: "deauth", description: "Remove provider authentication (alias of /logout)" },
+	{ name: "deauth", description: "Remove provider authentication (alias of /logout)", hidden: true },
 	{ name: "new", description: "Start a new session" },
 	{ name: "init", description: "Generate a starter AGENTS.md for this project" },
 	{ name: "compact", description: "Manually compact the session context" },
 	{ name: "handoff", description: "Mark this saved session for phone continuation for 8 hours, or cancel" },
 	{ name: "reclaim", description: "Reclaim this session after its remote owner releases it" },
 	{ name: "resume", description: "Resume a different session" },
-	{ name: "sessions", description: "Browse and resume sessions" },
+	{ name: "sessions", description: "Browse and resume sessions", hidden: true },
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, themes, and context files" },
 	{ name: "quit", description: `Quit ${APP_NAME}` },
-	{ name: "exit", description: `Quit ${APP_NAME} (alias of /quit)` },
+	{ name: "exit", description: `Quit ${APP_NAME} (alias of /quit)`, hidden: true },
 ];

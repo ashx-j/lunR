@@ -1173,6 +1173,8 @@ export interface RegisteredCommand {
 	name: string;
 	sourceInfo: SourceInfo;
 	description?: string;
+	/** Runs when typed but stays out of autocomplete and command listings (aliases kept for compatibility). */
+	hidden?: boolean;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
@@ -1335,7 +1337,7 @@ export interface ExtensionAPI {
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
 
-	/** Get available slash commands in the current session. */
+	/** Get available slash commands in the current session. Hidden extension commands are left out. */
 	getCommands(): SlashCommandInfo[];
 
 	// =========================================================================

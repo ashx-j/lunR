@@ -733,6 +733,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				const commands: RpcSlashCommand[] = [];
 
 				for (const command of session.extensionRunner.getRegisteredCommands()) {
+					// Hidden commands still run from a prompt; ACP and other clients just do not list them.
+					if (command.hidden) continue;
 					commands.push({
 						name: command.invocationName,
 						description: command.description,

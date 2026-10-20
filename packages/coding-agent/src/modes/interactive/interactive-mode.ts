@@ -252,7 +252,6 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
-import { wrapThinkingLevelSlashCommands } from "./thinking-level-slash.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -734,12 +733,14 @@ export class InteractiveMode {
 	}
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
-		// Define commands for autocomplete
-		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
-			name: command.name,
-			description: command.description,
-			...(command.argumentHint && { argumentHint: command.argumentHint }),
-		}));
+		// Define commands for autocomplete. Hidden builtins still dispatch from the submit chain.
+		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.filter((command) => !command.hidden).map(
+			(command) => ({
+				name: command.name,
+				description: command.description,
+				...(command.argumentHint && { argumentHint: command.argumentHint }),
+			}),
+		);
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
@@ -780,11 +781,6 @@ export class InteractiveMode {
 		if (loginCommand) {
 			loginCommand.getArgumentCompletions = loginArgCompletions;
 		}
-		// lunr: /auth shares /login's provider argument completions.
-		const authCommand = slashCommands.find((command) => command.name === "auth");
-		if (authCommand) {
-			authCommand.getArgumentCompletions = loginArgCompletions;
-		}
 
 		// Convert prompt templates to SlashCommand format for autocomplete
 		const templateCommands: SlashCommand[] = this.session.promptTemplates.map((cmd) => ({
@@ -793,11 +789,11 @@ export class InteractiveMode {
 			...(cmd.argumentHint && { argumentHint: cmd.argumentHint }),
 		}));
 
-		// Convert extension commands to SlashCommand format
-		const builtinCommandNames = new Set(slashCommands.map((c) => c.name));
+		// Convert extension commands to SlashCommand format. Hidden builtins still shadow extension commands.
+		const builtinCommandNames = new Set(BUILTIN_SLASH_COMMANDS.map((c) => c.name));
 		const extensionCommands: SlashCommand[] = this.session.extensionRunner
 			.getRegisteredCommands()
-			.filter((cmd) => !builtinCommandNames.has(cmd.name))
+			.filter((cmd) => !cmd.hidden && !builtinCommandNames.has(cmd.name))
 			.map((cmd) => ({
 				name: cmd.invocationName,
 				description: this.prefixAutocompleteDescription(cmd.description, cmd.sourceInfo),
@@ -835,9 +831,7 @@ export class InteractiveMode {
 	}
 
 	private setupAutocompleteProvider(): void {
-		let provider = wrapThinkingLevelSlashCommands(this.createBaseAutocompleteProvider(), () =>
-			this.session.getAvailableThinkingLevels(),
-		);
+		let provider = this.createBaseAutocompleteProvider();
 		const triggerCharacters: string[] = [...(provider.triggerCharacters ?? [])];
 		for (const wrapProvider of this.autocompleteProviderWrappers) {
 			provider = wrapProvider(provider);
@@ -3133,7 +3127,7 @@ export class InteractiveMode {
 				text &&
 				!this.runtimeHost.isDetached &&
 				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|off|minimal|low|medium|high|xhigh|max|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
 						text,
 					))
 			) {
@@ -4845,9 +4839,13 @@ export class InteractiveMode {
 		await this.awaitDeferredBuiltinsForPrompt();
 		const name = findUnknownSlashCommand(rawText, isKnown);
 		if (!name) return false;
+		// Suggest only what autocomplete lists, so aliases like /title are never offered.
 		const candidates = [
-			...BUILTIN_SLASH_COMMANDS.map((command) => command.name),
-			...this.session.extensionRunner.getRegisteredCommands().map((command) => command.invocationName),
+			...BUILTIN_SLASH_COMMANDS.filter((command) => !command.hidden).map((command) => command.name),
+			...this.session.extensionRunner
+				.getRegisteredCommands()
+				.filter((command) => !command.hidden)
+				.map((command) => command.invocationName),
 			...this.session.promptTemplates.map((template) => template.name),
 		];
 		this.restoreEditorDraft(text, images);
