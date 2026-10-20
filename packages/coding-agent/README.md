@@ -236,7 +236,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read`) |
+| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read-only`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
 | Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
