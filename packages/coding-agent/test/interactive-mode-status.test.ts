@@ -6,7 +6,6 @@ import { type Component, Container, type Focusable, TUI } from "../../tui/src/tu
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
-import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
 import { InteractiveMode, startInteractiveToolInstalls } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -483,10 +482,16 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 	});
 
 	test("matches login command arguments by provider id and name", async () => {
+		type FakeProvider = { id: string; name: string; auth: { oauth?: { name: string }; apiKey?: { name: string } } };
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: [];
-				modelRuntime: { getAvailable: () => [] };
+				modelRuntime: {
+					getAvailable: () => [];
+					getProviders: () => FakeProvider[];
+					getProviderAuthStatus: () => { configured: false };
+					isUsingOAuth: () => false;
+				};
 				promptTemplates: [];
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
@@ -495,7 +500,6 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
-			getLoginProviderOptions: () => AuthSelectorProvider[];
 		};
 
 		const createBaseAutocompleteProvider = (
@@ -506,7 +510,19 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		const fakeThis: FakeInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRuntime: { getAvailable: () => [] },
+				modelRuntime: {
+					getAvailable: () => [],
+					getProviders: () => [
+						{
+							id: "anthropic",
+							name: "Anthropic",
+							auth: { oauth: { name: "Anthropic subscription" }, apiKey: { name: "Anthropic API key" } },
+						},
+						{ id: "openai", name: "OpenAI", auth: { apiKey: { name: "OpenAI API key" } } },
+					],
+					getProviderAuthStatus: () => ({ configured: false }),
+					isUsingOAuth: () => false,
+				},
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
@@ -515,11 +531,6 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
-			getLoginProviderOptions: () => [
-				{ id: "anthropic", name: "Anthropic", authType: "oauth" },
-				{ id: "anthropic", name: "Anthropic", authType: "api_key" },
-				{ id: "openai", name: "OpenAI", authType: "api_key" },
-			],
 		};
 
 		const provider = createBaseAutocompleteProvider.call(fakeThis);

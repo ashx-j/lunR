@@ -24,6 +24,7 @@ Read this file first; ask when ambiguous; touch only the task; small why-commits
 
 - **v0.2.38 (2026-10-18):** latest npm release. Integration PR #208 merged PRs #195 to #207 and release PR #209 merged as `4cc8c4e`; tag `v0.2.38` published all four public packages and three native payloads, and the binary workflow succeeded. All seven tarballs match registry integrity, and a fresh isolated install reports 0.2.38 for the CLI and its three dependencies and passes the first-paint/first-turn check. Earlier releases and per-PR history: git log.
 - **In 0.2.38:** Removed `/share`, the subagent `share` option, the unbuilt `shadow-git` rollback mode, dead upstream code and assets, the unreachable first-run analytics screen and two pi easter eggs. Added terminal notifications, `lunr doctor`, and reviewed auto mode with "no questions" split into its own session flag. Fixed `PI_OFFLINE=0`, leftover Pi naming and read mode's handling of `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` output files and code-running env prefixes. Type checking is on for 77 pi-subagents files; 39 still carry `@ts-nocheck` (475 errors, mostly `subagent-executor.ts` and `subagent-runner.ts`).
+- **Unreleased (master):** the /login flow moved out of `interactive-mode.ts` into `modes/interactive/login-flow.ts` with no behavior change.
 - **Planned mascot - cat (2.A):** TUI cat fits kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal 2-line. Not yet wired.
   ```
      /\_/\
@@ -165,10 +166,12 @@ Renamed: bin `lunr`, `.lunr/`, `APP_NAME`. **Never write `~/.pi/`.** Still pi: `
 - Shipped docs: author for `@ashx-j/lunr` / `lunr` / `~/.lunr/`; keep ExtensionAPI `pi`, package.json `"pi"` and `PI_*` names.
 - Process registry: direct children only; `nohup &` grandchildren untracked.
 - vite/oxc: `import type { A, B }` not `import type { A, type B }`.
+- `/login` lives in `modes/interactive/login-flow.ts`: provider options, auth-type and provider selectors, the Anthropic ToS gate and the custom endpoint wizard. Functions take a `LoginFlowHost` built by `InteractiveMode.createLoginFlowHost`; the credential dialogs and `completeProviderAuthentication` stay in `InteractiveMode` and are reached through the host.
 - `// lunr:` = upstream edit markers. Hot sync files: `ashxj-tui.ts`, `interactive-mode.ts`, `agent-session.ts`, `bash.ts`, `settings-manager.ts`, `main.ts`, `builtin-extensions/*`.
 
 # Decisions (keep; why in one line)
 
+- 2026-10-20: move /login into `login-flow.ts` behind a host object instead of public InteractiveMode members, so onboarding can reuse it without growing the 8k-line file or the exported class API.
 - 2026-10-18: auto is reviewed and "no questions" is a separate session flag, so goals and subagents keep working unattended under yolo without paying for reviews.
 - 2026-10-18: default reviewers come only from providers whose own agents ship one (Claude Code, Codex, Grok Build, Qwen Code); other providers must pick a model, because choosing a safety reviewer is the user's call.
 - 2026-10-18: remove `/share` and the subagent `share` option instead of hosting a viewer, because both sent sessions to pi's site; keep accepting the old descriptor field so saved runs resume.
