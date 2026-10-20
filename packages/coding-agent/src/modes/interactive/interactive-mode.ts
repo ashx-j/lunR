@@ -215,7 +215,6 @@ import {
 } from "./extension-widget-order.ts";
 import {
 	getLoginProviderOptions,
-	handleLoginCommand,
 	type LoginFlowHost,
 	showCustomProviderWizard,
 	showLoginAuthTypeSelector,
@@ -223,6 +222,7 @@ import {
 } from "./login-flow.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
+import { findSlashCommandHandler, type SlashCommandHost } from "./slash-dispatch.ts";
 import {
 	buildHelpLines,
 	findUnknownSlashCommand,
@@ -580,6 +580,8 @@ export class InteractiveMode {
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
 	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
+	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
+	private readonly slashCommandHost: SlashCommandHost = this.createSlashCommandHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -3141,191 +3143,10 @@ export class InteractiveMode {
 				this.consumeStagedSubmitImages() ?? (await this.loadImageAttachments(this.takeSubmittedImages(text)));
 			this.ui.setChatScroll(0);
 
-			// Handle commands
-			if (text === "/paste-image") {
-				this.editor.setText("");
-				await this.handleClipboardPaste({ textFallback: false });
-				return;
-			}
-			if (text === "/settings") {
-				void this.showSettingsSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/scoped-models") {
-				this.editor.setText("");
-				await this.showModelsSelector();
-				return;
-			}
-			if (text === "/model" || text.startsWith("/model ")) {
-				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
-				this.editor.setText("");
-				await this.handleModelCommand(searchTerm);
-				return;
-			}
-			if (text === "/refresh") {
-				this.editor.setText("");
-				await this.handleRefreshCommand();
-				return;
-			}
-			if (text === "/export" || text.startsWith("/export ")) {
-				await this.handleExportCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/import" || text.startsWith("/import ")) {
-				await this.handleImportCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/copy") {
-				await this.handleCopyCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/name" || text.startsWith("/name ") || text === "/title" || text.startsWith("/title ")) {
-				this.handleNameCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/session") {
-				this.handleSessionCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/usage") {
-				this.editor.setText("");
-				await this.handleUsageCommand();
-				return;
-			}
-			if (text === "/fast" || text.startsWith("/fast ")) {
-				this.editor.setText("");
-				this.handleFastCommand(text === "/fast" ? "" : text.slice(6).trim());
-				return;
-			}
-			if (text === "/context") {
-				this.editor.setText("");
-				this.handleContextCommand();
-				return;
-			}
-			if (text === "/plan" || text.startsWith("/plan ")) {
-				this.editor.setText("");
-				await this.handlePlanCommand(text === "/plan" ? "" : text.slice(6).trim());
-				return;
-			}
-			if (text === "/hotkeys") {
-				this.handleHotkeysCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/help") {
-				this.handleHelpCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/fork") {
-				this.showUserMessageSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/clone") {
-				this.editor.setText("");
-				await this.handleCloneCommand();
-				return;
-			}
-			if (text === "/tree") {
-				this.showTreeSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/undo") {
-				this.editor.setText("");
-				await this.handleUndoCommand();
-				return;
-			}
-			if (text === "/edit") {
-				this.editor.setText("");
-				await this.handleEditCommand();
-				return;
-			}
-			if (text === "/redo") {
-				this.editor.setText("");
-				await this.handleRedoCommand();
-				return;
-			}
-			if (text === "/mode" || text.startsWith("/mode ")) {
-				this.editor.setText("");
-				this.handleModeCommand(text === "/mode" ? "" : text.slice(6).trim());
-				return;
-			}
-			if (text === "/read" || text === "/yolo" || text === "/auto") {
-				this.editor.setText("");
-				this.applyPermissionMode(text === "/read" ? "read-only" : (text.slice(1) as PermissionMode));
-				return;
-			}
-			if (text === "/processes") {
-				this.editor.setText("");
-				this.showProcessesSelector();
-				return;
-			}
-			if (text === "/rollback") {
-				this.editor.setText("");
-				await this.handleRollbackCommand();
-				return;
-			}
-			if (text === "/trust") {
-				this.showTrustSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/login" || text === "/auth" || text.startsWith("/login ") || text.startsWith("/auth ")) {
-				// lunr: /auth is an alias of /login; the provider arg follows the first space.
-				const providerRef = text.includes(" ") ? text.slice(text.indexOf(" ") + 1).trim() : undefined;
-				this.editor.setText("");
-				await handleLoginCommand(this.loginFlowHost, providerRef);
-				return;
-			}
-			if (text === "/logout" || text === "/deauth") {
-				// lunr: /deauth is an alias of /logout.
-				this.showOAuthSelector("logout");
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/new") {
-				this.editor.setText("");
-				await this.handleClearCommand();
-				return;
-			}
-			if (text === "/compact" || text.startsWith("/compact ")) {
-				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
-				this.editor.setText("");
-				await this.handleCompactCommand(customInstructions);
-				return;
-			}
-			if (text === "/reload") {
-				this.editor.setText("");
-				await this.handleReloadCommand();
-				return;
-			}
-			if (text === "/init") {
-				this.editor.setText("");
-				await this.handleInitCommand();
-				return;
-			}
-			if (text === "/debug") {
-				this.handleDebugCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/resume" || text === "/sessions") {
-				this.showSessionSelector();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/quit" || text === "/exit") {
-				// lunr: /exit is an alias of /quit.
-				this.editor.setText("");
-				await this.shutdown();
+			// Handle builtin commands
+			const slashCommand = findSlashCommandHandler(text);
+			if (slashCommand) {
+				await slashCommand.run(this.slashCommandHost, text);
 				return;
 			}
 
@@ -6221,6 +6042,53 @@ export class InteractiveMode {
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
+		};
+	}
+
+	// Builds the SlashCommandHost without making InteractiveMode members public. `editor` stays a
+	// getter because extensions can replace the editor.
+	private createSlashCommandHost(): SlashCommandHost {
+		const mode = this;
+		return {
+			get editor() {
+				return mode.editor;
+			},
+			loginFlowHost: this.loginFlowHost,
+			handleClipboardPaste: (options) => this.handleClipboardPaste(options),
+			showSettingsSelector: () => this.showSettingsSelector(),
+			showModelsSelector: () => this.showModelsSelector(),
+			handleModelCommand: (searchTerm) => this.handleModelCommand(searchTerm),
+			handleRefreshCommand: () => this.handleRefreshCommand(),
+			handleExportCommand: (text) => this.handleExportCommand(text),
+			handleImportCommand: (text) => this.handleImportCommand(text),
+			handleCopyCommand: () => this.handleCopyCommand(),
+			handleNameCommand: (text) => this.handleNameCommand(text),
+			handleSessionCommand: () => this.handleSessionCommand(),
+			handleUsageCommand: () => this.handleUsageCommand(),
+			handleFastCommand: (arg) => this.handleFastCommand(arg),
+			handleContextCommand: () => this.handleContextCommand(),
+			handlePlanCommand: (args) => this.handlePlanCommand(args),
+			handleHotkeysCommand: () => this.handleHotkeysCommand(),
+			handleHelpCommand: () => this.handleHelpCommand(),
+			showUserMessageSelector: () => this.showUserMessageSelector(),
+			handleCloneCommand: () => this.handleCloneCommand(),
+			showTreeSelector: () => this.showTreeSelector(),
+			handleUndoCommand: () => this.handleUndoCommand(),
+			handleEditCommand: () => this.handleEditCommand(),
+			handleRedoCommand: () => this.handleRedoCommand(),
+			handleModeCommand: (args) => this.handleModeCommand(args),
+			applyPermissionMode: (permissionMode) => this.applyPermissionMode(permissionMode),
+			showProcessesSelector: () => this.showProcessesSelector(),
+			handleRollbackCommand: () => this.handleRollbackCommand(),
+			showTrustSelector: () => this.showTrustSelector(),
+			showOAuthSelector: (oauthMode) => this.showOAuthSelector(oauthMode),
+			handleClearCommand: () => this.handleClearCommand(),
+			handleCompactCommand: (customInstructions) => this.handleCompactCommand(customInstructions),
+			handleReloadCommand: () => this.handleReloadCommand(),
+			handleInitCommand: () => this.handleInitCommand(),
+			handleDebugCommand: () => this.handleDebugCommand(),
+			showSessionSelector: () => this.showSessionSelector(),
+			shutdown: () => this.shutdown(),
 		};
 	}
 
