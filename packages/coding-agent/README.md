@@ -202,6 +202,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/export [file]` | Export session to HTML or JSONL |
 | `/import <file>` | Import and resume a JSONL session |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
+| `/help` | Show the commands and keys you need most |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/init` | Generate a starter AGENTS.md |
 | `/quit`, `/exit` | Quit lunR |

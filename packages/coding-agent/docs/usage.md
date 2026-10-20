@@ -72,6 +72,7 @@ Built-in commands (from `slash-commands.ts`):
 | `/read`, `/yolo`, `/auto` | Activate that permission mode |
 | `/processes` | View and manage background processes started this session |
 | `/rollback` | Undo the last turn's file changes and rewind the conversation |
+| `/help` | Show the commands and keys you need most |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/fork` | Create a new fork from a previous user message |
 | `/clone` | Duplicate the current session at the current position |

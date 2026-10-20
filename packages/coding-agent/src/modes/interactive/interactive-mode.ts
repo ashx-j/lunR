@@ -224,6 +224,13 @@ import {
 import { getModelSearchText } from "./model-search.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
+	buildHelpLines,
+	findUnknownSlashCommand,
+	formatUnknownSlashCommandStatus,
+	INTERACTIVE_BUILTIN_COMMAND_NAMES,
+	suggestSlashCommands,
+} from "./slash-guidance.ts";
+import {
 	computeSmoothRevealStep,
 	countGraphemesBeforeToolCall,
 	countMessageGraphemes,
@@ -3079,7 +3086,7 @@ export class InteractiveMode {
 	}
 
 	private setupEditorSubmitHandler(): void {
-		this.defaultEditor.onSubmit = async (text: string) => {
+		this.defaultEditor.onSubmit = async (text: string, rawText?: string) => {
 			text = text.trim();
 			if (text === "/reclaim" || text === "/reclaim stop") {
 				const file = this.sessionManager.getSessionFile();
@@ -3215,6 +3222,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/help") {
+				this.handleHelpCommand();
+				this.editor.setText("");
+				return;
+			}
 			if (text === "/fork") {
 				this.showUserMessageSelector();
 				this.editor.setText("");
@@ -3320,6 +3332,9 @@ export class InteractiveMode {
 				await this.shutdown();
 				return;
 			}
+
+			// A mistyped command goes back to the editor instead of to the model as a prompt.
+			if (await this.bounceUnknownSlashCommand(text, rawText ?? text, images)) return;
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
@@ -4452,7 +4467,8 @@ export class InteractiveMode {
 			this.showError("Use /reclaim before sending more work. Draft retained.");
 			return;
 		}
-		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
+		const rawText = this.editor.getExpandedText?.() ?? this.editor.getText();
+		const text = rawText.trim();
 		if (!text) return;
 
 		// Queue input during compaction (extension commands execute immediately)
@@ -4483,7 +4499,7 @@ export class InteractiveMode {
 			const images = await this.loadImageAttachments(this.takeSubmittedImages(text));
 			this.stagedSubmitImages = images;
 			this.editor.setText("");
-			this.editor.onSubmit(text);
+			this.editor.onSubmit(text, rawText);
 		}
 	}
 
@@ -4811,6 +4827,30 @@ export class InteractiveMode {
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
 		this.showStatus("Queued message for after compaction");
+	}
+
+	/**
+	 * Puts an unknown slash command back in the editor with suggestions and returns true. Recognition
+	 * comes from dispatch, so commands autocomplete hides still count. Waits for deferred builtins
+	 * before deciding, since their commands (such as /run and /goal) register after first paint.
+	 */
+	private async bounceUnknownSlashCommand(text: string, rawText: string, images?: ImageContent[]): Promise<boolean> {
+		const isKnown = (name: string): boolean =>
+			INTERACTIVE_BUILTIN_COMMAND_NAMES.has(name) ||
+			!!this.session.extensionRunner.getCommand(name) ||
+			this.session.promptTemplates.some((template) => template.name === name);
+		if (!findUnknownSlashCommand(rawText, isKnown)) return false;
+		await this.awaitDeferredBuiltinsForPrompt();
+		const name = findUnknownSlashCommand(rawText, isKnown);
+		if (!name) return false;
+		const candidates = [
+			...BUILTIN_SLASH_COMMANDS.map((command) => command.name),
+			...this.session.extensionRunner.getRegisteredCommands().map((command) => command.invocationName),
+			...this.session.promptTemplates.map((template) => template.name),
+		];
+		this.restoreEditorDraft(text, images);
+		this.showStatus(formatUnknownSlashCommandStatus(name, suggestSlashCommands(name, candidates)));
+		return true;
 	}
 
 	private isExtensionCommand(text: string): boolean {
@@ -7689,6 +7729,22 @@ export class InteractiveMode {
 	 */
 	private getEditorKeyDisplay(action: Keybinding): string {
 		return keyDisplayText(action);
+	}
+
+	/** Prints the short /help block: the commands and keys a new user needs first. */
+	private handleHelpCommand(): void {
+		const lines = buildHelpLines(
+			{
+				cyclePermissionMode: this.getAppKeyDisplay("app.mode.cycle"),
+				interrupt: this.getAppKeyDisplay("app.interrupt"),
+			},
+			(title) => theme.bold(theme.fg("accent", title)),
+		);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.ui.requestRender();
 	}
 
 	private handleHotkeysCommand(): void {

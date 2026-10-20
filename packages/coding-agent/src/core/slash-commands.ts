@@ -46,6 +46,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "auto", description: "Activate auto permission mode (a review model checks risky actions)" },
 	{ name: "processes", description: "View and manage background processes started this session" },
 	{ name: "rollback", description: "Undo the last turn's file changes and rewind the conversation" },
+	{ name: "help", description: "Show the commands and keys you need most" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
