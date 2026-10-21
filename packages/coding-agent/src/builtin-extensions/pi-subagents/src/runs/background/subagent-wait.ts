@@ -27,7 +27,7 @@
  * interactively, wakes the parent with). Since `subagent_wait` is used exactly
  * where there is no next turn to receive that notice, it must break on it too,
  * or a stuck child would stall the loop until the timeout. Attention runs are
- * reported so the caller can inspect / nudge / resume / interrupt them.
+ * reported so the caller can inspect / steer / resume / interrupt them.
  *
  * Wake mechanism: when given Pi's event bus (`deps.events`), `subagent_wait`
  * subscribes to the subagent completion/control channels and wakes the instant
@@ -283,7 +283,7 @@ function allRunsForSession(params: SubagentWaitParams, deps: SubagentWaitDeps): 
 
 function summarizeTerminalRuns(runs: AsyncRunSummary[], providerFinishedCount = 0): string {
 	if (runs.length === 0 && providerFinishedCount === 0) return "";
-	const counts = { complete: 0, failed: 0, paused: 0 } as Record<string, number>;
+	const counts = { complete: 0, failed: 0, paused: 0, stopped: 0 } as Record<string, number>;
 	for (const run of runs) {
 		if (run.state in counts) counts[run.state] += 1;
 	}
@@ -291,6 +291,7 @@ function summarizeTerminalRuns(runs: AsyncRunSummary[], providerFinishedCount = 
 	if (counts.complete) parts.push(`${counts.complete} complete`);
 	if (counts.failed) parts.push(`${counts.failed} failed`);
 	if (counts.paused) parts.push(`${counts.paused} paused`);
+	if (counts.stopped) parts.push(`${counts.stopped} stopped`);
 	if (providerFinishedCount > 0) parts.push(`${providerFinishedCount} provider item(s) finished`);
 	return parts.join(", ");
 }
@@ -537,7 +538,7 @@ export async function waitForSubagents(
 
 	const relevantAttention = attention.filter((run) => initialAsyncIds.has(run.id));
 	const attentionNote = relevantAttention.length > 0
-		? ` ${relevantAttention.length} run(s) need attention: ${relevantAttention.map((run) => run.id).join(", ")} — inspect with subagent({ action: "status" }) then nudge/resume/interrupt.`
+		? ` ${relevantAttention.length} run(s) need attention: ${relevantAttention.map((run) => run.id).join(", ")} — inspect with subagent({ action: "status" }) then steer/resume/interrupt.`
 		: "";
 	const stillRunning = active.filter((run) => initialAsyncIds.has(run.id)).length
 		+ providerActive.filter((item) => initialProviderIds.has(backgroundWorkIdentity(item))).length;
