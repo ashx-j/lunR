@@ -11,7 +11,7 @@ The interface has four main areas:
 - **Startup header** - shortcuts, loaded context files, prompt templates, skills, and extensions
 - **Messages** - user messages, assistant responses, tool calls, tool results, notifications, errors, and extension UI
 - **Editor** - where you type; border color indicates the current thinking level
-- **Footer** - working directory, git branch, session name, token/cache usage, context usage, plan bar, and current model
+- **Footer** - permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate. Most parts can be turned off in `/settings` → Customize. The current model, provider and thinking level are on the editor's border
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI. Click a thinking or tool card to expand or collapse that item. Smooth streaming (`smoothStreaming`, default off) is interactive TUI only.
 
@@ -76,7 +76,7 @@ Built-in commands (from `slash-commands.ts`):
 | `/fork` | Create a new fork from a previous user message |
 | `/clone` | Duplicate the current session at the current position |
 | `/tree` | Navigate session tree (`ctrl+o` cycles filters) |
-| `/undo` | Rewind the last turn (same session; `/redo` restores) |
+| `/undo` | Rewind the conversation one turn; files stay as they are (`/rollback` restores them, `/redo` restores the turn) |
 | `/edit` | Rewind the last turn and put its text in the chat box |
 | `/redo` | Restore a turn undone with `/undo` |
 | `/trust` | Save project trust decision for future sessions |
@@ -89,7 +89,7 @@ Built-in commands (from `slash-commands.ts`):
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/quit` | Quit lunR |
 
-Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`. Extensions can hide their own commands with `hidden: true` in `registerCommand`. There is no `/changelog` command.
+Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`. There is no `/changelog` command.
 
 Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`. See [Built-in features](features.md).
 

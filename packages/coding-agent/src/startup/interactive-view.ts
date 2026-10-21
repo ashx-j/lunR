@@ -354,6 +354,11 @@ export class InteractiveView {
 			if (this.failed) return;
 			this.status.setText(theme.fg("dim", this.exitConfirmation.hint));
 			this.ui.requestRender();
+			this.exitConfirmation.clearHintOnExpiry(() => {
+				if (this.failed) return;
+				this.status.setText("");
+				this.ui.requestRender();
+			});
 		};
 		this.editor.onPasteImage = () => void this.pasteClipboard();
 		this.inputUnsubscribe = this.ui.addInputListener((data) => {

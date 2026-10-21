@@ -102,7 +102,9 @@ describe("InteractiveMode /undo and /edit", () => {
 		expect(context.editor.setText).not.toHaveBeenCalled();
 		expect(context.chatContainer.clear).toHaveBeenCalled();
 		expect(context.renderInitialMessages).toHaveBeenCalled();
-		expect(context.showStatus).toHaveBeenCalledWith("Undone. /redo to restore.");
+		expect(context.showStatus).toHaveBeenCalledWith(
+			"Conversation rewound. Files are unchanged; /rollback restores them. /redo to restore the turn.",
+		);
 	});
 
 	it("/edit rewinds via navigateTree and pastes the undone user text", async () => {
