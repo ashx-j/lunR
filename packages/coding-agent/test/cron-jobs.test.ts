@@ -210,7 +210,7 @@ describe("getDueJobs", () => {
 		await updateJob(c.id, { nextRunAt: past });
 		await updateJob(a.id, { enabled: false });
 		await pauseJob(b.id);
-		const due = await getDueJobs();
+		const { due } = await getDueJobs();
 		expect(due.map((j) => j.id)).toEqual([c.id]);
 	});
 
@@ -219,7 +219,7 @@ describe("getDueJobs", () => {
 		// 3 hours overdue; grace for a 30m period is max(15m, 120s) = 15m.
 		await updateJob(job.id, { nextRunAt: new Date(Date.now() - 3 * 3_600_000).toISOString() });
 		const before = Date.now();
-		const due = await getDueJobs();
+		const { due } = await getDueJobs();
 		expect(due.map((j) => j.id)).toEqual([job.id]);
 		const after = await claimJobRun(job.id, new Date());
 		expect(after!.nextRunAt).not.toBeNull();
@@ -232,8 +232,9 @@ describe("getDueJobs", () => {
 		const missed = await createJob({ prompt: "m", schedule: "2030-01-01T00:00:00.000Z" });
 		await updateJob(missed.id, { nextRunAt: new Date(Date.now() - 200_000).toISOString() });
 
-		const due = await getDueJobs();
+		const { due, missed: missedJobs } = await getDueJobs();
 		expect(due.map((j) => j.id)).toEqual([oneShot.id]);
+		expect(missedJobs.map((j) => j.id)).toEqual([missed.id]);
 		const missedAfter = getJob(missed.id);
 		expect(missedAfter.state).toBe("error");
 		expect(missedAfter.nextRunAt).toBeNull();
