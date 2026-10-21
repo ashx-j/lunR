@@ -81,6 +81,21 @@ describe("protected destinations", () => {
 		);
 	});
 
+	it("matches protected names case-insensitively on macOS", async () => {
+		const platform = Object.getOwnPropertyDescriptor(process, "platform");
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		try {
+			for (const path of [join(agentDir, "SETTINGS.JSON"), join(agentDir, "Agents", "AGENTS.md")]) {
+				expect((await gateToolCall("write", { path }, profile))?.block, path).toBe(true);
+			}
+		} finally {
+			if (platform) Object.defineProperty(process, "platform", platform);
+		}
+		if (process.platform === "linux") {
+			expect(await gateToolCall("write", { path: join(agentDir, "SETTINGS.JSON") }, profile)).toBeUndefined();
+		}
+	});
+
 	it("checks a protected requested name even when it links outside the instruction tree", async () => {
 		const normal = join(profile, "ordinary.md");
 		await writeFile(normal, "ordinary");
