@@ -1663,15 +1663,51 @@ export class TUI extends Container {
 
 	private static readonly SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
 
-	private applyLineResets(lines: string[]): string[] {
+	/**
+	 * Normalize each text line, cut it to the terminal width and close its styles. Full and
+	 * partial redraws both write these lines, so an overflowing component cannot wrap the screen.
+	 * The first overflow per TUI writes the rendered lines to pi-crash.log for debugging.
+	 */
+	private applyLineResets(lines: string[], width: number): string[] {
 		const reset = TUI.SEGMENT_RESET;
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			if (!isImageLine(line)) {
-				lines[i] = normalizeTerminalOutput(line) + reset;
+			if (isImageLine(line)) continue;
+			let normalized = normalizeTerminalOutput(line);
+			if (visibleWidth(normalized) > width) {
+				this.logWidthOverflow(lines, i, width);
+				normalized = sliceByColumn(normalized, 0, width, true);
 			}
+			lines[i] = normalized + reset;
 		}
 		return lines;
+	}
+
+	private widthOverflowLogged = false;
+
+	private logWidthOverflow(lines: string[], index: number, width: number): void {
+		if (this.widthOverflowLogged) return;
+		this.widthOverflowLogged = true;
+		// lunr: tui cannot import coding-agent (layering) — env-first with .lunr fallback (was ~/.pi/agent)
+		const logPath = path.join(
+			process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".lunr", "agent"),
+			"pi-crash.log",
+		);
+		const data = [
+			`Line wider than the terminal at ${new Date().toISOString()}; truncated. A component is not truncating its output (use truncateToWidth()).`,
+			`Terminal width: ${width}`,
+			`Line ${index} visible width: ${visibleWidth(lines[index] ?? "")}`,
+			"",
+			"=== All rendered lines ===",
+			...lines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
+			"",
+		].join("\n");
+		try {
+			fs.mkdirSync(path.dirname(logPath), { recursive: true });
+			fs.writeFileSync(logPath, data);
+		} catch {
+			// a debug log must not break rendering
+		}
 	}
 
 	private collectKittyImageIds(lines: string[]): Set<number> {
@@ -1849,7 +1885,7 @@ export class TUI extends Container {
 		// Extract cursor position before applying line resets (marker must be found first)
 		const cursorPos = this.extractCursorPosition(newLines, height);
 
-		newLines = this.applyLineResets(newLines);
+		newLines = this.applyLineResets(newLines, width);
 
 		// Helper to clear scrollback and viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
@@ -2093,38 +2129,6 @@ export class TUI extends Container {
 			}
 
 			buffer += "\x1b[2K"; // Clear current line
-			if (!isImage && visibleWidth(line) > width) {
-				// Log all lines to crash file for debugging
-				// lunr: tui cannot import coding-agent (layering) — env-first with .lunr fallback (was ~/.pi/agent)
-				const crashLogPath = path.join(
-					process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".lunr", "agent"),
-					"pi-crash.log",
-				);
-				const crashData = [
-					`Crash at ${new Date().toISOString()}`,
-					`Terminal width: ${width}`,
-					`Line ${i} visible width: ${visibleWidth(line)}`,
-					"",
-					"=== All rendered lines ===",
-					...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
-					"",
-				].join("\n");
-				fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-				fs.writeFileSync(crashLogPath, crashData);
-
-				// Clean up terminal state before throwing
-				this.stop();
-
-				const errorMsg = [
-					`Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
-					"",
-					"This is likely caused by a custom TUI component not truncating its output.",
-					"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
-					"",
-					`Debug log written to: ${crashLogPath}`,
-				].join("\n");
-				throw new Error(errorMsg);
-			}
 			buffer += line;
 		}
 

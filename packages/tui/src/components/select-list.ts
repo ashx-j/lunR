@@ -9,6 +9,16 @@ const MIN_DESCRIPTION_WIDTH = 10;
 const normalizeToSingleLine = (text: string): string => text.replace(/[\r\n]+/g, " ").trim();
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(value, max));
 
+// Fits a single-line description into maxWidth, cutting after the last whole word and adding "…".
+function truncateDescription(text: string, maxWidth: number): string {
+	if (visibleWidth(text) <= maxWidth) return text;
+	const cut = truncateToWidth(text, maxWidth - 1, "");
+	const endsOnWord = text.charAt(cut.length) === " ";
+	const lastSpace = cut.lastIndexOf(" ");
+	const words = endsOnWord || lastSpace <= 0 ? cut : cut.slice(0, lastSpace);
+	return `${words.trimEnd().replace(/[,;:]$/, "")}…`;
+}
+
 export interface SelectItem {
 	value: string;
 	label: string;
@@ -156,7 +166,7 @@ export class SelectList implements Component {
 			const remainingWidth = width - descriptionStart - 2; // -2 for safety
 
 			if (remainingWidth > MIN_DESCRIPTION_WIDTH) {
-				const truncatedDesc = truncateToWidth(descriptionSingleLine, remainingWidth, "");
+				const truncatedDesc = truncateDescription(descriptionSingleLine, remainingWidth);
 				if (isSelected) {
 					return this.theme.selectedText(`${prefix}${truncatedValue}${spacing}${truncatedDesc}`);
 				}

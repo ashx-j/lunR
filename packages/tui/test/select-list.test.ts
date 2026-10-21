@@ -35,6 +35,17 @@ describe("SelectList", () => {
 		assert.ok(rendered[0].includes("Line one Line two Line three"));
 	});
 
+	it("cuts a long description after a whole word and adds an ellipsis", () => {
+		const items = [
+			{ value: "a", label: "a", description: "Reload keybindings, extensions, skills, prompts and themes" },
+		];
+		const rendered = new SelectList(items, 5, testTheme).render(60);
+
+		assert.ok(rendered[0].trimEnd().endsWith("…"), rendered[0]);
+		assert.match(rendered[0].trimEnd(), /\b(?:keybindings|extensions|skills|prompts)…$/);
+		assert.ok(visibleWidth(rendered[0]) <= 60);
+	});
+
 	it("keeps descriptions aligned when the primary text is truncated", () => {
 		const items = [
 			{ value: "short", label: "short", description: "short description" },
