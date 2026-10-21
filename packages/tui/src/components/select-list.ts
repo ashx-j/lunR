@@ -1,6 +1,6 @@
 import { getKeybindings } from "../keybindings.ts";
 import type { Component } from "../tui.ts";
-import { truncateToWidth, visibleWidth } from "../utils.ts";
+import { sliceByColumn, truncateToWidth, visibleWidth } from "../utils.ts";
 
 const DEFAULT_PRIMARY_COLUMN_WIDTH = 32;
 const PRIMARY_COLUMN_GAP = 2;
@@ -12,7 +12,9 @@ const clamp = (value: number, min: number, max: number): number => Math.max(min,
 // Fits a single-line description into maxWidth, cutting after the last whole word and adding "…".
 function truncateDescription(text: string, maxWidth: number): string {
 	if (visibleWidth(text) <= maxWidth) return text;
-	const cut = truncateToWidth(text, maxWidth - 1, "");
+	// sliceByColumn returns a plain prefix of `text`; truncateToWidth appends a reset code, which
+	// would shift the index of the character after the cut.
+	const cut = sliceByColumn(text, 0, maxWidth - 1, true);
 	const endsOnWord = text.charAt(cut.length) === " ";
 	const lastSpace = cut.lastIndexOf(" ");
 	const words = endsOnWord || lastSpace <= 0 ? cut : cut.slice(0, lastSpace);
