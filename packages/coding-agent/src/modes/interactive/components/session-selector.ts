@@ -452,10 +452,11 @@ class SessionList implements Component, Focusable {
 			const displayText = session.name ?? session.firstMessage;
 			const normalizedMessage = displayText.replace(/[\x00-\x1f\x7f]/g, " ").trim();
 
-			// Right side: message count and time since the last change, e.g. "12 msgs · 5m ago"
+			// Right side: message count and time since the last change, e.g. "12 msgs · 5m ago",
+			// with a leading "print ·" for sessions created by `lunr -p`
 			const age = formatSessionDate(session.modified);
 			const msgCount = `${session.messageCount} msg${session.messageCount === 1 ? "" : "s"}`;
-			let rightPart = `${msgCount} · ${age === "now" ? age : `${age} ago`}`;
+			let rightPart = `${session.origin === "print" ? "print · " : ""}${msgCount} · ${age === "now" ? age : `${age} ago`}`;
 			if (this.showCwd && session.cwd) {
 				rightPart = `${shortenPath(session.cwd)} ${rightPart}`;
 			}

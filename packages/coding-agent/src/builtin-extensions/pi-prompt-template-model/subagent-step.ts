@@ -284,7 +284,7 @@ function mergeTaskProgress(
 			recentOutput: existing?.recentOutput,
 			recentOutputLines: existing?.recentOutputLines,
 			recentTools: existing?.recentTools,
-			model: existing?.model ?? task.model,
+			model: existing?.model,
 			toolCount: existing?.toolCount,
 			durationMs: existing?.durationMs,
 			tokens: existing?.tokens,
@@ -596,7 +596,8 @@ export async function executeSubagentPromptStep(options: DelegatedPromptOptions)
 	);
 
 	try {
-		const response = await requestDelegatedRun(pi, ctx, request, signal, preparedTasks[0]?.model);
+		// The delegation protocol routes by tier only, so the widget shows the tier until the child reports its model.
+		const response = await requestDelegatedRun(pi, ctx, request, signal, request.tier);
 		if (response.isError) {
 			throw new Error(
 				`Delegated prompt execution failed: ${response.errorText || "unknown delegated error"}`,

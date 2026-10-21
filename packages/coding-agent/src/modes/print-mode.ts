@@ -73,6 +73,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
+		// Tag sessions this run creates so /resume can label them; -p then -c keeps them resumable.
+		session.sessionManager.markPrintOrigin();
 		await session.bindExtensions({
 			mode: mode === "json" ? "json" : "print",
 			commandContextActions: {
