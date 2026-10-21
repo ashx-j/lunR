@@ -321,6 +321,15 @@ describe("read-only execution spellings", () => {
 		"rg foo *",
 		"git diff *",
 		"uniq src/*.txt",
+		"find . -*",
+		"rg foo --*",
+		"git diff --*",
+		"sed -n p -*",
+		"sort x -*",
+		"file -*",
+		'find . ""*',
+		"find . \\-*",
+		'find . "-"*',
 	])("blocks %s because the glob can expand to an option", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
 	});

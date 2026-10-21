@@ -361,38 +361,43 @@ function shellWords(segment: string): string[] | undefined {
 }
 
 /**
- * Find unquoted glob characters (`*`, `?`, `[`) in a segment. `leading` is true when a word starts
- * with one, so the word could expand to a file name that begins with `-`.
+ * Find unquoted glob characters (`*`, `?`, `[`) in a segment. `leading` is true when the literal
+ * text before a word's first glob is empty or only dashes (`*`, `-*`, `""*`, `\-*`), so the word
+ * could expand to a file name that is an option.
  */
 function unquotedGlobs(segment: string): { any: boolean; leading: boolean } {
 	let any = false;
 	let quote: "'" | '"' | undefined;
-	let atWordStart = true;
+	// Literal text of the current word so far, with quotes and escapes removed; undefined once the
+	// word has had its first glob checked.
+	let prefix: string | undefined = "";
 	for (let i = 0; i < segment.length; i++) {
 		const ch = segment[i];
 		if (ch === "\\" && quote !== "'") {
+			if (prefix !== undefined && i + 1 < segment.length) prefix += segment[i + 1];
 			i++;
-			atWordStart = false;
 			continue;
 		}
 		if (quote) {
 			if (ch === quote) quote = undefined;
+			else if (prefix !== undefined) prefix += ch;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {
 			quote = ch;
-			atWordStart = false;
 			continue;
 		}
 		if (/\s/.test(ch)) {
-			atWordStart = true;
+			prefix = "";
 			continue;
 		}
 		if (ch === "*" || ch === "?" || ch === "[") {
-			if (atWordStart) return { any: true, leading: true };
+			if (prefix !== undefined && /^-*$/.test(prefix)) return { any: true, leading: true };
 			any = true;
+			prefix = undefined;
+			continue;
 		}
-		atWordStart = false;
+		if (prefix !== undefined) prefix += ch;
 	}
 	return { any, leading: false };
 }
