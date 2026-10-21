@@ -256,7 +256,6 @@ describe("read-only execution spellings", () => {
 
 	it.each([
 		"pnpm --version",
-		"yarn --version",
 		"bun --version",
 		"npm ls",
 		"npm view typescript version",
@@ -271,6 +270,9 @@ describe("read-only execution spellings", () => {
 		"uniq sorted.txt",
 		"NO_COLOR=1 ls",
 		"LC_ALL=C sort input.txt",
+		"less README.md",
+		"less -SR README.md",
+		"less --line-numbers README.md",
 	])("keeps informational form %s usable", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(false);
 	});
@@ -286,8 +288,56 @@ describe("read-only execution spellings", () => {
 		"GIT_EXTERNAL_DIFF=./x.sh git diff",
 		"PAGER=./x.sh git log",
 		"LD_PRELOAD=./evil.so ls",
+		"file -C -m magic",
+		"file --compile -m magic",
+		"file --comp -m magic",
+		"file -zC -m magic",
+		// a lesskey file's #env section can set LESSOPEN, which runs a command
+		"less -k keys.bin README.md",
+		"less -Sk keys.bin README.md",
+		"less --lesskey-src=keys.txt README.md",
+		"less --lesskey-s=keys.txt README.md",
+		"less --lesskey-file keys.bin README.md",
+		"more -k keys.bin README.md",
+		"less -o out.log README.md",
+		"less -Oout.log README.md",
+		"less --log-file=out.log README.md",
+		"less --LOG-FILE=out.log README.md",
+		// a repo yarnPath runs repo JavaScript for any yarn command
+		"yarn --version",
+		"yarn info react",
+		"yarn why react",
 	])("treats %s as able to run code or write files", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	// a repo file named like an option (`-i.ts`, `--pre=sh`) would become one after glob expansion
+	it.each([
+		"sed s/a/b/ *.ts",
+		"sed -n 1p ?.ts",
+		"sort [-]o.txt input.txt",
+		"file *",
+		"find . -name *",
+		"rg foo *",
+		"git diff *",
+		"uniq src/*.txt",
+	])("blocks %s because the glob can expand to an option", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"ls *.ts",
+		"grep x *.ts",
+		"cat *.md",
+		"wc -l src/*.ts",
+		"sed -n 1p src/*.ts",
+		"sed 's/a*/b/' file.ts",
+		"rg foo 'src/*.ts'",
+		"git log -- '*.ts'",
+		"file src/*.ts",
+		"file -b package.json",
+	])("keeps glob form %s usable", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
 	});
 });
 
