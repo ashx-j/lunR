@@ -2,7 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkNode, checkTerminal, collectDoctorChecks, formatDoctorReport } from "../src/cli/doctor-cli.ts";
+import {
+	checkDefaultModel,
+	checkNode,
+	checkTerminal,
+	collectDoctorChecks,
+	formatDoctorReport,
+} from "../src/cli/doctor-cli.ts";
 
 describe("lunr doctor", () => {
 	let agentDir: string;
@@ -56,8 +62,44 @@ describe("lunr doctor", () => {
 		);
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ browserEnabled: false }));
 		const report = formatDoctorReport(await collectDoctorChecks(agentDir));
-		expect(report).toContain("Logins: openai");
+		expect(report).toContain("Saved logins: openai");
 		expect(report).not.toContain("sk-doctor-secret");
+	});
+
+	it("counts env keys and models.json providers as ready and never names a missing /login", async () => {
+		const previousKey = process.env.GROQ_API_KEY;
+		process.env.GROQ_API_KEY = "gsk-doctor-secret";
+		try {
+			writeFileSync(
+				join(agentDir, "models.json"),
+				JSON.stringify({
+					providers: {
+						mybox: {
+							baseUrl: "http://127.0.0.1:9/v1",
+							api: "openai-completions",
+							apiKey: "local",
+							models: [{ id: "small" }],
+						},
+					},
+				}),
+			);
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ defaultProvider: "mybox", defaultModel: "small", browserEnabled: false }),
+			);
+			const byLabel = Object.fromEntries((await collectDoctorChecks(agentDir)).map((check) => [check.label, check]));
+			expect(byLabel["Custom providers"]).toMatchObject({ status: "ok", detail: "mybox" });
+			expect(byLabel["Environment keys"]?.detail).toContain("groq");
+			expect(byLabel["Default model"]).toMatchObject({ status: "ok", detail: "mybox/small" });
+			expect(byLabel.Providers).toBeUndefined();
+		} finally {
+			if (previousKey === undefined) delete process.env.GROQ_API_KEY;
+			else process.env.GROQ_API_KEY = previousKey;
+		}
+
+		const unknown = checkDefaultModel("gone", "m", [], new Set(["openai"]));
+		expect(unknown.fix).not.toContain("/login");
+		expect(checkDefaultModel("openai", "m", [], new Set(["openai"])).fix).toContain("/login openai");
 	});
 
 	it("requires Node 22.19 or newer", () => {

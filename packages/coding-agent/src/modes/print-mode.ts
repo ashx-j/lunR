@@ -9,6 +9,7 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
+import { describeProviderError } from "../core/provider-error-display.ts";
 import { encodeChildEventLines } from "../core/subagent-event-transport.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
@@ -151,8 +152,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+				if (assistantMsg.stopReason === "error") {
+					const { summary, hint } = describeProviderError(
+						assistantMsg.errorMessage || "Request error",
+						assistantMsg.provider,
+						"print",
+					);
+					console.error(hint ? `${summary}\n${hint}` : summary);
+					exitCode = 1;
+				} else if (assistantMsg.stopReason === "aborted") {
+					console.error(assistantMsg.errorMessage || "Request aborted");
 					exitCode = 1;
 				} else {
 					for (const content of assistantMsg.content) {
