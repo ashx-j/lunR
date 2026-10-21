@@ -34,6 +34,7 @@ import { beginCronFire, endCronFire } from "../core/cron/fire-guard.ts";
 import type { CronJob, CronJobOrigin } from "../core/cron/jobs.ts";
 import { setCronDeliverValidator } from "../core/cron/jobs.ts";
 import { startScheduler } from "../core/cron/scheduler.ts";
+import { globalBridge } from "../core/global-bridge.ts";
 import { createPermissionContext, deletePermissionContext } from "../core/permissions.ts";
 import { type BridgeSession, shutdownBridgeSession } from "./agent-bridge.ts";
 import { isAuthorized } from "./authz.ts";
@@ -41,7 +42,7 @@ import { type GatewayConfig, loadGatewayConfig, platformConfigFor } from "./conf
 import { splitMessage } from "./text.ts";
 import type { PlatformAdapter } from "./types.ts";
 
-const DELIVERY_BRIDGE_SYMBOL = Symbol.for("@lunr/cron-delivery");
+const deliveryBridge = globalBridge<ReturnType<typeof createPlatformDeliverer>>(Symbol.for("@lunr/cron-delivery"));
 
 type DeliveryBridge = (job: CronJob, content: string) => Promise<string | null>;
 
@@ -373,7 +374,7 @@ export function startGatewayCron(options: GatewayCronOptions): { stop(): Promise
 	setCronDeliverValidator((deliver, origin) => createDeliverValidator(getConfig())(deliver, origin));
 
 	// Retain the compatibility delivery bridge for integrations.
-	(globalThis as Record<symbol, unknown>)[DELIVERY_BRIDGE_SYMBOL] = platformDeliverer;
+	deliveryBridge.set(platformDeliverer);
 
 	const runJob = async (prompt: string, job: CronJob, signal: AbortSignal): Promise<string> => {
 		const fallbacks = options.fallbackModels ?? (await readCronFallbackModels());

@@ -7,7 +7,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import { computeContextBreakdown } from "../core/context-breakdown.ts";
 import type { ToolDefinition } from "../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../core/model-resolver.ts";
@@ -35,7 +35,7 @@ const MODEL_CACHE_CAP = 100;
 const SESSIONS_CACHE_CAP = 100;
 
 interface ModelCacheEntry {
-	models: Model<any>[];
+	models: Model<Api>[];
 	expires: number;
 }
 
@@ -54,7 +54,7 @@ function evictLRU<K, V>(map: Map<K, V>, cap: number): void {
 	}
 }
 
-function getCachedModels(key: string): Model<any>[] | undefined {
+function getCachedModels(key: string): Model<Api>[] | undefined {
 	const cached = modelCache.get(key);
 	if (!cached) return undefined;
 	if (Date.now() > cached.expires) {
@@ -67,7 +67,7 @@ function getCachedModels(key: string): Model<any>[] | undefined {
 	return cached.models;
 }
 
-function setCachedModels(key: string, models: Model<any>[]): void {
+function setCachedModels(key: string, models: Model<Api>[]): void {
 	modelCache.set(key, { models, expires: Date.now() + MODEL_CACHE_TTL_MS });
 	evictLRU(modelCache, MODEL_CACHE_CAP);
 }
@@ -138,9 +138,9 @@ function formatRelativeTime(date: Date): string {
 	return `${days}d ago`;
 }
 
-function formatModelList(models: Model<any>[], maxLines = MAX_MODEL_LIST_LINES): string[] {
+function formatModelList(models: Model<Api>[], maxLines = MAX_MODEL_LIST_LINES): string[] {
 	if (models.length === 0) return ["No models available."];
-	const byProvider = new Map<string, Model<any>[]>();
+	const byProvider = new Map<string, Model<Api>[]>();
 	for (const model of models) {
 		const list = byProvider.get(model.provider) ?? [];
 		list.push(model);
@@ -164,8 +164,8 @@ function formatModelList(models: Model<any>[], maxLines = MAX_MODEL_LIST_LINES):
 	];
 }
 
-function groupModelsByProvider(models: Model<any>[]): Map<string, Model<any>[]> {
-	const byProvider = new Map<string, Model<any>[]>();
+function groupModelsByProvider(models: Model<Api>[]): Map<string, Model<Api>[]> {
+	const byProvider = new Map<string, Model<Api>[]>();
 	for (const model of models) {
 		const list = byProvider.get(model.provider) ?? [];
 		list.push(model);
@@ -183,7 +183,7 @@ function truncateModelId(id: string): string {
 	return truncate(name, MODEL_ID_MAX);
 }
 
-async function refreshAndCacheModels(session: BridgeSession, key: string): Promise<Model<any>[]> {
+async function refreshAndCacheModels(session: BridgeSession, key: string): Promise<Model<Api>[]> {
 	const runtime: ModelRuntime = session.modelRuntime;
 	await runtime.refresh();
 	const models = [...(await runtime.getAvailable())].sort(
@@ -193,7 +193,7 @@ async function refreshAndCacheModels(session: BridgeSession, key: string): Promi
 	return models;
 }
 
-async function setModelAndReply(ctx: ChatCommandContext, model: Model<any>): Promise<void> {
+async function setModelAndReply(ctx: ChatCommandContext, model: Model<Api>): Promise<void> {
 	const session = ctx.session!;
 	try {
 		await session.setModel(model);

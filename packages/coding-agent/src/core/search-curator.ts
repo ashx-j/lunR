@@ -1,3 +1,4 @@
+import { globalBridge } from "./global-bridge.ts";
 /**
  * Search-curator bridge (consumer side).
  *
@@ -9,6 +10,7 @@
  */
 
 export const SEARCH_CURATOR_BRIDGE_SYMBOL = Symbol.for("@lunr/search-curator");
+const searchCuratorSlot = globalBridge<SearchCuratorBridge>(SEARCH_CURATOR_BRIDGE_SYMBOL);
 
 /** UI-level setting values exposed in /settings (map to pi-web-access workflows). */
 export type SearchCuratorSetting = "off" | "on" | "auto-summary";
@@ -20,7 +22,7 @@ export interface SearchCuratorBridge {
 }
 
 export function getSearchCuratorBridge(): SearchCuratorBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[SEARCH_CURATOR_BRIDGE_SYMBOL] as SearchCuratorBridge | undefined;
+	return searchCuratorSlot.get();
 }
 
 /** Current curator setting for the /settings row, or undefined when pi-web-access is not loaded. */
