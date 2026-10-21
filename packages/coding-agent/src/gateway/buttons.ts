@@ -237,8 +237,14 @@ export async function createPicker(
 	return result;
 }
 
-async function answerExpired(adapter: PlatformAdapter, cb: CallbackEvent): Promise<void> {
-	await adapter.answerCallback(cb.id, "Picker expired — run the command again.").catch(() => {});
+/** Dialog pickers come from a running turn, not a command the user can rerun. */
+function expiredText(picker: PendingPicker | undefined): string {
+	return picker?.kind === "dialog" ? "⏱ Expired. The question was cancelled." : "⏱ Expired — run the command again.";
+}
+
+async function answerExpired(adapter: PlatformAdapter, cb: CallbackEvent, picker?: PendingPicker): Promise<void> {
+	const text = picker?.kind === "dialog" ? "Expired." : "Picker expired — run the command again.";
+	await adapter.answerCallback(cb.id, text).catch(() => {});
 }
 
 async function answerUnauthorized(adapter: PlatformAdapter, cb: CallbackEvent): Promise<void> {
@@ -268,7 +274,7 @@ export async function handleCallback(
 	if (picker.completed === undefined && !pickerValid(picker)) {
 		registry.delete(parsed.id);
 		picker.onCancel?.();
-		await answerExpired(adapter, cb);
+		await answerExpired(adapter, cb, picker);
 		return;
 	}
 
@@ -293,11 +299,11 @@ export async function handleCallback(
 		if (!picker.completed) picker.onCancel?.();
 		registry.delete(parsed.id);
 		try {
-			await picker.adapter.editMessage(picker.chatId, picker.messageId, "⏱ Expired — run the command again.", []);
+			await picker.adapter.editMessage(picker.chatId, picker.messageId, expiredText(picker), []);
 		} catch {
 			// best-effort expiry message
 		}
-		await answerExpired(adapter, cb);
+		await answerExpired(adapter, cb, picker);
 		return;
 	}
 
@@ -402,9 +408,7 @@ export function startButtonSweeper(): void {
 				!isAuthorized({ ...entry.source, roleAuthorized: undefined }, loadGatewayConfig())
 			)
 				continue;
-			void entry.adapter
-				.editMessage(entry.chatId, entry.messageId, "⏱ Expired — run the command again.", [])
-				.catch(() => {});
+			void entry.adapter.editMessage(entry.chatId, entry.messageId, expiredText(entry), []).catch(() => {});
 		}
 	}, SWEEP_INTERVAL_MS);
 	sweeper.unref?.();

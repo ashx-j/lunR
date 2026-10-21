@@ -178,6 +178,12 @@ describe("router: group gating", () => {
 		expect(adapter.sent).toEqual([]);
 		expect(bridge.calls).toEqual([]);
 	});
+
+	it("forwarded commands in groups reach the session like they do in DMs", async () => {
+		const { bridge, router } = makeDeps(makeConfig());
+		await router.handleEvent(groupEvent("/cron list"));
+		expect(bridge.calls.map((call) => call.event.text)).toEqual(["/cron list"]);
+	});
 });
 
 describe("router: authorization", () => {
@@ -243,6 +249,48 @@ describe("router: normal path", () => {
 		vi.restoreAllMocks();
 		expect(adapter.sent).toHaveLength(3);
 		expect(JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"))).toEqual([]);
+	});
+
+	it("sends one notice when a chunk fails permanently and keeps the failed batch on disk", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		bridge.results = ["x".repeat(230)];
+		const original = adapter.send.bind(adapter);
+		vi.spyOn(adapter, "send").mockImplementation(async (chat, text, opts) => {
+			if (adapter.sent.length === 1 && text.startsWith("x")) return { success: false, retryable: false };
+			return original(chat, text, opts);
+		});
+		await router.handleEvent(dmEvent("go"));
+		expect(adapter.sent.map((m) => m.text)).toEqual([
+			expect.stringMatching(/^x+ \(1\/3\)$/),
+			"⚠ Part of a reply could not be delivered.",
+		]);
+		const pending = JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"));
+		expect(pending).toHaveLength(2);
+		expect(pending.every((item: { failed?: boolean }) => item.failed)).toBe(true);
+	});
+
+	it("keeps only the newest failed batches", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		vi.spyOn(adapter, "send").mockResolvedValue({ success: false, retryable: false });
+		for (let i = 0; i < 22; i++) {
+			bridge.results = [`answer ${i}`];
+			await router.handleEvent(dmEvent("go"));
+		}
+		const pending: Array<{ text: string; batchId: string }> = JSON.parse(
+			readFileSync(join(dir, "gateway-outbox.json"), "utf8"),
+		);
+		expect(new Set(pending.map((item) => item.batchId)).size).toBe(20);
+		expect(pending.at(-1)?.text).toBe("answer 21");
+		expect(pending.some((item) => item.text === "answer 0")).toBe(false);
+	});
+
+	it("splits long command replies to the adapter limit", async () => {
+		const { adapter, router } = makeDeps(makeConfig());
+		await router.handleEvent(dmEvent("/help"));
+		expect(adapter.sent.length).toBeGreaterThan(1);
+		expect(adapter.sent.every((m) => m.text.length <= adapter.maxMessageLength)).toBe(true);
+		expect(adapter.sent[0].opts?.replyTo).toBe("msg1");
+		expect(adapter.sent[1].opts?.replyTo).toBeUndefined();
 	});
 
 	it("falls back to a complete durable reply when final preview edit reports failure", async () => {

@@ -60,6 +60,9 @@ interface Outbound {
 	batchId?: string;
 }
 const MAX_ATTEMPTS = 5;
+/** Failed batches stay on disk for inspection; only the newest are kept. */
+const MAX_FAILED_BATCHES = 20;
+const FAILURE_NOTICE = "⚠ Part of a reply could not be delivered.";
 const path = () => join(getAgentDir(), "gateway-outbox.json");
 let outbox: Outbound[] = [];
 
@@ -251,13 +254,25 @@ async function drainKey(key: string): Promise<void> {
 				failedBatches.add(item.batchId);
 				for (const pending of outbox) if (pending.batchId === item.batchId) pending.failed = true;
 			}
+			if (item.failed) pruneFailedBatches();
 			atomicJson(path(), outbox);
 			console.error(
 				`[gateway] delivery ${item.failed ? "failed permanently" : "retry scheduled"} for ${source.platform}: ${result.error ?? "unknown error"}`,
 			);
+			// One best-effort notice, so the chat does not stop at "(2/5)" with no explanation.
+			// Not awaited, so a stalled transport cannot hold this key's queue.
+			if (item.failed)
+				void adapter.send(source.chatId, FAILURE_NOTICE, { threadId: source.threadId }).catch(() => {});
 			break;
 		}
 	}
+}
+
+/** Drop the oldest failed entries beyond MAX_FAILED_BATCHES batches. */
+function pruneFailedBatches(): void {
+	const failed = [...new Set(outbox.filter((item) => item.failed).map((item) => item.batchId ?? item.id))];
+	const dropped = new Set(failed.slice(0, Math.max(0, failed.length - MAX_FAILED_BATCHES)));
+	if (dropped.size) outbox = outbox.filter((item) => !item.failed || !dropped.has(item.batchId ?? item.id));
 }
 
 export function invalidateGatewayDialogs(key: string): void {
