@@ -3722,9 +3722,17 @@ export class InteractiveMode {
 		const rawText = this.editor.getExpandedText?.() ?? this.editor.getText();
 		const text = rawText.trim();
 		if (!text) return;
-		// Builtins run now, even while streaming, instead of being queued as a message.
+		// Builtins run now instead of being queued as a message. When idle they go through the regular
+		// submit chain, exactly like Enter.
 		if (findSlashCommandHandler(text)) {
+			if (!this.session.isStreaming && this.editor.onSubmit) {
+				this.editor.setText("");
+				this.editor.onSubmit(text, rawText);
+				return;
+			}
 			this.takeSubmittedImages(text);
+			this.editor.addToHistory?.(text);
+			this.editor.setText("");
 			await runSlashCommand(this.slashCommandHost, text);
 			return;
 		}
@@ -6406,6 +6414,11 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 
 	private async handleCompactCommand(customInstructions?: string): Promise<void> {
 		this.clearStatusIndicator();
+		// A second /compact would join the running one and never see its compaction_start.
+		if (this.session.isCompacting) {
+			this.showStatus("Compaction is already running.");
+			return;
+		}
 		let started = false;
 		const unsubscribe = this.session.subscribe((event) => {
 			if (event.type === "compaction_start") started = true;

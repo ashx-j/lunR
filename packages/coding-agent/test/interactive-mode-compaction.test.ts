@@ -116,9 +116,9 @@ describe("InteractiveMode /compact outcomes", () => {
 		customInstructions?: string,
 	) => Promise<void>;
 
-	function createCompactMode(compact: () => Promise<unknown>) {
+	function createCompactMode(compact: () => Promise<unknown>, isCompacting = false) {
 		return {
-			session: { compact, subscribe: () => () => {} },
+			session: { compact, subscribe: () => () => {}, isCompacting },
 			showError: vi.fn(),
 			showStatus: vi.fn(),
 			clearStatusIndicator: vi.fn(),
@@ -136,6 +136,14 @@ describe("InteractiveMode /compact outcomes", () => {
 		const mode = createCompactMode(() => Promise.resolve({ summary: "s", tokensBefore: 1 }));
 		await handleCompactCommand.call(mode, "focus on tests");
 		expect(mode.showStatus).toHaveBeenCalledWith("Already compacted.");
+	});
+
+	test("a /compact while one is running says so instead of joining it", async () => {
+		const compact = vi.fn(() => Promise.resolve({ summary: "s", tokensBefore: 1 }));
+		const mode = createCompactMode(compact, true);
+		await handleCompactCommand.call(mode);
+		expect(compact).not.toHaveBeenCalled();
+		expect(mode.showStatus).toHaveBeenCalledWith("Compaction is already running.");
 	});
 
 	test("an error before compaction starts is shown", async () => {
