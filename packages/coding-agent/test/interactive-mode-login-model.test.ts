@@ -1,8 +1,8 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { completeProviderAuthentication, type LoginFlowHost } from "../src/modes/interactive/login-flow.ts";
 
-const unknownModel = { provider: "unknown", id: "unknown", api: "unknown" } as Model<any>;
+const unknownModel = { provider: "unknown", id: "unknown", api: "unknown" } as Model<Api>;
 const claude = (id: string) =>
 	({ provider: "anthropic", id, api: "anthropic-messages" }) as Model<"anthropic-messages">;
 
