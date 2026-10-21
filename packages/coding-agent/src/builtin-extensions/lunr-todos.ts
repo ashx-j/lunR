@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lunr-todos — lunR-native agent todo list with an above-editor widget.
  *
@@ -21,7 +20,6 @@
  * The pure logic (summarizeTodos / buildTodoWidgetLines) is exported for
  * vitest — see test/lunr-todos.test.ts.
  *
- * `// @ts-nocheck` matches the builtin-extension convention (see lunr-cron).
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
 
@@ -32,7 +30,7 @@ import {
 	TODOS_ENABLED_CHANGED_SYMBOL,
 	type TodosEnabledChangedHandler,
 } from "../core/todo-settings.ts";
-import { keyText } from "../modes/interactive/components/keybinding-hints.ts";
+import { globalBridge } from "../core/global-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Pure logic (exported for tests)
@@ -82,7 +80,7 @@ export function summarizeTodos(todos: TodoItem[]): string {
  * active rows are hidden. Expanded mode shows every
  * row, completed included. Empty list / all-completed collapsed → no lines.
  */
-export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expandKey = "click"): TodoWidgetLine[] {
+export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean): TodoWidgetLine[] {
 	if (todos.length === 0) return [];
 	const row = (t: TodoItem): TodoWidgetLine => ({
 		kind: "todo",
@@ -112,6 +110,8 @@ export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expan
 
 const WIDGET_KEY = "todos";
 const EXPANDED_BRIDGE_SYMBOL = Symbol.for("@lunr/tools-expanded-changed");
+const expandedSlot = globalBridge<(value: boolean) => void>(EXPANDED_BRIDGE_SYMBOL);
+const enabledChangedSlot = globalBridge<TodosEnabledChangedHandler>(TODOS_ENABLED_CHANGED_SYMBOL);
 
 export default function (pi: ExtensionAPI): void {
 	let todos: TodoItem[] = [];
@@ -128,7 +128,7 @@ export default function (pi: ExtensionAPI): void {
 	function refreshWidget(): void {
 		const ctx = lastCtx;
 		if (!ctx?.hasUI) return;
-		const lines = buildTodoWidgetLines(todos, expanded, keyText("app.tools.expand"));
+		const lines = buildTodoWidgetLines(todos, expanded);
 		if (todos.length === 0 || lines.length === 0) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			return;
@@ -165,16 +165,16 @@ export default function (pi: ExtensionAPI): void {
 	};
 
 	function registerEnabledBridge(): void {
-		(globalThis as Record<symbol, unknown>)[TODOS_ENABLED_CHANGED_SYMBOL] = handleEnabledChanged;
+		enabledChangedSlot.set(handleEnabledChanged);
 	}
 	registerEnabledBridge();
 
 	// --- Expansion bridge (interactive-mode setToolsExpanded invokes this) ---
 	function registerExpandedBridge(): void {
-		(globalThis as Record<symbol, unknown>)[EXPANDED_BRIDGE_SYMBOL] = (value: boolean) => {
+		expandedSlot.set((value) => {
 			expanded = Boolean(value);
 			refreshWidget();
-		};
+		});
 	}
 	registerExpandedBridge();
 
@@ -199,10 +199,8 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		if (lastCtx?.hasUI) lastCtx.ui.setWidget(WIDGET_KEY, undefined);
 		lastCtx = null;
-		delete (globalThis as Record<symbol, unknown>)[EXPANDED_BRIDGE_SYMBOL];
-		if ((globalThis as Record<symbol, unknown>)[TODOS_ENABLED_CHANGED_SYMBOL] === handleEnabledChanged) {
-			delete (globalThis as Record<symbol, unknown>)[TODOS_ENABLED_CHANGED_SYMBOL];
-		}
+		expandedSlot.set(undefined);
+		if (enabledChangedSlot.get() === handleEnabledChanged) enabledChangedSlot.set(undefined);
 	});
 
 	// --- todo tool (agent-facing) ---
@@ -229,11 +227,11 @@ export default function (pi: ExtensionAPI): void {
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+			const text = (t: string) => ({ content: [{ type: "text" as const, text: t }], details: undefined });
 			const incoming = Array.isArray(params?.todos) ? params.todos : [];
 			todos = incoming
-				.filter((t: any) => t && typeof t.content === "string" && t.content.trim().length > 0)
-				.map((t: any, i: number) => ({
+				.filter((t) => t && typeof t.content === "string" && t.content.trim().length > 0)
+				.map((t, i) => ({
 					id: typeof t.id === "string" && t.id ? t.id : String(i + 1),
 					content: t.content.trim(),
 					status: t.status === "in_progress" || t.status === "completed" ? t.status : "pending",

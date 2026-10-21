@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Custom error types for MCP UI operations.
  * Provides structured errors with context and recovery hints.

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared debug logger — lightweight logging for non-fatal errors.
  *

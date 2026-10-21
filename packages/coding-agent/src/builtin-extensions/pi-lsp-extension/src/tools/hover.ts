@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_hover — Get type information and documentation at a position.
  */

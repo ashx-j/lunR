@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ServerDefinition } from "./types.ts";
 import type { McpServerManager } from "./server-manager.ts";
 import { logger } from "./logger.ts";

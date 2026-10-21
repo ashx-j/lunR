@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * pi-lsp-extension — Pi coding agent extension for LSP integration.
  *
@@ -36,7 +35,7 @@ import {
 import { DiagnosticSeverity } from "vscode-languageserver-protocol";
 
 import type { WorkspaceProvider } from "./workspace-provider.js";
-import { LspRuntimeHost, type LspRuntimeCallbacks } from "./runtime.js";
+import { LspRuntimeHost, type LspRuntimeBindOptions, type LspRuntimeCallbacks } from "./runtime.js";
 import { createDiagnosticsTool } from "./tools/diagnostics.js";
 import { createHoverTool } from "./tools/hover.js";
 import { createDefinitionTool } from "./tools/definition.js";
@@ -244,7 +243,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     }
   };
 
-  const buildBindOptions = (cwd: string) => ({
+  const buildBindOptions = (cwd: string): LspRuntimeBindOptions => ({
     cwd,
     callbacks: makeCallbacks(),
     pendingProvider,

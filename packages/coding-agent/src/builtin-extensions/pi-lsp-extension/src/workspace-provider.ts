@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Workspace Provider — abstraction for workspace detection and configuration.
  *

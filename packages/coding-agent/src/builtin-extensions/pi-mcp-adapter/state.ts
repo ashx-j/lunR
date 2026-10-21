@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { McpAuthFlow } from "./mcp-auth-flow.ts";
 import type { ConsentManager } from "./consent-manager.ts";

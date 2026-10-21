@@ -1,4 +1,3 @@
-// @ts-nocheck
 const MAX_OBJECTIVE_LENGTH = 4_000;
 
 export interface GoalCommandFeatures {

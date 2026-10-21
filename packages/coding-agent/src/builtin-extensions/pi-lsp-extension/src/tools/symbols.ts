@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_symbols — List symbols in a file or search workspace symbols.
  */

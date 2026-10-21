@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
