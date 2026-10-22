@@ -29,7 +29,7 @@ import { isAuthorized, requireAuthorized } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
-import { resolveWithinRoots } from "./mobile-commands.ts";
+import { FORWARDED_COMMANDS, resolveWithinRoots } from "./mobile-commands.ts";
 import type { PairingStore } from "./pairing.ts";
 import {
 	acceptGatewayInput,
@@ -169,6 +169,11 @@ export function createRouter(deps: RouterDeps): Router {
 		}
 	}
 
+	/** Approval context for this chat; plan approval reaches the live session through the bridge. */
+	function approvalContext(key: string, adapter: PlatformAdapter, event: MessageEvent) {
+		return { key, adapter, source: event.source, session: () => bridge.peekSession?.(key) };
+	}
+
 	/** Step 3: command registry. Returns true when the event was consumed. */
 	async function handleSlash(adapter: PlatformAdapter, event: MessageEvent, key: string): Promise<boolean> {
 		const text = event.text.trim();
@@ -186,7 +191,7 @@ export function createRouter(deps: RouterDeps): Router {
 				});
 				return true;
 			}
-			const consumed = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
+			const consumed = await runWithApprovalContext(approvalContext(key, adapter, event), () =>
 				handleMobileCommand({ key, event, adapter, bridge, cfg: freshCfg() }, commandWord, args),
 			);
 			if (consumed) return true;
@@ -236,6 +241,8 @@ export function createRouter(deps: RouterDeps): Router {
 		}
 		const cmd = CHAT_COMMANDS.find((c) => c.name === commandWord || c.aliases?.includes(commandWord));
 		if (!cmd) {
+			// Forwarded commands are extension commands the session runs as a normal turn, in any chat type.
+			if (FORWARDED_COMMANDS.some((c) => c.name === commandWord)) return false;
 			return event.source.chatType !== "dm";
 		}
 		const ctx = {
@@ -247,7 +254,7 @@ export function createRouter(deps: RouterDeps): Router {
 			args,
 			reply: (message: string) => sendCommandReply(adapter, event, message),
 		};
-		return runWithApprovalContext({ key, adapter, source: event.source }, () => runChatCommand(cmd, ctx));
+		return runWithApprovalContext(approvalContext(key, adapter, event), () => runChatCommand(cmd, ctx));
 	}
 
 	/** A successful preview is finalized by edit; failed edits fall back to a durable full reply. */
@@ -334,7 +341,7 @@ export function createRouter(deps: RouterDeps): Router {
 			},
 		};
 
-		const result = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
+		const result = await runWithApprovalContext(approvalContext(key, adapter, event), () =>
 			bridge.runTurn(key, event, callbacks),
 		);
 		if (result === QUEUED) return; // queued behind a running turn: no reply

@@ -1335,6 +1335,8 @@ export function parseKey(data: string): string | undefined {
 
 const KITTY_CSI_U_REGEX = /^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/;
 const KITTY_PRINTABLE_ALLOWED_MODIFIERS = MODIFIERS.shift | LOCK_MASK;
+const KITTY_PUA_START = 0xe000;
+const KITTY_PUA_END = 0xf8ff;
 
 /**
  * Decode a Kitty CSI-u sequence into a printable character, if applicable.
@@ -1377,6 +1379,10 @@ export function decodeKittyPrintable(data: string): string | undefined {
 	effectiveCodepoint = normalizeKittyFunctionalCodepoint(effectiveCodepoint);
 	// Drop control characters or invalid codepoints.
 	if (!Number.isFinite(effectiveCodepoint) || effectiveCodepoint < 32) return undefined;
+	// Kitty encodes functional keys (F13-F35, Menu, Print Screen, media keys, ...) as
+	// Private Use Area codepoints. Keypad keys were mapped above; any other PUA code is
+	// a key without text, not a character to insert.
+	if (effectiveCodepoint >= KITTY_PUA_START && effectiveCodepoint <= KITTY_PUA_END) return undefined;
 
 	try {
 		return String.fromCodePoint(effectiveCodepoint);

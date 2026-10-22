@@ -22,9 +22,18 @@ export const READ_ONLY_MODE_BLOCK_MESSAGE = "Read-only mode is active; no change
 
 const BLOCKED_TOOLS = new Set(["edit", "write", "memory_add", "memory_remove", "cron"]);
 
-/** Env assignments that can make a read-only command run another program. */
+/**
+ * Env assignments that can make a read-only command run another program, either directly
+ * (pagers, preloads) or by pointing it at a config file that does (HOME, XDG_*, rg and gh config).
+ */
 const CODE_RUNNING_ENV =
-	/^(GIT_[A-Z0-9_]+|[A-Z0-9_]*PAGER|[A-Z0-9_]*EDITOR|LESSOPEN|LESSCLOSE|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|BASH_ENV|ENV|PROMPT_COMMAND|NODE_OPTIONS|PYTHONSTARTUP|PERL5OPT|RUBYOPT)=/;
+	/^(GIT_[A-Z0-9_]+|[A-Z0-9_]*PAGER|[A-Z0-9_]*EDITOR|VISUAL|[A-Z0-9_]*BROWSER|LESS[A-Z0-9_]*|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|BASH_ENV|ENV|PROMPT_COMMAND|NODE_OPTIONS|PYTHON[A-Z0-9_]*|PERL5OPT|RUBYOPT|HOME|PATH|XDG_[A-Z0-9_]+|RIPGREP_CONFIG_PATH|GH_CONFIG_DIR|GNUPGHOME|YARN_[A-Z0-9_]+|[Nn][Pp][Mm]_[Cc][Oo][Nn][Ff][Ii][Gg]_[A-Za-z0-9_]+)=/;
+
+/** A command word with a directory part runs that file; only these system directories are trusted. */
+const SYSTEM_BIN_DIRS = new Set(["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]);
+
+/** Characters after `$` that start an expansion: names, positional and special parameters, `${`, `$(`, `$[`. */
+const DOLLAR_EXPANSION_START = /[A-Za-z0-9_{([@*#?$!-]/;
 
 /** Small allowlist of read-only commands permitted in read-only mode. Everything else is rejected. */
 const ALLOWED_COMMANDS = new Set([
@@ -175,9 +184,9 @@ export function isMutatingBashCommand(command: string): boolean {
 	// Any output redirect outside quotes can write a file.
 	if (hasUnquotedRedirect(command)) return true;
 
-	// Command substitution / process substitution / grouped redirect syntaxes
-	// bypass a simple command-name check.
-	if (hasShellSubstitution(command)) return true;
+	// Substitutions, parameter expansion, ANSI-C quoting and brace expansion change
+	// the words after this check, so a literal word check cannot classify them.
+	if (hasShellExpansion(command)) return true;
 
 	// Every segment separated by ; | & && || must individually be read-only.
 	for (const segment of splitShellSegments(command)) {
@@ -252,12 +261,20 @@ function splitShellSegments(command: string): string[] {
 	return segments.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-/** Command substitution expands inside double quotes; single quotes keep it literal. */
-function hasShellSubstitution(command: string): boolean {
+/**
+ * True when bash would rewrite a word before running it: command and process substitution,
+ * `$` expansions (also inside double quotes), `$'…'`/`$"…"` quoting and `{a,b}`/`{a..b}` brace
+ * expansion. Single quotes keep everything literal. A `$` that starts no expansion (`grep 'x$'`,
+ * `grep "x$"`) stays allowed.
+ */
+function hasShellExpansion(command: string): boolean {
 	let quote: "'" | '"' | undefined;
 	let escaped = false;
+	let braceDepth = 0;
+	let braceList = false;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
+		const next = command[i + 1];
 		if (escaped) {
 			escaped = false;
 			continue;
@@ -270,7 +287,11 @@ function hasShellSubstitution(command: string): boolean {
 			if (ch === quote) quote = undefined;
 			continue;
 		}
-		if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
+		if (ch === "`") return true;
+		if (ch === "$" && next !== undefined) {
+			if (DOLLAR_EXPANSION_START.test(next)) return true;
+			if (!quote && (next === "'" || next === '"')) return true;
+		}
 		if (quote === '"') {
 			if (ch === quote) quote = undefined;
 			continue;
@@ -279,8 +300,19 @@ function hasShellSubstitution(command: string): boolean {
 			quote = ch;
 			continue;
 		}
-		if ((ch === "<" || ch === ">") && command[i + 1] === "(") return true;
-		if (ch === "&" && command[i + 1] === ">") return true;
+		if ((ch === "<" || ch === ">") && next === "(") return true;
+		if (ch === "&" && next === ">") return true;
+		if (ch === "{") {
+			braceDepth++;
+		} else if (ch === "}" && braceDepth > 0) {
+			if (braceList) return true;
+			braceDepth--;
+		} else if (braceDepth > 0 && (ch === "," || (ch === "." && next === "."))) {
+			braceList = true;
+		} else if (/[\s;&|]/.test(ch)) {
+			braceDepth = 0;
+			braceList = false;
+		}
 	}
 	return false;
 }
@@ -331,6 +363,10 @@ function isMutatingSegment(segment: string): boolean {
 		tokens = tokens.slice(1);
 	}
 	if (tokens.length === 0) return false;
+
+	// `./scripts/ls` is a project file, not ls. Only bare names and trusted system paths count.
+	const slash = tokens[0].lastIndexOf("/");
+	if (tokens[0].includes("\\") || (slash >= 0 && !SYSTEM_BIN_DIRS.has(tokens[0].slice(0, slash)))) return true;
 
 	const command = basenameOf(tokens[0]).toLowerCase();
 	const args = tokens.slice(1);
@@ -405,13 +441,16 @@ function isMutatingSegment(segment: string): boolean {
 	return !ALLOWED_COMMANDS.has(command);
 }
 
-/** Global git options that take no value. Unknown leading flags are treated as mutating. */
+/**
+ * Global git options that take no value. Unknown leading flags are treated as mutating, including
+ * `-C`, `--git-dir`, `--work-tree` and `--bare`: they can point git at a repository whose config
+ * (core.fsmonitor, diff.external, textconv) runs a program.
+ */
 const GIT_GLOBAL_FLAGS = new Set([
 	"--no-pager",
 	"--version",
 	"--help",
 	"-h",
-	"--bare",
 	"--no-replace-objects",
 	"--no-optional-locks",
 	"--literal-pathspecs",
@@ -431,12 +470,12 @@ function gitSubcommandIndex(args: string[]): number {
 			index++;
 			continue;
 		}
-		if (token === "-C" || token === "--git-dir" || token === "--work-tree" || token === "--namespace") {
+		if (token === "--namespace") {
 			if (args[index + 1] === undefined) return -1;
 			index += 2;
 			continue;
 		}
-		if (token.startsWith("--git-dir=") || token.startsWith("--work-tree=") || token.startsWith("--namespace=")) {
+		if (token.startsWith("--namespace=")) {
 			index++;
 			continue;
 		}

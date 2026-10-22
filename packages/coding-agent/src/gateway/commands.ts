@@ -21,6 +21,7 @@ import { defaultGatewayConfig, type GatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
 import { FORWARDED_COMMANDS, MOBILE_COMMANDS, resolveWithinRoots } from "./mobile-commands.ts";
 import type { BridgeLike } from "./router.ts";
+import { splitMessage } from "./text.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -717,7 +718,8 @@ export function formatHelpText(): string {
 		lines.push(`${names} — ${cmd.description}`);
 	}
 	for (const cmd of botCommandSpecs()) {
-		if (!CHAT_COMMANDS.some((c) => c.name === cmd.name)) lines.push(`/${cmd.name} · ${cmd.description}`);
+		if (cmd.name !== "start" && !CHAT_COMMANDS.some((c) => c.name === cmd.name))
+			lines.push(`/${cmd.name} · ${cmd.description}`);
 	}
 	lines.push("");
 	lines.push("Tap to pick: /model, /thinking, /sessions (run without args to see buttons).");
@@ -763,10 +765,17 @@ export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext):
 	}
 }
 
-/** Reply helper used by the router to build the ChatCommandContext. */
+/**
+ * Reply helper used by the router to build the ChatCommandContext. Long replies are split
+ * to the adapter limit; a failed send throws so the caller reports it instead of going silent.
+ */
 export async function sendCommandReply(adapter: PlatformAdapter, event: MessageEvent, text: string): Promise<void> {
-	await adapter.send(event.source.chatId, prefixLines(text, ""), {
-		replyTo: event.messageId,
-		threadId: event.source.threadId,
-	});
+	const chunks = splitMessage(prefixLines(text, ""), adapter.maxMessageLength);
+	for (const [index, chunk] of chunks.entries()) {
+		const result = await adapter.send(event.source.chatId, chunk, {
+			replyTo: index === 0 ? event.messageId : undefined,
+			threadId: event.source.threadId,
+		});
+		if (!result.success) throw new Error(result.error ?? "Reply could not be sent.");
+	}
 }

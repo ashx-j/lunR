@@ -358,7 +358,7 @@ export async function openMcpPanel(
   const config = state.config;
   const cache = loadMetadataCache();
   const configPath = pi.getFlag("mcp-config") as string | undefined ?? configOverridePath;
-  const provenanceMap = getServerProvenance(configPath, ctx.cwd);
+  const provenanceMap = getServerProvenance(configPath, ctx.cwd, ctx.isProjectTrusted());
   const { lines: noticeLines, fingerprint } = buildSharedConfigNoticeLines(configPath, ctx.cwd);
 
   const callbacks = buildMcpPanelCallbacks(state, config, ctx);
@@ -407,7 +407,7 @@ export async function openMcpAuthPanel(
 
   const cache = loadMetadataCache();
   const configPath = pi.getFlag("mcp-config") as string | undefined ?? configOverridePath;
-  const provenanceMap = getServerProvenance(configPath, ctx.cwd);
+  const provenanceMap = getServerProvenance(configPath, ctx.cwd, ctx.isProjectTrusted());
   const callbacks = buildMcpPanelCallbacks(state, config, ctx);
   const { createMcpPanel } = await import("./mcp-panel.ts");
 

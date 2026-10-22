@@ -311,8 +311,7 @@ describe("session operation ownership", () => {
 				await retryEntered.promise;
 			}
 			h.appendResponses([
-				// Faux providers consume a response even when the request signal is already aborted.
-				...(phase === "tool" ? [fauxAssistantMessage("", { stopReason: "aborted" })] : []),
+				// An abort during a tool ends the scheduled run without another provider request.
 				fauxAssistantMessage([fauxToolCall("user_wait", {})], { stopReason: "toolUse" }),
 				fauxAssistantMessage("user result"),
 			]);

@@ -145,6 +145,16 @@ describe("prompt-driven subagent schema", () => {
 		expect(mixed.task).toBe("Review the web search hot path");
 		expect(mixed.tasks).toBeUndefined();
 		expect(mixed.chain).toBeUndefined();
+		const aliased = resolveSubagentRequestParams({
+			action: "single",
+			task: "Review the web search hot path",
+			description: "Review web perf",
+			tasks: [{ task: "x", description: "stub" }],
+			chain: [{ tier: "heavy" }],
+		});
+		expect(aliased.action).toBeUndefined();
+		expect(aliased.tasks).toBeUndefined();
+		expect(aliased.chain).toBeUndefined();
 		expect(
 			resolveSubagentRequestParams({
 				action: "status",
@@ -357,6 +367,25 @@ describe("same-turn large-launch gate counts generic singles", () => {
 			],
 		};
 		expect(effectiveLargeSubagentLaunchCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(3);
+	});
+
+	it("sums fanout and single sibling calls in one turn", () => {
+		const twoTasks = {
+			tasks: [
+				{ task: "a", description: "A" },
+				{ task: "b", description: "B" },
+			],
+		};
+		const single = { task: "solo", description: "Solo" };
+		const assistantMessage = {
+			content: [twoTasks, twoTasks, single].map((arguments_) => ({
+				type: "toolCall",
+				name: "subagent",
+				arguments: arguments_,
+			})),
+		};
+		expect(effectiveLargeSubagentLaunchCountForTurn(twoTasks, assistantMessage)).toBe(5);
+		expect(effectiveLargeSubagentLaunchCountForTurn(single, assistantMessage)).toBe(5);
 	});
 });
 

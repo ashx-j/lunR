@@ -604,7 +604,7 @@ export class DiscordAdapter implements PlatformAdapter {
 			platform: "discord",
 			chatId: thread?.parentId ?? interaction.channelId ?? interaction.user.id,
 			threadId: thread?.id,
-			chatType: thread ? ("thread" as const) : interaction.inGuild() ? ("channel" as const) : ("dm" as const),
+			chatType: thread ? ("thread" as const) : interaction.inGuild() ? ("group" as const) : ("dm" as const),
 			userId: interaction.user.id,
 			userName: interaction.user.username,
 		};
