@@ -12,6 +12,7 @@ import {
 	type ApprovalResponse,
 	NO_HANDLER_REASON,
 	type PermissionMode,
+	PLAN_APPROVAL_TIMEOUT_REASON,
 	registerApprovalHandler,
 	restorePermissionModeAfterPlan,
 	setPermissionMode,
@@ -162,8 +163,8 @@ async function createApprovalPrompt(
 		let messageId: string | undefined;
 		const timeout = setTimeout(() => {
 			pending.delete(id);
-			// An unanswered plan is not a decline: NO_HANDLER_REASON makes present_plan tell the model to wait for the user.
-			reject(new Error(req.kind === "plan" ? NO_HANDLER_REASON : "Approval request timed out"));
+			// An unanswered plan is not a decline: present_plan tells the model to wait for the user.
+			reject(new Error(req.kind === "plan" ? PLAN_APPROVAL_TIMEOUT_REASON : "Approval request timed out"));
 			if (messageId) {
 				const expired =
 					req.kind === "plan"

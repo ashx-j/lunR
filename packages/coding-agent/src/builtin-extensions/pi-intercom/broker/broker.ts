@@ -1,4 +1,3 @@
-// @ts-nocheck
 import net from "net";
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";

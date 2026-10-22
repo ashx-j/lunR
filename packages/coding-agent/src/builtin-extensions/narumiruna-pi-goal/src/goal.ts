@@ -1,8 +1,8 @@
-// @ts-nocheck
 // lunr: defineTool imported from the concrete module, NOT the package barrel —
 // the barrel re-exports main.ts which imports this extension (cycle).
 import { defineTool } from "../../../core/extensions/types.js";
 import { isCronFire } from "../../../core/cron/fire-guard.js";
+import { getMarkdownTheme } from "../../../modes/interactive/theme/theme.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
@@ -129,7 +129,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 						.map((block) => ("text" in block ? block.text : ""))
 						.join("\n");
 		const c = new Container();
-		c.addChild(new Markdown(`● ${raw}`, 1, 0, undefined, {
+		c.addChild(new Markdown(`● ${raw}`, 1, 0, getMarkdownTheme(), {
 			color: (content) => theme.fg("text", content),
 		}));
 		return c;

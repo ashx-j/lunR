@@ -3,10 +3,11 @@
  * (getAgentDir()). Secrets never land here — they go to gateway.json.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendDebugLog, getAgentDir, VERSION } from "../config.ts";
 import { loadGatewayConfig, saveGatewayConfig } from "../gateway/config.ts";
+import { writeJsonFileAtomic } from "../utils/json.ts";
 
 export type FeatureId = "chat-platforms";
 
@@ -193,17 +194,7 @@ export function loadInstallFeatures(): InstallFeaturesFile {
 }
 
 export function saveInstallFeatures(file: InstallFeaturesFile): void {
-	const path = installFeaturesPath();
-	const dir = getAgentDir();
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}`;
-	writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`, "utf-8");
-	renameSync(tmp, path);
-	try {
-		chmodSync(path, 0o644);
-	} catch {
-		// best-effort (Windows ACLs)
-	}
+	writeJsonFileAtomic(installFeaturesPath(), file, 0o644);
 }
 
 export function isFeatureEnabled(id: FeatureId): boolean {

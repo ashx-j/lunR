@@ -1,4 +1,3 @@
-// @ts-nocheck
 export interface SessionInfo {
   id: string;
   name?: string;

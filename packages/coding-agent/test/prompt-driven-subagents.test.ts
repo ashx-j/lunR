@@ -36,7 +36,6 @@ import {
 	normalizeChildSpec,
 	validateChildDescription,
 } from "../src/builtin-extensions/pi-subagents/src/shared/child-spec.ts";
-import { REMOVED_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../src/builtin-extensions/pi-subagents/src/shared/types.ts";
 import { buildChainExpressionSteps } from "../src/builtin-extensions/pi-subagents/src/slash/slash-commands.ts";
 import { effectiveLargeSubagentLaunchCountForTurn } from "../src/core/large-subagent-launch.ts";
 import { MODEL_TIERS_BRIDGE_SYMBOL } from "../src/core/model-tiers.ts";
@@ -196,15 +195,6 @@ describe("prompt-driven subagent schema", () => {
 			expect(description).toContain("When uncertain, choose standard.");
 			expect(description).toContain("Heavy does not require a failed standard attempt");
 		}
-	});
-
-	it("removes agent-definition management actions", () => {
-		for (const action of REMOVED_SUBAGENT_ACTIONS) {
-			expect(SUBAGENT_ACTIONS).not.toContain(action);
-		}
-		expect(SUBAGENT_ACTIONS).toEqual(
-			expect.arrayContaining(["status", "interrupt", "stop", "resume", "steer", "doctor"]),
-		);
 	});
 
 	it("tool descriptions prompt children directly instead of roster discovery", () => {

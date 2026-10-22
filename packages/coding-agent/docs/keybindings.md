@@ -83,7 +83,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
 | `app.interrupt` | `escape` | Abort the parent; press twice within 500ms to also stop this session's active async subagents |
-| `app.clear` | `ctrl+c` | Clear editor |
+| `app.clear` | `ctrl+c` | Clear editor; a second press within 500ms quits |
 | `app.exit` | `ctrl+d` | Exit when pressed twice within 1.5s on an empty editor; the first press shows a hint. `ctrl+d` still deletes forward when the editor has text |
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |

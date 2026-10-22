@@ -15,7 +15,7 @@ import type { ChildProcess } from "child_process";
 import { execSync, spawn } from "child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { complete, getModel, getModels } from "../src/compat.ts";
-import type { AssistantMessage, Context, Model, Usage } from "../src/types.ts";
+import type { Api, AssistantMessage, Context, Model, Usage } from "../src/types.ts";
 import { isContextOverflow } from "../src/utils/overflow.ts";
 import { hasAzureOpenAICredentials } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
@@ -48,7 +48,7 @@ interface OverflowResult {
 	response: AssistantMessage;
 }
 
-async function testContextOverflow(model: Model<any>, apiKey: string): Promise<OverflowResult> {
+async function testContextOverflow(model: Model<Api>, apiKey: string): Promise<OverflowResult> {
 	const overflowContent = generateOverflowContent(model.contextWindow);
 
 	const context: Context = {

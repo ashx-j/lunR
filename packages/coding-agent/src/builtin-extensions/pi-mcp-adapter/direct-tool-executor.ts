@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpExtensionState } from "./state.ts";

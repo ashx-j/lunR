@@ -10,9 +10,23 @@ import { markStartupMilestone } from "./startup/startup-milestones.ts";
 
 markStartupMilestone("process_entry");
 process.title = "lunr";
-if (process.stdout.isTTY && parseArgs(process.argv.slice(2)).mode !== "acp") {
-	process.stdout.write("\x1b]0;lunr\x07");
-}
+const ownsTitle = process.stdout.isTTY && parseArgs(process.argv.slice(2)).mode !== "acp";
+// Bound before print and json modes redirect process.stdout.write to stderr.
+const writeStdout = process.stdout.write.bind(process.stdout);
+// Push the terminal's current title onto the xterm title stack (CSI 22;0 t) before lunR's first
+// title write; the exit handler below pops it. Terminals without the stack ignore both sequences.
+if (ownsTitle) writeStdout("\x1b[22;0t\x1b]0;lunr\x07");
+
+let startupView: InteractiveView | undefined;
+// Exit handlers run after all other code, so the pop (CSI 23;0 t) follows the TUI stop and every
+// title write. No exit handler may write a title after it.
+process.once("exit", () => {
+	startupView?.stop();
+	if (!ownsTitle) return;
+	try {
+		writeStdout("\x1b[23;0t");
+	} catch {}
+});
 
 if (!isNodeBundle) {
 	try {
@@ -33,7 +47,6 @@ const preloadMode = resolvePreloadLaunchMode(args, {
 });
 markStartupMilestone("mode_routed");
 
-let startupView: InteractiveView | undefined;
 if (preloadMode === "interactive") {
 	const { InteractiveView } = await import("./startup/interactive-view.ts");
 	startupView = new InteractiveView();
@@ -63,7 +76,6 @@ const startRuntime = async () => {
 		}
 	}
 };
-process.once("exit", () => startupView?.stop());
 if (startupView) {
 	await Promise.race([startRuntime(), startupView.waitForExit()]);
 	if (startupView.isExitRequested) process.exit(process.exitCode ?? 0);

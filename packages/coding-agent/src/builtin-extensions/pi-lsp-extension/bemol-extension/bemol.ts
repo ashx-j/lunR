@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Bemol — Amazon's Brazil workspace → LSP bridge integration.
  *

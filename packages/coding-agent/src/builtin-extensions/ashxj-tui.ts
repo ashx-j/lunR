@@ -22,7 +22,8 @@
  * self-contained with inline types and verify via the included `tsconfig.json`
  * (`moduleResolution: "Bundler"` + `skipLibCheck: true`).
  *
- * The ONE exception is `CustomEditor`, imported as a RUNTIME VALUE directly
+ * Besides the dependency-free `globalBridge` helper from `core/global-bridge.ts`,
+ * the ONE exception is `CustomEditor`, imported as a RUNTIME VALUE directly
  * from its defining module (`modes/interactive/components/custom-editor.ts`).
  * We must `extends` it to inherit pi's app keybindings (escape, ctrl+d, model
  * switching, extension shortcuts) — wrapping would lose those. It is imported
@@ -31,6 +32,7 @@
  * under vite-node (`Class extends value undefined`).
  */
 
+import { globalBridge } from "../core/global-bridge.ts";
 import { CustomEditor } from "../modes/interactive/components/custom-editor.js";
 
 const CUSTOMIZE_BRIDGE = Symbol.for("@lunr/customize");
@@ -52,11 +54,13 @@ interface CustomizeBridgeForPrompt {
 interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
 }
+const customizeSlot = globalBridge<CustomizeBridgeForPrompt>(CUSTOMIZE_BRIDGE);
+const permissionModeSlot = globalBridge<PermissionModeBridgeForFooter>(PERMISSION_MODE_BRIDGE);
 function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
-	return (globalThis as Record<symbol, unknown>)[CUSTOMIZE_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+	return customizeSlot.get();
 }
 function lunrPermissionModeBridge(): PermissionModeBridgeForFooter | undefined {
-	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE] as PermissionModeBridgeForFooter | undefined;
+	return permissionModeSlot.get();
 }
 // lunr: read footer toggles at render time, with settings-manager defaults
 // when the bridge or a getter is unavailable.
@@ -230,7 +234,11 @@ interface ExtensionUIContextLike {
 
 /** Trimmed view of `ExtensionContext`. */
 interface ExtensionContextLike {
-	modelRegistry?: { getUsageServiceBridge?(): UsageServiceBridgeForFooter | undefined };
+	modelRegistry?: {
+		getUsageServiceBridge?(): UsageServiceBridgeForFooter | undefined;
+		/** Cached snapshot of models whose provider has a key or login. */
+		getAvailable?(): readonly unknown[];
+	};
 	mode: "tui" | "rpc" | "json" | "print";
 	hasUI: boolean;
 	model: ModelLike | undefined;
@@ -763,9 +771,11 @@ export function renderStatsLine(
 		}
 	}
 
-	// 2) Context usage: `pct/window` (lunr: gated on footerContext). Without a model it points at /login.
+	// 2) Context usage: `pct/window` (lunr: gated on footerContext). Without a model it points at
+	// /model when some provider already has models, otherwise at /login.
 	if (footerToggles.context && hasNoModel(ctx.model)) {
-		parts.push(color(theme, "dim", "no model · /login"));
+		const next = (ctx.modelRegistry?.getAvailable?.().length ?? 0) > 0 ? "/model" : "/login";
+		parts.push(color(theme, "dim", `no model · ${next}`));
 	} else if (footerToggles.context) {
 		const usage = ctx.getContextUsage();
 		const win = ctx.model?.contextWindow ?? usage?.contextWindow ?? 0;

@@ -7,6 +7,7 @@
 
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type {
+	Api,
 	AssistantMessage,
 	CacheRetention,
 	Context,
@@ -177,12 +178,36 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	return estimateRequestContextTokens(convertToLlm(messages));
 }
 
+/** Largest share of the context window compaction reserves for the prompt and summary. */
+const MAX_RESERVE_SHARE = 0.25;
+/** Largest share of the context window compaction keeps as recent messages. */
+const MAX_KEEP_RECENT_SHARE = 0.4;
+
 /**
- * Check if compaction should trigger based on context usage.
+ * Caps `reserveTokens` and `keepRecentTokens` to a share of the context window. Without the caps a
+ * window at or below the 16k default reserve would compact after every turn, and keeping 20k recent
+ * tokens would leave nothing older to summarize. Normal windows (200k) keep the configured values
+ * because the caps sit above them. A missing or zero window returns the settings unchanged.
+ */
+export function compactionSettingsForWindow(
+	settings: CompactionSettings,
+	contextWindow: number | undefined,
+): CompactionSettings {
+	if (!contextWindow || contextWindow <= 0) return settings;
+	return {
+		...settings,
+		reserveTokens: Math.min(settings.reserveTokens, Math.floor(contextWindow * MAX_RESERVE_SHARE)),
+		keepRecentTokens: Math.min(settings.keepRecentTokens, Math.floor(contextWindow * MAX_KEEP_RECENT_SHARE)),
+	};
+}
+
+/**
+ * Check if compaction should trigger based on context usage. The reserve is scaled to the window
+ * (see `compactionSettingsForWindow`).
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	return contextTokens > contextWindow - compactionSettingsForWindow(settings, contextWindow).reserveTokens;
 }
 
 // ============================================================================
@@ -466,7 +491,7 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 function createSummarizationOptions(
-	model: Model<any>,
+	model: Model<Api>,
 	maxTokens: number,
 	apiKey: string | undefined,
 	headers: Record<string, string> | undefined,
@@ -483,7 +508,7 @@ function createSummarizationOptions(
 }
 
 async function completeSummarization(
-	model: Model<any>,
+	model: Model<Api>,
 	context: Context,
 	options: SimpleStreamOptions,
 	streamFn?: StreamFn,
@@ -501,7 +526,7 @@ async function completeSummarization(
  */
 export async function generateSummary(
 	currentMessages: AgentMessage[],
-	model: Model<any>,
+	model: Model<Api>,
 	reserveTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
@@ -584,14 +609,21 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Compaction settings from settings.json, scaled to the context window */
 	settings: CompactionSettings;
 }
 
+/**
+ * Picks what to summarize and what to keep. Pass the model's `contextWindow` so small windows keep
+ * and reserve a share of the window instead of the fixed defaults; the scaled settings travel in
+ * the preparation and also bound the summary's output tokens.
+ */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
-	settings: CompactionSettings,
+	configuredSettings: CompactionSettings,
+	contextWindow?: number,
 ): CompactionPreparation | undefined {
+	const settings = compactionSettingsForWindow(configuredSettings, contextWindow);
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
 	}
@@ -697,7 +729,7 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
  */
 export async function compact(
 	preparation: CompactionPreparation,
-	model: Model<any>,
+	model: Model<Api>,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	customInstructions?: string,
@@ -792,7 +824,7 @@ export async function compact(
  */
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
-	model: Model<any>,
+	model: Model<Api>,
 	reserveTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,

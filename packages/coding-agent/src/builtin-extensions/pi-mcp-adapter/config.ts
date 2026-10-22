@@ -1,4 +1,3 @@
-// @ts-nocheck
 // config.ts - Config loading with import support
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";

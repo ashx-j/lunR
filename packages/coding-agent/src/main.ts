@@ -31,7 +31,11 @@ import {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
-import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+import {
+	formatNoApiKeyFoundMessage,
+	formatNoModelSelectedMessage,
+	formatNoModelsAvailableMessage,
+} from "./core/auth-guidance.ts";
 import { registerCustomizeBridge } from "./core/customize.ts";
 import { ExtensionRunner, emitSessionShutdownEvent } from "./core/extensions/runner.ts";
 import type { InlineExtension, ProjectTrustContext } from "./core/extensions/types.ts";
@@ -1064,9 +1068,26 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createAgentSession");
 
-	if (appMode !== "interactive" && !session.model) {
-		console.error(chalk.red(formatNoModelsAvailableMessage()));
-		process.exit(1);
+	// Non-interactive modes have no /login, so these messages use print wording. In print and
+	// json mode a provider that is named (selected model or saved default) but has no key gets
+	// its own message; the key test is the one a prompt runs before its first request. RPC keeps
+	// running so a client can add a key and gets the error on its prompt instead.
+	if (appMode !== "interactive") {
+		const runtime = session.modelRuntime;
+		const hasAuth = async (provider: string) =>
+			runtime.hasConfiguredAuth(provider) || (await runtime.checkAuth(provider)) !== undefined;
+		const provider = session.model?.provider ?? settingsManager.getDefaultProvider();
+		if (appMode !== "rpc" && provider && !(await hasAuth(provider))) {
+			console.error(chalk.red(formatNoApiKeyFoundMessage(provider, "print")));
+			process.exit(1);
+		}
+		if (!session.model) {
+			const anyAvailable = (await runtime.getAvailable()).length > 0;
+			console.error(
+				chalk.red(anyAvailable ? formatNoModelSelectedMessage("print") : formatNoModelsAvailableMessage("print")),
+			);
+			process.exit(1);
+		}
 	}
 
 	if (startupBenchmark && appMode !== "interactive") {

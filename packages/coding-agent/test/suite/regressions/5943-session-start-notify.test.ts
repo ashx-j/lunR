@@ -67,10 +67,6 @@ type LoadedResourcesContext = {
 			getRegisteredCommands: () => [];
 		};
 	};
-	getStartupExpansionState: () => boolean;
-	formatDisplayPath: (resourcePath: string) => string;
-	formatContextPath: (resourcePath: string) => string;
-	getBuiltInCommandConflictDiagnostics: (extensionRunner: LoadedResourcesContext["session"]["extensionRunner"]) => [];
 };
 
 function createRebindDefaults() {
@@ -253,10 +249,6 @@ function createLoadedResourcesContext(): LoadedResourcesContext {
 				getRegisteredCommands: () => [],
 			},
 		},
-		getStartupExpansionState: () => false,
-		formatDisplayPath: (resourcePath) => resourcePath,
-		formatContextPath: (resourcePath) => resourcePath.replace("/repo/", ""),
-		getBuiltInCommandConflictDiagnostics: () => [],
 	};
 }
 

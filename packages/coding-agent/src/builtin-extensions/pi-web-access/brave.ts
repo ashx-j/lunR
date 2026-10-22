@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync, readFileSync } from "node:fs";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResult, SearchResponse } from "./perplexity.ts";

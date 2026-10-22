@@ -107,6 +107,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export const NO_HANDLER_REASON = "Approval channel unavailable.";
+/** An approval channel rejects with this when nobody answered a plan prompt in time. */
+export const PLAN_APPROVAL_TIMEOUT_REASON = "Plan approval timed out.";
 export const LARGE_SUBAGENT_LAUNCH_REJECT_REASON = "Large subagent launch rejected by user.";
 export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch blocked: no approval channel available.";
 const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
@@ -199,7 +201,9 @@ export function planApprovalResultText(resp: ApprovalResponse): string {
  * this fails OPEN when no approval handler is registered (or none is reachable,
  * e.g. a gateway turn without a chat context): headless sessions have no one to
  * show the dialog to, so the plan is presented and the user replies in chat
- * instead of deadlocking the turn. Everything else keeps fail-closed.
+ * instead of deadlocking the turn. A prompt nobody answered in time
+ * (PLAN_APPROVAL_TIMEOUT_REASON) reads the same way, not as a decline.
+ * Everything else keeps fail-closed.
  */
 /**
  * Asks the user to decide an action auto mode's reviewer kept blocking or couldn't review.
@@ -228,7 +232,7 @@ export async function requestPlanApproval(summary: string): Promise<string> {
 		resp = await approvalHandler({ toolName: "present_plan", action: "plan", detail: summary, kind: "plan" });
 	} catch (err) {
 		const message = err instanceof Error ? err.message : "approval request failed";
-		if (message === NO_HANDLER_REASON) return PLAN_PASS_THROUGH_TEXT;
+		if (message === NO_HANDLER_REASON || message === PLAN_APPROVAL_TIMEOUT_REASON) return PLAN_PASS_THROUGH_TEXT;
 		return `Plan declined: ${message} — revise the plan and call present_plan again.`;
 	}
 	return planApprovalResultText(resp);

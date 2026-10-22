@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Workspace Index — project-wide symbol index with incremental updates.
  *
@@ -32,10 +31,13 @@ export class WorkspaceIndex {
   private built = false;
   private building: Promise<void> | null = null;
 
-  constructor(
-    private rootDir: string,
-    private treeSitter: TreeSitterManager,
-  ) {}
+  private rootDir: string;
+  private treeSitter: TreeSitterManager;
+
+  constructor(rootDir: string, treeSitter: TreeSitterManager) {
+    this.rootDir = rootDir;
+    this.treeSitter = treeSitter;
+  }
 
   /** Build the index by walking the project tree. Deduplicates concurrent calls. */
   async build(): Promise<void> {

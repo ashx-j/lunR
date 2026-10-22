@@ -61,7 +61,13 @@ function noticeText(updates: SessionNotification[]): string[] {
 }
 
 async function launch(
-	options: { lifecycle?: boolean; startupDialog?: boolean; profile?: boolean; extensionError?: boolean } = {},
+	options: {
+		lifecycle?: boolean;
+		startupDialog?: boolean;
+		profile?: boolean;
+		extensionError?: boolean;
+		requestTimeoutMs?: number;
+	} = {},
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "lunr-acp-integration-"));
 	const home = join(directory, "home");
@@ -100,6 +106,7 @@ async function launch(
 		ACP_FIXTURE_MCP_PIDS: mcpPids,
 		...(options.startupDialog ? { ACP_FIXTURE_STARTUP_DIALOG: "1" } : {}),
 		...(options.extensionError ? { ACP_FIXTURE_EXTENSION_ERROR: "1" } : {}),
+		...(options.requestTimeoutMs ? { LUNR_ACP_REQUEST_TIMEOUT_MS: String(options.requestTimeoutMs) } : {}),
 		NO_COLOR: "1",
 	};
 	const child: ChildProcessWithoutNullStreams = spawn(
@@ -623,7 +630,7 @@ describe("compiled ACP stdio integration", () => {
 	}, 90_000);
 
 	it("keeps a delayed form inside its turn, reports slash output and preserves client-owned identity", async () => {
-		const fixture = await launch();
+		const fixture = await launch({ requestTimeoutMs: 5_000 });
 		const { connection, project, updates, forms } = fixture;
 		await connection.initialize({ protocolVersion: 1, clientCapabilities: { elicitation: { form: {} } } });
 		const { sessionId } = await connection.newSession({ cwd: project, mcpServers: [] });
@@ -638,8 +645,8 @@ describe("compiled ACP stdio integration", () => {
 			},
 		);
 		await vi.waitFor(() => expect(forms).toHaveLength(1));
-		// user dialogs can outlive the worker's ordinary 30-second command timeout.
-		await new Promise((resolve) => setTimeout(resolve, 31_000));
+		// user dialogs can outlive the worker's ordinary command timeout (30 s, shortened to 5 s here).
+		await new Promise((resolve) => setTimeout(resolve, 5_500));
 		expect(settled).toBe(false);
 		await expect(connection.prompt({ sessionId, prompt: [{ type: "text", text: "report" }] })).rejects.toThrow();
 		fixture.answerForm("supplied by client");

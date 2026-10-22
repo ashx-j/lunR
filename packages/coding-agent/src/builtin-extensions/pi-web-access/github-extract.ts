@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync, readFileSync, rmSync, statSync, readdirSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { extname, join, resolve as resolvePath, sep as pathSep } from "node:path";

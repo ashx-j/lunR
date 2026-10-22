@@ -46,7 +46,11 @@ jobs:
         run: node scripts/check-interactive-first-paint.mjs
 
       - name: Check
-        run: npm run check
+        # check:ci fails on unformatted code instead of rewriting it like the local check.
+        run: npm run check:ci
 
       - name: Test
         run: npm test
+
+      - name: Script tests
+        run: node --test scripts/build-standalone.test.mjs scripts/distribution-lock-graph.test.mjs scripts/release-commands.test.mjs

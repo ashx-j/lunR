@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type { MessageRenderOptions, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { expandKeyText } from "../../modes/interactive/components/keybinding-hints.ts";
 
 interface AssistantContent {
 	type: string;
@@ -177,7 +178,7 @@ export function renderDelegatedSubagentResult(
 				box.addChild(new Text(theme.fg("toolOutput", taskText), 0, 0));
 			} else {
 				box.addChild(new Text(theme.fg("toolOutput", lines.slice(0, PREVIEW_LINES).join("\n")), 0, 0));
-				box.addChild(new Text(theme.fg("warning", `\n... (${lines.length - PREVIEW_LINES} more lines — Ctrl+O to expand)`), 0, 0));
+				box.addChild(new Text(theme.fg("warning", `\n... (${lines.length - PREVIEW_LINES} more lines, ${expandKeyText()} to expand)`), 0, 0));
 			}
 			box.addChild(new Spacer(1));
 		}
@@ -201,7 +202,7 @@ export function renderDelegatedSubagentResult(
 				box.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
 			} else {
 				box.addChild(new Text(theme.fg("toolOutput", lines.slice(0, PREVIEW_LINES).join("\n")), 0, 0));
-				box.addChild(new Text(theme.fg("warning", `\n... (${lines.length - PREVIEW_LINES} more lines — Ctrl+O to expand)`), 0, 0));
+				box.addChild(new Text(theme.fg("warning", `\n... (${lines.length - PREVIEW_LINES} more lines, ${expandKeyText()} to expand)`), 0, 0));
 			}
 			box.addChild(new Spacer(1));
 		}
