@@ -87,13 +87,13 @@
     {
       "url": "https://ai-gateway.vercel.sh/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-10-22T20:10:57.527Z",
-      "digest": "5daed3e2167b87af24e562699f0653574cdbbd1d7d1d7587429126f0969cd0b9"
+      "fetchedAt": "2026-10-22T23:26:12.246Z",
+      "digest": "c04816f8950f362ad5afcd6726f7840463772973a445918d3148c770e508c85a"
     },
     {
       "url": "https://integrate.api.nvidia.com/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-10-22T20:10:58.902Z",
+      "fetchedAt": "2026-10-22T23:26:13.492Z",
       "digest": "bcfcb10b0c15064642007fd397d0c4b6f87ae2cd408548c027bd079390d5e52e"
     },
     {
@@ -106,29 +106,29 @@
     {
       "url": "https://opencode.ai/zen/go/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-10-22T20:10:59.070Z",
-      "digest": "1278500050ad97e4c438f6f37a3fc10f22856111294cb7832e8e28191d1c36d6"
+      "fetchedAt": "2026-10-22T23:26:13.783Z",
+      "digest": "656353e54ec732eacaed9ef4916503c5a110357ed9c10a1f5be6685eb09000c3"
     },
     {
       "url": "https://opencode.ai/zen/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-10-22T20:10:59.046Z",
-      "digest": "6d17f7cb409bddab7b93b460df42fb5560e7b587ff7eb1980a74e3473b9ad65a"
+      "fetchedAt": "2026-10-22T23:26:13.774Z",
+      "digest": "fe2a835ccc748a8571d7c18c36b08c9c10e65b5161f20e59d86329444fec9b93"
     },
     {
       "url": "https://openrouter.ai/api/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-10-22T20:10:57.491Z",
-      "digest": "108fd0607d2196ee3bee21b5928de33114b7c1714874508526b5af7d478dcab3"
+      "fetchedAt": "2026-10-22T23:26:12.268Z",
+      "digest": "19fc734c9045213ad38036b8b250775af4596e8916237b8dfc7ef0716911d0fc"
     },
     {
       "url": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "status": "fresh",
-      "fetchedAt": "2026-10-22T20:10:57.552Z",
+      "fetchedAt": "2026-10-22T23:26:12.215Z",
       "digest": "7359ceba1d5b5226fe3b675bb7b6df4e21d70d310c3b88ed67eb97ccaa8a7e80"
     }
   ],
-  "generatedAt": "2026-10-22T20:11:14.748Z",
+  "generatedAt": "2026-10-22T23:26:28.098Z",
   "sourceCommit": "a4117a5ea6fca97f9b07ca5e38d1a57fac8b8f0d",
   "providerCount": 39,
   "modelCount": 1571
