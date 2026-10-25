@@ -430,15 +430,25 @@ function isAnthropicAdaptiveThinkingModel(modelId: string): boolean {
 		modelId.includes("opus-4.8") ||
 		modelId.includes("sonnet-4-6") ||
 		modelId.includes("sonnet-4.6") ||
+		modelId.includes("opus-5") ||
+		modelId.includes("opus.5") ||
 		modelId.includes("sonnet-5") ||
 		modelId.includes("sonnet.5") ||
+		modelId.includes("haiku-5") ||
+		modelId.includes("haiku.5") ||
 		modelId.includes("fable-5")
 	);
 }
 
 function isAnthropicTemperatureUnsupportedModel(modelId: string): boolean {
 	const id = modelId.toLowerCase();
-	return id.includes("opus-4-7") || id.includes("opus-4.7") || id.includes("opus-4-8") || id.includes("opus-4.8");
+	return (
+		id.includes("opus-4-7") ||
+		id.includes("opus-4.7") ||
+		id.includes("opus-4-8") ||
+		id.includes("opus-4.8") ||
+		/(opus|sonnet|haiku|fable)[-.]5/.test(id)
+	);
 }
 
 const OPENAI_COMPLETIONS_DEFAULT_COMPAT = {
@@ -658,7 +668,8 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	}
 	// Anthropic adaptive-thinking effort support (per Anthropic adaptive thinking docs):
 	// - "max" is available on all adaptive-thinking Claude models.
-	// - "xhigh" is only available on Opus 4.7/4.8, Sonnet 5, and Fable 5.
+	// - "xhigh" is only available on Opus 4.7/4.8 and the Claude 5 family.
+	// - Opus 5.5, Sonnet 5.5 and Fable 5 reject `thinking: { type: "disabled" }`, so "off" is not offered.
 	if (
 		model.id.includes("opus-4-6") ||
 		model.id.includes("opus-4.6") ||
@@ -672,10 +683,17 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		model.id.includes("opus-4.7") ||
 		model.id.includes("opus-4-8") ||
 		model.id.includes("opus-4.8") ||
+		model.id.includes("opus-5") ||
+		model.id.includes("opus.5") ||
 		model.id.includes("sonnet-5") ||
-		model.id.includes("sonnet.5")
+		model.id.includes("sonnet.5") ||
+		model.id.includes("haiku-5") ||
+		model.id.includes("haiku.5")
 	) {
 		mergeThinkingLevelMap(model, { xhigh: "xhigh", max: "max" });
+	}
+	if (/(opus|sonnet)[-.]5[-.]5/.test(model.id)) {
+		mergeThinkingLevelMap(model, { off: null });
 	}
 	if (model.id.includes("fable-5")) {
 		mergeThinkingLevelMap(model, { off: null, xhigh: "xhigh", max: "max" });
@@ -1730,9 +1748,11 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
-		// Process Kimi For Coding models
-		if (data["kimi-for-coding"]?.models) {
-			const kimiModels = data["kimi-for-coding"].models as Record<string, ModelsDevModel>;
+		// Process Kimi For Coding models. models.dev renamed the provider to `kimi-code-plan-global`
+		// and moved it to api.kimi.ai; lunR keeps its existing endpoint and transport.
+		const kimiProvider = data["kimi-for-coding"] ?? data["kimi-code-plan-global"];
+		if (kimiProvider?.models) {
+			const kimiModels = kimiProvider.models as Record<string, ModelsDevModel>;
 			const hasCanonicalModel = Object.prototype.hasOwnProperty.call(kimiModels, "kimi-for-coding");
 
 			const kimiAliases = new Set(["k2p5", "k2p6"]);
@@ -1743,6 +1763,8 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				// models.dev may expose versioned aliases (e.g. k2p5/k2p6).
 				// Normalize aliases to the canonical model id and drop duplicates when canonical exists.
 				if (kimiAliases.has(modelId) && hasCanonicalModel) continue;
+				// K3.1 is listed only for api.kimi.ai and has not been checked against lunR's endpoint.
+				if (modelId.startsWith("k3.1")) continue;
 
 				const normalizedId = kimiAliases.has(modelId) ? "kimi-for-coding" : modelId;
 				const normalizedName = kimiAliases.has(modelId) ? "Kimi For Coding" : m.name || normalizedId;
