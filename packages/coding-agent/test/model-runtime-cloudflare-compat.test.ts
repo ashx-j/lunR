@@ -1,3 +1,4 @@
+import type { Model } from "@earendil-works/pi-ai";
 import { complete, resetApiProviders } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -42,6 +43,20 @@ vi.mock("openai", () => {
 	return { default: FakeOpenAI };
 });
 
+/** A Workers AI model behind the AI Gateway /compat endpoint, which the catalog may not list today. */
+const workersAiGatewayModel: Model<"openai-completions"> = {
+	id: "workers-ai/@cf/moonshotai/kimi-k2.5",
+	name: "Kimi K2.5",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 262144,
+	maxTokens: 32768,
+};
+
 async function createCloudflareRuntime(): Promise<{ modelRuntime: ModelRuntime; modelRegistry: ModelRegistry }> {
 	const authStorage = AuthStorage.inMemory();
 	await authStorage.modify("cloudflare-ai-gateway", async () => ({
@@ -59,11 +74,8 @@ async function createCloudflareRuntime(): Promise<{ modelRuntime: ModelRuntime; 
 describe("ModelRegistry Cloudflare compat streaming", () => {
 	it("materializes the Cloudflare endpoint through ModelRuntime streaming", async () => {
 		const { modelRuntime } = await createCloudflareRuntime();
-		const model = modelRuntime.getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.5");
-		expect(model).toBeDefined();
-
 		resetApiProviders();
-		await modelRuntime.completeSimple(model!, { messages: [] });
+		await modelRuntime.completeSimple(workersAiGatewayModel, { messages: [] });
 
 		const clientOptions = openAIState.clientOptions as {
 			baseURL?: string;
@@ -75,15 +87,12 @@ describe("ModelRegistry Cloudflare compat streaming", () => {
 
 	it("materializes the Cloudflare endpoint after extension-style auth resolution", async () => {
 		const { modelRegistry } = await createCloudflareRuntime();
-		const model = modelRegistry.find("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.5");
-		expect(model).toBeDefined();
-
 		resetApiProviders();
-		const auth = await modelRegistry.getApiKeyAndHeaders(model!);
+		const auth = await modelRegistry.getApiKeyAndHeaders(workersAiGatewayModel);
 		expect(auth.ok).toBe(true);
 		if (!auth.ok) throw new Error(auth.error);
 
-		await complete(model!, { messages: [] }, auth);
+		await complete(workersAiGatewayModel, { messages: [] }, auth);
 
 		const clientOptions = openAIState.clientOptions as {
 			baseURL?: string;

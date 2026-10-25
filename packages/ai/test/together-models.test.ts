@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { getModel } from "../src/compat.ts";
+import { MODELS_DEV_SOURCES } from "../scripts/catalog-providers.ts";
+import { type ModelsDevModel, modelFromModelsDev } from "../src/catalog/models-dev.ts";
+import { getModels } from "../src/compat.ts";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.ts";
 
 const originalTogetherApiKey = process.env.TOGETHER_API_KEY;
@@ -13,60 +15,48 @@ afterEach(() => {
 });
 
 describe("Together models", () => {
-	it("registers the default Kimi K2.6 model via OpenAI-compatible Chat Completions API", () => {
-		const model = getModel("together", "moonshotai/Kimi-K2.6");
+	const together = MODELS_DEV_SOURCES.find((source) => source.provider === "together")!;
+	const build = (row: ModelsDevModel) => {
+		const route = together.route!("model", row)!;
+		return modelFromModelsDev("model", row, {
+			provider: "together",
+			api: together.api,
+			baseUrl: together.baseUrl,
+			compat: route.compat,
+		});
+	};
 
-		expect(model).toBeDefined();
-		expect(model.api).toBe("openai-completions");
-		expect(model.provider).toBe("together");
-		expect(model.baseUrl).toBe("https://api.together.ai/v1");
-		expect(model.reasoning).toBe(true);
-		expect(model.thinkingLevelMap).toEqual({ minimal: null, low: null, medium: null });
-		expect(model.input).toEqual(["text", "image"]);
-		expect(model.contextWindow).toBe(262144);
-		expect(model.maxTokens).toBe(131000);
-		expect(model.cost).toEqual({
-			input: 1.2,
-			output: 4.5,
-			cacheRead: 0.2,
-			cacheWrite: 0,
-		});
-		expect(model.compat).toEqual({
-			supportsStore: false,
-			supportsDeveloperRole: false,
-			supportsReasoningEffort: false,
-			maxTokensField: "max_tokens",
-			thinkingFormat: "together",
-			supportsStrictMode: false,
-			supportsLongCacheRetention: false,
-		});
+	it("serves catalog models through Together's chat completions endpoint", () => {
+		const models = getModels("together");
+		expect(models.length).toBeGreaterThan(0);
+		for (const model of models) {
+			expect(model.api).toBe("openai-completions");
+			expect(model.baseUrl).toBe("https://api.together.ai/v1");
+		}
 	});
 
 	it("models Together reasoning controls from the Together API surface", () => {
-		const gptOss = getModel("together", "openai/gpt-oss-120b");
-		expect(gptOss.thinkingLevelMap).toEqual({ off: null, minimal: null });
-		expect(gptOss.compat).toMatchObject({
-			supportsReasoningEffort: true,
-			thinkingFormat: "openai",
+		const effort = build({
+			reasoning: true,
+			reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
 		});
+		expect(effort.thinkingLevelMap).toEqual({ off: null, minimal: null });
+		expect(effort.compat).toMatchObject({ supportsReasoningEffort: true, thinkingFormat: "openai" });
 
-		const deepSeekV4 = getModel("together", "deepseek-ai/DeepSeek-V4-Pro");
-		expect(deepSeekV4.thinkingLevelMap).toEqual({
-			minimal: null,
-			low: null,
-			medium: null,
-			high: "high",
-			xhigh: null,
-		});
-		expect(deepSeekV4.compat).toMatchObject({
-			supportsReasoningEffort: true,
-			thinkingFormat: "together",
-		});
+		const toggle = build({ reasoning: true, reasoning_options: [{ type: "toggle" }] });
+		expect(toggle.thinkingLevelMap).toEqual({ minimal: null, low: null, medium: null });
+		expect(toggle.compat).toMatchObject({ supportsReasoningEffort: false, thinkingFormat: "together" });
 
-		const minimax = getModel("together", "MiniMaxAI/MiniMax-M2.7");
-		expect(minimax.thinkingLevelMap).toEqual({ off: null, minimal: null, low: null, medium: null });
-		expect(minimax.compat?.thinkingFormat).toBeUndefined();
-		expect(minimax.compat?.supportsReasoningEffort).toBe(false);
+		const both = build({
+			reasoning: true,
+			reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["high", "max"] }],
+		});
+		expect(both.compat).toMatchObject({ supportsReasoningEffort: true, thinkingFormat: "together" });
+
+		// Always reasons: neither reasoning field is sent.
+		const always = build({ reasoning: true, reasoning_options: [] });
+		expect(always.thinkingLevelMap).toEqual({ off: null, minimal: null, low: null, medium: null });
+		expect(always.compat).toMatchObject({ supportsReasoningEffort: false, thinkingFormat: "openai" });
 	});
 
 	it("resolves TOGETHER_API_KEY from the environment", () => {

@@ -1,7 +1,9 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.ts";
+import { applyCatalogRules } from "../src/catalog/rules.ts";
 import { getModel, stream, streamSimple } from "../src/compat.ts";
+import { getSupportedThinkingLevels } from "../src/models.ts";
 import type { AssistantMessage, Model, SimpleStreamOptions, Tool, ToolResultMessage } from "../src/types.ts";
 
 const mockState = vi.hoisted(() => ({
@@ -103,6 +105,11 @@ async function captureSimpleParams(
 	return (payload ?? mockState.lastParams) as CapturedParams;
 }
 
+/** GLM-4.5 has left the z.ai catalog; the rule that turns off its tool_stream still applies to it. */
+function glm45Air() {
+	return applyCatalogRules({ ...getModel("zai", "glm-5.3")!, id: "glm-4.5-air" })!;
+}
+
 describe("openai-completions tool_choice", () => {
 	beforeEach(() => {
 		mockState.lastParams = undefined;
@@ -196,7 +203,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("maps groq qwen3 reasoning levels to default reasoning_effort", async () => {
-		const model = getModel("groq", "qwen/qwen3-32b")!;
+		const model = getModel("groq", "qwen/qwen3.6-27b")!;
 		let payload: unknown;
 
 		await streamSimple(
@@ -212,7 +219,7 @@ describe("openai-completions tool_choice", () => {
 			},
 			{
 				apiKey: "test",
-				reasoning: "medium",
+				reasoning: "high",
 				onPayload: (params: unknown) => {
 					payload = params;
 				},
@@ -252,7 +259,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("enables tool_stream for supported z.ai models with tools", async () => {
-		const model = getModel("zai", "glm-5.1")!;
+		const model = getModel("zai", "glm-5.3")!;
 		const tools: Tool[] = [
 			{
 				name: "ping",
@@ -289,24 +296,17 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("stores z.ai tool_stream support in model compat metadata", () => {
-		expect(getModel("zai", "glm-5.1")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.7")?.compat?.zaiToolStream).toBe(true);
+		expect(getModel("zai", "glm-5.3")?.compat?.zaiToolStream).toBe(true);
 		expect(getModel("zai", "glm-4.7")?.compat?.zaiToolStream).toBe(true);
 		expect(getModel("zai", "glm-5-turbo")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.5-air")?.compat?.zaiToolStream).toBeUndefined();
+		expect(glm45Air().compat?.zaiToolStream).toBe(false);
 	});
 
 	it("stores z.ai GLM-5.2 effort metadata", () => {
 		for (const provider of ["zai", "zai-coding-cn"] as const) {
 			const model = getModel(provider, "glm-5.2")!;
 			expect(model.compat?.supportsReasoningEffort).toBe(true);
-			expect(model.thinkingLevelMap).toEqual({
-				minimal: null,
-				low: "high",
-				medium: "high",
-				high: "high",
-				max: "max",
-			});
+			expect(getSupportedThinkingLevels(model)).toEqual(["off", "high", "max"]);
 		}
 	});
 
@@ -437,7 +437,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits tool_stream for unsupported z.ai models", async () => {
-		const model = getModel("zai", "glm-4.5-air")!;
+		const model = glm45Air();
 		const tools: Tool[] = [
 			{
 				name: "ping",
@@ -474,7 +474,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("respects explicit z.ai tool_stream compat override", async () => {
-		const baseModel = getModel("zai", "glm-4.5-air")!;
+		const baseModel = glm45Air();
 		const model = {
 			...baseModel,
 			compat: {
@@ -518,7 +518,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits tool_stream when no tools are provided", async () => {
-		const model = getModel("zai", "glm-5.1")!;
+		const model = getModel("zai", "glm-5.3")!;
 		let payload: unknown;
 
 		await streamSimple(
@@ -560,7 +560,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 
-		const model = getModel("zai", "glm-5.1")!;
+		const model = getModel("zai", "glm-5.3")!;
 		const response = await streamSimple(
 			model,
 			{
@@ -1522,7 +1522,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("uses OpenRouter reasoning object instead of reasoning_effort", async () => {
-		const model = getModel("openrouter", "deepseek/deepseek-r1")!;
+		const model = getModel("openrouter", "deepseek/deepseek-v4-pro")!;
 		let payload: unknown;
 
 		await streamSimple(

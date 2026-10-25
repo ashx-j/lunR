@@ -111,6 +111,12 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	filterModels?(models: readonly Model<TApi>[], credential: Credential | undefined): readonly Model<TApi>[];
 
+	/**
+	 * Multi-protocol providers: whether this provider can stream a model on `api`, whatever its
+	 * catalog lists today. Undefined for single-protocol providers.
+	 */
+	supportsApi?(api: Api): boolean;
+
 	stream<T extends TApi>(
 		model: Model<T>,
 		context: Context,
@@ -631,6 +637,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 				}
 			: undefined,
 		filterModels: input.filterModels,
+		supportsApi: byApi ? (api) => byApi[api] !== undefined : undefined,
 		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),

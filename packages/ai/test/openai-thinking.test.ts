@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { getModel, getModels, getSupportedThinkingLevels } from "../src/compat.ts";
+import { getModel, getSupportedThinkingLevels } from "../src/compat.ts";
 import {
 	parseOpenAiGptVersion,
 	supportsOpenAiMax,
@@ -92,25 +92,12 @@ describe("GPT-6 Astra catalogs", () => {
 		for (const provider of ["openai", "openai-codex"] as const) {
 			const model = getModel(provider, "gpt-6-astra");
 			expect(model).toBeDefined();
-			expect(model?.name).toBe("GPT-6 Astra");
 			expect(model?.reasoning).toBe(true);
-			// OpenAI API advertises 1.05M; Codex OAuth's default context_window is 272k.
-			expect(model?.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
+			// The OpenAI API serves 1.05M but bills more above 272k, so the catalog starts in the base
+			// price tier; Codex OAuth's default context_window is 272k too.
+			expect(model?.contextWindow).toBe(272000);
 			expect(getSupportedThinkingLevels(model!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		}
-	});
-
-	it("keeps every baked Codex model on its audited default window", () => {
-		expect(Object.fromEntries(getModels("openai-codex").map((model) => [model.id, model.contextWindow]))).toEqual({
-			"gpt-5.3-codex-spark": 128000,
-			"gpt-5.4": 272000,
-			"gpt-5.4-mini": 272000,
-			"gpt-5.5": 272000,
-			"gpt-5.6-luna": 272000,
-			"gpt-5.6-sol": 272000,
-			"gpt-5.6-terra": 272000,
-			"gpt-6-astra": 272000,
-		});
 	});
 
 	it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
@@ -126,8 +113,9 @@ describe("GPT-6 Astra catalogs", () => {
 			const model = loadCatalogProvider(provider)["gpt-6-astra"];
 			expect(model).toBeDefined();
 			expect(model.provider).toBe(provider);
-			// Codex's default conversation limit is not the OpenAI API's maximum window.
-			expect(model.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
+			// Codex's default conversation limit and the OpenAI API's base price tier are 272k; Azure bills
+			// the full window at one rate.
+			expect(model.contextWindow).toBe(provider === "azure-openai-responses" ? 1050000 : 272000);
 			expect(model.maxTokens).toBe(128000);
 			if (provider !== "azure-openai-responses") {
 				expect(model.compat).toMatchObject({ supportsToolSearch: true });

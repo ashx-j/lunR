@@ -6,6 +6,13 @@ Routine catalog updates use HTTP requests and deterministic TypeScript normaliza
 
 The public generator combines models.dev, OpenRouter, Vercel, NVIDIA, OpenCode Zen/Go, and OpenAI's published Codex metadata. Codex model IDs come from that upstream document, not a handwritten list.
 
+Every tool-capable models.dev model of a shipped provider becomes a catalog row, so a new model appears in the next hourly publication after models.dev lists it. Model facts come from data:
+
+- Limits, prices (including long-context price tiers), image input and thinking levels come from the model's models.dev row. A gateway row that leaves a capability out takes it from the lab's own row (`canonical_model_id`), and a temperature rejection on either row holds.
+- Thinking levels follow `reasoning_options`. A level the model does not list is hidden; effort `none` or a toggle allows "off". Claude models with effort `max` use adaptive thinking.
+- `packages/ai/scripts/catalog-providers.ts` says which models.dev providers ship and how lunR reaches each one (endpoint, transport, provider-wide request settings).
+- `packages/ai/src/catalog/rules.ts` patches the few facts the sources get wrong. Each rule names its reason, and a rule may only drop a model when it says why.
+
 At runtime, supported providers also expose live discovery. Codex uses the authenticated account-specific `/codex/models` endpoint, including its client-version query and account header. The client version is resolved from official npm release metadata; only JSON metadata is fetched, never package code. If that lookup fails, discovery uses its last successful version or the bundled fallback.
 
 Provider-supplied capability fields override older published metadata for the same model. Missing fields use existing exact-model metadata or conservative defaults; unknown prices are marked unavailable in the picker. Explicit `models.json` and extension model configuration are applied last. API-specific transport compatibility remains code-owned.
@@ -22,7 +29,7 @@ Live caches are scoped to provider, endpoint, and credential/account identity us
 
 The hourly `publish-model-catalog.yml` workflow validates sources and publication contracts, then publishes data directly to the dedicated `model-catalog` branch. Application code still goes through normal review. Each publication has an immutable content-addressed snapshot, per-shard checksums, source fetch timestamps/status, and a manifest. Clients fetch the manifest and only the shards for providers with stored credentials; the old master-branch index remains a fallback during migration. Custom catalog mirrors retain the legacy index/shard format.
 
-Source requests have bounded retries and a last-good cache. Invalid schemas and suspicious drops greater than 25% for a source/provider previously containing at least ten models reuse cached data and appear in the workflow summary/manifest. Other sources can still update. A first run without a valid source cache fails closed. The final bundle must contain at least 500 models and include Anthropic, OpenAI, Codex, and OpenRouter, with valid limits, inputs, and prices.
+Source requests have bounded retries and a last-good cache. An invalid schema reuses the source's cached data. A provider that drops more than 25% of at least ten models keeps its cached models while the rest of the source updates; a flat model list that shrinks that much falls back as a whole. Both appear in the workflow summary and the manifest's `sources[]` (`cached` status or a `quarantined` list). Other sources can still update. A first run without a valid source cache fails closed. The final bundle must contain at least 500 models and include Anthropic, OpenAI, Codex, and OpenRouter, with valid limits, inputs, and prices.
 
 For an upstream outage, inspect the workflow summary and manifest source status; the timestamps describe when data was actually fetched. For a legitimate large removal caught by the guard, review the upstream change before invalidating that source's last-good Actions cache. New provider protocols or incompatible capability schemas still require adapter work; discovery cannot grant access an account does not have.
 

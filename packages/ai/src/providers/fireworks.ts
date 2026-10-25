@@ -5,7 +5,7 @@ import { createProvider, type Provider } from "../models.ts";
 import { FIREWORKS_MODELS } from "./fireworks.models.ts";
 
 export function fireworksProvider(): Provider<"anthropic-messages" | "openai-completions"> {
-	return createProvider({
+	return createProvider<"anthropic-messages" | "openai-completions">({
 		id: "fireworks",
 		name: "Fireworks",
 		baseUrl: "https://api.fireworks.ai/inference",

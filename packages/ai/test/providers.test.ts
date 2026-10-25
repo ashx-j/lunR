@@ -44,18 +44,6 @@ describe("builtin providers", () => {
 		}
 	});
 
-	it("uses official Kimi K3 pricing for Moonshot providers", () => {
-		const models = builtinModels();
-		for (const provider of ["moonshotai", "moonshotai-cn"]) {
-			expect(models.getModel(provider, "kimi-k3")?.cost).toEqual({
-				input: 3,
-				output: 15,
-				cacheRead: 0.3,
-				cacheWrite: 0,
-			});
-		}
-	});
-
 	it("rejects ambient Anthropic OAuth tokens while preserving real API keys", async () => {
 		const oauth = createModels({ authContext: fakeAuthContext({ ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-old" }) });
 		oauth.setProvider(anthropicProvider());
