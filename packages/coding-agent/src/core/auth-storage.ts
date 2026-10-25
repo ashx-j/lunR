@@ -52,6 +52,8 @@ function writeAuthFileAtomic(authPath: string, contents: string): void {
 }
 
 export interface AuthStorageBackend {
+	/** Read the current contents without taking the lock. */
+	read(): string | undefined;
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
 	withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }
@@ -75,6 +77,10 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			writeFileSync(this.authPath, "{}", AUTH_FILE_WRITE_OPTIONS);
 			chmodSync(this.authPath, 0o600);
 		}
+	}
+
+	read(): string | undefined {
+		return existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -177,6 +183,10 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 export class InMemoryAuthStorageBackend implements AuthStorageBackend {
 	private value: string | undefined;
 
+	read(): string | undefined {
+		return this.value;
+	}
+
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
 		const { result, next } = fn(this.value);
 		if (next !== undefined) {
@@ -231,12 +241,12 @@ export class AuthStorage implements CredentialStore {
 	 * Reload credentials from storage.
 	 */
 	reload(): void {
-		let content: string | undefined;
 		try {
-			this.storage.withLock((current) => {
-				content = current;
-				return { result: undefined };
-			});
+			// Lock-free: an OAuth refresh holds the lock for its whole round trip, and a locked read
+			// that gave up left a new process with no credentials. Writes replace the file by rename.
+			const content = this.storage.read();
+			// Windows writes in place, so a reader can catch a truncated file; keep the last snapshot.
+			if (content?.trim() === "") return;
 			this.data = this.parseStorageData(content);
 		} catch {
 			// Preserve the last valid in-memory snapshot.

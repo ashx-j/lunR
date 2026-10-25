@@ -8,6 +8,9 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-25: drop a scoped model when its provider has no credential left (at logout and at startup), but keep bare ids, globs, unregistered providers and project settings, because a stale `provider/model` only printed a warning on every start while the others may still match.
 - 2026-10-25: Claude 5-family rows get adaptive thinking, `xhigh`/`max` and no custom temperature by id match; Opus 5.5 and Sonnet 5.5 also drop "off", because those models reject `budget_tokens`, sampling values and (5.5 Opus/Sonnet) disabled thinking.
 - 2026-10-25: read models.dev `kimi-code-plan-global` when `kimi-for-coding` is missing but keep the api.kimi.com endpoint and skip `k3.1-*`, because the rename moved the listing to api.kimi.ai and K3.1 is untested there.
+- 2026-10-21: read-only bash blocks any word bash expands and any path-qualified command word, because the classifier sees literal words while bash runs the expanded ones.
+- 2026-10-21: `cron resume` retries an interrupted job through whichever process owns the lease, because a gateway-held lease left `cron run` with no process able to run it.
+- 2026-10-21: an abort during tools ends the run with aborted results for unstarted calls, matching an abort during streaming, because queued calls ran with an aborted signal and a new request followed.
 - 2026-10-20: cap the number of `@ts-nocheck` files with a limit that may only go down, so new unchecked files fail `npm run check` while the vendored backlog shrinks.
 - 2026-10-20: help describes `--provider` as narrowing `--model`, not as having a default, because the code never falls back to a saved or built-in provider for that flag.
 - 2026-10-20: group `/settings` into sections and move nine rarely changed rows into an Advanced submenu, because a flat 53-row list was hard to scan; descriptions and handlers stayed the same.

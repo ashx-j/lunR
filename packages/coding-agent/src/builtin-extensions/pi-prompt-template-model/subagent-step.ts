@@ -330,6 +330,7 @@ async function requestDelegatedRun(
 	ctx: ExtensionContext,
 	request: DelegatedSubagentRequest,
 	signal?: AbortSignal,
+	widgetModel?: string,
 ): Promise<DelegatedSubagentResponse> {
 	return await new Promise((resolve, reject) => {
 		const requestLabel = request.tasks && request.tasks.length > 0 ? `parallel(${request.tasks.length})` : request.agent;
@@ -382,7 +383,7 @@ async function requestDelegatedRun(
 			widgetSet = true;
 			ctx.ui.setWidget(
 				DELEGATED_WIDGET_KEY,
-				(_tui, theme) => createDelegatedProgressWidget(request.requestId, request.agent, request.context, request.task, request.tasks, theme, preparedTasks[0]?.model),
+				(_tui, theme) => createDelegatedProgressWidget(request.requestId, request.agent, request.context, request.task, request.tasks, theme, widgetModel),
 				{ placement: "aboveEditor" },
 			);
 			// Force TUI repaints every second so the elapsed timer ticks during idle periods
@@ -595,7 +596,7 @@ export async function executeSubagentPromptStep(options: DelegatedPromptOptions)
 	);
 
 	try {
-		const response = await requestDelegatedRun(pi, ctx, request, signal);
+		const response = await requestDelegatedRun(pi, ctx, request, signal, preparedTasks[0]?.model);
 		if (response.isError) {
 			throw new Error(
 				`Delegated prompt execution failed: ${response.errorText || "unknown delegated error"}`,

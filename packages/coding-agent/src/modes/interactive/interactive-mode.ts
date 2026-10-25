@@ -5777,6 +5777,10 @@ export class InteractiveMode {
 
 	private showTreeSelector(initialSelectedId?: string): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /tree.");
+			return;
+		}
 		const tree = this.sessionManager.getTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();

@@ -175,7 +175,9 @@ export class ProcessTerminal implements Terminal {
 	 * to handle the case where the response arrives split across multiple events.
 	 */
 	private setupStdinBuffer(): void {
-		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
+		// A lone ESC is the Escape key after 10ms; a started sequence (arrow, mouse report)
+		// gets 40ms so a slow link does not split it into Escape plus typed text.
+		this.stdinBuffer = new StdinBuffer({ timeout: 10, partialSequenceTimeout: 40 });
 
 		// Forward individual sequences to the input handler
 		this.stdinBuffer.on("data", (sequence) => {

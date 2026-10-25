@@ -501,10 +501,14 @@ describe("mobile UI delivery", () => {
 		const saved = JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"));
 		expect(saved).toMatchObject([{ text: "bad", failed: true }]);
 		await flushGatewayOutbox();
-		expect(failing.send).toHaveBeenCalledTimes(1);
+		// The failed send plus one notice explaining it.
+		expect(failing.send).toHaveBeenCalledTimes(2);
+		expect(failing.send).toHaveBeenLastCalledWith("1", "⚠ Part of a reply could not be delivered.", {
+			threadId: undefined,
+		});
 		vi.mocked(failing.send).mockResolvedValue({ success: true });
 		await queueGatewayText(key, source, failing, "later result", { kind: "result", cfg });
-		expect(failing.send).toHaveBeenCalledTimes(2);
+		expect(failing.send).toHaveBeenCalledTimes(3);
 	});
 
 	it("stops retrying after five temporary failures and retains the batch for diagnosis", async () => {
@@ -519,12 +523,13 @@ describe("mobile UI delivery", () => {
 				now.mockReturnValue(pending.nextAttempt + 1);
 				await flushGatewayOutbox();
 			}
-			expect(transport.send).toHaveBeenCalledTimes(5);
+			// Five attempts plus one failure notice.
+			expect(transport.send).toHaveBeenCalledTimes(6);
 			expect(JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"))).toMatchObject([
 				{ failed: true, attempts: 5 },
 			]);
 			await flushGatewayOutbox();
-			expect(transport.send).toHaveBeenCalledTimes(5);
+			expect(transport.send).toHaveBeenCalledTimes(6);
 		} finally {
 			now.mockRestore();
 		}

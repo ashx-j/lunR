@@ -92,15 +92,20 @@ it("external pause and deletion invalidate a previously collected occurrence", a
 	expect(await claimJobRun(job.id, new Date())).toBeNull();
 });
 
-it("an interrupted started occurrence pauses instead of replaying", async () => {
+it("an interrupted started occurrence pauses instead of replaying until resumed", async () => {
 	const job = await createJob({ prompt: "fake", schedule: "30m" });
 	await updateJob(job.id, { nextRunAt: new Date().toISOString() });
 	await claimJobRun(job.id, new Date());
 	await worker("tick");
 	expect(getJob(job.id).state).toBe("paused");
 	expect(getJob(job.id).lastError).toContain("unknown effects");
-	await expect(resumeJob(job.id)).rejects.toThrow("deliberate retry");
 	expect(existsSync(join(dir, "runs.txt"))).toBe(false);
+	// Resume is the deliberate retry; any lease owner then runs the interrupted one-shot once.
+	await resumeJob(job.id);
+	expect(getJob(job.id).interrupted).toBeUndefined();
+	await worker("tick");
+	expect(readFileSync(join(dir, "runs.txt"), "utf8").trim().split("\n")).toEqual([job.id]);
+	expect(getJob(job.id).state).toBe("completed");
 });
 
 it("busy admission leaves the occurrence due without counting or delivering it", async () => {
@@ -165,8 +170,18 @@ it("stop cancels and settles the first job, skips later due jobs and releases ow
 	await release!();
 });
 
+async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!condition()) {
+		if (Date.now() > deadline) throw new Error("condition not met in time");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
 it("an initially empty owner sees later external jobs and rejects another operator's manual run", async () => {
 	const scheduler = startScheduler({ intervalMs: 10, runJob: async () => "ok", deliverResult: async () => {} });
+	// Start the second operator only after the first owns the lease, so they do not race for it.
+	await waitUntil(() => scheduler.isOwner());
 	const other = startScheduler({ intervalMs: 60_000, runJob: async () => "bad", deliverResult: async () => {} });
 	try {
 		await worker("create", "later");
@@ -180,6 +195,27 @@ it("an initially empty owner sees later external jobs and rejects another operat
 	} finally {
 		await other.stop();
 		await scheduler.stop();
+	}
+});
+
+it("a waiting operator takes over after the owner stops and recovers its interrupted claims", async () => {
+	const owner = startScheduler({ intervalMs: 60_000, runJob: async () => "ok", deliverResult: async () => {} });
+	await waitUntil(() => owner.isOwner());
+	const waiting = startScheduler({ intervalMs: 10, runJob: async () => "ok", deliverResult: async () => {} });
+	try {
+		const job = await createJob({ prompt: "fake", schedule: "every 30m" });
+		await updateJob(job.id, { nextRunAt: new Date().toISOString() });
+		// An owner that exits mid-run leaves its durable claim behind.
+		await claimJobRun(job.id, new Date());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(waiting.isOwner()).toBe(false);
+		await owner.stop();
+		await waitUntil(() => waiting.isOwner());
+		expect(getJob(job.id).interrupted).toBe(true);
+		expect(getJob(job.id).activeRun).toBeUndefined();
+	} finally {
+		await waiting.stop();
+		await owner.stop();
 	}
 });
 

@@ -465,6 +465,32 @@ describe("button registry", () => {
 		vi.useRealTimers();
 	});
 
+	it("an expired dialog picker does not tell the user to rerun a command", async () => {
+		vi.useFakeTimers();
+		const adapter = new FakeAdapter();
+		const event = makeEvent("go");
+		await createPicker(adapter, event.source, {
+			kind: "dialog",
+			sessionKey: "k1",
+			invokerId: "u1",
+			items: [{ value: "Approve", label: "Approve" }],
+			title: "Allow this?",
+			async resolve() {
+				return { done: true, text: "done" };
+			},
+		});
+		const messageId = adapter.sent[0].messageId ?? "m1";
+		await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000);
+		const target = adapter.sent[0].buttons?.flat()[0];
+		await handleCallback(
+			{ id: "cb6", chatId: "chat1", messageId, userId: "u1", data: target!.data },
+			makeDeps({ adapter }),
+		);
+		expect(adapter.edits[0].text).toBe("⏱ Expired. The question was cancelled.");
+		expect(adapter.callbackAnswers[0].text).toBe("Expired.");
+		vi.useRealTimers();
+	});
+
 	it("TTL sweeper removes expired entries", () => {
 		vi.useFakeTimers();
 		startButtonSweeper();

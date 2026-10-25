@@ -1036,9 +1036,24 @@ export default function (pi: ExtensionAPI) {
 		return { results, urls };
 	}
 
-	async function openCuratorBrowser(callId: string, pc: PendingCurate, searchesComplete = true): Promise<void> {
+	async function openCuratorBrowser(callId: string, pc: PendingCurate, searchesComplete: boolean, ctx: ExtensionContext): Promise<void> {
 		if (pendingCurates.get(callId) !== pc) return;
 		let handle: CuratorServerHandle | null = null;
+		// lunr: declared before try so the catch below can reach it.
+		const sendCuratorFallbackUpdate = (message: string) => {
+			if (!handle) return;
+			pc.onUpdate?.({
+				content: [{ type: "text", text: `${message}\nOpen manually: ${handle.url}` }],
+				details: {
+					phase: "curator-fallback",
+					progress: searchesComplete ? 1 : 0.5,
+					curatorUrl: handle.url,
+					timeoutSeconds: pc.timeoutSeconds,
+					shortcut: curateKey,
+					browserOpenError: pc.browserOpenError,
+				},
+			});
+		};
 		try {
 			pc.phase = "curating";
 
@@ -1216,20 +1231,6 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (searchesComplete) handle.searchesDone();
 
-			const sendCuratorFallbackUpdate = (message: string) => {
-				pc.onUpdate?.({
-					content: [{ type: "text", text: `${message}\nOpen manually: ${handle.url}` }],
-					details: {
-						phase: "curator-fallback",
-						progress: searchesComplete ? 1 : 0.5,
-						curatorUrl: handle.url,
-						timeoutSeconds: pc.timeoutSeconds,
-						shortcut: curateKey,
-						browserOpenError: pc.browserOpenError,
-					},
-				});
-			};
-
 			pc.onUpdate?.({
 				content: [{ type: "text", text: searchesComplete ? "Waiting for summary approval in browser..." : "Searches streaming to browser..." }],
 				details: {
@@ -1280,7 +1281,7 @@ export default function (pi: ExtensionAPI) {
 			const [callId, pc] = entries[entries.length - 1];
 
 			if (pc.phase === "searching") {
-				pc.browserPromise = openCuratorBrowser(callId, pc, false);
+				pc.browserPromise = openCuratorBrowser(callId, pc, false, ctx);
 				ctx.ui.notify("Opening curator — remaining searches will stream in", "info");
 				return;
 			}
@@ -1464,7 +1465,7 @@ export default function (pi: ExtensionAPI) {
 				const onAbort = () => closeCurator(callId);
 				pendingCurates.set(callId, pc);
 				signal?.addEventListener("abort", onAbort, { once: true });
-				pc.browserPromise = openCuratorBrowser(callId, pc, false);
+				pc.browserPromise = openCuratorBrowser(callId, pc, false, ctx);
 
 				for (let qi = 0; qi < queryList.length; qi++) {
 					if (signal?.aborted || cancelled || searchAbort.signal.aborted) break;
