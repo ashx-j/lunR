@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * PDF Content Extractor
  * 

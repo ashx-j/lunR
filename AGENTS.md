@@ -47,4 +47,4 @@ Feature docs that ship with the package live in `packages/coding-agent/docs/` (s
 - 2026-10-25: catalog rows come from models.dev data for every shipped provider (thinking levels, prices, tiers, limits), with wrong facts in `packages/ai/src/catalog/rules.ts`. A shrunk models.dev provider is quarantined alone instead of freezing the source. The live catalog reaches users through the hourly `model-catalog` publish without a CLI release.
 - 2026-10-25: live discovery reads every logged-in provider's model list (Anthropic and Google included) and resolves new ids with the generator's resolver and the published `facts.json`.
 - 2026-10-25: 167 more models.dev providers ship as generic OpenAI/Anthropic-compatible providers (about 5,100 models in the published catalog, none in the CLI bundle).
-- Untracked locals: `prompts/`, `DESIGN.md`, `LUNR_SYSTEM_INJECTION.md`, `lunR-checklist.md`, `.pi-subagents/`.
+- Untracked locals on the owner's host may include `HANDOFF-*.md`, `LUNR_SYSTEM_INJECTION.md` and `.pi-subagents/`; `prompts/` is tracked.

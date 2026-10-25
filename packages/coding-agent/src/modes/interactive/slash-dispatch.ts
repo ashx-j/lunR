@@ -1,6 +1,6 @@
 /**
- * Builtin slash command dispatch for interactive mode. The submit handler looks up the trimmed text with
- * `findSlashCommandHandler` and runs the match; InteractiveMode supplies its UI and commands through
+ * Builtin slash command dispatch for interactive mode. The submit handler and Alt+Enter pass the trimmed
+ * text to `runSlashCommand`; InteractiveMode supplies its UI and commands through
  * SlashCommandHost. /reclaim and /handoff stay in the submit handler because they run before its
  * detached-session guard.
  */
@@ -51,9 +51,9 @@ export interface SlashCommandHost {
 }
 
 export interface SlashCommandHandler {
-	/** Also matches `/name <args>` (first space). Without it only the bare `/name` matches. */
+	/** Also matches `/name <args>`. Without it only the bare `/name` matches. */
 	readonly takesArgs?: boolean;
-	/** `text` is the trimmed submitted text; each handler parses its own arguments from it. */
+	/** `text` is the trimmed submitted text with one space after the name; each handler parses its own arguments. */
 	run(host: SlashCommandHost, text: string): Promise<void> | void;
 }
 
@@ -333,15 +333,42 @@ export const SLASH_COMMAND_HANDLERS: ReadonlyMap<string, SlashCommandHandler> = 
 	HANDLERS.flatMap((handler) => handler.names.map((name) => [name, handler] as const)),
 );
 
+// The command name ends at the first whitespace character, so a newline or tab after it counts like a space.
+function splitCommandName(text: string): { name: string; hasArgs: boolean } | undefined {
+	if (!text.startsWith("/")) return undefined;
+	const end = text.search(/\s/);
+	return end === -1 ? { name: text.slice(1), hasArgs: false } : { name: text.slice(1, end), hasArgs: true };
+}
+
 /**
  * Returns the handler for trimmed submitted `text`, or undefined when no builtin matches. The name runs
- * from after the `/` to the first space, so `/model x` finds `model` and `/modelx` finds nothing. Text
- * with arguments matches only handlers that take them; `/settings foo` falls through to the
- * unknown-command check and the prompt path.
+ * from after the `/` to the first whitespace character, so `/model x` finds `model` and `/modelx` finds
+ * nothing. Text with arguments matches only handlers that take them; `/settings foo` falls through to
+ * `findArgumentlessSlashCommand`.
  */
 export function findSlashCommandHandler(text: string): SlashCommandHandler | undefined {
-	if (!text.startsWith("/")) return undefined;
-	const spaceIndex = text.indexOf(" ");
-	const handler = SLASH_COMMAND_HANDLERS.get(spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex));
-	return handler && (spaceIndex === -1 || handler.takesArgs) ? handler : undefined;
+	const command = splitCommandName(text);
+	const handler = command && SLASH_COMMAND_HANDLERS.get(command.name);
+	return handler && (!command.hasArgs || handler.takesArgs) ? handler : undefined;
+}
+
+/**
+ * Runs the builtin for trimmed submitted `text` and returns true, or returns false when none matches.
+ * Handlers read arguments after a space, so the whitespace after the name becomes one space first.
+ */
+export async function runSlashCommand(host: SlashCommandHost, text: string): Promise<boolean> {
+	const handler = findSlashCommandHandler(text);
+	if (!handler) return false;
+	await handler.run(host, text.replace(/^(\/\S+)\s/, "$1 "));
+	return true;
+}
+
+/**
+ * Returns the name when `rawText` is a builtin that takes no arguments followed by more text, such as
+ * `/new fix the bug`. The submit chain puts that draft back instead of sending it to the model.
+ */
+export function findArgumentlessSlashCommand(rawText: string): string | undefined {
+	const command = splitCommandName(rawText.trimEnd());
+	const handler = command?.hasArgs ? SLASH_COMMAND_HANDLERS.get(command.name) : undefined;
+	return handler && !handler.takesArgs ? command?.name : undefined;
 }

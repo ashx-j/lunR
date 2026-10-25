@@ -7,6 +7,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { browserEnabledDefault, notifyBrowserEnabledChange } from "./browser/settings.ts";
 import { computerSettingsChanged } from "./computer-use/policy.ts";
+import { globalBridge } from "./global-bridge.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "./pr-watch/types.ts";
@@ -118,23 +119,23 @@ export type PackageSource =
 
 export type ReasoningDisplay = "auto" | "one-line" | "four-lines";
 
-const SUBAGENT_COMMUNICATION_BRIDGE = Symbol.for("@lunr/subagent-communication");
+const subagentCommunicationSlot = globalBridge<SettingsManager>(Symbol.for("@lunr/subagent-communication"));
 
 export function bindSubagentCommunicationSetting(manager: SettingsManager | undefined): void {
-	if (manager) (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE] = manager;
-	else delete (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+	subagentCommunicationSlot.set(manager);
 }
 
 export function subagentCommunicationEnabled(cwd: string, agentDir = getAgentDir()): boolean {
 	const inherited = process.env.PI_SUBAGENT_COMMUNICATION_ENABLED;
 	if (process.env.PI_SUBAGENT_CHILD === "1" && (inherited === "0" || inherited === "1")) return inherited === "1";
-	const active = (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+	const active = subagentCommunicationSlot.get();
 	if (
 		agentDir === getAgentDir() &&
 		active &&
-		typeof (active as SettingsManager).getSubagentCommunicationEnabled === "function"
+		// Another module copy may have stored the manager; check the method rather than the class.
+		typeof active.getSubagentCommunicationEnabled === "function"
 	) {
-		return (active as SettingsManager).getSubagentCommunicationEnabled();
+		return active.getSubagentCommunicationEnabled();
 	}
 	if (inherited === "0" || inherited === "1") return inherited === "1";
 	return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSubagentCommunicationEnabled();

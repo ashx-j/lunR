@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { NothingToCompactError } from "../src/core/agent-session.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 interface CompactionEndEvent {
@@ -106,5 +107,48 @@ describe("InteractiveMode compaction events", () => {
 		);
 		expect(fakeThis.pendingCompactionRender).toBeUndefined();
 		expect(fakeThis.checkShutdownRequested).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("InteractiveMode /compact outcomes", () => {
+	const handleCompactCommand = Reflect.get(InteractiveMode.prototype, "handleCompactCommand") as (
+		this: object,
+		customInstructions?: string,
+	) => Promise<void>;
+
+	function createCompactMode(compact: () => Promise<unknown>, isCompacting = false) {
+		return {
+			session: { compact, subscribe: () => () => {}, isCompacting },
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			clearStatusIndicator: vi.fn(),
+		};
+	}
+
+	test("a session too small to compact gets a dim status, not an error", async () => {
+		const mode = createCompactMode(() => Promise.reject(new NothingToCompactError()));
+		await handleCompactCommand.call(mode);
+		expect(mode.showStatus).toHaveBeenCalledWith("Nothing to compact yet.");
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	test("a repeat /compact that returns the earlier result says so", async () => {
+		const mode = createCompactMode(() => Promise.resolve({ summary: "s", tokensBefore: 1 }));
+		await handleCompactCommand.call(mode, "focus on tests");
+		expect(mode.showStatus).toHaveBeenCalledWith("Already compacted.");
+	});
+
+	test("a /compact while one is running says so instead of joining it", async () => {
+		const compact = vi.fn(() => Promise.resolve({ summary: "s", tokensBefore: 1 }));
+		const mode = createCompactMode(compact, true);
+		await handleCompactCommand.call(mode);
+		expect(compact).not.toHaveBeenCalled();
+		expect(mode.showStatus).toHaveBeenCalledWith("Compaction is already running.");
+	});
+
+	test("an error before compaction starts is shown", async () => {
+		const mode = createCompactMode(() => Promise.reject(new Error("No model selected.")));
+		await handleCompactCommand.call(mode);
+		expect(mode.showError).toHaveBeenCalledWith("No model selected.");
 	});
 });

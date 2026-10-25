@@ -9,8 +9,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type AuthEvent, type AuthPrompt, type Credential, claudeCodeUpdateNote } from "@earendil-works/pi-ai";
 import {
+	type Api,
 	type AssistantMessage,
 	getSupportedThinkingLevels,
 	type ImageContent,
@@ -54,16 +54,17 @@ import {
 	appendDebugLog,
 	CONFIG_DIR_NAME,
 	getAgentDir,
-	getAuthPath,
 	getDebugLogPath,
-	getDocsPath,
 	VERSION,
 } from "../../config.ts";
-import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
+import {
+	type AgentSession,
+	type AgentSessionEvent,
+	NothingToCompactError,
+	parseSkillBlock,
+} from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import { formatClaudeSubscriptionLogoutNote } from "../../core/auth-guidance.ts";
-import type { AutoReviewer } from "../../core/auto-review.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -71,7 +72,6 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
-import { formatCatalogRefreshSummary } from "../../core/catalog-merge.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
 import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
@@ -88,36 +88,21 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
+import { globalBridge } from "../../core/global-bridge.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/model-instructions.ts";
-import {
-	defaultModelPerProvider,
-	findExactModelReferenceMatch,
-	findSignedOutScopePatterns,
-	resolveModelScopeWithDiagnostics,
-} from "../../core/model-resolver.ts";
-import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
-import { nextModeForGoal, registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import {
-	type ApprovalResponse,
-	nextPermissionMode,
-	type PermissionMode,
-	registerApprovalHandler,
-	restorePermissionModeAfterPlan,
-} from "../../core/permissions.ts";
+import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
+import { type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
-import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import {
 	captureTreeChanges,
 	clearRollback,
 	commitRollbackTurn,
-	disableRollbackForSession,
-	enableRollbackForSession,
 	getRollbackRecoveryBlockReason,
 	getRollbackTargetUserId,
 	initRollback,
@@ -143,8 +128,6 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
-// lunr: multi-subscription API-key pools (stage 3 UI).
-import type { SubEntry } from "../../core/subscriptions.ts";
 import { time } from "../../core/timings.ts";
 import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -157,7 +140,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { processImage } from "../../utils/image-process.ts";
-import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
@@ -176,23 +158,13 @@ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { InjectedPromptMessageComponent } from "./components/injected-prompt-message.ts";
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
-import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
-import {
-	type AuthSelectorProvider,
-	formatAuthSelectorProviderType,
-	OAuthSelectorComponent,
-} from "./components/oauth-selector.ts";
+import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
 import { buildOnboardingOptions, OnboardingComponent, shouldShowOnboarding } from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
-import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
-import {
-	formatSubscriptionExhaustedUntil,
-	SettingsSelectorComponent,
-	type SubscriptionRowInfo,
-} from "./components/settings-selector.ts";
+import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	BranchSummaryStatusIndicator,
@@ -215,19 +187,38 @@ import {
 	replaceExtensionWidget,
 	widgetSeparatorNeedsSpacer,
 } from "./extension-widget-order.ts";
+import { type LoadedResourcesOptions, showLoadedResources } from "./loaded-resources.ts";
 import {
 	getLoginProviderOptions,
+	isUnknownModel,
 	type LoginFlowHost,
 	showCustomProviderWizard,
-	showLoginAuthTypeSelector,
 	showLoginProviderSelector,
+	showOAuthSelector,
 } from "./login-flow.ts";
+import {
+	countSubscriptions,
+	getModelCandidates,
+	handleModelCommand,
+	handleRefreshCommand,
+	listSubscriptionRows,
+	type ModelCommandHost,
+	showModelSelector,
+	showModelsSelector,
+} from "./model-commands.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
-import { findSlashCommandHandler, type SlashCommandHost } from "./slash-dispatch.ts";
+import {
+	findArgumentlessSlashCommand,
+	findSlashCommandHandler,
+	runSlashCommand,
+	type SlashCommandHost,
+} from "./slash-dispatch.ts";
 import {
 	buildHelpLines,
 	findUnknownSlashCommand,
+	formatArgumentlessSlashCommandStatus,
 	formatUnknownSlashCommandStatus,
 	INTERACTIVE_BUILTIN_COMMAND_NAMES,
 	suggestSlashCommands,
@@ -250,7 +241,6 @@ import {
 	setRegisteredThemes,
 	stopThemeWatcher,
 	Theme,
-	type ThemeColor,
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
@@ -262,27 +252,6 @@ interface Expandable {
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
-}
-
-class ExpandableText extends Text implements Expandable {
-	private readonly getCollapsedText: () => string;
-	private readonly getExpandedText: () => string;
-
-	constructor(
-		getCollapsedText: () => string,
-		getExpandedText: () => string,
-		expanded = false,
-		paddingX = 0,
-		paddingY = 0,
-	) {
-		super(expanded ? getExpandedText() : getCollapsedText(), paddingX, paddingY);
-		this.getCollapsedText = getCollapsedText;
-		this.getExpandedText = getExpandedText;
-	}
-
-	setExpanded(expanded: boolean): void {
-		this.setText(expanded ? this.getExpandedText() : this.getCollapsedText());
-	}
 }
 
 type CompactionQueuedMessage = {
@@ -329,16 +298,13 @@ const INIT_EXISTING_FILE_INSTRUCTIONS = {
 		"An AGENTS.md already exists — keep the existing content and only add missing sections; do not rewrite what is already there.",
 } as const;
 
+// lunr: extensions listen here for tool expansion changes (lunr-todos widget).
+const toolsExpandedChangedBridge = globalBridge<(expanded: boolean) => void>(
+	Symbol.for("@lunr/tools-expanded-changed"),
+);
+
 function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
-}
-
-function isUnknownModel(model: Model<any> | undefined): boolean {
-	return !!model && model.provider === "unknown" && model.id === "unknown" && model.api === "unknown";
-}
-
-function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
-	return providerId in defaultModelPerProvider;
 }
 
 type LoginProviderCompletionOption = {
@@ -517,13 +483,6 @@ export class InteractiveMode {
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
 
-	// Restore the previous mode after approving a plan or leaving read-only via /plan.
-	private previousPermissionMode: PermissionMode | undefined;
-
-	// lunr: mode in effect before `/goal` forced session auto. Dedicated so it cannot
-	// collide with plan restore.
-	private preGoalPermissionMode: PermissionMode | undefined;
-
 	// lunr: in-memory redo stack for /undo and /redo (leaf entry ids; cleared on any
 	// new user message, never persisted — undone turns reappear after restart)
 	private redoStack: string[] = [];
@@ -585,6 +544,9 @@ export class InteractiveMode {
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
 	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
 	private readonly slashCommandHost: SlashCommandHost = this.createSlashCommandHost();
+	// Owns permission mode changes and their history; see permission-controller.ts.
+	private readonly permissions = new PermissionModeController(this.createPermissionControllerHost());
+	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -608,8 +570,7 @@ export class InteractiveMode {
 			this.stopPlanUsagePolling();
 			this.resetExtensionUI();
 			// Reset UI mode history before binding the replacement session.
-			this.previousPermissionMode = undefined;
-			this.preGoalPermissionMode = undefined;
+			this.permissions.resetHistory();
 			// lunr: clear process registry and rollback state
 			processRegistry.clearRegistry();
 			// lunr: on fork (/rollback, tree navigation) the snapshots SURVIVE —
@@ -625,7 +586,7 @@ export class InteractiveMode {
 			// lunr: re-init rollback for the new session id + re-apply auto force-enable.
 			initRollback(this.settingsManager, this.sessionManager.getSessionId());
 			const mode = this.session.permissionMode;
-			this.syncPermissionModeEffects(mode);
+			this.permissions.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
 		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
@@ -635,8 +596,8 @@ export class InteractiveMode {
 		// lunr: register the permission-mode footer bridge (provider-side: InteractiveMode owns the state).
 		registerPermissionModeBridge(() => this.session.permissionMode);
 		registerPermissionModeControlBridge({
-			enterGoalAuto: () => this.enterGoalAuto(),
-			leaveGoalAuto: () => this.leaveGoalAuto(),
+			enterGoalAuto: () => this.permissions.enterGoalAuto(),
+			leaveGoalAuto: () => this.permissions.leaveGoalAuto(),
 		});
 		this.headerContainer = new Container();
 		if (options.startupView) {
@@ -722,21 +683,6 @@ export class InteractiveMode {
 			return description;
 		}
 		return description ? `[${sourceTag}] ${description}` : `[${sourceTag}]`;
-	}
-
-	private getBuiltInCommandConflictDiagnostics(extensionRunner: ExtensionRunner): ResourceDiagnostic[] {
-		const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
-		return extensionRunner
-			.getRegisteredCommands()
-			.filter((command) => builtinNames.has(command.name))
-			.map((command) => ({
-				type: "warning" as const,
-				message:
-					command.invocationName === command.name
-						? `Extension command '/${command.name}' conflicts with built-in interactive command. Skipping in autocomplete.`
-						: `Extension command '/${command.name}' conflicts with built-in interactive command. Available as '/${command.invocationName}'.`,
-				path: command.sourceInfo.path,
-			}));
 	}
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
@@ -910,21 +856,21 @@ export class InteractiveMode {
 				const resp = await this.showPlanApprovalDialog(req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
-					const target = this.restoreTargetAfterPlan();
+					const target = this.permissions.restoreTargetAfterPlan();
 					// The plan is approved either way; cancelling the reviewer picker must not leave it blocked in read.
-					this.applyPermissionMode(target === "read-only" ? "yolo" : target, { cancelMode: "yolo" });
+					this.permissions.applyPermissionMode(target === "read-only" ? "yolo" : target, { cancelMode: "yolo" });
 				}
 				return resp;
 			}
-			if (req.kind === "auto-review") return this.showAutoReviewDecisionDialog(req);
+			if (req.kind === "auto-review") return this.permissions.showAutoReviewDecisionDialog(req);
 			return "reject";
 		});
 
 		// lunr: initialize rollback service for this session.
 		initRollback(this.settingsManager, this.sessionManager.getSessionId());
 		setRollbackWarningHandler((msg) => this.showStatus(msg));
-		this.syncPermissionModeEffects(this.session.permissionMode);
-		this.warnIfAutoHasNoReviewer();
+		this.permissions.syncPermissionModeEffects(this.session.permissionMode);
+		this.permissions.warnIfAutoHasNoReviewer();
 
 		await this.themeController.applyFromSettings();
 
@@ -1075,9 +1021,11 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Update terminal title with session name and cwd.
+	 * Update terminal title with session name and cwd. Skipped once shutdown starts: teardown
+	 * (session_shutdown, UI reset) runs after the TUI stops, and a write then would outlive lunR.
 	 */
 	private updateTerminalTitle(): void {
+		if (this.isShuttingDown) return;
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
@@ -1147,9 +1095,17 @@ export class InteractiveMode {
 		// Main interactive loop
 		while (true) {
 			const userInput = await this.getUserInput();
+			let accepted = false;
 			try {
-				await this.promptAfterDeferredBuiltins(userInput.text, { images: userInput.images });
+				await this.promptAfterDeferredBuiltins(userInput.text, {
+					images: userInput.images,
+					preflightResult: (success) => {
+						accepted = success;
+					},
+				});
 			} catch (error: unknown) {
+				// Submit cleared the editor; a message the session never took (no API key, for example) goes back.
+				if (!accepted && !this.editor.getText()) this.restoreEditorDraft(userInput.text, userInput.images);
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
 			}
@@ -1159,12 +1115,14 @@ export class InteractiveMode {
 	/**
 	 * Startup model guidance. With no saved credential and no usable model, shows onboarding once the
 	 * deferred builtins have attached (so the /login provider list is complete); otherwise shows the
-	 * model fallback warning, if any. Escape or Skip closes onboarding for this launch only.
+	 * model fallback warning, or a warning when the selected model has no key. Escape or Skip closes
+	 * onboarding for this launch only.
 	 */
 	private async showModelSetupGuidance(modelFallbackMessage: string | undefined): Promise<void> {
 		const credentials = await this.session.modelRuntime.listCredentials();
 		if (!shouldShowOnboarding(credentials, this.session.model)) {
 			if (modelFallbackMessage) this.showWarning(modelFallbackMessage);
+			else await this.warnIfModelHasNoAuth();
 			return;
 		}
 		await this.waitForDeferredBuiltins();
@@ -1172,6 +1130,17 @@ export class InteractiveMode {
 		// Leave a selector or dialog the user opened in the meantime (such as /login) alone.
 		if (this.editorContainer.children[0] !== this.editor) return;
 		this.showOnboarding();
+	}
+
+	/** Warns once at startup when the selected model's provider has no key or login, before a message fails. */
+	private async warnIfModelHasNoAuth(): Promise<void> {
+		const model = this.session.model;
+		if (!model || isUnknownModel(model)) return;
+		const runtime = this.session.modelRuntime;
+		if (runtime.hasConfiguredAuth(model.provider) || (await runtime.checkAuth(model.provider))) return;
+		this.showWarning(
+			`${model.provider} has no API key or login. Run /login ${model.provider}, or /model to pick another model.`,
+		);
 	}
 
 	// Each onboarding choice hands off to the /login flow; a login then opens /model if no model is set.
@@ -1199,7 +1168,7 @@ export class InteractiveMode {
 		const model = this.session.model;
 		if (model && !isUnknownModel(model)) return;
 		if ((await this.session.modelRuntime.getAvailable()).length === 0) return;
-		await this.showModelSelector(undefined, "Ready. Type a message, or /help for commands.");
+		await showModelSelector(this.modelCommandHost, undefined, "Ready. Type a message, or /help for commands.");
 	}
 
 	private async checkTmuxKeyboardSetup(): Promise<string | undefined> {
@@ -1260,579 +1229,18 @@ export class InteractiveMode {
 	// Extension System
 	// =========================================================================
 
-	private formatDisplayPath(p: string): string {
-		const home = os.homedir();
-		let result = p;
-
-		// Replace home directory with ~
-		if (result.startsWith(home)) {
-			result = `~${result.slice(home.length)}`;
-		}
-
-		return result;
-	}
-
-	private formatExtensionDisplayPath(path: string): string {
-		let result = this.formatDisplayPath(path);
-		result = result.replace(/\/index\.ts$/, "").replace(/\/index\.js$/, "");
-		return result;
-	}
-
-	private formatContextPath(p: string): string {
-		const cwd = path.resolve(this.sessionManager.getCwd());
-		const absolutePath = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
-		const relativePath = getCwdRelativePath(absolutePath, cwd);
-		if (relativePath !== undefined) {
-			return relativePath;
-		}
-
-		return this.formatDisplayPath(absolutePath);
-	}
-
-	private getStartupExpansionState(): boolean {
-		return this.options.verbose || this.toolOutputExpanded;
-	}
-
-	/**
-	 * Get a short path relative to the package root for display.
-	 */
-	private getShortPath(fullPath: string, sourceInfo?: SourceInfo): string {
-		const baseDir = sourceInfo?.baseDir;
-		if (baseDir && this.isPackageSource(sourceInfo)) {
-			const relativePath = path.relative(path.resolve(baseDir), path.resolve(fullPath));
-			if (
-				relativePath &&
-				relativePath !== "." &&
-				!relativePath.startsWith("..") &&
-				!relativePath.startsWith(`..${path.sep}`) &&
-				!path.isAbsolute(relativePath)
-			) {
-				return relativePath.replace(/\\/g, "/");
-			}
-		}
-
-		const source = sourceInfo?.source ?? "";
-		const npmMatch = fullPath.match(/node_modules\/(@?[^/]+(?:\/[^/]+)?)\/(.*)/);
-		if (npmMatch && source.startsWith("npm:")) {
-			return npmMatch[2];
-		}
-
-		const gitMatch = fullPath.match(/git\/[^/]+\/[^/]+\/(.*)/);
-		if (gitMatch && source.startsWith("git:")) {
-			return gitMatch[1];
-		}
-
-		return this.formatDisplayPath(fullPath);
-	}
-
-	private getCompactPathLabel(resourcePath: string, sourceInfo?: SourceInfo): string {
-		const shortPath = this.getShortPath(resourcePath, sourceInfo);
-		const normalizedPath = shortPath.replace(/\\/g, "/");
-		const segments = normalizedPath.split("/").filter((segment) => segment.length > 0 && segment !== "~");
-		if (segments.length > 0) {
-			return segments[segments.length - 1]!;
-		}
-		return shortPath;
-	}
-
-	private getCompactPackageSourceLabel(sourceInfo?: SourceInfo): string {
-		const source = sourceInfo?.source ?? "";
-		if (source.startsWith("npm:")) {
-			return source.slice("npm:".length) || source;
-		}
-
-		const gitSource = parseGitUrl(source);
-		if (gitSource) {
-			return gitSource.path || source;
-		}
-
-		return source;
-	}
-
-	private getCompactExtensionLabel(resourcePath: string, sourceInfo?: SourceInfo): string {
-		if (!this.isPackageSource(sourceInfo)) {
-			return this.getCompactPathLabel(resourcePath, sourceInfo);
-		}
-
-		const sourceLabel = this.getCompactPackageSourceLabel(sourceInfo);
-		if (!sourceLabel) {
-			return this.getCompactPathLabel(resourcePath, sourceInfo);
-		}
-
-		const shortPath = this.getShortPath(resourcePath, sourceInfo).replace(/\\/g, "/");
-		const packagePath = shortPath.startsWith("extensions/") ? shortPath.slice("extensions/".length) : shortPath;
-		const parsedPath = path.posix.parse(packagePath);
-
-		if (parsedPath.name === "index") {
-			return !parsedPath.dir || parsedPath.dir === "." ? sourceLabel : `${sourceLabel}:${parsedPath.dir}`;
-		}
-
-		return `${sourceLabel}:${packagePath}`;
-	}
-
-	private getCompactDisplayPathSegments(resourcePath: string): string[] {
-		return this.formatDisplayPath(resourcePath)
-			.replace(/\\/g, "/")
-			.split("/")
-			.filter((segment) => segment.length > 0 && segment !== "~");
-	}
-
-	private getCompactNonPackageExtensionLabel(
-		resourcePath: string,
-		index: number,
-		allPaths: Array<{ path: string; segments: string[] }>,
-	): string {
-		const segments = allPaths[index]?.segments;
-		if (!segments || segments.length === 0) {
-			return this.getCompactPathLabel(resourcePath);
-		}
-
-		for (let segmentCount = 1; segmentCount <= segments.length; segmentCount += 1) {
-			const candidate = segments.slice(-segmentCount).join("/");
-			const isUnique = allPaths.every((item, itemIndex) => {
-				if (itemIndex === index) {
-					return true;
-				}
-				return item.segments.slice(-segmentCount).join("/") !== candidate;
-			});
-
-			if (isUnique) {
-				return candidate;
-			}
-		}
-
-		return segments.join("/");
-	}
-
-	private getCompactExtensionLabels(extensions: Array<{ path: string; sourceInfo?: SourceInfo }>): string[] {
-		const nonPackageExtensions = extensions
-			.map((extension) => {
-				const segments = this.getCompactDisplayPathSegments(extension.path);
-				const lastSegment = segments[segments.length - 1];
-				if (segments.length > 1 && (lastSegment === "index.ts" || lastSegment === "index.js")) {
-					segments.pop();
-				}
-				return {
-					path: extension.path,
-					sourceInfo: extension.sourceInfo,
-					segments,
-				};
-			})
-			.filter((extension) => !this.isPackageSource(extension.sourceInfo));
-
-		return extensions.map((extension) => {
-			if (this.isPackageSource(extension.sourceInfo)) {
-				return this.getCompactExtensionLabel(extension.path, extension.sourceInfo);
-			}
-
-			const nonPackageIndex = nonPackageExtensions.findIndex((item) => item.path === extension.path);
-			if (nonPackageIndex === -1) {
-				return this.getCompactPathLabel(extension.path, extension.sourceInfo);
-			}
-
-			return this.getCompactNonPackageExtensionLabel(extension.path, nonPackageIndex, nonPackageExtensions);
-		});
-	}
-
-	private getDisplaySourceInfo(sourceInfo?: SourceInfo): {
-		label: string;
-		scopeLabel?: string;
-		color: "accent" | "muted";
-	} {
-		const source = sourceInfo?.source ?? "local";
-		const scope = sourceInfo?.scope ?? "project";
-		if (source === "local") {
-			if (scope === "user") {
-				return { label: "user", color: "muted" };
-			}
-			if (scope === "project") {
-				return { label: "project", color: "muted" };
-			}
-			if (scope === "temporary") {
-				return { label: "path", scopeLabel: "temp", color: "muted" };
-			}
-			return { label: "path", color: "muted" };
-		}
-
-		if (source === "cli") {
-			return { label: "path", scopeLabel: scope === "temporary" ? "temp" : undefined, color: "muted" };
-		}
-
-		const scopeLabel =
-			scope === "user" ? "user" : scope === "project" ? "project" : scope === "temporary" ? "temp" : undefined;
-		return { label: source, scopeLabel, color: "accent" };
-	}
-
-	private getScopeGroup(sourceInfo?: SourceInfo): "user" | "project" | "path" {
-		const source = sourceInfo?.source ?? "local";
-		const scope = sourceInfo?.scope ?? "project";
-		if (source === "cli" || scope === "temporary") return "path";
-		if (scope === "user") return "user";
-		if (scope === "project") return "project";
-		return "path";
-	}
-
-	private isPackageSource(sourceInfo?: SourceInfo): boolean {
-		const source = sourceInfo?.source ?? "";
-		return source.startsWith("npm:") || source.startsWith("git:");
-	}
-
-	private buildScopeGroups(items: Array<{ path: string; sourceInfo?: SourceInfo }>): Array<{
-		scope: "user" | "project" | "path";
-		paths: Array<{ path: string; sourceInfo?: SourceInfo }>;
-		packages: Map<string, Array<{ path: string; sourceInfo?: SourceInfo }>>;
-	}> {
-		const groups: Record<
-			"user" | "project" | "path",
+	// Binds the listing in loaded-resources.ts to this session's container, cwd and expansion state.
+	private showLoadedResources(options?: LoadedResourcesOptions): void {
+		showLoadedResources(
 			{
-				scope: "user" | "project" | "path";
-				paths: Array<{ path: string; sourceInfo?: SourceInfo }>;
-				packages: Map<string, Array<{ path: string; sourceInfo?: SourceInfo }>>;
-			}
-		> = {
-			user: { scope: "user", paths: [], packages: new Map() },
-			project: { scope: "project", paths: [], packages: new Map() },
-			path: { scope: "path", paths: [], packages: new Map() },
-		};
-
-		for (const item of items) {
-			const groupKey = this.getScopeGroup(item.sourceInfo);
-			const group = groups[groupKey];
-			const source = item.sourceInfo?.source ?? "local";
-
-			if (this.isPackageSource(item.sourceInfo)) {
-				const list = group.packages.get(source) ?? [];
-				list.push(item);
-				group.packages.set(source, list);
-			} else {
-				group.paths.push(item);
-			}
-		}
-
-		return [groups.project, groups.user, groups.path].filter(
-			(group) => group.paths.length > 0 || group.packages.size > 0,
+				session: this.session,
+				container: this.loadedResourcesContainer,
+				cwd: this.sessionManager.getCwd(),
+				verbose: this.options.verbose === true,
+				expanded: Boolean(this.options.verbose || this.toolOutputExpanded),
+			},
+			options,
 		);
-	}
-
-	private formatScopeGroups(
-		groups: Array<{
-			scope: "user" | "project" | "path";
-			paths: Array<{ path: string; sourceInfo?: SourceInfo }>;
-			packages: Map<string, Array<{ path: string; sourceInfo?: SourceInfo }>>;
-		}>,
-		options: {
-			formatPath: (item: { path: string; sourceInfo?: SourceInfo }) => string;
-			formatPackagePath: (item: { path: string; sourceInfo?: SourceInfo }, source: string) => string;
-		},
-	): string {
-		const lines: string[] = [];
-
-		for (const group of groups) {
-			lines.push(`  ${theme.fg("accent", group.scope)}`);
-
-			const sortedPaths = [...group.paths].sort((a, b) => a.path.localeCompare(b.path));
-			for (const item of sortedPaths) {
-				lines.push(theme.fg("dim", `    ${options.formatPath(item)}`));
-			}
-
-			const sortedPackages = Array.from(group.packages.entries()).sort(([a], [b]) => a.localeCompare(b));
-			for (const [source, items] of sortedPackages) {
-				lines.push(`    ${theme.fg("mdLink", source)}`);
-				const sortedPackagePaths = [...items].sort((a, b) => a.path.localeCompare(b.path));
-				for (const item of sortedPackagePaths) {
-					lines.push(theme.fg("dim", `      ${options.formatPackagePath(item, source)}`));
-				}
-			}
-		}
-
-		return lines.join("\n");
-	}
-
-	private findSourceInfoForPath(p: string, sourceInfos: Map<string, SourceInfo>): SourceInfo | undefined {
-		const exact = sourceInfos.get(p);
-		if (exact) return exact;
-
-		let current = p;
-		while (current.includes("/")) {
-			current = current.substring(0, current.lastIndexOf("/"));
-			const parent = sourceInfos.get(current);
-			if (parent) return parent;
-		}
-
-		return undefined;
-	}
-
-	private formatPathWithSource(p: string, sourceInfo?: SourceInfo): string {
-		if (sourceInfo) {
-			const shortPath = this.getShortPath(p, sourceInfo);
-			const { label, scopeLabel } = this.getDisplaySourceInfo(sourceInfo);
-			const labelText = scopeLabel ? `${label} (${scopeLabel})` : label;
-			return `${labelText} ${shortPath}`;
-		}
-		return this.formatDisplayPath(p);
-	}
-
-	private formatDiagnostics(diagnostics: readonly ResourceDiagnostic[], sourceInfos: Map<string, SourceInfo>): string {
-		const lines: string[] = [];
-
-		// Group collision diagnostics by name
-		const collisions = new Map<string, ResourceDiagnostic[]>();
-		const otherDiagnostics: ResourceDiagnostic[] = [];
-
-		for (const d of diagnostics) {
-			if (d.type === "collision" && d.collision) {
-				const list = collisions.get(d.collision.name) ?? [];
-				list.push(d);
-				collisions.set(d.collision.name, list);
-			} else {
-				otherDiagnostics.push(d);
-			}
-		}
-
-		// Format collision diagnostics grouped by name
-		for (const [name, collisionList] of collisions) {
-			const first = collisionList[0]?.collision;
-			if (!first) continue;
-			lines.push(theme.fg("warning", `  "${name}" collision:`));
-			lines.push(
-				theme.fg(
-					"dim",
-					`    ${theme.fg("success", "✓")} ${this.formatPathWithSource(first.winnerPath, this.findSourceInfoForPath(first.winnerPath, sourceInfos))}`,
-				),
-			);
-			for (const d of collisionList) {
-				if (d.collision) {
-					lines.push(
-						theme.fg(
-							"dim",
-							`    ${theme.fg("warning", "✗")} ${this.formatPathWithSource(d.collision.loserPath, this.findSourceInfoForPath(d.collision.loserPath, sourceInfos))} (skipped)`,
-						),
-					);
-				}
-			}
-		}
-
-		for (const d of otherDiagnostics) {
-			if (d.path) {
-				const formattedPath = this.formatPathWithSource(d.path, this.findSourceInfoForPath(d.path, sourceInfos));
-				lines.push(theme.fg(d.type === "error" ? "error" : "warning", `  ${formattedPath}`));
-				lines.push(theme.fg(d.type === "error" ? "error" : "warning", `    ${d.message}`));
-			} else {
-				lines.push(theme.fg(d.type === "error" ? "error" : "warning", `  ${d.message}`));
-			}
-		}
-
-		return lines.join("\n");
-	}
-
-	private showLoadedResources(options?: {
-		extensions?: Array<{ path: string; sourceInfo?: SourceInfo }>;
-		force?: boolean;
-		showDiagnosticsWhenQuiet?: boolean;
-	}): void {
-		// Resource rendering is idempotent; chat clears no longer clear this separate container.
-		this.loadedResourcesContainer.clear();
-
-		// lunr: startup/reload render nothing by default; the [Context]/[Skills]/etc. listing
-		// only appears with --verbose (or an explicit force). Diagnostics still surface below.
-		const showListing = options?.force || this.options.verbose;
-		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
-		if (!showListing && !showDiagnostics) {
-			return;
-		}
-
-		const sectionHeader = (name: string, color: ThemeColor = "mdHeading") => theme.fg(color, `[${name}]`);
-		const formatCompactList = (items: string[], options?: { sort?: boolean }): string => {
-			const labels = items.map((item) => item.trim()).filter((item) => item.length > 0);
-			if (options?.sort !== false) {
-				labels.sort((a, b) => a.localeCompare(b));
-			}
-			return theme.fg("dim", `  ${labels.join(", ")}`);
-		};
-		const addLoadedSection = (
-			name: string,
-			collapsedBody: string,
-			expandedBody = collapsedBody,
-			color: ThemeColor = "mdHeading",
-		): void => {
-			const section = new ExpandableText(
-				() => `${sectionHeader(name, color)}\n${collapsedBody}`,
-				() => `${sectionHeader(name, color)}\n${expandedBody}`,
-				this.getStartupExpansionState(),
-				0,
-				0,
-			);
-			this.loadedResourcesContainer.addChild(section);
-			this.loadedResourcesContainer.addChild(new Spacer(1));
-		};
-
-		const skillsResult = this.session.resourceLoader.getSkills();
-		const promptsResult = this.session.resourceLoader.getPrompts();
-		const themesResult = this.session.resourceLoader.getThemes();
-		const extensions =
-			options?.extensions ??
-			this.session.resourceLoader
-				.getExtensions()
-				.extensions.filter((extension) => !extension.path.startsWith("<inline:"))
-				.map((extension) => ({
-					path: extension.path,
-					sourceInfo: extension.sourceInfo,
-				}));
-		const sourceInfos = new Map<string, SourceInfo>();
-		for (const extension of extensions) {
-			if (extension.sourceInfo) {
-				sourceInfos.set(extension.path, extension.sourceInfo);
-			}
-		}
-		for (const skill of skillsResult.skills) {
-			if (skill.sourceInfo) {
-				sourceInfos.set(skill.filePath, skill.sourceInfo);
-			}
-		}
-		for (const prompt of promptsResult.prompts) {
-			if (prompt.sourceInfo) {
-				sourceInfos.set(prompt.filePath, prompt.sourceInfo);
-			}
-		}
-		for (const loadedTheme of themesResult.themes) {
-			if (loadedTheme.sourcePath && loadedTheme.sourceInfo) {
-				sourceInfos.set(loadedTheme.sourcePath, loadedTheme.sourceInfo);
-			}
-		}
-
-		if (showListing) {
-			const contextFiles = this.session.resourceLoader.getAgentsFiles().agentsFiles;
-			if (contextFiles.length > 0) {
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-				const contextList = contextFiles
-					.map((f) => theme.fg("dim", `  ${this.formatDisplayPath(f.path)}`))
-					.join("\n");
-				const contextCompactList = formatCompactList(
-					contextFiles.map((contextFile) => this.formatContextPath(contextFile.path)),
-					{ sort: false },
-				);
-				addLoadedSection("Context", contextCompactList, contextList);
-			}
-
-			const skills = skillsResult.skills;
-			if (skills.length > 0) {
-				const groups = this.buildScopeGroups(
-					skills.map((skill) => ({ path: skill.filePath, sourceInfo: skill.sourceInfo })),
-				);
-				const skillList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatDisplayPath(item.path),
-					formatPackagePath: (item) => this.getShortPath(item.path, item.sourceInfo),
-				});
-				const skillCompactList = formatCompactList(skills.map((skill) => skill.name));
-				addLoadedSection("Skills", skillCompactList, skillList);
-			}
-
-			const templates = this.session.promptTemplates;
-			if (templates.length > 0) {
-				const groups = this.buildScopeGroups(
-					templates.map((template) => ({ path: template.filePath, sourceInfo: template.sourceInfo })),
-				);
-				const templateByPath = new Map(templates.map((t) => [t.filePath, t]));
-				const templateList = this.formatScopeGroups(groups, {
-					formatPath: (item) => {
-						const template = templateByPath.get(item.path);
-						return template ? `/${template.name}` : this.formatDisplayPath(item.path);
-					},
-					formatPackagePath: (item) => {
-						const template = templateByPath.get(item.path);
-						return template ? `/${template.name}` : this.formatDisplayPath(item.path);
-					},
-				});
-				const promptCompactList = formatCompactList(templates.map((template) => `/${template.name}`));
-				addLoadedSection("Prompts", promptCompactList, templateList);
-			}
-
-			if (extensions.length > 0) {
-				const groups = this.buildScopeGroups(extensions);
-				const extList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatExtensionDisplayPath(item.path),
-					formatPackagePath: (item) =>
-						this.formatExtensionDisplayPath(this.getShortPath(item.path, item.sourceInfo)),
-				});
-				const extensionCompactList = formatCompactList(this.getCompactExtensionLabels(extensions));
-				addLoadedSection("Extensions", extensionCompactList, extList, "mdHeading");
-			}
-
-			// Show loaded themes (excluding built-in)
-			const loadedThemes = themesResult.themes;
-			const customThemes = loadedThemes.filter((t) => t.sourcePath);
-			if (customThemes.length > 0) {
-				const groups = this.buildScopeGroups(
-					customThemes.map((loadedTheme) => ({
-						path: loadedTheme.sourcePath!,
-						sourceInfo: loadedTheme.sourceInfo,
-					})),
-				);
-				const themeList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatDisplayPath(item.path),
-					formatPackagePath: (item) => this.getShortPath(item.path, item.sourceInfo),
-				});
-				const themeCompactList = formatCompactList(
-					customThemes.map(
-						(loadedTheme) =>
-							loadedTheme.name ?? this.getCompactPathLabel(loadedTheme.sourcePath!, loadedTheme.sourceInfo),
-					),
-				);
-				addLoadedSection("Themes", themeCompactList, themeList);
-			}
-		}
-
-		if (showDiagnostics) {
-			const skillDiagnostics = skillsResult.diagnostics;
-			if (skillDiagnostics.length > 0) {
-				const warningLines = this.formatDiagnostics(skillDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new Text(`${theme.fg("warning", "[Skill conflicts]")}\n${warningLines}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
-
-			const promptDiagnostics = promptsResult.diagnostics;
-			if (promptDiagnostics.length > 0) {
-				const warningLines = this.formatDiagnostics(promptDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new Text(`${theme.fg("warning", "[Prompt conflicts]")}\n${warningLines}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
-
-			const extensionDiagnostics: ResourceDiagnostic[] = [];
-			const extensionErrors = this.session.resourceLoader.getExtensions().errors;
-			if (extensionErrors.length > 0) {
-				for (const error of extensionErrors) {
-					extensionDiagnostics.push({ type: "error", message: error.error, path: error.path });
-				}
-			}
-
-			const commandDiagnostics = this.session.extensionRunner.getCommandDiagnostics();
-			extensionDiagnostics.push(...commandDiagnostics);
-			extensionDiagnostics.push(...this.getBuiltInCommandConflictDiagnostics(this.session.extensionRunner));
-
-			const shortcutDiagnostics = this.session.extensionRunner.getShortcutDiagnostics();
-			extensionDiagnostics.push(...shortcutDiagnostics);
-
-			if (extensionDiagnostics.length > 0) {
-				const warningLines = this.formatDiagnostics(extensionDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new Text(`${theme.fg("warning", "[Extension issues]")}\n${warningLines}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
-
-			const themeDiagnostics = themesResult.diagnostics;
-			if (themeDiagnostics.length > 0) {
-				const warningLines = this.formatDiagnostics(themeDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new Text(`${theme.fg("warning", "[Theme conflicts]")}\n${warningLines}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
-		}
 	}
 
 	/**
@@ -2446,7 +1854,9 @@ export class InteractiveMode {
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
-			setTitle: (title) => this.ui.terminal.setTitle(title),
+			setTitle: (title) => {
+				if (!this.isShuttingDown) this.ui.terminal.setTitle(title);
+			},
 			custom: (factory, options) => this.showExtensionCustom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
@@ -2518,6 +1928,7 @@ export class InteractiveMode {
 				},
 				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
 			);
+			if (opts?.initialIndex !== undefined) this.extensionSelector.setSelectedIndex(opts.initialIndex);
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionSelector);
@@ -2908,13 +2319,13 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
-		this.defaultEditor.onAction("app.mode.cycle", () => this.cyclePermissionMode());
+		this.defaultEditor.onAction("app.mode.cycle", () => this.permissions.cyclePermissionMode());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
 		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
-		this.defaultEditor.onAction("app.model.select", () => void this.showModelSelector());
+		this.defaultEditor.onAction("app.model.select", () => void showModelSelector(this.modelCommandHost));
 		// lunr: tool/thinking expand is per-item click; ctrl+o is not bound (tree filter still uses ctrl+o).
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
@@ -3099,10 +2510,11 @@ export class InteractiveMode {
 						this.showStatus("This terminal already owns the session.");
 						return;
 					}
-					const draft = this.editor.getText();
 					await requestSessionTransfer(file, { stop: text === "/reclaim stop" });
 					await this.runtimeHost.switchSession(file);
-					this.editor.setText(draft === text ? this.detachedDraft : draft);
+					// Submit cleared the editor, so restore the draft saved at release unless the user typed since.
+					if (!this.editor.getText()) this.editor.setText(this.detachedDraft);
+					this.detachedDraft = "";
 					this.showStatus("Session reclaimed.");
 				} catch (error) {
 					this.showError(error instanceof Error ? error.message : String(error));
@@ -3110,6 +2522,10 @@ export class InteractiveMode {
 				return;
 			}
 			if ((this.runtimeHost.isDetached || this.transferInProgress) && !["/quit", "/exit"].includes(text)) {
+				// Submit already cleared the editor; put the draft and its image chips back.
+				this.editor.setText(text);
+				const attachments = this.takeSubmittedImages(text);
+				if (attachments.length > 0) this.editor.restoreImageMarkers?.(attachments);
 				this.showError(
 					"Session is detached or transferring. Draft retained. Use /reclaim, /reclaim stop, or /quit.",
 				);
@@ -3149,11 +2565,7 @@ export class InteractiveMode {
 			this.ui.setChatScroll(0);
 
 			// Handle builtin commands
-			const slashCommand = findSlashCommandHandler(text);
-			if (slashCommand) {
-				await slashCommand.run(this.slashCommandHost, text);
-				return;
-			}
+			if (await runSlashCommand(this.slashCommandHost, text)) return;
 
 			// A mistyped command goes back to the editor instead of to the model as a prompt.
 			if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText ?? submittedText, { images })))
@@ -3634,11 +3046,7 @@ export class InteractiveMode {
 				}
 				this.clearStatusIndicator("compaction");
 				if (event.aborted) {
-					if (event.reason === "manual") {
-						this.showError("Compaction cancelled");
-					} else {
-						this.showStatus("Auto-compaction cancelled");
-					}
+					this.showStatus(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled");
 				} else if (event.result) {
 					if (this.session.isIdle) {
 						this.renderCompactionResult(event.result);
@@ -4043,7 +3451,7 @@ export class InteractiveMode {
 			new Text(
 				theme.fg(
 					"warning",
-					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
+					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart lunR.`,
 				),
 				1,
 				0,
@@ -4078,10 +3486,13 @@ export class InteractiveMode {
 		const now = Date.now();
 		if (now - this.lastSigintTime < 500) {
 			void this.shutdown();
-		} else {
-			this.clearEditor();
-			this.lastSigintTime = now;
+			return;
 		}
+		// A press on an empty editor has nothing to clear, so say what the next one does.
+		const wasEmpty = this.editor.getText().length === 0;
+		this.clearEditor();
+		this.lastSigintTime = now;
+		if (wasEmpty) setTimeout(this.addExitHint(`Press ${keyDisplayText("app.clear")} again to exit`), 500).unref?.();
 	}
 
 	private handleCtrlD(): void {
@@ -4090,7 +3501,21 @@ export class InteractiveMode {
 			void this.shutdown();
 			return;
 		}
-		this.showStatus(this.exitConfirmation.hint);
+		this.exitConfirmation.clearHintOnExpiry(this.addExitHint(this.exitConfirmation.hint));
+	}
+
+	// Adds a dim exit hint to the chat and returns the function that removes it once its window closes.
+	private addExitHint(message: string): () => void {
+		const spacer = new Spacer(1);
+		const text = new Text(theme.fg("dim", message), 1, 0);
+		this.chatContainer.addChild(spacer);
+		this.chatContainer.addChild(text);
+		this.ui.requestRender();
+		return () => {
+			this.chatContainer.removeChild(spacer);
+			this.chatContainer.removeChild(text);
+			this.ui.requestRender();
+		};
 	}
 
 	/**
@@ -4297,6 +3722,20 @@ export class InteractiveMode {
 		const rawText = this.editor.getExpandedText?.() ?? this.editor.getText();
 		const text = rawText.trim();
 		if (!text) return;
+		// Builtins run now instead of being queued as a message. When idle they go through the regular
+		// submit chain, exactly like Enter.
+		if (findSlashCommandHandler(text)) {
+			if (!this.session.isStreaming && this.editor.onSubmit) {
+				this.editor.setText("");
+				this.editor.onSubmit(text, rawText);
+				return;
+			}
+			this.takeSubmittedImages(text);
+			this.editor.addToHistory?.(text);
+			this.editor.setText("");
+			await runSlashCommand(this.slashCommandHost, text);
+			return;
+		}
 		// Same unknown command check as Enter; the draft stays in the editor.
 		if (text.startsWith("/") && (await this.bounceUnknownSlashCommand(text, rawText))) return;
 
@@ -4363,21 +3802,16 @@ export class InteractiveMode {
 		}
 	}
 
-	private cyclePermissionMode(): void {
-		this.applyPermissionMode(nextPermissionMode(this.session.permissionMode), {
-			silent: true,
-			cancelMode: nextPermissionMode("auto"),
-		});
-	}
-
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		try {
 			const result = await this.session.cycleModel(direction);
 			if (result === undefined) {
-				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
-				this.showStatus(msg);
+				if (this.session.scopedModels.length > 0) this.showStatus("Only one model in scope");
+				else if ((await this.session.modelRuntime.getAvailable()).length === 0)
+					this.showStatus("No models available. Run /login to add a provider.");
+				else this.showStatus("Only one model available");
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
@@ -4406,7 +3840,7 @@ export class InteractiveMode {
 			}
 		}
 		// lunr: let extensions (lunr-todos widget) react to ctrl+o expansion.
-		(globalThis as any)[Symbol.for("@lunr/tools-expanded-changed")]?.(expanded);
+		toolsExpandedChangedBridge.get()?.(expanded);
 		this.ui.requestRender();
 	}
 
@@ -4659,17 +4093,23 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Reports an unknown slash command with suggestions and returns true. `cleared` means submit already
-	 * emptied the editor, so the draft goes back with its images; Alt+Enter omits it because its draft
-	 * is still in the editor. Recognition comes from dispatch, so commands autocomplete hides still
-	 * count. Waits for deferred builtins before deciding, since their commands (such as /run and /goal)
-	 * register after first paint.
+	 * Reports an unknown slash command with suggestions, or a builtin given arguments it does not take,
+	 * and returns true. `cleared` means submit already emptied the editor, so the draft goes back with
+	 * its images; Alt+Enter omits it because its draft is still in the editor. Recognition comes from
+	 * dispatch, so commands autocomplete hides still count. Waits for deferred builtins before deciding,
+	 * since their commands (such as /run and /goal) register after first paint.
 	 */
 	private async bounceUnknownSlashCommand(
 		text: string,
 		rawText: string,
 		cleared?: { images?: ImageContent[] },
 	): Promise<boolean> {
+		const argumentless = findArgumentlessSlashCommand(rawText);
+		if (argumentless) {
+			if (cleared) this.restoreEditorDraft(text, cleared.images);
+			this.showStatus(formatArgumentlessSlashCommandStatus(argumentless));
+			return true;
+		}
 		const isKnown = (name: string): boolean =>
 			INTERACTIVE_BUILTIN_COMMAND_NAMES.has(name) ||
 			!!this.session.extensionRunner.getCommand(name) ||
@@ -4698,8 +4138,8 @@ export class InteractiveMode {
 
 		const extensionRunner = this.session.extensionRunner;
 
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const nameEnd = text.search(/\s/);
+		const commandName = nameEnd === -1 ? text.slice(1) : text.slice(1, nameEnd);
 		return !!extensionRunner.getCommand(commandName);
 	}
 
@@ -4821,8 +4261,8 @@ export class InteractiveMode {
 	}
 
 	private async showSettingsSelector(): Promise<void> {
-		// lunr: prefetch the pool size for the Subscriptions row label (render paths stay sync).
-		const subscriptionCount = await this.countSubscriptions();
+		// lunr: prefetch the pool size for the API keys row label (render paths stay sync).
+		const subscriptionCount = await countSubscriptions(this.session);
 		this.showSelector((done) => {
 			const selector = new SettingsSelectorComponent(
 				{
@@ -5212,7 +4652,7 @@ export class InteractiveMode {
 					},
 					onChooseAutoReviewModel: () => {
 						done();
-						this.showAutoReviewModelPicker();
+						this.permissions.showAutoReviewModelPicker();
 					},
 					onRollbackEnabledChange: (enabled) => {
 						this.settingsManager.setRollbackEnabled(enabled);
@@ -5232,7 +4672,7 @@ export class InteractiveMode {
 						this.settingsManager.setAutoManageSubscriptions(enabled);
 					},
 					subscriptions: {
-						list: () => this.listSubscriptionRows(),
+						list: () => listSubscriptionRows(this.session),
 						setActive: (providerId, id) =>
 							this.session.modelRuntime.subscriptionManager.setActive(providerId, id),
 						rename: (providerId, id, name) =>
@@ -5274,148 +4714,23 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleModelCommand(searchTerm?: string): Promise<void> {
-		if (!searchTerm) {
-			await this.showModelSelector();
-			return;
-		}
-
-		const model = await this.findExactModelMatch(searchTerm);
-		if (model) {
-			try {
-				await this.session.setModel(model);
-				this.footer.invalidate();
-				this.updateEditorBorderColor();
-				this.showStatus(`Model: ${model.id}`);
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-			} catch (error) {
-				this.showError(error instanceof Error ? error.message : String(error));
-			}
-			return;
-		}
-
-		await this.showModelSelector(searchTerm);
-	}
-
-	// lunr: /refresh — local provider /models + official GitHub overlay. Never pi.dev.
-	// Ollama Cloud still re-registers via its bridge after the core refresh.
-	private async handleRefreshCommand(): Promise<void> {
-		const runtime = this.session.modelRuntime;
-		const allowNetwork = runtime.isNetworkAllowed();
-		if (!allowNetwork) {
-			this.showStatus("Model network refresh is disabled (offline mode). Reloaded from cache only.");
-		}
-		let result: Awaited<ReturnType<typeof runtime.refresh>>;
-		try {
-			result = await runtime.refresh({ allowNetwork, force: true });
-		} catch (error) {
-			this.showStatus(`Model refresh failed: ${error instanceof Error ? error.message : String(error)}`);
-			this.footer.invalidate();
-			return;
-		}
-
-		// Discovered metadata stays in its cache, not in user overrides. Enrichment is automatic.
-		const extraDefaults = result.incomplete.length;
-		const asked: string[] = [];
-
-		let ollama: string | undefined;
-		const runner = this.session.extensionRunner;
-		const cloudRefresh = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] as
-			| ((ctx: { ui: unknown; auth?: { apiKey?: string; headers?: Record<string, string> } }) => Promise<unknown>)
-			| undefined;
-		if (cloudRefresh && allowNetwork) {
-			try {
-				const resolution = await runtime.getAuth("ollama-cloud");
-				await cloudRefresh({
-					ui: runner.createCommandContext().ui,
-					auth: resolution
-						? {
-								apiKey: resolution.auth.apiKey,
-								headers: Object.fromEntries(
-									Object.entries(resolution.auth.headers ?? {}).filter(
-										(entry): entry is [string, string] => entry[1] !== null,
-									),
-								),
-							}
-						: undefined,
-				});
-			} catch (error) {
-				ollama = `ollama-cloud refresh failed: ${error instanceof Error ? error.message : String(error)}`;
-			}
-		}
-		this.session.refreshModelFromRegistry();
-		// The catalog cannot add subscription models that the saved Claude Code picker never offered.
-		const claudeCodeNote = claudeCodeUpdateNote(await runtime.readCredential("anthropic").catch(() => undefined));
-		this.showStatus(
-			[
-				formatCatalogRefreshSummary({
-					official: result.official
-						? {
-								source: result.official.source,
-								modelCount: result.official.catalog.models.length,
-								evictedUserRows: result.official.evictedUserRows,
-							}
-						: undefined,
-					providers: [
-						...result.live.map((entry) => ({
-							id: entry.providerId,
-							status: entry.status,
-							added: entry.added,
-							total: entry.total,
-							error: entry.error,
-						})),
-						...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
-							id,
-							status: "error" as const,
-							error,
-						})),
-					],
-					asked,
-					extraDefaults,
-					ollama,
-				}),
-				claudeCodeNote,
-			]
-				.filter(Boolean)
-				.join(" "),
-		);
-		this.footer.invalidate();
-	}
-
-	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
-		const models = await this.getModelCandidates();
-		return findExactModelReferenceMatch(searchTerm, models);
-	}
-
 	/** Resolve a "provider/model" settings string to a runtime model, if it still exists. */
-	private resolveModelReference(reference: string | undefined): Model<any> | undefined {
+	private resolveModelReference(reference: string | undefined): Model<Api> | undefined {
 		if (!reference) return undefined;
 		const slashIndex = reference.indexOf("/");
 		if (slashIndex <= 0 || slashIndex === reference.length - 1) return undefined;
 		return this.session.modelRuntime.getModel(reference.slice(0, slashIndex), reference.slice(slashIndex + 1));
 	}
 
-	private async getModelCandidates(): Promise<Model<any>[]> {
-		if (this.session.scopedModels.length > 0) {
-			return this.session.scopedModels.map((scoped) => scoped.model);
-		}
-
-		try {
-			return [...(await refreshModelCandidatesForInit(this.session.modelRuntime))];
-		} catch {
-			return [];
-		}
-	}
-
 	/** Update the footer's available provider count from current model candidates */
 	private async updateAvailableProviderCount(): Promise<void> {
-		const models = await this.getModelCandidates();
+		const models = await getModelCandidates(this.session);
 		const uniqueProviders = new Set(models.map((m) => m.provider));
 		this.footerDataProvider.setAvailableProviderCount(uniqueProviders.size);
 	}
 
 	private async maybeWarnAboutAnthropicSubscriptionAuth(
-		model: Model<any> | undefined = this.session.model,
+		model: Model<Api> | undefined = this.session.model,
 	): Promise<void> {
 		if (this.anthropicSubscriptionWarningShown) {
 			return;
@@ -5480,7 +4795,7 @@ export class InteractiveMode {
 					trustStore.setMany(selection.updates);
 					done();
 					this.showStatus(
-						`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart pi for this to take effect.`,
+						`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart lunR for this to take effect.`,
 					);
 				},
 				onCancel: () => {
@@ -5488,229 +4803,6 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 			});
-			return { component: selector, focus: selector };
-		});
-	}
-
-	// `selectedStatus` replaces the "Model: <id>" status after a pick (the post-login picker prints a ready line).
-	private async showModelSelector(initialSearchInput?: string, selectedStatus?: string): Promise<void> {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		// lunr: prefetch active subscription names so row rendering stays synchronous.
-		const subscriptionNames = await this.getActiveSubscriptionNames();
-		this.showSelector((done) => {
-			const selector = new ModelSelectorComponent(
-				this.ui,
-				this.session.model,
-				this.settingsManager,
-				this.session.modelRuntime,
-				this.session.scopedModels,
-				async (model) => {
-					try {
-						await this.session.setModel(model);
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
-						done();
-						this.showStatus(selectedStatus ?? `Model: ${model.id}`);
-						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-						// lunr: offer manual subscription switching for pooled providers.
-						await this.maybeShowSubscriptionPicker(model.provider);
-					} catch (error) {
-						done();
-						this.showError(error instanceof Error ? error.message : String(error));
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				initialSearchInput,
-				{ subscriptionNames },
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	// lunr: providerId → active subscription name for providers with a multi-key pool.
-	// Empty when auto-manage subscriptions is on (no manual switching UI then).
-	private async getActiveSubscriptionNames(): Promise<ReadonlyMap<string, string>> {
-		const names = new Map<string, string>();
-		if (this.settingsManager.getAutoManageSubscriptions()) return names;
-		try {
-			const manager = this.session.modelRuntime.subscriptionManager;
-			for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
-				if (type !== "api_key") continue;
-				const subs = await manager.list(providerId);
-				if (subs.length < 2) continue;
-				const active = await manager.getActive(providerId);
-				if (active) names.set(providerId, active.name);
-			}
-		} catch {
-			// Pool read failures must not break the model selector.
-		}
-		return names;
-	}
-
-	// lunr: after a model pick, offer manual subscription switching for pooled providers.
-	// Skipped when auto-manage is on; the model selection stands either way.
-	private async maybeShowSubscriptionPicker(providerId: string): Promise<void> {
-		if (this.settingsManager.getAutoManageSubscriptions()) return;
-		const manager = this.session.modelRuntime.subscriptionManager;
-		const subs = await manager.list(providerId);
-		if (subs.length < 2) return;
-		const activeId = (await manager.getActive(providerId))?.id;
-		const labels = subs.map((sub) => this.formatSubscriptionPickerLabel(sub, sub.id === activeId));
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				`Select active subscription for ${providerId}:`,
-				labels,
-				(option) => {
-					done();
-					const sub = subs[labels.indexOf(option)];
-					if (!sub || sub.id === activeId) {
-						this.ui.requestRender();
-						return;
-					}
-					manager.setActive(providerId, sub.id).then(
-						() => this.showStatus(`Subscription: ${sub.name} (${providerId})`),
-						(error: unknown) =>
-							this.showError(
-								`Failed to switch subscription: ${error instanceof Error ? error.message : String(error)}`,
-							),
-					);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	// lunr: picker row label — "work (active)", "Sub 3 · exhausted until 14:30".
-	private formatSubscriptionPickerLabel(sub: SubEntry, isActive: boolean): string {
-		let label = sub.name;
-		if (isActive) label += " (active)";
-		if (sub.exhaustedUntil !== undefined) {
-			label += ` · exhausted until ${formatSubscriptionExhaustedUntil(sub.exhaustedUntil)}`;
-		}
-		return label;
-	}
-
-	// lunr: total pool size across providers, for the /settings Subscriptions row label.
-	private async countSubscriptions(): Promise<number> {
-		try {
-			let count = 0;
-			for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
-				if (type !== "api_key") continue;
-				count += (await this.session.modelRuntime.subscriptionManager.list(providerId)).length;
-			}
-			return count;
-		} catch {
-			return 0;
-		}
-	}
-
-	// lunr: plain-data rows for the /settings Subscriptions submenu (manager stays in core).
-	private async listSubscriptionRows(): Promise<SubscriptionRowInfo[]> {
-		const rows: SubscriptionRowInfo[] = [];
-		const manager = this.session.modelRuntime.subscriptionManager;
-		for (const { providerId, type } of await this.session.modelRuntime.listCredentials()) {
-			if (type !== "api_key") continue;
-			const providerName = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
-			const subs = await manager.list(providerId);
-			const activeId = (await manager.getActive(providerId))?.id;
-			for (const sub of subs) {
-				rows.push({
-					providerId,
-					providerName,
-					id: sub.id,
-					name: sub.name,
-					active: sub.id === activeId,
-					...(sub.exhaustedUntil !== undefined ? { exhaustedUntil: sub.exhaustedUntil } : {}),
-				});
-			}
-		}
-		return rows;
-	}
-
-	private async showModelsSelector(): Promise<void> {
-		// Get all available models
-		await this.session.modelRuntime.refresh();
-		const allModels = [...(await this.session.modelRuntime.getAvailable())];
-
-		if (allModels.length === 0) {
-			this.showStatus("No models available");
-			return;
-		}
-
-		// Check if session has scoped models (from previous session-only changes or CLI --models)
-		const sessionScopedModels = this.session.scopedModels;
-		const hasSessionScope = sessionScopedModels.length > 0;
-
-		// Build enabled model IDs from session state or settings
-		let currentEnabledIds: string[] | null = null;
-
-		if (hasSessionScope) {
-			// Use current session's scoped models
-			currentEnabledIds = sessionScopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
-		} else {
-			// Fall back to settings
-			const patterns = this.settingsManager.getEnabledModels();
-			if (patterns !== undefined && patterns.length > 0) {
-				// Unmatched patterns stay unchecked here; a console warning would draw over the TUI.
-				const { scopedModels } = await resolveModelScopeWithDiagnostics(patterns, this.session.modelRuntime);
-				currentEnabledIds = scopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
-			}
-		}
-
-		// Helper to update session's scoped models (session-only, no persist)
-		const updateSessionModels = async (enabledIds: string[] | null) => {
-			currentEnabledIds = enabledIds === null ? null : [...enabledIds];
-			if (enabledIds && enabledIds.length > 0 && enabledIds.length < allModels.length) {
-				const { scopedModels: newScopedModels } = await resolveModelScopeWithDiagnostics(
-					enabledIds,
-					this.session.modelRuntime,
-				);
-				this.session.setScopedModels(
-					newScopedModels.map((sm) => ({
-						model: sm.model,
-						thinkingLevel: sm.thinkingLevel,
-					})),
-				);
-			} else {
-				// All enabled or none enabled = no filter
-				this.session.setScopedModels([]);
-			}
-			await this.updateAvailableProviderCount();
-			this.ui.requestRender();
-		};
-
-		this.showSelector((done) => {
-			const selector = new ScopedModelsSelectorComponent(
-				{
-					allModels,
-					enabledModelIds: currentEnabledIds,
-				},
-				{
-					onChange: async (enabledIds) => {
-						await updateSessionModels(enabledIds);
-					},
-					onPersist: (enabledIds) => {
-						// Persist to settings
-						const newPatterns =
-							enabledIds === null || enabledIds.length === allModels.length
-								? undefined // All enabled = clear filter
-								: enabledIds;
-						this.settingsManager.setEnabledModels(newPatterns ? [...newPatterns] : undefined);
-						this.showStatus("Model selection saved to settings");
-					},
-					onCancel: () => {
-						done();
-						this.ui.requestRender();
-					},
-				},
-			);
 			return { component: selector, focus: selector };
 		});
 	}
@@ -5998,53 +5090,22 @@ export class InteractiveMode {
 		}
 	}
 
-	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		// lunr: providers with a multi-key pool list one entry per subscription plus an
-		// "all subscriptions" entry, encoding the target as "<providerId>#<subId|all>".
-		const options: AuthSelectorProvider[] = [];
-		for (const { providerId, type: credentialType } of await this.session.modelRuntime.listCredentials()) {
-			const type = credentialType === "external_claude_code" ? "oauth" : credentialType;
-			const providerName = this.session.modelRuntime.getProvider(providerId)?.name ?? providerId;
-			const name =
-				credentialType === "external_claude_code" ? `${providerName} (Claude subscription)` : providerName;
-			const status = { type, source: "stored credential" };
-			if (type === "api_key") {
-				const subs = await this.session.modelRuntime.subscriptionManager.list(providerId);
-				if (subs.length > 1) {
-					for (const sub of subs) {
-						options.push({
-							id: `${providerId}#${sub.id}`,
-							name: `${name} — ${sub.name}`,
-							authType: type,
-							status,
-						});
-					}
-					options.push({ id: `${providerId}#all`, name: `${name} — all subscriptions`, authType: type, status });
-					continue;
-				}
-			}
-			options.push({ id: providerId, name, authType: type, status });
-		}
-		return options.sort((a, b) => a.name.localeCompare(b.name));
-	}
-
-	// lunr: remove every pool key for a provider; removing the last key also deletes
-	// the auth.json credential, so the modelRuntime.logout afterwards is a no-op delete.
-	private async removeAllSubscriptions(providerId: string): Promise<void> {
-		const manager = this.session.modelRuntime.subscriptionManager;
-		const subs = await manager.list(providerId);
-		for (const sub of subs) {
-			await manager.removeKey(providerId, sub.id);
-		}
-	}
-
-	// Builds the LoginFlowHost without making InteractiveMode members public. `session` stays a
-	// getter because /new, /resume and /fork replace the session.
+	// Builds the LoginFlowHost without making InteractiveMode members public. `session` and `editor`
+	// stay getters because /new, /resume and /fork replace the session and extensions can replace the editor.
 	private createLoginFlowHost(): LoginFlowHost {
 		const mode = this;
 		return {
 			get session() {
 				return mode.session;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get editorContainer() {
+				return mode.editorContainer;
+			},
+			get editor() {
+				return mode.editor;
 			},
 			showSelector: (create) => this.showSelector(create),
 			showStatus: (message) => this.showStatus(message),
@@ -6053,15 +5114,53 @@ export class InteractiveMode {
 			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
 			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
 			requestRender: () => this.ui.requestRender(),
-			showLoginDialog: (providerId, providerName) => this.showLoginDialog(providerId, providerName),
-			showApiKeyLoginDialog: (providerId, providerName) => this.showApiKeyLoginDialog(providerId, providerName),
-			showAmbientAuthDialog: (providerOption) => this.showAmbientAuthDialog(providerOption),
-			completeProviderAuthentication: (providerId, providerName, authType, previousModel, overrides) =>
-				this.completeProviderAuthentication(providerId, providerName, authType, previousModel, overrides),
+			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
+		};
+	}
+
+	// Builds the ModelCommandHost. `session` stays a getter because /new, /resume and /fork replace it.
+	private createModelCommandHost(): ModelCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
+			showStatus: (message) => this.showStatus(message),
+			showError: (message) => this.showError(message),
+			showSelector: (create) => this.showSelector(create),
+			invalidateFooter: () => this.footer.invalidate(),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
+			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
+		};
+	}
+
+	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
+	private createPermissionControllerHost(): PermissionControllerHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
+			recordActivity: () => recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir),
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showSelector: (create) => this.showSelector(create),
+			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+			resolveModelReference: (reference) => this.resolveModelReference(reference),
+			sendUserMessageAfterDeferredBuiltins: (text) => this.sendUserMessageAfterDeferredBuiltins(text),
 		};
 	}
 
@@ -6076,9 +5175,9 @@ export class InteractiveMode {
 			loginFlowHost: this.loginFlowHost,
 			handleClipboardPaste: (options) => this.handleClipboardPaste(options),
 			showSettingsSelector: () => this.showSettingsSelector(),
-			showModelsSelector: () => this.showModelsSelector(),
-			handleModelCommand: (searchTerm) => this.handleModelCommand(searchTerm),
-			handleRefreshCommand: () => this.handleRefreshCommand(),
+			showModelsSelector: () => showModelsSelector(this.modelCommandHost),
+			handleModelCommand: (searchTerm) => handleModelCommand(this.modelCommandHost, searchTerm),
+			handleRefreshCommand: () => handleRefreshCommand(this.modelCommandHost),
 			handleExportCommand: (text) => this.handleExportCommand(text),
 			handleImportCommand: (text) => this.handleImportCommand(text),
 			handleCopyCommand: () => this.handleCopyCommand(),
@@ -6087,7 +5186,7 @@ export class InteractiveMode {
 			handleUsageCommand: () => this.handleUsageCommand(),
 			handleFastCommand: (arg) => this.handleFastCommand(arg),
 			handleContextCommand: () => this.handleContextCommand(),
-			handlePlanCommand: (args) => this.handlePlanCommand(args),
+			handlePlanCommand: (args) => this.permissions.handlePlanCommand(args),
 			handleHotkeysCommand: () => this.handleHotkeysCommand(),
 			handleHelpCommand: () => this.handleHelpCommand(),
 			showUserMessageSelector: () => this.showUserMessageSelector(),
@@ -6096,12 +5195,12 @@ export class InteractiveMode {
 			handleUndoCommand: () => this.handleUndoCommand(),
 			handleEditCommand: () => this.handleEditCommand(),
 			handleRedoCommand: () => this.handleRedoCommand(),
-			handleModeCommand: (args) => this.handleModeCommand(args),
-			applyPermissionMode: (permissionMode) => this.applyPermissionMode(permissionMode),
+			handleModeCommand: (args) => this.permissions.handleModeCommand(args),
+			applyPermissionMode: (permissionMode) => this.permissions.applyPermissionMode(permissionMode),
 			showProcessesSelector: () => this.showProcessesSelector(),
 			handleRollbackCommand: () => this.handleRollbackCommand(),
 			showTrustSelector: () => this.showTrustSelector(),
-			showOAuthSelector: (oauthMode) => this.showOAuthSelector(oauthMode),
+			showOAuthSelector: (oauthMode) => showOAuthSelector(this.loginFlowHost, oauthMode),
 			handleClearCommand: () => this.handleClearCommand(),
 			handleCompactCommand: (customInstructions) => this.handleCompactCommand(customInstructions),
 			handleReloadCommand: () => this.handleReloadCommand(),
@@ -6163,416 +5262,6 @@ export class InteractiveMode {
 				return { component: selector, focus: selector };
 			});
 		});
-	}
-
-	/**
-	 * Removes scoped models whose provider has no credential left after a logout, from settings and from
-	 * this session's ctrl+p cycle. A provider still reachable through an environment key keeps its models.
-	 */
-	private async forgetSignedOutScopedModels(): Promise<void> {
-		const runtime = this.session.modelRuntime;
-		const signedOut = await findSignedOutScopePatterns(this.settingsManager.getEnabledModels() ?? [], runtime);
-		if (signedOut.length > 0) this.settingsManager.removeEnabledModels(signedOut);
-		const scoped = this.session.scopedModels;
-		const auth = await Promise.all(scoped.map((entry) => runtime.checkAuth(entry.model.provider)));
-		const kept = scoped.filter((_, index) => auth[index]);
-		if (kept.length !== scoped.length) this.session.setScopedModels(kept);
-	}
-
-	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
-		if (mode === "login") {
-			showLoginAuthTypeSelector(this.loginFlowHost);
-			return;
-		}
-
-		const providerOptions = await this.getLogoutProviderOptions();
-		if (providerOptions.length === 0) {
-			this.showStatus(
-				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
-			);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				mode,
-				providerOptions,
-				async (providerId: string) => {
-					done();
-
-					const providerOption = providerOptions.find((provider) => provider.id === providerId);
-					if (!providerOption) {
-						return;
-					}
-
-					try {
-						// lunr: pool-aware logout — "provider#subId" removes one key,
-						// "provider#all" and plain entries remove everything.
-						const hashIndex = providerOption.id.indexOf("#");
-						if (hashIndex > 0) {
-							const poolProviderId = providerOption.id.slice(0, hashIndex);
-							const subRef = providerOption.id.slice(hashIndex + 1);
-							if (subRef !== "all") {
-								await this.session.modelRuntime.subscriptionManager.removeKey(poolProviderId, subRef);
-								await this.updateAvailableProviderCount();
-								this.showStatus(`Removed subscription ${providerOption.name}.`);
-								return;
-							}
-							await this.removeAllSubscriptions(poolProviderId);
-							await this.session.modelRuntime.logout(poolProviderId);
-							await this.forgetSignedOutScopedModels();
-							await this.updateAvailableProviderCount();
-							const poolProviderName =
-								this.session.modelRuntime.getProvider(poolProviderId)?.name ?? poolProviderId;
-							this.showStatus(`Removed all subscriptions for ${poolProviderName}`);
-							return;
-						}
-
-						// lunr: a plain entry can still have a lazy-imported pool — clear it so
-						// rotation cannot resurrect the removed credential.
-						await this.removeAllSubscriptions(providerOption.id);
-						const removed = await this.session.modelRuntime.readCredential(providerOption.id);
-						await this.session.modelRuntime.logout(providerOption.id);
-						await this.forgetSignedOutScopedModels();
-						await this.updateAvailableProviderCount();
-						const message =
-							removed?.type === "external_claude_code"
-								? `Logged out of ${providerOption.name}. ${formatClaudeSubscriptionLogoutNote(removed)}`
-								: providerOption.authType === "oauth"
-									? `Logged out of ${providerOption.name}`
-									: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
-						this.showStatus(message);
-					} catch (error: unknown) {
-						this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async completeProviderAuthentication(
-		providerId: string,
-		providerName: string,
-		authType: "oauth" | "api_key",
-		previousModel: Model<any> | undefined,
-		// lunr: lets the subscription add-flow adjust the status wording.
-		overrides?: { actionLabel?: string; savedNote?: string },
-	): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
-
-		const actionLabel =
-			overrides?.actionLabel ??
-			(authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`);
-		const savedNote = overrides?.savedNote ?? `Credentials saved to ${getAuthPath()}`;
-
-		let selectedModel: Model<any> | undefined;
-		let selectionError: string | undefined;
-		if (isUnknownModel(previousModel)) {
-			const availableModels = await this.session.modelRuntime.getAvailable();
-			const providerModels = availableModels.filter((model) => model.provider === providerId);
-			// lunr: generic models.dev providers have no configured default; their first model stands in below.
-			if (providerModels.length === 0) {
-				selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
-			} else {
-				const defaultModelId = hasDefaultModelProvider(providerId)
-					? defaultModelPerProvider[providerId]
-					: undefined;
-				// Plans offer different models. Without the default, take the provider's first model, as startup
-				// does; for a Claude subscription that is Claude Code's own default.
-				selectedModel = providerModels.find((model) => model.id === defaultModelId) ?? providerModels[0];
-				try {
-					await this.session.setModel(selectedModel);
-				} catch (error: unknown) {
-					selectedModel = undefined;
-					const errorMessage = error instanceof Error ? error.message : String(error);
-					selectionError = `${actionLabel}, but selecting its default model failed: ${errorMessage}. Use /model to select a model.`;
-				}
-			}
-		}
-
-		await this.updateAvailableProviderCount();
-		this.footer.invalidate();
-		this.updateEditorBorderColor();
-		if (selectedModel) {
-			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedNote}`);
-			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
-		} else {
-			this.showStatus(`${actionLabel}. ${savedNote}`);
-			if (selectionError) {
-				this.showError(selectionError);
-			} else {
-				void this.maybeWarnAboutAnthropicSubscriptionAuth();
-			}
-		}
-		await this.openModelSelectorIfUnset();
-	}
-
-	private showAmbientAuthDialog(providerOption: AuthSelectorProvider): void {
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		const dialog = new LoginDialogComponent(
-			this.ui,
-			providerOption.id,
-			() => restoreEditor(),
-			providerOption.name,
-			`${providerOption.name} setup`,
-		);
-		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside pi.`, [], true);
-
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-	}
-
-	private async showApiKeyLoginDialog(providerId: string, providerName: string): Promise<void> {
-		const previousModel = this.session.model;
-
-		// lunr: multi-subscription pools — when the provider already has stored keys,
-		// ask whether the new key joins the pool or replaces it.
-		const subscriptionManager = this.session.modelRuntime.subscriptionManager;
-		const existingSubs = await subscriptionManager.list(providerId);
-		let poolMode: "add" | "replace" | undefined;
-		if (existingSubs.length > 0) {
-			poolMode = await this.chooseSubscriptionLoginMode(providerName, existingSubs.length);
-			if (poolMode === undefined) {
-				this.showStatus("Login cancelled.");
-				return;
-			}
-		}
-
-		const dialog = new LoginDialogComponent(
-			this.ui,
-			providerId,
-			(_success, _message) => {
-				// Completion handled below
-			},
-			providerName,
-		);
-
-		if (providerId === "amazon-bedrock") {
-			dialog.showDetails([
-				theme.fg("text", "You can also use an AWS profile, IAM keys, or role-based credentials."),
-				theme.fg("muted", "See:"),
-				theme.fg("accent", `  ${path.join(getDocsPath(), "providers.md")}`),
-			]);
-		}
-
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		try {
-			const credential = await this.loginProvider(dialog, providerId, "api_key");
-			restoreEditor();
-			if (poolMode === "add" && credential.type === "api_key" && credential.key !== undefined) {
-				const entry = await subscriptionManager.addKey(providerId, credential.key);
-				await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel, {
-					actionLabel: `Added subscription "${entry.name}" for ${providerName}`,
-					savedNote: "Key stored in the subscription pool. Rename it in /settings → Subscriptions.",
-				});
-				return;
-			}
-			if (poolMode === "replace") {
-				await this.replaceSubscriptionPool(providerId, credential);
-			}
-			await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel);
-		} catch (error: unknown) {
-			restoreEditor();
-			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
-				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
-			}
-		}
-	}
-
-	// lunr: add-vs-replace picker shown when an API-key provider already has stored keys.
-	private chooseSubscriptionLoginMode(providerName: string, keyCount: number): Promise<"add" | "replace" | undefined> {
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					`${providerName} already has ${keyCount} stored key${keyCount === 1 ? "" : "s"}.`,
-					["Add as new subscription", "Replace existing"],
-					(option) => {
-						done();
-						resolve(option === "Add as new subscription" ? "add" : "replace");
-					},
-					() => {
-						done();
-						resolve(undefined);
-					},
-					{
-						message:
-							"Add keeps the existing keys in a pool you can switch between; Replace overwrites them with the new key.",
-					},
-				);
-				return { component: selector, focus: selector };
-			});
-		});
-	}
-
-	// lunr: "Replace existing" collapses the pool to the single key login just stored,
-	// so rotation cannot resurrect replaced keys. Removing the last pool key deletes the
-	// auth.json credential, and addKey re-mirrors the same key the login already stored.
-	private async replaceSubscriptionPool(providerId: string, credential: Credential): Promise<void> {
-		const subscriptionManager = this.session.modelRuntime.subscriptionManager;
-		const subs = await subscriptionManager.list(providerId);
-		for (const sub of subs) {
-			await subscriptionManager.removeKey(providerId, sub.id);
-		}
-		if (credential.type === "api_key" && credential.key !== undefined) {
-			await subscriptionManager.addKey(providerId, credential.key);
-		}
-	}
-
-	private showAuthSelect(
-		dialog: LoginDialogComponent,
-		prompt: Extract<AuthPrompt, { type: "select" }>,
-	): Promise<string> {
-		return new Promise((resolve, reject) => {
-			const restoreDialog = () => {
-				this.editorContainer.clear();
-				this.editorContainer.addChild(dialog);
-				this.ui.setFocus(dialog);
-				this.ui.requestRender();
-			};
-			const labels = prompt.options.map((option) => option.label);
-			const selector = new ExtensionSelectorComponent(
-				prompt.message,
-				labels,
-				(optionLabel) => {
-					restoreDialog();
-					const id = prompt.options.find((option) => option.label === optionLabel)?.id;
-					if (id) resolve(id);
-					else reject(new Error("Login cancelled"));
-				},
-				() => {
-					restoreDialog();
-					reject(new Error("Login cancelled"));
-				},
-			);
-			this.editorContainer.clear();
-			this.editorContainer.addChild(selector);
-			this.ui.setFocus(selector);
-			this.ui.requestRender();
-		});
-	}
-
-	private async showAuthPrompt(dialog: LoginDialogComponent, prompt: AuthPrompt): Promise<string> {
-		let response: Promise<string>;
-		if (prompt.type === "select") {
-			response = this.showAuthSelect(dialog, prompt);
-		} else if (prompt.type === "manual_code") {
-			response = dialog.showManualInput(prompt.message);
-		} else {
-			response = dialog.showPrompt(prompt.message, prompt.placeholder);
-		}
-		if (!prompt.signal) return response;
-		if (prompt.signal.aborted) throw new Error("Login cancelled");
-		const signal = prompt.signal;
-		let onAbort: (() => void) | undefined;
-		const aborted = new Promise<string>((_resolve, reject) => {
-			onAbort = () => reject(new Error("Login cancelled"));
-			signal.addEventListener("abort", onAbort, { once: true });
-		});
-		try {
-			return await Promise.race([response, aborted]);
-		} finally {
-			if (onAbort) signal.removeEventListener("abort", onAbort);
-		}
-	}
-
-	private notifyAuthDialog(dialog: LoginDialogComponent, event: AuthEvent): void {
-		if (event.type === "auth_url") {
-			dialog.showAuth(event.url, event.instructions);
-		} else if (event.type === "device_code") {
-			dialog.showDeviceCode(event);
-			dialog.showWaiting("Waiting for authentication...");
-		} else if (event.type === "info") {
-			dialog.showInfo(event.message, event.links);
-		} else {
-			dialog.showProgress(event.message);
-		}
-	}
-
-	private async loginProvider(
-		dialog: LoginDialogComponent,
-		providerId: string,
-		method: "api_key" | "oauth",
-	): Promise<Credential> {
-		return this.session.modelRuntime.login(providerId, method, {
-			signal: dialog.signal,
-			prompt: (prompt) => this.showAuthPrompt(dialog, prompt),
-			notify: (event) => this.notifyAuthDialog(dialog, event),
-			handoff: async (command, args, env) => {
-				this.ui.stop();
-				try {
-					await new Promise<void>((resolve, reject) => {
-						const child = spawn(command, [...args], { stdio: "inherit", env, windowsHide: false });
-						const abort = () => child.kill();
-						dialog.signal.addEventListener("abort", abort, { once: true });
-						if (dialog.signal.aborted) abort();
-						child.once("error", (error) => {
-							dialog.signal.removeEventListener("abort", abort);
-							reject(error);
-						});
-						child.once("close", (code) => {
-							dialog.signal.removeEventListener("abort", abort);
-							if (code === 0) resolve();
-							else reject(new Error("Claude Code login did not complete"));
-						});
-					});
-				} finally {
-					this.ui.start();
-				}
-			},
-		});
-	}
-
-	private async showLoginDialog(providerId: string, providerName: string): Promise<void> {
-		const previousModel = this.session.model;
-		const dialog = new LoginDialogComponent(this.ui, providerId, (_success, _message) => {}, providerName);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		try {
-			await this.loginProvider(dialog, providerId, "oauth");
-			restoreEditor();
-			await this.completeProviderAuthentication(providerId, providerName, "oauth", previousModel);
-		} catch (error: unknown) {
-			restoreEditor();
-			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
-				this.showError(`Failed to login to ${providerName}: ${errorMsg}`);
-			}
-		}
 	}
 
 	// =========================================================================
@@ -6668,7 +5357,7 @@ export class InteractiveMode {
 	private async handleUndoCommand(): Promise<void> {
 		const result = await this.rewindLastTurn("undo");
 		if (!result) return;
-		this.showStatus("Undone. /redo to restore.");
+		this.showStatus("Conversation rewound. Files are unchanged; /rollback restores them. /redo to restore the turn.");
 	}
 
 	private async handleEditCommand(): Promise<void> {
@@ -7203,141 +5892,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// /plan is a shortcut into read-only mode for planning.
-	private async handlePlanCommand(args: string): Promise<void> {
-		const sub = args.toLowerCase();
-		const inReadOnly = this.session.permissionMode === "read-only";
-
-		if (sub === "status") {
-			this.showStatus(
-				inReadOnly
-					? "Read mode is active. /plan off to leave it."
-					: `Permission mode: ${this.session.permissionMode}.`,
-			);
-			return;
-		}
-
-		if (sub !== "" && sub !== "on" && sub !== "off") {
-			if (!inReadOnly) this.applyPermissionMode("read-only");
-			await this.sendUserMessageAfterDeferredBuiltins(`Create a plan for: ${args}`);
-			return;
-		}
-
-		const next = sub !== "off";
-		if (next === inReadOnly) {
-			this.showStatus(next ? "Read mode is already active." : "Read mode is already off.");
-			return;
-		}
-
-		this.applyPermissionMode(next ? "read-only" : this.restoreTargetAfterPlan());
-	}
-
-	private handleModeCommand(args: string): void {
-		const sub = args.toLowerCase();
-
-		if (sub === "status") {
-			this.showStatus(
-				`Permission mode: ${this.session.permissionMode === "read-only" ? "read" : this.session.permissionMode}`,
-			);
-			return;
-		}
-
-		if (sub === "yolo" || sub === "auto" || sub === "read-only" || sub === "read") {
-			this.applyPermissionMode(sub === "read" ? "read-only" : sub);
-			return;
-		}
-
-		if (sub !== "") {
-			this.showStatus("Usage: /mode [yolo|auto|read] — bare /mode opens the selector.");
-			return;
-		}
-
-		const options = [
-			"YOLO — auto-approve tools, agent may still ask",
-			"Auto — a review model checks risky actions",
-			"Read — inspect without making changes",
-		];
-		void this.showExtensionSelector("Permission mode", options).then((choice) => {
-			if (!choice) return;
-			if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
-			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
-			else if (choice.startsWith("Read")) this.applyPermissionMode("read-only");
-		});
-	}
-
-	/** Destination after plan approval or /plan off. */
-	private restoreTargetAfterPlan(): PermissionMode {
-		return restorePermissionModeAfterPlan(
-			this.previousPermissionMode,
-			this.settingsManager.getDefaultPermissionMode(),
-		);
-	}
-
-	/** Apply addendum + auto-rollback for a mode without a status toast. */
-	private syncPermissionModeEffects(mode: PermissionMode): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		this.session.setPermissionMode(mode);
-		if (mode === "auto") enableRollbackForSession(this.sessionManager.getSessionId());
-	}
-
-	// lunr: `/goal` works without questions in the current mode (read-only steps up to yolo), without writing settings.
-	private enterGoalAuto(): void {
-		const next = nextModeForGoal(this.session.permissionMode, "enter", this.preGoalPermissionMode);
-		this.preGoalPermissionMode = next.saved;
-		if (next.mode !== this.session.permissionMode) {
-			this.applyPermissionMode(next.mode, { silent: true });
-		}
-		this.session.setAutonomous(true);
-		enableRollbackForSession(this.sessionManager.getSessionId());
-	}
-
-	private leaveGoalAuto(): void {
-		const next = nextModeForGoal(this.session.permissionMode, "leave", this.preGoalPermissionMode);
-		this.preGoalPermissionMode = next.saved;
-		this.session.setAutonomous(false);
-		if (next.mode !== this.session.permissionMode) {
-			this.applyPermissionMode(next.mode, { silent: true });
-		}
-		if (this.session.permissionMode !== "auto") disableRollbackForSession(this.sessionManager.getSessionId());
-	}
-
-	/** `cancelMode` is where to go if auto needs a review model and the user cancels the picker. */
-	private applyPermissionMode(mode: PermissionMode, opts?: { silent?: boolean; cancelMode?: PermissionMode }): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		if (mode === "auto") {
-			const reviewer = this.session.resolveAutoReviewer();
-			if (reviewer.kind !== "ready") {
-				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode);
-				return;
-			}
-		}
-		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
-		const prev = this.session.permissionMode;
-		if (mode === "read-only" && prev !== "read-only") {
-			this.previousPermissionMode = prev;
-		}
-		this.session.setPermissionMode(mode);
-		this.ui.requestRender();
-
-		if (mode === "auto" && prev !== "auto") {
-			enableRollbackForSession(this.sessionManager.getSessionId());
-		} else if (mode !== "auto" && prev === "auto") {
-			disableRollbackForSession(this.sessionManager.getSessionId());
-		}
-
-		if (opts?.silent) return;
-
-		if (mode === "auto" && prev !== "auto") {
-			const reviewer = this.session.resolveAutoReviewer();
-			const by = reviewer.kind === "ready" ? reviewer.ref : "the review model";
-			this.showStatus(`Auto mode active. ${by} checks risky actions. Rollback enabled for this session.`);
-		} else if (mode === "read-only") {
-			this.showStatus("Read mode active. Changes are blocked.");
-		} else {
-			this.showStatus(`Permission mode: ${mode}`);
-		}
-	}
-
 	/**
 	 * Rings the bell or sends a desktop notice, per the Notifications setting, when a run
 	 * finishes or waits for the user. Skipped while the terminal reports it has focus.
@@ -7351,78 +5905,6 @@ export class InteractiveMode {
 	/** Extension questions only count as waiting for the user while a run is in progress. */
 	private notifyAttentionIfRunning(): void {
 		if (this.session.isStreaming) this.notifyAttention("input");
-	}
-
-	/**
-	 * Opens the model list so the user can pick the auto review model, then enters auto. With a
-	 * `reviewer` it first explains why auto needs one. Cancelling switches to `cancelMode` if given.
-	 */
-	private showAutoReviewModelPicker(
-		reviewer?: Exclude<AutoReviewer, { kind: "ready" }>,
-		cancelMode?: PermissionMode,
-	): void {
-		if (reviewer) {
-			this.showWarning(
-				reviewer.kind === "missing"
-					? `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one. Pick the model that should check risky actions.`
-					: `Auto review model ${reviewer.ref} isn't available. Pick another model to check risky actions.`,
-			);
-		}
-		this.showSelector((done) => {
-			const selector = new ModelSelectorComponent(
-				this.ui,
-				this.resolveModelReference(this.settingsManager.getAutoReviewModel()),
-				this.settingsManager,
-				this.session.modelRuntime,
-				this.session.scopedModels,
-				(model) => {
-					done();
-					this.settingsManager.setAutoReviewModel(`${model.provider}/${model.id}`);
-					if (reviewer) this.applyPermissionMode("auto");
-					else this.showStatus(`Auto review model: ${model.provider}/${model.id}`);
-				},
-				() => {
-					done();
-					if (reviewer && cancelMode) this.applyPermissionMode(cancelMode, { silent: cancelMode !== "yolo" });
-					this.ui.requestRender();
-				},
-				undefined,
-				{ persistDefault: false },
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	/** Startup check for a session that opens in auto without a usable review model. */
-	private warnIfAutoHasNoReviewer(): void {
-		if (this.session.permissionMode !== "auto") return;
-		const reviewer = this.session.resolveAutoReviewer();
-		if (reviewer.kind === "ready") return;
-		this.showWarning(
-			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
-		);
-	}
-
-	// Dialog when auto mode's review model kept blocking, or couldn't review, one action.
-	private async showAutoReviewDecisionDialog(req: { toolName: string; detail: string }): Promise<ApprovalResponse> {
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					`Auto review stopped a ${req.toolName} call. Run it anyway?`,
-					["Run it once", "Keep it blocked"],
-					(option) => {
-						done();
-						resolve(option === "Run it once" ? "once" : "reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-					{ message: req.detail.slice(0, 800) },
-				);
-				return { component: selector, focus: selector };
-			});
-		});
 	}
 
 	// Approval dialog for one subagent call launching more than two children.
@@ -7932,11 +6414,26 @@ ${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |
 
 	private async handleCompactCommand(customInstructions?: string): Promise<void> {
 		this.clearStatusIndicator();
-
+		// A second /compact would join the running one and never see its compaction_start.
+		if (this.session.isCompacting) {
+			this.showStatus("Compaction is already running.");
+			return;
+		}
+		let started = false;
+		const unsubscribe = this.session.subscribe((event) => {
+			if (event.type === "compaction_start") started = true;
+		});
 		try {
 			await this.session.compact(customInstructions);
-		} catch {
-			// Ignore, will be emitted as an event
+			// compact() returns the earlier result without events when the session already ends in a compaction.
+			if (!started) this.showStatus("Already compacted.");
+		} catch (error) {
+			// Failures after compaction_start arrive as a compaction_end event instead.
+			if (started) return;
+			if (error instanceof NothingToCompactError) this.showStatus("Nothing to compact yet.");
+			else this.showError(error instanceof Error ? error.message : String(error));
+		} finally {
+			unsubscribe();
 		}
 	}
 

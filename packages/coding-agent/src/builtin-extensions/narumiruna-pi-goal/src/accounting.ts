@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { collectUsageRequests, totalRequestUsage, collectChildUsage, totalChildUsage } from "../../../core/usage-accounting.ts";
 import type { Usage } from "@earendil-works/pi-ai";
+import type { SessionEntry } from "../../../core/session-manager.ts";
 
 export interface GoalAccountingState {
 	status: string;
@@ -105,7 +105,7 @@ export function cumulativeAssistantTokens(entries: unknown[]) {
 }
 
 export function currentTokenTotal(ctx: UsageContext): number {
-	const sessionManager = ctx.sessionManager as { getEntries?: () => unknown[]; getBranch?: () => unknown[] } | undefined;
+	const sessionManager = ctx.sessionManager as { getEntries?: () => SessionEntry[]; getBranch?: () => SessionEntry[] } | undefined;
 	const entries = sessionManager?.getEntries?.() ?? sessionManager?.getBranch?.() ?? [];
 	return totalRequestUsage(collectUsageRequests(entries)).total + totalChildUsage(collectChildUsage(entries)).total;
 }

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CronJob,
 	createJob,
@@ -145,11 +145,17 @@ describe("runSchedulerTick", () => {
 			runJob: async () => {
 				// advanceNextRun already moved nextRunAt into the future before runJob.
 				advancedNextRunAt = getJob(job.id).nextRunAt;
-				await new Promise((resolve) => setTimeout(resolve, 5000));
+				// the run finishes 5s late: move the clock instead of sleeping.
+				vi.setSystemTime(Date.now() + 5000);
 				return "ok";
 			},
 		});
-		await runSchedulerTick(deps);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			await runSchedulerTick(deps);
+		} finally {
+			vi.useRealTimers();
+		}
 		const after = getJob(job.id);
 		// markJobRun must not re-anchor to the actual run time (now+5s) — it keeps
 		// the slot advanceNextRun computed before the run.

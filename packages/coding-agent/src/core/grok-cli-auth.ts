@@ -6,19 +6,18 @@
  * must never write a rotated-out refresh back over a newer one.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } from "@earendil-works/pi-ai";
 import lockfile from "proper-lockfile";
+import { writeAuthFileAtomic } from "./auth-storage.ts";
 
 export const XAI_PROVIDER_ID = "xai";
 /** Same client as packages/ai/src/auth/oauth/xai.ts `XAI_CLIENT_ID`. */
 export const XAI_GROK_CLI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 /** Matches packages/ai/src/auth/oauth/xai.ts `REFRESH_SKEW_MS`. */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
-
-const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf-8", mode: 0o600 } as const;
 
 export function grokHomeDir(grokHome?: string): string {
 	if (grokHome) return grokHome;
@@ -132,35 +131,6 @@ function shouldAdopt(lunr: Credential | undefined, chosen: Credential | undefine
 	if (!chosen || chosen.type !== "oauth") return false;
 	if (!lunr || lunr.type !== "oauth") return true;
 	return lunr.access !== chosen.access || lunr.refresh !== chosen.refresh;
-}
-
-function writeAuthFileAtomic(authPath: string, contents: string): void {
-	const tmp = `${authPath}.${process.pid}.${Date.now()}.tmp`;
-	writeFileSync(tmp, contents, AUTH_FILE_WRITE_OPTIONS);
-	try {
-		chmodSync(tmp, 0o600);
-	} catch {
-		// mode bits are best-effort on Windows.
-	}
-	try {
-		if (process.platform === "win32" && existsSync(authPath)) {
-			writeFileSync(authPath, contents, AUTH_FILE_WRITE_OPTIONS);
-			chmodSync(authPath, 0o600);
-			return;
-		}
-		renameSync(tmp, authPath);
-		try {
-			chmodSync(authPath, 0o600);
-		} catch {
-			// mode bits are best-effort on Windows.
-		}
-	} finally {
-		try {
-			unlinkSync(tmp);
-		} catch {
-			// tmp already renamed, or never created.
-		}
-	}
 }
 
 function acquireGrokLock(authPath: string): () => void {

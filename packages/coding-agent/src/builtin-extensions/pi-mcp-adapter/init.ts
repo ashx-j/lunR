@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createMcpAuthFlow } from "./mcp-auth-flow.ts";
 import type { McpExtensionState } from "./state.ts";

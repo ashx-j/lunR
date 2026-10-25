@@ -1,4 +1,3 @@
-// @ts-nocheck
 export interface FetchContentParams {
 	url?: unknown;
 	urls?: unknown;

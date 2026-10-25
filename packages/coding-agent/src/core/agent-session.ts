@@ -32,6 +32,7 @@ import type {
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import type {
+	Api,
 	AssistantMessage,
 	AuthResult,
 	ImageContent,
@@ -234,7 +235,7 @@ export interface AgentSessionConfig {
 	cwd: string;
 	agentDir?: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
-	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	scopedModels?: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }>;
 	/** Resource loader for extensions, skills, prompts, themes, context files, and system prompt */
 	resourceLoader: ResourceLoader;
 	/** SDK custom tools registered outside extensions */
@@ -332,7 +333,7 @@ interface WaitPromptHandoffState {
 
 /** Result from cycleModel() */
 export interface ModelCycleResult {
-	model: Model<any>;
+	model: Model<Api>;
 	thinkingLevel: ThinkingLevel;
 	/** Whether cycling through scoped models (--models flag) or all available */
 	isScoped: boolean;
@@ -394,6 +395,14 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 /** Standard thinking levels (no-model fallback). Live models use getSupportedThinkingLevels. */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/** Thrown by `compact()` before any compaction event when the branch has nothing old enough to summarize. */
+export class NothingToCompactError extends Error {
+	constructor() {
+		super("Nothing to compact (session too small)");
+		this.name = "NothingToCompactError";
+	}
+}
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -403,7 +412,7 @@ export class AgentSession {
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
 
-	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	private _scopedModels: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }>;
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
@@ -572,7 +581,7 @@ export class AgentSession {
 				: undefined;
 	}
 
-	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
+	private async _getRequiredRequestAuth(model: Model<Api>): Promise<{
 		apiKey: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
@@ -606,7 +615,7 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
-	private async _getSummarizationRequestAuth(model: Model<any>): Promise<{
+	private async _getSummarizationRequestAuth(model: Model<Api>): Promise<{
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
@@ -1189,7 +1198,7 @@ export class AgentSession {
 	}
 
 	/** Current model (may be undefined if not yet selected) */
-	get model(): Model<any> | undefined {
+	get model(): Model<Api> | undefined {
 		return this.agent.state.model;
 	}
 
@@ -1488,12 +1497,12 @@ export class AgentSession {
 	}
 
 	/** Scoped models for cycling (from --models flag) */
-	get scopedModels(): ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }> {
+	get scopedModels(): ReadonlyArray<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }> {
 		return this._scopedModels;
 	}
 
 	/** Update scoped models for cycling */
-	setScopedModels(scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>): void {
+	setScopedModels(scopedModels: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }>): void {
 		this._scopedModels = scopedModels;
 	}
 
@@ -1733,7 +1742,7 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		this.assertCanStartWork();
-		const commandName = text.startsWith("/") ? text.slice(1).split(" ")[0] : undefined;
+		const commandName = text.startsWith("/") ? text.slice(1).split(/\s/, 1)[0] : undefined;
 		// Lifecycle commands may replace the session; they cannot own a run they must drain.
 		if ((options?.expandPromptTemplates ?? true) && commandName && this._extensionRunner.getCommand(commandName)) {
 			try {
@@ -2042,10 +2051,10 @@ export class AgentSession {
 	 * Try to execute an extension command. Returns true if command was found and executed.
 	 */
 	private async _tryExecuteExtensionCommand(text: string): Promise<boolean> {
-		// Parse command name and args
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+		// The name ends at the first whitespace character, so `/goal` followed by a newline still runs /goal.
+		const nameEnd = text.search(/\s/);
+		const commandName = nameEnd === -1 ? text.slice(1) : text.slice(1, nameEnd);
+		const args = nameEnd === -1 ? "" : text.slice(nameEnd + 1);
 
 		const command = this._extensionRunner.getCommand(commandName);
 		if (!command) return false;
@@ -2075,9 +2084,9 @@ export class AgentSession {
 	private _expandSkillCommand(text: string): string {
 		if (!text.startsWith("/skill:")) return text;
 
-		const spaceIndex = text.indexOf(" ");
-		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const nameEnd = text.search(/\s/);
+		const skillName = nameEnd === -1 ? text.slice(7) : text.slice(7, nameEnd);
+		const args = nameEnd === -1 ? "" : text.slice(nameEnd + 1).trim();
 
 		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
 		if (!skill) return text; // Unknown skill, pass through
@@ -2175,8 +2184,8 @@ export class AgentSession {
 	 * Throw an error if the text is an extension command.
 	 */
 	private _throwIfExtensionCommand(text: string): void {
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const nameEnd = text.search(/\s/);
+		const commandName = nameEnd === -1 ? text.slice(1) : text.slice(1, nameEnd);
 		const command = this._extensionRunner.getCommand(commandName);
 
 		if (command) {
@@ -2357,8 +2366,8 @@ export class AgentSession {
 	// =========================================================================
 
 	private async _emitModelSelect(
-		nextModel: Model<any>,
-		previousModel: Model<any> | undefined,
+		nextModel: Model<Api>,
+		previousModel: Model<Api> | undefined,
 		source: "set" | "cycle" | "restore",
 	): Promise<void> {
 		if (modelsAreEqual(previousModel, nextModel)) return;
@@ -2375,7 +2384,7 @@ export class AgentSession {
 	 * Validates that auth is configured, saves to session and settings.
 	 * @throws Error if no auth is configured for the model
 	 */
-	async setModel(model: Model<any>): Promise<void> {
+	async setModel(model: Model<Api>): Promise<void> {
 		if (!(await this._modelRuntime.checkAuth(model.provider))) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
@@ -2535,7 +2544,7 @@ export class AgentSession {
 		this._refreshCurrentModelFromRegistry();
 	}
 
-	private resolvedCatalogModel(): Model<any> | undefined {
+	private resolvedCatalogModel(): Model<Api> | undefined {
 		const current = this.model;
 		if (!current) return undefined;
 		const registry = this._modelRuntime.getModel(current.provider, current.id);
@@ -2642,29 +2651,22 @@ export class AgentSession {
 		this.assertCanStartWork();
 		const existing = this._latestCompactionResult();
 		if (existing) return existing;
+		// Checks that fail before compaction_start emit no compaction events; callers report the error.
+		if (!this.model) throw new Error(formatNoModelSelectedMessage());
+		const model = this.model;
+		const { apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+		const pathEntries = this.sessionManager.getBranch();
+		const preparation = prepareCompaction(
+			pathEntries,
+			this.settingsManager.getCompactionSettings(),
+			model.contextWindow,
+		);
+		if (!preparation) throw new NothingToCompactError();
 		this._disconnectFromAgent();
 		this._compactionAbortController = new AbortController();
 
 		try {
 			this._emit({ type: "compaction_start", reason: "manual" });
-			if (!this.model) {
-				throw new Error(formatNoModelSelectedMessage());
-			}
-
-			const { apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
-
-			const pathEntries = this.sessionManager.getBranch();
-			const settings = this.settingsManager.getCompactionSettings();
-
-			const preparation = prepareCompaction(pathEntries, settings);
-			if (!preparation) {
-				// Check why we can't compact
-				const lastEntry = pathEntries[pathEntries.length - 1];
-				if (lastEntry?.type === "compaction") {
-					throw new Error("Already compacted");
-				}
-				throw new Error("Nothing to compact (session too small)");
-			}
 
 			let extensionCompaction: CompactionResult | undefined;
 			let fromExtension = false;
@@ -2705,7 +2707,7 @@ export class AgentSession {
 				// Generate compaction result
 				const result = await compact(
 					preparation,
-					this.model,
+					model,
 					apiKey,
 					headers,
 					customInstructions,
@@ -2920,7 +2922,7 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			const preparation = prepareCompaction(pathEntries, settings, this.model.contextWindow);
 			if (!preparation) {
 				return false;
 			}
@@ -4061,10 +4063,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get all user messages from session for fork selector.
+	 * User messages on the active branch, for the fork selector. Turns rewound by /undo or left on
+	 * another branch are not listed; /tree reaches those.
 	 */
 	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
-		const entries = this.sessionManager.getEntries();
+		const entries = this.sessionManager.getBranch();
 		const result: Array<{ entryId: string; text: string }> = [];
 
 		for (const entry of entries) {

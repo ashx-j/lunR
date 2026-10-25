@@ -94,6 +94,8 @@ export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/** `select` only: option index the cursor starts on. Hosts without a cursor ignore it. */
+	initialIndex?: number;
 }
 
 /** Placement for extension widgets. */
@@ -316,7 +318,7 @@ export interface ExtensionContext {
 	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */
-	model: Model<any> | undefined;
+	model: Model<Api> | undefined;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** Admit one idle request and await only its messages and cancellation settlement. */
@@ -809,8 +811,8 @@ export type ModelSelectSource = "set" | "cycle" | "restore";
 /** Fired when a new model is selected */
 export interface ModelSelectEvent {
 	type: "model_select";
-	model: Model<any>;
-	previousModel: Model<any> | undefined;
+	model: Model<Api>;
+	previousModel: Model<Api> | undefined;
 	source: ModelSelectSource;
 }
 
@@ -1345,7 +1347,7 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** Set the current model. Returns false if no API key available. */
-	setModel(model: Model<any>): Promise<boolean>;
+	setModel(model: Model<Api>): Promise<boolean>;
 
 	/** Get current thinking level. */
 	getThinkingLevel(): ThinkingLevel;
@@ -1570,7 +1572,7 @@ export type SetActiveToolsHandler = (toolNames: string[]) => void;
 
 export type RefreshToolsHandler = () => void;
 
-export type SetModelHandler = (model: Model<any>) => Promise<boolean>;
+export type SetModelHandler = (model: Model<Api>) => Promise<boolean>;
 
 export type GetThinkingLevelHandler = () => ThinkingLevel;
 
@@ -1630,7 +1632,7 @@ export interface ExtensionContextActions {
 	sendMessage?: ExtensionContext["sendMessage"];
 	hasQueuedMessage?: ExtensionContext["hasQueuedMessage"];
 	removeQueuedMessage?: ExtensionContext["removeQueuedMessage"];
-	getModel: () => Model<any> | undefined;
+	getModel: () => Model<Api> | undefined;
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
 	getSignal: () => AbortSignal | undefined;

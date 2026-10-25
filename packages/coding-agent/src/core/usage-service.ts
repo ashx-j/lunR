@@ -15,6 +15,7 @@
 
 import { createHash } from "node:crypto";
 import type { AuthResult } from "@earendil-works/pi-ai";
+import { globalBridge } from "./global-bridge.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
@@ -248,6 +249,7 @@ export function clearPlanUsageCache(): void {
 // ---------------------------------------------------------------------------
 
 export const USAGE_SERVICE_BRIDGE_SYMBOL = Symbol.for("@lunr/usage-service");
+const usageServiceSlot = globalBridge<UsageServiceBridge>(USAGE_SERVICE_BRIDGE_SYMBOL);
 
 export interface FooterPlanSegment {
 	label: string;
@@ -284,13 +286,13 @@ export function registerUsageServiceBridge(runtime: ModelRuntime, settingsManage
 	};
 	bridges.set(runtime, bridge);
 	// Compatibility bridge requires an explicit async owner; it never falls back to another session.
-	(globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE_SYMBOL] = {
+	usageServiceSlot.set({
 		peek: (providerId: string) => getUsageServiceBridge()?.peek(providerId),
 		prefetch: (providerId: string) => getUsageServiceBridge()?.prefetch(providerId),
 		pickForFooter: (providerId: string) => getUsageServiceBridge()?.pickForFooter(providerId),
 		getPreferredWindow: () => getUsageServiceBridge()?.getPreferredWindow() ?? "weekly",
 		setOnUpdate: (fn: (() => void) | undefined) => getUsageServiceBridge()?.setOnUpdate(fn),
-	} satisfies UsageServiceBridge;
+	});
 }
 
 export function getUsageServiceBridge(runtime = runtimeScope.getStore()?.modelRuntime): UsageServiceBridge | undefined {

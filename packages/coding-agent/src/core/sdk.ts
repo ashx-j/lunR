@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { clampThinkingLevel, type Message, type Model } from "@earendil-works/pi-ai";
+import { type Api, clampThinkingLevel, type Message, type Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -43,11 +43,11 @@ export interface CreateAgentSessionOptions {
 	modelRuntime?: ModelRuntime;
 
 	/** Model to use. Default: from settings, else first available */
-	model?: Model<any>;
+	model?: Model<Api>;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
-	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	scopedModels?: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }>;
 
 	/**
 	 * Optional default tool suppression mode when no explicit allowlist is provided.

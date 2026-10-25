@@ -1,6 +1,12 @@
 # Package size report: @ashx-j/lunr
 
-Measured 2026-10-20 on master `eee4fdba` (v0.2.38) after fresh tui, ai, agent and coding-agent builds. Sizes are in MB (10^6 bytes). Nothing was removed. This file sits outside `packages/`, so npm never ships it.
+Measured 2026-10-20 on master `eee4fdba` (v0.2.38) after fresh tui, ai, agent and coding-agent builds. Sizes are in MB (10^6 bytes). This file sits outside `packages/`, so npm never ships it.
+
+## Applied cuts (2026-10-21)
+
+The coding-agent `files` list now drops the changes marked safe below: `!dist/**/*.map` (both kinds), `!docs/images/exy.png`, and `!dist/catalog/providers`, `!dist/catalog/providers.json`, `!dist/catalog/publication.json`. `npm run publish:dry` now packs `@ashx-j/lunr@0.2.39` at 5.41 MB packed, 21.94 MB unpacked and 1590 files. That is close to the 5.30 MB estimate; the difference is mostly the new 0.31 MB MCP Apps `app-bridge.bundle.js`. An isolated install of the packed tarballs runs `lunr --version`, `--help` (also under `--enable-source-maps`) and RPC mode. The risky and unsafe rows are unchanged.
+
+The tables below describe the package before the cuts.
 
 ## Current size
 
@@ -48,7 +54,7 @@ The bundle build rewrites `import.meta.url` to each module's original `dist/` pa
 - `pi-intercom/broker/spawn.ts` spawns `broker.js` with node (traced above).
 - `pi-subagents/.../async-execution.ts` spawns `subagent-runner.js` for background subagents.
 - `pi-subagents/.../pi-args.ts` passes `subagent-prompt-runtime.js` and `extension/fanout-child.js` to child lunR processes as `--extension`. jiti loads them there.
-- `pi-lsp-extension/src/lsp-manager.ts` points the shared LSP daemon at `lsp-daemon.ts` and `lsp-daemon-launcher.cjs`.
+- `pi-lsp-extension/src/lsp-manager.ts` spawns the shared LSP daemon `lsp-daemon.js` with node (before 2026-10-21 it pointed at `lsp-daemon.ts` and a missing `lsp-daemon-launcher.cjs`).
 - `gateway/service.ts` writes `dist/cli.js` into the service unit. `modes/acp/process.ts` spawns `dist/cli.js` for workers.
 
 The static import closure of those five child entry points is 162 loose `.js` files (2.1 MB). It reaches into loose `core/`, `utils/`, `gateway/` and `modes/` modules, not just `builtin-extensions/`. Apart from `cli.js`, `rpc.js` and the export-html templates, the other loose `.js` files (4.54 MB) only serve as the fallback that `cli.js` and `rpc.js` use when `dist/node-runtime` is missing.
@@ -78,10 +84,10 @@ Each saving is a separate `npm pack --dry-run --ignore-scripts --json --workspac
 
 The safe changes together (both map kinds, `exy.png` and the catalog extras) bring the tarball to 5.30 MB packed (down 5.66 MB, 52%) and 21.48 MB unpacked (down 23.50 MB), with 1565 files. Adding the risky loose-JS cut gives 4.34 MB packed and 17.02 MB unpacked.
 
-## Side findings (not verified at runtime)
+## Side findings (fixed 2026-10-21)
 
-- `lsp-daemon-launcher.cjs` does not exist in `src/` or `dist/`, and `lsp-daemon.ts` is only shipped as `.js`. The shared LSP daemon therefore cannot start from an install. `lsp-manager.ts` then reports "Daemon mode failed, falling back to direct" and starts the server directly.
-- `pi-mcp-adapter/ui-server.ts` serves `app-bridge.bundle.js` from `import.meta.dirname`. That file is in neither `src/` nor `dist/`. The bundle rewrite also covers only `import.meta.url`, so inside the bundle `import.meta.dirname` is `dist/node-runtime`.
+- The shared LSP daemon could not start from an install: `lsp-daemon-launcher.cjs` did not exist. `lsp-manager.ts` now runs the compiled `lsp-daemon.js` directly.
+- `pi-mcp-adapter/ui-server.ts` served a missing `app-bridge.bundle.js`. `scripts/build-node-runtime.mjs` now builds it into `dist/builtin-extensions/pi-mcp-adapter/`, and the server resolves it from `import.meta.url`.
 
 ## How to reproduce
 

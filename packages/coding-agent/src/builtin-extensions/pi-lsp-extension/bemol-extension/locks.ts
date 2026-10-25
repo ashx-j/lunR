@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Workspace Lock — cross-session coordination for bemol runs.
  *
