@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * LSP Manager — manages multiple LSP server instances, one per language.
  *
@@ -7,7 +6,7 @@
  */
 
 import { resolve, join, dirname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn as spawnChild } from "node:child_process";
@@ -526,20 +525,11 @@ export class LspManager {
   ): Promise<void> {
     this.stop.signal.throwIfAborted();
     const socketPath = this.getSocketPath(languageId)!;
-    const daemonScript = new URL("./lsp-daemon.ts", import.meta.url).pathname;
-    const launcherScript = new URL("./lsp-daemon-launcher.cjs", import.meta.url).pathname;
-
-    // Resolve jiti from the running process's module context
-    let jitiPath: string;
-    try {
-      jitiPath = require.resolve("jiti");
-    } catch {
-      try {
-        jitiPath = require.resolve("@mariozechner/jiti");
-      } catch {
-        throw new Error("Cannot resolve jiti for daemon spawn — jiti not found in module path");
-      }
-    }
+    // Run the compiled daemon beside this module with plain node. The Node bundle rewrites
+    // import.meta.url to the original dist path; source runs and the standalone binary have
+    // no compiled daemon, so they fail here and fall back to a direct server.
+    const daemonScript = fileURLToPath(new URL("./lsp-daemon.js", import.meta.url));
+    if (!existsSync(daemonScript)) throw new Error(`LSP daemon script not found: ${daemonScript}`);
 
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
@@ -562,7 +552,7 @@ export class LspManager {
 
     const child = spawnChild(
       process.execPath, // node
-      [launcherScript, jitiPath, daemonScript, socketPath, config.command, ...effectiveArgs],
+      [daemonScript, socketPath, config.command, ...effectiveArgs],
       {
         cwd: this.rootDir,
         env,
@@ -571,7 +561,7 @@ export class LspManager {
       },
     );
 
-    // The launcher becomes shared infrastructure after spawn. Own its startup
+    // The daemon becomes shared infrastructure after spawn. Own its startup
     // error event, but do not kill a daemon when this session disconnects.
     child.unref(); // let daemon outlive this process
     await this.waitForStart(new Promise<void>((resolve, reject) => {

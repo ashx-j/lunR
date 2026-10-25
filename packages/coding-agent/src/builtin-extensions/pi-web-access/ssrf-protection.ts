@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 

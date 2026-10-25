@@ -22,7 +22,8 @@ const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf-8", mode: 0o600 } as const;
 /** OAuth refresh holds this lock for the IdP round-trip. 30s made a sleepy refresh look stale and let a second process spend the same token. */
 const AUTH_LOCK_STALE_MS = 120_000;
 
-function writeAuthFileAtomic(authPath: string, contents: string): void {
+/** Replace an auth file through a temp file and rename, keeping mode 0600. Also used for Grok CLI auth. */
+export function writeAuthFileAtomic(authPath: string, contents: string): void {
 	const tmp = `${authPath}.${process.pid}.${Date.now()}.tmp`;
 	writeFileSync(tmp, contents, AUTH_FILE_WRITE_OPTIONS);
 	try {

@@ -62,11 +62,16 @@ const packages = [
 const dryRun = process.argv.includes("--dry-run");
 const packIndex = process.argv.indexOf("--pack-dir");
 const packDirectory = packIndex === -1 ? undefined : process.argv[packIndex + 1];
-const unknownArgs = process.argv.slice(2).filter((arg, index) => arg !== "--dry-run" && index + 2 !== packIndex && index + 2 !== packIndex + 1);
+// --manifest <file> records each package's name, version and packed integrity for scripts/verify-npm-release.mjs.
+const manifestIndex = process.argv.indexOf("--manifest");
+const manifestPath = manifestIndex === -1 ? undefined : process.argv[manifestIndex + 1];
+const valueIndexes = new Set([packIndex, manifestIndex].filter((index) => index !== -1).flatMap((index) => [index, index + 1]));
+const unknownArgs = process.argv.slice(2).filter((arg, index) => arg !== "--dry-run" && !valueIndexes.has(index + 2));
 if (packIndex !== -1 && (!dryRun || !packDirectory)) throw new Error("--pack-dir requires --dry-run and an existing destination directory.");
+if (manifestIndex !== -1 && !manifestPath) throw new Error("--manifest requires a file path.");
 
 if (unknownArgs.length > 0) {
-	console.error(`Usage: node scripts/publish.mjs [--dry-run [--pack-dir <directory>]]`);
+	console.error(`Usage: node scripts/publish.mjs [--dry-run [--pack-dir <directory>]] [--manifest <file>]`);
 	process.exit(1);
 }
 
@@ -181,6 +186,8 @@ const packageStates = packages.map((pkg) => ({
 	version: packageVersions.get(pkg.workspaceName),
 }));
 
+const manifest = [];
+
 await (async () => {
 	const temps = [];
 	try {
@@ -214,6 +221,7 @@ await (async () => {
 			console.log(
 				`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked\n`,
 			);
+			manifest.push({ name: pkg.publishedName, version: pkg.version, integrity: packed.integrity });
 		}
 
 		for (const pkg of payloadStates) {
@@ -221,7 +229,9 @@ await (async () => {
 			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], { capture: true, cwd: pkg.stageDir });
 			const packed = Object.values(JSON.parse(result.stdout))[0];
 			console.log(`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked`);
+			manifest.push({ name: pkg.publishedName, version: pkg.version, integrity: packed.integrity });
 		}
+		if (manifestPath) writeFileSync(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
 		if (dryRun) return;
 		if (packageStates.find((pkg) => pkg.publishedName === "@ashx-j/lunr").published && payloadStates.some((pkg) => !pkg.published)) {
 			throw new Error("Use a new lunR release version before publishing new optional payload packages.");

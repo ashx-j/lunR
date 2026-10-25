@@ -27,6 +27,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import { globalBridge } from "../../core/global-bridge.ts";
 import { GENERATED_MODELS } from "./models.generated.ts";
 import {
   assembleModels,
@@ -75,6 +76,10 @@ function createRefreshProgressUi(ctx: Pick<ExtensionCommandContext, "ui">) {
   };
 }
 
+type OllamaCloudRefresh = (
+  ctx: Pick<ExtensionCommandContext, "ui"> & { auth?: OllamaDiscoveryAuth },
+) => ReturnType<typeof runRefresh>;
+
 async function runRefresh(pi: ExtensionAPI, ctx: Pick<ExtensionCommandContext, "ui"> & { auth?: OllamaDiscoveryAuth }) {
   const progressUi = createRefreshProgressUi(ctx);
   try {
@@ -112,7 +117,5 @@ export default async function (pi: ExtensionAPI) {
   // lunr: no user-visible command here — /refresh is the single refresh entry
   // point. Core triggers this extension's refresh through the bridge because
   // it bypasses the refreshModels hook and re-registers the provider wholesale.
-  (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/ollama-cloud-refresh")] = (
-    ctx: Pick<ExtensionCommandContext, "ui"> & { auth?: OllamaDiscoveryAuth },
-  ) => runRefresh(pi, ctx);
+  globalBridge<OllamaCloudRefresh>(Symbol.for("@lunr/ollama-cloud-refresh")).set((ctx) => runRefresh(pi, ctx));
 }

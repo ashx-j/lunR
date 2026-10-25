@@ -20,6 +20,7 @@ import type {
 	Message,
 	Model,
 	OpenAICompletionsCompat,
+	OpenRouterRouting,
 	ProviderEnv,
 	ProviderHeaders,
 	SimpleStreamOptions,
@@ -573,6 +574,24 @@ function createClient(
 	});
 }
 
+/**
+ * Request fields OpenAI-compatible servers accept beyond the OpenAI SDK request type: Z.ai tool
+ * streaming, Qwen and chat-template thinking switches, DeepSeek `thinking`, provider-specific
+ * `reasoning_effort` strings, and OpenRouter / Vercel AI Gateway routing.
+ */
+type CompatChatCompletionParams = Omit<
+	OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+	"reasoning_effort"
+> & {
+	tool_stream?: boolean;
+	enable_thinking?: boolean;
+	chat_template_kwargs?: Record<string, ResolvedChatTemplateKwargValue>;
+	thinking?: { type: "enabled" | "disabled" };
+	reasoning_effort?: string | null;
+	provider?: OpenRouterRouting;
+	providerOptions?: { gateway: Record<string, string[]> };
+};
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -594,9 +613,11 @@ function buildParams(
 				: undefined,
 		prompt_cache_retention: cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 	};
+	// Same object; writes through `request` may use the compat-only fields.
+	const request: CompatChatCompletionParams = params;
 
 	if (compat.supportsUsageInStreaming !== false) {
-		(params as any).stream_options = { include_usage: true };
+		params.stream_options = { include_usage: true };
 	}
 
 	if (compat.supportsStore) {
@@ -605,7 +626,7 @@ function buildParams(
 
 	if (options?.maxTokens) {
 		if (compat.maxTokensField === "max_tokens") {
-			(params as any).max_tokens = options.maxTokens;
+			params.max_tokens = options.maxTokens;
 		} else {
 			params.max_completion_tokens = options.maxTokens;
 		}
@@ -621,7 +642,7 @@ function buildParams(
 	if (activeTools && activeTools.length > 0) {
 		params.tools = convertTools(activeTools, compat);
 		if (compat.zaiToolStream) {
-			(params as any).tool_stream = true;
+			request.tool_stream = true;
 		}
 	} else if (hasToolHistory(context.messages)) {
 		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
@@ -650,26 +671,25 @@ function buildParams(
 			}
 		}
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-		(params as any).enable_thinking = !!options?.reasoningEffort;
+		request.enable_thinking = !!options?.reasoningEffort;
 	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		(params as any).chat_template_kwargs = {
+		request.chat_template_kwargs = {
 			enable_thinking: !!options?.reasoningEffort,
 			preserve_thinking: true,
 		};
 	} else if (compat.thinkingFormat === "chat-template" && model.reasoning) {
 		const chatTemplateKwargs = buildChatTemplateKwargs(model, options, compat);
 		if (chatTemplateKwargs) {
-			(params as any).chat_template_kwargs = chatTemplateKwargs;
+			request.chat_template_kwargs = chatTemplateKwargs;
 		}
 	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
 		if (options?.reasoningEffort) {
-			(params as any).thinking = { type: "enabled" };
+			request.thinking = { type: "enabled" };
 		} else if (model.thinkingLevelMap?.off !== null) {
-			(params as any).thinking = { type: "disabled" };
+			request.thinking = { type: "disabled" };
 		}
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-			(params as any).reasoning_effort =
-				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			request.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
@@ -704,17 +724,17 @@ function buildParams(
 		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
-		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+		request.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
 		if (typeof offValue === "string") {
-			(params as any).reasoning_effort = offValue;
+			request.reasoning_effort = offValue;
 		}
 	}
 
 	// OpenRouter provider routing preferences
 	if (model.compat?.openRouterRouting) {
-		(params as any).provider = model.compat.openRouterRouting;
+		request.provider = model.compat.openRouterRouting;
 	}
 
 	// Vercel AI Gateway provider routing preferences
@@ -724,7 +744,7 @@ function buildParams(
 			const gatewayOptions: Record<string, string[]> = {};
 			if (routing.only) gatewayOptions.only = routing.only;
 			if (routing.order) gatewayOptions.order = routing.order;
-			(params as any).providerOptions = { gateway: gatewayOptions };
+			request.providerOptions = { gateway: gatewayOptions };
 		}
 	}
 

@@ -114,7 +114,7 @@ function createFakeSession(): BridgeSession {
 		isStreaming: false,
 		isCompacting: false,
 		get model() {
-			return model as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
+			return model as unknown as import("@earendil-works/pi-ai/compat").Model<import("@earendil-works/pi-ai").Api>;
 		},
 		set model(value) {
 			model = value as unknown as ReturnType<typeof fakeModel>;
@@ -469,7 +469,7 @@ describe("/thinking", () => {
 			"claude-opus-4",
 			"anthropic",
 			true,
-		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
+		) as unknown as import("@earendil-works/pi-ai/compat").Model<import("@earendil-works/pi-ai").Api>;
 		const ctx = makeCtx("/thinking");
 		await runChatCommand(findCommand("thinking"), ctx);
 		expect(adapter.sent[0].text).toContain("Pick a thinking level");
@@ -484,7 +484,7 @@ describe("/thinking", () => {
 			"claude-opus-4",
 			"anthropic",
 			true,
-		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
+		) as unknown as import("@earendil-works/pi-ai/compat").Model<import("@earendil-works/pi-ai").Api>;
 		const ctx = makeCtx("/thinking high");
 		await runChatCommand(findCommand("thinking"), ctx);
 		expect(bridge.session?.thinkingLevel).toBe("high");
@@ -496,7 +496,7 @@ describe("/thinking", () => {
 			"claude-opus-4",
 			"anthropic",
 			true,
-		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
+		) as unknown as import("@earendil-works/pi-ai/compat").Model<import("@earendil-works/pi-ai").Api>;
 		const ctx = makeCtx(`/${alias} high`);
 		await runChatCommand(findCommand(alias), ctx);
 		expect(bridge.session?.thinkingLevel).toBe("high");
@@ -508,7 +508,7 @@ describe("/thinking", () => {
 			"claude-opus-4",
 			"anthropic",
 			true,
-		) as unknown as import("@earendil-works/pi-ai/compat").Model<any>;
+		) as unknown as import("@earendil-works/pi-ai/compat").Model<import("@earendil-works/pi-ai").Api>;
 		const ctx = makeCtx("/thinking maximum");
 		await runChatCommand(findCommand("thinking"), ctx);
 		expect(adapter.sent[0].text).toContain("Invalid level");

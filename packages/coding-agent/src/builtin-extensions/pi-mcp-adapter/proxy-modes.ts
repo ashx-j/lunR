@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
 import { checkSync } from "recheck";

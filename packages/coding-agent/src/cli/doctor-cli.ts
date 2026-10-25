@@ -8,9 +8,12 @@ import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isKeyRelease, ProcessTerminal, parseKey } from "@earendil-works/pi-tui";
 import chalk from "chalk";
+import { LOCAL_SERVERS } from "../builtin-extensions/lunr-local-providers/local-servers.ts";
 import { getAgentDir, getDocsPath, isBunBinary, VERSION } from "../config.ts";
 import { AuthStorage } from "../core/auth-storage.ts";
+import { hasGrokCliXaiAuth } from "../core/grok-cli-auth.ts";
 import { type AppKeybinding, KeybindingsManager } from "../core/keybindings.ts";
+import { ModelRuntime } from "../core/model-runtime.ts";
 import { officialCatalogCachePath } from "../core/official-catalog.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
 
@@ -49,16 +52,24 @@ export async function handleDoctorCli(args: string[]): Promise<boolean> {
 export async function collectDoctorChecks(agentDir: string = getAgentDir()): Promise<DoctorCheck[]> {
 	const settings = SettingsManager.create(process.cwd(), agentDir, { projectTrusted: false });
 	const auth = AuthStorage.create(join(agentDir, "auth.json"));
-	const logins = await auth.list();
+	// Cache-only, like startup: no provider or catalog requests. `grokHome: null` keeps reads from
+	// copying a Grok CLI login into auth.json; that login is checked directly instead.
+	const runtime = await ModelRuntime.create({
+		authPath: join(agentDir, "auth.json"),
+		modelsPath: join(agentDir, "models.json"),
+		allowModelNetwork: false,
+		grokHome: null,
+	});
+	const ready = await readReadyProviders(runtime);
+	if (!ready.some((provider) => provider.id === "xai") && hasGrokCliXaiAuth()) {
+		ready.push({ id: "xai", kind: "login", detail: "Grok CLI" });
+	}
+	const loginIds = new Set([...runtime.getProviders().map((provider) => provider.id), ...LOCAL_SERVER_IDS]);
 	const checks = [
 		checkNode(process.versions.node),
 		checkAgentDir(agentDir),
-		checkLogins(logins.map((login) => login.providerId)),
-		checkDefaultModel(
-			settings.getDefaultProvider(),
-			settings.getDefaultModel(),
-			logins.map((login) => login.providerId),
-		),
+		...checkProviders(ready),
+		checkDefaultModel(settings.getDefaultProvider(), settings.getDefaultModel(), ready, loginIds),
 		checkCatalog(officialCatalogCachePath(agentDir), Date.now()),
 		await checkClaudeCode(auth),
 		await checkBrowser(settings.getBrowserEnabled()),
@@ -118,34 +129,106 @@ function checkAgentDir(agentDir: string): DoctorCheck {
 	}
 }
 
-export function checkLogins(providers: string[]): DoctorCheck {
-	return providers.length > 0
-		? { status: "ok", label: "Logins", detail: providers.join(", ") }
-		: {
-				status: "warn",
-				label: "Logins",
-				detail: "none saved",
-				fix: "Run lunr, then /login to add a subscription or API key.",
-			};
+/** Where a ready provider's auth comes from. */
+export type ProviderAuthKind = "login" | "local" | "env" | "custom";
+
+export interface ReadyProvider {
+	id: string;
+	kind: ProviderAuthKind;
+	/** Env variable names for `env`, or where a login lives, when known. */
+	detail?: string;
 }
 
+const LOCAL_SERVER_IDS = LOCAL_SERVERS.map((server) => server.providerId);
+
+/**
+ * Providers the runtime can authenticate now. Uses the same test a prompt runs before its first
+ * request (`hasConfiguredAuth` or `checkAuth` in agent-session), so env keys and models.json
+ * providers count, not only saved logins.
+ */
+async function readReadyProviders(runtime: ModelRuntime): Promise<ReadyProvider[]> {
+	const ids = new Set([
+		...runtime.getProviders().map((provider) => provider.id),
+		...(await runtime.listCredentials()).map((credential) => credential.providerId),
+	]);
+	const ready: ReadyProvider[] = [];
+	for (const id of ids) {
+		if (!runtime.hasConfiguredAuth(id) && (await runtime.checkAuth(id)) === undefined) continue;
+		const status = runtime.getProviderAuthStatus(id);
+		switch (status.source) {
+			case "stored":
+			case "runtime":
+				ready.push({ id, kind: LOCAL_SERVER_IDS.includes(id) ? "local" : "login" });
+				break;
+			case "models_json_key":
+			case "models_json_command":
+			case "fallback":
+				ready.push({ id, kind: "custom" });
+				break;
+			default:
+				ready.push({ id, kind: "env", detail: status.label });
+		}
+	}
+	return ready;
+}
+
+const PROVIDER_GROUPS: Array<{ kind: ProviderAuthKind; label: string }> = [
+	{ kind: "login", label: "Saved logins" },
+	{ kind: "env", label: "Environment keys" },
+	{ kind: "custom", label: "Custom providers" },
+	{ kind: "local", label: "Local servers" },
+];
+
+/** One line per kind of ready provider, or one warning when none is ready. */
+export function checkProviders(ready: ReadyProvider[]): DoctorCheck[] {
+	if (ready.length === 0) {
+		return [
+			{
+				status: "warn",
+				label: "Providers",
+				detail: "none ready",
+				fix: "Run lunr, then /login to add a subscription, API key or local server, or set a provider's API key environment variable.",
+			},
+		];
+	}
+	return PROVIDER_GROUPS.flatMap(({ kind, label }) => {
+		const group = ready.filter((provider) => provider.kind === kind);
+		if (group.length === 0) return [];
+		const names = group.map((provider) => (provider.detail ? `${provider.id} (${provider.detail})` : provider.id));
+		return [{ status: "ok", label, detail: names.join(", ") } satisfies DoctorCheck];
+	});
+}
+
+/**
+ * The saved default model and whether its provider is ready. `loginIds` are the providers /login
+ * offers, so the fix never names a login that does not exist.
+ */
 export function checkDefaultModel(
 	provider: string | undefined,
 	model: string | undefined,
-	logins: string[],
+	ready: ReadyProvider[],
+	loginIds: ReadonlySet<string>,
 ): DoctorCheck {
+	const label = "Default model";
 	if (!provider || !model) {
-		return { status: "warn", label: "Default model", detail: "not set", fix: "Pick one in lunr with /model." };
+		return ready.length > 0
+			? { status: "warn", label, detail: "not set", fix: "Pick one in lunr with /model." }
+			: {
+					status: "warn",
+					label,
+					detail: "not set",
+					fix: "Add a provider first, then pick a model in lunr with /model.",
+				};
 	}
 	const name = `${provider}/${model}`;
-	return logins.includes(provider)
-		? { status: "ok", label: "Default model", detail: name }
-		: {
-				status: "warn",
-				label: "Default model",
-				detail: `${name}, but ${provider} has no saved login`,
-				fix: `Run /login ${provider}, or set that provider's API key environment variable.`,
-			};
+	if (ready.some((entry) => entry.id === provider)) return { status: "ok", label, detail: name };
+	const local = LOCAL_SERVERS.find((server) => server.providerId === provider);
+	const fix = local
+		? `Start ${local.productName}, then run /login ${provider} in lunr.`
+		: loginIds.has(provider)
+			? `Run lunr, then /login ${provider}, or set that provider's API key environment variable.`
+			: `${provider} is not a known provider. Pick another model in lunr with /model.`;
+	return { status: "warn", label, detail: `${name}, but ${provider} has no key or login`, fix };
 }
 
 export function checkCatalog(cachePath: string, now: number): DoctorCheck {

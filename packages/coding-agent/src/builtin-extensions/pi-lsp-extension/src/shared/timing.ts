@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared timing constants for LSP operations.
  */

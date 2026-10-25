@@ -48,6 +48,8 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
+	/** Set when print mode (`-p`, `--mode json`) created the session. Absent for interactive and older sessions. */
+	origin?: "print";
 }
 
 export interface NewSessionOptions {
@@ -190,6 +192,8 @@ export interface SessionInfo {
 	name?: string;
 	/** Path to the parent session (if this session was forked). */
 	parentSessionPath?: string;
+	/** Copied from the header; `/resume` tags print runs. */
+	origin?: "print";
 	created: Date;
 	modified: Date;
 	messageCount: number;
@@ -707,6 +711,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			cwd,
 			name,
 			parentSessionPath,
+			...(header.origin === "print" ? { origin: "print" as const } : {}),
 			created: new Date(header.timestamp),
 			modified,
 			messageCount,
@@ -1417,6 +1422,13 @@ export class SessionManager {
 	 */
 	buildSessionContext(): SessionContext {
 		return buildSessionContext(this.getEntries(), this.leafId, this.byId);
+	}
+
+	/** Print mode calls this for each session it binds. It only tags a session not yet written to disk, so resumed or opened sessions keep their header. */
+	markPrintOrigin(): void {
+		if (this.flushed) return;
+		const header = this.getHeader();
+		if (header) header.origin = "print";
 	}
 
 	/**

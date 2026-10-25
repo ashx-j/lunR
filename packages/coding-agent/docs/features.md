@@ -40,7 +40,7 @@ The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remai
 
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
-Enable Confirm large subagent launches in `/settings` to receive one aggregate confirmation in **yolo** for 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. This setting is off by default. Sequential work stays `chain`. Auto, where the reviewer checks full-access launches, and sessions that work without questions (`/goal`, subagents, ACP Autonomous) bypass confirmation even when the setting is enabled.
+Enable Confirm big subagent launches in `/settings` to receive one aggregate confirmation in **yolo** for 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. This setting is off by default. Sequential work stays `chain`. Auto, where the reviewer checks full-access launches, and sessions that work without questions (`/goal`, subagents, ACP Autonomous) bypass confirmation even when the setting is enabled.
 
 `/goal` sets a session goal and makes the session work without asking questions, keeping your permission mode. A read-only session switches to yolo for the goal and back afterwards.
 

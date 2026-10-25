@@ -54,7 +54,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "tree", description: "Navigate session tree (switch branches)" },
-	{ name: "undo", description: "Rewind the last turn (same session; /redo restores)" },
+	{ name: "undo", description: "Rewind the conversation one turn; files stay as they are (/redo restores)" },
 	{ name: "edit", description: "Rewind the last turn and put its text in the chat box" },
 	{ name: "redo", description: "Restore a turn undone with /undo" },
 	{ name: "trust", description: "Save project trust decision for future sessions" },

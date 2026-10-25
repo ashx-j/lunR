@@ -8,6 +8,11 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-25: drop a scoped model when its provider has no credential left (at logout and at startup), but keep bare ids, globs, unregistered providers and project settings, because a stale `provider/model` only printed a warning on every start while the others may still match.
 - 2026-10-25: Claude 5-family rows get adaptive thinking, `xhigh`/`max` and no custom temperature by id match; Opus 5.5 and Sonnet 5.5 also drop "off", because those models reject `budget_tokens`, sampling values and (5.5 Opus/Sonnet) disabled thinking.
 - 2026-10-25: read models.dev `kimi-code-plan-global` when `kimi-for-coding` is missing but keep the api.kimi.com endpoint and skip `k3.1-*`, because the rename moved the listing to api.kimi.ai and K3.1 is untested there.
+- 2026-10-21: remove the unused agent harness (about 6,000 lines) and keep `uuidv7`, because nothing outside the package used it and no upstream sync happened.
+- 2026-10-21: scale compaction reserve and kept tokens to the window, because with a 16k window `shouldCompact` was true every turn and nothing was old enough to cut.
+- 2026-10-21: a TUI cron owner hands the lease to the gateway when it skips due jobs, because only the gateway can deliver to chat platforms.
+- 2026-10-21: keep `NPM_TOKEN` and add pre-publish checks and registry verification, because trusted publishing needs npm-side setup first.
+- 2026-10-21: drop source maps, `exy.png` and catalog extras from the package, because nothing reads them at runtime and they doubled the tarball.
 - 2026-10-21: read-only bash blocks any word bash expands and any path-qualified command word, because the classifier sees literal words while bash runs the expanded ones.
 - 2026-10-21: `cron resume` retries an interrupted job through whichever process owns the lease, because a gateway-held lease left `cron run` with no process able to run it.
 - 2026-10-21: an abort during tools ends the run with aborted results for unstarted calls, matching an abort during streaming, because queued calls ran with an aborted signal and a new request followed.
@@ -98,7 +103,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - Scope rename; `PI_CODING_AGENT*` rename.
 - Rollback: shadow-git capture (option removed until built), gateway rollback (B7), orphan GC, symlink escape. Orchestrator timeouts from closed PR #41 remain unshipped.
 - Cron: script/`no_agent` jobs; more gateway platforms; process-tree for `nohup` grandchildren.
-- Package size: `docs/package-size-report.md` lists which `files` entries are safe to drop (maps, `exy.png` and catalog extras take the tarball from 10.96 to 5.30 MB) and the 211 MB of other-platform optional packages npm installs. Nothing is cut yet.
+- Package size: maps, `exy.png` and catalog extras are cut (5.41 MB packed). The 211 MB of other-platform optional packages npm installs remain; see `docs/package-size-report.md`.
 - Planned mascot, a cat (2.A): fits the kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal two lines, not yet wired.
   ```
      /\_/\

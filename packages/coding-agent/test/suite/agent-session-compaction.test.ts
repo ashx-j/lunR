@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
+	type Api,
 	type AssistantMessage,
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
@@ -133,7 +134,7 @@ describe("AgentSession compaction characterization", () => {
 	it("throws when compacting without a model", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		harness.session.agent.state.model = undefined as unknown as Model<any>;
+		harness.session.agent.state.model = undefined as unknown as Model<Api>;
 
 		await expect(harness.session.compact()).rejects.toThrow("No model selected");
 	});

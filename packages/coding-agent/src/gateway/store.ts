@@ -7,9 +7,10 @@
  * Tests override the file location via setGatewayStorePath().
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
+import { writeJsonFileAtomic } from "../utils/json.ts";
 
 export interface StoredSession {
 	sessionId: string;
@@ -56,12 +57,7 @@ function readStore(): StoreData {
 }
 
 function writeStore(data: StoreData): void {
-	const path = storePath();
-	const dir = dirname(path);
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}`;
-	writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
-	renameSync(tmp, path);
+	writeJsonFileAtomic(storePath(), data);
 }
 
 export function getSession(key: string): StoredSession | undefined {

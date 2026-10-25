@@ -1,4 +1,3 @@
-// @ts-nocheck
 export interface LoopExtraction {
 	args: string;
 	loopCount: number | null;

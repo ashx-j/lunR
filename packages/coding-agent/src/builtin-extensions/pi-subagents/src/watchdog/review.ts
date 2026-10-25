@@ -3,6 +3,7 @@ import { Agent, type AgentTool, type StreamFn, type ThinkingLevel } from "@earen
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createReadOnlyTools } from "../../../../core/tools/index.ts";
 import { convertToLlm } from "../../../../core/messages.ts";
+import type { Api } from "@earendil-works/pi-ai";
 import { streamSimple, type Model } from "@earendil-works/pi-ai/compat";
 import { Type, type Static } from "typebox";
 import { resolveModelCandidate } from "../runs/shared/model-fallback.ts";
@@ -34,7 +35,7 @@ type WatchdogWarnParams = Static<typeof WatchdogWarnParams>;
 
 type WatchdogContextProvider = ExtensionContext | (() => ExtensionContext | undefined);
 
-type RegistryModel = Model<any>;
+type RegistryModel = Model<Api>;
 
 interface WatchdogReviewAuth {
 	apiKey?: string;

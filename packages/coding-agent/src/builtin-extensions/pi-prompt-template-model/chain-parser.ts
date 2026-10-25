@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { parseCommandArgs } from "./args.ts";
 
 export interface ChainStep {

@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import { basename } from "node:path";
+import { basename, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -17,13 +17,16 @@ import { resolvePath } from "../../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import type { ToolGroupRole } from "../extensions/types.ts";
 
+/**
+ * Shows a path under the home directory as `~/...`. Only whole directory names match, so with home
+ * `/home/ash` the path `/home/ash2` stays as it is. Non-strings render as "".
+ */
 export function shortenPath(path: unknown): string {
 	if (typeof path !== "string") return "";
 	const home = os.homedir();
-	if (path.startsWith(home)) {
-		return `~${path.slice(home.length)}`;
-	}
-	return path;
+	if (!home || !path.startsWith(home)) return path;
+	const rest = path.slice(home.length);
+	return rest === "" || rest.startsWith("/") || rest.startsWith(sep) ? `~${rest}` : path;
 }
 
 export function linkPath(styledText: string, rawPath: string, cwd: string): string {

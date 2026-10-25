@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared constants — directories to skip, file size limits, etc.
  *

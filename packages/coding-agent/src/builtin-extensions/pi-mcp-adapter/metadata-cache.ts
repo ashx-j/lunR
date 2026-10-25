@@ -1,4 +1,3 @@
-// @ts-nocheck
 // metadata-cache.ts - Persistent MCP metadata cache
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";

@@ -34,16 +34,29 @@ jobs:
       - name: Check computer-use production approval
         run: node scripts/check-computer-use-release.mjs --production
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s $(which fdfind) /usr/local/bin/fd
+
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Build (no packages/ai generate-models)
+      - name: Build without catalog generation
         run: |
           set -euo pipefail
-          npx tsgo -p packages/tui/tsconfig.build.json
-          npx tsgo -p packages/ai/tsconfig.build.json
-          npx tsgo -p packages/agent/tsconfig.build.json
-          npm --prefix packages/coding-agent run build
+          npm run build
+          git diff --exit-code -- packages/ai
+
+      - name: Check
+        run: npm run check:ci
+
+      - name: Test
+        run: npm test
+
+      - name: Script tests
+        run: node --test scripts/build-standalone.test.mjs scripts/distribution-lock-graph.test.mjs scripts/release-commands.test.mjs
 
       - name: Prepare pinned computer-use payloads
         run: |
@@ -56,6 +69,10 @@ jobs:
           node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs
 
       - name: Publish @ashx-j/lunr*
-        run: node scripts/publish.mjs
+        run: node scripts/publish.mjs --manifest "$RUNNER_TEMP/npm-release.json"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # npm metadata and tarballs can lag the publish by minutes; the script retries until its deadline.
+      - name: Verify registry tarballs and a fresh install
+        run: node scripts/verify-npm-release.mjs "$RUNNER_TEMP/npm-release.json" --timeout-minutes 15

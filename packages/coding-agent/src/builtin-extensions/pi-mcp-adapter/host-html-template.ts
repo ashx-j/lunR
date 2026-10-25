@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { UiHostContext, UiResourceContent, UiResourceCsp } from "./types.ts";
 
 // Use locally bundled AppBridge to avoid CDN Zod bundling issues

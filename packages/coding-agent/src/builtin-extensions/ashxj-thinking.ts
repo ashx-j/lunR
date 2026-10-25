@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Vendored from https://github.com/ashx-j/ashxj-thinking @ 0330a34
 // ("Remove custom footer — keep only /thinking command"), single-file ashxj
 // convention. lunR patches are marked `// lunr:`.
@@ -24,6 +23,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { globalBridge } from "../core/global-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal structural types (see file header for why these are inline)
@@ -53,7 +53,7 @@ interface ExtensionContextLike {
 	model: ModelLike | undefined;
 	ui: {
 		notify(message: string, type?: "info" | "warning" | "error"): void;
-		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
+		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number; initialIndex?: number }): Promise<string | undefined>;
 	};
 }
 
@@ -177,8 +177,10 @@ interface CustomizeBridge {
 	setHideThinkingBlock(hide: boolean): void;
 }
 
+const customizeSlot = globalBridge<CustomizeBridge>(Symbol.for("@lunr/customize"));
+
 function getCustomizeBridge(): CustomizeBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/customize")] as CustomizeBridge | undefined;
+	return customizeSlot.get();
 }
 
 /** Returns the persisted `hideThinkingBlock` value (default false, matching
@@ -345,10 +347,9 @@ export default function (pi: ExtensionAPI): void {
 				const options = levels.map((lvl) =>
 					(lvl === currentLevel ? "\u25CF " : "  ") + formatLevelLabel(lvl),
 				);
-				const chosen = await ctx.ui.select(
-					`Thinking level (current: ${currentLevel})`,
-					options,
-				);
+				const chosen = await ctx.ui.select(`Thinking level (current: ${currentLevel})`, options, {
+					initialIndex: Math.max(0, levels.indexOf(currentLevel)),
+				});
 				if (chosen === undefined) return;
 				// Chosen string starts with the current-marker ("● ") or two-space
 				// gutter; strip the prefix and extract the first token (the level).

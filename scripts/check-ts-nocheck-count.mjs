@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const allowedNocheckFiles = 182;
+const allowedNocheckFiles = 60;
 
 const ignoredDirectories = new Set([".git", "dist", "extension-repos", "hermes-agent", "kimi-cli", "node_modules", "pi"]);
 const sourceExtensions = /\.(?:[cm]?[jt]s|tsx)$/;

@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { bindPromptTemplateChains } from "../../core/prompt-chain-bridge.ts";
 import { getPromptResources } from "../../core/prompt-resource-bridge.ts";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
@@ -88,7 +87,7 @@ interface PromptStepResult {
 }
 
 interface PromptTurnRestore {
-	originalModel: Model<any> | undefined;
+	originalModel: Model<Api> | undefined;
 	originalThinking: ThinkingLevel | undefined;
 }
 
@@ -115,10 +114,10 @@ const DEFAULT_COMPARE_FINAL_APPLIER_TASK = [
 export default function promptModelExtension(pi: ExtensionAPI) {
 	let prompts = new Map<string, PromptWithModel>();
 	let chainPrompts = new Map<string, PromptWithModel>();
-	let previousModel: Model<any> | undefined;
+	let previousModel: Model<Api> | undefined;
 	let previousThinking: ThinkingLevel | undefined;
 	let pendingSkillMessage: PendingSkillMessage | undefined;
-	let runtimeModel: Model<any> | undefined;
+	let runtimeModel: Model<Api> | undefined;
 	let chainActive = false;
 	let loopState: LoopState | null = null;
 	let freshCollapse: FreshCollapse | null = null;
@@ -137,12 +136,12 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		executeCommand: executeToolCommand,
 	});
 
-	function sameModel(a: Model<any> | undefined, b: Model<any> | undefined): boolean {
+	function sameModel(a: Model<Api> | undefined, b: Model<Api> | undefined): boolean {
 		if (!a || !b) return a === b;
 		return a.provider === b.provider && a.id === b.id;
 	}
 
-	function getCurrentModel(ctx: Pick<ExtensionContext, "model">): Model<any> | undefined {
+	function getCurrentModel(ctx: Pick<ExtensionContext, "model">): Model<Api> | undefined {
 		return runtimeModel ?? ctx.model;
 	}
 
@@ -268,9 +267,9 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		prompt: PromptWithModel,
 		args: string[],
 		ctx: ExtensionCommandContext,
-		currentModel: Model<any> | undefined,
+		currentModel: Model<Api> | undefined,
 		override?: SubagentOverride,
-		inheritedModel?: Model<any>,
+		inheritedModel?: Model<Api>,
 		taskPreamble?: string,
 		loopContext?: string,
 		promptTurnRestore?: PromptTurnRestore,
@@ -414,9 +413,9 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 
 	async function restoreSessionState(
 		ctx: ExtensionContext,
-		originalModel: Model<any> | undefined,
+		originalModel: Model<Api> | undefined,
 		originalThinking: ThinkingLevel | undefined,
-		currentModel?: Model<any>,
+		currentModel?: Model<Api>,
 		currentThinking?: ThinkingLevel,
 	) {
 		const restoredParts: string[] = [];
@@ -444,9 +443,9 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	async function restoreAfterExecution(
 		ctx: ExtensionContext,
 		shouldRestore: boolean,
-		originalModel: Model<any> | undefined,
+		originalModel: Model<Api> | undefined,
 		originalThinking: ThinkingLevel | undefined,
-		currentModel: Model<any> | undefined,
+		currentModel: Model<Api> | undefined,
 		currentThinking: ThinkingLevel | undefined,
 		errorState: ExecutionErrorState,
 		phase: "loop" | "chain",
@@ -568,10 +567,10 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 
 	async function resolveCompareBaseModel(
 		prompt: PromptWithModel,
-		currentModel: Model<any> | undefined,
+		currentModel: Model<Api> | undefined,
 		ctx: ExtensionCommandContext,
 		modelOverride?: string,
-	): Promise<Model<any> | undefined> {
+	): Promise<Model<Api> | undefined> {
 		const requestedModels = modelOverride ? [modelOverride] : prompt.models;
 		if (requestedModels.length > 0) {
 			const selected = await selectModelCandidate(requestedModels, currentModel, ctx.modelRegistry);
@@ -738,7 +737,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		prompt: PromptWithModel,
 		args: string,
 		ctx: ExtensionCommandContext,
-		currentModel: Model<any> | undefined,
+		currentModel: Model<Api> | undefined,
 		runtime: { cwd?: string; model?: string; subagentOverride?: SubagentOverride; fork?: boolean },
 	) {
 		if (runtime.subagentOverride) {
@@ -853,7 +852,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 				slot: normalizedWorkers[index]!,
 				result,
 			}));
-			if (workerPairs.length === 0) return;
+			if (!workerResult || workerPairs.length === 0) return;
 			const successfulWorkers = workerPairs.filter((entry) => !entry.result.isError);
 			const failedWorkers = workerPairs.filter((entry) => entry.result.isError);
 			if (successfulWorkers.length === 0) {
@@ -947,7 +946,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	}
 
 	async function collapseBoomerangPrompt(
-		ctx: ExtensionContext,
+		ctx: ExtensionCommandContext,
 		name: string,
 		targetId: string | null,
 		previousSummaries: string[] = [],

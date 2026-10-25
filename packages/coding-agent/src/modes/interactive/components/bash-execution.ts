@@ -70,6 +70,21 @@ export class BashExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	/** A click toggles the full output; `app.tools.expand` has no default key. */
+	override handleClick(_localY: number, _width: number): boolean {
+		this.setExpanded(!this.expanded);
+		return true;
+	}
+
+	/**
+	 * Own render so the TUI treats this card as one click target. The chat
+	 * layout flattens containers that keep `Container.prototype.render`, which
+	 * would send clicks to the inner rows instead of `handleClick` above.
+	 */
+	override render(width: number): string[] {
+		return super.render(width);
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.updateDisplay();
