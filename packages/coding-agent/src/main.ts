@@ -38,7 +38,12 @@ import type { InlineExtension, ProjectTrustContext } from "./core/extensions/typ
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
 import { ModelRegistry } from "./core/model-registry.ts";
-import { resolveCliModel, resolveModelScopeWithDiagnostics, type ScopedModel } from "./core/model-resolver.ts";
+import {
+	findSignedOutScopePatterns,
+	resolveCliModel,
+	resolveModelScopeWithDiagnostics,
+	type ScopedModel,
+} from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
 import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
@@ -927,6 +932,11 @@ export async function main(args: string[], options?: MainOptions) {
 			})),
 		];
 
+		if (!parsed.models) {
+			// Scoped models of a provider signed out in an earlier run would only warn on every start.
+			const signedOut = await findSignedOutScopePatterns(settingsManager.getEnabledModels() ?? [], modelRuntime);
+			if (signedOut.length > 0) settingsManager.removeEnabledModels(signedOut);
+		}
 		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
 		// Unmatched patterns join the diagnostics: a console write would land behind the first-paint TUI.
 		const modelScope =
