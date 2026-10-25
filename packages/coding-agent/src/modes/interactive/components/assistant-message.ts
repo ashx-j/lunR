@@ -1,10 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { describeProviderError } from "../../../core/provider-error-display.ts";
 import type { ReasoningDisplay } from "../../../core/settings-manager.ts";
 import { copyToClipboard } from "../../../utils/clipboard.ts";
 import { sanitizeTerminalText } from "../../../utils/sanitize-terminal-text.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { CopyableTextBlockComponent, type CopyableTextStatus, parseCopyableTextSegments } from "./copyable-text.ts";
+import { expandKeyText } from "./keybinding-hints.ts";
 import {
 	formatThoughtDuration,
 	isThinkingRunComplete,
@@ -42,6 +44,7 @@ export class AssistantMessageComponent extends Container {
 	// lunr: per-run expand. `expanded` still means "all runs" for setExpanded().
 	private expanded = false;
 	private expandedRuns = new Set<number>();
+	private errorExpanded = false;
 	// lunr: live per-run timings from interactive-mode; undefined = history message
 	// (always treated as final, rendered without durations).
 	private thinkingTimings?: ThinkingRunTiming[];
@@ -227,13 +230,13 @@ export class AssistantMessageComponent extends Container {
 					if (segment.type === "markdown") {
 						const trimmed = sanitizeTerminalText(segment.text).trim();
 						if (!trimmed) continue;
-						const text = isFirstTextBlock ? `● ${trimmed}` : trimmed;
-						isFirstTextBlock = false;
+						const markdown = new Markdown(trimmed, this.outputPad, 0, this.markdownTheme, {
+							color: (body: string) => theme.fg("userMessageText", body),
+						});
 						this.contentContainer.addChild(
-							new Markdown(text, this.outputPad, 0, this.markdownTheme, {
-								color: (body: string) => theme.fg("userMessageText", body),
-							}),
+							isFirstTextBlock ? new BulletedMarkdown(markdown, this.outputPad) : markdown,
 						);
+						isFirstTextBlock = false;
 						continue;
 					}
 
@@ -300,23 +303,52 @@ export class AssistantMessageComponent extends Container {
 			);
 		} else if (!hasToolCalls) {
 			if (message.stopReason === "aborted") {
+				// An abort comes from Escape or a session switch, so it reads as a dim status, not a failure.
 				const abortMessage =
 					message.errorMessage && message.errorMessage !== "Request was aborted"
 						? message.errorMessage
 						: "Operation aborted";
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(
-					new Text(theme.fg("error", sanitizeTerminalText(abortMessage)), this.outputPad, 0),
+					new Text(theme.fg("dim", sanitizeTerminalText(abortMessage)), this.outputPad, 0),
 				);
 			} else if (message.stopReason === "error") {
-				const errorMsg = message.errorMessage || "Unknown error";
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(
-					new Text(theme.fg("error", `Error: ${sanitizeTerminalText(errorMsg)}`), this.outputPad, 0),
+					new ErrorDetailsBlock(
+						this,
+						this.renderErrorLines(message.errorMessage || "Unknown error", message.provider),
+					),
 				);
 			}
 		}
 		this.onThinkingAnimationChange?.(this.thinkingAnimationActive);
+	}
+
+	/**
+	 * Provider error as a summary line, an optional /login hint, and the raw
+	 * text when expanded (click or `setExpanded`). The raw text only shows when
+	 * the summary dropped part of it.
+	 */
+	private renderErrorLines(raw: string, provider: string): Component {
+		const { summary, hint } = describeProviderError(raw, provider, "interactive");
+		const lines = [theme.fg("error", `Error: ${sanitizeTerminalText(summary)}`)];
+		if (hint) lines.push(theme.fg("warning", hint));
+		if (summary !== raw.trim()) {
+			lines.push(
+				this.expanded || this.errorExpanded
+					? theme.fg("dim", sanitizeTerminalText(raw))
+					: theme.fg("dim", `(${expandKeyText()} for the full error)`),
+			);
+		}
+		return new Text(lines.join("\n"), this.outputPad, 0);
+	}
+
+	toggleErrorDetails(): void {
+		this.errorExpanded = !this.errorExpanded;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage, this.thinkingSourceOptions());
+		}
 	}
 
 	private copyPayload(key: string, payload: string): void {
@@ -363,14 +395,22 @@ export class AssistantMessageComponent extends Container {
 		const wrap = (inner: Component): void => {
 			this.contentContainer.addChild(new ThinkingRunBlock(this, thinkingRunIndex, inner));
 		};
+		const timing = this.thinkingTimings?.[thinkingRunIndex];
+		const thoughtLabel = new Text(
+			theme.fg(
+				"thinkingText",
+				theme.italic(
+					timing?.end !== undefined
+						? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
+						: "✻ Thought",
+				),
+			),
+			this.outputPad,
+			0,
+		);
 		if (this.thinkingCollapse && !this.isRunExpanded(thinkingRunIndex) && runComplete) {
-			const timing = this.thinkingTimings?.[thinkingRunIndex];
-			const label =
-				timing?.end !== undefined
-					? `✻ Thought for ${formatThoughtDuration(timing.end - timing.start)}`
-					: "✻ Thought";
 			const block = new Container();
-			block.addChild(new Text(theme.fg("thinkingText", theme.italic(label)), this.outputPad, 0));
+			block.addChild(thoughtLabel);
 			const joinedThinking = thinkingBlocks.join("\n\n");
 			const snippet = thinkingSnippet(
 				displayMessage.provider === "openai-codex" ? joinedThinking.replaceAll("**", "") : joinedThinking,
@@ -415,12 +455,19 @@ export class AssistantMessageComponent extends Container {
 			}
 			return;
 		}
-		wrap(
-			new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-				color: (text: string) => theme.fg("thinkingText", text),
-				italic: true,
-			}),
-		);
+		const body = new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+			color: (text: string) => theme.fg("thinkingText", text),
+			italic: true,
+		});
+		// An expanded run that collapses keeps its "✻ Thought for Ns" header above the full text.
+		if (this.thinkingCollapse && runComplete) {
+			const block = new Container();
+			block.addChild(thoughtLabel);
+			block.addChild(body);
+			wrap(block);
+		} else {
+			wrap(body);
+		}
 		if (hasVisibleContentAfter) {
 			this.contentContainer.addChild(new Spacer(1));
 		}
@@ -440,6 +487,53 @@ class ThinkingRunBlock extends Container {
 
 	handleClick(_localY: number, _width: number): boolean {
 		this.owner.toggleThinkingRun(this.runIndex);
+		return true;
+	}
+}
+
+/**
+ * The first text block of a reply with the `●` bullet hanging in the margin: the block renders
+ * two columns narrower and shifts right, and the bullet fills those columns on the first line,
+ * so wrapped lines line up under the text instead of under the bullet.
+ */
+class BulletedMarkdown implements Component {
+	private readonly inner: Markdown;
+	private readonly pad: number;
+
+	constructor(inner: Markdown, pad: number) {
+		this.inner = inner;
+		this.pad = pad;
+	}
+
+	render(width: number): string[] {
+		const margin = " ".repeat(this.pad);
+		let bulletPlaced = false;
+		return this.inner.render(Math.max(1, width - 2)).map((line) => {
+			// Lines without the plain-space margin (image rows) pass through untouched.
+			if (!line.startsWith(margin)) return line;
+			const prefix = bulletPlaced ? "  " : `${theme.fg("userMessageText", "●")} `;
+			bulletPlaced = true;
+			return margin + prefix + line.slice(this.pad);
+		});
+	}
+
+	invalidate(): void {
+		this.inner.invalidate();
+	}
+}
+
+/** Click target for a provider error; toggles the raw error text. */
+class ErrorDetailsBlock extends Container {
+	private readonly owner: AssistantMessageComponent;
+
+	constructor(owner: AssistantMessageComponent, inner: Component) {
+		super();
+		this.owner = owner;
+		this.addChild(inner);
+	}
+
+	handleClick(_localY: number, _width: number): boolean {
+		this.owner.toggleErrorDetails();
 		return true;
 	}
 }

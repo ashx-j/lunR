@@ -4,7 +4,8 @@
  * startScheduler() runs an unref'd, self-rescheduling setTimeout loop (default
  * 60s tick). Tick errors are caught — the loop never dies. A process without the
  * profile lease retries it on every tick, so another operator can take over when
- * the owner exits. Each tick collects due jobs and runs them sequentially under
+ * the owner exits or hands the lease over (`handoffBackoffTicks`) after skipping due
+ * jobs it cannot run. Each tick collects due jobs and runs them sequentially under
  * durable occurrence claims. Interrupted work pauses for deliberate retry.
  *
  * Per due job: build the prompt (cron-hint prefix + contextFrom upstream
@@ -41,6 +42,13 @@ export interface SchedulerDeps {
 	canRun?: () => boolean;
 	/** False skips a due job without claiming it, leaving it due for an operator that can run and deliver it. */
 	accepts?: (job: CronJob) => boolean;
+	/**
+	 * Hand the lease to another operator when `accepts` skipped a due job. After such a tick the
+	 * owner releases the lease, so a gateway can take it on its next tick, and waits this many
+	 * ticks before trying to acquire again, so the two do not trade the lease back and forth.
+	 * Unset keeps the lease.
+	 */
+	handoffBackoffTicks?: number;
 	/** Tick interval; default 60s. */
 	intervalMs?: number;
 	/** Per-job wall-clock timeout; default 5 minutes. */
@@ -154,12 +162,17 @@ export async function executeJob(
 	return { status: "settled" };
 }
 
-async function tick(deps: SchedulerDeps, now: Date, signal: AbortSignal): Promise<void> {
+/** Runs due jobs; returns how many due jobs `accepts` skipped. */
+async function tick(deps: SchedulerDeps, now: Date, signal: AbortSignal): Promise<number> {
 	const { due, missed } = await getDueJobs(now);
 	for (const job of missed) await deliverFailure(job, deps, job.lastError ?? "missed schedule");
+	let skipped = 0;
 	for (const dueJob of due) {
 		if (signal.aborted || deps.canRun?.() === false) break;
-		if (deps.accepts?.(dueJob) === false) continue;
+		if (deps.accepts?.(dueJob) === false) {
+			skipped++;
+			continue;
+		}
 		const job = await claimJobRun(dueJob.id, now);
 		if (job) {
 			if (signal.aborted) {
@@ -169,6 +182,7 @@ async function tick(deps: SchedulerDeps, now: Date, signal: AbortSignal): Promis
 			await executeJob(job, deps, signal);
 		}
 	}
+	return skipped;
 }
 
 /** A standalone tick owns the same lease as the long-lived operators. */
@@ -185,7 +199,8 @@ export async function runSchedulerTick(deps: SchedulerDeps, now: Date = new Date
 
 /**
  * The first healthy operator owns the lease until all admitted work and delivery settle.
- * Others retry the lease each tick and take over once the owner releases it.
+ * Others retry the lease each tick and take over once the owner releases it. With
+ * `handoffBackoffTicks`, an owner that skips due jobs it cannot run hands the lease over.
  */
 export function startScheduler(deps: SchedulerDeps) {
 	const controller = new AbortController();
@@ -194,6 +209,8 @@ export function startScheduler(deps: SchedulerDeps) {
 	let release: (() => Promise<void>) | null = null;
 	let active: Promise<void> | undefined;
 	let stopping: Promise<void> | undefined;
+	/** Ticks left before retrying the lease after a handoff. */
+	let handoffWait = 0;
 	/** Ownership counts only after the previous owner's interrupted claims are recovered. */
 	const acquire = async (): Promise<void> => {
 		const lease = await acquireSchedulerLease();
@@ -219,12 +236,22 @@ export function startScheduler(deps: SchedulerDeps) {
 		try {
 			// A failed earlier attempt is retried below.
 			await ready.catch(() => {});
-			if (!release && !controller.signal.aborted) {
+			if (!release && handoffWait > 0) {
+				handoffWait--;
+			} else if (!release && !controller.signal.aborted) {
 				ready = acquire();
 				await ready;
 			}
 			if (release && !controller.signal.aborted && !active) {
-				active = tick(deps, new Date(), controller.signal);
+				active = (async () => {
+					const skipped = await tick(deps, new Date(), controller.signal);
+					if (skipped > 0 && deps.handoffBackoffTicks && release && !controller.signal.aborted) {
+						const lease = release;
+						release = null;
+						handoffWait = deps.handoffBackoffTicks;
+						await lease();
+					}
+				})();
 				try {
 					await active;
 				} finally {
@@ -245,6 +272,12 @@ export function startScheduler(deps: SchedulerDeps) {
 		isOwner: () => release !== null && !controller.signal.aborted,
 		async run(jobId: string): Promise<void> {
 			await ready;
+			// After a handoff nobody may have taken the lease; a manual run tries it now.
+			if (!release && handoffWait > 0 && !controller.signal.aborted) {
+				handoffWait = 0;
+				ready = acquire();
+				await ready;
+			}
 			if (!release)
 				throw new Error(
 					"another process owns the cron scheduler; run the job from that operator, or use cron resume to retry an interrupted job",

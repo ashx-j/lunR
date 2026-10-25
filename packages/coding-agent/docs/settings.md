@@ -51,7 +51,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `theme` | string | `"moon"` | Theme name (`"moon"` is the only built-in, or a custom theme name) |
+| `theme` | string | `"moon"` | Theme name (`"moon"` is the only built-in, or a custom theme name). `"<light>/<dark>"` picks the first theme on a light terminal background and the second otherwise |
 | `externalEditor` | string | `$VISUAL`, then `$EDITOR`, then Notepad on Windows or `nano` elsewhere | Command for Ctrl+G external editor; takes precedence over environment variables |
 | `quietStartup` | boolean | `false` | Hide startup header |
 | `smoothStreaming` | boolean | `false` | Reveal streamed responses grapheme by grapheme (~30 FPS). Interactive TUI only |
@@ -253,7 +253,7 @@ Customize these from `/settings` → Customize as well. The same menu controls `
 | `rollbackTurns` | number | `2` | How many user-turns of snapshots to retain |
 | `rollbackCapture` | string | `"copies"` | Snapshot capture mode: `"copies"`, or `"hybrid"`, which also deletes files created outside tools when `rollbackScope` is `"tree"` |
 | `rollbackScope` | string | `"tools"` | What to snapshot |
-| `autoManageSubscriptions` | boolean | `false` | When true, subscription key switching is fully automatic (no manual picker) |
+| `autoManageSubscriptions` | boolean | `false` | Shown as Auto-rotate API keys. When true, lunR switches to the next saved API key after a usage limit without asking |
 
 ### Resources
 

@@ -68,7 +68,7 @@ describe("buildTodoWidgetLines", () => {
 			todo("5", "e"),
 			todo("6", "done", "completed"),
 		];
-		const lines = buildTodoWidgetLines(todos, false, "ctrl+o");
+		const lines = buildTodoWidgetLines(todos, false);
 		const rows = lines.filter((line) => line.kind === "todo");
 		expect(rows).toHaveLength(TODO_WIDGET_COLLAPSED_ROWS);
 		expect(rows.map((line) => line.text)).toEqual(["● a", "○ b", "○ c"]);

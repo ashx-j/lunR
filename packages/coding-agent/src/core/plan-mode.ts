@@ -82,7 +82,6 @@ const ALLOWED_COMMANDS = new Set([
 	"node",
 	"npm",
 	"pnpm",
-	"yarn",
 	"bun",
 ]);
 
@@ -111,10 +110,11 @@ const GIT_LIST_FLAGS = new Map<string, Set<string>>([
 	["remote", new Set(["-v", "--verbose"])],
 ]);
 
+// yarn is absent on purpose: a repo `yarnPath` (.yarnrc.yml) or `yarn-path` (.yarnrc) makes every
+// yarn command, `--version` included, run JavaScript from the repo.
 const PACKAGE_MANAGER_READS = new Map<string, Set<string>>([
 	["npm", new Set(["ls", "list", "view", "info", "explain", "outdated", "root", "prefix"])],
 	["pnpm", new Set(["ls", "list", "why", "outdated"])],
-	["yarn", new Set(["info", "why"])],
 	["bun", new Set()],
 ]);
 
@@ -130,6 +130,13 @@ const ALWAYS_MUTATING_MANAGERS = new Set([
 	"winget",
 	"scoop",
 ]);
+
+/**
+ * Commands where an option can write a file or run a program (sed -i, sort -o, file -C, find -delete,
+ * rg --pre, git --output). An unquoted glob at the start of an argument can expand to a repo file
+ * named like such an option (`sed s/a/b/ *.ts` with a file `-i.ts`), so those arguments block.
+ */
+const OPTION_GLOB_SENSITIVE = new Set(["sed", "sort", "file", "find", "rg", "git"]);
 
 /** Only understood informational interpreter invocations are allowed. */
 const RUNNER_INFO_FLAGS = new Set(["-v", "--version", "-h", "--help"]);
@@ -353,6 +360,48 @@ function shellWords(segment: string): string[] | undefined {
 	return words;
 }
 
+/**
+ * Find unquoted glob characters (`*`, `?`, `[`) in a segment. `leading` is true when the literal
+ * text before a word's first glob is empty or only dashes (`*`, `-*`, `""*`, `\-*`), so the word
+ * could expand to a file name that is an option.
+ */
+function unquotedGlobs(segment: string): { any: boolean; leading: boolean } {
+	let any = false;
+	let quote: "'" | '"' | undefined;
+	// Literal text of the current word so far, with quotes and escapes removed; undefined once the
+	// word has had its first glob checked.
+	let prefix: string | undefined = "";
+	for (let i = 0; i < segment.length; i++) {
+		const ch = segment[i];
+		if (ch === "\\" && quote !== "'") {
+			if (prefix !== undefined && i + 1 < segment.length) prefix += segment[i + 1];
+			i++;
+			continue;
+		}
+		if (quote) {
+			if (ch === quote) quote = undefined;
+			else if (prefix !== undefined) prefix += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			prefix = "";
+			continue;
+		}
+		if (ch === "*" || ch === "?" || ch === "[") {
+			if (prefix !== undefined && /^-*$/.test(prefix)) return { any: true, leading: true };
+			any = true;
+			prefix = undefined;
+			continue;
+		}
+		if (prefix !== undefined) prefix += ch;
+	}
+	return { any, leading: false };
+}
+
 function isMutatingSegment(segment: string): boolean {
 	let tokens = shellWords(segment);
 	if (!tokens) return true;
@@ -373,6 +422,9 @@ function isMutatingSegment(segment: string): boolean {
 
 	if (ALWAYS_MUTATING_MANAGERS.has(command)) return true;
 
+	const globs = unquotedGlobs(segment);
+	if (globs.leading && OPTION_GLOB_SENSITIVE.has(command)) return true;
+
 	if (command === "sed") {
 		return args.some((a) => a === "-i" || a.startsWith("-i") || a.startsWith("--in-place") || /^-[^-]*i/.test(a));
 	}
@@ -386,8 +438,30 @@ function isMutatingSegment(segment: string): boolean {
 		return args.some((a) => a === "--pre" || a.startsWith("--pre="));
 	}
 	if (command === "uniq") {
-		// uniq [options] [input [output]] writes the output operand.
-		return args.filter((a) => !a.startsWith("-")).length >= 2;
+		// uniq [options] [input [output]] writes the output operand; a glob can expand to two operands.
+		return globs.any || args.filter((a) => !a.startsWith("-")).length >= 2;
+	}
+	if (command === "file") {
+		// file -C / --compile writes a compiled .mgc magic file.
+		return args.some((arg) => {
+			const option = arg.split("=")[0];
+			return (option.startsWith("--co") && "--compile".startsWith(option)) || /^-[^-]*C/.test(arg);
+		});
+	}
+	if (command === "less" || command === "more") {
+		// -k/--lesskey-file/--lesskey-src load a key file whose #env section can set LESSOPEN, which
+		// runs a command even when output is not a terminal. -o/-O/--log-file write a log file.
+		// Long options may be abbreviated, so any prefix of those names counts.
+		return args.some((arg) => {
+			const option = arg.split("=")[0].toLowerCase();
+			return (
+				/^-[^-]*[oOk]/.test(arg) ||
+				(option.length >= 4 &&
+					["--log-file", "--lesskey-file", "--lesskey-src", "--lesskey-content"].some((name) =>
+						name.startsWith(option),
+					))
+			);
+		});
 	}
 	if (command === "git") {
 		// git grep -O/--open-files-in-pager runs a pager program on the matches.

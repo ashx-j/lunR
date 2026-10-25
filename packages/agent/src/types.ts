@@ -130,7 +130,7 @@ export interface AgentLoopTurnUpdate {
 	/** Context for the next provider request. */
 	context?: AgentContext;
 	/** Model for the next provider request. */
-	model?: Model<any>;
+	model?: Model<Api>;
 	/** Thinking level for the next provider request. */
 	thinkingLevel?: ThinkingLevel;
 }
@@ -138,7 +138,7 @@ export interface AgentLoopTurnUpdate {
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
-	model: Model<any>;
+	model: Model<Api>;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -323,7 +323,7 @@ export interface AgentState {
 	/** System prompt sent with each model request. */
 	systemPrompt: string;
 	/** Active model used for future turns. */
-	model: Model<any>;
+	model: Model<Api>;
 	/** Requested reasoning level for future turns. */
 	thinkingLevel: ThinkingLevel;
 	/** Available tools. Assigning a new array copies the top-level array. */

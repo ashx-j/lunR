@@ -21,6 +21,7 @@ import { Type } from "@sinclair/typebox";
 // lunr: concrete core-module import (never the package barrel) — resolves the
 // memory dir next to the lunr agent dir instead of the hardcoded ~/.pi below.
 import { getAgentDir } from "../config.js";
+import { globalBridge } from "../core/global-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Paths and config
@@ -53,8 +54,10 @@ interface MemoryCapBridge {
 	setCharCap(cap: number): void;
 }
 
+const capSlot = globalBridge<MemoryCapBridge>(Symbol.for("@lunr/memory-cap"));
+
 function getCapBridge(): MemoryCapBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/memory-cap")] as MemoryCapBridge | undefined;
+	return capSlot.get();
 }
 
 function isMemoryEnabled(): boolean {

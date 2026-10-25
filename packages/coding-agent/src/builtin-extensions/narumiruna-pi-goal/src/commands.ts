@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
 import { buildGoalPrompt, buildObjectiveUpdatedPrompt, buildResumePrompt } from "./prompts.js";

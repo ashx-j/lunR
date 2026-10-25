@@ -1,4 +1,4 @@
-import { type Model, modelsAreEqual } from "@earendil-works/pi-ai";
+import { type Api, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
 import {
 	Container,
 	type Focusable,
@@ -19,11 +19,11 @@ import { keyHint } from "./keybinding-hints.ts";
 interface ModelItem {
 	provider: string;
 	id: string;
-	model: Model<any>;
+	model: Model<Api>;
 }
 
 interface ScopedModelItem {
-	model: Model<any>;
+	model: Model<Api>;
 	thinkingLevel?: string;
 }
 
@@ -34,6 +34,12 @@ export interface ModelSelectorOptions {
 	persistDefault?: boolean;
 	/** lunr: providerId → active subscription name, rendered as a `[provider · name]` suffix. */
 	subscriptionNames?: ReadonlyMap<string, string>;
+	/** Heading above the list, for pickers that choose something other than the session model. */
+	title?: string;
+	/** Dim line under the title, such as why the picker opened. */
+	note?: string;
+	/** When set, the permission mode cycle key (Shift+Tab) closes the picker and calls this instead of onCancel. */
+	onCyclePermissionMode?: () => void;
 }
 
 /**
@@ -57,10 +63,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private activeModels: ModelItem[] = [];
 	private filteredModels: ModelItem[] = [];
 	private selectedIndex: number = 0;
-	private currentModel?: Model<any>;
+	private currentModel?: Model<Api>;
 	private settingsManager: SettingsManager;
 	private modelRuntime: ModelRuntime;
-	private onSelectCallback: (model: Model<any>) => void;
+	private onSelectCallback: (model: Model<Api>) => void;
 	private onCancelCallback: () => void;
 	private errorMessage?: string;
 	private refreshStatusMessage = "Refreshing model catalogs…";
@@ -73,16 +79,17 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private readonly refreshAbortController = new AbortController();
 	private closed = false;
 	private readonly persistDefault: boolean;
+	private readonly onCyclePermissionMode: (() => void) | undefined;
 	// lunr: active subscription names for providers with multi-key pools (empty = no suffixes).
 	private readonly subscriptionNames: ReadonlyMap<string, string>;
 
 	constructor(
 		tui: TUI,
-		currentModel: Model<any> | undefined,
+		currentModel: Model<Api> | undefined,
 		settingsManager: SettingsManager,
 		modelRuntime: ModelRuntime,
 		scopedModels: ReadonlyArray<ScopedModelItem>,
-		onSelect: (model: Model<any>) => void,
+		onSelect: (model: Model<Api>) => void,
 		onCancel: () => void,
 		initialSearchInput?: string,
 		options?: ModelSelectorOptions,
@@ -90,6 +97,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		super();
 
 		this.persistDefault = options?.persistDefault ?? true;
+		this.onCyclePermissionMode = options?.onCyclePermissionMode;
 		this.subscriptionNames = options?.subscriptionNames ?? new Map();
 
 		this.tui = tui;
@@ -104,6 +112,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		// Add top border
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
+		if (options?.title) this.addChild(new Text(theme.fg("accent", theme.bold(options.title)), 0, 0));
+		if (options?.note) this.addChild(new Text(theme.fg("muted", options.note), 0, 0));
+		if (options?.title || options?.note) this.addChild(new Spacer(1));
 
 		// Add hint about model filtering
 		if (scopedModels.length > 0) {
@@ -150,7 +161,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private loadModelsFromSnapshot(): void {
-		const models = this.modelRuntime.getAvailableSnapshot().map((model: Model<any>) => ({
+		const models = this.modelRuntime.getAvailableSnapshot().map((model: Model<Api>) => ({
 			provider: model.provider,
 			id: model.id,
 			model,
@@ -330,6 +341,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
+		if (this.onCyclePermissionMode && kb.matches(keyData, "app.mode.cycle")) {
+			this.close();
+			this.onCyclePermissionMode();
+			return;
+		}
 		if (kb.matches(keyData, "tui.input.tab")) {
 			if (this.scopedModelItems.length > 0) {
 				const nextScope: ModelScope = this.scope === "all" ? "scoped" : "all";
@@ -371,7 +387,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		}
 	}
 
-	private handleSelect(model: Model<any>): void {
+	private handleSelect(model: Model<Api>): void {
 		this.close();
 		// Save as new default
 		if (this.persistDefault) {

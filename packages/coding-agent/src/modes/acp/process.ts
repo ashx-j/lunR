@@ -33,6 +33,15 @@ export interface WorkerOptions {
 	sessionPath?: string;
 }
 
+/**
+ * Timeout for worker commands that do not pass their own. Integration tests shorten it through
+ * LUNR_ACP_REQUEST_TIMEOUT_MS so they need not wait out 30 seconds; unset or invalid means 30 s.
+ */
+function defaultRequestTimeoutMs(): number {
+	const configured = Number(process.env.LUNR_ACP_REQUEST_TIMEOUT_MS);
+	return Number.isInteger(configured) && configured > 0 ? configured : 30_000;
+}
+
 // adapted from pi-acp's subprocess transport; the child always runs this lunr installation.
 export class AcpRpcProcess {
 	private readonly pending = new Map<
@@ -133,7 +142,7 @@ export class AcpRpcProcess {
 
 	async request<T extends RpcCommand>(
 		command: T,
-		timeoutMs = 30_000,
+		timeoutMs = defaultRequestTimeoutMs(),
 	): Promise<Extract<RpcResponse, { command: T["type"]; success: true }>> {
 		if (this.failure) {
 			await this.closed;

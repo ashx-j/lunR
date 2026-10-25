@@ -11,9 +11,10 @@
  * <PLATFORM>_BOT_TOKEN env → file token.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
+import { writeJsonFileAtomic } from "../utils/json.ts";
 
 export interface PlatformConfig {
 	enabled: boolean;
@@ -152,17 +153,7 @@ export function loadGatewayConfig(): GatewayConfig {
 
 /** Write the whole config atomically (tmp + rename); chmod 0600 best-effort. */
 export function saveGatewayConfig(config: GatewayConfig): void {
-	const path = gatewayConfigPath();
-	const dir = getAgentDir();
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}`;
-	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
-	renameSync(tmp, path);
-	try {
-		chmodSync(path, 0o600);
-	} catch {
-		// best-effort (Windows ACLs don't map cleanly)
-	}
+	writeJsonFileAtomic(gatewayConfigPath(), config, 0o600);
 }
 
 /**

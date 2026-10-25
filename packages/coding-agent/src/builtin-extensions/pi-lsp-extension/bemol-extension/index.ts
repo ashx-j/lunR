@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * pi-lsp-bemol — Bemol workspace provider for pi-lsp-extension.
  *

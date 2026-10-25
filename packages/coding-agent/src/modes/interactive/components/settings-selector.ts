@@ -673,7 +673,7 @@ class CustomizeSubmenu extends Container {
 			{
 				id: "footer-statuses",
 				label: "Feature statuses",
-				description: "Active plan and goal status",
+				description: "Shows /plan and /goal while they are active",
 				currentValue: (bridge?.getFooterStatuses() ?? true) ? "on" : "off",
 				values: ["on", "off"],
 			},
@@ -950,7 +950,7 @@ class SubscriptionRenameSubmenu extends Container {
 
 	constructor(currentName: string, done: (selectedValue?: string) => void) {
 		super();
-		this.addChild(new Text(theme.bold(theme.fg("accent", "Rename Subscription")), 0, 0));
+		this.addChild(new Text(theme.bold(theme.fg("accent", "Rename API key")), 0, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("muted", "Display name for this API key."), 0, 0));
 		this.addChild(new Spacer(1));
@@ -1036,7 +1036,7 @@ class SubscriptionActionSubmenu extends Container {
 				currentValue: "remove…",
 				submenu: (_currentValue, confirmDone) =>
 					new SelectSubmenu(
-						"Remove Subscription",
+						"Remove API key",
 						`Delete "${row.name}" from ${row.providerName}? The last key also logs out the provider.`,
 						[
 							{ value: "cancel", label: "Cancel" },
@@ -1102,7 +1102,7 @@ class SubscriptionsSubmenu extends Container {
 		super();
 		this.subs = subs;
 		this.done = done;
-		this.addChild(new Text(theme.bold(theme.fg("accent", "Subscriptions")), 0, 0));
+		this.addChild(new Text(theme.bold(theme.fg("accent", "API keys")), 0, 0));
 		this.addChild(new Spacer(1));
 		this.contentContainer = new Container();
 		this.addChild(this.contentContainer);
@@ -1123,7 +1123,7 @@ class SubscriptionsSubmenu extends Container {
 		this.settingsList = undefined;
 
 		if (rows.length === 0) {
-			this.contentContainer.addChild(new Text(theme.fg("muted", "  No stored API key subscriptions."), 0, 0));
+			this.contentContainer.addChild(new Text(theme.fg("muted", "  No saved API keys."), 0, 0));
 			this.contentContainer.addChild(new Text(theme.fg("dim", "  Esc to go back"), 0, 0));
 			this.subs.requestRender();
 			return;
@@ -1505,15 +1505,15 @@ export class SettingsSelectorComponent extends Container {
 				id: "cache-miss-notices",
 				label: "Cache miss notices",
 				description: "Prompt cache miss notices in the transcript",
-				currentValue: config.showCacheMissNotices ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.showCacheMissNotices ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "show-hardware-cursor",
 				label: "Show hardware cursor",
 				description: "Terminal cursor for input method editors",
-				currentValue: config.showHardwareCursor ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.showHardwareCursor ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "editor-padding",
@@ -1540,8 +1540,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "clear-on-shrink",
 				label: "Clear on shrink",
 				description: "Clear leftover terminal rows when content shrinks",
-				currentValue: config.clearOnShrink ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.clearOnShrink ? "on" : "off",
+				values: ["on", "off"],
 			},
 		];
 
@@ -1627,8 +1627,8 @@ export class SettingsSelectorComponent extends Container {
 				? [
 						{
 							id: "subscriptions",
-							label: "Subscriptions",
-							description: "Saved API key management",
+							label: "API keys",
+							description: "Saved API keys you can switch between",
 							currentValue:
 								config.subscriptionCount === 0
 									? "none"
@@ -1640,7 +1640,7 @@ export class SettingsSelectorComponent extends Container {
 			// lunr: multi-subscription pools
 			{
 				id: "auto-manage-subscriptions",
-				label: "Auto-manage subscriptions",
+				label: "Auto-rotate API keys",
 				description: "Automatic API key rotation after usage limits",
 				currentValue: config.autoManageSubscriptions ? "on" : "off",
 				values: ["on", "off"],
@@ -1664,8 +1664,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "autocompact",
 				label: "Auto-compact",
 				description: "Compact context before it reaches the model limit",
-				currentValue: config.autoCompact ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.autoCompact ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "steering-mode",
@@ -1711,7 +1711,7 @@ export class SettingsSelectorComponent extends Container {
 			},
 			{
 				id: "confirm-large-subagent-launches",
-				label: "Confirm large subagent launches",
+				label: "Confirm big subagent launches",
 				description: "Confirm 3+ children; Auto bypasses confirmation",
 				currentValue: config.confirmLargeSubagentLaunches ? "on" : "off",
 				values: ["on", "off"],
@@ -1777,8 +1777,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "hide-thinking",
 				label: "Hide thinking",
 				description: "Thinking block visibility",
-				currentValue: config.hideThinkingBlock ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.hideThinkingBlock ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				// lunr: collapsible reasoning — completed thinking runs render as
@@ -1786,8 +1786,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "thinking-collapse",
 				label: "Collapse thinking",
 				description: "Short summaries for completed thinking",
-				currentValue: config.thinkingCollapse ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.thinkingCollapse ? "on" : "off",
+				values: ["on", "off"],
 				disabled: () => config.hideThinkingBlock,
 			},
 			{
@@ -1803,8 +1803,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "smooth-streaming",
 				label: "Smooth streaming",
 				description: "Typewriter-style response streaming",
-				currentValue: config.smoothStreaming ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.smoothStreaming ? "on" : "off",
+				values: ["on", "off"],
 			},
 			// Only show inline image rows if the terminal supports them
 			...(supportsImages
@@ -1813,8 +1813,8 @@ export class SettingsSelectorComponent extends Container {
 							id: "show-images",
 							label: "Show images",
 							description: "Inline terminal image rendering",
-							currentValue: config.showImages ? "true" : "false",
-							values: ["true", "false"],
+							currentValue: config.showImages ? "on" : "off",
+							values: ["on", "off"],
 						},
 						{
 							id: "image-width-cells",
@@ -1829,15 +1829,15 @@ export class SettingsSelectorComponent extends Container {
 				id: "auto-resize-images",
 				label: "Auto-resize images",
 				description: "Limit images to 2000 x 2000 pixels",
-				currentValue: config.autoResizeImages ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.autoResizeImages ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "block-images",
 				label: "Block images",
 				description: "Prevent images from reaching model providers",
-				currentValue: config.blockImages ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.blockImages ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "tree-filter-mode",
@@ -1850,8 +1850,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "quiet-startup",
 				label: "Quiet startup",
 				description: "Startup log visibility",
-				currentValue: config.quietStartup ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.quietStartup ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{ kind: "section", label: "Features" },
 			{
@@ -1915,8 +1915,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "skill-commands",
 				label: "Skill commands",
 				description: "Skills as /skill:name commands",
-				currentValue: config.enableSkillCommands ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.enableSkillCommands ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "skill-tag-character",
@@ -1937,8 +1937,8 @@ export class SettingsSelectorComponent extends Container {
 				id: "terminal-progress",
 				label: "Terminal progress",
 				description: "Progress in supported terminal tabs",
-				currentValue: config.showTerminalProgress ? "true" : "false",
-				values: ["true", "false"],
+				currentValue: config.showTerminalProgress ? "on" : "off",
+				values: ["on", "off"],
 			},
 			{
 				id: "double-escape-action",
@@ -1963,22 +1963,22 @@ export class SettingsSelectorComponent extends Container {
 		const onSettingChange = (id: string, newValue: string) => {
 			switch (id) {
 				case "autocompact":
-					callbacks.onAutoCompactChange(newValue === "true");
+					callbacks.onAutoCompactChange(newValue === "on");
 					break;
 				case "show-images":
-					callbacks.onShowImagesChange(newValue === "true");
+					callbacks.onShowImagesChange(newValue === "on");
 					break;
 				case "image-width-cells":
 					callbacks.onImageWidthCellsChange(parseInt(newValue, 10));
 					break;
 				case "auto-resize-images":
-					callbacks.onAutoResizeImagesChange(newValue === "true");
+					callbacks.onAutoResizeImagesChange(newValue === "on");
 					break;
 				case "block-images":
-					callbacks.onBlockImagesChange(newValue === "true");
+					callbacks.onBlockImagesChange(newValue === "on");
 					break;
 				case "skill-commands":
-					callbacks.onEnableSkillCommandsChange(newValue === "true");
+					callbacks.onEnableSkillCommandsChange(newValue === "on");
 					break;
 				case "skill-tag-character":
 					callbacks.onSkillTagCharacterChange(newValue as SkillTagCharacter);
@@ -2000,10 +2000,10 @@ export class SettingsSelectorComponent extends Container {
 					break;
 				}
 				case "hide-thinking":
-					callbacks.onHideThinkingBlockChange(newValue === "true");
+					callbacks.onHideThinkingBlockChange(newValue === "on");
 					break;
 				case "thinking-collapse":
-					callbacks.onThinkingCollapseChange(newValue === "true");
+					callbacks.onThinkingCollapseChange(newValue === "on");
 					break;
 				case "reasoning-display":
 					if (newValue === "auto" || newValue === "one-line" || newValue === "four-lines") {
@@ -2011,16 +2011,16 @@ export class SettingsSelectorComponent extends Container {
 					}
 					break;
 				case "cache-miss-notices":
-					callbacks.onShowCacheMissNoticesChange(newValue === "true");
+					callbacks.onShowCacheMissNoticesChange(newValue === "on");
 					break;
 				case "cache-retention":
 					callbacks.onCacheRetentionChange(newValue as "none" | "short" | "long");
 					break;
 				case "quiet-startup":
-					callbacks.onQuietStartupChange(newValue === "true");
+					callbacks.onQuietStartupChange(newValue === "on");
 					break;
 				case "smooth-streaming":
-					callbacks.onSmoothStreamingChange(newValue === "true");
+					callbacks.onSmoothStreamingChange(newValue === "on");
 					break;
 				case "subagent-communication":
 					callbacks.onSubagentCommunicationChange(newValue === "on");
@@ -2079,7 +2079,7 @@ export class SettingsSelectorComponent extends Container {
 					);
 					break;
 				case "show-hardware-cursor":
-					callbacks.onShowHardwareCursorChange(newValue === "true");
+					callbacks.onShowHardwareCursorChange(newValue === "on");
 					break;
 				case "editor-padding":
 					callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
@@ -2091,10 +2091,10 @@ export class SettingsSelectorComponent extends Container {
 					callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
 					break;
 				case "clear-on-shrink":
-					callbacks.onClearOnShrinkChange(newValue === "true");
+					callbacks.onClearOnShrinkChange(newValue === "on");
 					break;
 				case "terminal-progress":
-					callbacks.onShowTerminalProgressChange(newValue === "true");
+					callbacks.onShowTerminalProgressChange(newValue === "on");
 					break;
 				case "attention-notification":
 					callbacks.onAttentionNotificationChange(newValue as AttentionNotification);

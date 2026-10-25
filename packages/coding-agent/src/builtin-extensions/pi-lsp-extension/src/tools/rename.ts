@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_rename — Preview a rename refactoring across the workspace.
  * Returns planned edits but does NOT apply them.

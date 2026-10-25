@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { globalBridge } from "./global-bridge.ts";
 import { runtimeScope } from "./runtime-scope.ts";
 import type { ModelTierName, SettingsManager } from "./settings-manager.ts";
 
@@ -13,6 +14,7 @@ import type { ModelTierName, SettingsManager } from "./settings-manager.ts";
 export const TIER_NAMES: readonly ModelTierName[] = ["light", "standard", "heavy"];
 
 export const MODEL_TIERS_BRIDGE_SYMBOL = Symbol.for("@lunr/model-tiers");
+const modelTiersSlot = globalBridge<ModelTiersBridge>(MODEL_TIERS_BRIDGE_SYMBOL);
 
 export interface ModelTiersBridge {
 	/** Resolve a tier to its configured "provider/model" string, or undefined if unset/unknown. */
@@ -84,12 +86,12 @@ const bridge: ModelTiersBridge = {
  */
 export function registerModelTierBridge(settingsManager: SettingsManager): void {
 	activeSettingsManager = settingsManager;
-	(globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] = bridge;
+	modelTiersSlot.set(bridge);
 }
 
 /** Read the bridge from `globalThis`, or undefined when not registered (extension-safe). */
 export function getModelTiersBridge(): ModelTiersBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[MODEL_TIERS_BRIDGE_SYMBOL] as ModelTiersBridge | undefined;
+	return modelTiersSlot.get();
 }
 
 /** Resolve a tier to its configured "provider/model" string, or undefined if unset/unknown. */

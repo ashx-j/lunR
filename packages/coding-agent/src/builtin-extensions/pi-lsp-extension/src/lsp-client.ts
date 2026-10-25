@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * LSP Client — JSON-RPC client for LSP servers.
  *
@@ -71,7 +70,10 @@ export class LspClient {
   readonly command: string;
   readonly rootDir: string;
 
-  constructor(private options: LspClientOptions) {
+  private options: LspClientOptions;
+
+  constructor(options: LspClientOptions) {
+    this.options = options;
     this.languageId = options.languageId;
     this.command = options.command;
     this.rootDir = options.rootDir;

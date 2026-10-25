@@ -521,7 +521,10 @@ export interface ParsedGroup { kind: "group"; tasks: ParsedStep[]; config: Group
 export type ParsedGroupStep = ParsedStep | ParsedGroup;
 
 export const PARALLEL_GROUP_USAGE =
-	'Usage: /chain agent "task" -> (agent2 "task" | agent3 "task") -> agent4';
+	'Usage: /chain a[tier=standard] "task" -> (b[tier=light] "task" | c[tier=light] "task") -> d[tier=standard]';
+
+// lunr: /run needs a tier on the name, with no space before the bracket.
+const RUN_USAGE = "Usage: /run <name>[tier=light|standard|heavy] <task> [--foreground], for example /run review[tier=standard] check the diff";
 
 export class SlashParseError extends Error {}
 
@@ -698,7 +701,7 @@ const parseAgentArgs = (
 	ctx: ExtensionContext,
 ): { steps: ParsedStep[]; task: string } | null => {
 	const input = args.trim();
-	const usage = `Usage: /${command} description1 "task1" -> description2 "task2"`;
+	const usage = `Usage: /${command} name1[tier=standard] "task1" -> name2[tier=standard] "task2" (tier=light|standard|heavy or model=provider/id)`;
 	let steps: ParsedStep[];
 	let sharedTask: string;
 	let perStep = false;
@@ -737,7 +740,7 @@ const parseAgentArgs = (
 		return null;
 	}
 	if (command === "chain" && !steps[0]?.task && (perStep || !sharedTask)) {
-		ctx.ui.notify(`First step must have a task: /chain description "task" -> description2`, "error");
+		ctx.ui.notify(`First step must have a task: /chain name[tier=standard] "task" -> name2[tier=standard]`, "error");
 		return null;
 	}
 	if (command === "parallel" && !steps.some((s) => s.task) && !sharedTask) {
@@ -860,7 +863,7 @@ export function buildChainExpressionSteps(
 	// Every task inside a parallel group needs its own task; there is no shared-task fallback.
 	for (const step of expression.steps) {
 		if (step.kind === "group" && step.tasks.some((t) => !t.task)) {
-			notify('Each child in a parallel group needs a task: (description "a" | description2 "b")');
+			notify('Each child in a parallel group needs a task: (name[tier=light] "a" | name2[tier=light] "b")');
 			return null;
 		}
 	}
@@ -870,7 +873,7 @@ export function buildChainExpressionSteps(
 			? firstStep.tasks.some((t) => Boolean(t.task))
 			: Boolean(firstStep.task);
 	if (!firstHasTask) {
-		notify('First step must have a task: /chain description "task" -> description2');
+		notify('First step must have a task: /chain name[tier=standard] "task" -> name2[tier=standard]');
 		return null;
 	}
 	const sharedTask =
@@ -928,10 +931,10 @@ export function registerSlashCommands(
 			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--foreground]", "error"); return; }
+			if (!input) { ctx.ui.notify(RUN_USAGE, "error"); return; }
 			const { name: description, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
-			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--foreground]", "error"); return; }
+			if (!description || !task || !inline.tier) { ctx.ui.notify(RUN_USAGE, "error"); return; }
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {

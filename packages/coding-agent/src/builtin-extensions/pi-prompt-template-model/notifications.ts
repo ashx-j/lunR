@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PromptLoaderDiagnostic } from "./prompt-loader.ts";
 

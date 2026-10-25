@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Decide the `isError` override for a finished tool result in the `tool_result` hook.
  *

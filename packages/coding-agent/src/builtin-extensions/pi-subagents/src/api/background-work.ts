@@ -1,3 +1,5 @@
+import { globalBridge } from "../../../../core/global-bridge.ts";
+
 export const BACKGROUND_WORK_PROTOCOL_VERSION = 1;
 export const BACKGROUND_WORK_REGISTRY_KEY = "pi-subagents.background-work.v1";
 
@@ -40,15 +42,15 @@ interface BackgroundWorkRegistry {
 }
 
 function registry(): BackgroundWorkRegistry {
-	const key = Symbol.for(BACKGROUND_WORK_REGISTRY_KEY);
-	const globalObject = globalThis as Record<PropertyKey, unknown>;
-	const existing = globalObject[key];
+	// Another copy of this module may have created the registry, so validate before trusting it.
+	const slot = globalBridge<unknown>(Symbol.for(BACKGROUND_WORK_REGISTRY_KEY));
+	const existing = slot.get();
 	if (existing === undefined) {
 		const created: BackgroundWorkRegistry = {
 			version: BACKGROUND_WORK_PROTOCOL_VERSION,
 			providers: new Map(),
 		};
-		globalObject[key] = created;
+		slot.set(created);
 		return created;
 	}
 	if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
