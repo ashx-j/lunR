@@ -21,7 +21,9 @@ Read before changing the model catalog, model selection, login or provider trans
 - xAI effort maps and Responses transport live in `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses via `parseXaiGrok4Minor`). `withXaiEffortMetadata` also runs in `mergeCatalogLayers`. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`; Completions compat must not leak onto Responses.
 - OpenAI GPT effort floors live in `openai-effort.ts` and fill only levels a catalog row leaves open, so models.dev levels win. Codex generation and live discovery share `packages/ai/src/catalog/codex.ts`. Discovery is client-version-gated: an old version can return 200 without new models.
 - Codex uses each route's `context_window` as its compaction budget; `max_context_window` never becomes the default. Fast mode persists only for `openai-codex`.
-- OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS`.
+- OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Keep `opencode` in `UNLISTED_PROVIDERS` (`live-catalog.ts`).
+- Live discovery covers every built-in provider whose catalog transport has a list endpoint; `liveListProtocol` picks the request shape. A 400/404/405 from a list endpoint is a quiet `skipped`, because an `error` would show in `/refresh` and retry the whole refresh every minute instead of hourly. A 401/403 is an error that `refreshIfStale` does not retry early (`LIVE_LIST_REJECTED`). Anthropic and Google lists skip any login that is not a stored API key, since `getAuth` throws for old subscription and OAuth records.
+- New listed ids resolve through `discoveredModel` in `packages/ai/src/catalog/providers.ts`, the function the generator uses for OpenCode's live-only ids. Change model resolution there, not in `live-catalog.ts`.
 
 ## Claude subscriptions
 

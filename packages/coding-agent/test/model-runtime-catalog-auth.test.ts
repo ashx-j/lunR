@@ -488,3 +488,25 @@ describe("ModelRuntime live catalog OAuth refresh", () => {
 		expect(raw[grokOidcEntryKey()]).toMatchObject({ email: "user@example.com", user_id: "user-1" });
 	});
 });
+
+describe("ModelRuntime live list logins", () => {
+	it("skips Anthropic's list quietly for a login that is not an API key", async () => {
+		const fetchImpl = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async () => new Response("not found", { status: 404 }));
+		const credentials = AuthStorage.inMemory({
+			anthropic: { type: "oauth", access: "old-pi-token", refresh: "old-refresh", expires: 0 },
+		});
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			subscriptions: SubscriptionManager.inMemory(credentials),
+			allowModelNetwork: false,
+		});
+
+		const result = await runtime.refresh({ allowNetwork: true });
+		expect(result.live.find((entry) => entry.providerId === "anthropic")).toMatchObject({ status: "skipped" });
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("api.anthropic.com/v1/models"))).toBe(false);
+	});
+});

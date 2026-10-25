@@ -4,7 +4,7 @@
  * Builds lunR's model catalog from public sources.
  *
  * - models.dev supplies most providers and every model fact it carries (limits, prices,
- *   modalities, thinking levels). catalog-providers.ts says which providers ship and how to
+ *   modalities, thinking levels). src/catalog/providers.ts says which providers ship and how to
  *   reach them.
  * - OpenRouter, Vercel AI Gateway and OpenAI's Codex list are read from their own APIs.
  * - src/catalog/rules.ts patches the few facts the sources get wrong.
@@ -20,12 +20,19 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCodexCatalog } from "../src/catalog/codex.ts";
 import { normalizeCatalogPricing } from "../src/catalog/metadata.ts";
-import { MODELS_DEV_URL, type ModelsDevCatalog, ModelsDevFacts, modelFromModelsDev } from "../src/catalog/models-dev.ts";
+import {
+	type ModelFactsIndex,
+	MODELS_DEV_URL,
+	type ModelsDevCatalog,
+	ModelsDevFacts,
+	modelFromModelsDev,
+} from "../src/catalog/models-dev.ts";
 import { applyCatalogRules } from "../src/catalog/rules.ts";
 import type { Api, Model } from "../src/types.ts";
-import { EXTRA_MODELS, LIVE_MODEL_LISTS, modelsDevModels, normalizeLiveId } from "./catalog-providers.ts";
+import { LIVE_MODEL_LISTS, modelsDevModels, normalizeLiveId } from "../src/catalog/providers.ts";
+import { EXTRA_MODELS } from "./catalog-extras.ts";
 import { CatalogSources } from "./catalog-sources.ts";
-import { parseZenModelIds } from "./opencode-catalog.ts";
+import { parseZenModelIds } from "../src/catalog/opencode.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODEX_PUBLIC_CATALOG_URL = "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json";
@@ -229,7 +236,7 @@ async function generateModels() {
 	) as Record<string, Record<string, Model<Api>>>;
 
 	if (!options.jsonOnly) writeTypeScript(sorted);
-	if (options.jsonOutputDir) writeJson(options.jsonOutputDir, sorted);
+	if (options.jsonOutputDir) writeJson(options.jsonOutputDir, sorted, facts.toIndex());
 
 	console.log("\nModel statistics:");
 	console.log(`  Total: ${providerIds.reduce((sum, id) => sum + Object.keys(sorted[id]).length, 0)}`);
@@ -270,14 +277,18 @@ function writeTypeScript(providers: Record<string, Record<string, Model<Api>>>) 
 	console.log(`Generated ${ids.length} catalogs under src/providers/`);
 }
 
-/** Publishable JSON: everything in models.json, one shard per provider, and source status. */
-function writeJson(directory: string, providers: Record<string, Record<string, Model<Api>>>) {
+/**
+ * Publishable JSON: everything in models.json, one shard per provider, source status, and the
+ * models.dev facts index live discovery uses for models the catalog does not list yet.
+ */
+function writeJson(directory: string, providers: Record<string, Record<string, Model<Api>>>, facts: ModelFactsIndex) {
 	const write = (path: string, value: unknown) => writeFileSync(path, `${JSON.stringify(value)}\n`);
 	rmSync(directory, { recursive: true, force: true });
 	mkdirSync(join(directory, "providers"), { recursive: true });
 	write(join(directory, "models.json"), providers);
 	write(join(directory, "providers.json"), Object.keys(providers));
 	write(join(directory, "sources.json"), sources.statuses.sort((a, b) => a.url.localeCompare(b.url)));
+	write(join(directory, "facts.json"), facts);
 	for (const [provider, models] of Object.entries(providers)) write(join(directory, "providers", `${provider}.json`), models);
 	console.log(`Generated JSON model catalog under ${directory}`);
 }

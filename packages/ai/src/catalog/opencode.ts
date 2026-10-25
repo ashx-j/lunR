@@ -1,13 +1,9 @@
 /**
- * OpenCode Zen / Go helpers for the catalog generator.
+ * OpenCode Zen / Go helpers for the catalog.
  * Availability comes from GET /v1/models; models.dev supplies metadata.
  */
 
-export type OpencodeApi =
-	| "openai-responses"
-	| "anthropic-messages"
-	| "google-generative-ai"
-	| "openai-completions";
+export type OpencodeApi = "openai-responses" | "anthropic-messages" | "google-generative-ai" | "openai-completions";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

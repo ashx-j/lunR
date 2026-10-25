@@ -4,7 +4,7 @@ import {
 	opencodeBaseUrl,
 	parseZenModelIds,
 	resolveOpencodeApi,
-} from "../scripts/opencode-catalog.ts";
+} from "../src/catalog/opencode.ts";
 import { OPENCODE_MODELS } from "../src/providers/opencode.models.ts";
 import { OPENCODE_GO_MODELS } from "../src/providers/opencode-go.models.ts";
 

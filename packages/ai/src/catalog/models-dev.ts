@@ -2,8 +2,8 @@ import type { AnthropicMessagesCompat, Api, Model, ModelCost, ModelCostTier, Thi
 
 /**
  * Reader for https://models.dev/api.json, the public catalog lunR builds most provider rows from.
- * The catalog generator turns models.dev facts into lunR models through these functions, so a
- * model's thinking levels, prices and limits come from data instead of id lists.
+ * The catalog generator and live discovery both turn models.dev facts into lunR models through
+ * these functions, so a model's thinking levels, prices and limits come from data instead of id lists.
  */
 
 export const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -171,6 +171,20 @@ export function modelFromModelsDev(id: string, row: ModelsDevModel, target: Mode
 	};
 }
 
+/** Published model facts keyed by bare id. */
+export type ModelFactsIndex = Record<string, ModelsDevModel>;
+
+const FACT_FIELDS = [
+	"name",
+	"family",
+	"tool_call",
+	"reasoning",
+	"reasoning_options",
+	"temperature",
+	"limit",
+	"modalities",
+] as const satisfies readonly (keyof ModelsDevModel)[];
+
 /** Strips gateway decorations, so `~anthropic/claude-x:batch` and `claude-x@2026` both read `claude-x`. */
 export function bareModelId(id: string): string {
 	return id
@@ -189,6 +203,11 @@ export function bareModelId(id: string): string {
 export class ModelsDevFacts {
 	private readonly catalog: ModelsDevCatalog;
 	private readonly index = new Map<string, { key: string; row: ModelsDevModel }[]>();
+
+	/** Facts from a published index (see `toIndex`), for clients without the full models.dev data. */
+	static fromIndex(index: ModelFactsIndex): ModelsDevFacts {
+		return new ModelsDevFacts({ facts: { models: index } });
+	}
 
 	constructor(catalog: ModelsDevCatalog) {
 		this.catalog = catalog;
@@ -221,6 +240,28 @@ export class ModelsDevFacts {
 			modalities: row.modalities ?? lab.modalities,
 			limit: row.limit ?? lab.limit,
 		};
+	}
+
+	/**
+	 * One row per bare id, with only the fields live discovery reads. The lab's own row wins over
+	 * hosts, and prices stay out because they belong to each host. Ids with no agent row keep only
+	 * `tool_call: false`, so discovery can skip them.
+	 */
+	toIndex(): ModelFactsIndex {
+		const index: ModelFactsIndex = {};
+		for (const [bare, candidates] of [...this.index].sort(([a], [b]) => a.localeCompare(b))) {
+			const agents = candidates.filter((candidate) => isAgentModel(candidate.row));
+			const chosen = agents.find((candidate) => !candidate.row.canonical_model_id) ?? agents[0];
+			if (!chosen) {
+				index[bare] = { tool_call: false };
+				continue;
+			}
+			const row = this.complete(chosen.row);
+			index[bare] = Object.fromEntries(
+				FACT_FIELDS.flatMap((field) => (row[field] === undefined ? [] : [[field, row[field]]])),
+			) as ModelsDevModel;
+		}
+		return index;
 	}
 
 	/**
