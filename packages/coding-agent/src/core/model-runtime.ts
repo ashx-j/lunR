@@ -40,7 +40,9 @@ import {
 	buildLiveOverlay,
 	fetchLiveProviderModels,
 	type IncompleteLiveModel,
+	LIVE_LIST_REJECTED,
 	type LiveCatalogResult,
+	listNeedsApiKey,
 	liveListProtocol,
 } from "./live-catalog.ts";
 import { ModelConfig } from "./model-config.ts";
@@ -790,7 +792,9 @@ export class ModelRuntime implements Models {
 		// Bound retries on a broken source; a successful refresh extends the deadline to one hour.
 		this.nextAutomaticRefresh = Date.now() + 60_000;
 		const result = await this.refresh({ allowNetwork: true, signal: options.signal });
-		if (!result.aborted && !result.errors.size) this.nextAutomaticRefresh = Date.now() + 3_600_000;
+		// A refused login stays refused for a minute too; only transient failures earn an early retry.
+		const transient = [...result.errors.values()].some((error) => !error.message.startsWith(LIVE_LIST_REJECTED));
+		if (!result.aborted && !transient) this.nextAutomaticRefresh = Date.now() + 3_600_000;
 		return result;
 	}
 
@@ -920,10 +924,23 @@ export class ModelRuntime implements Models {
 					};
 				}
 
+				// Anthropic and Google lists take API keys only. A subscription or an old OAuth record would
+				// fail auth on every refresh, so it skips the list quietly instead.
+				const keyOnly = listNeedsApiKey(liveListProtocol(providerId, bakedIn));
+				const skipped = {
+					providerId,
+					status: "skipped" as const,
+					discoveries: [],
+					added: 0,
+					total: stored?.models.length ?? 0,
+					incomplete: [],
+				};
+				if (keyOnly && (await this.credentials.read(providerId))?.type !== "api_key") return skipped;
 				let credential: Credential | undefined;
 				try {
 					credential = await this.refreshCredentialFor(providerId);
 				} catch (error) {
+					if (keyOnly) return skipped;
 					return {
 						providerId,
 						status: "error" as const,

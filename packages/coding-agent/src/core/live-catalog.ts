@@ -18,9 +18,12 @@ export type LiveListProtocol = "codex" | "openai" | "anthropic" | "google" | "mi
 
 /**
  * Providers whose list lunR does not read: OpenCode's free rows follow its Zen list and models.dev,
- * Copilot's picker arrives with its login, and the rest have no fixed list endpoint.
+ * Copilot's picker arrives with its login, NIM's list is mostly not chat models, and the rest have
+ * no fixed list endpoint.
  */
 const UNLISTED_PROVIDERS = new Set([
+	// NIM's list mixes in embedding, reward and vision models; the catalog intersects it with models.dev.
+	"nvidia",
 	"opencode",
 	"opencode-go",
 	"github-copilot",
@@ -586,6 +589,14 @@ function listRequest(
 
 class ListUnavailable extends Error {}
 
+/** Error text for a list request the provider refused with 401 or 403; an automatic refresh does not retry it early. */
+export const LIVE_LIST_REJECTED = "model list rejected the login";
+
+/** Only listing protocols that read API keys; any other login skips the list quietly. */
+export function listNeedsApiKey(protocol: LiveListProtocol | undefined): boolean {
+	return protocol === "anthropic" || protocol === "google";
+}
+
 export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOptions): Promise<LiveCatalogResult> {
 	const empty: LiveCatalogResult = {
 		providerId: options.providerId,
@@ -631,9 +642,12 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 					},
 					signal: controller.signal,
 				});
-				// A provider without a list endpoint answers 4xx; keep its catalog rows and stay quiet.
-				if (response.status >= 400 && response.status < 500 && !codex) {
+				// A provider without a list endpoint answers 400, 404 or 405; keep its catalog rows and stay quiet.
+				if ([400, 404, 405, 501].includes(response.status) && !codex) {
 					throw new ListUnavailable(`model list unavailable (HTTP ${response.status})`);
+				}
+				if (response.status === 401 || response.status === 403) {
+					throw new Error(`${LIVE_LIST_REJECTED} (HTTP ${response.status})`);
 				}
 				if (!response.ok) throw new Error(`HTTP ${response.status}`);
 				return response.json();
@@ -646,9 +660,11 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 			}),
 		]);
 		const bakedIds = new Set(options.bakedIn.map((model) => model.id));
-		const unknown = listedIds(protocol, payload).some(
-			(id) => !bakedIds.has(id) && !options.knownKeys.has(modelKey(options.providerId, id)),
-		);
+		const isKnown = (id: string) => bakedIds.has(id) || options.knownKeys.has(modelKey(options.providerId, id));
+		// OpenRouter's own list carries everything it needs; elsewhere only new chat ids need facts.
+		const unknown =
+			options.providerId !== "openrouter" &&
+			listedIds(protocol, payload).some((id) => !isKnown(id) && !NON_CHAT_ID.test(id));
 		const facts = unknown ? await options.getFacts?.() : undefined;
 		const discoveries = codex
 			? discoverCodexModels(payload, options.baseUrl)
@@ -658,7 +674,7 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 					facts,
 				});
 		if (!discoveries.length) throw new ListUnavailable("no usable models returned; retaining cached models");
-		const added = discoveries.filter((discovery) => !bakedIds.has(discovery.model.id)).length;
+		const added = discoveries.filter((discovery) => !isKnown(discovery.model.id)).length;
 		return {
 			providerId: options.providerId,
 			discoveryClientVersion,

@@ -5,6 +5,7 @@ import {
 	discoverLiveModels,
 	fetchLiveProviderModels,
 	isLiveModelIncomplete,
+	LIVE_LIST_REJECTED,
 	mapOpenRouterModel,
 	parseOpenAIModelsList,
 	synthesizeLiveModel,
@@ -241,6 +242,18 @@ describe("live-catalog", () => {
 			fetchImpl: async () => new Response("not found", { status: 404 }),
 		});
 		expect(result).toMatchObject({ status: "skipped", error: "model list unavailable (HTTP 404)" });
+	});
+
+	it("reports a refused login without treating it as a missing list", async () => {
+		const result = await fetchLiveProviderModels({
+			providerId: "xai",
+			baseUrl: "https://api.x.ai/v1",
+			bakedIn: [template()],
+			credential: { type: "api_key", key: "revoked" },
+			knownKeys: new Set(),
+			fetchImpl: async () => new Response("unauthorized", { status: 401 }),
+		});
+		expect(result).toMatchObject({ status: "error", error: `${LIVE_LIST_REJECTED} (HTTP 401)` });
 	});
 
 	it("loads models.dev facts only when the list names a new id", async () => {
