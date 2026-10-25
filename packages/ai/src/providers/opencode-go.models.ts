@@ -169,7 +169,7 @@ export const OPENCODE_GO_MODELS = {
 		input: ["text","image"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
 		contextWindow: 500000,
-		maxTokens: 65536,
+		maxTokens: 500000,
 	} satisfies Model<"openai-responses">,
 	"grok-4.7": {
 		id: "grok-4.7",
@@ -238,7 +238,7 @@ export const OPENCODE_GO_MODELS = {
 		thinkingLevelMap: {"minimal":null,"low":null,"medium":null},
 		input: ["text","image"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
-		contextWindow: 262144,
+		contextWindow: 256000,
 		maxTokens: 262144,
 	} satisfies Model<"openai-completions">,
 	"kimi-k2.7-code": {
@@ -364,8 +364,8 @@ export const OPENCODE_GO_MODELS = {
 		thinkingLevelMap: {"off":null,"minimal":null,"low":null,"medium":null},
 		input: ["text"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
-		contextWindow: 204800,
-		maxTokens: 131072,
+		contextWindow: 196608,
+		maxTokens: 24576,
 	} satisfies Model<"openai-completions">,
 	"minimax-m2.7": {
 		id: "minimax-m2.7",
@@ -458,7 +458,7 @@ export const OPENCODE_GO_MODELS = {
 		input: ["text","image"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
 		contextWindow: 1000000,
-		maxTokens: 64000,
+		maxTokens: 65536,
 	} satisfies Model<"openai-completions">,
 	"qwen3.7-max": {
 		id: "qwen3.7-max",
@@ -469,8 +469,8 @@ export const OPENCODE_GO_MODELS = {
 		reasoning: true,
 		input: ["text"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
-		contextWindow: 1064000,
-		maxTokens: 64000,
+		contextWindow: 1000000,
+		maxTokens: 65536,
 	} satisfies Model<"anthropic-messages">,
 	"qwen3.7-plus": {
 		id: "qwen3.7-plus",

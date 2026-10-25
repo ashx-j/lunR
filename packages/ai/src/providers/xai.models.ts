@@ -4,33 +4,6 @@
 import type { Model } from "../types.ts";
 
 export const XAI_MODELS = {
-	"grok-4.20-0309-non-reasoning": {
-		id: "grok-4.20-0309-non-reasoning",
-		name: "Grok 4.20 (Non-Reasoning)",
-		api: "openai-responses",
-		provider: "xai",
-		baseUrl: "https://api.x.ai/v1",
-		compat: {"supportsLongCacheRetention":false},
-		reasoning: false,
-		input: ["text","image"],
-		cost: {"input":1.25,"output":2.5,"cacheRead":0.2,"cacheWrite":0,"tiers":[{"inputTokensAbove":200000,"input":2.5,"output":5,"cacheRead":0.4,"cacheWrite":0}]},
-		contextWindow: 1000000,
-		maxTokens: 30000,
-	} satisfies Model<"openai-responses">,
-	"grok-4.20-0309-reasoning": {
-		id: "grok-4.20-0309-reasoning",
-		name: "Grok 4.20 (Reasoning)",
-		api: "openai-responses",
-		provider: "xai",
-		baseUrl: "https://api.x.ai/v1",
-		compat: {"supportsLongCacheRetention":false},
-		reasoning: true,
-		thinkingLevelMap: {"off":null,"minimal":null,"low":null,"medium":null},
-		input: ["text","image"],
-		cost: {"input":1.25,"output":2.5,"cacheRead":0.2,"cacheWrite":0,"tiers":[{"inputTokensAbove":200000,"input":2.5,"output":5,"cacheRead":0.4,"cacheWrite":0}]},
-		contextWindow: 1000000,
-		maxTokens: 30000,
-	} satisfies Model<"openai-responses">,
 	"grok-4.3": {
 		id: "grok-4.3",
 		name: "Grok 4.3",

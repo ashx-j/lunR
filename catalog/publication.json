@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-80983b255dff465997a4fa67798d0c0bb76dd5191b47652f388aa5ba42d06510",
+  "revision": "sha256-a20401799d236b7e3f8691d34ea495d2eed333071cda0b0093e643f41f09c447",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -67,15 +67,15 @@
     "openai": "ab86affdfd2b99f097bafd674b09fd00e7f315bc88b10f4cdac509aecca64bee",
     "openai-codex": "ff0cb7c59255e4bd58fb57a9fb9ed7b628b206db5f3ffddd604bcaee3320d001",
     "opencode": "39805c599e3eaff6a5b155767b2d21b01860cf06646517870c0425bf37f0af6b",
-    "opencode-go": "75b999f4667efd654a781fbbeb7c36b9528609b9af31273c52e55988c0e16502",
-    "openrouter": "b4039be078da3fe22d8fa4f75c241bd30ae4a772eed38aaa60637ab6d6b68d41",
+    "opencode-go": "f5a10889dd857ae592f69f684bb3eff705af12c10f6fa9b288c93b754d398fc9",
+    "openrouter": "bac462fa756139ccb95d049abc874c0d4c44994d7cf6300d22a8f6bbd8052912",
     "qwen-cloud": "654033e19d712a01f465762f684367516d6a6fb2ed7915e30fab06d604993536",
     "qwen-cloud-cn": "b505c390f899c27c6e1279c6eba7777e710b5825b72a66c371124b51dccaba63",
     "qwen-token-plan": "01e881bf6740b29873f2adbe9dab0de30e7e1c4fa55413942adbdc199594c0c0",
     "qwen-token-plan-cn": "d4647fdf90886474a65eeb148bd5f077dc4efa396f06734955fd813a38a01f89",
     "together": "72ee45f31063291d862e6acc13ec46f9e0410db32497e9046187fe250037a15a",
     "vercel-ai-gateway": "c40b068f624589cfb5952e7183bf821e05dccf41ce51581468ec1e0293095eee",
-    "xai": "67b20714bcc019c95767229b1d932e3071a9f8a8f6a2e20bd5dd7ef954076616",
+    "xai": "68940cf26a085aac5ede33429504b355d7fa60358d13e2b8c9952176c5fd8700",
     "xiaomi": "636b38f0a188fbaabb7dfdd1c4bc33eab0b57727a61e276ca2b61eb88a2c73f4",
     "xiaomi-token-plan-ams": "bb3d5f6a73dbf2035a5840642e482ebf45311101864a2dda09e3140e202f8528",
     "xiaomi-token-plan-cn": "012fb07cf2bc7a950be4f6a581cd5efc63b6f72f1bde523e946dbb9495e02bd0",
@@ -87,55 +87,55 @@
     {
       "url": "https://ai-gateway.vercel.sh/v1/models",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:14.544Z",
+      "fetchedAt": "2026-10-25T11:26:32.435Z",
       "digest": "28e21d04fae90b7fdd5fe38d53a2e9c8a15e0b395f4f461e9d8c84b7e5590f82",
       "error": "Offline"
     },
     {
       "url": "https://integrate.api.nvidia.com/v1/models",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:14.687Z",
+      "fetchedAt": "2026-10-25T11:26:31.997Z",
       "digest": "36d73721a986182ca405e6218193500541cd100966076c5d5abad401d2137d76",
       "error": "Offline"
     },
     {
       "url": "https://models.dev/api.json",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:14.309Z",
-      "digest": "7eb7e12967d8f6b65d0ac3d1c7aa44037a7ddef8a62aaa194b41b3cfafa31889",
+      "fetchedAt": "2026-10-25T11:26:32.180Z",
+      "digest": "34c6751862ca34af12992d77c74eb73db74e83b424242215a61aa55a5fc8e655",
       "error": "Offline"
     },
     {
       "url": "https://opencode.ai/zen/go/v1/models",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:15.055Z",
-      "digest": "11259c8a4fe6bfd861f0721470cd5bd7a5fd6cb85ab0828edb9c88c60e993a85",
+      "fetchedAt": "2026-10-25T11:26:32.415Z",
+      "digest": "55020aa5bf9288c20b41dd96555d4c4c82a37351e1ccb21f68c215fa7663a0a5",
       "error": "Offline"
     },
     {
       "url": "https://opencode.ai/zen/v1/models",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:15.064Z",
-      "digest": "81c2ed0cff8af5b5c54f32777f092d6b3501dcf92f54f2b8211edadf18d831f6",
+      "fetchedAt": "2026-10-25T11:26:32.413Z",
+      "digest": "d29fa5d1e84f64fa6cb93c74dfbe539b1bd8fba0854286f289c7cffad22479c6",
       "error": "Offline"
     },
     {
       "url": "https://openrouter.ai/api/v1/models",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:14.122Z",
-      "digest": "68e4918dc78899906852d1c11ba2b95903048056f84d8fc8bcb93493fac86c41",
+      "fetchedAt": "2026-10-25T11:26:32.459Z",
+      "digest": "bd797b6112fad65baa4811dd5555c9ce27b7068085d9af9d05ed3af045cd40a1",
       "error": "Offline"
     },
     {
       "url": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "status": "cached",
-      "fetchedAt": "2026-10-25T10:49:14.587Z",
+      "fetchedAt": "2026-10-25T11:26:32.081Z",
       "digest": "7359ceba1d5b5226fe3b675bb7b6df4e21d70d310c3b88ed67eb97ccaa8a7e80",
       "error": "Offline"
     }
   ],
-  "generatedAt": "2026-10-25T11:16:46.860Z",
-  "sourceCommit": "4ad9d57a0e4569ae296bf984551bfec51add9db8",
+  "generatedAt": "2026-10-25T11:29:43.248Z",
+  "sourceCommit": "1cebf4886e6d883246547baaaf1aa20165730aef",
   "providerCount": 39,
-  "modelCount": 1699
+  "modelCount": 1697
 }

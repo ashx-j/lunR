@@ -86,6 +86,12 @@ export const CATALOG_RULES: readonly CatalogRule[] = [
 	// xAI
 	{
 		providers: ["xai"],
+		match: /^grok-4\.20(?:$|-)/,
+		drop: true,
+		why: "Grok 4.20 predates Grok 4.3, but lunR's Grok version check reads it as minor 20 and would send Grok 4.6 effort levels it does not take.",
+	},
+	{
+		providers: ["xai"],
 		match: /^grok-4\.5(?:$|-)/,
 		set: { thinkingLevelMap: { xhigh: undefined } },
 		why: "xAI accepts xhigh on Grok 4.5 but runs it as high, so the picker would show a duplicate level.",

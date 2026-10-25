@@ -113,8 +113,9 @@ describe("GPT-6 Astra catalogs", () => {
 			const model = loadCatalogProvider(provider)["gpt-6-astra"];
 			expect(model).toBeDefined();
 			expect(model.provider).toBe(provider);
-			// Codex's default conversation limit is not the OpenAI API's maximum window.
-			expect(model.contextWindow).toBe(provider === "openai-codex" ? 272000 : 1050000);
+			// Codex's default conversation limit and the OpenAI API's base price tier are 272k; Azure bills
+			// the full window at one rate.
+			expect(model.contextWindow).toBe(provider === "azure-openai-responses" ? 1050000 : 272000);
 			expect(model.maxTokens).toBe(128000);
 			if (provider !== "azure-openai-responses") {
 				expect(model.compat).toMatchObject({ supportsToolSearch: true });
