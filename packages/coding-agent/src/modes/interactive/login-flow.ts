@@ -20,7 +20,7 @@ import {
 	slugifyProviderId,
 	upsertCustomProvider,
 } from "../../core/model-config-writer.ts";
-import { defaultModelPerProvider } from "../../core/model-resolver.ts";
+import { defaultModelPerProvider, findSignedOutScopePatterns } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
@@ -487,6 +487,20 @@ async function removeAllSubscriptions(host: LoginFlowHost, providerId: string): 
 	}
 }
 
+/**
+ * Removes scoped models whose provider has no credential left after a logout, from settings and from
+ * this session's ctrl+p cycle. A provider still reachable through an environment key keeps its models.
+ */
+async function forgetSignedOutScopedModels(host: LoginFlowHost): Promise<void> {
+	const { modelRuntime: runtime, settingsManager } = host.session;
+	const signedOut = await findSignedOutScopePatterns(settingsManager.getEnabledModels() ?? [], runtime);
+	if (signedOut.length > 0) settingsManager.removeEnabledModels(signedOut);
+	const scoped = host.session.scopedModels;
+	const auth = await Promise.all(scoped.map((entry) => runtime.checkAuth(entry.model.provider)));
+	const kept = scoped.filter((_, index) => auth[index]);
+	if (kept.length !== scoped.length) host.session.setScopedModels(kept);
+}
+
 export async function showOAuthSelector(host: LoginFlowHost, mode: "login" | "logout"): Promise<void> {
 	if (mode === "login") {
 		showLoginAuthTypeSelector(host);
@@ -528,6 +542,7 @@ export async function showOAuthSelector(host: LoginFlowHost, mode: "login" | "lo
 						}
 						await removeAllSubscriptions(host, poolProviderId);
 						await host.session.modelRuntime.logout(poolProviderId);
+						await forgetSignedOutScopedModels(host);
 						await host.updateAvailableProviderCount();
 						const poolProviderName =
 							host.session.modelRuntime.getProvider(poolProviderId)?.name ?? poolProviderId;
@@ -540,6 +555,7 @@ export async function showOAuthSelector(host: LoginFlowHost, mode: "login" | "lo
 					await removeAllSubscriptions(host, providerOption.id);
 					const removed = await host.session.modelRuntime.readCredential(providerOption.id);
 					await host.session.modelRuntime.logout(providerOption.id);
+					await forgetSignedOutScopedModels(host);
 					await host.updateAvailableProviderCount();
 					const message =
 						removed?.type === "external_claude_code"
