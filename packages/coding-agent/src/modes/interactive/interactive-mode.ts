@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AuthEvent, AuthPrompt, Credential } from "@earendil-works/pi-ai";
+import { type AuthEvent, type AuthPrompt, type Credential, claudeCodeUpdateNote } from "@earendil-works/pi-ai";
 import {
 	type AssistantMessage,
 	getSupportedThinkingLevels,
@@ -5344,33 +5344,40 @@ export class InteractiveMode {
 			}
 		}
 		this.session.refreshModelFromRegistry();
+		// The catalog cannot add subscription models that the saved Claude Code picker never offered.
+		const claudeCodeNote = claudeCodeUpdateNote(await runtime.readCredential("anthropic").catch(() => undefined));
 		this.showStatus(
-			formatCatalogRefreshSummary({
-				official: result.official
-					? {
-							source: result.official.source,
-							modelCount: result.official.catalog.models.length,
-							evictedUserRows: result.official.evictedUserRows,
-						}
-					: undefined,
-				providers: [
-					...result.live.map((entry) => ({
-						id: entry.providerId,
-						status: entry.status,
-						added: entry.added,
-						total: entry.total,
-						error: entry.error,
-					})),
-					...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
-						id,
-						status: "error" as const,
-						error,
-					})),
-				],
-				asked,
-				extraDefaults,
-				ollama,
-			}),
+			[
+				formatCatalogRefreshSummary({
+					official: result.official
+						? {
+								source: result.official.source,
+								modelCount: result.official.catalog.models.length,
+								evictedUserRows: result.official.evictedUserRows,
+							}
+						: undefined,
+					providers: [
+						...result.live.map((entry) => ({
+							id: entry.providerId,
+							status: entry.status,
+							added: entry.added,
+							total: entry.total,
+							error: entry.error,
+						})),
+						...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
+							id,
+							status: "error" as const,
+							error,
+						})),
+					],
+					asked,
+					extraDefaults,
+					ollama,
+				}),
+				claudeCodeNote,
+			]
+				.filter(Boolean)
+				.join(" "),
 		);
 		this.footer.invalidate();
 	}

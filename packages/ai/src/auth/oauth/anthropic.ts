@@ -128,13 +128,15 @@ function controlChannel(child: ReturnType<typeof spawnClaudeCode>) {
 
 /** Claude Code's own label for a model variant billed from usage credits instead of the plan. */
 const USAGE_CREDITS = /usage credits/i;
+/** Context window of a Claude Code `[1m]` route, as Claude Code 2.1.263 reported through `get_context_usage`. */
+const ONE_MILLION_ROUTE_WINDOW = 1_000_000;
 
 /**
  * The account's models from Claude Code itself, with no Messages request. The `initialize` handshake lists
- * the picker; `set_model` plus `get_context_usage` report each route's context window. A tripwire base URL
- * proves no other request was sent before anything is saved. Each model keeps the largest window Claude
- * Code offers on the plan, skipping variants it labels as drawing from usage credits, and the list keeps
- * Claude Code's picker order so its default for the plan comes first.
+ * the picker. Since Claude Code 2.1.310, switching models or reading a route's context window asks Anthropic,
+ * so setup does neither: a `[1m]` route records 1M and other routes keep lunR's catalog window. A tripwire
+ * base URL proves no other request was sent before anything is saved. Variants Claude Code labels as drawing
+ * from usage credits are skipped, and the list keeps Claude Code's picker order so its default comes first.
  */
 async function discoverModels(command: string, configDir: string | undefined): Promise<ClaudeCodeModelRoute[]> {
 	const tripwire = await ClaudeCodeTripwire.open();
@@ -178,13 +180,10 @@ async function discoverModels(command: string, configDir: string | undefined): P
 		const models = new Map<string, ClaudeCodeModelRoute>();
 		for (const [route, usageCredits] of routes) {
 			if (usageCredits) continue;
-			await channel.request({ subtype: "set_model", model: route });
-			const usage = await channel.request({ subtype: "get_context_usage" });
-			const contextWindow = isRecord(usage) ? usage.maxTokens : undefined;
-			if (typeof contextWindow !== "number" || !Number.isInteger(contextWindow) || contextWindow <= 0) continue;
 			const id = route.replace(/\[1m\]$/, "");
-			// Replacing an existing key keeps its first picker position.
-			if (contextWindow > (models.get(id)?.contextWindow ?? 0)) models.set(id, { id, route, contextWindow });
+			// Replacing an existing key keeps its first picker position, so a `[1m]` route wins over the plain one.
+			if (id !== route) models.set(id, { id, route, contextWindow: ONE_MILLION_ROUTE_WINDOW });
+			else if (!models.has(id)) models.set(id, { id, route });
 		}
 		if (tripwire.tripped) throw new Error("Claude Code model discovery tried to contact Anthropic. Setup not saved.");
 		return [...models.values()];

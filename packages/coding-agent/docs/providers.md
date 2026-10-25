@@ -30,7 +30,7 @@ Use `/logout` to remove the lunR connection. Most subscription providers store r
 
 ### Claude Pro/Max
 
-`/login anthropic` offers a Claude subscription connection that runs through Claude Code 2.1.263. The first time, lunR asks before downloading that exact Claude Code build (about 100 MB) from the npm registry into `~/.lunr/agent/claude-code/2.1.263/`. The download must match a hash pinned in lunR's source, or nothing is installed. You do not need Python or a separate Claude Code install, and lunR never changes another Claude Code on your machine.
+`/login anthropic` offers a Claude subscription connection that runs through Claude Code 2.1.310. The first time, lunR asks before downloading that exact Claude Code build (about 100 MB) from the npm registry into `~/.lunr/agent/claude-code/2.1.310/`. The download must match a hash pinned in lunR's source, or nothing is installed. You do not need Python or a separate Claude Code install, and lunR never changes another Claude Code on your machine.
 
 lunR's copy uses Claude Code's normal sign-in, so an existing Claude Code login is reused. Otherwise, confirm the terminal handoff to `claude auth login` and pick a Claude subscription.
 
@@ -38,7 +38,7 @@ Claude Code owns your account session. lunR does not read its credentials or cop
 
 `/logout anthropic` removes only lunR's connection and cached provider models. Your Claude Code login stays, and so does the downloaded binary; delete `~/.lunr/agent/claude-code/` to remove it. Connections from the earlier Python-based setup, old lunR Anthropic OAuth tokens, and `ANTHROPIC_OAUTH_TOKEN` all need `/login anthropic` again. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
 
-The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Models, routes, and context windows come from Claude Code during setup: its model picker lists what your plan offers, and lunR keeps each model's largest window that Claude Code does not bill from usage credits (for example, Opus 5 stays on its standard 200K window rather than the credit-billed 1M one). Connections saved before lunR 0.2.37 need `/login anthropic` once to record this. The route passes offline checks against the real Claude Code 2.1.263 binary but is not yet qualified against a live account on every platform.
+The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Models and routes come from Claude Code's model picker during setup, which lists what your plan offers. lunR skips variants that Claude Code bills from usage credits. A `[1m]` route gets a 1M context window, and every other model uses the window from lunR's model catalog. Setup sends nothing to Anthropic. New Claude models usually need a newer Claude Code: when lunR pins a newer one, `/refresh` says so, and `/login anthropic` downloads it and lists the new models. Connections saved before lunR 0.2.37 need `/login anthropic` once. The route passes offline checks against the real Claude Code 2.1.310 binary and a live Linux run, but is not yet qualified against a live account on every platform.
 
 ### GitHub Copilot
 
