@@ -22,8 +22,9 @@ export interface OnboardingOption {
 const MAX_TEXT_WIDTH = 80;
 /** Below this many description columns, each description moves under its label. */
 const MIN_DESCRIPTION_WIDTH = 24;
+/** Rows without a featured provider name this many providers instead. */
 const PROVIDER_NAME_LIMIT = 4;
-/** Providers both rows name first, in this order; the rest keep /login's name order. */
+/** The providers both rows name, in this order; the rest only count toward "and more". */
 const FEATURED_PROVIDER_IDS = ["anthropic", "openai-codex", "openai", "xai", "google"];
 /** Keyless local servers (Ollama, LM Studio) sign in through the account flow but are not accounts. */
 const LOCAL_PROVIDER_IDS = new Set(LOCAL_SERVERS.map((server) => server.providerId));
@@ -40,19 +41,19 @@ export function shouldShowOnboarding(
 	return credentials.length === 0 && (!model || model.provider === "unknown");
 }
 
-/** "A, B, C, D and 5 more", or "A, B and C" when everything fits. */
-function formatProviderNames(names: readonly string[]): string {
-	const unique = [...new Set(names)];
-	if (unique.length > PROVIDER_NAME_LIMIT) {
-		return `${unique.slice(0, PROVIDER_NAME_LIMIT).join(", ")} and ${unique.length - PROVIDER_NAME_LIMIT} more`;
-	}
-	if (unique.length < 2) return unique.join("");
-	return `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}`;
+/**
+ * "A, B, C and more" when only some names are shown, or "A, B and C" when all are. No count, so
+ * the row stays one line and does not change as /login gains providers.
+ */
+function formatProviderNames(shown: readonly string[], total: number): string {
+	if (shown.length < total) return `${shown.join(", ")} and more`;
+	if (shown.length < 2) return shown.join("");
+	return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
 }
 
 /**
  * Builds the onboarding choices from the /login provider list (`getLoginProviderOptions`), so the
- * provider names cannot go stale. Both rows name the featured providers first and skip local servers.
+ * provider names cannot go stale. Both rows name only the featured providers and skip local servers.
  * Account and API-key rows are left out when no provider offers them.
  */
 export function buildOnboardingOptions(
@@ -62,23 +63,25 @@ export function buildOnboardingOptions(
 		const rank = FEATURED_PROVIDER_IDS.indexOf(id);
 		return rank === -1 ? FEATURED_PROVIDER_IDS.length : rank;
 	};
-	const namesFor = (authType: AuthSelectorProvider["authType"]) =>
-		providers
+	const describe = (authType: AuthSelectorProvider["authType"]) => {
+		const matching = providers
 			.filter((provider) => provider.authType === authType && !LOCAL_PROVIDER_IDS.has(provider.id))
-			.sort((a, b) => featuredRank(a.id) - featuredRank(b.id))
-			.map((provider) => provider.name);
-	const subscriptions = namesFor("oauth");
-	const apiKeys = namesFor("api_key");
+			.sort((a, b) => featuredRank(a.id) - featuredRank(b.id));
+		const names = [...new Set(matching.map((provider) => provider.name))];
+		const featured = new Set(
+			matching.filter((provider) => FEATURED_PROVIDER_IDS.includes(provider.id)).map((provider) => provider.name),
+		);
+		const shown = featured.size > 0 ? [...featured] : names.slice(0, PROVIDER_NAME_LIMIT);
+		return names.length > 0 ? formatProviderNames(shown, names.length) : undefined;
+	};
+	const subscriptions = describe("oauth");
+	const apiKeys = describe("api_key");
 	const options: OnboardingOption[] = [];
-	if (subscriptions.length > 0) {
-		options.push({
-			choice: "oauth",
-			label: "Sign in with an account",
-			description: formatProviderNames(subscriptions),
-		});
+	if (subscriptions) {
+		options.push({ choice: "oauth", label: "Sign in with an account", description: subscriptions });
 	}
-	if (apiKeys.length > 0) {
-		options.push({ choice: "api_key", label: "Sign in with an API key", description: formatProviderNames(apiKeys) });
+	if (apiKeys) {
+		options.push({ choice: "api_key", label: "Sign in with an API key", description: apiKeys });
 	}
 	options.push(
 		{
