@@ -18,6 +18,7 @@ Read before building, testing, packaging or publishing lunR.
 - `bash test.sh --workspace=packages/coding-agent -- <test files> --maxWorkers=1` runs with disposable home/profile/cache/temp directories and an allowlisted environment without credentials. Plain package `vitest --run` uses the caller's profile.
 - First paint and first request: after the builds, `node scripts/check-interactive-first-paint.mjs [cli]` checks stalled and failed hydration plus first-turn subagent/MCP/LSP/fetch, and compares the full default tool payload with browser-on and browser-off baseline hashes.
 - Async child questions: `node scripts/check-subagent-questions.mjs` (also `--idle`), logs under `.artifacts/`.
+- CI's Script tests step installs bun 1.3.14, the version `build-binaries.yml` pins, because `scripts/build-standalone.test.mjs` bundles its probe with bun.
 - Fixture gotchas live in [testing.md](testing.md).
 
 ## Run
@@ -28,6 +29,7 @@ Read before building, testing, packaging or publishing lunR.
 ## Release and install
 
 - Install: `npm i -g @ashx-j/lunr` (Node >= 22.19).
+- On Windows, `node scripts/release.mjs publish-tag` fails: `run()` spawns with `shell: true` there, so the `-m "Release vX"` tag message splits into words. 0.2.33 and 0.2.34 were tagged by hand. Tag from Linux or macOS.
 - Release prep checks formatting without writing; normalize inherited formatting on the release branch first. Bump with `npm run version:patch`.
 - Workspace names stay `@earendil-works/pi-*`. `scripts/publish.mjs` rewrites **package.json and compiled JS/d.ts imports** to `@ashx-j/lunr{,-ai,-tui,-agent}`. Rewriting names only is not enough; `0.1.0` crashed with `Cannot find package '@earendil-works/pi-ai'`. Never publish `@earendil-works/*`.
 - CI: `.github/workflows/publish-npm.yml` on `v*` tags with `secrets.NPM_TOKEN`. It builds, runs `check:ci` and the tests before publishing, then `scripts/verify-npm-release.mjs` checks every registry tarball against the integrity `publish.mjs --manifest` recorded and does a fresh isolated install. Trusted publishing needs npm-side setup by the owner first.

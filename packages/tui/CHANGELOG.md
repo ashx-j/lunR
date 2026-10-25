@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.2.40] - 2026-10-25
+
+### Fixed
+
+- Lines wider than the terminal are truncated in both redraw paths instead of wrapping into the next row.
+- Picker text is cut at word ends.
+- Chat anchor lookup searches nearest-first, which takes a frame at 20K rows from about 16 ms to under 0.01 ms.
+- Indic text is measured per code point.
+- Kitty key releases and unmapped Kitty keys no longer type characters, escape sequences split across reads are joined, and surrogate pairs stay intact.
+- `stop()` can be called more than once.
+
 ## [0.2.39] - 2026-10-20
 
 - `SettingsList` accepts `{ kind: "section", label }` rows. They render as dim headings, navigation, search and the row counter skip them, and a section without a label adds a blank row.

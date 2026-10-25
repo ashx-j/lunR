@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.2.40] - 2026-10-25
+
+### Added
+
+- `builtinProviders()` registers 167 generic providers from models.dev (`providers/models-dev-providers.generated.ts`) after the hand-written ones. They have no baked-in rows; their models come from the published catalog and their model lists.
+- `catalog/models-dev` reads models.dev rows into models, and `catalog/providers` resolves an id a provider lists that the catalog lacks: the provider's own data first, then the closest models.dev model, then the catalog rules.
+- `Provider.supportsApi(api)` says whether a provider serves a protocol.
+
+### Changed
+
+- The catalog generator builds every shipped provider's rows from models.dev data. Model facts models.dev gets wrong live in `src/catalog/rules.ts`, each with a reason.
+- Multi-protocol providers pass their protocol union to `createProvider` explicitly instead of inferring it from the generated catalog.
+- Claude subscriptions pin Claude Code 2.1.310. Setup reads only its picker. `CLAUDE_CODE_VERSION` moved to `auth/anthropic-route.ts`.
+
 ## [0.2.38] - 2026-10-18
 
 - Align the package version with the lunR 0.2.38 release.

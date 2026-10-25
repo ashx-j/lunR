@@ -1,8 +1,43 @@
 # Changelog
 
-lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.39`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.40`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
 
 ## [Unreleased]
+
+## [0.2.40] - 2026-10-25
+
+### Added
+
+- 167 more providers in `/login`: every models.dev provider with an OpenAI- or Anthropic-compatible endpoint and an API key variable, such as Nebius, SiliconFlow, Baseten, Chutes, Novita, SambaNova, Volcengine and the MiniMax, Alibaba and Tencent coding plans. Their models arrive with the published catalog after login and through the provider's own model list.
+- A logged-in provider's new models show up as soon as its model list names them, before models.dev or the hourly catalog has them. lunR reads the list of every logged-in provider that has one, including Anthropic and Google with an API key. A new id takes its settings from the closest models.dev model, or starts with a 128K window, 8K output and no thinking controls when nothing is known.
+- `/refresh` says when a Claude subscription's model list came from an older Claude Code and `/login anthropic` would update it.
+- Print-mode sessions show in `/resume`, tagged `print`.
+
+### Changed
+
+- New lab models reach the catalog the day models.dev lists them. Thinking levels, prices, long-context price tiers and limits come from models.dev instead of hand-kept id lists, which had dropped models such as MiniMax-M3.1-Flash.
+- The thinking picker hides levels a model does not accept. Claude no longer shows "minimal", and neither do GPT-5.1 and later. "Off" sends effort "none" where the model takes it, so those models stop reasoning instead of reasoning anyway.
+- Direct OpenAI models start at their base price tier's 272K window whenever a long-context tier costs more. GPT-6 and the Pro models used to start at 1.05M and bill up to twice the rate above 272K.
+- Prices follow models.dev, including its long-context tiers (Haiku 5.5 above 100K, Grok above 200K). DeepSeek V4 moved up to its list price.
+- Claude subscriptions use Claude Code 2.1.310, which lists Opus, Sonnet and Haiku 5.5. Existing connections keep their older model list until `/login anthropic`.
+- Logging in to a provider with no configured default model picks its first model instead of showing an error.
+- Small context windows compact less often. The compaction reserve is capped at 25% of the window and kept tokens at 40%.
+- Provider errors show a readable message instead of raw JSON, with a `/login` hint on 401 and 403. `lunr doctor` counts environment keys and custom providers.
+- A TUI cron owner that skips jobs only the gateway can deliver hands the lease to the gateway. `cron resume` retries interrupted jobs, and missed one-shot jobs are reported.
+- The npm package is 5.41 MB packed, down from 10.96 MB. It no longer ships source maps or catalog extras.
+
+### Fixed
+
+- Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5 appear in the catalog and run reasoning turns with adaptive thinking instead of failing with a 400. Opus 5 gets adaptive thinking too.
+- Copilot sends Claude Fable and GPT-6 to the right API.
+- `/logout` removes the provider's `provider/...` entries from enabled models, and startup removes ones left by earlier logouts, so lunR stops warning about them on every start.
+- Read-only mode blocks commands that bash rewrites before running them (`$(...)`, brace lists, `./rm`, `HOME=` or `PATH=` prefixes, `git -C`, `file -C`, `yarn`, globs after a dash-only prefix), so a read-only session can no longer write files that way.
+- Protected paths match case-insensitively on macOS. Transcripts are created with mode 0600 and session folders with 0700.
+- A bash command killed by a signal reports an error instead of success.
+- `/plan` followed by a newline and a task runs `/plan`. Slash commands split on any whitespace, drafts are restored, Alt+Enter runs builtin commands and clears the editor, and `/compact` during a compaction says one is running.
+- The gateway forwards commands in every chat and keeps Discord native sessions working.
+- The onboarding sign-in rows stay on one line at 80 columns.
+- The terminal title is restored on exit.
 
 ## [0.2.39] - 2026-10-20
 
