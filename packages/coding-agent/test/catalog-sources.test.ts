@@ -10,19 +10,38 @@ afterEach(() => {
 });
 
 describe("public catalog sources", () => {
-	it("quarantines a partial provider response even when its schema is valid", async () => {
+	it("keeps a shrunk provider's last-good copy while other providers update", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "lunr-source-test-"));
 		directories.push(directory);
-		const original = {
-			openai: { models: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`model-${i}`, {}])) },
-		};
+		const twenty = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`model-${i}`, {}]));
+		await new CatalogSources(
+			directory,
+			vi.fn(async () => Response.json({ openai: { models: twenty }, anthropic: { models: { old: {} } } })),
+		).fetch("https://example.test/models");
+		const sources = new CatalogSources(
+			directory,
+			vi.fn(async () =>
+				Response.json({ openai: { models: { remaining: {} } }, anthropic: { models: { old: {}, new: {} } } }),
+			),
+		);
+		expect(await (await sources.fetch("https://example.test/models")).json()).toEqual({
+			openai: { models: twenty },
+			anthropic: { models: { old: {}, new: {} } },
+		});
+		expect(sources.statuses[0]).toMatchObject({ status: "fresh", quarantined: ["openai"] });
+	});
+
+	it("falls back to the last-good copy when a flat model list shrinks", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "lunr-source-test-"));
+		directories.push(directory);
+		const original = { data: Array.from({ length: 20 }, (_, i) => ({ id: `model-${i}` })) };
 		await new CatalogSources(
 			directory,
 			vi.fn(async () => Response.json(original)),
 		).fetch("https://example.test/models");
 		const sources = new CatalogSources(
 			directory,
-			vi.fn(async () => Response.json({ openai: { models: { remaining: {} } } })),
+			vi.fn(async () => Response.json({ data: [{ id: "model-0" }] })),
 		);
 		expect(await (await sources.fetch("https://example.test/models")).json()).toEqual(original);
 		expect(sources.statuses[0]).toMatchObject({

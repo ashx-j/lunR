@@ -5,6 +5,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 ## Decisions
 
 - 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash, GPT-5.6 on the API) and gave new families wrong thinking settings.
+- 2026-10-25: quarantine a shrunk provider instead of the whole models.dev source, because one dropped provider lunR never ships froze every new model for seven weeks.
 - 2026-10-25: hide thinking levels a model does not list instead of mapping them to a neighbor, so every level in the picker sends a value the provider accepts.
 - 2026-10-25: start direct OpenAI models at their base price tier's context window (272k) whenever models.dev lists a long-context tier, because requests above it bill at up to twice the rate; GPT-6 and the Pro models were the exceptions before.
 - 2026-10-25: Claude Opus 5.5, Sonnet 5.5, Fable 5 and Mythos drop "off" through a catalog rule, because they reject disabled thinking and models.dev has no field for it.
