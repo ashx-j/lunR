@@ -1,24 +1,12 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	inferOpencodeApiFromModelId,
-	isZeroCost,
 	opencodeBaseUrl,
-	opencodeFreeModelApi,
 	parseZenModelIds,
 	resolveOpencodeApi,
-	shouldIncludeOpencodeModel,
 } from "../scripts/opencode-catalog.ts";
 import { OPENCODE_MODELS } from "../src/providers/opencode.models.ts";
-import type { Model } from "../src/types.ts";
-
-const catalogPath = join(dirname(fileURLToPath(import.meta.url)), "../../../catalog/providers/opencode.json");
-
-function loadOpencodeCatalog(): Record<string, Model> {
-	return JSON.parse(readFileSync(catalogPath, "utf8")) as Record<string, Model>;
-}
+import { OPENCODE_GO_MODELS } from "../src/providers/opencode-go.models.ts";
 
 describe("parseZenModelIds", () => {
 	it("reads OpenAI { data: [{ id }] } lists", () => {
@@ -37,39 +25,6 @@ describe("parseZenModelIds", () => {
 	it("returns an empty set for junk", () => {
 		expect(parseZenModelIds(null)).toEqual(new Set());
 		expect(parseZenModelIds({})).toEqual(new Set());
-	});
-});
-
-describe("shouldIncludeOpencodeModel", () => {
-	const liveIds = new Set(["big-pickle", "laguna-s-2.1-free", "deepseek-v4-flash-free"]);
-
-	it("drops rows that cannot tool-call", () => {
-		expect(shouldIncludeOpencodeModel("big-pickle", { toolCall: false, liveIds, deprecated: false })).toBe(false);
-	});
-
-	it("keeps deprecated models.dev rows that Zen still serves", () => {
-		expect(shouldIncludeOpencodeModel("laguna-s-2.1-free", { toolCall: true, liveIds, deprecated: true })).toBe(true);
-		expect(shouldIncludeOpencodeModel("deepseek-v4-flash-free", { toolCall: true, liveIds, deprecated: true })).toBe(
-			true,
-		);
-	});
-
-	it("drops models.dev rows that are not on the live list", () => {
-		expect(shouldIncludeOpencodeModel("north-mini-code-free", { toolCall: true, liveIds, deprecated: false })).toBe(
-			false,
-		);
-		expect(shouldIncludeOpencodeModel("north-mini-code-free", { toolCall: true, liveIds, deprecated: true })).toBe(
-			false,
-		);
-	});
-
-	it("falls back to skip-deprecated when the live list is missing", () => {
-		expect(shouldIncludeOpencodeModel("x-preview-f-free", { toolCall: true, liveIds: null, deprecated: false })).toBe(
-			true,
-		);
-		expect(shouldIncludeOpencodeModel("laguna-s-2.1-free", { toolCall: true, liveIds: null, deprecated: true })).toBe(
-			false,
-		);
 	});
 });
 
@@ -103,37 +58,14 @@ describe("resolveOpencodeApi", () => {
 	});
 });
 
-describe("OpenCode Zen catalog", () => {
-	it("maps $0 rows to completions except Muse Spark contributor-free", () => {
-		const catalog = loadOpencodeCatalog();
-		const sources: Array<[string, Record<string, Model>]> = [
-			["baked-in", OPENCODE_MODELS as unknown as Record<string, Model>],
-			["official shard", catalog],
-		];
-		for (const [label, models] of sources) {
-			const zeroCost = Object.values(models).filter((model) => isZeroCost(model.cost));
-			expect(zeroCost.length, `${label} should list at least one free Zen model`).toBeGreaterThan(0);
-			for (const model of zeroCost) {
-				expect(model.api, `${label} ${model.id}`).toBe(opencodeFreeModelApi(model.id));
-			}
-		}
-	});
-
-	it.each(["1.2", "1.3", "2.0"])("keeps versioned Muse Spark %s contributor-free on Responses", (version) => {
-		expect(opencodeFreeModelApi(`muse-spark-${version}-contributor-free`)).toBe("openai-responses");
-		expect(opencodeFreeModelApi(`other-${version}-contributor-free`)).toBe("openai-completions");
-	});
-
-	it("keeps all current Muse Spark contributor-free rows on Responses", () => {
-		for (const models of [OPENCODE_MODELS, loadOpencodeCatalog()]) {
-			const museModels = Object.values(models).filter(
-				(model) => model.id.startsWith("muse-spark-") && model.id.endsWith("-contributor-free"),
-			);
-			expect(museModels.length).toBeGreaterThan(0);
-			for (const model of museModels) {
-				expect(model.api).toBe("openai-responses");
-				expect(model.baseUrl).toBe("https://opencode.ai/zen/v1");
-				expect(isZeroCost(model.cost)).toBe(true);
+describe("OpenCode catalog", () => {
+	it("points every model at the endpoint for its protocol", () => {
+		for (const [models, basePath] of [
+			[OPENCODE_MODELS, "https://opencode.ai/zen"],
+			[OPENCODE_GO_MODELS, "https://opencode.ai/zen/go"],
+		] as const) {
+			for (const model of Object.values(models)) {
+				expect(model.baseUrl, model.id).toBe(opencodeBaseUrl(basePath, model.api));
 			}
 		}
 	});

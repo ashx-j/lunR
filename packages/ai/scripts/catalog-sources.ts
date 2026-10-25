@@ -34,9 +34,12 @@ export class CatalogSources {
 	private readonly pending = new Map<string, Promise<Response>>();
 	private readonly directory: string;
 	private readonly fetchImpl: typeof fetch;
-	constructor(directory: string, fetchImpl: typeof fetch = fetch) {
+	private readonly offline: boolean;
+	/** `offline` reads only the last-good copies, so a rerun sees exactly the same inputs. */
+	constructor(directory: string, fetchImpl: typeof fetch = fetch, options: { offline?: boolean } = {}) {
 		this.directory = directory;
 		this.fetchImpl = fetchImpl;
+		this.offline = options.offline === true;
 	}
 
 	fetch(url: string, validate: (value: any) => boolean = (value) => !!value && typeof value === "object"): Promise<Response> {
@@ -52,8 +55,8 @@ export class CatalogSources {
 		const file = join(this.directory, `${createHash("sha256").update(url).digest("hex")}.json`);
 		let cached: { payload: unknown; fetchedAt: string } | undefined;
 		try { cached = JSON.parse(readFileSync(file, "utf8")); } catch { /* First run. */ }
-		let error: unknown;
-		for (let attempt = 0; attempt < 3; attempt++) {
+		let error: unknown = this.offline ? new Error("Offline") : undefined;
+		for (let attempt = 0; attempt < (this.offline ? 0 : 3); attempt++) {
 			if (attempt) await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** (attempt - 1)));
 			try {
 				const response = await this.fetchImpl(url, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/json" } });

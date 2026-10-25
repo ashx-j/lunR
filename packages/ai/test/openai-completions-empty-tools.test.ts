@@ -1,5 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL } from "../src/api/cloudflare.ts";
 import { getModel, streamSimple } from "../src/compat.ts";
+import type { Model } from "../src/types.ts";
+
+/** A Workers AI model behind the AI Gateway /compat endpoint. Request fields come from runtime detection. */
+const workersAiGatewayModel: Model<"openai-completions"> = {
+	id: "workers-ai/@cf/moonshotai/kimi-k2.6",
+	name: "Kimi K2.6",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 262144,
+	maxTokens: 32768,
+	compat: { sendSessionAffinityHeaders: true },
+};
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -164,7 +181,7 @@ describe("openai-completions empty tools handling", () => {
 		process.env.CLOUDFLARE_API_KEY = "cf-token";
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const model = workersAiGatewayModel;
 
 		await streamSimple(
 			model,
@@ -201,7 +218,7 @@ describe("openai-completions empty tools handling", () => {
 		process.env.CLOUDFLARE_API_KEY = "cf-token";
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const model = workersAiGatewayModel;
 
 		await streamSimple(model, {
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
@@ -234,7 +251,7 @@ describe("openai-completions empty tools handling", () => {
 		process.env.CLOUDFLARE_API_KEY = "cf-token";
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const workersModel = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const workersModel = workersAiGatewayModel;
 
 		await streamSimple(
 			workersModel,

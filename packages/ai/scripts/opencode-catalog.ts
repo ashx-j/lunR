@@ -1,10 +1,7 @@
 /**
- * OpenCode Zen / Go catalog helpers for generate-models.ts.
- * Live source of truth is GET /v1/models; models.dev supplies metadata.
+ * OpenCode Zen / Go helpers for the catalog generator.
+ * Availability comes from GET /v1/models; models.dev supplies metadata.
  */
-
-export const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
-export const OPENCODE_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
 
 export type OpencodeApi =
 	| "openai-responses"
@@ -31,24 +28,6 @@ export function parseZenModelIds(payload: unknown): Set<string> {
 		}
 	}
 	return ids;
-}
-
-/**
- * When a live Zen list is available, include a models.dev row iff it is
- * tool-capable and still served — even if models.dev marked it deprecated.
- * When the live list is missing, keep the old skip-deprecated behavior.
- */
-export function shouldIncludeOpencodeModel(
-	modelId: string,
-	options: {
-		toolCall: boolean;
-		liveIds: ReadonlySet<string> | null;
-		deprecated?: boolean;
-	},
-): boolean {
-	if (!modelId || options.toolCall !== true) return false;
-	if (options.liveIds) return options.liveIds.has(modelId);
-	return options.deprecated !== true;
 }
 
 export function resolveOpencodeApi(args: { npm?: string; modelId: string }): OpencodeApi {
@@ -79,14 +58,4 @@ export function opencodeBaseUrl(basePath: string, api: OpencodeApi): string {
 	// Anthropic SDK appends /v1/messages to baseURL.
 	if (api === "anthropic-messages") return basePath;
 	return `${basePath.replace(/\/+$/u, "")}/v1`;
-}
-
-export function isZeroCost(cost: { input?: number; output?: number } | undefined): boolean {
-	return (cost?.input ?? 0) === 0 && (cost?.output ?? 0) === 0;
-}
-
-/** Free / contributor-free rows that Zen serves on the Responses API. */
-export function opencodeFreeModelApi(modelId: string): OpencodeApi {
-	if (modelId.startsWith("muse-spark-") && modelId.endsWith("-contributor-free")) return "openai-responses";
-	return "openai-completions";
 }

@@ -4,7 +4,11 @@ Read before changing the model catalog, model selection, login or provider trans
 
 ## Catalog and selection
 
-- Catalog: see `packages/coding-agent/docs/model-catalog.md`. Humans edit the generator/adapters and regenerate JSON; never hand-edit `catalog/providers/*.json`. `models.json` is one minified line on purpose; cache-only create prefers `official-catalog-cache.json`. There is no pi.dev catalog; `/refresh` is the only refresh command.
+- Catalog: see `packages/coding-agent/docs/model-catalog.md`. Humans edit the generator/adapters and regenerate JSON; never hand-edit `catalog/providers/*.json`.
+- Model facts come from models.dev, not code. A wrong fact goes in `packages/ai/src/catalog/rules.ts` with a `why`; never add id lists or id regexes to the generator. Provider endpoints and transports live in `packages/ai/scripts/catalog-providers.ts`.
+- `npm --prefix packages/ai run generate-models -- --offline` regenerates from the last fetched sources, so two runs see identical inputs when comparing generator changes.
+- Tests that exercise a transport build fixture models instead of `getModel("provider", "id")`: upstream sources drop models, and a pinned id breaks the build on the next regeneration. Catalog tests feed fixture models.dev rows to `modelsDevModels`.
+- Multi-protocol providers pass their protocol union to `createProvider<...>` explicitly. Inferring it from the generated catalog broke compilation whenever upstream added or removed a protocol. `models.json` is one minified line on purpose; cache-only create prefers `official-catalog-cache.json`. There is no pi.dev catalog; `/refresh` is the only refresh command.
 - Official rows without `compat`/`thinkingLevelMap` take a baked-in template in `refreshOfficialCatalog`: same id first, then the provider's first model. The first-model fallback gave Haiku 4.5 adaptive thinking, which Anthropic rejects.
 - The shrink guard in `catalog-sources.ts` rejects a whole source when any one provider in it shrinks by more than 25%. A provider models.dev dropped (`iflowcn`, unused by lunR) froze models.dev at the 2026-09-06 copy until 2026-10-25. Check `sources[].status` in the published `catalog/publication.json`; a `cached` models.dev entry means new models are missing. Recovery: delete the `catalog-sources-v2-*` Actions caches, then dispatch the workflow.
 - `ModelRuntime.getModel` prefers the available-snapshot row, which carries credential-specific limits from `filterModels`; the plain catalog row is the fallback.

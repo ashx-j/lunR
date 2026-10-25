@@ -6,6 +6,13 @@ Routine catalog updates use HTTP requests and deterministic TypeScript normaliza
 
 The public generator combines models.dev, OpenRouter, Vercel, NVIDIA, OpenCode Zen/Go, and OpenAI's published Codex metadata. Codex model IDs come from that upstream document, not a handwritten list.
 
+Every tool-capable models.dev model of a shipped provider becomes a catalog row, so a new model appears in the next hourly publication after models.dev lists it. Model facts come from data:
+
+- Limits, prices (including long-context price tiers), image input and thinking levels come from the model's models.dev row. A gateway row that leaves a capability out takes it from the lab's own row (`canonical_model_id`), and a temperature rejection on either row holds.
+- Thinking levels follow `reasoning_options`. A level the model does not list is hidden; effort `none` or a toggle allows "off". Claude models with effort `max` use adaptive thinking.
+- `packages/ai/scripts/catalog-providers.ts` says which models.dev providers ship and how lunR reaches each one (endpoint, transport, provider-wide request settings).
+- `packages/ai/src/catalog/rules.ts` patches the few facts the sources get wrong. Each rule names its reason, and a rule may only drop a model when it says why.
+
 At runtime, supported providers also expose live discovery. Codex uses the authenticated account-specific `/codex/models` endpoint, including its client-version query and account header. The client version is resolved from official npm release metadata; only JSON metadata is fetched, never package code. If that lookup fails, discovery uses its last successful version or the bundled fallback.
 
 Provider-supplied capability fields override older published metadata for the same model. Missing fields use existing exact-model metadata or conservative defaults; unknown prices are marked unavailable in the picker. Explicit `models.json` and extension model configuration are applied last. API-specific transport compatibility remains code-owned.
