@@ -96,6 +96,7 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
+	findSignedOutScopePatterns,
 	resolveModelScopeWithDiagnostics,
 } from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
@@ -6160,6 +6161,20 @@ export class InteractiveMode {
 		});
 	}
 
+	/**
+	 * Removes scoped models whose provider has no credential left after a logout, from settings and from
+	 * this session's ctrl+p cycle. A provider still reachable through an environment key keeps its models.
+	 */
+	private async forgetSignedOutScopedModels(): Promise<void> {
+		const runtime = this.session.modelRuntime;
+		const signedOut = await findSignedOutScopePatterns(this.settingsManager.getEnabledModels() ?? [], runtime);
+		if (signedOut.length > 0) this.settingsManager.removeEnabledModels(signedOut);
+		const scoped = this.session.scopedModels;
+		const auth = await Promise.all(scoped.map((entry) => runtime.checkAuth(entry.model.provider)));
+		const kept = scoped.filter((_, index) => auth[index]);
+		if (kept.length !== scoped.length) this.session.setScopedModels(kept);
+	}
+
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
 		if (mode === "login") {
 			showLoginAuthTypeSelector(this.loginFlowHost);
@@ -6201,6 +6216,7 @@ export class InteractiveMode {
 							}
 							await this.removeAllSubscriptions(poolProviderId);
 							await this.session.modelRuntime.logout(poolProviderId);
+							await this.forgetSignedOutScopedModels();
 							await this.updateAvailableProviderCount();
 							const poolProviderName =
 								this.session.modelRuntime.getProvider(poolProviderId)?.name ?? poolProviderId;
@@ -6213,6 +6229,7 @@ export class InteractiveMode {
 						await this.removeAllSubscriptions(providerOption.id);
 						const removed = await this.session.modelRuntime.readCredential(providerOption.id);
 						await this.session.modelRuntime.logout(providerOption.id);
+						await this.forgetSignedOutScopedModels();
 						await this.updateAvailableProviderCount();
 						const message =
 							removed?.type === "external_claude_code"
