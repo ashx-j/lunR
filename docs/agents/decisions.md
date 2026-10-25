@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-25: pin Claude Code 2.1.310 and read only its picker at setup, taking non-`[1m]` windows from the catalog, because 2.1.263's picker has no 5.5 models and 2.1.310's `set_model`/`get_context_usage` contact Anthropic, which setup must not do.
 - 2026-10-25: Claude 5-family rows get adaptive thinking, `xhigh`/`max` and no custom temperature by id match; Opus 5.5 and Sonnet 5.5 also drop "off", because those models reject `budget_tokens`, sampling values and (5.5 Opus/Sonnet) disabled thinking.
 - 2026-10-25: read models.dev `kimi-code-plan-global` when `kimi-for-coding` is missing but keep the api.kimi.com endpoint and skip `k3.1-*`, because the rename moved the listing to api.kimi.ai and K3.1 is untested there.
 - 2026-10-20: cap the number of `@ts-nocheck` files with a limit that may only go down, so new unchecked files fail `npm run check` while the vendored backlog shrinks.
@@ -22,7 +23,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-18: read a saved `shadow-git` rollback capture as `copies`, because that is what the menu promised and it deletes fewer files than the hybrid behavior it had.
 - 2026-10-18: gate notices on terminal focus reports, not run length, so watched runs stay quiet and abandoned short runs still ping.
 - 2026-10-18: enable type checking on pi-subagents files that already pass before fixing errors, so new mistakes there fail the build without touching vendored behavior.
-- 2026-10-17: derive Claude subscription routes and windows from Claude Code's picker and `get_context_usage`, skipping usage-credit variants, because a hardcoded route table goes stale and had routed Opus 5 to credit billing.
+- 2026-10-17: derive Claude subscription routes from Claude Code's picker, skipping usage-credit variants, because a hardcoded route table goes stale and had routed Opus 5 to credit billing.
 - 2026-10-17: let Claude Code send subscription requests straight to Anthropic and read its `stream_event` output, because Anthropic's terms bar developers from intermediating Claude.ai session tokens while allowing sign-in to unmodified Claude Code.
 - 2026-10-17: after `/login`, fall back to the provider's first offered model in Claude Code picker order, so plans without the hardcoded default still get Claude Code's default.
 - 2026-10-17: narrow app model lists in RPC `get_available_models` behind an opt-in setting so ACP and the RPC provider share one rule and `/model` stays unchanged.
