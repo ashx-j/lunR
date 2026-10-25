@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- The agent harness (`AgentHarness`, sessions and repos, compaction, skills, prompt templates, system prompt, message and truncation helpers) and `NodeExecutionEnv`. lunR never used it. `uuidv7` stays exported, and `./node` now exports the same API as the main entry.
+
 ## [0.2.38] - 2026-10-18
 
 - Align the package version with the lunR 0.2.38 release.

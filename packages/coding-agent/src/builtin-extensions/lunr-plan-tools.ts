@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lunr-plan-tools — plan approval for read-only sessions.
  *
@@ -15,7 +14,6 @@
  *
  * `runPresentPlan` is exported for vitest — see test/plan-approval.test.ts.
  *
- * `// @ts-nocheck` matches the builtin-extension convention (see lunr-cron).
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
 
@@ -46,7 +44,10 @@ export default function (pi: ExtensionAPI): void {
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const summary = typeof params?.summary === "string" ? params.summary.trim() : "";
-			return { content: [{ type: "text" as const, text: await runPresentPlan(summary, ctx.sessionManager.getSessionId()) }] };
+			return {
+				content: [{ type: "text" as const, text: await runPresentPlan(summary, ctx.sessionManager.getSessionId()) }],
+				details: undefined,
+			};
 		},
 		renderCall(_args, theme) {
 			return new Text(theme.fg("toolTitle", theme.bold("present_plan")), 0, 0);

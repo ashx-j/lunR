@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Tree-sitter Parser Manager — loads and caches WASM parsers per language.
  *

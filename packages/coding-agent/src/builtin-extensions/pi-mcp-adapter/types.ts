@@ -1,4 +1,3 @@
-// @ts-nocheck
 // types.ts - Core type definitions
 import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";

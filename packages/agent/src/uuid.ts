@@ -12,6 +12,7 @@ function fillRandomBytes(bytes: Uint8Array): void {
 	}
 }
 
+/** RFC 9562 version 7 UUID. Ids from one process sort in creation order, even within one millisecond. */
 export function uuidv7(): string {
 	const random = new Uint8Array(16);
 	fillRandomBytes(random);

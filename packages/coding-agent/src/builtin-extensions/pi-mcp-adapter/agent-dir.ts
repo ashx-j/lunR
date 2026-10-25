@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 

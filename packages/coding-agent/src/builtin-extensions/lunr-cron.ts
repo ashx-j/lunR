@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lunr-cron — lunR-native scheduled jobs (Phase 1: local TUI delivery;
  * Phase 4: gateway delivery + origin stamping).
@@ -20,7 +19,6 @@
  *    performs platform delivery with current grants. TUI delivery notifies
  *    locally and records platform delivery as unavailable.
  *
- * `// @ts-nocheck` matches the builtin-extension convention.
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
 
@@ -170,7 +168,8 @@ export default function (pi: ExtensionAPI): void {
 			return false;
 		}
 	};
-	const schedulerDeps = { runJob, deliverResult, accepts, canRun: () => !!lastCtx?.isIdle() && !lastCtx.hasPendingMessages() };
+	// Skipped due jobs hand the lease to a running gateway; the TUI waits 3 ticks before retaking it.
+	const schedulerDeps = { runJob, deliverResult, accepts, handoffBackoffTicks: 3, canRun: () => !!lastCtx?.isIdle() && !lastCtx.hasPendingMessages() };
 	const triggerRun = async (job: CronJob, _ctx: ExtensionContext): Promise<string> => {
 		if (!scheduler)
 			throw new Error("cron runs require the owning TUI operator; use cron run there, or wait for the gateway schedule. To retry an interrupted job from here, use cron resume.");
@@ -306,7 +305,7 @@ export default function (pi: ExtensionAPI): void {
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+			const text = (t: string) => ({ content: [{ type: "text" as const, text: t }], details: undefined });
 			if (isCronFire()) {
 				return text("cron: unavailable while a cron-fired turn is running (cron jobs cannot schedule cron jobs).");
 			}

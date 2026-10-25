@@ -1,4 +1,7 @@
 import assert from "node:assert";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Image } from "../src/components/image.ts";
@@ -416,6 +419,35 @@ describe("TUI stop", () => {
 		tui.stop();
 
 		assert.strictEqual(terminal.getWrites(), "");
+	});
+});
+
+describe("TUI line width", () => {
+	it("truncates a line wider than the terminal in partial redraws and logs it", async () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "tui-width-"));
+		try {
+			await withEnv({ PI_CODING_AGENT_DIR: agentDir }, async () => {
+				const terminal = new VirtualTerminal(20, 6);
+				const tui = new TUI(terminal);
+				const component = new TestComponent();
+				component.lines = ["first", "second"];
+				tui.addChild(component);
+				tui.start();
+				await terminal.waitForRender();
+
+				component.lines = ["x".repeat(30), "second"];
+				tui.requestRender();
+				await terminal.waitForRender();
+
+				const viewport = terminal.getViewport();
+				assert.strictEqual(viewport[0], "x".repeat(20));
+				assert.strictEqual(viewport[1]?.trim(), "second");
+				assert.ok(readFileSync(join(agentDir, "pi-crash.log"), "utf8").includes("Terminal width: 20"));
+				tui.stop();
+			});
+		} finally {
+			rmSync(agentDir, { recursive: true, force: true });
+		}
 	});
 });
 

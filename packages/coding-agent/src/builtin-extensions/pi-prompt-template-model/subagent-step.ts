@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { preparePromptExecution } from "./prompt-execution.ts";
 import type { PromptWithModel } from "./prompt-loader.ts";
@@ -33,10 +33,10 @@ import { createDelegatedProgressWidget, DELEGATED_WIDGET_KEY } from "./subagent-
 interface DelegatedPromptBaseOptions {
 	pi: ExtensionAPI;
 	ctx: ExtensionContext;
-	currentModel: Model<any> | undefined;
+	currentModel: Model<Api> | undefined;
 	override?: SubagentOverride;
 	signal?: AbortSignal;
-	inheritedModel?: Model<any>;
+	inheritedModel?: Model<Api>;
 	taskPreamble?: string;
 	worktree?: boolean;
 	allowPartialFailures?: boolean;
@@ -164,9 +164,9 @@ interface PreparedDelegatedTask {
 async function prepareDelegatedTask(
 	task: DelegatedParallelTaskInput,
 	ctx: ExtensionContext,
-	currentModel: Model<any> | undefined,
+	currentModel: Model<Api> | undefined,
 	override: SubagentOverride | undefined,
-	inheritedModel: Model<any> | undefined,
+	inheritedModel: Model<Api> | undefined,
 	taskPreamble: string | undefined,
 ): Promise<PreparedDelegatedTask> {
 	const requestedAgent = resolveDelegationName(task.prompt, override);
@@ -284,7 +284,7 @@ function mergeTaskProgress(
 			recentOutput: existing?.recentOutput,
 			recentOutputLines: existing?.recentOutputLines,
 			recentTools: existing?.recentTools,
-			model: existing?.model ?? task.model,
+			model: existing?.model,
 			toolCount: existing?.toolCount,
 			durationMs: existing?.durationMs,
 			tokens: existing?.tokens,
@@ -596,7 +596,8 @@ export async function executeSubagentPromptStep(options: DelegatedPromptOptions)
 	);
 
 	try {
-		const response = await requestDelegatedRun(pi, ctx, request, signal, preparedTasks[0]?.model);
+		// The delegation protocol routes by tier only, so the widget shows the tier until the child reports its model.
+		const response = await requestDelegatedRun(pi, ctx, request, signal, request.tier);
 		if (response.isError) {
 			throw new Error(
 				`Delegated prompt execution failed: ${response.errorText || "unknown delegated error"}`,

@@ -26,6 +26,11 @@ function harness() {
 		},
 		onSubmit: undefined as ((text: string) => Promise<void>) | undefined,
 	};
+	// Like the real editor, submitting clears the text before onSubmit runs.
+	const submit = (value: string) => {
+		text = "";
+		return editor.onSubmit!(value);
+	};
 	const state = {
 		sessionManager: manager,
 		runtimeHost: {
@@ -44,10 +49,11 @@ function harness() {
 		transferInProgress: false,
 		showStatus: vi.fn(),
 		showError: vi.fn(),
+		takeSubmittedImages: () => [],
 	};
 	const prototype = InteractiveMode.prototype as unknown as { setupEditorSubmitHandler(this: typeof state): void };
 	prototype.setupEditorSubmitHandler.call(state);
-	return { state, editor, manager, directory };
+	return { state, editor, submit, manager, directory };
 }
 
 describe("TUI handoff commands", () => {
@@ -62,33 +68,33 @@ describe("TUI handoff commands", () => {
 	});
 
 	it("keeps a detached terminal alive and its draft intact when the owner refuses transfer", async () => {
-		const { state, editor, manager } = harness();
+		const { state, editor, submit, manager } = harness();
 		state.runtimeHost.isDetached = true;
 		cleanups.push(
 			registerTransferHandler(manager, async () => {
 				throw new SessionTransferError("Still busy. Wait, stop or cancel.", "busy");
 			}),
 		);
-		await editor.onSubmit!("a new prompt");
+		await submit("a new prompt");
 		expect(state.showError).toHaveBeenCalledWith(expect.stringContaining("Draft retained"));
-		await editor.onSubmit!("/reclaim");
+		expect(editor.getText()).toBe("a new prompt");
+		await submit("/reclaim");
 		expect(state.showError).toHaveBeenCalledWith(expect.stringContaining("Still busy"));
-		expect(editor.getText()).toBe("unsent draft");
+		expect(state.detachedDraft).toBe("unsent draft");
 		expect(state.runtimeHost.switchSession).not.toHaveBeenCalled();
 		manager.assertWritable();
 	});
 
 	it("reclaims only after release, reloads saved state and restores the pre-transfer draft", async () => {
-		const { state, editor, manager } = harness();
+		const { state, editor, submit, manager } = harness();
 		manager.resetLeaf();
 		state.runtimeHost.isDetached = true;
-		editor.setText("/reclaim");
 		cleanups.push(
 			registerTransferHandler(manager, async () => {
 				manager.dispose();
 			}),
 		);
-		await editor.onSubmit!("/reclaim");
+		await submit("/reclaim");
 		expect(state.showError).not.toHaveBeenCalled();
 		expect(state.sessionManager).not.toBe(manager);
 		expect(state.sessionManager.getLeafId()).toBeNull();

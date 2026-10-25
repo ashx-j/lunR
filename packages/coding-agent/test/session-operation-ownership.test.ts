@@ -12,7 +12,10 @@ import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import {
+	type PermissionControllerHost,
+	PermissionModeController,
+} from "../src/modes/interactive/permission-controller.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
@@ -587,14 +590,15 @@ describe("session operation ownership", () => {
 
 	it("applies an interactive mode change to the existing session permission context", async () => {
 		const h = await harness();
-		const mode = Object.create(InteractiveMode.prototype) as {
-			runtimeHost: { session: Harness["session"]; services: { agentDir: string }; isDetached: boolean };
-			ui: { requestRender: () => void };
-			applyPermissionMode: (mode: "read-only", options: { silent: boolean }) => void;
+		const host = {
+			session: h.session,
+			ui: { requestRender: vi.fn() },
+			isSessionDetached: () => false,
+			recordActivity: vi.fn(),
 		};
-		mode.runtimeHost = { session: h.session, services: { agentDir: h.tempDir }, isDetached: false };
-		mode.ui = { requestRender: vi.fn() };
-		mode.applyPermissionMode("read-only", { silent: true });
+		new PermissionModeController(host as unknown as PermissionControllerHost).applyPermissionMode("read-only", {
+			silent: true,
+		});
 		expect(getPermissionMode(h.session.sessionId)).toBe("read-only");
 		expect(h.session.sessionManager.getPermissionMode()).toBe("read-only");
 		expect(h.session.systemPrompt).toContain("read-only mode");

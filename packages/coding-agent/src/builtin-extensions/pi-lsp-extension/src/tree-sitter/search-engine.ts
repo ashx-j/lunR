@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Search Engine — run compiled patterns against source files and collect matches.
  *

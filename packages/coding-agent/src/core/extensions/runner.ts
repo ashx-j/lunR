@@ -3,7 +3,7 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model, ProviderHeaders } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
@@ -273,7 +273,7 @@ export class ExtensionRunner {
 	private sessionManager: SessionManager;
 	private modelRegistry: ModelRegistry;
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
-	private getModel: () => Model<any> | undefined = () => undefined;
+	private getModel: () => Model<Api> | undefined = () => undefined;
 	private promptWithCompletionFn: ExtensionContext["promptWithCompletion"];
 	private sendMessageFn: ExtensionContext["sendMessage"];
 	private hasQueuedMessageFn: ExtensionContext["hasQueuedMessage"];

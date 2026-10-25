@@ -1,3 +1,4 @@
+import { globalBridge } from "./global-bridge.ts";
 import type { PermissionMode } from "./permissions.ts";
 
 /**
@@ -9,6 +10,7 @@ import type { PermissionMode } from "./permissions.ts";
  */
 
 export const PERMISSION_MODE_CONTROL_SYMBOL = Symbol.for("@lunr/permission-mode-control");
+const permissionModeControlSlot = globalBridge<PermissionModeControlBridge>(PERMISSION_MODE_CONTROL_SYMBOL);
 
 export interface PermissionModeControlBridge {
 	enterGoalAuto(): void;
@@ -39,13 +41,11 @@ export function nextModeForGoal(
 }
 
 export function registerPermissionModeControlBridge(bridge: PermissionModeControlBridge): void {
-	(globalThis as Record<symbol, unknown>)[PERMISSION_MODE_CONTROL_SYMBOL] = bridge;
+	permissionModeControlSlot.set(bridge);
 }
 
 export function getPermissionModeControlBridge(): PermissionModeControlBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_CONTROL_SYMBOL] as
-		| PermissionModeControlBridge
-		| undefined;
+	return permissionModeControlSlot.get();
 }
 
 export function enterGoalAuto(): void {

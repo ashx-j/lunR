@@ -1,3 +1,4 @@
+import { globalBridge } from "./global-bridge.ts";
 import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SubagentSpinnerName } from "./subagent-spinner-setting.ts";
@@ -12,6 +13,7 @@ import type { SubagentSpinnerName } from "./subagent-spinner-setting.ts";
  */
 
 export const CUSTOMIZE_BRIDGE_SYMBOL = Symbol.for("@lunr/customize");
+const customizeSlot = globalBridge<CustomizeBridge>(CUSTOMIZE_BRIDGE_SYMBOL);
 
 export interface CustomizeBridge {
 	getOpenAIFastMode(): boolean;
@@ -85,10 +87,10 @@ const bridge: CustomizeBridge = {
  */
 export function registerCustomizeBridge(settingsManager: SettingsManager): void {
 	activeSettingsManager = settingsManager;
-	(globalThis as Record<symbol, unknown>)[CUSTOMIZE_BRIDGE_SYMBOL] = bridge;
+	customizeSlot.set(bridge);
 }
 
 /** Read the bridge from `globalThis`, or undefined when not registered (extension-safe). */
 export function getCustomizeBridge(): CustomizeBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[CUSTOMIZE_BRIDGE_SYMBOL] as CustomizeBridge | undefined;
+	return customizeSlot.get();
 }

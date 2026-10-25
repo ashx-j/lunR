@@ -1,7 +1,7 @@
 import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { CompactionSummaryMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { keyText } from "./keybinding-hints.ts";
+import { expandKeyText } from "./keybinding-hints.ts";
 
 /**
  * Component that renders a compaction message with collapsed/expanded state.
@@ -22,6 +22,12 @@ export class CompactionSummaryMessageComponent extends Box {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		this.updateDisplay();
+	}
+
+	/** A click toggles the card; `app.tools.expand` has no default key. */
+	handleClick(_localY: number, _width: number): boolean {
+		this.setExpanded(!this.expanded);
+		return true;
 	}
 
 	override invalidate(): void {
@@ -48,7 +54,7 @@ export class CompactionSummaryMessageComponent extends Box {
 			this.addChild(
 				new Text(
 					theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (`) +
-						theme.fg("dim", keyText("app.tools.expand")) +
+						theme.fg("dim", expandKeyText()) +
 						theme.fg("customMessageText", " to expand)"),
 					0,
 					0,

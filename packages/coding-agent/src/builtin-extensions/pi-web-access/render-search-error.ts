@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Pure, dependency-free renderer for web_search error / cancel results.
  *

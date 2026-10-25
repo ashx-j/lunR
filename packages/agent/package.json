@@ -24,15 +24,11 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json",
 		"test": "vitest --run",
-		"test:harness": "vitest --run --config vitest.harness.config.ts",
-		"coverage:harness": "vitest --run --config vitest.harness.config.ts --coverage",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "^0.2.39",
-		"ignore": "7.0.5",
-		"typebox": "1.1.38",
-		"yaml": "2.9.0"
+		"typebox": "1.1.38"
 	},
 	"keywords": [
 		"ai",
@@ -53,7 +49,6 @@
 	},
 	"devDependencies": {
 		"@types/node": "24.12.4",
-		"@vitest/coverage-v8": "4.1.9",
 		"typescript": "5.9.3",
 		"vitest": "4.1.9"
 	}

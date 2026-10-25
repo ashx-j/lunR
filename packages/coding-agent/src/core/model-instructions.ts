@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Settings, SettingsManager } from "./settings-manager.ts";
 
 export type ModelInstructionsMode = "both" | "model-only";
@@ -73,7 +73,7 @@ function concreteModelId(value: unknown): string | undefined {
 export function ensureModelInstructionDirs(
 	agentDir: string,
 	settings: Pick<Settings, "defaultModel" | "enabledModels" | "modelTiers">,
-	currentModel?: Pick<Model<any>, "id">,
+	currentModel?: Pick<Model<Api>, "id">,
 ): string[] {
 	const modelIds = new Set<string>();
 	const add = (value: unknown) => {
@@ -112,7 +112,7 @@ function safeReadInstruction(path: string): { path: string; content: string } | 
 export function loadSelectedUserInstructions(options: {
 	agentDir: string;
 	settingsManager: SettingsManager;
-	model?: Pick<Model<any>, "id">;
+	model?: Pick<Model<Api>, "id">;
 }): Array<{ path: string; content: string }> {
 	ensureModelInstructionDirs(options.agentDir, options.settingsManager.getGlobalSettings(), options.model);
 	const enabled = options.settingsManager.getModelInstructionsEnabled();

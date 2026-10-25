@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { DirectToolSpec, McpConfig } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
 import { isServerCacheValid } from "./metadata-cache.ts";

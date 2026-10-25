@@ -78,6 +78,11 @@ export function formatUnknownSlashCommandStatus(name: string, suggestions: reado
 	return `Unknown command /${name}.${didYouMean} Start with a space to send it as a message.`;
 }
 
+/** Status line shown when a builtin that takes no arguments is submitted with text after it. */
+export function formatArgumentlessSlashCommandStatus(name: string): string {
+	return `/${name} takes no arguments. Start with a space to send it as a message.`;
+}
+
 type HelpEntry = readonly [command: string, description: string];
 
 // One `/help` row with two aligned command columns.

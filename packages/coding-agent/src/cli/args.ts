@@ -290,7 +290,7 @@ ${chalk.bold("All options:")}
   --help, -h                     Show this help
   --version, -v                  Show version number
 
-Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
+Extensions can register additional flags.${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
   # Interactive mode
@@ -335,7 +335,7 @@ ${chalk.bold("Examples:")}
   # Start with a specific thinking level
   ${APP_NAME} --thinking high "Solve this complex problem"
 
-  # Read-only mode (no file modifications possible)
+  # Allow only the file reading and search tools
   ${APP_NAME} --tools read,grep,find,ls -p "Review the code in src/"
 
   # Disable one tool while keeping the rest available

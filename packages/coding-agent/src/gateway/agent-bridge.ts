@@ -33,7 +33,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { AgentSession, AgentSessionEvent, SessionStats } from "../core/agent-session.ts";
 import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
@@ -126,7 +126,7 @@ export interface BridgeSession {
 	readonly isRetrying?: boolean;
 	readonly isStreaming: boolean;
 	readonly isCompacting?: boolean;
-	readonly model?: Model<any>;
+	readonly model?: Model<Api>;
 	readonly modelRuntime: ModelRuntime;
 	readonly thinkingLevel: ThinkingLevel;
 	readonly messages: AgentMessage[];
@@ -141,7 +141,7 @@ export interface BridgeSession {
 	getAvailableThinkingLevels(): ThinkingLevel[];
 	supportsThinking(): boolean;
 	setThinkingLevel(level: ThinkingLevel): void;
-	setModel(model: Model<any>): Promise<void>;
+	setModel(model: Model<Api>): Promise<void>;
 	compact(customInstructions?: string): Promise<CompactionResult>;
 	navigateTree(
 		targetId: string,

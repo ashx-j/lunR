@@ -49,6 +49,15 @@ export class CustomMessageComponent extends Container {
 		return true;
 	}
 
+	/**
+	 * Own render so the TUI treats this message as one click target. The chat
+	 * layout flattens containers that keep `Container.prototype.render`, which
+	 * would send clicks to the renderer's rows instead of `handleClick` above.
+	 */
+	override render(width: number): string[] {
+		return super.render(width);
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.rebuild();

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// @ts-nocheck
 /**
  * LSP Daemon — persistent LSP server proxy over Unix domain socket.
  *

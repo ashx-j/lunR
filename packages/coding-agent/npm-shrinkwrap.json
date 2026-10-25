@@ -656,9 +656,7 @@
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/pi-ai": "^0.2.39",
-				"ignore": "7.0.5",
-				"typebox": "1.1.38",
-				"yaml": "2.9.0"
+				"typebox": "1.1.38"
 			},
 			"engines": {
 				"node": ">=22.19.0"
