@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-a20401799d236b7e3f8691d34ea495d2eed333071cda0b0093e643f41f09c447",
+  "revision": "sha256-a224dfb7045fd4927b4b2b9a241a7562baa048ec97d4cc4b2df55b01b716adfd",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -52,7 +52,7 @@
     "cloudflare-workers-ai": "a7ed1a5bc51ef0906591cc6e01be2729ecb944329f471e5ec871696e25fc86ef",
     "deepseek": "626abdeda3dd93b117a0531eabd14b95c3db44c035f50edef2c289e8cdaa9d1a",
     "fireworks": "69a0c9bca30e5bfa5571fe48e4bc1bb95a9c6a202632c10709386739c645143a",
-    "github-copilot": "14287cc0f5781bc5bf0522553e63e2fc3ccece4943f6d3f5adc70aab26df3145",
+    "github-copilot": "23ade60d511e21464992e83668296547163a18e5060b19a1f2c0051112645aaf",
     "google": "61ad0492b47869423b137a425c2a01c548871fe2e8288801925fbe2b5625286b",
     "google-vertex": "3c6114293187d4aeb81876b937d649c345f5879be8c719d5830ea6c55bef5ff0",
     "groq": "08bf0185eac65b47312b831e090855b8fd86f364bd39b506c028a048817fd99a",
@@ -67,13 +67,13 @@
     "openai": "ab86affdfd2b99f097bafd674b09fd00e7f315bc88b10f4cdac509aecca64bee",
     "openai-codex": "ff0cb7c59255e4bd58fb57a9fb9ed7b628b206db5f3ffddd604bcaee3320d001",
     "opencode": "39805c599e3eaff6a5b155767b2d21b01860cf06646517870c0425bf37f0af6b",
-    "opencode-go": "f5a10889dd857ae592f69f684bb3eff705af12c10f6fa9b288c93b754d398fc9",
+    "opencode-go": "154be8715dab6528322e6decb243c69c1f183793cd5e3d6f525c21f1a03004cf",
     "openrouter": "bac462fa756139ccb95d049abc874c0d4c44994d7cf6300d22a8f6bbd8052912",
     "qwen-cloud": "654033e19d712a01f465762f684367516d6a6fb2ed7915e30fab06d604993536",
     "qwen-cloud-cn": "b505c390f899c27c6e1279c6eba7777e710b5825b72a66c371124b51dccaba63",
     "qwen-token-plan": "01e881bf6740b29873f2adbe9dab0de30e7e1c4fa55413942adbdc199594c0c0",
     "qwen-token-plan-cn": "d4647fdf90886474a65eeb148bd5f077dc4efa396f06734955fd813a38a01f89",
-    "together": "72ee45f31063291d862e6acc13ec46f9e0410db32497e9046187fe250037a15a",
+    "together": "3e7372b8cab8304de3e9a63f3a1df87fcc8b95587505a53f578bb0c678a77c3b",
     "vercel-ai-gateway": "c40b068f624589cfb5952e7183bf821e05dccf41ce51581468ec1e0293095eee",
     "xai": "68940cf26a085aac5ede33429504b355d7fa60358d13e2b8c9952176c5fd8700",
     "xiaomi": "636b38f0a188fbaabb7dfdd1c4bc33eab0b57727a61e276ca2b61eb88a2c73f4",
@@ -134,8 +134,8 @@
       "error": "Offline"
     }
   ],
-  "generatedAt": "2026-10-25T11:29:43.248Z",
-  "sourceCommit": "1cebf4886e6d883246547baaaf1aa20165730aef",
+  "generatedAt": "2026-10-25T11:49:20.380Z",
+  "sourceCommit": "17ba2c911b660272c82e8fcac04e683771f349b9",
   "providerCount": 39,
-  "modelCount": 1697
+  "modelCount": 1673
 }

@@ -81,11 +81,10 @@ export const OPENCODE_GO_MODELS = {
 		baseUrl: "https://opencode.ai/zen/go/v1",
 		compat: {"maxTokensField":"max_tokens"},
 		reasoning: true,
-		thinkingLevelMap: {"minimal":null,"low":null,"medium":null},
 		input: ["text"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
-		contextWindow: 200000,
-		maxTokens: 131072,
+		contextWindow: 202752,
+		maxTokens: 128000,
 	} satisfies Model<"openai-completions">,
 	"glm-5.2": {
 		id: "glm-5.2",
@@ -238,8 +237,8 @@ export const OPENCODE_GO_MODELS = {
 		thinkingLevelMap: {"minimal":null,"low":null,"medium":null},
 		input: ["text","image"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
-		contextWindow: 256000,
-		maxTokens: 262144,
+		contextWindow: 262144,
+		maxTokens: 16384,
 	} satisfies Model<"openai-completions">,
 	"kimi-k2.7-code": {
 		id: "kimi-k2.7-code",
@@ -470,7 +469,7 @@ export const OPENCODE_GO_MODELS = {
 		input: ["text"],
 		cost: {"input":0,"output":0,"cacheRead":0,"cacheWrite":0},
 		contextWindow: 1000000,
-		maxTokens: 65536,
+		maxTokens: 131072,
 	} satisfies Model<"anthropic-messages">,
 	"qwen3.7-plus": {
 		id: "qwen3.7-plus",

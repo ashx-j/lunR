@@ -2,8 +2,8 @@ import type { AnthropicMessagesCompat, Api, Model, ModelCost, ModelCostTier, Thi
 
 /**
  * Reader for https://models.dev/api.json, the public catalog lunR builds most provider rows from.
- * The generator and live discovery both turn models.dev facts into lunR models through these
- * functions, so a model's thinking levels, prices and limits come from data instead of id lists.
+ * The catalog generator turns models.dev facts into lunR models through these functions, so a
+ * model's thinking levels, prices and limits come from data instead of id lists.
  */
 
 export const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -225,7 +225,8 @@ export class ModelsDevFacts {
 
 	/**
 	 * Exact matches beat the longest known id the new one extends (`claude-opus-5-5-backup` reads
-	 * `claude-opus-5-5`), and the preferred models.dev provider beats the rest.
+	 * `claude-opus-5-5`). The preferred models.dev provider beats the lab's own row, which beats
+	 * other hosts.
 	 */
 	find(id: string, preferKey?: string): ModelsDevModel | undefined {
 		const bare = bareModelId(id);
@@ -237,7 +238,11 @@ export class ModelsDevFacts {
 			}
 			candidates = best ? this.index.get(best) : undefined;
 		}
-		const found = (candidates?.find((candidate) => candidate.key === preferKey) ?? candidates?.[0])?.row;
+		const found = (
+			candidates?.find((candidate) => candidate.key === preferKey) ??
+			candidates?.find((candidate) => !candidate.row.canonical_model_id) ??
+			candidates?.[0]
+		)?.row;
 		return found ? this.complete(found) : undefined;
 	}
 }

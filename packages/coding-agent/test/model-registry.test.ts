@@ -9,6 +9,7 @@ import type {
 	OpenAICompletionsCompat,
 } from "@earendil-works/pi-ai/compat";
 import { getApiProvider, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { clearApiKeyCache, type ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.ts";
@@ -1804,12 +1805,14 @@ describe("ModelRegistry", () => {
 			});
 
 			test("getAvailable filters GitHub Copilot OAuth models to account picker availability", async () => {
+				// Any catalog model; the account picker enables only this one.
+				const enabled = githubCopilotProvider().getModels()[0].id;
 				await authStorage.modify("github-copilot", async () => ({
 					type: "oauth",
 					refresh: "github-access-token",
 					access: "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;",
 					expires: Date.now() + 60_000,
-					availableModelIds: ["gpt-5.5"],
+					availableModelIds: [enabled],
 				}));
 
 				const registry = await createModelRegistry(authStorage, modelsJsonPath);
@@ -1819,7 +1822,7 @@ describe("ModelRegistry", () => {
 						.getAvailable()
 						.filter((m) => m.provider === "github-copilot")
 						.map((m) => m.id),
-				).toEqual(["gpt-5.5"]);
+				).toEqual([enabled]);
 			});
 
 			test("getApiKeyAndHeaders resolves authHeader on every request", async () => {

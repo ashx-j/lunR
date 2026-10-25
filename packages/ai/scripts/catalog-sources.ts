@@ -33,26 +33,33 @@ function coverage(payload: any): Map<string, number> {
 	));
 }
 
-/** Keys of providers (or the whole list) that lost more than a quarter of at least ten models. */
-function shrunk(previous: unknown, next: unknown): string[] {
-	const counts = coverage(next);
-	return [...coverage(previous)].flatMap(([key, count]) =>
-		count >= 10 && (counts.get(key) ?? 0) < count * 0.75 ? [key] : [],
-	);
-}
+/** True when a count fell by more than a quarter from at least ten. */
+const suspicious = (before: number, after: number) => before >= 10 && after < before * 0.75;
 
 /**
  * Quarantine suspicious partial responses. A provider in a keyed catalog that shrank keeps its
- * last-good copy while the others update, because one provider models.dev drops must not freeze
- * every other provider's new models. A shrunk flat list falls back as a whole.
+ * last-good copy while the others update, because one provider models.dev trims must not freeze
+ * every other provider's new models. A provider that disappears entirely is a removal or a rename
+ * and is let go. A flat model list, or a keyed catalog whose total shrank, falls back as a whole.
  */
 function guardCoverage(previous: unknown, next: unknown): { payload: unknown; quarantined: string[] } {
-	const keys = shrunk(previous, next);
-	if (!keys.length) return { payload: next, quarantined: [] };
-	if (!isProviderKeyed(next) || !isProviderKeyed(previous)) {
-		throw new Error(`Suspicious catalog shrink for ${keys.join(", ")}`);
+	const before = coverage(previous);
+	const after = coverage(next);
+	const total = (counts: Map<string, number>) => [...counts.values()].reduce((sum, count) => sum + count, 0);
+	if (!isProviderKeyed(next) || !isProviderKeyed(previous) || suspicious(total(before), total(after))) {
+		const shrunk = [...before].filter(([key, count]) => suspicious(count, after.get(key) ?? 0)).map(([key]) => key);
+		if (shrunk.length || suspicious(total(before), total(after))) {
+			throw new Error(`Suspicious catalog shrink for ${shrunk.join(", ") || "the whole source"}`);
+		}
+		return { payload: next, quarantined: [] };
 	}
-	return { payload: { ...next, ...Object.fromEntries(keys.map((key) => [key, previous[key]])) }, quarantined: keys };
+	const quarantined = [...before]
+		.filter(([key, count]) => after.has(key) && suspicious(count, after.get(key) ?? 0))
+		.map(([key]) => key);
+	return {
+		payload: { ...next, ...Object.fromEntries(quarantined.map((key) => [key, previous[key]])) },
+		quarantined,
+	};
 }
 
 /** Independent public source fetches with schema checks, bounded retries and last-good fallback. */
@@ -80,7 +87,7 @@ export class CatalogSources {
 
 	private async load(url: string, validate: (value: any) => boolean): Promise<Response> {
 		const file = join(this.directory, `${createHash("sha256").update(url).digest("hex")}.json`);
-		let cached: { payload: unknown; fetchedAt: string } | undefined;
+		let cached: { payload: unknown; fetchedAt: string; quarantined?: string[] } | undefined;
 		try { cached = JSON.parse(readFileSync(file, "utf8")); } catch { /* First run. */ }
 		let error: unknown = this.offline ? new Error("Offline") : undefined;
 		for (let attempt = 0; attempt < (this.offline ? 0 : 3); attempt++) {
@@ -95,14 +102,21 @@ export class CatalogSources {
 				const fetchedAt = new Date().toISOString();
 				mkdirSync(this.directory, { recursive: true });
 				const temporary = `${file}.${process.pid}.tmp`;
-				writeFileSync(temporary, JSON.stringify({ payload, fetchedAt }));
+				writeFileSync(temporary, JSON.stringify({ payload, fetchedAt, ...(quarantined.length ? { quarantined } : {}) }));
 				renameSync(temporary, file);
 				if (quarantined.length) console.warn(`Keeping last-good ${quarantined.join(", ")} from ${url}: suspicious shrink`);
 				return this.result(url, payload, fetchedAt, "fresh", undefined, quarantined);
 			} catch (cause) { error = cause; }
 		}
 		if (cached && validate(cached.payload)) {
-			return this.result(url, cached.payload, cached.fetchedAt, "cached", error instanceof Error ? error.message : "Source unavailable");
+			return this.result(
+				url,
+				cached.payload,
+				cached.fetchedAt,
+				"cached",
+				error instanceof Error ? error.message : "Source unavailable",
+				cached.quarantined,
+			);
 		}
 		throw new Error(`Catalog source unavailable and no valid cache: ${url}`, { cause: error });
 	}

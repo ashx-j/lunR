@@ -41,6 +41,8 @@ export interface ModelsDevSource extends Omit<ModelsDevTarget, "provider"> {
 	listLiveOnly?: boolean;
 	/** Start with the context window of the base price tier, so requests do not silently cost more. */
 	baseTierContext?: boolean;
+	/** Leave out rows models.dev marks deprecated, for providers that retire them with no runtime filter. */
+	skipDeprecated?: boolean;
 	/** Subscription plans: prices do not apply. */
 	free?: boolean;
 	/** Drop long-context price tiers the provider does not bill. */
@@ -284,6 +286,7 @@ export const MODELS_DEV_SOURCES: readonly ModelsDevSource[] = [
 		from: ["together", "togetherai", "together-ai"],
 		api: "openai-completions",
 		baseUrl: "https://api.together.ai/v1",
+		skipDeprecated: true,
 		// Toggle models take `reasoning: { enabled }`, effort models take `reasoning_effort`, and models
 		// that always reason take neither.
 		route: (_id, row) => {
@@ -322,11 +325,14 @@ export const MODELS_DEV_SOURCES: readonly ModelsDevSource[] = [
 		api: "openai-completions",
 		baseUrl: "https://api.individual.githubcopilot.com",
 		headers: COPILOT_HEADERS,
+		// Copilot token users see every catalog row, not just the account picker, so retired rows stay out.
+		skipDeprecated: true,
+		// Copilot serves Claude on Messages and GPT on Responses; everything else is chat completions.
 		route: (_id, row) => {
 			const api = apiForNpm(row.provider?.npm);
-			return api === "openai-completions"
-				? { compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false } }
-				: { api };
+			return api === "anthropic-messages" || api === "openai-responses"
+				? { api }
+				: { compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false } };
 		},
 	},
 	// MiniMax's Anthropic-compatible API; the SDK appends /v1/messages.
@@ -536,7 +542,7 @@ function sourceModels(
 	const models: Model<Api>[] = [];
 	const seen = new Set<string>();
 	for (const [rowId, row] of Object.entries(data[key].models)) {
-		if (!isAgentModel(row)) continue;
+		if (!isAgentModel(row) || (source.skipDeprecated && row.status === "deprecated")) continue;
 		let id = rowId;
 		if (source.live) {
 			// Without a live list, fall back to the rows models.dev still considers current.
@@ -560,6 +566,8 @@ function sourceModels(
 			name: id,
 			reasoning: known?.reasoning ?? true,
 			cost: undefined,
+			// The borrowed row's SDK routing belongs to its host; the id decides here.
+			provider: undefined,
 			limit: { context: known?.limit?.context ?? 128000, output: known?.limit?.output ?? 8192 },
 		};
 		const model = sourceModel(source, id, row);

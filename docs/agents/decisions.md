@@ -4,8 +4,10 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
-- 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash, 15 Together models, nine Copilot models) and gave new families wrong thinking settings.
-- 2026-10-25: quarantine a shrunk provider instead of the whole models.dev source, because one dropped provider lunR never ships froze every new model for seven weeks.
+- 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash) and gave new families wrong settings (Copilot routed Claude Fable and GPT-6 to chat completions; Claude Opus 5 had no adaptive thinking).
+- 2026-10-25: quarantine a shrunk provider instead of the whole models.dev source, because one dropped provider lunR never ships froze every new model for seven weeks. A provider that vanishes is let go (removal or rename); a total drop over 25% still falls back as a whole.
+- 2026-10-25: keep skipping models.dev `deprecated` rows for Together and Copilot only, because elsewhere "deprecated" often means superseded but still served (MiniMax-M2.7, GLM-5.2).
+- 2026-10-25: the GPT-6 runtime overlay fills only thinking levels the catalog leaves open, so models.dev's effort "none" keeps "off" available.
 - 2026-10-25: hide thinking levels a model does not list instead of mapping them to a neighbor, so every level in the picker sends a value the provider accepts.
 - 2026-10-25: start direct OpenAI models at their base price tier's context window (272k) whenever models.dev lists a long-context tier, because requests above it bill at up to twice the rate; GPT-6 and the Pro models were the exceptions before.
 - 2026-10-25: Claude Opus 5.5, Sonnet 5.5, Fable 5 and Mythos drop "off" through a catalog rule, because they reject disabled thinking and models.dev has no field for it.

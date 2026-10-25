@@ -17,8 +17,8 @@ Read before changing the model catalog, model selection, login or provider trans
 ## Providers
 
 - xAI shares the official `grok` OAuth client, rotates refresh tokens and revokes the family on reuse. Adopt `~/.grok/auth.json` only when lunR is expired or after `invalid_grant`; write RFC3339 `expires_at`; never overwrite a newer Grok family or treat `modify(undefined)` as adopt. Remap to re-login only on `invalid_grant`/revoked refresh (`/usage` also on 401 billing), never on timeout or 403. Token refresh caps at 30s.
-- xAI effort maps and Responses transport live in `generate-models.ts` / `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses via `parseXaiGrok4Minor`). `withXaiEffortMetadata` also runs in `mergeCatalogLayers`. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`; Completions compat must not leak onto Responses.
-- OpenAI GPT effort floors live in `generate-models.ts` / `openai-effort.ts` as fallback; provider maps win. Codex generation and live discovery share `packages/ai/src/catalog/codex.ts`. Discovery is client-version-gated: an old version can return 200 without new models.
+- xAI effort maps and Responses transport live in `xai-effort.ts` (grok-4.6+ `xhigh`; grok-4.5+ Responses via `parseXaiGrok4Minor`). `withXaiEffortMetadata` also runs in `mergeCatalogLayers`. Completions exceptions go in `XAI_RESPONSES_EXCLUDED_MODEL_IDS`; Completions compat must not leak onto Responses.
+- OpenAI GPT effort floors live in `openai-effort.ts` and fill only levels a catalog row leaves open, so models.dev levels win. Codex generation and live discovery share `packages/ai/src/catalog/codex.ts`. Discovery is client-version-gated: an old version can return 200 without new models.
 - Codex uses each route's `context_window` as its compaction budget; `max_context_window` never becomes the default. Fast mode persists only for `openai-codex`.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Do not add `opencode` to `LIVE_LIST_PROVIDER_IDS`.
 
