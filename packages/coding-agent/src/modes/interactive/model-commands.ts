@@ -4,7 +4,7 @@
  * /settings menu shows. InteractiveMode supplies the session and UI through ModelCommandHost.
  */
 
-import type { Api } from "@earendil-works/pi-ai";
+import { type Api, claudeCodeUpdateNote } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../core/agent-session.ts";
@@ -107,33 +107,40 @@ export async function handleRefreshCommand(host: ModelCommandHost): Promise<void
 		}
 	}
 	host.session.refreshModelFromRegistry();
+	// The catalog cannot add subscription models that the saved Claude Code picker never offered.
+	const claudeCodeNote = claudeCodeUpdateNote(await runtime.readCredential("anthropic").catch(() => undefined));
 	host.showStatus(
-		formatCatalogRefreshSummary({
-			official: result.official
-				? {
-						source: result.official.source,
-						modelCount: result.official.catalog.models.length,
-						evictedUserRows: result.official.evictedUserRows,
-					}
-				: undefined,
-			providers: [
-				...result.live.map((entry) => ({
-					id: entry.providerId,
-					status: entry.status,
-					added: entry.added,
-					total: entry.total,
-					error: entry.error,
-				})),
-				...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
-					id,
-					status: "error" as const,
-					error,
-				})),
-			],
-			asked,
-			extraDefaults,
-			ollama,
-		}),
+		[
+			formatCatalogRefreshSummary({
+				official: result.official
+					? {
+							source: result.official.source,
+							modelCount: result.official.catalog.models.length,
+							evictedUserRows: result.official.evictedUserRows,
+						}
+					: undefined,
+				providers: [
+					...result.live.map((entry) => ({
+						id: entry.providerId,
+						status: entry.status,
+						added: entry.added,
+						total: entry.total,
+						error: entry.error,
+					})),
+					...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
+						id,
+						status: "error" as const,
+						error,
+					})),
+				],
+				asked,
+				extraDefaults,
+				ollama,
+			}),
+			claudeCodeNote,
+		]
+			.filter(Boolean)
+			.join(" "),
 	);
 	host.invalidateFooter();
 }
