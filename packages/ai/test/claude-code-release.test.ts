@@ -37,8 +37,8 @@ afterEach(() => {
 describe("Claude Code release", () => {
 	it("keeps lunR's binary under the agent directory, apart from other installs", () => {
 		vi.stubEnv("PI_CODING_AGENT_DIR", "/agent");
-		expect(managedClaudeCodePath("linux-x64")).toBe(join("/agent", "claude-code", "2.1.263", "claude"));
-		expect(managedClaudeCodePath("win32-x64")).toBe(join("/agent", "claude-code", "2.1.263", "claude.exe"));
+		expect(managedClaudeCodePath("linux-x64")).toBe(join("/agent", "claude-code", "2.1.310", "claude"));
+		expect(managedClaudeCodePath("win32-x64")).toBe(join("/agent", "claude-code", "2.1.310", "claude.exe"));
 		vi.unstubAllEnvs();
 	});
 

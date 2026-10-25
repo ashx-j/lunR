@@ -173,7 +173,7 @@ describe("isMutatingBashCommand", () => {
 		]) {
 			expect(isMutatingBashCommand(command), command).toBe(true);
 		}
-		for (const command of ["git --no-pager status", "git -C /tmp status", "git --git-dir=.git log"]) {
+		for (const command of ["git --no-pager status", "git --namespace=x log"]) {
 			expect(isMutatingBashCommand(command), command).toBe(false);
 		}
 	});
@@ -288,5 +288,59 @@ describe("read-only execution spellings", () => {
 		"LD_PRELOAD=./evil.so ls",
 	])("treats %s as able to run code or write files", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+});
+
+describe("shell expansion and redirection tricks", () => {
+	it.each([
+		"find . -name '*.tmp' {-delete,}",
+		"find . -name '*.tmp' {'-delete',}",
+		"find . -name x -{dele,}te",
+		"echo {a..c}",
+		"find . $'-delete'",
+		"sed $'-i' s/a/b/ f",
+		'find . $"-delete"',
+		"F=-delete; find . $F",
+		"O=--output=/x; git log $O",
+		'git log "$O"',
+		`find . \${F}`,
+		"git log $1",
+		"HOME=. git diff",
+		"XDG_CONFIG_HOME=. git diff",
+		"true\nHOME=. git diff",
+		"PATH=.; ls",
+		"RIPGREP_CONFIG_PATH=notes.txt rg foo",
+		"GH_CONFIG_DIR=. gh pr view",
+		"git --git-dir=evil.git --work-tree=. status",
+		"git --git-dir evil.git log",
+		"git -C fixture.git log",
+		"git --bare log -p",
+		"./scripts/ls",
+		"scripts/cat x",
+		"/tmp/ls",
+		"/usr/bin/../../tmp/ls",
+		"cat a | ./grep b",
+	])("blocks %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"ls -la",
+		"git log --oneline",
+		"rg foo src/",
+		"cat a | grep b",
+		"find . -name '*.ts'",
+		'find . -name "*.ts"',
+		"grep -n 'foo$' src/a.ts",
+		'grep -n "^foo$" src/a.ts',
+		"rg 'a{1,3}' src",
+		"echo '$HOME'",
+		"git show HEAD@{1}",
+		"git log @{u}..HEAD",
+		"/usr/bin/ls -la",
+		"/bin/cat a.txt",
+		"LC_ALL=C sort input.txt",
+	])("allows %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
 	});
 });

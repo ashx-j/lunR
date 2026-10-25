@@ -15,7 +15,7 @@ import type { Context, Message } from "../src/types.ts";
 import { isRetryableAssistantError } from "../src/utils/retry.ts";
 
 /**
- * Stand-in for Claude Code 2.1.263's stream-json mode, matching what the real binary printed against a
+ * Stand-in for Claude Code 2.1.310's stream-json mode, matching what the real binary printed against a
  * fixture upstream: replayed user turns get zero-turn results; the Messages request goes straight to
  * ANTHROPIC_BASE_URL; each raw SSE event comes back as a `stream_event` line among other status lines;
  * an HTTP error ends in a `result` carrying `api_error_status`, and a refused connection in one without.

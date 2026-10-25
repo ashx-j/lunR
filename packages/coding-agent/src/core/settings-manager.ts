@@ -1626,6 +1626,14 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/** Drops these patterns from the global `enabledModels`. Removing the last one clears the scope. */
+	removeEnabledModels(patterns: readonly string[]): void {
+		const current = this.globalSettings.enabledModels;
+		if (!current) return;
+		const kept = current.filter((pattern) => !patterns.includes(pattern));
+		if (kept.length !== current.length) this.setEnabledModels(kept.length > 0 ? kept : undefined);
+	}
+
 	getClientScopedModelsOnly(): boolean {
 		return this.settings.clientScopedModelsOnly ?? false;
 	}

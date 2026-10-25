@@ -78,8 +78,8 @@ export function summarizeTodos(todos: TodoItem[]): string {
 /**
  * Widget lines for the current list. Collapsed mode shows all four active rows,
  * or TODO_WIDGET_COLLAPSED_ROWS when there are five or more (in-progress first, then pending),
- * and never emits a `✓ N done` summary. A `+N more (<expandKey> to expand)`
- * hint is appended when active rows are hidden. Expanded mode shows every
+ * and never emits a `✓ N done` summary. A `+N more` hint is appended when
+ * active rows are hidden. Expanded mode shows every
  * row, completed included. Empty list / all-completed collapsed → no lines.
  */
 export function buildTodoWidgetLines(todos: TodoItem[], expanded: boolean, expandKey = "click"): TodoWidgetLine[] {

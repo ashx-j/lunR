@@ -97,11 +97,11 @@ export const TUI_KEYBINDINGS = {
 		description: "Delete character forward",
 	},
 	"tui.editor.deleteWordBackward": {
-		defaultKeys: ["ctrl+w", "alt+backspace"],
+		defaultKeys: ["ctrl+w", "alt+backspace", "ctrl+backspace"],
 		description: "Delete word backward",
 	},
 	"tui.editor.deleteWordForward": {
-		defaultKeys: ["alt+d", "alt+delete"],
+		defaultKeys: ["alt+d", "alt+delete", "ctrl+delete"],
 		description: "Delete word forward",
 	},
 	"tui.editor.deleteToLineStart": {

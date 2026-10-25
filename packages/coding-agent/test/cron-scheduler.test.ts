@@ -194,6 +194,33 @@ describe("runSchedulerTick", () => {
 		expect(getLatestJobOutput(job.id)).toBeNull();
 	});
 
+	it("reports a one-shot missed beyond its grace through failure delivery", async () => {
+		const job = await createJob({ prompt: "p", schedule: "30m", name: "remindjob" });
+		await updateJob(job.id, { nextRunAt: new Date(Date.now() - 200_000).toISOString() });
+		const { deps, calls } = makeDeps({});
+		await runSchedulerTick(deps);
+		expect(calls.run).toHaveLength(0);
+		expect(calls.delivered).toEqual([
+			"Cron job 'remindjob' failed: missed one-shot schedule beyond the 120s recovery grace",
+		]);
+		expect(getJob(job.id).state).toBe("error");
+		await runSchedulerTick(deps);
+		expect(calls.delivered).toHaveLength(1);
+	});
+
+	it("leaves jobs the operator does not accept due and unclaimed", async () => {
+		const job = await createJob({ prompt: "p", schedule: "every 30m" });
+		await dueNow(job.id);
+		const slot = getJob(job.id).nextRunAt;
+		const { deps, calls } = makeDeps({});
+		await runSchedulerTick({ ...deps, accepts: () => false });
+		expect(calls.run).toHaveLength(0);
+		expect(getJob(job.id).nextRunAt).toBe(slot);
+		expect(getJob(job.id).activeRun).toBeUndefined();
+		await runSchedulerTick(deps);
+		expect(calls.run).toHaveLength(1);
+	});
+
 	it("completes one-shots after firing", async () => {
 		const job = await createJob({ prompt: "p", schedule: "30m" });
 		await dueNow(job.id);

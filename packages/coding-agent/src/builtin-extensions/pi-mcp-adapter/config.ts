@@ -626,7 +626,7 @@ export function writeSharedServerEntry(filePath: string, serverName: string, ent
   return filePath;
 }
 
-export function getServerProvenance(overridePath?: string, cwd = process.cwd()): Map<string, ServerProvenance> {
+export function getServerProvenance(overridePath?: string, cwd = process.cwd(), projectTrusted = false): Map<string, ServerProvenance> {
   const provenance = new Map<string, ServerProvenance>();
   const userPath = getPiGlobalConfigPath(overridePath);
 
@@ -637,7 +637,7 @@ export function getServerProvenance(overridePath?: string, cwd = process.cwd()):
 
     if (loaded.imports?.length) {
       for (const importKind of loaded.imports) {
-        const importPath = resolveImportPath(importKind, cwd);
+        const importPath = resolveImportPath(importKind, cwd, projectTrusted);
         if (!importPath) continue;
 
         try {

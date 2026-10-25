@@ -7,7 +7,7 @@ Read before adding features, extensions or bridges, or before syncing from upstr
   - Deferred (interactive after paint; print/RPC/gateway before first turn): pi-ollama-cloud, narumiruna-pi-goal, lunr-cron, lunr-pr-watch, pi-intercom, pi-prompt-template-model, pi-subagents, pi-web-access, lunr-browser, pi-lsp-extension, pi-mcp-adapter, lunr-computer-use.
   - Removed: lunr-settings-tools, lunr-behavior, context-mode, MattDevy + narumiruna collections. Extension absorption was rolled back; **never merge `archive/extension-absorption-DO-NOT-MERGE`.**
 - **Bridges:** `globalThis[Symbol.for("@lunr/...")]`. Never runtime-barrel-import `@earendil-works/pi-coding-agent` under `builtin-extensions/`, only concrete modules. `complete`/`streamSimple`/`getModel` come from `@earendil-works/pi-ai/compat`.
-- **Cron:** `core/cron` in TUI (live session) and gateway (fresh headless session). One `jobs.json` in `~/.lunr/agent/cron/`. `runWithOrigin` ALS. Gateway fallback: `cronFallbackModels`. TUI cron uses the gateway's deliver allowlist.
+- **Cron:** `core/cron` in TUI (live session) and gateway (fresh headless session). One `jobs.json` in `~/.lunr/agent/cron/`. `runWithOrigin` ALS. Gateway fallback: `cronFallbackModels`. TUI cron uses the gateway's deliver allowlist. Schedulers without the lease retry it every tick; ownership counts only after `recoverInterruptedRuns` succeeds. A TUI owner skips, without claiming, jobs from other projects or with non-local targets (`SchedulerDeps.accepts`); missed one-shots go through `deliverFailure`. `cron resume` clears `interrupted` and the lease owner runs the job once.
 - **Gateway:** Telegram long-poll + Discord (mention-gated, no GuildMembers intent). Authz fail-closed. `ADAPTER_FACTORIES`. Details in [integrations.md](integrations.md).
 - **ACP:** `lunr --mode acp` adapts pi-acp with one native RPC worker per ACP session. Setup, limits and T3 settings: `packages/coding-agent/docs/acp.md`.
 - **Footer:** ashxj-tui `setFooter` only. Toggles are render-time `CustomizeBridge` reads.
@@ -28,6 +28,8 @@ Read before adding features, extensions or bridges, or before syncing from upstr
 - Read `PI_OFFLINE` through `isOfflineModeEnabled()` (1/true/yes); a raw `!== undefined` check treated `0` as offline.
 - Process registry tracks direct children only; `nohup &` grandchildren are untracked.
 - Lazy extension lifecycle: session replacement invalidates pending work before new work binds. Await extension `session_shutdown` before gateway/cron disposal. MCP closes partial connections and shares one shutdown promise; LSP serializes shutdown and bind; `subagent_wait` waits only for pending launch registration.
+- Agent loop: an abort during tool preparation or execution turns unstarted calls into "Operation aborted" results and ends the run without another provider request; queued steering and follow-ups stay queued. A stream that ends without done/error becomes an error message.
+- `AuthStorage.reload` reads `auth.json` without the lock and keeps the last snapshot on an empty or unparsable file. Session files are created 0600 and directories lunR creates 0700. `navigateTree` (`/tree`, RPC) refuses while a run is active.
 - Extension aliases match prefixes. Keep the AI catalog directory ahead of its root compatibility-file alias.
 - Usage records live in session custom entries outside model context. Request IDs survive receipt replay; forks carry context but no new spend. Unknown usage and prices stay distinct from measured zero.
 

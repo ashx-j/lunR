@@ -10,9 +10,8 @@ import { CLAUDE_CODE_VERSION } from "../src/utils/claude-code-release.ts";
 const fake = vi.hoisted(() => ({
 	managedPath: "",
 	statuses: [] as unknown[],
-	/** Picker rows the `initialize` handshake returns, and `get_context_usage` windows by route. */
+	/** Picker rows the `initialize` handshake returns. */
 	picker: [] as Record<string, unknown>[],
-	windows: {} as Record<string, number>,
 	/** Puts a garbled line before every control response. */
 	garbled: false,
 	tripped: false,
@@ -27,7 +26,6 @@ vi.mock("../src/api/claude-code-process.ts", async (importOriginal) => ({
 		fake.calls.push([...args]);
 		const stdout = new EventEmitter();
 		const emit = (text: string) => queueMicrotask(() => stdout.emit("data", Buffer.from(text)));
-		let model = "";
 		const child = Object.assign(new EventEmitter(), {
 			pid: 1,
 			stdout,
@@ -37,13 +35,7 @@ vi.mock("../src/api/claude-code-process.ts", async (importOriginal) => ({
 				write: (line: string) => {
 					const { request_id, request } = JSON.parse(line);
 					fake.calls.push([request.subtype, request.model ?? ""]);
-					if (request.subtype === "set_model") model = request.model;
-					const response =
-						request.subtype === "initialize"
-							? { models: fake.picker }
-							: request.subtype === "get_context_usage"
-								? { maxTokens: fake.windows[model] }
-								: {};
+					const response = request.subtype === "initialize" ? { models: fake.picker } : {};
 					const reply = { type: "control_response", response: { subtype: "success", request_id, response } };
 					emit(`${fake.garbled ? "{not json\n" : ""}${JSON.stringify(reply)}\n`);
 				},
@@ -114,7 +106,6 @@ describe("Anthropic subscription login", () => {
 		fake.managedPath = process.execPath;
 		fake.statuses = [subscriber];
 		fake.picker = [sonnet, haiku];
-		fake.windows = { "claude-sonnet-5": 200_000, "claude-haiku-4-5-20251001": 200_000 };
 		fake.garbled = false;
 		fake.tripped = false;
 		fake.calls = [];
@@ -122,7 +113,7 @@ describe("Anthropic subscription login", () => {
 		delete process.env.CLAUDE_CONFIG_DIR;
 	});
 
-	it("saves a version 3 record with Claude Code's models and windows and no secrets", async () => {
+	it("saves a version 3 record with Claude Code's models and no secrets", async () => {
 		const { credentials, login } = runtime();
 		const credential = await login(interaction([]).value);
 		expect(credential).toEqual({
@@ -132,15 +123,15 @@ describe("Anthropic subscription login", () => {
 			command: process.execPath,
 			accountFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
 			models: [
-				{ id: "claude-sonnet-5", route: "claude-sonnet-5", contextWindow: 200_000 },
-				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001", contextWindow: 200_000 },
+				{ id: "claude-sonnet-5", route: "claude-sonnet-5" },
+				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001" },
 			],
 		});
 		expect(JSON.stringify(credential)).not.toContain("Person@Example.com");
 		expect(await credentials.read("anthropic")).toEqual(credential);
 	});
 
-	it("keeps each model's largest window on the plan and skips variants billed from usage credits", async () => {
+	it("prefers a 1M route, skips variants billed from usage credits and never asks Claude Code about a route", async () => {
 		fake.picker = [
 			row("default", "claude-sonnet-5"),
 			sonnet,
@@ -149,24 +140,17 @@ describe("Anthropic subscription login", () => {
 			row("opus[1m]", "claude-opus-5[1m]", "Opus 5 with 1M context · Draws from usage credits · $5/$25 per Mtok"),
 			haiku,
 		];
-		fake.windows = {
-			"claude-sonnet-5": 200_000,
-			"claude-sonnet-5[1m]": 1_000_000,
-			"claude-opus-5": 200_000,
-			"claude-opus-5[1m]": 1_000_000,
-			"claude-haiku-4-5-20251001": 200_000,
-		};
 		const { login } = runtime();
 		const credential = await login(interaction([]).value);
 		expect(credential).toMatchObject({
 			models: [
 				{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 },
-				{ id: "claude-opus-5", route: "claude-opus-5", contextWindow: 200_000 },
-				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001", contextWindow: 200_000 },
+				{ id: "claude-opus-5", route: "claude-opus-5" },
+				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001" },
 			],
 		});
-		// The credit-billed variant is never even selected.
-		expect(fake.calls).not.toContainEqual(["set_model", "claude-opus-5[1m]"]);
+		// Since Claude Code 2.1.310 both requests contact Anthropic, which setup never does.
+		expect(fake.calls.filter(([call]) => call === "set_model" || call === "get_context_usage")).toEqual([]);
 	});
 
 	it("asks before downloading and stops when the user declines", async () => {

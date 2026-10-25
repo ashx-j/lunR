@@ -309,23 +309,21 @@ describe("TelegramAdapter", () => {
 		await adapter.disconnect();
 	});
 
-	it("send passes thread/reply options and retries without parse_mode on Markdown errors", async () => {
+	it("send passes thread/reply options and sends plain text so identifiers keep their underscores", async () => {
 		const api = new MockApi();
-		api.queue("sendMessage", new TelegramApiError(400, "Bad Request: can't parse entities"), { message_id: 55 });
+		api.queue("sendMessage", { message_id: 55 });
 		const adapter = new TelegramAdapter(CFG, { callApi: api.callApi });
-		const result = await adapter.send("123", "hi *bold*", { replyTo: "7", threadId: "9" });
+		const result = await adapter.send("123", "set max_tokens and top_p", { replyTo: "7", threadId: "9" });
 		expect(result).toEqual({ success: true, messageId: "55" });
 		const sends = api.callsFor("sendMessage");
-		expect(sends).toHaveLength(2);
+		expect(sends).toHaveLength(1);
 		expect(sends[0]).toMatchObject({
 			chat_id: "123",
-			text: "hi *bold*",
-			parse_mode: "Markdown",
+			text: "set max_tokens and top_p",
 			message_thread_id: 9,
 			reply_parameters: { message_id: 7 },
 		});
-		expect("parse_mode" in sends[1]).toBe(false);
-		expect(sends[1].text).toBe("hi *bold*");
+		expect("parse_mode" in sends[0]).toBe(false);
 	});
 
 	it("sends without a reply reference when the original message was deleted", async () => {
@@ -373,15 +371,16 @@ describe("TelegramAdapter", () => {
 		await expect(adapter.editMessage("1", "5", "same")).resolves.toEqual({ success: true, messageId: "5" });
 	});
 
-	it("editMessage retries without parse_mode on Markdown errors", async () => {
+	it("editMessage sends plain text", async () => {
 		const api = new MockApi();
-		api.queue("editMessageText", new TelegramApiError(400, "Bad Request: can't parse entities"), {});
+		api.queue("editMessageText", {});
 		const adapter = new TelegramAdapter(CFG, { callApi: api.callApi });
-		const result = await adapter.editMessage("1", "5", "x_y");
+		const result = await adapter.editMessage("1", "5", "x_y and a_b");
 		expect(result.success).toBe(true);
 		const edits = api.callsFor("editMessageText");
-		expect(edits).toHaveLength(2);
-		expect("parse_mode" in edits[1]).toBe(false);
+		expect(edits).toHaveLength(1);
+		expect(edits[0].text).toBe("x_y and a_b");
+		expect("parse_mode" in edits[0]).toBe(false);
 	});
 
 	it("sendTyping refreshes every 4s and stops once send() completes", async () => {

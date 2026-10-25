@@ -137,6 +137,27 @@ describe("AuthStorage", () => {
 		await expect(storage.list()).resolves.toEqual([]);
 	});
 
+	test("loads credentials while another process holds the lock", async () => {
+		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
+		const release = await lockfile.lock(authJsonPath, { realpath: false });
+		try {
+			const storage = AuthStorage.create(authJsonPath);
+			expect(await storage.read("anthropic")).toEqual({ type: "api_key", key: "stored" });
+		} finally {
+			await release();
+		}
+	});
+
+	test("reload keeps the last snapshot when the file is truncated", async () => {
+		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
+		const storage = AuthStorage.create(authJsonPath);
+		writeFileSync(authJsonPath, "");
+		storage.reload();
+		writeFileSync(authJsonPath, '{"anthropic": {"type": "api');
+		storage.reload();
+		expect(await storage.read("anthropic")).toEqual({ type: "api_key", key: "stored" });
+	});
+
 	test("does not write after lock acquisition failure and recovers on retry", async () => {
 		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
 		const storage = AuthStorage.create(authJsonPath);

@@ -2,15 +2,17 @@
  * lunR: cron scheduler loop (Phase 1 of the cron/gateway roadmap).
  *
  * startScheduler() runs an unref'd, self-rescheduling setTimeout loop (default
- * 60s tick). Tick errors are caught — the loop never dies. Each tick collects
- * due jobs and runs them sequentially under a profile lease and durable occurrence
- * claims. Interrupted work pauses for deliberate retry.
+ * 60s tick). Tick errors are caught — the loop never dies. A process without the
+ * profile lease retries it on every tick, so another operator can take over when
+ * the owner exits. Each tick collects due jobs and runs them sequentially under
+ * durable occurrence claims. Interrupted work pauses for deliberate retry.
  *
  * Per due job: build the prompt (cron-hint prefix + contextFrom upstream
  * outputs at an 8K cap each + job.prompt) → runJob → saveJobOutput →
  * [SILENT] check (whole response, or first/last line) → deliverResult.
  * Empty responses are soft failures; all failures attempt delivery of a
- * compact one-line error. Delivery errors land in job.lastDeliveryError.
+ * compact one-line error, including one-shots missed beyond their grace.
+ * Delivery errors land in job.lastDeliveryError.
  *
  * The scheduler knows nothing about delivery channels: runJob/deliverResult
  * are injected by the TUI extension or gateway operator.
@@ -37,6 +39,8 @@ export interface SchedulerDeps {
 	deliverResult: (job: CronJob, content: string) => Promise<void>;
 	/** Idle check before claiming; atomic admission must still be enforced by runJob. */
 	canRun?: () => boolean;
+	/** False skips a due job without claiming it, leaving it due for an operator that can run and deliver it. */
+	accepts?: (job: CronJob) => boolean;
 	/** Tick interval; default 60s. */
 	intervalMs?: number;
 	/** Per-job wall-clock timeout; default 5 minutes. */
@@ -151,9 +155,11 @@ export async function executeJob(
 }
 
 async function tick(deps: SchedulerDeps, now: Date, signal: AbortSignal): Promise<void> {
-	const due = await getDueJobs(now);
+	const { due, missed } = await getDueJobs(now);
+	for (const job of missed) await deliverFailure(job, deps, job.lastError ?? "missed schedule");
 	for (const dueJob of due) {
 		if (signal.aborted || deps.canRun?.() === false) break;
+		if (deps.accepts?.(dueJob) === false) continue;
 		const job = await claimJobRun(dueJob.id, now);
 		if (job) {
 			if (signal.aborted) {
@@ -177,7 +183,10 @@ export async function runSchedulerTick(deps: SchedulerDeps, now: Date = new Date
 	}
 }
 
-/** First healthy operator retains ownership until all admitted work and delivery settle. */
+/**
+ * The first healthy operator owns the lease until all admitted work and delivery settle.
+ * Others retry the lease each tick and take over once the owner releases it.
+ */
 export function startScheduler(deps: SchedulerDeps) {
 	const controller = new AbortController();
 	const intervalMs = deps.intervalMs ?? 60_000;
@@ -185,24 +194,35 @@ export function startScheduler(deps: SchedulerDeps) {
 	let release: (() => Promise<void>) | null = null;
 	let active: Promise<void> | undefined;
 	let stopping: Promise<void> | undefined;
-	const ready = acquireSchedulerLease().then(async (lease) => {
-		release = lease;
-		if (lease) {
-			try {
-				await recoverInterruptedRuns();
-			} catch (error) {
-				await lease();
-				release = null;
-				throw error;
-			}
+	/** Ownership counts only after the previous owner's interrupted claims are recovered. */
+	const acquire = async (): Promise<void> => {
+		const lease = await acquireSchedulerLease();
+		if (!lease) return;
+		if (controller.signal.aborted) {
+			await lease();
+			return;
 		}
-	});
+		try {
+			await recoverInterruptedRuns();
+		} catch (error) {
+			await lease();
+			throw error;
+		}
+		release = lease;
+	};
+	// The latest acquire attempt; run() and stop() wait for it to settle.
+	let ready = acquire();
 	// Attach a rejection handler immediately; the first timer may be a minute away.
 	void ready.catch(() => {});
 	const loop = async (): Promise<void> => {
 		if (controller.signal.aborted) return;
 		try {
-			await ready;
+			// A failed earlier attempt is retried below.
+			await ready.catch(() => {});
+			if (!release && !controller.signal.aborted) {
+				ready = acquire();
+				await ready;
+			}
 			if (release && !controller.signal.aborted && !active) {
 				active = tick(deps, new Date(), controller.signal);
 				try {
@@ -225,7 +245,10 @@ export function startScheduler(deps: SchedulerDeps) {
 		isOwner: () => release !== null && !controller.signal.aborted,
 		async run(jobId: string): Promise<void> {
 			await ready;
-			if (!release) throw new Error("another process owns the cron scheduler; run the job from that operator");
+			if (!release)
+				throw new Error(
+					"another process owns the cron scheduler; run the job from that operator, or use cron resume to retry an interrupted job",
+				);
 			if (controller.signal.aborted) throw new Error("cron scheduler is stopping");
 			if (active || deps.canRun?.() === false) throw new Error("cron operator is busy; retry when idle");
 			active = (async () => {
@@ -246,7 +269,8 @@ export function startScheduler(deps: SchedulerDeps) {
 			controller.abort(new Error("scheduler stopped"));
 			if (timer) clearTimeout(timer);
 			stopping = (async () => {
-				await ready;
+				// A failed acquire holds nothing to release.
+				await ready.catch(() => {});
 				try {
 					await active;
 				} finally {

@@ -343,6 +343,8 @@ async function runClaudeCode(
 		};
 		// Cleanup that already ran during the writes above had no process to stop, so never start one.
 		if (signal?.aborted) throw new Error("Claude Code request cancelled");
+		// Claude Code tells the model its working directory in an environment note it adds to every request,
+		// so it runs in lunR's own directory. Empty setting sources keep that directory's CLAUDE.md and settings out.
 		const child = spawnClaudeCode(
 			connection.command,
 			[
@@ -375,7 +377,7 @@ async function runClaudeCode(
 				"--no-session-persistence",
 			],
 			env,
-			directory,
+			process.cwd(),
 		);
 		pid = child.pid;
 		// Output already written stays readable after the process closes, so cleanup is safe here too.
