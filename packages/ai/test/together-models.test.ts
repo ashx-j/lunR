@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { MODELS_DEV_SOURCES } from "../scripts/catalog-providers.ts";
 import { type ModelsDevModel, modelFromModelsDev } from "../src/catalog/models-dev.ts";
+import { MODELS_DEV_SOURCES } from "../src/catalog/providers.ts";
 import { getModels } from "../src/compat.ts";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.ts";
 

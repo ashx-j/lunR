@@ -1,14 +1,17 @@
 /**
- * Which models.dev providers lunR ships, and how it talks to each one.
- * This file holds provider knowledge only (endpoint, transport, provider-wide request quirks).
- * Model facts come from models.dev; the few it gets wrong live in src/catalog/rules.ts.
+ * Which models.dev providers lunR ships, how it talks to each one, and how a models.dev row
+ * becomes a lunR model. The catalog generator and live discovery share this code, so a model a
+ * provider lists before the catalog has it gets the same settings the next publication will give it.
+ * Model facts come from models.dev; the few it gets wrong live in rules.ts.
  */
 import {
 	CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL,
 	CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
 	CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL,
 	CLOUDFLARE_WORKERS_AI_BASE_URL,
-} from "../src/api/cloudflare.ts";
+} from "../api/cloudflare.ts";
+import type { Api, KnownProvider, Model, OpenAICompletionsCompat } from "../types.ts";
+import { shouldUseXaiResponsesApi, XAI_RESPONSES_COMPAT } from "../xai-effort.ts";
 import {
 	isAgentModel,
 	type ModelsDevCatalog,
@@ -16,10 +19,9 @@ import {
 	type ModelsDevModel,
 	type ModelsDevTarget,
 	modelFromModelsDev,
-} from "../src/catalog/models-dev.ts";
-import type { Api, KnownProvider, Model, OpenAICompletionsCompat } from "../src/types.ts";
-import { shouldUseXaiResponsesApi, XAI_RESPONSES_COMPAT } from "../src/xai-effort.ts";
-import { opencodeBaseUrl, resolveOpencodeApi } from "./opencode-catalog.ts";
+} from "./models-dev.ts";
+import { opencodeBaseUrl, resolveOpencodeApi } from "./opencode.ts";
+import { applyCatalogRules } from "./rules.ts";
 
 /** Per-model transport. Returning undefined skips a row lunR cannot drive. */
 export type ModelsDevRoute = (
@@ -415,94 +417,6 @@ export const MODELS_DEV_SOURCES: readonly ModelsDevSource[] = [
 	{ provider: "deepseek", from: ["deepseek"], api: "openai-completions", baseUrl: "https://api.deepseek.com" },
 ];
 
-/** Models no public source lists yet. Each entry should go once a source carries it. */
-export const EXTRA_MODELS: readonly Model<Api>[] = [
-	...(
-		[
-			["Ling-2.6-flash", "Ling 2.6 Flash", false, 0.01, 0.02],
-			["Ling-2.6-1T", "Ling 2.6 1T", false, 0.06, 0.25],
-			["Ring-2.6-1T", "Ring 2.6 1T", true, 0.06, 0.25],
-		] as const
-	).map(
-		([id, name, reasoning, input, output]): Model<"openai-completions"> => ({
-			id,
-			name,
-			api: "openai-completions",
-			provider: "ant-ling",
-			baseUrl: "https://api.ant-ling.com/v1",
-			reasoning,
-			input: ["text"],
-			cost: { input, output, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 262144,
-			maxTokens: 65536,
-			// Ring reasons by default; only high and xhigh have documented effort controls.
-			...(reasoning
-				? {
-						thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: "high", xhigh: "xhigh" },
-					}
-				: {}),
-			compat: {
-				supportsStore: false,
-				supportsDeveloperRole: false,
-				supportsReasoningEffort: false,
-				maxTokensField: "max_tokens",
-				supportsLongCacheRetention: false,
-				...(reasoning ? { thinkingFormat: "ant-ling" as const } : {}),
-			},
-		}),
-	),
-	{
-		id: "mistral-medium-3.5",
-		name: "Mistral Medium 3.5",
-		api: "mistral-conversations",
-		provider: "mistral",
-		baseUrl: "https://api.mistral.ai",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 262144,
-		maxTokens: 262144,
-	},
-	{
-		id: "gpt-5-chat-latest",
-		name: "GPT-5 Chat Latest",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://api.openai.com/v1",
-		reasoning: false,
-		input: ["text", "image"],
-		cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	// OpenRouter routers. Their price depends on the model they pick, so it is unknown here.
-	{
-		id: "auto",
-		name: "Auto",
-		api: "openai-completions",
-		provider: "openrouter",
-		baseUrl: "https://openrouter.ai/api/v1",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 2000000,
-		maxTokens: 30000,
-	},
-	{
-		// Fusion's own metadata lists no tools, but it resolves to models that call caller tools.
-		id: "openrouter/fusion",
-		name: "OpenRouter: Fusion",
-		api: "openai-completions",
-		provider: "openrouter",
-		baseUrl: "https://openrouter.ai/api/v1",
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1000000,
-		maxTokens: 30000,
-	},
-];
-
 /** NIM and OpenCode ids can differ from models.dev in case and `_` versus `.`. */
 export const normalizeLiveId = (id: string) => id.toLowerCase().replaceAll("_", ".");
 
@@ -554,23 +468,11 @@ function sourceModels(
 		const model = sourceModel(source, id, facts.complete(row));
 		if (model) models.push(model);
 	}
-	// A provider can serve a model before models.dev lists it there. Borrow the closest known
-	// model's facts, or conservative defaults when there is none.
+	// A provider can serve a model before models.dev lists it there.
 	for (const id of source.listLiveOnly ? (live?.values() ?? []) : []) {
 		if (seen.has(id)) continue;
-		const known = facts.find(id, key);
-		console.log(`${source.provider}: ${id} is live but not on models.dev${known ? "; using a related model's facts" : ""}`);
-		// Prices belong to the host, so a borrowed row keeps its capabilities but not its price.
-		const row: ModelsDevModel = {
-			...known,
-			name: id,
-			reasoning: known?.reasoning ?? true,
-			cost: undefined,
-			// The borrowed row's SDK routing belongs to its host; the id decides here.
-			provider: undefined,
-			limit: { context: known?.limit?.context ?? 128000, output: known?.limit?.output ?? 8192 },
-		};
-		const model = sourceModel(source, id, row);
+		console.log(`${source.provider}: ${id} is live but not on models.dev`);
+		const model = discoveredModel(source.provider, id, {}, facts);
 		if (model) models.push(model);
 	}
 	return models;
@@ -588,4 +490,32 @@ export function modelsDevModels(
 	return MODELS_DEV_SOURCES.flatMap((source) =>
 		sourceModels(source, data, facts, source.live ? liveLists.get(source.live) : undefined),
 	);
+}
+
+/**
+ * A model a provider lists before lunR's catalog has it. What the provider reported wins, the
+ * closest known models.dev model fills the rest, and the provider's route and the catalog rules
+ * apply as they will once the model reaches the catalog. With nothing known, the model gets 128k
+ * context, 8k output and no thinking controls, so every request it sends is one the provider takes.
+ * Undefined for providers lunR does not build from models.dev.
+ */
+export function discoveredModel(
+	provider: string,
+	id: string,
+	reported: ModelsDevModel,
+	facts?: ModelsDevFacts,
+): Model<Api> | undefined {
+	const source = MODELS_DEV_SOURCES.find((candidate) => candidate.provider === provider);
+	if (!source) return undefined;
+	const known = facts?.find(id, source.from[0]);
+	const defined = Object.fromEntries(Object.entries(reported).filter(([, value]) => value !== undefined));
+	// A borrowed row's name, price and SDK routing belong to another model or host.
+	const row: ModelsDevModel = { ...known, name: id, cost: undefined, provider: undefined, ...defined };
+	row.reasoning ??= false;
+	row.limit = {
+		context: reported.limit?.context ?? known?.limit?.context ?? 128000,
+		output: reported.limit?.output ?? known?.limit?.output ?? 8192,
+	};
+	const model = sourceModel(source, id, row);
+	return model && applyCatalogRules(model);
 }

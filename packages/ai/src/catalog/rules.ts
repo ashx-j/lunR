@@ -2,7 +2,8 @@ import type { Api, Model, ModelCostRates, ThinkingLevelMap } from "../types.ts";
 
 /**
  * Model facts the public sources get wrong or do not carry. The generator applies these to every
- * catalog row. A rule never decides whether a new model exists unless it says `drop` and explains why.
+ * catalog row, and live discovery applies them to models it finds before the catalog has them.
+ * A rule never decides whether a new model exists unless it says `drop` and explains why.
  */
 export interface CatalogRule {
 	/** lunR provider ids. Omit to apply to every provider. */

@@ -13,7 +13,14 @@ Every tool-capable models.dev model of a shipped provider becomes a catalog row,
 - `packages/ai/scripts/catalog-providers.ts` says which models.dev providers ship and how lunR reaches each one (endpoint, transport, provider-wide request settings).
 - `packages/ai/src/catalog/rules.ts` patches the few facts the sources get wrong. Each rule names its reason, and a rule may only drop a model when it says why.
 
-At runtime, supported providers also expose live discovery. Codex uses the authenticated account-specific `/codex/models` endpoint, including its client-version query and account header. The client version is resolved from official npm release metadata; only JSON metadata is fetched, never package code. If that lookup fails, discovery uses its last successful version or the bundled fallback.
+At runtime, lunR also reads each logged-in provider's own model list, so a model shows up in `/model` within the hourly refresh after the provider starts serving it, even before models.dev lists it:
+
+- OpenAI-compatible providers answer `GET {baseUrl}/models`. Anthropic (API keys only, never a Claude subscription) reports each model's limits, thinking types and effort levels. Google's list reports limits and thinking support for models that generate content. Mistral reports chat and tool support.
+- A listed id the catalog already has keeps its catalog row and takes only the fields the provider reported (name, limits, image input, whether it reasons).
+- A new id goes through the same resolver the catalog generator uses (`packages/ai/src/catalog/providers.ts`): the provider's reported fields first, then the closest models.dev model from the published `facts.json`, then the catalog rules. The CLI downloads `facts.json` only when a list names a new id. With nothing known, the model gets 128k context, 8k output and no thinking controls, and its price shows as unknown. New ids that look like embedding, speech, image or safety models are skipped.
+- A provider without a list endpoint answers 4xx; that refresh stays quiet and keeps the provider's catalog rows. OpenCode, Copilot, Bedrock, Vertex, Azure and the Cloudflare gateways are not listed (see `UNLISTED_PROVIDERS` in `live-catalog.ts`).
+
+Codex uses the authenticated account-specific `/codex/models` endpoint, including its client-version query and account header. The client version is resolved from official npm release metadata; only JSON metadata is fetched, never package code. If that lookup fails, discovery uses its last successful version or the bundled fallback.
 
 Provider-supplied capability fields override older published metadata for the same model. Missing fields use existing exact-model metadata or conservative defaults; unknown prices are marked unavailable in the picker. Explicit `models.json` and extension model configuration are applied last. API-specific transport compatibility remains code-owned.
 

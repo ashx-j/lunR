@@ -1,12 +1,12 @@
-import type { Model } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import { ModelsDevFacts } from "@earendil-works/pi-ai/catalog/models-dev";
+import { describe, expect, it, vi } from "vitest";
 import {
 	discoverLiveModels,
 	fetchLiveProviderModels,
 	isLiveModelIncomplete,
 	mapOpenRouterModel,
 	parseOpenAIModelsList,
-	selectLiveTemplate,
 	synthesizeLiveModel,
 } from "../src/core/live-catalog.ts";
 
@@ -108,43 +108,143 @@ describe("live-catalog", () => {
 		expect(result.incomplete).toEqual([]);
 	});
 
-	it("uses a reasoning GPT sibling as the live template for new gpt ids", () => {
-		const gpt4 = {
-			...template("openai"),
-			id: "gpt-4o",
-			name: "GPT-4o",
-			api: "openai-responses" as const,
-			reasoning: false,
-		};
-		const sol = {
-			...template("openai"),
-			id: "gpt-5.6-sol",
-			name: "GPT-5.6 Sol",
-			api: "openai-responses" as const,
+	it("gives a new OpenAI id the settings models.dev facts describe", () => {
+		const gpt4 = { ...template("openai"), id: "gpt-4o", api: "openai-responses" as const, reasoning: false };
+		const facts = ModelsDevFacts.fromIndex({
+			"gpt-7": {
+				tool_call: true,
+				reasoning: true,
+				reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh"] }],
+				limit: { context: 1000000, output: 128000 },
+			},
+		});
+		const [discovery] = discoverLiveModels("openai", { data: [{ id: "gpt-7" }] }, [gpt4], { facts });
+		expect(discovery.model).toMatchObject({
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-		};
-		const picked = selectLiveTemplate("openai", "gpt-6-astra", [gpt4, sol]);
-		expect(picked?.id).toBe("gpt-5.6-sol");
-		const discoveries = discoverLiveModels("openai", { data: [{ id: "gpt-6-astra" }] }, [gpt4, sol]);
-		expect(discoveries[0]?.model.api).toBe("openai-responses");
-		expect(discoveries[0]?.model.reasoning).toBe(true);
+			contextWindow: 1000000,
+			maxTokens: 128000,
+		});
+		expect(getSupportedThinkingLevels(discovery.model)).toEqual(["off", "low", "medium", "high", "xhigh"]);
 	});
 
-	it("does not apply the reasoning GPT fallback to GPT-4, chat, or other providers", () => {
-		const gpt4 = {
-			...template("openai"),
-			id: "gpt-4o",
-			reasoning: false,
+	it("starts a new id without facts with no thinking controls and 128k context", () => {
+		const [discovery] = discoverLiveModels("deepseek", { data: [{ id: "deepseek-v9" }] }, [
+			{ ...template("deepseek"), id: "deepseek-chat", baseUrl: "https://api.deepseek.com" },
+		]);
+		expect(discovery.model).toMatchObject({ reasoning: false, contextWindow: 128000, maxTokens: 8192 });
+		expect(discovery.model.catalog?.pricing).toBe("unknown");
+	});
+
+	it("reads Claude capabilities from Anthropic's list and applies catalog rules", () => {
+		const claude = { ...template("anthropic"), id: "claude-sonnet-4-6", api: "anthropic-messages" as const };
+		const capabilities = (levels: string[]) => ({
+			image_input: { supported: true },
+			thinking: { supported: true, types: { adaptive: { supported: true }, enabled: { supported: false } } },
+			effort: Object.fromEntries(levels.map((level) => [level, { supported: true }])),
+		});
+		const discoveries = discoverLiveModels(
+			"anthropic",
+			{
+				data: [
+					{
+						id: "claude-opus-9",
+						display_name: "Claude Opus 9",
+						max_input_tokens: 2000000,
+						max_tokens: 256000,
+						capabilities: capabilities(["low", "medium", "high", "xhigh", "max"]),
+					},
+					{
+						id: "claude-opus-5-5",
+						max_input_tokens: 1000000,
+						max_tokens: 128000,
+						capabilities: capabilities(["low", "max"]),
+					},
+				],
+			},
+			[claude],
+		);
+		const [opus9, opus55] = discoveries.map((entry) => entry.model);
+		expect(opus9).toMatchObject({
+			name: "Claude Opus 9",
+			api: "anthropic-messages",
+			contextWindow: 2000000,
+			input: ["text", "image"],
+			compat: { forceAdaptiveThinking: true },
+		});
+		expect(getSupportedThinkingLevels(opus9)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+		// The rule for models that reject disabled thinking still applies.
+		expect(getSupportedThinkingLevels(opus55)).not.toContain("off");
+	});
+
+	it("reads Gemini models that generate content from Google's list", () => {
+		const gemini = {
+			...template("google"),
+			id: "gemini-3.5-flash",
+			api: "google-generative-ai" as const,
+			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 		};
-		const reasoning = {
-			...template("openai"),
-			id: "gpt-5.6-sol",
-			reasoning: true,
+		const discoveries = discoverLiveModels(
+			"google",
+			{
+				models: [
+					{
+						name: "models/gemini-9-pro",
+						displayName: "Gemini 9 Pro",
+						inputTokenLimit: 2097152,
+						outputTokenLimit: 65536,
+						thinking: true,
+						supportedGenerationMethods: ["generateContent", "countTokens"],
+					},
+					{ name: "models/text-embedding-9", supportedGenerationMethods: ["embedContent"] },
+				],
+			},
+			[gemini],
+		);
+		expect(discoveries.map((entry) => entry.model.id)).toEqual(["gemini-9-pro"]);
+		expect(discoveries[0]?.model).toMatchObject({ contextWindow: 2097152, reasoning: true });
+	});
+
+	it("skips new speech, image and embedding ids but keeps catalog ones", () => {
+		const groq = { ...template("groq"), id: "whisper-large-v3", baseUrl: "https://api.groq.com/openai/v1" };
+		const ids = discoverLiveModels(
+			"groq",
+			{ data: [{ id: "whisper-large-v3" }, { id: "playai-tts" }, { id: "llama-guard-5" }, { id: "kimi-k9" }] },
+			[groq],
+		).map((entry) => entry.model.id);
+		expect(ids).toEqual(["whisper-large-v3", "kimi-k9"]);
+	});
+
+	it("stays quiet when a provider has no list endpoint", async () => {
+		const result = await fetchLiveProviderModels({
+			providerId: "zai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+			bakedIn: [{ ...template("zai"), id: "glm-5.3" }],
+			credential: { type: "api_key", key: "test-key" },
+			knownKeys: new Set(),
+			fetchImpl: async () => new Response("not found", { status: 404 }),
+		});
+		expect(result).toMatchObject({ status: "skipped", error: "model list unavailable (HTTP 404)" });
+	});
+
+	it("loads models.dev facts only when the list names a new id", async () => {
+		const getFacts = vi.fn(async () => undefined);
+		const options = {
+			providerId: "xai",
+			baseUrl: "https://api.x.ai/v1",
+			bakedIn: [template()],
+			credential: { type: "api_key" as const, key: "test-key" },
+			knownKeys: new Set<string>(),
+			getFacts,
 		};
-		expect(selectLiveTemplate("openai", "gpt-4.2", [gpt4, reasoning])?.id).toBe("gpt-4o");
-		expect(selectLiveTemplate("openai", "gpt-6-chat-latest", [gpt4, reasoning])?.id).toBe("gpt-4o");
-		expect(selectLiveTemplate("openrouter", "openai/gpt-6-astra", [gpt4, reasoning])?.id).toBe("gpt-4o");
+		await fetchLiveProviderModels({
+			...options,
+			fetchImpl: async () => Response.json({ data: [{ id: "grok-4.3" }] }),
+		});
+		expect(getFacts).not.toHaveBeenCalled();
+		await fetchLiveProviderModels({ ...options, fetchImpl: async () => Response.json({ data: [{ id: "grok-9" }] }) });
+		expect(getFacts).toHaveBeenCalledOnce();
 	});
 
 	it("discovers new xAI ids from a live list payload", () => {

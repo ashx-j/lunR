@@ -5,6 +5,9 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 ## Decisions
 
 - 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash) and gave new families wrong settings (Copilot routed Claude Fable and GPT-6 to chat completions; Claude Opus 5 had no adaptive thinking).
+- 2026-10-25: read every logged-in provider's own model list instead of eight, and resolve new ids with the generator's code plus a published facts file, because lab releases reached providers' lists hours or days before models.dev and lunR showed them only after both caught up.
+- 2026-10-25: a new id with no known facts starts without thinking controls, because sending a reasoning parameter to a model that rejects it breaks every turn, while omitting it only uses the model's default.
+- 2026-10-25: ship `facts.json` only in versioned publications, not the CLI bundle, because it is only needed for models newer than any bundle.
 - 2026-10-25: quarantine a shrunk provider instead of the whole models.dev source, because one dropped provider lunR never ships froze every new model for seven weeks. A provider that vanishes is let go (removal or rename); a total drop over 25% still falls back as a whole.
 - 2026-10-25: keep skipping models.dev `deprecated` rows for Together and Copilot only, because elsewhere "deprecated" often means superseded but still served (MiniMax-M2.7, GLM-5.2).
 - 2026-10-25: the GPT-6 runtime overlay fills only thinking levels the catalog leaves open, so models.dev's effort "none" keeps "off" available.

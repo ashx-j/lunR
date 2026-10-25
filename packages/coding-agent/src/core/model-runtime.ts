@@ -40,10 +40,11 @@ import {
 	buildLiveOverlay,
 	fetchLiveProviderModels,
 	type IncompleteLiveModel,
-	LIVE_LIST_PROVIDER_IDS,
 	type LiveCatalogResult,
+	liveListProtocol,
 } from "./live-catalog.ts";
 import { ModelConfig } from "./model-config.ts";
+import { loadModelFacts } from "./model-facts.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
 	loadOfficialCatalog,
@@ -291,6 +292,11 @@ export class ModelRuntime implements Models {
 
 	private bakedInModels(providerId: string): Model<Api>[] {
 		return [...(this.defaultBuiltins.get(providerId)?.getModels() ?? [])];
+	}
+
+	/** Built-in providers whose own model list lunR reads after login. */
+	private liveListProviderIds(): string[] {
+		return [...this.defaultBuiltins.keys()].filter((id) => liveListProtocol(id, this.bakedInModels(id)));
 	}
 
 	private rebuildProviders(): void {
@@ -836,7 +842,7 @@ export class ModelRuntime implements Models {
 	private async restoreLiveCatalogs(): Promise<LiveCatalogResult[]> {
 		const storedProviders = await this.listStoredProviderIds();
 		const results: LiveCatalogResult[] = [];
-		for (const providerId of LIVE_LIST_PROVIDER_IDS) {
+		for (const providerId of this.liveListProviderIds()) {
 			const stored = storedProviders.has(providerId) ? await this.modelsStore.read(providerId) : undefined;
 			const valid =
 				(!stored?.scope && providerId !== "openai-codex") || stored?.scope === (await this.scopeFor(providerId));
@@ -856,14 +862,21 @@ export class ModelRuntime implements Models {
 
 	private async refreshLiveCatalogs(officialKeys: Set<string>, signal?: AbortSignal): Promise<LiveCatalogResult[]> {
 		const storedProviders = await this.listStoredProviderIds();
+		const providerIds = this.liveListProviderIds();
 		const known = knownModelKeys(
-			LIVE_LIST_PROVIDER_IDS.flatMap((id) => this.bakedInModels(id)),
+			providerIds.flatMap((id) => this.bakedInModels(id)),
 			officialKeys,
 			this.userModels.keys(),
 		);
+		// One facts download per refresh, and only if some list names a model the catalog lacks.
+		let facts: ReturnType<typeof loadModelFacts> | undefined;
+		const getFacts = () => {
+			facts ??= loadModelFacts({ allowNetwork: true, signal });
+			return facts;
+		};
 
 		const results = await Promise.all(
-			LIVE_LIST_PROVIDER_IDS.map(async (providerId) => {
+			providerIds.map(async (providerId) => {
 				if (!storedProviders.has(providerId)) {
 					this.overlay.setLive(providerId, []);
 					return {
@@ -940,6 +953,7 @@ export class ModelRuntime implements Models {
 					bakedIn,
 					credential,
 					knownKeys: known,
+					getFacts,
 					signal,
 				});
 				// A login/logout during the request must not install the previous account's result.

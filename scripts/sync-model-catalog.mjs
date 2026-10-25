@@ -122,9 +122,21 @@ function validateBundle(inputDir) {
 		throw new Error(`Refusing to publish only ${modelCount} models; expected at least ${MINIMUM_MODEL_COUNT}`);
 	}
 
-	const digest = createHash("sha256").update(modelsBytes).digest("hex");
+	// Live discovery's facts index ships only with versioned publications, not in the CLI bundle.
+	const factsPath = join(inputDir, "facts.json");
+	let factsBytes;
+	if (existsSync(factsPath)) {
+		factsBytes = readFileSync(factsPath);
+		const facts = JSON.parse(factsBytes.toString("utf8"));
+		if (!isRecord(facts) || !Object.values(facts).every(isRecord)) {
+			throw new Error("facts.json must map model ids to fact objects");
+		}
+	}
+
+	const digest = createHash("sha256").update(modelsBytes).update(factsBytes ?? "").digest("hex");
 	return {
 		inputDir,
+		factsPath: factsBytes ? factsPath : undefined,
 		modelsPath,
 		providerIndexPath,
 		providersDir,
@@ -172,12 +184,15 @@ function syncBundle(bundle, outputDir, sourceCommit, versioned = false) {
 
 	const leftover = join(outputDir, LEGACY_OFFICIAL_FILENAME);
 	if (existsSync(leftover)) rmSync(leftover);
+	const facts = versioned && bundle.factsPath ? readFileSync(bundle.factsPath) : undefined;
+	if (facts) writeFileSync(join(outputDir, "facts.json"), facts);
 
 	const publication = {
 		version: 2,
 		revision: bundle.revision,
 		providers: bundle.providerIds,
 		shards: Object.fromEntries(bundle.providerIds.map((id) => [id, createHash("sha256").update(JSON.stringify(readJson(join(bundle.providersDir, `${id}.json`)))).digest("hex")])),
+		...(facts ? { facts: createHash("sha256").update(JSON.stringify(JSON.parse(facts.toString("utf8")))).digest("hex") } : {}),
 		sources: existsSync(join(bundle.inputDir, "sources.json")) ? readJson(join(bundle.inputDir, "sources.json")) : [],
 		generatedAt: new Date().toISOString(),
 		sourceCommit,

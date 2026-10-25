@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-a224dfb7045fd4927b4b2b9a241a7562baa048ec97d4cc4b2df55b01b716adfd",
+  "revision": "sha256-bced06b299c3a6602e082238182edf73b86762f28e8fe75915cdb839efffb3e0",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -66,8 +66,8 @@
     "nvidia": "d30feee77b5fa2438e0b42b5658f05a4c73a4672fcaf892432596a05bfc19794",
     "openai": "ab86affdfd2b99f097bafd674b09fd00e7f315bc88b10f4cdac509aecca64bee",
     "openai-codex": "ff0cb7c59255e4bd58fb57a9fb9ed7b628b206db5f3ffddd604bcaee3320d001",
-    "opencode": "39805c599e3eaff6a5b155767b2d21b01860cf06646517870c0425bf37f0af6b",
-    "opencode-go": "154be8715dab6528322e6decb243c69c1f183793cd5e3d6f525c21f1a03004cf",
+    "opencode": "8b5c70961969163678c29a181056f466a1559c16e1837e7c3a20379882bf1342",
+    "opencode-go": "ebcb31610bed0671b7191cd29695d73e75a2d6aa1406dda996085d4b03bbdaa2",
     "openrouter": "bac462fa756139ccb95d049abc874c0d4c44994d7cf6300d22a8f6bbd8052912",
     "qwen-cloud": "654033e19d712a01f465762f684367516d6a6fb2ed7915e30fab06d604993536",
     "qwen-cloud-cn": "b505c390f899c27c6e1279c6eba7777e710b5825b72a66c371124b51dccaba63",
@@ -134,8 +134,8 @@
       "error": "Offline"
     }
   ],
-  "generatedAt": "2026-10-25T11:49:20.380Z",
-  "sourceCommit": "17ba2c911b660272c82e8fcac04e683771f349b9",
+  "generatedAt": "2026-10-25T11:52:39.991Z",
+  "sourceCommit": "0b43e15243794c23a53e53d22b2f8b1c3ff3d966",
   "providerCount": 39,
   "modelCount": 1673
 }

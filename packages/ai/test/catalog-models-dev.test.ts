@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { modelsDevModels } from "../scripts/catalog-providers.ts";
 import {
 	type ModelsDevCatalog,
 	ModelsDevFacts,
@@ -7,6 +6,7 @@ import {
 	modelFromModelsDev,
 	modelsDevThinkingLevelMap,
 } from "../src/catalog/models-dev.ts";
+import { modelsDevModels } from "../src/catalog/providers.ts";
 import { applyCatalogRules } from "../src/catalog/rules.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 
