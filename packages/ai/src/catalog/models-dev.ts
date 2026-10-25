@@ -243,15 +243,19 @@ export class ModelsDevFacts {
 	}
 
 	/**
-	 * One row per bare id for agent models, with only the fields live discovery reads. The lab's
-	 * own row wins over hosts. Prices stay out because they belong to each host.
+	 * One row per bare id, with only the fields live discovery reads. The lab's own row wins over
+	 * hosts, and prices stay out because they belong to each host. Ids with no agent row keep only
+	 * `tool_call: false`, so discovery can skip them.
 	 */
 	toIndex(): ModelFactsIndex {
 		const index: ModelFactsIndex = {};
 		for (const [bare, candidates] of [...this.index].sort(([a], [b]) => a.localeCompare(b))) {
 			const agents = candidates.filter((candidate) => isAgentModel(candidate.row));
 			const chosen = agents.find((candidate) => !candidate.row.canonical_model_id) ?? agents[0];
-			if (!chosen) continue;
+			if (!chosen) {
+				index[bare] = { tool_call: false };
+				continue;
+			}
 			const row = this.complete(chosen.row);
 			index[bare] = Object.fromEntries(
 				FACT_FIELDS.flatMap((field) => (row[field] === undefined ? [] : [[field, row[field]]])),

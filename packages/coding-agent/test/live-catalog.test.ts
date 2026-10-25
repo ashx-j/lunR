@@ -216,6 +216,21 @@ describe("live-catalog", () => {
 		expect(ids).toEqual(["whisper-large-v3", "kimi-k9"]);
 	});
 
+	it("skips new ids models.dev knows cannot call tools", () => {
+		const gemini = { ...template("google"), id: "gemini-3.5-flash", api: "google-generative-ai" as const };
+		const facts = ModelsDevFacts.fromIndex({ "gemma-9-1b-it": { tool_call: false } });
+		const listed = (name: string) => ({ name: `models/${name}`, supportedGenerationMethods: ["generateContent"] });
+		const ids = discoverLiveModels(
+			"google",
+			{ models: [listed("gemma-9-1b-it"), listed("gemini-9-pro")] },
+			[gemini],
+			{
+				facts,
+			},
+		).map((entry) => entry.model.id);
+		expect(ids).toEqual(["gemini-9-pro"]);
+	});
+
 	it("stays quiet when a provider has no list endpoint", async () => {
 		const result = await fetchLiveProviderModels({
 			providerId: "zai",

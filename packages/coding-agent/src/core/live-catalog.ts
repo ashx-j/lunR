@@ -403,7 +403,8 @@ export function discoverLiveModels(
 	const discoveries: LiveModelDiscovery[] = [];
 	for (const listed of listedModels(protocol, payload)) {
 		const known = bakedIds.has(listed.id) || options.known?.has(modelKey(providerId, listed.id)) === true;
-		if (!known && NON_CHAT_ID.test(listed.id)) continue;
+		// models.dev knows some new ids as models that cannot call tools.
+		if (!known && (NON_CHAT_ID.test(listed.id) || options.facts?.find(listed.id)?.tool_call === false)) continue;
 		const template = { ...(selectLiveTemplate(listed.id, bakedIn) ?? fallback), provider: providerId };
 		const model =
 			(!known && discoveredModel(providerId, listed.id, listed.reported, options.facts)) ||

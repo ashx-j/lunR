@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-bced06b299c3a6602e082238182edf73b86762f28e8fe75915cdb839efffb3e0",
+  "revision": "sha256-6588bd0f125740cb936511193844a7fe7544dae138613b062899dc45749fabdb",
   "providers": [
     "amazon-bedrock",
     "ant-ling",
@@ -134,8 +134,8 @@
       "error": "Offline"
     }
   ],
-  "generatedAt": "2026-10-25T11:52:39.991Z",
-  "sourceCommit": "0b43e15243794c23a53e53d22b2f8b1c3ff3d966",
+  "generatedAt": "2026-10-25T12:03:20.611Z",
+  "sourceCommit": "f0651b8c3226a8205d213a6d231ded5298839918",
   "providerCount": 39,
   "modelCount": 1673
 }
