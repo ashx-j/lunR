@@ -57,6 +57,8 @@ describe("which auto-mode actions get reviewed", () => {
 		expect(needsAutoReview("write", { path: "scripts/.env" }, project)).toBe(true);
 		expect(needsAutoReview("bash", { command: "GIT_EXTERNAL_DIFF=./x.sh git diff" }, project)).toBe(true);
 		expect(needsAutoReview("bash", { command: "  FOO=1 ls" }, project)).toBe(true);
+		expect(needsAutoReview("bash", { command: "true\nFOO=1 ls" }, project)).toBe(true);
+		expect(needsAutoReview("bash", { command: "true\nHOME=. git diff" }, project)).toBe(true);
 		expect(needsAutoReview("fetch_content", { url: "https://example.com/?k=secret" }, project)).toBe(true);
 		expect(needsAutoReview("browser", { action: "navigate", url: "https://example.com" }, project)).toBe(true);
 		expect(needsAutoReview("browser", { action: "inspect" }, project)).toBe(false);

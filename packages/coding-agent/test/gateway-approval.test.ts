@@ -6,11 +6,22 @@ import {
 	clearSessionApprovals,
 	gateToolCall,
 	getPermissionMode,
+	type PermissionMode,
+	PLAN_APPROVED_TEXT,
+	PLAN_DECLINED_TEXT,
+	PLAN_PASS_THROUGH_TEXT,
+	requestPlanApproval,
 	resetPermissions,
 	setPermissionMode,
 } from "../src/core/permissions.ts";
-import type { TurnCallbacks } from "../src/gateway/agent-bridge.ts";
-import { handleApprovalCallback, resetApprovalRegistry } from "../src/gateway/approval.ts";
+import type { BridgeSession, TurnCallbacks } from "../src/gateway/agent-bridge.ts";
+import {
+	handleApprovalCallback,
+	registerGatewayApprovalHandler,
+	rememberModeBeforePlan,
+	resetApprovalRegistry,
+	runWithApprovalContext,
+} from "../src/gateway/approval.ts";
 import { defaultGatewayConfig, type GatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 import { createPairingStore } from "../src/gateway/pairing.ts";
 import { type BridgeLike, createRouter } from "../src/gateway/router.ts";
@@ -62,6 +73,7 @@ class FakeBridge implements BridgeLike {
 	results: Array<string | Error> = [];
 	status = { busy: false, queueDepth: 0 };
 	onRunTurn?: () => void | Promise<void>;
+	session?: BridgeSession;
 
 	async runTurn(key: string, event: MessageEvent, _callbacks: TurnCallbacks): Promise<string> {
 		this.calls.push({ key, event });
@@ -81,6 +93,9 @@ class FakeBridge implements BridgeLike {
 	}
 	async getSession(): Promise<null> {
 		return null;
+	}
+	peekSession(): BridgeSession | undefined {
+		return this.session;
 	}
 	async switchSession(): Promise<void> {}
 	async undo(): Promise<{ userText: string }> {
@@ -226,5 +241,105 @@ describe("gateway yolo-mode approvals", () => {
 
 	it("defaults to yolo permission mode for gateway sessions", () => {
 		expect(getPermissionMode()).toBe("yolo");
+	});
+});
+
+describe("gateway plan approvals", () => {
+	/** Live-session stand-in: only the members plan approval reads or calls. */
+	function planSession(defaultMode: PermissionMode = "yolo") {
+		const modes: PermissionMode[] = [];
+		const session = {
+			sessionManager: { getSessionId: () => "s1" },
+			settingsManager: { getDefaultPermissionMode: () => defaultMode },
+			resolveAutoReviewer: () => ({ kind: "ready" }),
+			setPermissionMode: (mode: PermissionMode) => {
+				modes.push(mode);
+				setPermissionMode(mode, "s1");
+			},
+		} as unknown as BridgeSession;
+		return { session, modes };
+	}
+
+	it("restores the pre-plan mode through the session setter and offers Approve/Reject only", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		const { session, modes } = planSession();
+		bridge.session = session;
+		rememberModeBeforePlan("s1", "auto", "read-only");
+		setPermissionMode("read-only", "s1");
+		let result = "";
+		bridge.onRunTurn = async () => {
+			result = await requestPlanApproval("1. Edit the file");
+		};
+		const runPromise = router.handleEvent(dmEvent("go"));
+		await waitFor(() => adapter.sent.some((m) => m.buttons));
+		const prompt = adapter.sent.find((m) => m.buttons)!;
+		expect(prompt.buttons!.flat().map((b) => b.label)).toEqual(["✓ Approve", "✗ Reject"]);
+		adapter.simulateCallback({
+			id: "cb1",
+			chatId: "chat1",
+			messageId: "m1",
+			userId: "u1",
+			data: findButtonByLabel(adapter, "✓ Approve")!.data,
+		});
+		await runPromise;
+		expect(result).toBe(PLAN_APPROVED_TEXT);
+		expect(modes).toEqual(["auto"]);
+		expect(getPermissionMode("s1")).toBe("auto");
+	});
+
+	it("leaves read-only for the saved default when no pre-plan mode is known", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		const { session, modes } = planSession("read-only");
+		bridge.session = session;
+		bridge.onRunTurn = async () => {
+			await requestPlanApproval("plan");
+		};
+		const runPromise = router.handleEvent(dmEvent("go"));
+		await waitFor(() => adapter.sent.some((m) => m.buttons));
+		adapter.simulateCallback({
+			id: "cb1",
+			chatId: "chat1",
+			messageId: "m1",
+			userId: "u1",
+			data: findButtonByLabel(adapter, "✓ Approve")!.data,
+		});
+		await runPromise;
+		expect(modes).toEqual(["yolo"]);
+	});
+
+	it("sends a long plan through the chunked outbox before a short buttons message", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		const plan = "step ".repeat(2000);
+		let result = "";
+		bridge.onRunTurn = async () => {
+			result = await requestPlanApproval(plan);
+		};
+		const runPromise = router.handleEvent(dmEvent("go"));
+		await waitFor(() => adapter.sent.some((m) => m.buttons));
+		const promptIndex = adapter.sent.findIndex((m) => m.buttons);
+		expect(promptIndex).toBeGreaterThan(1);
+		expect(adapter.sent.every((m) => m.text.length <= adapter.maxMessageLength)).toBe(true);
+		expect(adapter.sent[promptIndex].text).toContain("Approve this plan?");
+		adapter.simulateCallback({
+			id: "cb1",
+			chatId: "chat1",
+			messageId: "m1",
+			userId: "u1",
+			data: findButtonByLabel(adapter, "✗ Reject")!.data,
+		});
+		await runPromise;
+		expect(result).toBe(PLAN_DECLINED_TEXT);
+	});
+
+	it("tells the model to wait for the user when a plan prompt times out", async () => {
+		registerGatewayApprovalHandler();
+		saveGatewayConfig(makeConfig());
+		const adapter = new FakeAdapter();
+		const source = dmEvent("go").source;
+		const result = await runWithApprovalContext({ key: "k1", adapter, source, timeoutMs: 20 }, () =>
+			requestPlanApproval("plan"),
+		);
+		expect(result).toBe(PLAN_PASS_THROUGH_TEXT);
+		expect(adapter.edits.at(-1)?.text).toContain("Plan approval expired");
 	});
 });

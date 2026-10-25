@@ -218,6 +218,35 @@ describe("AgentBridge LRU eviction", () => {
 		for (const release of releases) release();
 	});
 
+	it("streams each assistant message from its start, separated by a blank line", async () => {
+		let listener: ((event: AgentSessionEvent) => void) | undefined;
+		const start = () => ({ type: "message_start", message: { role: "assistant", content: [] } });
+		const delta = (text: string) => ({
+			type: "message_update",
+			message: { role: "assistant" },
+			assistantMessageEvent: { type: "text_delta", partial: { content: [{ type: "text", text }] } },
+		});
+		const session: BridgeSession = {
+			...fakeSession(),
+			subscribe: (next) => {
+				listener = next;
+				return () => {};
+			},
+			prompt: async () => {
+				for (const event of [start(), delta("Ok"), start(), delta("Let me"), delta("Let me check")])
+					listener?.(event as unknown as AgentSessionEvent);
+			},
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const deltas: string[] = [];
+		try {
+			await bridge.runTurn("k1", makeEvent("k1"), { onDelta: (text) => deltas.push(text) });
+			expect(deltas.join("")).toBe("Ok\n\nLet me check");
+		} finally {
+			await bridge.shutdown();
+		}
+	});
+
 	it("queues messages for a busy session instead of creating a new one", async () => {
 		let release: (() => void) | undefined;
 		const session = {

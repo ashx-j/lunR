@@ -37,12 +37,15 @@ export type AutoReviewer =
 	| { kind: "unavailable"; ref: string };
 
 /** Tools that only update lunR's own state, so reviewing them would cost a request for nothing. */
-const REVIEW_FREE_TOOLS = new Set(["todo", "goal_complete", "goal_blocked"]);
+export const REVIEW_FREE_TOOLS: ReadonlySet<string> = new Set(["todo", "goal_complete", "goal_blocked"]);
 const PROJECT_EDIT_TOOLS = new Set(["edit", "write", "code_rewrite"]);
 /** Read-only for the project, but a URL can carry data out, so auto reviews them. */
 const URL_FETCH_TOOLS = new Set(["web_fetch", "fetch_content"]);
-/** `FOO=bar cmd` can make an informational command run code (GIT_EXTERNAL_DIFF, PAGER, LD_PRELOAD...). */
-const SHELL_ENV_PREFIX = /(?:^\s*|[;&|(]\s*)[A-Za-z_][A-Za-z0-9_]*=/;
+/**
+ * `FOO=bar cmd` can make an informational command run code (GIT_EXTERNAL_DIFF, PAGER, LD_PRELOAD...).
+ * Matches at the start of any shell segment, including one that starts after a newline.
+ */
+const SHELL_ENV_PREFIX = /(?:^\s*|[;&|(\n]\s*)[A-Za-z_][A-Za-z0-9_]*=/;
 
 /**
  * True when auto mode should ask the reviewer before `toolName` runs with `input`: anything

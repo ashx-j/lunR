@@ -110,6 +110,7 @@ export interface BridgeSessionStatus {
 export interface BridgeSession {
 	promptWithCompletion?: AgentSession["promptWithCompletion"];
 	resolveAutoReviewer?: AgentSession["resolveAutoReviewer"];
+	setPermissionMode?: AgentSession["setPermissionMode"];
 	drain?: AgentSession["drain"];
 	prompt(text: string, options?: { source?: "extension"; images?: ImageContent[] }): Promise<void>;
 	abort(): Promise<void> | void;
@@ -641,7 +642,14 @@ export class AgentBridge {
 		if (callbacks.onDelta) {
 			const onDelta = callbacks.onDelta;
 			let streamedLen = 0;
+			let separate = false;
 			unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+				// Each assistant message streams from zero; a blank line separates it from text already shown.
+				if (event.type === "message_start" && event.message.role === "assistant") {
+					separate ||= streamedLen > 0;
+					streamedLen = 0;
+					return;
+				}
 				if (event.type !== "message_update") return;
 				const assistantEvent = event.assistantMessageEvent;
 				if (assistantEvent.type !== "text_delta") return;
@@ -649,9 +657,9 @@ export class AgentBridge {
 				for (const content of assistantEvent.partial.content) {
 					if (content.type === "text") full += content.text;
 				}
-				if (full.length < streamedLen) streamedLen = 0; // new assistant message (tool-call boundary)
 				if (full.length > streamedLen) {
-					onDelta(full.slice(streamedLen));
+					onDelta(`${separate ? "\n\n" : ""}${full.slice(streamedLen)}`);
+					separate = false;
 					streamedLen = full.length;
 				}
 			});

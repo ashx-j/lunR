@@ -2,7 +2,6 @@
 
 Read before writing or debugging tests. Commands are in [build-and-release.md](build-and-release.md).
 
-- `cron-ownership.test.ts` ("an initially empty owner sees later external jobs...") can fail on CI runners because two schedulers race for one lease; it failed once on #208 and passed on rerun and in the full local run. Rerun before suspecting a change.
 - First-request fixtures strip inherited `PI_SUBAGENT_*`, `PI_SUBAGENTS_*` and `PI_INTERCOM_*` variables; inside a child the supervisor schema replaces intercom and the hash no longer measures the parent payload. Refresh both browser hashes after any agent-facing schema change. Capture inventories through the real CLI composition, not direct SDK tool descriptions.
 - To refresh the Windows/macOS first-request hashes from Linux, run the startup benchmark (`PI_STARTUP_BENCHMARK=1`) with an `--import` preload that returns `win32` for `process.platform` only when the stack includes `lunr-computer-use`. Check that it reproduces master's pinned hashes before trusting new ones.
 - To measure errors in `@ts-nocheck` files, rewrite each `// @ts-nocheck` line (line 2 after a shebang) to `// @ts-nocheck-OFF`, run `tsgo --noEmit`, group errors by file, then restore. The directive only hides that file's diagnostics, so one run counts every file.

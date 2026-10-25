@@ -4,6 +4,8 @@ import {
 	ANTHROPIC_SETUP_REQUIRED,
 	anthropicRequestRoute,
 	CLAUDE_CODE_UPDATE_REQUIRED,
+	CLAUDE_CODE_VERSION,
+	claudeCodeUpdateNote,
 } from "../src/auth/anthropic-route.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import type { AuthContext, ExternalClaudeCodeCredential } from "../src/auth/types.ts";
@@ -136,5 +138,21 @@ describe("Anthropic subscription route", () => {
 		expect(() =>
 			anthropicRequestRoute("anthropic", resolution, { transformHeaders: async (headers) => headers }),
 		).toThrow("custom headers");
+	});
+});
+
+describe("claudeCodeUpdateNote", () => {
+	const connection = (command: string) =>
+		({ type: "external_claude_code", version: 3, manager: "claude-code", command, models: [] }) as const;
+
+	it("asks for /login anthropic only when the saved Claude Code is older than the pinned release", () => {
+		expect(claudeCodeUpdateNote(connection("/home/me/.lunr/agent/claude-code/2.1.263/claude"))).toBe(
+			`Claude subscription models come from Claude Code 2.1.263. Run /login anthropic to update to ${CLAUDE_CODE_VERSION} and get newer models.`,
+		);
+		expect(
+			claudeCodeUpdateNote(connection("C:\\Users\\me\\.lunr\\agent\\claude-code\\2.1.263\\claude.exe")),
+		).toContain("Claude Code 2.1.263.");
+		expect(claudeCodeUpdateNote(connection(`/a/claude-code/${CLAUDE_CODE_VERSION}/claude`))).toBeUndefined();
+		expect(claudeCodeUpdateNote({ type: "api_key", key: "sk-ant-api" })).toBeUndefined();
 	});
 });
