@@ -22,6 +22,8 @@ Read before changing the model catalog, model selection, login or provider trans
 - Codex uses each route's `context_window` as its compaction budget; `max_context_window` never becomes the default. Fast mode persists only for `openai-codex`.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Keep `opencode` in `UNLISTED_PROVIDERS` (`live-catalog.ts`).
 - Live discovery covers every built-in provider whose catalog transport has a list endpoint; `liveListProtocol` picks the request shape. A 400/404/405 from a list endpoint is a quiet `skipped`, because an `error` would show in `/refresh` and retry the whole refresh every minute instead of hourly. A 401/403 is an error that `refreshIfStale` does not retry early (`LIVE_LIST_REJECTED`). Anthropic and Google lists skip any login that is not a stored API key, since `getAuth` throws for old subscription and OAuth records.
+- Generic models.dev providers (`MODELS_DEV_PROVIDERS`) have no baked-in rows. Code that reads `bakedIn[0]` for a template or transport must fall back to the provider's definition. Keys lunR reads another way or that extensions register (`ollama-cloud`, `lmstudio`) stay out through `NOT_GENERIC` in `catalog/providers.ts`.
+- `sync-model-catalog.mjs` leaves generic providers out of the checked-in `catalog/` (the CLI bundle) and keeps them in versioned publications, so their 5,000+ rows never enter the package or the startup cache.
 - New listed ids resolve through `discoveredModel` in `packages/ai/src/catalog/providers.ts`, the function the generator uses for OpenCode's live-only ids. Change model resolution there, not in `live-catalog.ts`.
 
 ## Claude subscriptions

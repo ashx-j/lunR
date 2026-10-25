@@ -23,6 +23,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 	});
 }
 
+import { MODELS_DEV_PROVIDERS } from "./providers/models-dev-providers.generated.ts";
 import type { KnownProvider, ProviderEnv } from "./types.ts";
 import { getProviderEnvValue } from "./utils/provider-env.ts";
 
@@ -110,7 +111,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 	};
 
 	const envVar = envMap[provider];
-	return envVar ? [envVar] : undefined;
+	return envVar ? [envVar] : MODELS_DEV_PROVIDERS.find((definition) => definition.id === provider)?.env;
 }
 
 /**

@@ -6247,12 +6247,13 @@ export class InteractiveMode {
 		if (isUnknownModel(previousModel)) {
 			const availableModels = await this.session.modelRuntime.getAvailable();
 			const providerModels = availableModels.filter((model) => model.provider === providerId);
-			if (!hasDefaultModelProvider(providerId)) {
-				selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
-			} else if (providerModels.length === 0) {
+			// lunr: generic models.dev providers have no configured default; their first model stands in below.
+			if (providerModels.length === 0) {
 				selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
 			} else {
-				const defaultModelId = defaultModelPerProvider[providerId];
+				const defaultModelId = hasDefaultModelProvider(providerId)
+					? defaultModelPerProvider[providerId]
+					: undefined;
 				// Plans offer different models. Without the default, take the provider's first model, as startup
 				// does; for a Claude subscription that is Claude Code's own default.
 				selectedModel = providerModels.find((model) => model.id === defaultModelId) ?? providerModels[0];

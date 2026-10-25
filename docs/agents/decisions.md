@@ -5,6 +5,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 ## Decisions
 
 - 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash) and gave new families wrong settings (Copilot routed Claude Fable and GPT-6 to chat completions; Claude Opus 5 had no adaptive thinking).
+- 2026-10-25: ship every models.dev provider with an OpenAI- or Anthropic-compatible endpoint and an API key variable as a generic provider (167 today), because models on providers nobody had written code for were unreachable; their rows stay out of the CLI bundle so the package and startup cache keep their size.
 - 2026-10-25: read every logged-in provider's own model list instead of eight, and resolve new ids with the generator's code plus a published facts file, because lab releases reached providers' lists hours or days before models.dev and lunR showed them only after both caught up.
 - 2026-10-25: a new id with no known facts starts without thinking controls, because sending a reasoning parameter to a model that rejects it breaks every turn, while omitting it only uses the model's default.
 - 2026-10-25: ship `facts.json` only in versioned publications, not the CLI bundle, because it is only needed for models newer than any bundle.

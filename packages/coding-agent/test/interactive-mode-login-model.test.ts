@@ -32,7 +32,7 @@ const unknownModel = { provider: "unknown", id: "unknown", api: "unknown" } as M
 const claude = (id: string) =>
 	({ provider: "anthropic", id, api: "anthropic-messages" }) as Model<"anthropic-messages">;
 
-async function logIn(available: Model<"anthropic-messages">[]) {
+async function logIn(available: Model<"anthropic-messages">[], providerId = "anthropic", providerName = "Anthropic") {
 	const context: LoginContext = {
 		session: { modelRuntime: { getAvailable: async () => available }, setModel: vi.fn(async () => {}) },
 		updateAvailableProviderCount: vi.fn(async () => {}),
@@ -43,7 +43,7 @@ async function logIn(available: Model<"anthropic-messages">[]) {
 		maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(async () => {}),
 		openModelSelectorIfUnset: vi.fn(async () => {}),
 	};
-	await prototype.completeProviderAuthentication.call(context, "anthropic", "Anthropic", "oauth", unknownModel, {
+	await prototype.completeProviderAuthentication.call(context, providerId, providerName, "oauth", unknownModel, {
 		savedNote: "Saved.",
 	});
 	return context;
@@ -54,6 +54,17 @@ describe("model selection after /login", () => {
 		const context = await logIn([claude("claude-sonnet-5"), claude("claude-haiku-4-5-20251001")]);
 		expect(context.session.setModel).toHaveBeenCalledWith(claude("claude-sonnet-5"));
 		expect(context.showStatus).toHaveBeenCalledWith("Logged in to Anthropic. Selected claude-sonnet-5. Saved.");
+		expect(context.showError).not.toHaveBeenCalled();
+	});
+
+	it("selects the first model of a provider with no configured default", async () => {
+		const model = {
+			provider: "nebius",
+			id: "glm-9",
+			api: "openai-completions",
+		} as unknown as Model<"anthropic-messages">;
+		const context = await logIn([model], "nebius", "Nebius");
+		expect(context.session.setModel).toHaveBeenCalledWith(model);
 		expect(context.showError).not.toHaveBeenCalled();
 	});
 

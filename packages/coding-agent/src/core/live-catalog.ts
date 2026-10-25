@@ -1,5 +1,6 @@
 import type { Api, Credential, Model } from "@earendil-works/pi-ai";
 import { codexModelsUrl, resolveCodexCatalogVersion } from "@earendil-works/pi-ai/catalog/codex";
+import { MODELS_DEV_PROVIDERS } from "@earendil-works/pi-ai/catalog/generic-providers";
 import { normalizeCatalogPricing } from "@earendil-works/pi-ai/catalog/metadata";
 import type { ModelsDevFacts, ModelsDevModel } from "@earendil-works/pi-ai/catalog/models-dev";
 import { discoveredModel } from "@earendil-works/pi-ai/catalog/providers";
@@ -35,11 +36,11 @@ const UNLISTED_PROVIDERS = new Set([
 	"radius",
 ]);
 
-/** The list protocol for a provider, from the transport its catalog uses. */
+/** The list protocol for a provider, from the transport its catalog or models.dev definition uses. */
 export function liveListProtocol(providerId: string, bakedIn: readonly Model<Api>[]): LiveListProtocol | undefined {
 	if (providerId === "openai-codex") return "codex";
 	if (UNLISTED_PROVIDERS.has(providerId)) return undefined;
-	const api = bakedIn[0]?.api;
+	const api = bakedIn[0]?.api ?? MODELS_DEV_PROVIDERS.find((definition) => definition.id === providerId)?.api;
 	if (api === "openai-completions" || api === "openai-responses") return "openai";
 	// Other Anthropic-compatible hosts (MiniMax, Kimi, Fireworks) have no documented list endpoint.
 	if (api === "anthropic-messages") return providerId === "anthropic" ? "anthropic" : undefined;
@@ -398,8 +399,8 @@ export function discoverLiveModels(
 	if (providerId === "openai-codex")
 		return discoverCodexModels(payload, bakedIn[0]?.baseUrl ?? "https://chatgpt.com/backend-api");
 	const fallback = firstBakedInModel(bakedIn);
-	if (!fallback) return [];
-	if (providerId === "openrouter") return discoverOpenRouterModels(payload, { ...fallback, provider: providerId });
+	if (providerId === "openrouter")
+		return fallback ? discoverOpenRouterModels(payload, { ...fallback, provider: providerId }) : [];
 	const protocol = options.protocol ?? liveListProtocol(providerId, bakedIn) ?? "openai";
 	if (protocol === "codex") return [];
 	const bakedIds = new Set(bakedIn.map((model) => model.id));
@@ -408,11 +409,13 @@ export function discoverLiveModels(
 		const known = bakedIds.has(listed.id) || options.known?.has(modelKey(providerId, listed.id)) === true;
 		// models.dev knows some new ids as models that cannot call tools.
 		if (!known && (NON_CHAT_ID.test(listed.id) || options.facts?.find(listed.id)?.tool_call === false)) continue;
-		const template = { ...(selectLiveTemplate(listed.id, bakedIn) ?? fallback), provider: providerId };
+		const template = selectLiveTemplate(listed.id, bakedIn);
+		// Generic models.dev providers have no baked-in rows, so a known id resolves through models.dev too.
 		const model =
-			(!known && discoveredModel(providerId, listed.id, listed.reported, options.facts)) ||
-			templateModel(listed.id, template);
-		discoveries.push(withReported(model, listed.reported));
+			((!known || !template) &&
+				discoveredModel(providerId, listed.id, listed.reported, options.facts, MODELS_DEV_PROVIDERS)) ||
+			(template && templateModel(listed.id, { ...template, provider: providerId }));
+		if (model) discoveries.push(withReported(model, listed.reported));
 	}
 	return discoveries;
 }
@@ -608,7 +611,7 @@ export async function fetchLiveProviderModels(options: FetchLiveProviderModelsOp
 	};
 	const protocol = liveListProtocol(options.providerId, options.bakedIn);
 	const codex = protocol === "codex";
-	if (!protocol || (!firstBakedInModel(options.bakedIn) && !codex) || !options.baseUrl) return empty;
+	if (!protocol || !options.baseUrl) return empty;
 
 	const timeoutMs = options.timeoutMs ?? LIVE_CATALOG_TIMEOUT_MS;
 	const controller = new AbortController();
