@@ -21,7 +21,7 @@ import {
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type {
 	Agent,
 	AgentEvent,
@@ -150,6 +150,7 @@ import { measureStartup } from "./timings.ts";
 import { TODO_TOOL_NAMES } from "./todo-settings.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { resolveToCwd } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { isAuthInvalidError, isUsageLimitError } from "./usage-limit.ts";
 
@@ -670,7 +671,7 @@ export class AgentSession {
 				const toolName = toolCall.name;
 				const argPath =
 					args && typeof args === "object" && "path" in args
-						? resolve(this._cwd, String((args as Record<string, unknown>).path))
+						? resolveToCwd(String((args as Record<string, unknown>).path), this._cwd)
 						: undefined;
 				const pathsToSnapshot: string[] = [];
 				if (toolName === "edit" || toolName === "write") {
@@ -3853,6 +3854,10 @@ export class AgentSession {
 		} = {},
 	) {
 		this.assertCanStartWork();
+		// Entries from a live run would land under the new leaf.
+		if (this.isStreaming) {
+			throw new Error("Wait for the current response to finish before navigating the session tree.");
+		}
 		if (this._branchSummaryAbortController) throw new Error("Tree navigation is already in progress.");
 		return this._trackOperation(() => this._navigateTree(targetId, options));
 	}

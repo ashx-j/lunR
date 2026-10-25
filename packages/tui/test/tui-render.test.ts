@@ -401,6 +401,24 @@ describe("TUI resize handling", () => {
 	});
 });
 
+describe("TUI stop", () => {
+	it("writes nothing when stopped a second time", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["Line 0", "Line 1"];
+		tui.addChild(component);
+		tui.start();
+		await terminal.waitForRender();
+
+		tui.stop();
+		terminal.clearWrites();
+		tui.stop();
+
+		assert.strictEqual(terminal.getWrites(), "");
+	});
+});
+
 describe("TUI content shrinkage", () => {
 	it("clears empty rows when content shrinks significantly", async () => {
 		const terminal = new VirtualTerminal(40, 10);

@@ -479,6 +479,10 @@ export function buildSessionContext(
 	return { messages, thinkingLevel, model };
 }
 
+/** Transcripts can hold secrets: new session files are owner-only, as are directories lunR creates for them. */
+const SESSION_FILE_MODE = 0o600;
+const SESSION_DIR_MODE = 0o700;
+
 /**
  * Compute the default session directory for a cwd.
  * Encodes cwd into a safe directory name under ~/.pi/agent/sessions/.
@@ -493,7 +497,7 @@ function getDefaultSessionDirPath(cwd: string, agentDir: string = getDefaultAgen
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
 	const sessionDir = getDefaultSessionDirPath(cwd, agentDir);
 	if (!existsSync(sessionDir)) {
-		mkdirSync(sessionDir, { recursive: true });
+		mkdirSync(sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
 	}
 	return sessionDir;
 }
@@ -793,7 +797,7 @@ async function listSessionsFromDir(
 
 /** Atomically replace a log without changing the manager that owns it. */
 function writeSessionEntries(file: string, entries: FileEntry[]): void {
-	const mode = existsSync(file) ? statSync(file).mode & 0o777 : 0o600;
+	const mode = existsSync(file) ? statSync(file).mode & 0o777 : SESSION_FILE_MODE;
 	const temp = `${file}.${randomUUID()}.tmp`;
 	const fd = openSync(temp, "wx", mode);
 	try {
@@ -946,7 +950,7 @@ export class SessionManager {
 		this.sessionDir = normalizePath(sessionDir);
 		this.persist = persist;
 		if (persist && this.sessionDir && !existsSync(this.sessionDir)) {
-			mkdirSync(this.sessionDir, { recursive: true });
+			mkdirSync(this.sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
 		}
 
 		try {
@@ -1097,7 +1101,9 @@ export class SessionManager {
 
 	private _appendToFile(entry: SessionEntry): void {
 		if (!this.sessionFile) return;
-		appendFileSync(this.sessionFile, `${this.needsAppendSeparator ? "\n" : ""}${JSON.stringify(entry)}\n`);
+		appendFileSync(this.sessionFile, `${this.needsAppendSeparator ? "\n" : ""}${JSON.stringify(entry)}\n`, {
+			mode: SESSION_FILE_MODE,
+		});
 		this.needsAppendSeparator = false;
 	}
 
@@ -1141,7 +1147,7 @@ export class SessionManager {
 		}
 
 		if (!this.flushed) {
-			const fd = openSync(this.sessionFile, "wx");
+			const fd = openSync(this.sessionFile, "wx", SESSION_FILE_MODE);
 			try {
 				for (const e of this.fileEntries) {
 					writeFileSync(fd, `${JSON.stringify(e)}\n`);
@@ -1758,7 +1764,7 @@ export class SessionManager {
 
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(resolvedTargetCwd);
 		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
+			mkdirSync(dir, { recursive: true, mode: SESSION_DIR_MODE });
 		}
 
 		// Create new session file with new ID but forked content

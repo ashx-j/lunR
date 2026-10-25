@@ -73,15 +73,14 @@ describe("OnboardingComponent", () => {
 		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 		expect(text[0]).toBe("─".repeat(width));
 		// Text wraps at 80 columns whatever the chat width.
-		expect(text.slice(2, 15)).toEqual([
+		expect(text.slice(2, 14)).toEqual([
 			" Welcome to lunR",
 			"",
 			" lunR needs a model provider before it can do anything.",
 			" Pick how you want to sign in. You can add more later with /login.",
 			"",
-			" → Sign in with an account        Anthropic, OpenAI Codex, xAI, GitHub Copilot",
-			"                                  and 1 more",
-			"   Sign in with an API key        Anthropic, OpenAI, xAI, Google and 4 more",
+			" → Sign in with an account        Anthropic, OpenAI Codex, xAI and more",
+			"   Sign in with an API key        Anthropic, OpenAI, xAI, Google and more",
 			"   Connect a custom API endpoint  Any OpenAI-compatible server",
 			"   Skip for now                   Open the chat without a model",
 			"",

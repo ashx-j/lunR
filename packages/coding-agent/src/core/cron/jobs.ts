@@ -85,7 +85,7 @@ export interface CronJob {
 	/** Job IDs whose latest output (8K chars cap each) is prepended to the prompt. */
 	contextFrom?: string[];
 	workdir?: string;
-	/** Unknown interrupted effects require an explicit run, rather than ordinary resume. */
+	/** Unknown interrupted effects keep the job paused until an explicit resume or run retries it. */
 	interrupted?: boolean;
 	/** Durable claim written before dispatch. Interrupted claims require explicit retry. */
 	activeRun?: { id: string; scheduledAt: string | null; startedAt: string; advancedTo?: string | null };
@@ -576,12 +576,18 @@ export async function pauseJob(idOrName: string): Promise<CronJob> {
 	});
 }
 
+/**
+ * Resume a paused job. Resuming an interrupted job is the user's deliberate retry:
+ * it becomes due now, so whichever operator owns the scheduler runs it on its next tick.
+ */
 export async function resumeJob(idOrName: string): Promise<CronJob> {
 	return mutateJobs(() => {
 		const job = getJob(idOrName);
-		if (job.interrupted)
-			throw new Error("interrupted run has unknown effects; inspect them and use cron run for a deliberate retry");
-		if (job.state === "paused") {
+		if (job.interrupted) {
+			delete job.interrupted;
+			job.state = "scheduled";
+			job.nextRunAt = new Date().toISOString();
+		} else if (job.state === "paused") {
 			job.state = "scheduled";
 			job.nextRunAt = computeNextRun(job)?.toISOString() ?? null;
 		}
@@ -605,12 +611,14 @@ export async function removeJob(idOrName: string): Promise<CronJob> {
 /**
  * Jobs due to fire now. Skips disabled/paused/completed jobs and jobs without a
  * nextRunAt. One-shots fire up to 120s late (flat recovery grace); beyond that
- * they are marked state "error" and skipped. Recurring backlog fires once;
- * claiming the occurrence advances it to the next future slot without a burst.
+ * they are marked state "error" and returned in `missed` so the caller can
+ * report the failure. Recurring backlog fires once; claiming the occurrence
+ * advances it to the next future slot without a burst.
  */
-export async function getDueJobs(now: Date = new Date()): Promise<CronJob[]> {
+export async function getDueJobs(now: Date = new Date()): Promise<{ due: CronJob[]; missed: CronJob[] }> {
 	return mutateJobs(() => {
 		const due: CronJob[] = [];
+		const missed: CronJob[] = [];
 		for (const job of loadJobs()) {
 			if (!job.enabled || job.state !== "scheduled" || job.activeRun) continue;
 			if (!job.nextRunAt) continue;
@@ -625,13 +633,14 @@ export async function getDueJobs(now: Date = new Date()): Promise<CronJob[]> {
 					job.lastStatus = "error";
 					job.lastError = "missed one-shot schedule beyond the 120s recovery grace";
 					job.nextRunAt = null;
+					missed.push(job);
 				}
 				continue;
 			}
 
 			due.push(job);
 		}
-		return due;
+		return { due, missed };
 	});
 }
 
@@ -712,7 +721,7 @@ export async function recoverInterruptedRuns(): Promise<void> {
 			if (!job.activeRun) continue;
 			job.state = "paused";
 			job.lastStatus = "error";
-			job.lastError = "interrupted run has unknown effects; use cron run to retry deliberately";
+			job.lastError = "interrupted run has unknown effects; inspect them, then resume or run the job to retry it";
 			job.interrupted = true;
 			delete job.activeRun;
 		}

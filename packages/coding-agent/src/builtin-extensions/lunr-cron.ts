@@ -14,9 +14,11 @@
  *  - Jobs created inside a gateway chat turn are stamped with that chat as
  *    their origin and default deliver to "origin" (core/cron/origin-context).
  *  - Scheduler starts on session_start only in "tui" mode, stops on
- *    session_shutdown. runJob admits and awaits one owned prompt;
- *    TUI delivery notifies locally and records external delivery as unavailable;
- *    the gateway operator performs platform delivery with current grants.
+ *    session_shutdown. runJob admits and awaits one owned prompt.
+ *    The TUI scheduler skips, without claiming, jobs from other projects or
+ *    with platform targets, leaving them due for the gateway operator, which
+ *    performs platform delivery with current grants. TUI delivery notifies
+ *    locally and records platform delivery as unavailable.
  *
  * `// @ts-nocheck` matches the builtin-extension convention.
  * Runtime imports stay on concrete core modules — never the package barrel.
@@ -65,6 +67,11 @@ function createInContext(input: CreateJobInput, ctx: ExtensionContext) {
 	const origin = currentOrigin();
 	const workdir = origin ? resolveWithinRoots(ctx.cwd, loadGatewayConfig().projectRoots ?? []) : ctx.cwd;
 	return createJob({ ...input, workdir, origin: origin ? { ...origin } : null, deliver: input.deliver ?? (origin ? "origin" : "local") });
+}
+
+/** True when every delivery target is the local output file. */
+function deliversLocallyOnly(job: CronJob): boolean {
+	return job.deliver.split(",").every((target) => target.trim() === "local");
 }
 
 /** A TUI owns its current project; it must not silently execute another project's job. */
@@ -130,7 +137,8 @@ export default function (pi: ExtensionAPI): void {
 	setCronDeliverValidator((deliver, origin) => createDeliverValidator(loadGatewayConfig())(deliver, origin));
 
 	const deliverResult = async (job: CronJob, _content: string): Promise<void> => {
-		if (job.deliver.split(",").some((target) => target.trim() !== "local")) {
+		if (!deliversLocallyOnly(job)) {
+			lastCtx?.ui.notify(`Cron job '${job.name}' was not delivered to ${job.deliver}; only the gateway delivers to chat platforms. See /cron list.`, "warning");
 			throw new Error("platform delivery unavailable from this TUI operator; restart scheduling in the gateway after stopping this operator");
 		}
 		lastCtx?.ui.notify(`Cron job '${job.name}' finished`, "info");
@@ -152,9 +160,20 @@ export default function (pi: ExtensionAPI): void {
 			return extractAssistantText(result.messages);
 		} finally { endCronFire(); }
 	};
-	const schedulerDeps = { runJob, deliverResult, canRun: () => !!lastCtx?.isIdle() && !lastCtx.hasPendingMessages() };
+	/** Jobs this TUI cannot run here or deliver stay due, unclaimed, for the gateway. */
+	const accepts = (job: CronJob): boolean => {
+		if (!lastCtx || !deliversLocallyOnly(job)) return false;
+		try {
+			requireTuiJobWorkdir(job, lastCtx);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const schedulerDeps = { runJob, deliverResult, accepts, canRun: () => !!lastCtx?.isIdle() && !lastCtx.hasPendingMessages() };
 	const triggerRun = async (job: CronJob, _ctx: ExtensionContext): Promise<string> => {
-		if (!scheduler) throw new Error("cron runs require the owning TUI operator; use cron run there, or wait for the gateway schedule");
+		if (!scheduler)
+			throw new Error("cron runs require the owning TUI operator; use cron run there, or wait for the gateway schedule. To retry an interrupted job from here, use cron resume.");
 		await scheduler.run(job.id);
 		return `Cron job '${job.name}' (${job.id}) finished. Check cron list for run or delivery errors.`;
 	};

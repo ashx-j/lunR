@@ -13,9 +13,10 @@ export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
 export const PR_WATCH_STATE_WRITE_BLOCK_REASON =
 	"PR watch state is client-managed. Use pr_watch start/wait; only the user can cancel or restart through /pr-watch.";
 
+/** Windows and macOS (APFS, HFS+) are case-insensitive by default, so `SETTINGS.JSON` is settings.json there. */
 function normalize(path: string): string {
 	const normalized = resolve(path);
-	return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+	return process.platform === "win32" || process.platform === "darwin" ? normalized.toLowerCase() : normalized;
 }
 
 function isWithin(target: string, root: string): boolean {

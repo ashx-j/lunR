@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
 	findInitialModel,
+	findSignedOutScopePatterns,
 	narrowToScope,
 	parseModelPattern,
 	resolveCliModel,
@@ -237,6 +238,31 @@ describe("resolveModelScopeWithDiagnostics", () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+describe("findSignedOutScopePatterns", () => {
+	test("returns only provider/... patterns of registered providers with no credential", async () => {
+		const runtime = {
+			getProvider: (id: string) => (["anthropic", "openai-codex"].includes(id) ? {} : undefined),
+			checkAuth: async (id: string) => (id === "anthropic" ? { source: "auth.json", type: "api_key" } : undefined),
+		} as unknown as Parameters<typeof findSignedOutScopePatterns>[1];
+
+		const patterns = [
+			"openai-codex/gpt-6-luna",
+			"openai-codex/gpt-6.1-sol:high",
+			"openai-codex/*",
+			"anthropic/claude-sonnet-5",
+			"gpt-6-astra",
+			"*sonnet*",
+			"extension-provider/model",
+		];
+
+		expect(await findSignedOutScopePatterns(patterns, runtime)).toEqual([
+			"openai-codex/gpt-6-luna",
+			"openai-codex/gpt-6.1-sol:high",
+			"openai-codex/*",
+		]);
 	});
 });
 

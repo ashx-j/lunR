@@ -4,6 +4,8 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-25: pin Claude Code 2.1.310 and read only its picker at setup, taking non-`[1m]` windows from the catalog, because 2.1.263's picker has no 5.5 models and 2.1.310's `set_model`/`get_context_usage` contact Anthropic, which setup must not do.
+- 2026-10-25: drop a scoped model when its provider has no credential left (at logout and at startup), but keep bare ids, globs, unregistered providers and project settings, because a stale `provider/model` only printed a warning on every start while the others may still match.
 - 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash) and gave new families wrong settings (Copilot routed Claude Fable and GPT-6 to chat completions; Claude Opus 5 had no adaptive thinking).
 - 2026-10-25: read every logged-in provider's own model list instead of eight, and resolve new ids with the generator's code plus a published facts file, because lab releases reached providers' lists hours or days before models.dev and lunR showed them only after both caught up.
 - 2026-10-25: a new id with no known facts starts without thinking controls, because sending a reasoning parameter to a model that rejects it breaks every turn, while omitting it only uses the model's default.
@@ -15,6 +17,9 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-25: start direct OpenAI models at their base price tier's context window (272k) whenever models.dev lists a long-context tier, because requests above it bill at up to twice the rate; GPT-6 and the Pro models were the exceptions before.
 - 2026-10-25: Claude Opus 5.5, Sonnet 5.5, Fable 5 and Mythos drop "off" through a catalog rule, because they reject disabled thinking and models.dev has no field for it.
 - 2026-10-25: read models.dev `kimi-code-plan-global` when `kimi-for-coding` is missing but keep the api.kimi.com endpoint and skip `k3.1-*`, because the rename moved the listing to api.kimi.ai and K3.1 is untested there.
+- 2026-10-21: read-only bash blocks any word bash expands and any path-qualified command word, because the classifier sees literal words while bash runs the expanded ones.
+- 2026-10-21: `cron resume` retries an interrupted job through whichever process owns the lease, because a gateway-held lease left `cron run` with no process able to run it.
+- 2026-10-21: an abort during tools ends the run with aborted results for unstarted calls, matching an abort during streaming, because queued calls ran with an aborted signal and a new request followed.
 - 2026-10-20: cap the number of `@ts-nocheck` files with a limit that may only go down, so new unchecked files fail `npm run check` while the vendored backlog shrinks.
 - 2026-10-20: help describes `--provider` as narrowing `--model`, not as having a default, because the code never falls back to a saved or built-in provider for that flag.
 - 2026-10-20: group `/settings` into sections and move nine rarely changed rows into an Advanced submenu, because a flat 53-row list was hard to scan; descriptions and handlers stayed the same.
@@ -31,7 +36,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-18: read a saved `shadow-git` rollback capture as `copies`, because that is what the menu promised and it deletes fewer files than the hybrid behavior it had.
 - 2026-10-18: gate notices on terminal focus reports, not run length, so watched runs stay quiet and abandoned short runs still ping.
 - 2026-10-18: enable type checking on pi-subagents files that already pass before fixing errors, so new mistakes there fail the build without touching vendored behavior.
-- 2026-10-17: derive Claude subscription routes and windows from Claude Code's picker and `get_context_usage`, skipping usage-credit variants, because a hardcoded route table goes stale and had routed Opus 5 to credit billing.
+- 2026-10-17: derive Claude subscription routes from Claude Code's picker, skipping usage-credit variants, because a hardcoded route table goes stale and had routed Opus 5 to credit billing.
 - 2026-10-17: let Claude Code send subscription requests straight to Anthropic and read its `stream_event` output, because Anthropic's terms bar developers from intermediating Claude.ai session tokens while allowing sign-in to unmodified Claude Code.
 - 2026-10-17: after `/login`, fall back to the provider's first offered model in Claude Code picker order, so plans without the hardcoded default still get Claude Code's default.
 - 2026-10-17: narrow app model lists in RPC `get_available_models` behind an opt-in setting so ACP and the RPC provider share one rule and `/model` stays unchanged.

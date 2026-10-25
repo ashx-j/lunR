@@ -27,14 +27,14 @@ export function anthropicProvider(): Provider<"anthropic-messages"> {
 			oauth: lazyOAuth({ name: "Anthropic (Claude Pro/Max)", load: loadAnthropicOAuth }),
 		},
 		models: Object.values(ANTHROPIC_MODELS),
-		// A subscription lists only what Claude Code offered at setup, in its picker order, with the window
-		// Claude Code reported for each route so compaction runs before Claude Code's limit.
+		// A subscription lists only what Claude Code offered at setup, in its picker order. A window saved for
+		// the route replaces the catalog's, so compaction runs before Claude Code's limit.
 		filterModels: (models, credential) =>
 			credential?.type === "external_claude_code"
 				? (credential.models ?? []).flatMap((offered) => {
 						const model = models.find((candidate) => candidate.id === offered.id);
 						if (!model) return [];
-						return model.contextWindow === offered.contextWindow
+						return offered.contextWindow === undefined || model.contextWindow === offered.contextWindow
 							? [model]
 							: [{ ...model, contextWindow: offered.contextWindow }];
 					})

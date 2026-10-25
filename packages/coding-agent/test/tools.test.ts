@@ -485,6 +485,12 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
+		it.skipIf(process.platform === "win32")("reports a signal-killed command as an error", async () => {
+			await expect(bashTool.execute("test-call-sigkill", { command: "echo before; kill -9 $$" })).rejects.toThrow(
+				/before\n+Command terminated by SIGKILL/,
+			);
+		});
+
 		it("should respect timeout", async () => {
 			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
 				/timed out/i,

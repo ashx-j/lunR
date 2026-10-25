@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AuthEvent, AuthPrompt, Credential } from "@earendil-works/pi-ai";
+import { type AuthEvent, type AuthPrompt, type Credential, claudeCodeUpdateNote } from "@earendil-works/pi-ai";
 import {
 	type AssistantMessage,
 	getSupportedThinkingLevels,
@@ -96,6 +96,7 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
+	findSignedOutScopePatterns,
 	resolveModelScopeWithDiagnostics,
 } from "../../core/model-resolver.ts";
 import { refreshModelCandidatesForInit } from "../../core/model-runtime.ts";
@@ -5343,33 +5344,40 @@ export class InteractiveMode {
 			}
 		}
 		this.session.refreshModelFromRegistry();
+		// The catalog cannot add subscription models that the saved Claude Code picker never offered.
+		const claudeCodeNote = claudeCodeUpdateNote(await runtime.readCredential("anthropic").catch(() => undefined));
 		this.showStatus(
-			formatCatalogRefreshSummary({
-				official: result.official
-					? {
-							source: result.official.source,
-							modelCount: result.official.catalog.models.length,
-							evictedUserRows: result.official.evictedUserRows,
-						}
-					: undefined,
-				providers: [
-					...result.live.map((entry) => ({
-						id: entry.providerId,
-						status: entry.status,
-						added: entry.added,
-						total: entry.total,
-						error: entry.error,
-					})),
-					...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
-						id,
-						status: "error" as const,
-						error,
-					})),
-				],
-				asked,
-				extraDefaults,
-				ollama,
-			}),
+			[
+				formatCatalogRefreshSummary({
+					official: result.official
+						? {
+								source: result.official.source,
+								modelCount: result.official.catalog.models.length,
+								evictedUserRows: result.official.evictedUserRows,
+							}
+						: undefined,
+					providers: [
+						...result.live.map((entry) => ({
+							id: entry.providerId,
+							status: entry.status,
+							added: entry.added,
+							total: entry.total,
+							error: entry.error,
+						})),
+						...Object.entries(result.official?.errors ?? {}).map(([id, error]) => ({
+							id,
+							status: "error" as const,
+							error,
+						})),
+					],
+					asked,
+					extraDefaults,
+					ollama,
+				}),
+				claudeCodeNote,
+			]
+				.filter(Boolean)
+				.join(" "),
 		);
 		this.footer.invalidate();
 	}
@@ -5769,6 +5777,10 @@ export class InteractiveMode {
 
 	private showTreeSelector(initialSelectedId?: string): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before running /tree.");
+			return;
+		}
 		const tree = this.sessionManager.getTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
@@ -6153,6 +6165,20 @@ export class InteractiveMode {
 		});
 	}
 
+	/**
+	 * Removes scoped models whose provider has no credential left after a logout, from settings and from
+	 * this session's ctrl+p cycle. A provider still reachable through an environment key keeps its models.
+	 */
+	private async forgetSignedOutScopedModels(): Promise<void> {
+		const runtime = this.session.modelRuntime;
+		const signedOut = await findSignedOutScopePatterns(this.settingsManager.getEnabledModels() ?? [], runtime);
+		if (signedOut.length > 0) this.settingsManager.removeEnabledModels(signedOut);
+		const scoped = this.session.scopedModels;
+		const auth = await Promise.all(scoped.map((entry) => runtime.checkAuth(entry.model.provider)));
+		const kept = scoped.filter((_, index) => auth[index]);
+		if (kept.length !== scoped.length) this.session.setScopedModels(kept);
+	}
+
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
 		if (mode === "login") {
 			showLoginAuthTypeSelector(this.loginFlowHost);
@@ -6194,6 +6220,7 @@ export class InteractiveMode {
 							}
 							await this.removeAllSubscriptions(poolProviderId);
 							await this.session.modelRuntime.logout(poolProviderId);
+							await this.forgetSignedOutScopedModels();
 							await this.updateAvailableProviderCount();
 							const poolProviderName =
 								this.session.modelRuntime.getProvider(poolProviderId)?.name ?? poolProviderId;
@@ -6206,6 +6233,7 @@ export class InteractiveMode {
 						await this.removeAllSubscriptions(providerOption.id);
 						const removed = await this.session.modelRuntime.readCredential(providerOption.id);
 						await this.session.modelRuntime.logout(providerOption.id);
+						await this.forgetSignedOutScopedModels();
 						await this.updateAvailableProviderCount();
 						const message =
 							removed?.type === "external_claude_code"

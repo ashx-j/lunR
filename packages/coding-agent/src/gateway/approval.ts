@@ -1,6 +1,8 @@
 /**
- * Gateway approvals for large subagent launches and plans.
+ * Gateway approvals for large subagent launches, auto review and plans.
  * A missing chat context rejects large launches; plans pass through.
+ * An approved plan restores the mode the chat used before /plan; an unanswered
+ * plan prompt leaves the model waiting for the user instead of reading as a decline.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -9,13 +11,17 @@ import {
 	type ApprovalRequest,
 	type ApprovalResponse,
 	NO_HANDLER_REASON,
+	type PermissionMode,
 	registerApprovalHandler,
+	restorePermissionModeAfterPlan,
 	setPermissionMode,
 } from "../core/permissions.ts";
+import type { BridgeSession } from "./agent-bridge.ts";
 import { isAuthorized } from "./authz.ts";
 import { loadGatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
 import { createPairingStore } from "./pairing.ts";
+import { queueGatewayText } from "./presenter.ts";
 import { getSession } from "./store.ts";
 import type { ButtonSpec, CallbackEvent, PlatformAdapter, SessionSource } from "./types.ts";
 
@@ -29,12 +35,15 @@ interface ApprovalContext {
 	adapter: PlatformAdapter;
 	source: SessionSource;
 	timeoutMs?: number;
+	/** Live session for the chat, so an approved plan restores its mode through the session setter. */
+	session?: () => BridgeSession | undefined;
 }
 
 interface PendingApproval {
 	key?: string;
 	source: SessionSource;
 	plan: boolean;
+	session?: () => BridgeSession | undefined;
 	resolve: (value: ApprovalResponse) => void;
 	reject: (reason?: unknown) => void;
 	timeout: ReturnType<typeof setTimeout>;
@@ -47,6 +56,13 @@ interface PendingApproval {
 
 const approvalContext = new AsyncLocalStorage<ApprovalContext>();
 const pending = new Map<string, PendingApproval>();
+/** Mode each session used before the chat switched it to read-only, keyed by session id. */
+const modesBeforePlan = new Map<string, PermissionMode>();
+
+/** Record the mode a chat leaves when it switches to read-only, so plan approval can return to it. */
+export function rememberModeBeforePlan(sessionId: string, previous: PermissionMode, next: PermissionMode): void {
+	if (next === "read-only" && previous !== "read-only") modesBeforePlan.set(sessionId, previous);
+}
 
 function generateId(): string {
 	let id = "";
@@ -79,22 +95,45 @@ export function runWithApprovalContext<T>(ctx: ApprovalContext, fn: () => Promis
 	return approvalContext.run(ctx, fn);
 }
 
+/**
+ * Build the buttons message text. Detail that would push it past the adapter limit
+ * goes first through the chunked outbox, and the buttons message points back to it.
+ */
+async function approvalTitle(
+	adapter: PlatformAdapter,
+	source: SessionSource,
+	heading: string,
+	detail: string,
+	key?: string,
+): Promise<string> {
+	const full = `${heading}\n${detail}`;
+	if (full.length <= adapter.maxMessageLength) return full;
+	if (key) {
+		await queueGatewayText(key, source, adapter, detail, { kind: "notice" });
+		return `${heading}\n(Details in the messages above.)`.slice(0, adapter.maxMessageLength);
+	}
+	return `${full.slice(0, adapter.maxMessageLength - 1)}…`;
+}
+
 async function createApprovalPrompt(
 	adapter: PlatformAdapter,
 	source: SessionSource,
 	req: ApprovalRequest,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 	key?: string,
+	session?: () => BridgeSession | undefined,
 ): Promise<ApprovalResponse> {
 	const id = generateId();
 	// Large child launches get a dedicated title; inline buttons cannot capture feedback.
-	const title =
+	const heading =
 		req.kind === "large-subagent-launch"
-			? `Approve large subagent launch?\n${req.detail}`
+			? "Approve large subagent launch?"
 			: req.kind === "auto-review"
-				? `Auto review stopped a ${req.toolName} call. Run it anyway?\n${req.detail}`
-				: `Approve ${req.toolName}?\n${req.detail}`;
-	// An auto-review decision covers this one action, so it has no session-wide approval.
+				? `Auto review stopped a ${req.toolName} call. Run it anyway?`
+				: req.kind === "plan"
+					? "Approve this plan?"
+					: `Approve ${req.toolName}?`;
+	// Auto-review and plan decisions cover one action, so they have no session-wide approval.
 	const rows: ButtonSpec[][] =
 		req.kind === "auto-review"
 			? [
@@ -103,21 +142,34 @@ async function createApprovalPrompt(
 						{ label: "✗ Keep it blocked", data: makeCallbackData(id, "reject") },
 					],
 				]
-			: [
-					[
-						{ label: "✓ Approve once", data: makeCallbackData(id, "once") },
-						{ label: "✓ Approve session", data: makeCallbackData(id, "session") },
-					],
-					[{ label: "✗ Reject", data: makeCallbackData(id, "reject") }],
-				];
+			: req.kind === "plan"
+				? [
+						[
+							{ label: "✓ Approve", data: makeCallbackData(id, "once") },
+							{ label: "✗ Reject", data: makeCallbackData(id, "reject") },
+						],
+					]
+				: [
+						[
+							{ label: "✓ Approve once", data: makeCallbackData(id, "once") },
+							{ label: "✓ Approve session", data: makeCallbackData(id, "session") },
+						],
+						[{ label: "✗ Reject", data: makeCallbackData(id, "reject") }],
+					];
+	const title = await approvalTitle(adapter, source, heading, req.detail, key);
 
 	return new Promise<ApprovalResponse>((resolve, reject) => {
 		let messageId: string | undefined;
 		const timeout = setTimeout(() => {
 			pending.delete(id);
-			reject(new Error("Approval request timed out"));
+			// An unanswered plan is not a decline: NO_HANDLER_REASON makes present_plan tell the model to wait for the user.
+			reject(new Error(req.kind === "plan" ? NO_HANDLER_REASON : "Approval request timed out"));
 			if (messageId) {
-				void adapter.editMessage(source.chatId, messageId, "⏱ Approval expired.", []).catch(() => {});
+				const expired =
+					req.kind === "plan"
+						? "⏱ Plan approval expired. Reply here to approve or change the plan."
+						: "⏱ Approval expired.";
+				void adapter.editMessage(source.chatId, messageId, expired, []).catch(() => {});
 			}
 		}, timeoutMs);
 
@@ -125,6 +177,7 @@ async function createApprovalPrompt(
 			key,
 			source,
 			plan: req.kind === "plan",
+			session,
 			resolve,
 			reject,
 			timeout,
@@ -161,7 +214,7 @@ export async function createGatewayApprovalRequest(req: ApprovalRequest): Promis
 	if (!ctx) {
 		throw new Error(NO_HANDLER_REASON);
 	}
-	return createApprovalPrompt(ctx.adapter, ctx.source, req, ctx.timeoutMs, ctx.key);
+	return createApprovalPrompt(ctx.adapter, ctx.source, req, ctx.timeoutMs, ctx.key, ctx.session);
 }
 
 /** Register the gateway approval handler with the core permission gate. */
@@ -210,17 +263,41 @@ export async function handleApprovalCallback(event: CallbackEvent, adapter?: Pla
 		entry.resolve("reject");
 		return true;
 	}
-	if (entry.plan && response !== "reject" && entry.key) {
-		const sessionId = getSession(entry.key)?.sessionId;
-		if (sessionId) setPermissionMode("yolo", sessionId);
-	}
+	if (entry.plan && response !== "reject") restoreModeAfterPlan(entry);
 	entry.resolve(response);
 
 	const label =
-		parsed.action === "reject" || parsed.action === "cancel" ? "Rejected." : `Approved (${parsed.action}).`;
+		parsed.action === "reject" || parsed.action === "cancel"
+			? "Rejected."
+			: entry.plan
+				? "Approved."
+				: `Approved (${parsed.action}).`;
 	await entry.adapter.editMessage(entry.chatId, entry.messageId ?? "", label, []).catch(() => {});
 	await entry.adapter.answerCallback(event.id).catch(() => {});
 	return true;
+}
+
+/**
+ * Leave read-only after an approved plan, as the TUI does: return to the mode used before
+ * /plan (or the saved default), never read-only, and auto only while its reviewer is ready.
+ * The live session setter also saves the mode so a reopened chat keeps it.
+ */
+function restoreModeAfterPlan(entry: PendingApproval): void {
+	const session = entry.session?.();
+	const sessionId =
+		session?.sessionManager?.getSessionId() ?? (entry.key ? getSession(entry.key)?.sessionId : undefined);
+	if (!sessionId) return;
+	const previous = modesBeforePlan.get(sessionId);
+	modesBeforePlan.delete(sessionId);
+	let target = restorePermissionModeAfterPlan(
+		previous,
+		session?.settingsManager?.getDefaultPermissionMode() ?? "yolo",
+	);
+	if (target === "read-only") target = "yolo";
+	if (target === "auto" && session?.resolveAutoReviewer && session.resolveAutoReviewer().kind !== "ready")
+		target = "yolo";
+	if (session?.setPermissionMode) session.setPermissionMode(target);
+	else setPermissionMode(target, sessionId);
 }
 
 /** Test hook: clear all pending approvals and stop their timeouts. */

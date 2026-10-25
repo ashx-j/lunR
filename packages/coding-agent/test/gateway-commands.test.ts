@@ -264,6 +264,7 @@ describe("command registry", () => {
 		expect(text).toContain("/effort");
 		expect(text).toContain("/reasoning");
 		expect(text).toContain("/undo");
+		expect(text.match(/^\/start\b/gm)).toHaveLength(1);
 	});
 
 	it("botCommandSpecs covers every command, aliases skipped, Telegram-safe names", () => {

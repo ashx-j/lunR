@@ -1457,7 +1457,7 @@ await models.logout('github-copilot');
 
 ### Anthropic subscriptions
 
-Anthropic API keys use the Messages API. Claude subscription setup instead returns an `external_claude_code` credential. After confirmation, setup downloads Claude Code 2.1.263 from the npm registry into `<agent dir>/claude-code/2.1.263/` and checks it against a pinned hash. It then reads Claude Code's existing subscription sign-in and supported model routes. Claude Code owns authentication; lunR stores the binary path and route metadata without copying subscription tokens.
+Anthropic API keys use the Messages API. Claude subscription setup instead returns an `external_claude_code` credential. After confirmation, setup downloads Claude Code 2.1.310 from the npm registry into `<agent dir>/claude-code/2.1.310/` and checks it against a pinned hash. It then reads Claude Code's existing subscription sign-in and supported model routes. Claude Code owns authentication; lunR stores the binary path and route metadata without copying subscription tokens.
 
 Use `/login anthropic` in lunR for the terminal setup flow. SDK applications can call `models.login('anthropic', 'oauth', interaction)` after registering `anthropicProvider()`. Their `AuthInteraction` must handle selection prompts and can supply `handoff` for Claude Code login. Without a handoff, setup asks the user to log in to Claude Code separately. Select a model through `models.getAvailable('anthropic')` after setup so its route matches the connected account.
 

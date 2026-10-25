@@ -40,8 +40,8 @@ export interface ClaudeCodeModelRoute {
 	id: string;
 	/** `--model` value lunR passes to Claude Code, such as `claude-sonnet-5[1m]`. */
 	route: string;
-	/** Context window Claude Code reports for that route. */
-	contextWindow: number;
+	/** Context window of that route. Absent when it is not a `[1m]` route, so the catalog window applies. */
+	contextWindow?: number;
 }
 
 /**

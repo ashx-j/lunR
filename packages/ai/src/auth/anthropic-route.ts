@@ -1,7 +1,7 @@
 import type { ModelsStreamTransforms } from "../models.ts";
 import type { StreamOptions } from "../types.ts";
 import { ModelsError } from "./resolve.ts";
-import type { AuthResult } from "./types.ts";
+import type { AuthResult, Credential } from "./types.ts";
 
 export const ANTHROPIC_SETUP_REQUIRED =
 	"Anthropic subscription authentication now requires Claude Code. Run /login anthropic and choose the subscription option. Direct OAuth tokens are no longer supported.";
@@ -9,6 +9,25 @@ export const ANTHROPIC_SETUP_REQUIRED =
 /** Connections older than version 3 lack Claude Code's model routes and windows, so they cannot serve requests. */
 export const CLAUDE_CODE_UPDATE_REQUIRED =
 	"This Claude subscription connection was made with an older lunR setup. Run /login anthropic to update it.";
+
+/**
+ * Claude Code release that lunR downloads and runs for Anthropic subscriptions. History replay and
+ * request-body overrides are version-sensitive, so a version change needs a fresh live qualification.
+ * `utils/claude-code-release.ts` holds the matching download hashes; this module stays browser-safe.
+ */
+export const CLAUDE_CODE_VERSION = "2.1.310";
+
+/**
+ * Note for a saved Claude subscription that runs an older Claude Code than the pinned release. Its model
+ * list came from that release's picker, so newer models only appear after /login anthropic. Undefined when
+ * the connection is current or is not a Claude Code subscription.
+ */
+export function claudeCodeUpdateNote(credential: Credential | undefined): string | undefined {
+	if (credential?.type !== "external_claude_code" || credential.version !== 3) return undefined;
+	const version = /[\\/]claude-code[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(credential.command)?.[1];
+	if (!version || version === CLAUDE_CODE_VERSION) return undefined;
+	return `Claude subscription models come from Claude Code ${version}. Run /login anthropic to update to ${CLAUDE_CODE_VERSION} and get newer models.`;
+}
 
 export function isAnthropicOAuthToken(value: string | undefined): boolean {
 	return !!value && (value.includes("sk-ant-oat") || value.startsWith("sk-ant-oauth"));

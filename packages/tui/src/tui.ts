@@ -102,6 +102,11 @@ export interface Component {
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
+/** Options for `TUI.addInputListener`. */
+type InputListenerOptions = {
+	/** Also receive Kitty key-release events. Default false, matching `Component.wantsKeyRelease`. */
+	wantsKeyRelease?: boolean;
+};
 type PendingOsc11BackgroundQuery = {
 	settled: boolean;
 	resolve: ((rgb: RgbColor | undefined) => void) | undefined;
@@ -350,7 +355,7 @@ export class TUI extends Container {
 	private previousWidth = 0;
 	private previousHeight = 0;
 	private focusedComponent: Component | null = null;
-	private inputListeners = new Set<InputListener>();
+	private inputListeners = new Map<InputListener, InputListenerOptions>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
@@ -1018,8 +1023,12 @@ export class TUI extends Container {
 		this.requestRender();
 	}
 
-	addInputListener(listener: InputListener): () => void {
-		this.inputListeners.add(listener);
+	/**
+	 * Run `listener` on raw input before the focused component sees it. Listeners skip
+	 * Kitty key-release events unless they pass `{ wantsKeyRelease: true }`.
+	 */
+	addInputListener(listener: InputListener, options: InputListenerOptions = {}): () => void {
+		this.inputListeners.set(listener, options);
 		return () => {
 			this.inputListeners.delete(listener);
 		};
@@ -1091,7 +1100,9 @@ export class TUI extends Container {
 		this.terminal.write("\x1b[16t");
 	}
 
+	/** Restore the terminal. Safe to call more than once: later calls before the next `start()` do nothing. */
 	stop(): void {
+		if (this.stopped) return;
 		this.stopped = true;
 		this.started = false;
 		if (this.renderTimer) {
@@ -1327,7 +1338,8 @@ export class TUI extends Container {
 
 		if (this.inputListeners.size > 0) {
 			let current = data;
-			for (const listener of this.inputListeners) {
+			for (const [listener, options] of this.inputListeners) {
+				if (!options.wantsKeyRelease && isKeyRelease(current)) continue;
 				const result = listener(current);
 				if (result?.consume) {
 					return;

@@ -5,6 +5,7 @@ import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from "../core/
 import { SessionManager } from "../core/session-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
+import { rememberModeBeforePlan } from "./approval.ts";
 import { isAuthorized, requireAuthorized } from "./authz.ts";
 import {
 	createPicker,
@@ -526,6 +527,7 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 		await ctx.adapter.send(ctx.event.source.chatId, problem);
 		return true;
 	}
+	if (id) rememberModeBeforePlan(id, getPermissionMode(id), mode as (typeof PERMISSION_MODES)[number]);
 	setPermissionMode(mode as (typeof PERMISSION_MODES)[number], id);
 	session.sessionManager?.setPermissionMode?.(mode as (typeof PERMISSION_MODES)[number]);
 	await ctx.adapter.send(ctx.event.source.chatId, `Permission mode: ${mode}`);
