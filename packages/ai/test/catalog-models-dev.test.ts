@@ -6,7 +6,7 @@ import {
 	modelFromModelsDev,
 	modelsDevThinkingLevelMap,
 } from "../src/catalog/models-dev.ts";
-import { modelsDevModels } from "../src/catalog/providers.ts";
+import { discoveredModel, modelsDevModels, modelsDevProviderDefinitions } from "../src/catalog/providers.ts";
 import { applyCatalogRules } from "../src/catalog/rules.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 
@@ -169,5 +169,86 @@ describe("catalog rules", () => {
 		expect(applyCatalogRules(base, [{ providers: ["anthropic"], match: /.*/, drop: true, why: "test" }])).toBe(
 			undefined,
 		);
+	});
+});
+
+describe("generic models.dev providers", () => {
+	const agent = { tool_call: true } satisfies ModelsDevModel;
+
+	it("ships OpenAI- and Anthropic-compatible providers that take an API key", () => {
+		const data: ModelsDevCatalog = {
+			nebius: {
+				name: "Nebius",
+				npm: "@ai-sdk/openai-compatible",
+				api: "https://api.nebius.test/v1/",
+				env: ["NEBIUS_API_KEY"],
+				models: { a: agent },
+			},
+			coding: {
+				name: "Coding",
+				npm: "@ai-sdk/anthropic",
+				api: "https://coding.test/anthropic/v1",
+				env: ["CODING_KEY"],
+				models: { a: agent },
+			},
+			account: {
+				npm: "@ai-sdk/openai-compatible",
+				// Account placeholders in the URL need hand-written settings.
+				api: `https://x.test/$${"{ACCOUNT}"}/v1`,
+				env: ["K"],
+				models: { a: agent },
+			},
+			sdk: { npm: "custom-sdk", api: "https://sdk.test", env: ["K"], models: { a: agent } },
+			embeddings: {
+				npm: "@ai-sdk/openai-compatible",
+				api: "https://e.test",
+				env: ["K"],
+				models: { e: { tool_call: false } },
+			},
+			groq: { npm: "@ai-sdk/openai-compatible", api: "https://groq.test", env: ["K"], models: { a: agent } },
+			// Another key for an endpoint a hand-written source already reaches.
+			"groq-plan": {
+				npm: "@ai-sdk/openai-compatible",
+				api: "https://api.groq.com/openai/v1/",
+				env: ["K"],
+				models: { a: agent },
+			},
+		};
+		expect(modelsDevProviderDefinitions(data)).toEqual([
+			{
+				id: "coding",
+				name: "Coding",
+				baseUrl: "https://coding.test/anthropic",
+				api: "anthropic-messages",
+				env: ["CODING_KEY"],
+			},
+			{
+				id: "nebius",
+				name: "Nebius",
+				baseUrl: "https://api.nebius.test/v1",
+				api: "openai-completions",
+				env: ["NEBIUS_API_KEY"],
+			},
+		]);
+	});
+
+	it("builds and discovers a generic provider's models with no hand-written settings", () => {
+		const data: ModelsDevCatalog = {
+			nebius: {
+				npm: "@ai-sdk/openai-compatible",
+				api: "https://api.nebius.test/v1",
+				env: ["NEBIUS_API_KEY"],
+				models: { "glm-9": { ...agent, reasoning: true, reasoning_options: [{ type: "toggle" }] } },
+			},
+		};
+		const definitions = modelsDevProviderDefinitions(data);
+		expect(modelsDevModels(data, new ModelsDevFacts(data), new Map(), definitions)).toEqual([
+			expect.objectContaining({ id: "glm-9", provider: "nebius", baseUrl: "https://api.nebius.test/v1" }),
+		]);
+		expect(discoveredModel("nebius", "glm-10", {}, undefined, definitions)).toMatchObject({
+			provider: "nebius",
+			api: "openai-completions",
+			reasoning: false,
+		});
 	});
 });

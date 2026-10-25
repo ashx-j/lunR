@@ -1,4 +1,5 @@
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import { MODELS_DEV_PROVIDERS } from "@earendil-works/pi-ai/catalog/generic-providers";
 import { ModelsDevFacts } from "@earendil-works/pi-ai/catalog/models-dev";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -230,6 +231,16 @@ describe("live-catalog", () => {
 			},
 		).map((entry) => entry.model.id);
 		expect(ids).toEqual(["gemini-9-pro"]);
+	});
+
+	it("discovers models for a generic models.dev provider with no baked-in rows", () => {
+		const definition = MODELS_DEV_PROVIDERS.find((candidate) => candidate.api === "openai-completions")!;
+		const [discovery] = discoverLiveModels(definition.id, { data: [{ id: "brand-new-model" }] }, []);
+		expect(discovery.model).toMatchObject({
+			provider: definition.id,
+			api: "openai-completions",
+			baseUrl: definition.baseUrl,
+		});
 	});
 
 	it("stays quiet when a provider has no list endpoint", async () => {

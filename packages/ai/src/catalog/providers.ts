@@ -10,7 +10,7 @@ import {
 	CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL,
 	CLOUDFLARE_WORKERS_AI_BASE_URL,
 } from "../api/cloudflare.ts";
-import type { Api, KnownProvider, Model, OpenAICompletionsCompat } from "../types.ts";
+import type { Api, Model, OpenAICompletionsCompat, ProviderId } from "../types.ts";
 import { shouldUseXaiResponsesApi, XAI_RESPONSES_COMPAT } from "../xai-effort.ts";
 import {
 	isAgentModel,
@@ -30,7 +30,7 @@ export type ModelsDevRoute = (
 ) => (Partial<Omit<ModelsDevTarget, "provider">> & { id?: string }) | undefined;
 
 export interface ModelsDevSource extends Omit<ModelsDevTarget, "provider"> {
-	provider: KnownProvider;
+	provider: ProviderId;
 	/** models.dev provider keys. The first one present wins, since models.dev renames providers. */
 	from: readonly string[];
 	route?: ModelsDevRoute;
@@ -479,15 +479,79 @@ function sourceModels(
 }
 
 /**
- * Every shipped provider's models from models.dev. A tool-capable row becomes a model unless its
- * route or a live list says the provider cannot serve it; rules apply later.
+ * A models.dev provider lunR ships without hand-written settings: an OpenAI- or Anthropic-compatible
+ * endpoint that takes an API key. The generator writes the current list to
+ * `providers/models-dev-providers.generated.ts`.
+ */
+export interface ModelsDevProviderDefinition {
+	id: string;
+	name: string;
+	baseUrl: string;
+	api: "openai-completions" | "anthropic-messages";
+	env: readonly string[];
+}
+
+/** models.dev keys lunR reads another way: OpenRouter and Vercel through their own APIs, the rest through extensions. */
+const NOT_GENERIC = new Set(["openrouter", "vercel", "ollama-cloud", "lmstudio"]);
+
+/**
+ * Every models.dev provider with an OpenAI- or Anthropic-compatible endpoint, an API key variable and
+ * at least one agent model that no hand-written source already covers, by key or by endpoint.
+ * Endpoints with account placeholders in the URL need hand-written settings and stay out.
+ */
+export function modelsDevProviderDefinitions(data: ModelsDevCatalog): ModelsDevProviderDefinition[] {
+	const taken = new Set([
+		...NOT_GENERIC,
+		...MODELS_DEV_SOURCES.flatMap((source) => [source.provider, ...source.from]),
+	]);
+	// A models.dev entry for an endpoint lunR already reaches by hand (a coding plan under another key)
+	// would show twice in /login and lose the hand-written request settings.
+	const endpoint = (url: string) => url.toLowerCase().replace(/\/+$/, "").replace(/\/v1$/, "");
+	const reached = new Set(MODELS_DEV_SOURCES.map((source) => endpoint(source.baseUrl)));
+	return Object.entries(data)
+		.sort(([a], [b]) => a.localeCompare(b))
+		.flatMap(([id, provider]): ModelsDevProviderDefinition[] => {
+			const api =
+				provider.npm === "@ai-sdk/openai-compatible"
+					? "openai-completions"
+					: provider.npm === "@ai-sdk/anthropic"
+						? "anthropic-messages"
+						: undefined;
+			if (taken.has(id) || !api || !provider.api || provider.api.includes("${") || !provider.env?.length) return [];
+			if (reached.has(endpoint(provider.api))) return [];
+			if (!Object.values(provider.models ?? {}).some(isAgentModel)) return [];
+			// The Anthropic SDK appends /v1/messages itself.
+			const baseUrl = api === "anthropic-messages" ? provider.api.replace(/\/v1\/?$/, "") : provider.api;
+			return [{ id, name: provider.name ?? id, baseUrl: baseUrl.replace(/\/+$/, ""), api, env: provider.env }];
+		});
+}
+
+/** The source for a provider: its hand-written entry, or one built from its models.dev definition. */
+export function modelsDevSource(
+	provider: string,
+	definitions: readonly ModelsDevProviderDefinition[] = [],
+): ModelsDevSource | undefined {
+	const source = MODELS_DEV_SOURCES.find((candidate) => candidate.provider === provider);
+	if (source) return source;
+	const definition = definitions.find((candidate) => candidate.id === provider);
+	return definition
+		? { provider: definition.id, from: [definition.id], api: definition.api, baseUrl: definition.baseUrl }
+		: undefined;
+}
+
+/**
+ * Every shipped provider's models from models.dev, including the generic providers in
+ * `definitions`. A tool-capable row becomes a model unless its route or a live list says the
+ * provider cannot serve it; rules apply later.
  */
 export function modelsDevModels(
 	data: ModelsDevCatalog,
 	facts: ModelsDevFacts,
 	liveLists: ReadonlyMap<string, Map<string, string> | undefined> = new Map(),
+	definitions: readonly ModelsDevProviderDefinition[] = [],
 ): Model<Api>[] {
-	return MODELS_DEV_SOURCES.flatMap((source) =>
+	const sources = [...MODELS_DEV_SOURCES, ...definitions.flatMap((d) => modelsDevSource(d.id, definitions) ?? [])];
+	return sources.flatMap((source) =>
 		sourceModels(source, data, facts, source.live ? liveLists.get(source.live) : undefined),
 	);
 }
@@ -504,8 +568,9 @@ export function discoveredModel(
 	id: string,
 	reported: ModelsDevModel,
 	facts?: ModelsDevFacts,
+	definitions: readonly ModelsDevProviderDefinition[] = [],
 ): Model<Api> | undefined {
-	const source = MODELS_DEV_SOURCES.find((candidate) => candidate.provider === provider);
+	const source = modelsDevSource(provider, definitions);
 	if (!source) return undefined;
 	const known = facts?.find(id, source.from[0]);
 	const defined = Object.fromEntries(Object.entries(reported).filter(([, value]) => value !== undefined));
