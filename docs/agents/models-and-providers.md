@@ -8,6 +8,7 @@ Read before changing the model catalog, model selection, login or provider trans
 - Official rows without `compat`/`thinkingLevelMap` take a baked-in template in `refreshOfficialCatalog`: same id first, then the provider's first model. The first-model fallback gave Haiku 4.5 adaptive thinking, which Anthropic rejects.
 - The shrink guard in `catalog-sources.ts` rejects a whole source when any one provider in it shrinks by more than 25%. A provider models.dev dropped (`iflowcn`, unused by lunR) froze models.dev at the 2026-09-06 copy until 2026-10-25. Check `sources[].status` in the published `catalog/publication.json`; a `cached` models.dev entry means new models are missing. Recovery: delete the `catalog-sources-v2-*` Actions caches, then dispatch the workflow.
 - `ModelRuntime.getModel` prefers the available-snapshot row, which carries credential-specific limits from `filterModels`; the plain catalog row is the fallback.
+- Logout and startup remove global `enabledModels` entries shaped `provider/...` whose registered provider fails `checkAuth` (`findSignedOutScopePatterns`). An env key still counts as a credential, so `/logout` of a stored key keeps the scope while the env key exists.
 - `/model` lists stored credentials only (`auth.json`, subscriptions, `--api-key`); ambient env keys do not list models but still resolve for a selected model. Logout deletes that provider's `models-store` + user-models. `/refresh` calls `getAuth` before `GET /models` so expired OAuth refreshes; it rebinds the session model.
 
 ## Providers

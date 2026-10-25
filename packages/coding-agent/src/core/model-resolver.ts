@@ -336,6 +336,31 @@ export async function resolveModelScopeWithDiagnostics(
 }
 
 /**
+ * Scope patterns whose provider has no credential left, such as `openai-codex/gpt-6` after
+ * `/logout openai-codex`. Only `provider/...` patterns for a registered provider count, so bare model ids,
+ * globs like `*sonnet*` and providers an extension has not registered yet always stay.
+ */
+export async function findSignedOutScopePatterns(
+	patterns: readonly string[],
+	modelRuntime: Pick<ModelRuntime, "getProvider" | "checkAuth">,
+): Promise<string[]> {
+	const signedOut = new Map<string, boolean>();
+	const result: string[] = [];
+	for (const pattern of patterns) {
+		const slash = pattern.indexOf("/");
+		if (slash <= 0) continue;
+		const providerId = pattern.slice(0, slash);
+		let isSignedOut = signedOut.get(providerId);
+		if (isSignedOut === undefined) {
+			isSignedOut = !!modelRuntime.getProvider(providerId) && !(await modelRuntime.checkAuth(providerId));
+			signedOut.set(providerId, isSignedOut);
+		}
+		if (isSignedOut) result.push(pattern);
+	}
+	return result;
+}
+
+/**
  * Narrows an app's model list to the scoped models it contains, plus the current model so it stays
  * selected. With no scoped model in the list, every model stays, like `/model` without a scope.
  */
