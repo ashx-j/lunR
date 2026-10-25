@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.40] - 2026-10-25
+
 ### Added
 
 - `builtinProviders()` registers 167 generic providers from models.dev (`providers/models-dev-providers.generated.ts`) after the hand-written ones. They have no baked-in rows; their models come from the published catalog and their model lists.

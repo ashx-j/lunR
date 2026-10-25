@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.40] - 2026-10-25
+
 ### Fixed
 
 - Lines wider than the terminal are truncated in both redraw paths instead of wrapping into the next row.
