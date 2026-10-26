@@ -1,0 +1,1 @@
+{"Ling-1T":{"id":"Ling-1T","name":"Ling-1T","api":"openai-completions","provider":"bailing","baseUrl":"https://api.tbox.cn/api/llm/v1","reasoning":false,"input":["text"],"cost":{"input":0.57,"output":2.29,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":32000}}
