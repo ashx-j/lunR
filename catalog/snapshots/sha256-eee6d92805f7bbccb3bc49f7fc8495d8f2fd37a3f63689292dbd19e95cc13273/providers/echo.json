@@ -1,0 +1,1 @@
+{"echo":{"id":"echo","name":"Echo","api":"openai-completions","provider":"echo","baseUrl":"https://echo.tracerml.ai/v1","reasoning":true,"thinkingLevelMap":{"minimal":null,"off":"none"},"input":["text"],"cost":{"input":10,"output":50,"cacheRead":0,"cacheWrite":0},"contextWindow":262144,"maxTokens":65536}}
