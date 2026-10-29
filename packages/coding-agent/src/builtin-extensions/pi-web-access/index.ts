@@ -1357,7 +1357,9 @@ export default function (pi: ExtensionAPI) {
 				: (params.query !== undefined ? [params.query] : []);
 			const queryList = normalizeQueryList(rawQueryList);
 			const configWorkflow = loadConfigForExtensionInit().workflow;
-			const workflow = resolveWorkflow(params.workflow ?? configWorkflow, ctx?.hasUI !== false);
+			// The curator is a browser page on this machine, so only the terminal app can show it.
+			// RPC and gateway users would wait for a window they can't see.
+			const workflow = resolveWorkflow(params.workflow ?? configWorkflow, ctx?.hasUI !== false && ctx?.mode === "tui");
 			const shouldCurate = workflow === "summary-review";
 
 			if (queryList.length === 0) {
