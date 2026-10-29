@@ -61,7 +61,7 @@ For a local development server, explicitly opt in yourself:
 {"browserAllowPrivateNetwork": true}
 ```
 
-Set `browserAllowPrivateNetwork` in global `settings.json` yourself and restart after changing it. This grants access to **all local and private destinations**, including requests initiated by public pages. It is not a per-site allowlist. To return to the public-only policy:
+Set `browserAllowPrivateNetwork` in the global `~/.lunr/agent/settings.json` yourself and restart after changing it. This grants access to **all local and private destinations**, including requests initiated by public pages. It is not a per-site allowlist. To return to the public-only policy:
 
 ```json
 {"browserAllowPrivateNetwork": false}
@@ -76,11 +76,3 @@ Each session owns a new ephemeral browser context. Children get separate context
 Operations are serialized, with at most 16 queued calls and four tabs including popups. Snapshots return at most 16KB or 300 lines, plus a truncation notice. Scope `inspect` with a unique role/name or label when it truncates. Chromium still constructs the accessible snapshot before truncation; this is an output limit, not a page-memory limit. The viewport is 1280 by 800; screenshots are capped at 2MB.
 
 Operations have a 30-second deadline, with shorter launch, navigation, and interaction timeouts. Cancellation closes the browser rather than keeping partially completed state. Session replacement, reload, shutdown, and aborted turns also close it. Five minutes without a browser operation discards the context. Resuming a conversation does not restore its browser state. Forced process termination cannot promise the same cleanup as a normal shutdown.
-
-## Development validation
-
-Install Chromium into an isolated cache explicitly, then use that same `PLAYWRIGHT_BROWSERS_PATH` for tests. `test/browser.test.ts` runs policy tests without Chromium and enables its actual-browser cases only when this variable is set. `test/browser-lifecycle.test.ts` covers missing binaries, deferred loading, settings-driven cleanup, and cancellation during launch. Browser settings and install tests cover default-on behavior, legacy explicit disable, npm lifecycle execution, offline installs, and ignored scripts.
-
-After the offline package builds and coding-agent Node bundle, run `node scripts/check-browser.mjs`. It uses a local scripted provider and fixture website, with the normal child permission environment for auto and read-only CLI sessions. A third session verifies missing-Chromium recovery. The checker terminates completed print processes after the final answer because of the existing headless exit behavior. It saves sanitized fixture results, tool inventories, and isolated prompts under `.artifacts/browser-smoke/`; nothing is sent to an external model.
-
-`node scripts/check-interactive-first-paint.mjs` verifies both disabled and enabled browser tool inventories while the implementation imports are stalled. No Chromium launch is needed for that check.

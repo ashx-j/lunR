@@ -237,6 +237,23 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 |-------|---------|
 | `bashMode` | Editor border in bash mode (`!` prefix) |
 
+### Other optional colors
+
+| Token | Purpose |
+|-------|---------|
+| `accent2` | Secondary accent (boot border, separators, brand highlights). Falls back to `accent`. |
+| `white` | Body-text white. Falls back to `text`. |
+
+### Prompt glyph (optional)
+
+The top-level `glyphs.promptArrow` string sets the prompt character in the input box. The default is `>`.
+
+```json
+{
+  "glyphs": { "promptArrow": "❯" }
+}
+```
+
 ### HTML Export (optional)
 
 The `export` section controls colors for `/export` HTML output. If omitted, colors are derived from `userMessageBg`.

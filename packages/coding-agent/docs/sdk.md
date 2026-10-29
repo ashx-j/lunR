@@ -4,7 +4,7 @@
 
 The SDK provides programmatic access to lunR's agent capabilities. Use it to embed lunR in other applications, build custom interfaces, or integrate with automated workflows.
 
-Standalone consumers install and import `@ashx-j/lunr`. The jiti extension loader also aliases `@earendil-works/pi-coding-agent` (and the companion `@ashx-j/lunr-*` / `@earendil-works/pi-*` names). Default `agentDir` is `~/.lunr/agent`.
+Standalone consumers install and import `@ashx-j/lunr`. The package needs Node 22.19 or newer and is ESM only, so use `import`, not `require`. Default `agentDir` is `~/.lunr/agent`.
 
 **Example use cases:**
 - Build a custom UI (web, desktop, mobile)
@@ -208,7 +208,7 @@ await session.prompt("What files are here?");
 
 // With images
 await session.prompt("What's in this image?", {
-  images: [{ type: "image", source: { type: "base64", mediaType: "image/png", data: "..." } }]
+  images: [{ type: "image", data: "<base64 data>", mimeType: "image/png" }]
 });
 
 // During streaming: must specify how to queue the message
@@ -366,17 +366,14 @@ When you pass a custom `ResourceLoader`, `cwd` and `agentDir` no longer control 
 ### Model
 
 ```typescript
-import { getModel } from "@ashx-j/lunr-ai";
 import { ModelRuntime } from "@ashx-j/lunr";
 
 const modelRuntime = await ModelRuntime.create();
 
-// Find specific built-in model (doesn't check if API key exists)
-const opus = getModel("anthropic", "claude-opus-4-5");
-if (!opus) throw new Error("Model not found");
-
-// Find any model by provider/id, including custom models from models.json
+// Find a model by provider/id, including custom models from models.json
 // (doesn't check if API key exists)
+const opus = modelRuntime.getModel("anthropic", "claude-opus-4-5");
+if (!opus) throw new Error("Model not found");
 const customModel = modelRuntime.getModel("my-provider", "my-model");
 
 // Get only models that have valid authentication configured
@@ -450,8 +447,8 @@ for (const provider of modelRuntime.getProviders()) {
   console.log(provider.name, provider.auth, status);
 }
 
-// Runtime API key override (not persisted to disk)
-modelRuntime.setRuntimeApiKey("anthropic", "sk-my-temp-key");
+// Runtime API key override (not persisted to disk). Async: it refreshes the model list.
+await modelRuntime.setRuntimeApiKey("anthropic", "sk-my-temp-key");
 
 // Custom credential and model locations
 const customRuntime = await ModelRuntime.create({
@@ -459,7 +456,7 @@ const customRuntime = await ModelRuntime.create({
   modelsPath: "/my/app/models.json",
 });
 
-// Or inject any pi-ai CredentialStore
+// Or inject any lunr-ai CredentialStore
 const credentials = new InMemoryCredentialStore();
 const inMemoryRuntime = await ModelRuntime.create({ credentials });
 
@@ -475,9 +472,11 @@ const { session } = await createAgentSession({
 Use a `ResourceLoader` to override the system prompt:
 
 ```typescript
-import { createAgentSession, DefaultResourceLoader } from "@ashx-j/lunr";
+import { createAgentSession, DefaultResourceLoader, getAgentDir } from "@ashx-j/lunr";
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   systemPromptOverride: () => "You are a helpful assistant.",
 });
 await loader.reload();
@@ -486,6 +485,20 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 ```
 
 > See [examples/sdk/03-custom-prompt.ts](../examples/sdk/03-custom-prompt.ts)
+
+### Permissions
+
+A session starts in the mode from the `defaultPermissionMode` setting, which is `yolo` unless you change it. In `yolo` mode, tools such as `bash` and `write` run without approval. Pass `permissionMode` to set the mode for one session:
+
+```typescript
+import { createAgentSession } from "@ashx-j/lunr";
+
+const { session } = await createAgentSession({
+  permissionMode: "read-only", // "yolo" (default), "auto", or "read-only"
+});
+```
+
+`read-only` blocks writes and other mutating tools.
 
 ### Tools
 
@@ -514,7 +527,7 @@ const { session } = await createAgentSession({
 
 // Disable one tool while keeping the rest available
 const { session } = await createAgentSession({
-  excludeTools: ["ask_question"],
+  excludeTools: ["web_search"],
 });
 ```
 
@@ -582,9 +595,11 @@ If you pass `tools`, include each custom or extension tool name you want enabled
 Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.lunr/agent/extensions/`, `.lunr/extensions/`, and settings.json extension sources.
 
 ```typescript
-import { createAgentSession, DefaultResourceLoader } from "@ashx-j/lunr";
+import { createAgentSession, DefaultResourceLoader, getAgentDir } from "@ashx-j/lunr";
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   additionalExtensionPaths: ["/path/to/my-extension.ts"],
   extensionFactories: [
     (pi) => {
@@ -604,7 +619,7 @@ Extensions can register tools, subscribe to events, add commands, and more. See 
 **Named inline extensions:** By default, inline factories display as `<inline:1>`, `<inline:2>`, etc. in the startup Extensions list. To show a descriptive name instead, wrap the factory:
 
 ```typescript
-import type { InlineExtension } from "@ashx-j/lunr";
+import { DefaultResourceLoader, getAgentDir, type InlineExtension } from "@ashx-j/lunr";
 
 const myProvider: InlineExtension = {
   name: "my-provider",
@@ -616,6 +631,8 @@ const myProvider: InlineExtension = {
 };
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   extensionFactories: [myProvider],
 });
 ```
@@ -625,10 +642,12 @@ This displays as `<inline:my-provider>` instead of `<inline:1>`. Bare factory fu
 **Event Bus:** Extensions can communicate via `pi.events`. Pass a shared `eventBus` to `DefaultResourceLoader` if you need to emit or listen from outside:
 
 ```typescript
-import { createEventBus, DefaultResourceLoader } from "@ashx-j/lunr";
+import { createEventBus, DefaultResourceLoader, getAgentDir } from "@ashx-j/lunr";
 
 const eventBus = createEventBus();
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   eventBus,
 });
 await loader.reload();
@@ -643,7 +662,9 @@ eventBus.on("my-extension:status", (data) => console.log(data));
 ```typescript
 import {
   createAgentSession,
+  createSyntheticSourceInfo,
   DefaultResourceLoader,
+  getAgentDir,
   type Skill,
 } from "@ashx-j/lunr";
 
@@ -652,10 +673,13 @@ const customSkill: Skill = {
   description: "Custom instructions",
   filePath: "/path/to/SKILL.md",
   baseDir: "/path/to",
-  source: "custom",
+  sourceInfo: createSyntheticSourceInfo("/path/to/SKILL.md", { source: "sdk" }),
+  disableModelInvocation: false,
 };
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   skillsOverride: (current) => ({
     skills: [...current.skills, customSkill],
     diagnostics: current.diagnostics,
@@ -671,9 +695,11 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 ### Context Files
 
 ```typescript
-import { createAgentSession, DefaultResourceLoader } from "@ashx-j/lunr";
+import { createAgentSession, DefaultResourceLoader, getAgentDir } from "@ashx-j/lunr";
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   agentsFilesOverride: (current) => ({
     agentsFiles: [
       ...current.agentsFiles,
@@ -693,18 +719,23 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 ```typescript
 import {
   createAgentSession,
+  createSyntheticSourceInfo,
   DefaultResourceLoader,
+  getAgentDir,
   type PromptTemplate,
 } from "@ashx-j/lunr";
 
 const customCommand: PromptTemplate = {
   name: "deploy",
   description: "Deploy the application",
-  source: "(custom)",
+  filePath: "/virtual/prompts/deploy.md",
+  sourceInfo: createSyntheticSourceInfo("/virtual/prompts/deploy.md", { source: "sdk" }),
   content: "# Deploy\n\n1. Build\n2. Test\n3. Deploy",
 };
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   promptsOverride: (current) => ({
     prompts: [...current.prompts, customCommand],
     diagnostics: current.diagnostics,
@@ -757,7 +788,7 @@ const { session: opened } = await createAgentSession({
 
 // List sessions
 const currentProjectSessions = await SessionManager.list(process.cwd());
-const allSessions = await SessionManager.listAll(process.cwd());
+const allSessions = await SessionManager.listAll();
 
 // Session replacement API for /new, /resume, /fork, /clone, and import flows.
 const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
@@ -799,12 +830,12 @@ const sm = SessionManager.open("/path/to/session.jsonl");
 
 // Session listing
 const currentProjectSessions = await SessionManager.list(process.cwd());
-const allSessions = await SessionManager.listAll(process.cwd());
+const allSessions = await SessionManager.listAll();
 
 // Tree traversal
 const entries = sm.getEntries();        // All entries (excludes header)
 const tree = sm.getTree();              // Full tree structure
-const path = sm.getPath();              // Path from root to current leaf
+const path = sm.getBranch();            // Path from root to current leaf
 const leaf = sm.getLeafEntry();         // Current leaf entry
 const entry = sm.getEntry(id);          // Get entry by ID
 const children = sm.getChildren(id);    // Direct children of entry
@@ -883,7 +914,7 @@ import {
 } from "@ashx-j/lunr";
 
 const loader = new DefaultResourceLoader({
-  cwd,
+  cwd: process.cwd(),
   agentDir: getAgentDir(),
 });
 await loader.reload();
@@ -921,7 +952,6 @@ interface LoadExtensionsResult {
 ## Complete Example
 
 ```typescript
-import { getModel } from "@ashx-j/lunr-ai";
 import { Type } from "typebox";
 import {
   createAgentSession,
@@ -937,7 +967,7 @@ const modelRuntime = await ModelRuntime.create({
   modelsPath: "/custom/agent/models.json",
 });
 if (process.env.MY_KEY) {
-  modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_KEY);
+  await modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_KEY);
 }
 
 // Inline tool
@@ -952,7 +982,7 @@ const statusTool = defineTool({
   }),
 });
 
-const model = getModel("anthropic", "claude-opus-4-5");
+const model = modelRuntime.getModel("anthropic", "claude-opus-4-5");
 if (!model) throw new Error("Model not found");
 
 // In-memory settings with overrides
@@ -1077,7 +1107,7 @@ await runPrintMode(runtime, {
 
 ### runRpcMode
 
-JSON-RPC mode for subprocess integration:
+JSON-lines protocol mode for subprocess integration:
 
 ```typescript
 import {
@@ -1141,7 +1171,7 @@ createAgentSessionRuntime
 AgentSessionRuntime
 
 // Auth and Models
-ModelRuntime // implements pi-ai Models and owns credential storage
+ModelRuntime // implements lunr-ai Models and owns credential storage
 ModelRegistry // synchronous extension compatibility facade
 resolveCliModel
 resolveModelScopeWithDiagnostics

@@ -60,7 +60,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
-| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). Saved `"manual"` becomes yolo; saved `"plan"` becomes read-only. |
+| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). |
 | `autoReviewModel` | string | unset | `"provider/model"` that reviews risky actions in auto mode. Unset uses the provider's own reviewer (Claude Sonnet 5 for Anthropic, the session model for OpenAI, xAI and Qwen); other providers need one set |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
 | `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
@@ -86,8 +86,6 @@ For VS Code, include `--wait` so lunR resumes after the editor exits:
 ```
 
 ### Offline and updates
-
-lunR does not use `enableInstallTelemetry`, `collapseChangelog`, `PI_SKIP_VERSION_CHECK`, or `PI_TELEMETRY`. There is no pi.dev latest-version or report-install ping.
 
 `lunr update` reinstalls global `@ashx-j/lunr` from npm. Catalog refresh is `/refresh`. Use `--offline` or `PI_OFFLINE=1` to skip startup network operations (npm update check, package update checks, live catalog probes). First interactive paint is already cache-only.
 
@@ -279,7 +277,7 @@ String form loads all resources from a package:
 
 ```json
 {
-  "packages": ["pi-skills", "@org/my-extension"]
+  "packages": ["npm:@foo/lunr-tools", "npm:@org/my-extension"]
 }
 ```
 
@@ -289,8 +287,8 @@ Object form filters which resources to load:
 {
   "packages": [
     {
-      "source": "pi-skills",
-      "skills": ["brave-search", "transcribe"],
+      "source": "npm:@foo/lunr-tools",
+      "skills": ["review", "deploy"],
       "extensions": []
     }
   ]
@@ -317,7 +315,7 @@ See [packages.md](packages.md) for package management details.
     "maxRetries": 3
   },
   "enabledModels": ["claude-*", "gpt-4o"],
-  "packages": ["pi-skills"]
+  "packages": ["npm:@foo/lunr-tools"]
 }
 ```
 

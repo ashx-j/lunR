@@ -2,7 +2,7 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@ashx-j/lunr` instead of spawning a subprocess. See the SDK (`docs/sdk.md`) and types in the published package (`node_modules/@ashx-j/lunr`). A subprocess TypeScript client ships in the repo as `packages/coding-agent/src/modes/rpc/rpc-client.ts`.
+**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@ashx-j/lunr` instead of spawning a subprocess. See the SDK (`docs/sdk.md`) and types in the published package (`node_modules/@ashx-j/lunr`). A typed subprocess client, `RpcClient`, is exported from `@ashx-j/lunr`.
 
 ## Starting RPC Mode
 
@@ -190,7 +190,7 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+The `model` field is a full [Model](#model-object) object, or omitted when no model is selected. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
 
 `permissionMode` reports `yolo`, `auto` or `read-only`. ACP-managed workers also
 report `pendingSubagents`, which includes owned child work awaiting completion
@@ -198,8 +198,8 @@ delivery. Ordinary RPC clients do not receive this field.
 
 #### set_permission_mode
 
-Change session permissions while idle. Active prompts, compaction, retries and
-bash execution reject the change.
+Change the permission mode. The new mode applies to the next tool call, including
+during a turn. An invalid mode returns an error response.
 
 ```json
 {"type":"set_permission_mode","mode":"read-only"}
@@ -227,7 +227,7 @@ Response:
 }
 ```
 
-Messages are `AgentMessage` objects (see [Message Types](#message-types)).
+Messages are `AgentMessage` objects (see [Types](#types)).
 
 ### Model
 
@@ -239,7 +239,7 @@ Switch to a specific model.
 {"type": "set_model", "provider": "anthropic", "modelId": "claude-sonnet-4-20250514"}
 ```
 
-Response contains the full [Model](#model) object:
+Response contains the full [Model](#model-object) object:
 ```json
 {
   "type": "response",
@@ -271,7 +271,7 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object.
+The `model` field is a full [Model](#model-object) object.
 
 #### get_available_models
 
@@ -281,7 +281,7 @@ List all configured models. With `clientScopedModelsOnly` on in settings and at 
 {"type": "get_available_models"}
 ```
 
-Response contains an array of full [Model](#model) objects:
+Response contains an array of full [Model](#model-object) objects:
 ```json
 {
   "type": "response",
@@ -462,6 +462,8 @@ Execute a shell command and add output to conversation context.
 {"type": "bash", "command": "ls -la"}
 ```
 
+Set `"excludeFromContext": true` to run the command and record it in the session without sending its output to the LLM.
+
 Response:
 ```json
 {
@@ -488,7 +490,7 @@ If output was truncated, includes `fullOutputPath`:
     "exitCode": 0,
     "cancelled": false,
     "truncated": true,
-    "fullOutputPath": "/tmp/pi-bash-abc123.log"
+    "fullOutputPath": "/tmp/lunr-bash-abc123.log"
   }
 }
 ```
@@ -566,7 +568,7 @@ Response:
 }
 ```
 
-`tokens` contains assistant usage totals for the current session state. `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
+`tokens` contains assistant usage totals for the current session state. `parentUsage`, `childUsage` and `combinedUsage` also report request counts and cost for the session, its subagents, and both together. `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
@@ -805,9 +807,9 @@ Response:
   "success": true,
   "data": {
     "commands": [
-      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "path": "/home/user/.lunr/agent/extensions/session.ts"},
-      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "location": "project", "path": "/home/user/myproject/.lunr/prompts/fix-tests.md"},
-      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "location": "user", "path": "/home/user/.lunr/agent/skills/brave-search/SKILL.md"}
+      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "sourceInfo": {"path": "/home/user/.lunr/agent/extensions/session.ts", "source": "auto", "scope": "user", "origin": "top-level", "baseDir": "/home/user/.lunr/agent/extensions"}},
+      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "sourceInfo": {"path": "/home/user/myproject/.lunr/prompts/fix-tests.md", "source": "auto", "scope": "project", "origin": "top-level", "baseDir": "/home/user/myproject/.lunr/prompts"}},
+      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "sourceInfo": {"path": "/home/user/.lunr/agent/skills/brave-search/SKILL.md", "source": "auto", "scope": "user", "origin": "top-level", "baseDir": "/home/user/.lunr/agent/skills/brave-search"}}
     ]
   }
 }
@@ -820,11 +822,12 @@ Each command has:
   - `"extension"`: Registered via `pi.registerCommand()` in an extension
   - `"prompt"`: Loaded from a prompt template `.md` file
   - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
-- `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.lunr/agent/`)
-  - `"project"`: Project-level (`./.lunr/`)
-  - `"path"`: Explicit path via CLI or settings
-- `path`: Absolute file path to the command source (optional)
+- `sourceInfo`: Where the command was loaded from:
+  - `path`: Absolute file path to the command source
+  - `source`: `"auto"` for a resource found in a standard config folder, `"local"` for a path listed in settings, or the package source for an installed package
+  - `scope`: `"user"` (`~/.lunr/agent/`), `"project"` (`./.lunr/`), or `"temporary"` (not saved, such as a path passed on the command line)
+  - `origin`: `"top-level"` for a resource found directly, or `"package"` for one provided by an installed package
+  - `baseDir`: The directory the resource was found in (optional)
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
 
@@ -852,6 +855,10 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 | `compaction_end` | Compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
+| `entry_appended` | An extension appended a custom entry to the session |
+| `session_info_changed` | Session name changed |
+| `thinking_level_changed` | Thinking level changed |
+| `subscription_rotation` | A failed run switched to the next pooled subscription key |
 | `extension_error` | Extension threw an error |
 
 ### agent_start
@@ -1069,6 +1076,19 @@ On final failure (max retries exceeded):
   "finalError": "529 overloaded_error: Overloaded"
 }
 ```
+
+### entry_appended / session_info_changed / thinking_level_changed / subscription_rotation
+
+Session-level events. They carry these fields:
+
+```json
+{"type": "entry_appended", "entry": {...}}
+{"type": "session_info_changed", "name": "my-feature-work"}
+{"type": "thinking_level_changed", "level": "high"}
+{"type": "subscription_rotation", "providerId": "anthropic", "keyName": "work", "errorMessage": "..."}
+```
+
+`name` is omitted when the session name is cleared.
 
 ### extension_error
 
@@ -1303,7 +1323,7 @@ Parse errors:
 
 Types ship in the published package (`node_modules/@ashx-j/lunr`). In this repo they live under `packages/ai`, `packages/agent`, and `packages/coding-agent/src`.
 
-### Model
+### Model object
 
 ```json
 {
@@ -1331,8 +1351,7 @@ Types ship in the published package (`node_modules/@ashx-j/lunr`). In this repo 
 {
   "role": "user",
   "content": "Hello!",
-  "timestamp": 1733234567890,
-  "attachments": []
+  "timestamp": 1733234567890
 }
 ```
 
@@ -1390,25 +1409,11 @@ Created by the `bash` RPC command (not by LLM tool calls):
   "exitCode": 0,
   "cancelled": false,
   "truncated": false,
-  "fullOutputPath": null,
   "timestamp": 1733234567890
 }
 ```
 
-### Attachment
-
-```json
-{
-  "id": "img1",
-  "type": "image",
-  "fileName": "photo.jpg",
-  "mimeType": "image/jpeg",
-  "size": 102400,
-  "content": "base64-encoded-data...",
-  "extractedText": null,
-  "preview": null
-}
-```
+`fullOutputPath` is present only when the output was truncated. `excludeFromContext` is `true` when the command was sent with `"excludeFromContext": true`.
 
 ## Example: Basic Client (Python)
 
@@ -1441,7 +1446,8 @@ for event in read_events():
         if delta.get("type") == "text_delta":
             print(delta["delta"], end="", flush=True)
     
-    if event.get("type") == "agent_end":
+    # agent_settled means no retry, compaction retry or queued message remains
+    if event.get("type") == "agent_settled":
         print()
         break
 ```

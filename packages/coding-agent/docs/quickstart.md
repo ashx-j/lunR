@@ -10,24 +10,11 @@ Requires **Node.js ≥ 22.19**. lunR is distributed as `@ashx-j/lunr`:
 npm i -g @ashx-j/lunr
 ```
 
-`--ignore-scripts` is optional; lunR does not require install scripts for a normal npm install. There is no pi.dev `install.sh`.
+A normal install also downloads Chromium for the browser tool. `--ignore-scripts` skips it, and `lunr browser install` adds it later.
 
 ### Uninstall
 
-Product uninstall vs package uninstall:
-
-```bash
-# Remove this lunR install; keeps ~/.lunr/agent
-lunr uninstall
-
-# Also wipe ~/.lunr/agent (settings, credentials, sessions, packages)
-lunr uninstall --purge
-
-# Remove an extension package (alias for lunr remove)
-lunr uninstall npm:@foo/bar
-```
-
-You can also uninstall the npm package itself:
+Remove the CLI with your package manager:
 
 ```bash
 npm uninstall -g @ashx-j/lunr
@@ -36,7 +23,9 @@ yarn global remove @ashx-j/lunr
 bun uninstall -g @ashx-j/lunr
 ```
 
-`npm uninstall -g` leaves settings, credentials, sessions, and installed packages in `~/.lunr/agent/`. Use `lunr uninstall --purge` to wipe that directory.
+That leaves settings, credentials, sessions, and installed packages in `~/.lunr/agent/`. To delete that directory too, run `lunr uninstall --purge` before removing the package. It asks for confirmation, or pass `--yes`. For an npm install, `lunr uninstall` without `--purge` only prints the npm command.
+
+To remove an extension package instead, use `lunr uninstall npm:@foo/bar` (alias for `lunr remove`).
 
 Optional first-run features (Telegram/Discord gateway):
 
@@ -53,7 +42,7 @@ cd /path/to/project
 lunr
 ```
 
-Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override with `PI_CODING_AGENT_DIR`. Never use `~/.pi/` as the lunR home.
+Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override with `PI_CODING_AGENT_DIR`.
 
 ## Authenticate
 
@@ -103,7 +92,7 @@ By default, lunR gives the model four tools:
 - `edit` - patch files
 - `bash` - run shell commands
 
-Additional built-in read-only tools (`grep`, `find`, `ls`) exist but start off. lunR runs in your current working directory and can modify files there. Use git or `/rollback` if you want easy undo.
+Additional built-in read-only tools (`grep`, `find`, `ls`) exist but start off. lunR runs in your current working directory and can modify files there. Use git for easy undo. `/rollback` also restores the last turn's file changes, but it is off by default. Turn it on in `/settings` → Rollback.
 
 Permission modes are `yolo | auto | read-only`. Shift+Tab cycles that order. The TUI displays read-only as `read`; `/plan` enters read-only mode and `present_plan` is available there for approval.
 
@@ -187,7 +176,7 @@ lunr update          # reinstall global @ashx-j/lunr from npm
 lunr update --self   # same
 ```
 
-Workspace `npx lunr` from this repo is not a published install and will not self-update. Catalog refresh is `/refresh`. Extra flags such as `--models`, `--all`, and `--force` are invalid.
+Catalog refresh is `/refresh`, not `lunr update`.
 
 ## Next steps
 

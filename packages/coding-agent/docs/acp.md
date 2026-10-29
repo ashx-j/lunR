@@ -23,10 +23,6 @@ acp
 
 Adjust the first argument if your global npm directory is elsewhere.
 
-For a development checkout, build the packages, then use executable `node`
-with arguments `/absolute/path/to/lunR/packages/coding-agent/dist/cli.js`,
-`--mode`, `acp`. This runs the checkout without replacing an installed CLI.
-
 Configure model access in lunR's terminal interface first. ACP uses the same
 credentials, model catalog, instructions, skills and enabled extensions, with
 the ACP adjustments below.
@@ -136,5 +132,4 @@ prompt conversion and pre-edit snapshot approach from
 `04d0a15d6bb42bb65cce5c9caedcdcb2cdcb6905`.
 The original adapter is MIT licensed. Its [copyright and license](licenses/pi-acp.txt)
 ship with lunR. The integration replaces Pi-specific settings, session lookup,
-process launch and permission behavior with lunR's implementations. The ACP
-SDK is pinned to the base adapter's reviewed `0.26.0` API.
+process launch and permission behavior with lunR's implementations.

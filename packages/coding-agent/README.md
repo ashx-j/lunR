@@ -79,17 +79,15 @@ lunr setup
 lunr features list
 ```
 
-To remove the CLI, keep `~/.lunr/agent` unless you pass `--purge`:
+To remove the CLI, run `npm uninstall -g @ashx-j/lunr`. That keeps `~/.lunr/agent`. To delete that directory too, run `lunr uninstall --purge` first:
 
 ```bash
-lunr uninstall           # remove this lunR install; keeps ~/.lunr/agent
-lunr uninstall --purge   # also wipe ~/.lunr/agent (settings, credentials, sessions)
+lunr uninstall                # npm installs: prints the npm command that removes the CLI
+lunr uninstall --purge        # also deletes ~/.lunr/agent (settings, credentials, sessions); asks first, or pass --yes
 lunr uninstall npm:@foo/bar   # remove an extension package (alias for lunr remove)
 ```
 
-You can also `npm uninstall -g @ashx-j/lunr`. That leaves `~/.lunr/agent` in place.
-
-Config lives in `~/.lunr/agent` (global) and project `.lunr/` (`piConfig.configDir`). Override the agent dir with `PI_CODING_AGENT_DIR`. **Do not use `~/.pi/` as the lunR home.**
+Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override the agent dir with `PI_CODING_AGENT_DIR`.
 
 Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
 
@@ -118,7 +116,7 @@ For ChatGPT/Codex, lunR discovers the models available to your account directly,
 - Ollama and LM Studio via `/login` (localhost probe)
 - OpenCode Zen: `/login opencode` then `/refresh` (free rows rotate from live `/v1/models`)
 
-**API keys:** Anthropic, Ant Ling, OpenAI, Azure OpenAI, DeepSeek, NVIDIA NIM, Google Gemini, Google Vertex, Amazon Bedrock, Mistral, Groq, Cerebras, Cloudflare AI Gateway, Cloudflare Workers AI, xAI, OpenRouter, Vercel AI Gateway, ZAI Coding Plan, OpenCode Zen/Go, Hugging Face, Fireworks, Together AI, Kimi For Coding, MiniMax, Xiaomi MiMo, Qwen Token Plan.
+**API keys:** Anthropic, Ant Ling, OpenAI, Azure OpenAI, DeepSeek, NVIDIA NIM, Google Gemini, Google Vertex, Amazon Bedrock, Mistral, Groq, Cerebras, Cloudflare AI Gateway, Cloudflare Workers AI, xAI, OpenRouter, Vercel AI Gateway, ZAI Coding Plan, OpenCode Zen/Go, Hugging Face, Fireworks, Together AI, Kimi For Coding, Moonshot AI, MiniMax, Xiaomi MiMo, Qwen Token Plan, Qwen Cloud.
 
 See [docs/providers.md](docs/providers.md) for setup. **xAI SuperGrok:** `/login xai` can import `~/.grok/auth.json` from the Grok CLI; `/logout xai` does **not** delete that file.
 
@@ -133,7 +131,7 @@ The interface from top to bottom:
 - **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
 - **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
 - **Editor** - Where you type; border color indicates thinking level
-- **Footer** - Working directory, git branch, session name, token/cache usage, cost, context usage, plan bar, current model. Customize its segments under `/settings` → Customize.
+- **Footer** - Permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate. Customize its segments under `/settings` → Customize. The current model and thinking level are on the editor's border.
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions. [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
@@ -191,7 +189,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/session` | Show session info |
 | `/tree` | Jump to any point in the session (`ctrl+o` cycles filters) |
 | `/undo`, `/edit`, `/redo` | Same-session rewind; `/edit` pastes the last prompt |
-| `/rollback` | Undo the last turn's file changes (forks) |
+| `/rollback` | Undo the last turn's file changes (forks). Off by default; turn it on in `/settings` → Rollback |
 | `/trust` | Save project trust decision |
 | `/fork` | Create a new session from a previous user message |
 | `/clone` | Duplicate the current active branch |
@@ -206,7 +204,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/init` | Generate a starter AGENTS.md |
 | `/quit` | Quit lunR |
 
-Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`, which writes the rendered screen to the debug log. There is no `/changelog` or `/token-usage` command.
+Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`, which writes the rendered screen to the debug log.
 
 ### Permission modes
 
@@ -331,7 +329,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 Use `--offline` or `PI_OFFLINE=1` to skip startup network operations (npm update check, package update checks, live catalog probes). First interactive paint is already cache-only.
 
-`lunr update` / `lunr update --self` reinstalls global `@ashx-j/lunr` from npm. It is not a catalog refresh and does not take `--models`, `--all`, or `--force`. Workspace `npx lunr` (this repo) refuses to self-update; install the published package to use `lunr update`.
+`lunr update` / `lunr update --self` reinstalls global `@ashx-j/lunr` from npm. It is not a catalog refresh.
 
 ---
 
@@ -362,7 +360,7 @@ Reusable prompts as Markdown files. Type `/name` to expand.
 ```markdown
 <!-- ~/.lunr/agent/prompts/review.md -->
 Review this code for bugs, security issues, and performance problems.
-Focus on: {{focus}}
+Focus on: $@
 ```
 
 Place in `~/.lunr/agent/prompts/`, `.lunr/prompts/`, or a [package](#packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
@@ -397,7 +395,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-The factory argument is conventionally named `pi` (`export default function (pi: ExtensionAPI)`). Keep that. The jiti loader aliases both `@ashx-j/lunr` and `@earendil-works/pi-coding-agent` when loading extensions.
+The factory argument is conventionally named `pi` (`export default function (pi: ExtensionAPI)`). Keep that.
 
 The default export can also be `async`. lunR waits for async extension factories before startup continues.
 
@@ -405,7 +403,7 @@ Place in `~/.lunr/agent/extensions/`, `.lunr/extensions/`, or a [package](#packa
 
 ### Themes
 
-Built-in theme: **`moon` only** (`getDefaultTheme()` returns `"moon"`). Themes hot-reload: modify the active theme file and lunR immediately applies changes.
+Built-in theme: **`moon` only**. Themes hot-reload: modify the active theme file and lunR immediately applies changes.
 
 Place custom themes in `~/.lunr/agent/themes/`, `.lunr/themes/`, or a [package](#packages). Schema: [theme-schema.json](https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/src/modes/interactive/theme/theme-schema.json) (also packed as `dist/modes/interactive/theme/theme-schema.json`). See [docs/themes.md](docs/themes.md).
 
@@ -436,7 +434,6 @@ Create a package by adding a `pi` key to `package.json`:
 ```json
 {
   "name": "my-lunr-package",
-  "keywords": ["pi-package"],
   "pi": {
     "extensions": ["./extensions"],
     "skills": ["./skills"],
@@ -526,7 +523,7 @@ lunr features [list|enable|disable]
 lunr doctor                        # Check logins, default model, catalog, browser, Claude Code and gateway
 lunr doctor keys                   # Test whether Shift+Enter, Alt+Enter and image paste reach lunR
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
-lunr uninstall [--purge]           # Remove this lunR install (keeps ~/.lunr/agent unless --purge)
+lunr uninstall [--purge]           # Print the npm removal command; --purge also deletes ~/.lunr/agent
 lunr uninstall <source> [-l]       # Remove an extension package (alias for remove)
 lunr install <source> [-l]         # Install package, -l for project-local
 lunr remove <source> [-l]          # Remove package
@@ -536,7 +533,7 @@ lunr update                        # Reinstall global @ashx-j/lunr only
 lunr update --self                 # Same as lunr update
 ```
 
-`lunr update` does not take `--models`, `--all`, `--force`, or `--extensions`. Refresh catalogs with `/refresh`.
+`lunr update` takes no other options. Refresh catalogs with `/refresh`.
 
 `lunr config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command.
 
@@ -662,7 +659,7 @@ lunr --models "claude-*,gpt-4o"
 lunr --tools read,grep,find,ls -p "Review the code"
 
 # Disable one extension or built-in tool while keeping the rest available
-lunr --exclude-tools ask_question
+lunr --exclude-tools web_search
 
 # High thinking level
 lunr --thinking high "Solve this complex problem"
@@ -673,7 +670,7 @@ lunr --offline
 
 ### Environment Variables
 
-These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
+These variables keep pi's `PI_` prefix.
 
 | Variable | Description |
 |----------|-------------|
@@ -694,7 +691,7 @@ See [docs/development.md](docs/development.md) for setup, forking, and debugging
 
 ## License
 
-MIT. See [LICENSE](LICENSE) for lunR and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the original pi license.
+MIT. See [LICENSE](https://github.com/ashx-j/lunR/blob/master/LICENSE) for lunR and [THIRD_PARTY_NOTICES](https://github.com/ashx-j/lunR/blob/master/THIRD_PARTY_NOTICES) for the original pi license.
 
 ## See Also
 

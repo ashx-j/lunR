@@ -16,7 +16,7 @@ Minimal terminal UI framework with differential rendering and synchronized outpu
 ## Quick Start
 
 ```typescript
-import { TUI, Text, Editor, ProcessTerminal, matchesKey } from "@ashx-j/lunr-tui";
+import { TUI, Text, Editor, ProcessTerminal, matchesKey, type EditorTheme } from "@ashx-j/lunr-tui";
 
 // Create terminal
 const terminal = new ProcessTerminal();
@@ -27,7 +27,18 @@ const tui = new TUI(terminal);
 // Add components
 tui.addChild(new Text("Welcome to my app!"));
 
-import { defaultEditorTheme as editorTheme } from './test/test-themes.ts';
+// Minimal editor theme using plain ANSI codes
+const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
+const editorTheme: EditorTheme = {
+  borderColor: dim,
+  selectList: {
+    selectedPrefix: (s) => `\x1b[34m${s}\x1b[39m`,
+    selectedText: (s) => `\x1b[1m${s}\x1b[22m`,
+    description: dim,
+    scrollInfo: dim,
+    noMatch: dim,
+  },
+};
 const editor = new Editor(tui, editorTheme);
 editor.onSubmit = (text) => {
   console.log("Submitted:", text);
@@ -155,16 +166,16 @@ interface Component {
   render(width: number): string[];
   handleInput?(data: string): void;
   handleClick?(localY: number, width: number, localX?: number): boolean;
-  invalidate?(): void;
+  invalidate(): void;
 }
 ```
 
 | Method | Description |
 |--------|-------------|
-| `render(width)` | Returns an array of strings, one per line. Each line **must not exceed `width`** or the TUI will error. Use `truncateToWidth()` or manual wrapping to ensure this. |
+| `render(width)` | Returns an array of strings, one per line. Each line **must not exceed `width`**. The TUI truncates lines that are too wide and writes a diagnostic log (`pi-crash.log` in `~/.lunr/agent`, or `$PI_CODING_AGENT_DIR` if set) on the first overflow. Use `truncateToWidth()` or manual wrapping to avoid this. |
 | `handleInput?(data)` | Called when the component has focus and receives keyboard input. The `data` string contains raw terminal input (may include ANSI escape sequences). |
 | `handleClick?(localY, width, localX?)` | Called for a click with zero-based coordinates inside the component. `localX` is optional for compatibility with row-only handlers. Return `true` when handled. |
-| `invalidate?()` | Called to clear any cached render state. Components should re-render from scratch on the next `render()` call. |
+| `invalidate()` | Called to clear any cached render state. Components should re-render from scratch on the next `render()` call. |
 
 The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, reapply styles per line or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
 
@@ -475,12 +486,21 @@ interface SettingItem {
   currentValue: string;
   values?: string[];  // If provided, Enter/Space cycles through these
   submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
+  disabled?: () => boolean;  // If it returns true, the row is dimmed and cannot be activated
+  searchTerms?: string[];    // Extra names that search matches besides the label
+}
+
+// Non-selectable heading that groups the rows after it. Mix sections into the rows array.
+interface SettingSection {
+  kind: "section";
+  label?: string;
 }
 
 interface SettingsListTheme {
   label: (text: string, selected: boolean) => string;
   value: (text: string, selected: boolean) => string;
   description: (text: string) => string;
+  disabled: (text: string) => string;
   cursor: string;
   hint: (text: string) => string;
 }
@@ -493,7 +513,8 @@ const settings = new SettingsList(
   10,      // maxVisible
   theme,   // SettingsListTheme
   (id, newValue) => console.log(`${id} changed to ${newValue}`),
-  () => console.log("Cancelled")
+  () => console.log("Cancelled"),
+  { enableSearch: true }  // optional: fuzzy search by label
 );
 settings.updateValue("theme", "light");
 ```
@@ -513,7 +534,7 @@ const spacer = new Spacer(2); // 2 empty lines (default: 1)
 
 ### Image
 
-Renders images inline for terminals that support the Kitty graphics protocol (Kitty, Ghostty, WezTerm) or iTerm2 inline images. Falls back to a text placeholder on unsupported terminals.
+Renders images inline for terminals that support the Kitty graphics protocol (Kitty, Ghostty, WezTerm, Warp) or iTerm2 inline images. Falls back to a text placeholder on unsupported terminals.
 
 ```typescript
 interface ImageTheme {
@@ -595,7 +616,7 @@ if (matchesKey(data, Key.enter)) {
 The TUI uses three rendering strategies:
 
 1. **First Render**: Output all lines without clearing scrollback
-2. **Width Changed or Change Above Viewport**: Clear screen and full re-render
+2. **Width or Height Changed, or Change Above Viewport**: Clear screen and full re-render
 3. **Normal Update**: Move cursor to first changed line, clear to end, render changed lines
 
 All updates are wrapped in **synchronized output** (`\x1b[?2026h` ... `\x1b[?2026l`) for atomic, flicker-free rendering.
@@ -608,21 +629,24 @@ The TUI works with any object implementing the `Terminal` interface:
 interface Terminal {
   start(onInput: (data: string) => void, onResize: () => void): void;
   stop(): void;
+  drainInput(maxMs?: number, idleMs?: number): Promise<void>;
   write(data: string): void;
   get columns(): number;
   get rows(): number;
+  get kittyProtocolActive(): boolean;
   moveBy(lines: number): void;
   hideCursor(): void;
   showCursor(): void;
   clearLine(): void;
   clearFromCursor(): void;
   clearScreen(): void;
+  setTitle(title: string): void;
+  setProgress(active: boolean): void;
 }
 ```
 
-**Built-in implementations:**
+**Built-in implementation:**
 - `ProcessTerminal` - Uses `process.stdin/stdout`
-- `VirtualTerminal` - For testing (uses `@xterm/headless`)
 
 ## Utilities
 
@@ -645,7 +669,7 @@ const lines = wrapTextWithAnsi("This is a long line that needs wrapping", 20);
 
 ## Creating Custom Components
 
-When creating custom components, **each line returned by `render()` must not exceed the `width` parameter**. The TUI will error if any line is wider than the terminal.
+When creating custom components, **each line returned by `render()` must not exceed the `width` parameter**. The TUI truncates any line that is wider than the terminal and logs the first overflow.
 
 ### Handling Input
 
@@ -760,33 +784,35 @@ class CachedComponent implements Component {
 
 ## Example
 
-See `test/chat-simple.ts` for a complete chat interface example with:
+From a repo checkout, see `packages/tui/test/chat-simple.ts` for a complete chat interface example with:
 - Markdown messages with custom background colors
 - Loading spinner during responses
 - Editor with autocomplete and slash commands
 - Spacers between messages
 
-Run it:
+Run it from `packages/tui`:
 ```bash
 npx tsx test/chat-simple.ts
 ```
 
 ## Development
 
+These commands need a repo checkout.
+
 ```bash
-# Install dependencies (from monorepo root)
+# Install dependencies (from the monorepo root)
 npm install
 
-# Run type checking
+# Run lint and repo checks (from the monorepo root)
 npm run check
 
-# Run the demo
+# Run the demo (from packages/tui)
 npx tsx test/chat-simple.ts
 ```
 
 ### Debug logging
 
-Set `PI_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout.
+Set `PI_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout. The example below needs a repo checkout, but the variable works with any app built on this package.
 
 ```bash
 PI_TUI_WRITE_LOG=/tmp/tui-ansi.log npx tsx test/chat-simple.ts

@@ -31,6 +31,8 @@ agent.subscribe((event) => {
 await agent.prompt("Hello!");
 ```
 
+The agent reads the API key for the model's provider from the environment (`ANTHROPIC_API_KEY` here). To supply keys another way, pass `getApiKey` in the agent options.
+
 ## Core Concepts
 
 ### AgentMessage vs LLM Message
@@ -45,7 +47,7 @@ LLMs only understand `user`, `assistant`, and `toolResult`. The `convertToLlm` f
 
 ```
 AgentMessage[] → transformContext() → AgentMessage[] → convertToLlm() → Message[] → LLM
-                    (optional)                           (required)
+                    (optional)                           (optional on Agent, required for agentLoop)
 ```
 
 1. **transformContext**: Prune old messages, inject external context
@@ -169,7 +171,7 @@ const agent = new Agent({
     messages: AgentMessage[],
   },
 
-  // Convert AgentMessage[] to LLM Message[] (required for custom message types)
+  // Convert AgentMessage[] to LLM Message[] (optional; the default keeps user, assistant and toolResult messages)
   convertToLlm: (messages) => messages.filter(...),
 
   // Transform context before convertToLlm (for pruning, compaction)
@@ -268,7 +270,7 @@ await agent.continue();
 
 ```typescript
 agent.state.systemPrompt = "New prompt";
-agent.state.model = getModel("openai", "gpt-4o");
+agent.state.model = getBuiltinModel("openai", "gpt-4o");
 agent.state.thinkingLevel = "medium";
 agent.state.tools = [myTool];
 agent.toolExecution = "sequential";
@@ -381,7 +383,7 @@ const agent = new Agent({
 Define tools using `AgentTool`:
 
 ```typescript
-import { Type } from "typebox";
+import { Type } from "@ashx-j/lunr-ai";
 
 const readFileTool: AgentTool = {
   name: "read_file",
@@ -423,7 +425,7 @@ execute: async (toolCallId, params, signal, onUpdate) => {
     throw new Error(`File not found: ${params.path}`);
   }
   // Return content only on success
-  return { content: [{ type: "text", text: "..." }] };
+  return { content: [{ type: "text", text: "..." }], details: {} };
 }
 ```
 
@@ -454,6 +456,7 @@ For direct control without the Agent class:
 
 ```typescript
 import { agentLoop, agentLoopContinue } from "@ashx-j/lunr-agent";
+import { getBuiltinModel } from "@ashx-j/lunr-ai/providers/all";
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",

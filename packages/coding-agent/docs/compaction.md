@@ -34,6 +34,8 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.lunr/agent/settings.json` or `<project-dir>/.lunr/settings.json`). This leaves room for the LLM's response.
 
+On small context windows lunR caps both settings by window size. The effective `reserveTokens` is at most 25% of the context window, and the effective `keepRecentTokens` is at most 40%. Windows of about 65k tokens or more keep the configured values.
+
 For Codex OAuth models, lunR checks the threshold after each complete batch of tool results. If the batch crosses the threshold, lunR compacts before sending the next provider request.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary. Running `/compact` again at an unchanged compaction boundary is a no-op.
@@ -126,8 +128,8 @@ Defined in [`session-manager.ts`](https://github.com/ashx-j/lunR/blob/master/pac
 interface CompactionEntry<T = unknown> {
   type: "compaction";
   id: string;
-  parentId: string;
-  timestamp: number;
+  parentId: string | null;
+  timestamp: string;  // ISO timestamp
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
@@ -172,10 +174,12 @@ Entries to summarize: B, C, D
 
 After navigation with summary:
 
-         ┌─ B ─ C ─ D ─ [summary of B,C,D]
+         ┌─ B ─ C ─ D
     A ───┤
-         └─ E ─ F (new leaf)
+         └─ E ─ F ─ [summary of B,C,D] (new leaf)
 ```
+
+The summary entry attaches at the new leaf position, which is the target entry (or its parent when the target is a user message). The abandoned branch stays in the file unchanged.
 
 ### Cumulative File Tracking
 
@@ -193,8 +197,8 @@ Defined in [`session-manager.ts`](https://github.com/ashx-j/lunR/blob/master/pac
 interface BranchSummaryEntry<T = unknown> {
   type: "branch_summary";
   id: string;
-  parentId: string;
-  timestamp: number;
+  parentId: string | null;
+  timestamp: string;  // ISO timestamp
   summary: string;
   fromId: string;      // Entry we navigated from
   fromHook?: boolean;  // true if provided by extension (legacy field name)

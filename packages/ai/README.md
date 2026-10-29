@@ -52,7 +52,6 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
   - [CLI Login](#cli-login)
   - [Programmatic OAuth](#programmatic-oauth)
 - [Migrating from the Old Global API](#migrating-from-the-old-global-api)
-- [Development](#development)
 - [License](#license)
 
 ## Supported Providers
@@ -86,6 +85,9 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - **Fireworks** (uses OpenAI- and Anthropic-compatible APIs)
 - **Kimi For Coding** (Moonshot AI subscription endpoint, uses Anthropic-compatible API)
 - **Xiaomi MiMo** (defaults to API billing endpoint, with separate Token Plan providers for `cn`/`ams`/`sgp` regions)
+- **Qwen Cloud** (Alibaba DashScope, with separate China provider)
+- **Qwen Token Plan** (with separate China provider)
+- **Radius** (dynamic model gateway, API key or OAuth, models come from the gateway)
 - **Any OpenAI-compatible API**: Ollama, vLLM, LM Studio, etc.
 
 ## Installation
@@ -440,6 +442,10 @@ Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` ex
 | Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` |
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` |
 | Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` |
+| Qwen Cloud / Qwen Cloud CN | `DASHSCOPE_API_KEY` or `QWEN_CLOUD_API_KEY` |
+| Qwen Token Plan | `DASHSCOPE_TOKEN_PLAN_API_KEY`, falls back to `DASHSCOPE_API_KEY` |
+| Qwen Token Plan CN | `DASHSCOPE_TOKEN_PLAN_CN_API_KEY`, falls back to `DASHSCOPE_TOKEN_PLAN_API_KEY`, then `DASHSCOPE_API_KEY` |
+| Radius | `RADIUS_API_KEY` |
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
 
 Amazon Bedrock resolves ambient AWS credentials (`AWS_PROFILE`, access key pairs, `AWS_BEARER_TOKEN_BEDROCK`, ECS task roles, web identity tokens); its provider-owned login flow supports bearer tokens, AWS profiles, and the existing credential chain. Vertex AI resolves either an explicit key or gcloud Application Default Credentials plus project/location, with a provider-owned login flow for API keys, ADC, and service-account files.
@@ -623,7 +629,7 @@ All streaming events emitted during assistant message generation:
 | `done` | Stream complete | `reason`: Stop reason ("stop", "length", "toolUse"), `message`: Final assistant message |
 | `error` | Error occurred | `reason`: Error type ("error" or "aborted"), `error`: AssistantMessage with partial content |
 
-Streaming events for different content blocks are not guaranteed to be contiguous. Providers may emit deltas for text, thinking, and tool calls in the same upstream chunk, and pi may surface corresponding events interleaved, for example `text_start`, `text_delta`, `toolcall_start`, `text_delta`, `toolcall_delta`. Consumers must use `contentIndex` to associate each delta/end event with its block and must not assume that a block's `*_start`/`*_delta`/`*_end` sequence is uninterrupted by events for other blocks.
+Streaming events for different content blocks are not guaranteed to be contiguous. Providers may emit deltas for text, thinking, and tool calls in the same upstream chunk, and the library may surface corresponding events interleaved, for example `text_start`, `text_delta`, `toolcall_start`, `text_delta`, `toolcall_delta`. Consumers must use `contentIndex` to associate each delta/end event with its block and must not assume that a block's `*_start`/`*_delta`/`*_end` sequence is uninterrupted by events for other blocks.
 
 ## Image Input
 
@@ -1055,7 +1061,7 @@ Custom models can carry `headers` (e.g. proxies behind bot detection) and `compa
 
 Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so the system prompt is sent as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
 
-Use model-level `thinkingLevelMap` to describe model-specific thinking controls. Keys are pi thinking levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Missing standard levels through `high` use provider defaults; `xhigh` and `max` are opt-in and require a non-null map entry. String values are sent to the provider, `null` marks a level unsupported, and maps may skip levels.
+Use model-level `thinkingLevelMap` to describe model-specific thinking controls. Keys are thinking levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Missing standard levels through `high` use provider defaults; `xhigh` and `max` are opt-in and require a non-null map entry. String values are sent to the provider, `null` marks a level unsupported, and maps may skip levels.
 
 ```typescript
 const ollamaReasoningModel: Model<'openai-completions'> = {
@@ -1132,7 +1138,7 @@ interface OpenAICompletionsCompat {
   requiresThinkingAsText?: boolean;  // Whether thinking blocks must be converted to text (default: false)
   requiresReasoningContentOnAssistantMessages?: boolean; // Whether all replayed assistant messages must include empty reasoning_content when reasoning is enabled (default: auto-detected for DeepSeek)
   thinkingFormat?: 'openai' | 'openrouter' | 'deepseek' | 'together' | 'zai' | 'qwen' | 'chat-template' | 'qwen-chat-template' | 'string-thinking' | 'ant-ling'; // Format for reasoning param: 'openai' uses reasoning_effort, 'openrouter' uses reasoning: { effort }, 'deepseek' uses thinking: { type } plus reasoning_effort when supported, 'together' uses reasoning: { enabled } plus reasoning_effort when supported, 'zai' uses thinking: { type }, 'qwen' uses enable_thinking, 'chat-template' uses configurable chat_template_kwargs, 'qwen-chat-template' uses chat_template_kwargs.enable_thinking and preserve_thinking, 'string-thinking' uses top-level thinking, 'ant-ling' uses reasoning: { effort } only for mapped efforts (default: openai)
-  chatTemplateKwargs?: Record<string, string | number | boolean | null | { '$var': 'thinking.enabled' | 'thinking.effort'; omitWhenOff?: boolean }>; // chat_template_kwargs values; use $var for pi-controlled thinking values
+  chatTemplateKwargs?: Record<string, string | number | boolean | null | { '$var': 'thinking.enabled' | 'thinking.effort'; omitWhenOff?: boolean }>; // chat_template_kwargs values; use $var for library-controlled thinking values
   cacheControlFormat?: 'anthropic';  // Anthropic-style cache_control on system prompt, last tool, and last user/assistant text content
   openRouterRouting?: OpenRouterRouting; // OpenRouter routing preferences (default: {})
   vercelGatewayRouting?: VercelGatewayRouting; // Vercel AI Gateway routing preferences (default: {})
@@ -1532,95 +1538,6 @@ Compat is a strict superset of the root entrypoint, so a file can switch its imp
 | `getEnvApiKey('openai')` | `await models.getAuth(model.provider)` |
 | `streamAnthropic(model, ctx, opts)` | `stream` from `@ashx-j/lunr-ai/api/anthropic-messages`, or a provider in a collection |
 | `registerFauxProvider()` | `fauxProvider()` + `models.setProvider()` |
-
-## Development
-
-### Adding a New Provider
-
-Adding a new LLM provider requires changes across multiple files. The layered layout: API implementations live in `src/api/`, provider factories in `src/providers/`, generated catalogs in `src/providers/<id>.models.ts`. This checklist covers all necessary steps:
-
-#### 1. Core Types (`src/types.ts`)
-
-- Add the API identifier to `KnownApi` (for example `"bedrock-converse-stream"`), if it is a new API
-- Add the provider name to `KnownProvider` (for example `"amazon-bedrock"`)
-- Add the options type to `ApiOptionsMap`
-
-#### 2. API Implementation (`src/api/<api-id>.ts`, only for a new API)
-
-Create a new API implementation file (for example `bedrock-converse-stream.ts`) that exports exactly `stream` and `streamSimple`, plus:
-
-- An options interface extending `StreamOptions` (for example `BedrockOptions`)
-- Message conversion functions to transform `Context` to provider format
-- Tool conversion if the provider supports tools
-- Response parsing to emit standardized events (`text`, `tool_call`, `thinking`, `usage`, `stop`)
-
-Add a lazy wrapper `src/api/<api-id>.lazy.ts` (`<name>Api()` via `lazyApi()`) so providers can reference the implementation without importing its SDK. Add any root-level `export type` re-exports in `src/index.ts` that should remain available from `@ashx-j/lunr-ai`.
-
-#### 3. Model Generation (`scripts/generate-models.ts`, `scripts/generate-image-models.ts`)
-
-- Add logic to fetch and parse models from the provider's source (e.g., models.dev API)
-- Map chat/tool-capable provider model data to the standardized `Model` interface via `scripts/generate-models.ts`; regeneration emits `src/providers/<id>.models.ts` and the aggregator
-- Map image-generation provider model data to the standardized `ImagesModel` interface via `scripts/generate-image-models.ts`
-- Handle provider-specific quirks (pricing format, capability flags, model ID transformations)
-
-#### 4. Provider Factory (`src/providers/<id>.ts`)
-
-- `createProvider()` wiring catalog + auth + the lazy API wrapper
-- Auth: `envApiKeyAuth` for standard key providers, a custom `ApiKeyAuth` for ambient auth (AWS profiles, ADC), `lazyOAuth` where an OAuth flow exists
-- Register the factory in `src/providers/all.ts`
-- If it is a new API: register it in the builtin list in `src/compat.ts` and add the package subpath export in `package.json`
-
-#### 5. Tests (`test/`)
-
-Create or update test files to cover the new provider:
-
-- `stream.test.ts` - Basic streaming and tool use
-- `tokens.test.ts` - Token usage reporting
-- `abort.test.ts` - Request cancellation
-- `empty.test.ts` - Empty message handling
-- `context-overflow.test.ts` - Context limit errors
-- `image-limits.test.ts` - Image support (if applicable)
-- `unicode-surrogate.test.ts` - Unicode handling
-- `tool-call-without-result.test.ts` - Orphaned tool calls
-- `image-tool-result.test.ts` - Images in tool results
-- `total-tokens.test.ts` - Token counting accuracy
-- `cross-provider-handoff.test.ts` - Cross-provider context replay
-- `providers.test.ts` - Provider listing and auth resolution
-
-For `cross-provider-handoff.test.ts`, add at least one provider/model pair. If the provider exposes multiple model families (for example GPT and Claude), add at least one pair per family.
-
-For providers with non-standard auth (AWS, Google Vertex), create a utility like `bedrock-utils.ts` with credential detection helpers.
-
-#### 6. Coding Agent Integration (`../coding-agent/`)
-
-Update `src/core/model-resolver.ts`:
-
-- Add a default model ID for the provider in `DEFAULT_MODELS`
-
-Update `src/cli/args.ts`:
-
-- Add environment variable documentation in the help text
-
-Update `README.md`:
-
-- Add the provider to the providers section with setup instructions
-
-#### 7. Documentation
-
-Update `packages/ai/README.md`:
-
-- Add to the Supported Providers table
-- Document any provider-specific options or authentication requirements
-- Add environment variable to the Environment Variables section
-
-#### 8. Changelog
-
-Add an entry to `packages/ai/CHANGELOG.md` under `## [Unreleased]`:
-
-```markdown
-### Added
-- Added support for [Provider Name] provider ([#PR](link) by [@author](link))
-```
 
 ## License
 
