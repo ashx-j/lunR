@@ -326,6 +326,7 @@ async function createOwnedAgentSession(options: CreateAgentSessionOptions): Prom
 					.externalClaudeCode;
 			return modelRuntime.streamSimple(model, context, {
 				...options,
+				...(subscription ? { claudeCodeAutoMode: session.claudeCodeAutoMode() } : {}),
 				...(subscription && !headerRunner?.hasHandlers("before_provider_request") ? { onPayload: undefined } : {}),
 				...(subscription && !headerRunner?.hasHandlers("after_provider_response") ? { onResponse: undefined } : {}),
 				timeoutMs,

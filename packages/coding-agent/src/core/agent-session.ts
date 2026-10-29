@@ -51,6 +51,7 @@ import {
 	modelsAreEqual,
 	resetApiProviders,
 	streamSimple,
+	takeClaudeCodeReview,
 } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
@@ -62,6 +63,7 @@ import {
 	type AutoReviewer,
 	AutoReviewTracker,
 	buildAutoReviewContext,
+	isNeverReviewed,
 	missingReviewerReason,
 	needsAutoReview,
 	parseAutoReviewVerdict,
@@ -70,6 +72,7 @@ import {
 	SUBAGENT_CHILD_AUTO_REVIEW_ENV,
 } from "./auto-review.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+import { reviewWithCodex } from "./codex-auto-review.ts";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -1288,8 +1291,21 @@ export class AgentSession {
 			parentRef: this._parentAutoReviewRef,
 			configuredRef: this.settingsManager.getAutoReviewModel(),
 			sessionModel: this.model,
+			// Anthropic only reports OAuth for a Claude Code subscription; a runtime API key turns it off.
+			claudeSubscription: this.model?.provider === "anthropic" && this._modelRuntime.isUsingOAuth("anthropic"),
 			getModel: (provider, modelId) => this._modelRuntime.getModel(provider, modelId),
 		});
+	}
+
+	/**
+	 * The `claudeCodeAutoMode` stream option while Claude Code's own auto mode reviews this session's
+	 * calls, so the bridge runs Claude Code in auto mode. Tools auto mode never reviews skip its reviewer.
+	 */
+	claudeCodeAutoMode(): { allowTools: string[] } | undefined {
+		if (this.permissionMode !== "auto" || !this._autoReviewEnabled) return undefined;
+		const reviewer = this.resolveAutoReviewer();
+		if (reviewer.kind !== "ready" || reviewer.native !== "claude-code") return undefined;
+		return { allowTools: this.agent.state.tools.map((tool) => tool.name).filter(isNeverReviewed) };
 	}
 
 	/**
@@ -1300,8 +1316,37 @@ export class AgentSession {
 	private async _reviewAutoAction(toolName: string, args: unknown, toolCallId: string): Promise<string | undefined> {
 		const reviewer = this.resolveAutoReviewer();
 		let reason: string;
+		// Without a verdict (no reviewer, or the subscription's reviewer couldn't review) the user decides.
+		let noVerdict = reviewer.kind !== "ready";
 		if (reviewer.kind !== "ready") {
 			reason = missingReviewerReason(reviewer);
+		} else if (reviewer.native) {
+			const review =
+				reviewer.native === "claude-code"
+					? await (takeClaudeCodeReview(toolCallId) ??
+							Promise.resolve({
+								decision: "unavailable" as const,
+								reason: "Claude Code didn't review this call.",
+							}))
+					: await reviewWithCodex({
+							model: reviewer.model,
+							messages: this.agent.state.messages,
+							isFeatureMessage: (message) => this._extensionUserMessages.has(message),
+							action: { toolCallId, toolName, input: args },
+							cwd: this._cwd,
+							projectInstructions: this._autoReviewProjectInstructions(),
+							sessionId: this.sessionId,
+							signal: this.agent.signal,
+							complete: (model, context, options) => this._modelRuntime.completeSimple(model, context, options),
+							onResponse: (response) => this.sessionManager.appendRequestUsage("auto-review", response),
+						});
+			if (this.agent.signal?.aborted) return "Aborted before auto review finished.";
+			if (review.decision === "allow") {
+				this._autoReviewTracker.recordAllow();
+				return undefined;
+			}
+			reason = review.reason;
+			noVerdict = review.decision === "unavailable";
 		} else {
 			try {
 				const response = await this._modelRuntime.completeSimple(
@@ -1311,10 +1356,7 @@ export class AgentSession {
 						earlierActions: this._autoReviewEarlierActions(toolCallId),
 						action: { toolName, input: args },
 						cwd: this._cwd,
-						projectInstructions: this._resourceLoader
-							.getAgentsFiles()
-							.agentsFiles.map((file) => file.content)
-							.join("\n\n"),
+						projectInstructions: this._autoReviewProjectInstructions(),
 					}),
 					{ signal: this.agent.signal, ...(reviewer.model.reasoning ? { reasoning: "low" as const } : {}) },
 				);
@@ -1338,7 +1380,7 @@ export class AgentSession {
 			}
 		}
 		const limitReached = this._autoReviewTracker.recordBlock();
-		if (limitReached || reviewer.kind !== "ready") {
+		if (limitReached || noVerdict) {
 			const decision = await requestAutoReviewDecision(
 				{ toolName, detail: `${reason}\n\n${toolName} ${JSON.stringify(args, null, 2).slice(0, 2000)}` },
 				this.sessionId,
@@ -1348,6 +1390,13 @@ export class AgentSession {
 			if (decision === "reject") return `The user blocked this action after auto review flagged it: ${reason}`;
 		}
 		return `Auto mode's review model blocked this action: ${reason} Don't reach the same result another way. Choose a clearly safer approach or ask the user.`;
+	}
+
+	private _autoReviewProjectInstructions(): string {
+		return this._resourceLoader
+			.getAgentsFiles()
+			.agentsFiles.map((file) => file.content)
+			.join("\n\n");
 	}
 
 	private _autoReviewUserMessages(): Array<{ text: string; fromExtension: boolean }> {

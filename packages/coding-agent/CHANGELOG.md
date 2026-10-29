@@ -4,6 +4,10 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.40`**. Versioned
 
 ## [Unreleased]
 
+### Changed
+
+- Auto mode on a Claude subscription uses Claude Code's own auto mode to review risky actions, so lunR no longer sends its own review request. On a ChatGPT sign-in it uses Codex's own auto review (`codex-auto-review`). An `autoReviewModel` setting still overrides both.
+
 ## [0.2.40] - 2026-10-25
 
 ### Added

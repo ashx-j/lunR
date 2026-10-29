@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-29: Claude subscriptions and ChatGPT sign-ins review auto-mode actions with their own agent's reviewer (Claude Code's auto mode, Codex's `codex-auto-review`), because those reviews come with the subscription and lunR's own review was a normal paid request. Claude Code reviews inside the bridge's own process because lunR may not send subscription requests itself.
 - 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
 - 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.
 - 2026-10-29: remove the issue and PR auto-close gates, because their approved list held pi's contributors, their message linked a CONTRIBUTING.md that doesn't exist, and the Questions link went to pi's Discord.

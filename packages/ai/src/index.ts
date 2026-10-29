@@ -9,6 +9,7 @@ export { Type } from "typebox";
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./api/anthropic-messages.ts";
 export type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./api/bedrock-converse-stream.ts";
+export { type ClaudeCodeReview, takeClaudeCodeReview } from "./api/claude-code-review.ts";
 export type { GoogleOptions } from "./api/google-generative-ai.ts";
 export type { GoogleThinkingLevel } from "./api/google-shared.ts";
 export type { GoogleVertexOptions } from "./api/google-vertex.ts";

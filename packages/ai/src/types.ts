@@ -126,6 +126,12 @@ export interface StreamOptions {
 	/** Resolved subscription connection, set only after provider auth selection. */
 	externalClaudeCode?: ExternalClaudeCodeCredential;
 	/**
+	 * Claude subscriptions only: run Claude Code in its auto permission mode, so its own reviewer checks each
+	 * tool call in the answer. `takeClaudeCodeReview` hands out the verdicts. Tools in `allowTools` skip the
+	 * reviewer, the way Claude Code's own read-only tools do.
+	 */
+	claudeCodeAutoMode?: { allowTools: readonly string[] };
+	/**
 	 * Preferred transport for providers that support multiple transports.
 	 * Providers that do not support this option ignore it.
 	 */
