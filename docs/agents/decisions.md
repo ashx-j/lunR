@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-30: remove the Telegram/Discord gateway, `lunr features`, `/handoff` and cron chat delivery, because other tools do chat access better and the owner no longer wants to support it; `lunr gateway` stays as a notice that exits 0 so old autostart services neither prompt a model nor restart in a loop.
 - 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
 - 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.
 - 2026-10-29: remove the issue and PR auto-close gates, because their approved list held pi's contributors, their message linked a CONTRIBUTING.md that doesn't exist, and the Questions link went to pi's Discord.
@@ -25,11 +26,10 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-25: read models.dev `kimi-code-plan-global` when `kimi-for-coding` is missing but keep the api.kimi.com endpoint and skip `k3.1-*`, because the rename moved the listing to api.kimi.ai and K3.1 is untested there.
 - 2026-10-21: remove the unused agent harness (about 6,000 lines) and keep `uuidv7`, because nothing outside the package used it and no upstream sync happened.
 - 2026-10-21: scale compaction reserve and kept tokens to the window, because with a 16k window `shouldCompact` was true every turn and nothing was old enough to cut.
-- 2026-10-21: a TUI cron owner hands the lease to the gateway when it skips due jobs, because only the gateway can deliver to chat platforms.
 - 2026-10-21: keep `NPM_TOKEN` and add pre-publish checks and registry verification, because trusted publishing needs npm-side setup first.
 - 2026-10-21: drop source maps, `exy.png` and catalog extras from the package, because nothing reads them at runtime and they doubled the tarball.
 - 2026-10-21: read-only bash blocks any word bash expands and any path-qualified command word, because the classifier sees literal words while bash runs the expanded ones.
-- 2026-10-21: `cron resume` retries an interrupted job through whichever process owns the lease, because a gateway-held lease left `cron run` with no process able to run it.
+- 2026-10-21: `cron resume` retries an interrupted job through whichever process owns the lease, because a lease held by another process left `cron run` with no process able to run it.
 - 2026-10-21: an abort during tools ends the run with aborted results for unstarted calls, matching an abort during streaming, because queued calls ran with an aborted signal and a new request followed.
 - 2026-10-20: cap the number of `@ts-nocheck` files with a limit that may only go down, so new unchecked files fail `npm run check` while the vendored backlog shrinks.
 - 2026-10-20: help describes `--provider` as narrowing `--model`, not as having a default, because the code never falls back to a saved or built-in provider for that flag.
@@ -67,12 +67,10 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-09-26: keep uncertain native computer outcomes with one recovery image, because an error after delivered input must not invite blind replay; accept effects only from fresh post-action images.
 - 2026-09-13: bound screenshot payloads and keep provider history until targeted retention can be measured against prompt-cache disruption.
 - 2026-09-26: default substantive delegation to the standard tier and require a specific reasoning difficulty for heavy, because broad labels encouraged over-selection.
-- 2026-09-26: use one gateway authorization check for messages and commands so pairing grants usable access without a second owner approval.
-- 2026-09-26: reuse the gateway outbox for final answers and follow-ups and keep bounded failed batches instead of retrying forever or dropping text.
 - 2026-09-25: frame oversized child JSON events instead of raising the stdout line limit, so image results survive while transport stays bounded.
 - 2026-09-24: replace manual and plan with yolo, auto and read-only, and fail closed on unclassified tools in read-only, because proxy and direct MCP calls can write.
 - 2026-09-24: keep parent-child messaging and autonomous delegation as independent default-on switches, because direct-work mode should still allow requested children.
-- 2026-09-21: put fresh-versus-resume and gateway management in the default prompt because both must be right before the first tool call.
+- 2026-09-21: put fresh-versus-resume in the default prompt because it must be right before the first tool call.
 - 2026-09-21: treat Enter during `subagent_wait` as a run-scoped graceful handoff so background work survives.
 - 2026-09-13: keep intercom and its relay, fixing Windows stderr ownership instead of replacing the communication system.
 - 2026-09-12: gate question wakeups on answered state so cancellation cannot undo a double-Escape stop.
@@ -104,20 +102,18 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-08-08: `thinkingCollapse` layered on `hideThinkingBlock`; `/exit` = `/quit`.
 - 2026-08-06: subscriptions sibling file; auth.json = active key; `autoManageSubscriptions` is manual switch only.
 - 2026-08-03: do not add boot art. `qwen-cloud` ≠ token-plan. `/refresh` is the only refresh command.
-- 2026-07-28: cron in TUI + daemon; Discord discord.js; Telegram long-poll; authz fail-closed.
 - 2026-07-26: extension-absorption rolled back — baked-in extensions + bridges only. No “done” without live `npx lunr` + one message.
 - 2026-07-22 / 08-15: no pi.dev catalog. `/refresh` = local `/models` + our GitHub `catalog/`.
 - 2026-07-18: `.lunr/` split; keep `pi-*` scopes + `PI_CODING_AGENT_*`.
 
 ## Deferred
 
-- Gateway cold first slash after daemon start can hang minutes; local scripted-provider first-use flow passes but does not establish a cold-start latency bound.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Claude subscriptions: live runs used one signed-in account; macOS and ARM remain unqualified.
 - Computer use: held modifier/button release, Mac/ARM hardware, provider-driven use, and live Windows hover/taskbar recovery remain unverified. Smooth cursor animation needs a scope decision.
 - Scope rename; `PI_CODING_AGENT*` rename.
-- Rollback: shadow-git capture (option removed until built), gateway rollback (B7), orphan GC, symlink escape. Orchestrator timeouts from closed PR #41 remain unshipped.
-- Cron: script/`no_agent` jobs; more gateway platforms; process-tree for `nohup` grandchildren.
+- Rollback: shadow-git capture (option removed until built), orphan GC, symlink escape. Orchestrator timeouts from closed PR #41 remain unshipped.
+- Cron: script/`no_agent` jobs; process-tree for `nohup` grandchildren.
 - Package size: maps, `exy.png` and catalog extras are cut (5.41 MB packed). The 211 MB of other-platform optional packages npm installs remain; see `docs/package-size-report.md`.
 - Planned mascot, a cat (2.A): fits the kitty spinners `₍^. .^₎⟆` / `(ㅅ´ ˘ `)`. Minimal two lines, not yet wired.
   ```

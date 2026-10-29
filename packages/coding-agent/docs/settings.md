@@ -242,11 +242,10 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 Customize these from `/settings` → Customize as well. The same menu controls `subagentSpinner` with an animated preview.
 
-### Cron, rollback, subscriptions
+### Rollback, subscriptions
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `cronFallbackModels` | string[] | - | `provider/modelId` entries tried in order when a gateway cron fire fails. Hand-edited |
 | `rollbackEnabled` | boolean | `false` | Enable `/rollback` snapshots |
 | `rollbackTurns` | number | `2` | How many user-turns of snapshots to retain |
 | `rollbackCapture` | string | `"copies"` | Snapshot capture mode: `"copies"`, or `"hybrid"`, which also deletes files created outside tools when `rollbackScope` is `"tree"` |

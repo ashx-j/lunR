@@ -660,7 +660,7 @@ Handlers mutate `event.headers` in place. Set a key to a string to add or overri
 
 ```typescript
 pi.on("before_provider_headers", (event, ctx) => {
-  // Add or override — e.g. a session id for gateway tracing/attribution
+  // Add or override — e.g. a session id for proxy tracing/attribution
   event.headers["x-session-id"] = ctx.sessionManager.getSessionId();
 
   // Remove a header from this request
@@ -936,11 +936,11 @@ UI methods for user interaction. See [Custom UI](#custom-ui) for full details.
 
 ### ctx.mode
 
-Current run mode: `"tui"`, `"rpc"`, `"json"`, `"print"`, or `"gateway"` (Telegram and Discord chat sessions). Use `ctx.mode === "tui"` to guard terminal-only features such as `custom()`, component factories, terminal input, and direct TUI rendering.
+Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "tui"` to guard terminal-only features such as `custom()`, component factories, terminal input, and direct TUI rendering.
 
 ### ctx.hasUI
 
-`true` in TUI, RPC and gateway modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)). In gateway mode, dialogs and notifications go to the chat, `custom()` throws, and the other UI methods are no-ops.
+`true` in TUI and RPC modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)).
 
 ### ctx.cwd
 
@@ -1467,7 +1467,7 @@ Register a command.
 
 If multiple extensions register the same command name, lunR keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
 
-Do not reuse a built-in command name such as `/plan` or `/handoff`. In the TUI the built-in command runs first, so yours never runs.
+Do not reuse a built-in command name such as `/plan` or `/model`. In the TUI the built-in command runs first, so yours never runs.
 
 ```typescript
 pi.registerCommand("stats", {
@@ -2795,11 +2795,10 @@ const text = rustLines.join("\n");
 |------|------------|-------------|-------|
 | Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
 | RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
-| Gateway (Telegram/Discord) | `"gateway"` | `true` | `select`, `confirm`, `input`, `editor` and `notify` go to the chat; `custom()` throws; other UI methods are no-ops |
 | JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
 
-Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in TUI, RPC and gateway modes.
+Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in TUI and RPC modes.
 
 ## Examples Reference
 
@@ -2821,7 +2820,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | **Commands** |||
 | `pirate.ts` | Modify system prompt per-turn | `registerCommand`, `before_agent_start` |
 | `summarize.ts` | Conversation summary command | `registerCommand`, `ui.custom` |
-| `handoff.ts` | Cross-provider model handoff. The built-in `/handoff` wins over its `/handoff` command in the TUI | `registerCommand`, `ui.editor`, `ui.custom` |
+| `handoff.ts` | Cross-provider model handoff | `registerCommand`, `ui.editor`, `ui.custom` |
 | `qna.ts` | Q&A with custom UI | `registerCommand`, `ui.custom`, `setEditorText` |
 | `send-user-message.ts` | Inject user messages | `registerCommand`, `sendUserMessage` |
 | `reload-runtime.ts` | Reload command | `registerCommand`, `ctx.reload()` |

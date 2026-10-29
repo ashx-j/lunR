@@ -27,14 +27,6 @@ That leaves settings, credentials, sessions, and installed packages in `~/.lunr/
 
 To remove an extension package instead, use `lunr uninstall npm:@foo/bar` (alias for `lunr remove`).
 
-Optional first-run features (Telegram/Discord gateway):
-
-```bash
-lunr setup
-lunr features list
-lunr features enable chat-platforms
-```
-
 Then start lunR in the project directory you want it to work on:
 
 ```bash
@@ -181,7 +173,7 @@ Catalog refresh is `/refresh`, not `lunr update`.
 ## Next steps
 
 - [Using lunR](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
-- [Built-in features](features.md) - gateway, cron, MCP, subagents, plan, todos, and more.
+- [Built-in features](features.md) - cron, MCP, subagents, plan, todos, and more.
 - [Providers](providers.md) - authentication and model setup.
 - [Settings](settings.md) - global and project configuration.
 - [Keybindings](keybindings.md) - shortcuts and customization.

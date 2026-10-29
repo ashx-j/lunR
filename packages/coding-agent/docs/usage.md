@@ -1,6 +1,6 @@
 # Using lunR
 
-This page collects day-to-day usage details that do not fit on the quickstart page. Built-in MCP, subagents, gateway, cron, plan, and related workflows are covered in [Built-in features](features.md).
+This page collects day-to-day usage details that do not fit on the quickstart page. Built-in MCP, subagents, cron, plan, and related workflows are covered in [Built-in features](features.md).
 
 ## Interactive Mode
 
@@ -42,7 +42,7 @@ Run the focused tests, then summarize failures.
 
 The copied payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR preserves its indentation, whitespace, and internal newlines without trimming, and does not copy either fence line. Use a longer backtick or tilde fence when the payload contains shorter fenced code.
 
-A streamed block stays readable while incomplete, but becomes clickable only after the closing fence is received and revealed. Reopened sessions reconstruct clickable sections from the saved assistant message. Print, JSON, RPC, and gateway modes leave the fences readable and never perform clipboard writes.
+A streamed block stays readable while incomplete, but becomes clickable only after the closing fence is received and revealed. Reopened sessions reconstruct clickable sections from the saved assistant message. Print, JSON and RPC modes leave the fences readable and never perform clipboard writes.
 
 ## Slash Commands
 
@@ -176,9 +176,7 @@ lunr [options] [@files...] [messages...]
 ### Product and Package Commands
 
 ```bash
-lunr setup                         # First-run / reconfigure optional features
-lunr features [list|enable|disable]
-lunr gateway […]                   # Chat gateway (requires chat-platforms)
+lunr setup                         # Install Chromium for the browser tool
 lunr uninstall [--purge]           # Print the npm removal command; --purge also deletes ~/.lunr/agent
 lunr uninstall <source> [-l]       # Remove an extension package (alias for remove)
 lunr install <source> [-l]         # Install package, -l for project-local
@@ -340,10 +338,8 @@ These variables keep pi's `PI_` prefix.
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
 
-Gateway bot tokens optionally use `LUNR_TELEGRAM_BOT_TOKEN` / `LUNR_DISCORD_BOT_TOKEN`.
-
 ## Design Principles
 
-lunR keeps the core small and still ships the workflows most coding agents expect: MCP, subagents, permission modes, plan + `present_plan`, todos, `/processes`, cron, gateway, web search, LSP, agent memory, goals, intercom, skill-creator, and model tiers. Everything else stays in extensions, skills, prompt templates, and packages.
+lunR keeps the core small and still ships the workflows most coding agents expect: MCP, subagents, permission modes, plan + `present_plan`, todos, `/processes`, cron, web search, LSP, agent memory, goals, intercom, skill-creator, and model tiers. Everything else stays in extensions, skills, prompt templates, and packages.
 
 See [Built-in features](features.md) and the [README philosophy](../README.md#philosophy).
