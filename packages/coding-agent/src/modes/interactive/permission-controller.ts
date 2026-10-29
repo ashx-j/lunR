@@ -27,8 +27,6 @@ export interface PermissionControllerHost {
 	readonly ui: TUI;
 	/** True while the session is detached or being transferred; mode changes are ignored then. */
 	isSessionDetached(): boolean;
-	/** Marks this terminal as active for session handoff. */
-	recordActivity(): void;
 	showStatus(message: string): void;
 	showWarning(message: string): void;
 	/** Replaces the editor with a selector; `done` restores the editor. */
@@ -190,7 +188,6 @@ export class PermissionModeController {
 				return;
 			}
 		}
-		this.host.recordActivity();
 		const prev = this.host.session.permissionMode;
 		if (mode === "read-only" && prev !== "read-only") {
 			this.previousPermissionMode = prev;

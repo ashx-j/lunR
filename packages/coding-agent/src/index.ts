@@ -213,14 +213,6 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export {
-	cancelSessionHandoff,
-	HANDOFF_DURATION_MS,
-	type HandoffCandidate,
-	latestTuiSession,
-	listHandoffCandidates,
-	listRegisteredSessionPaths,
-	markSessionHandoff,
-	recordTuiActivity,
 	registerTransferHandler,
 	requestSessionTransfer,
 	SessionTransferError,

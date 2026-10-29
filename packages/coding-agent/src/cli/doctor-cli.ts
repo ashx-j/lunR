@@ -41,7 +41,7 @@ export async function handleDoctorCli(args: string[]): Promise<boolean> {
 		process.exitCode = checks.some((check) => check.status === "fail") ? 1 : 0;
 	} else {
 		console.log(
-			"Usage: lunr doctor        check logins, models, browser, Claude Code and gateway\n       lunr doctor keys   test which shortcuts reach lunR in this terminal",
+			"Usage: lunr doctor        check logins, models, browser and Claude Code\n       lunr doctor keys   test which shortcuts reach lunR in this terminal",
 		);
 		process.exitCode = sub === "--help" || sub === "-h" || sub === "help" ? 0 : 2;
 	}
@@ -73,7 +73,6 @@ export async function collectDoctorChecks(agentDir: string = getAgentDir()): Pro
 		checkCatalog(officialCatalogCachePath(agentDir), Date.now()),
 		await checkClaudeCode(auth),
 		await checkBrowser(settings.getBrowserEnabled()),
-		await checkGateway(),
 		checkTerminal(process.env, getDocsPath()),
 	];
 	return checks.filter((check): check is DoctorCheck => check !== undefined);
@@ -299,33 +298,6 @@ async function checkBrowser(enabled: boolean): Promise<DoctorCheck> {
 			fix: "Reinstall lunR, then run lunr browser install.",
 		};
 	}
-}
-
-async function checkGateway(): Promise<DoctorCheck> {
-	const label = "Gateway";
-	const { loadGatewayConfig, resolvePlatformToken } = await import("../gateway/config.ts");
-	const config = loadGatewayConfig();
-	const platforms = (["telegram", "discord"] as const).filter((platform) => config[platform].enabled);
-	if (platforms.length === 0) return { status: "ok", label, detail: "not set up" };
-	const missing = platforms.filter((platform) => !resolvePlatformToken(platform, config[platform]));
-	if (missing.length > 0) {
-		return {
-			status: "fail",
-			label,
-			detail: `${missing.join(", ")} has no bot token`,
-			fix: "Run lunr gateway setup.",
-		};
-	}
-	const { serviceStatusText } = await import("../gateway/service.ts");
-	const state =
-		serviceStatusText()
-			.split("\n")[0]
-			?.replace(/^Gateway:\s*/, "") ?? "unknown";
-	const detail = `${platforms.join(" and ")}, ${state}`;
-	if (state === "stopped")
-		return { status: "warn", label, detail, fix: "Start it with lunr gateway start. Details: lunr gateway status." };
-	if (state.includes("not responding")) return { status: "warn", label, detail, fix: "Inspect lunr gateway logs." };
-	return { status: "ok", label, detail };
 }
 
 /** Terminal-specific shortcut traps from docs/terminal-setup.md, for the terminals lunR can recognize. */

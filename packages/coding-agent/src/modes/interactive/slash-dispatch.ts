@@ -1,7 +1,7 @@
 /**
  * Builtin slash command dispatch for interactive mode. The submit handler and Alt+Enter pass the trimmed
  * text to `runSlashCommand`; InteractiveMode supplies its UI and commands through
- * SlashCommandHost. /reclaim and /handoff stay in the submit handler because they run before its
+ * SlashCommandHost. /reclaim stays in the submit handler because it runs before its
  * detached-session guard.
  */
 

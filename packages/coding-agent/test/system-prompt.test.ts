@@ -25,12 +25,6 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain(
 			"Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up.",
 		);
-		expect(prompt).toContain("inspect with `lunr gateway status` or `lunr gateway doctor`");
-		expect(prompt).toContain("configure with `lunr gateway setup`");
-		expect(prompt).toContain("send `/whoami` or a normal message to the bot");
-		expect(prompt).toContain("there is no arbitrary outbound send command");
-		expect(prompt).toContain("Keep bot tokens out of commands and output.");
-		expect(prompt).toContain(`${getDocsPath()}/features.md`);
 		expect(prompt).toContain("Never modify this tree, including through shell commands.");
 		expect(prompt).not.toContain("behavior.md");
 		expect(prompt).toContain("Guidelines:");

@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.2.40",
-	"description": "Terminal coding agent with subagents, MCP, permission modes, scheduled prompts and a Telegram/Discord bot",
+	"description": "Terminal coding agent with subagents, MCP, permission modes and scheduled prompts",
 	"type": "module",
 	"piConfig": {
 		"name": "lunr",
@@ -61,7 +61,6 @@
 		"croner": "10.0.1",
 		"cross-spawn": "7.0.6",
 		"diff": "8.0.4",
-		"discord.js": "14.27.0",
 		"glob": "13.0.6",
 		"highlight.js": "10.7.3",
 		"hosted-git-info": "9.0.3",

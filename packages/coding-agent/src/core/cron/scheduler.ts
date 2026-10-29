@@ -1,5 +1,5 @@
 /**
- * lunR: cron scheduler loop (Phase 1 of the cron/gateway roadmap).
+ * lunR: cron scheduler loop.
  *
  * startScheduler() runs an unref'd, self-rescheduling setTimeout loop (default
  * 60s tick). Tick errors are caught — the loop never dies. A process without the
@@ -16,7 +16,7 @@
  * Delivery errors land in job.lastDeliveryError.
  *
  * The scheduler knows nothing about delivery channels: runJob/deliverResult
- * are injected by the TUI extension or gateway operator.
+ * are injected by the TUI extension.
  */
 
 import type { CronJob } from "./jobs.ts";
@@ -44,7 +44,7 @@ export interface SchedulerDeps {
 	accepts?: (job: CronJob) => boolean;
 	/**
 	 * Hand the lease to another operator when `accepts` skipped a due job. After such a tick the
-	 * owner releases the lease, so a gateway can take it on its next tick, and waits this many
+	 * owner releases the lease, so another TUI can take it on its next tick, and waits this many
 	 * ticks before trying to acquire again, so the two do not trade the lease back and forth.
 	 * Unset keeps the lease.
 	 */

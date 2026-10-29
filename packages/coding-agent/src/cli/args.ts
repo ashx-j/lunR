@@ -220,23 +220,21 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - terminal coding agent with multi-provider models, subagents, cron and chat gateways
+	console.log(`${chalk.bold(APP_NAME)} - terminal coding agent with multi-provider models, subagents and cron
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} setup                      Install Chromium and configure optional features
+  ${APP_NAME} setup                      Install Chromium for the browser tool
   ${APP_NAME} browser install            Repair Chromium after offline or ignored-script installs
-  ${APP_NAME} features [list|enable|disable]
-  ${APP_NAME} doctor [keys]              Check logins, models, browser and gateway; keys tests shortcuts
+  ${APP_NAME} doctor [keys]              Check logins, models and browser; keys tests shortcuts
   ${APP_NAME} uninstall                  Remove this ${APP_NAME} install (keeps agent dir unless --purge)
   ${APP_NAME} uninstall <source> [-l]    Remove an extension package (alias for remove)
   ${APP_NAME} install <source> [-l]      Install extension source and add to settings
   ${APP_NAME} remove <source> [-l]       Remove extension source from settings
   ${APP_NAME} list                       List installed extensions from settings
   ${APP_NAME} config [-l]                Open TUI to enable/disable package resources (Tab switches scope)
-  ${APP_NAME} gateway […]                Chat gateway daemon (requires chat-platforms feature)
   ${APP_NAME} <command> --help           Show help for install/remove/uninstall/list/config
 
 ${chalk.bold("Common options:")}

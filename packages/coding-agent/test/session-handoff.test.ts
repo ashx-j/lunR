@@ -6,18 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
-import {
-	cancelSessionHandoff,
-	HANDOFF_DURATION_MS,
-	latestTuiSession,
-	listHandoffCandidates,
-	listRegisteredSessionPaths,
-	markSessionHandoff,
-	recordTuiActivity,
-	registerTransferHandler,
-	requestSessionTransfer,
-	SessionTransferError,
-} from "../src/core/session-handoff.ts";
+import { registerTransferHandler, requestSessionTransfer, SessionTransferError } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import {
 	canonicalSessionPath,
@@ -175,28 +164,6 @@ describe("exclusive session ownership and handoff", () => {
 			expect(reopened.getPermissionMode()).toBe(expected);
 			reopened.dispose();
 		}
-	});
-
-	it("marks for exactly eight hours, refreshes, cancels and keeps latest TUI activity independent of background appends", () => {
-		const first = saved();
-		const second = saved();
-		const profile = join(directory, "profile");
-		recordTuiActivity(first, profile, 1);
-		recordTuiActivity(second, profile, 2);
-		first.appendMessage({ role: "user", content: "background", timestamp: 3 });
-		expect(latestTuiSession(profile)?.sessionId).toBe(second.getSessionId());
-		markSessionHandoff(first, profile, 100);
-		expect(listHandoffCandidates(profile, 100 + HANDOFF_DURATION_MS - 1)).toHaveLength(1);
-		expect(listHandoffCandidates(profile, 100 + HANDOFF_DURATION_MS)).toHaveLength(0);
-		markSessionHandoff(first, profile, 200);
-		markSessionHandoff(second, profile, 300);
-		expect(listHandoffCandidates(profile, 301).map((record) => record.sessionId)).toEqual([
-			second.getSessionId(),
-			first.getSessionId(),
-		]);
-		cancelSessionHandoff(first, profile);
-		expect(listHandoffCandidates(profile, 301)).toHaveLength(1);
-		expect(listRegisteredSessionPaths(profile)).toHaveLength(2);
 	});
 
 	it("gracefully transfers between real processes and the released manager cannot write", async () => {

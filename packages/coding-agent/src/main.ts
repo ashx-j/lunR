@@ -589,7 +589,7 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (["setup", "features", "uninstall", "browser"].includes(args[0])) {
+	if (["setup", "uninstall", "browser"].includes(args[0])) {
 		const { handleInstallCli } = await import("./cli/install-cli.ts");
 		if (await handleInstallCli(args)) return;
 	}
@@ -613,9 +613,13 @@ export async function main(args: string[], options?: MainOptions) {
 		if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) return;
 	}
 
+	// The chat gateway was removed. Old autostart services still run `lunr gateway run`; exit 0 so
+	// they neither send "gateway run" to a model as a prompt nor restart in a loop.
 	if (args[0] === "gateway") {
-		const { handleGatewayCommand } = await import("./gateway/command.ts");
-		if (await handleGatewayCommand(args)) return;
+		console.error(
+			"lunR no longer has a chat gateway. Remove any lunr gateway startup entry (systemd user unit, LaunchAgent or scheduled task).",
+		);
+		return;
 	}
 
 	const parsed = parseArgs(args);

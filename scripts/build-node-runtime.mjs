@@ -36,7 +36,6 @@ const result = await build({
 		"recheck",
 		"open",
 		"unpdf",
-		"discord.js",
 		"playwright-core",
 	],
 	banner: {

@@ -11,7 +11,7 @@ export function stripJsonComments(input: string): string {
 /**
  * Write `data` as pretty JSON through `<path>.tmp-<pid>` and a rename, creating the parent
  * directory first. `mode` is applied to the final file best-effort (Windows ACLs do not map).
- * Used by the gateway and install state files; auth files use `writeAuthFileAtomic`.
+ * Used by the install layout file; auth files use `writeAuthFileAtomic`.
  */
 export function writeJsonFileAtomic(path: string, data: unknown, mode?: number): void {
 	const dir = dirname(path);

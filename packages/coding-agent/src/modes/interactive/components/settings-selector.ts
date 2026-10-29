@@ -223,7 +223,6 @@ export interface SettingsCallbacks {
 	onAutoReviewModelChange: (ref: string | undefined) => void;
 	/** Closes /settings and opens the model list for the auto review model. */
 	onChooseAutoReviewModel: () => void;
-	onGatewayAction?: (action: string) => void;
 	// lunr: rollback callbacks
 	onRollbackEnabledChange: (enabled: boolean) => void;
 	onRollbackTurnsChange: (turns: number) => void;
@@ -1884,32 +1883,6 @@ export class SettingsSelectorComponent extends Container {
 					: "Unavailable because web access is not loaded",
 				currentValue: config.searchCurator ?? "unavailable",
 				values: curatorAvailable ? SEARCH_CURATOR_VALUES : undefined,
-			},
-			{
-				id: "gateway",
-				label: "Gateway",
-				description: "Phone access and automatic startup",
-				currentValue: "manage",
-				submenu: (_value, done) =>
-					new SelectSubmenu(
-						"Gateway",
-						"Boot startup may require administrator permission. Setup manages bot accounts and approved folders.",
-						[
-							{ value: "setup", label: "Set up Telegram or Discord" },
-							{ value: "status", label: "Show gateway status" },
-							{ value: "start", label: "Start gateway" },
-							{ value: "stop", label: "Stop gateway" },
-							{ value: "autostart login", label: "Start automatically at login" },
-							{ value: "autostart boot", label: "Start automatically at boot" },
-							{ value: "autostart off", label: "Disable automatic startup" },
-						],
-						"",
-						(action) => {
-							done();
-							callbacks.onGatewayAction?.(action);
-						},
-						() => done(),
-					),
 			},
 			{
 				id: "skill-commands",

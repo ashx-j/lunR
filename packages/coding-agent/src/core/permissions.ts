@@ -15,7 +15,7 @@
  * flag for /goal, subagents and ACP Autonomous, not a mode.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
- * concurrent gateway chats do not share permission decisions.
+ * concurrent sessions in one process do not share permission decisions.
  */
 
 import { computerPolicy } from "./computer-use/policy.ts";
@@ -199,7 +199,7 @@ export function planApprovalResultText(resp: ApprovalResponse): string {
 /**
  * lunr: present_plan approval request. Unlike the aggregate launch gate
  * this fails OPEN when no approval handler is registered (or none is reachable,
- * e.g. a gateway turn without a chat context): headless sessions have no one to
+ * e.g. a print-mode turn): headless sessions have no one to
  * show the dialog to, so the plan is presented and the user replies in chat
  * instead of deadlocking the turn. A prompt nobody answered in time
  * (PLAN_APPROVAL_TIMEOUT_REASON) reads the same way, not as a decline.
