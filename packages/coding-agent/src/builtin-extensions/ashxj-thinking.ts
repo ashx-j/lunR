@@ -168,7 +168,7 @@ function agentSettingsPath(): string {
 
 // ---------------------------------------------------------------------------
 // lunR customize bridge for persisted thinking-block visibility.
-// When the bridge is present (TUI / gateway sessions), reads/writes go through
+// When the bridge is present (lunR sessions), reads/writes go through
 // SettingsManager (lockfile + merge). Falls back to direct file I/O when the
 // extension loads in a context without the bridge (e.g. upstream pi).
 // ---------------------------------------------------------------------------

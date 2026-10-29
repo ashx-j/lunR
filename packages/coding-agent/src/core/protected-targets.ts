@@ -38,8 +38,7 @@ export function protectedTargetWriteReason(path: string, cwd: string): string | 
 			{ path: join(cwd, CONFIG_DIR_NAME, "settings.json"), reason: SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON },
 			{
 				path: join(agentDir, "install-features.json"),
-				reason:
-					"Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.",
+				reason: "Browser settings are user-managed in /settings. Do not change install-features.json directly.",
 			},
 		];
 		for (const policy of policies) {

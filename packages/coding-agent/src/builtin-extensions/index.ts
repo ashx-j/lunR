@@ -3,7 +3,7 @@
  *
  * Light factories stay on the first-paint graph. Heavy factories are imported
  * only when attachDeferredBuiltinExtensions() runs after the TUI is up, or
- * immediately for print/RPC/gateway where there is no first-paint window.
+ * immediately for print/RPC where there is no first-paint window.
  */
 
 import type { ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
@@ -76,7 +76,7 @@ export async function loadDeferredBuiltinExtensions(): Promise<InlineExtension[]
 	return loaded;
 }
 
-/** Full roster. Print / RPC / gateway still need every factory before the first turn. */
+/** Full roster. Print / RPC still need every factory before the first turn. */
 export async function loadAllBuiltinExtensions(): Promise<InlineExtension[]> {
 	return [...lightBuiltinExtensions, ...(await loadDeferredBuiltinExtensions())];
 }

@@ -8,7 +8,7 @@
  *    dialog (kind "plan" approval request, see core/permissions.ts). Any
  *    approve exits read-only mode in interactive-mode BEFORE the result resolves.
  *  - Outside read-only mode the tool returns an error text. Without an approval
- *    handler (gateway/headless) it passes through instead of deadlocking.
+ *    handler (headless) it passes through instead of deadlocking.
  *  - Chat render is a quiet one-liner (renderCall/renderResult), matching the
  *    todo/cron tools' minimal footprint.
  *

@@ -1,5 +1,5 @@
 /**
- * Product install CLI: setup / features / uninstall (no source).
+ * Product install CLI: setup / uninstall (no source).
  * Intercepted before handlePackageCommand so `lunr uninstall` (no source)
  * is product uninstall and `lunr uninstall <source>` stays package-remove.
  */
@@ -8,40 +8,13 @@ import { existsSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { APP_NAME, getAgentDir, NPM_CLI_PACKAGE, VERSION } from "../config.ts";
-import {
-	appendInstallLog,
-	applyFeatureFlags,
-	FEATURE_CATALOG,
-	FEATURE_HANDLERS,
-	type FeatureId,
-	getFeatureSpec,
-	type InstallFeaturesFile,
-	isProductUninstallArgv,
-	loadInstallFeatures,
-	parseFeatureFlags,
-	saveInstallFeatures,
-} from "../core/install-features.ts";
+import { appendInstallLog, isProductUninstallArgv } from "../core/install-features.ts";
 import { loadInstallLayout, resolveInstallPrefix } from "../core/install-layout.ts";
-import { loadGatewayConfig } from "../gateway/config.ts";
-import { readSecret } from "./read-secret.ts";
 
 function printSetupHelp(): void {
-	console.log(`${APP_NAME} setup [--yes] [--feature <id>] [--no-feature <id>] [--set <id.option>=<value>] [--reconfigure]
-
-First-run / reconfigure optional features.
-
-${APP_NAME} features list
-${APP_NAME} features enable <id> [--set <id.option>=<value>]...
-${APP_NAME} features disable <id> [--purge-secrets]
+	console.log(`${APP_NAME} setup [--yes]                   Install Chromium for the browser tool
 ${APP_NAME} uninstall [--purge] [--yes]    Remove this ${APP_NAME} install (keeps agent dir unless --purge)
 ${APP_NAME} uninstall <source> [-l]        Remove an extension package (alias for remove)
-`);
-}
-
-function printFeaturesHelp(): void {
-	console.log(`${APP_NAME} features list
-${APP_NAME} features enable <id> [--set <id.option>=<value>]...
-${APP_NAME} features disable <id> [--purge-secrets]
 `);
 }
 
@@ -58,171 +31,21 @@ async function askYesNo(prompt: string, defaultYes: boolean): Promise<boolean> {
 	return trimmed === "y" || trimmed === "yes";
 }
 
-function fileTokenAlreadySet(optionId: string): boolean {
-	const cfg = loadGatewayConfig();
-	if (optionId === "telegram-token") return Boolean(cfg.telegram.token);
-	if (optionId === "discord-token") return Boolean(cfg.discord.token);
-	return false;
-}
-
-async function collectSecretsForFeature(id: FeatureId, secrets: Record<string, string>): Promise<void> {
-	const spec = getFeatureSpec(id);
-	if (!spec) return;
-	for (const option of spec.options) {
-		if (option.type !== "secret") continue;
-		if (fileTokenAlreadySet(option.id)) {
-			console.log(`    ${option.id}: token already set`);
-			continue;
-		}
-		const value = await readSecret(option.prompt);
-		if (value) secrets[option.id] = value;
-	}
-}
-
 async function runSetup(argv: string[]): Promise<number> {
-	const parsed = parseFeatureFlags(argv);
-	if (!parsed.ok) {
-		console.error(parsed.error);
+	const unknown = argv.find((arg) => arg !== "--yes" && arg !== "-y");
+	if (unknown) {
+		console.error(`unknown flag ${unknown}`);
 		printSetupHelp();
 		return 2;
 	}
-	if (!parsed.yes && !process.stdin.isTTY) {
-		console.error("non-interactive setup requires --yes");
-		printSetupHelp();
-		return 2;
-	}
-
-	const current = loadInstallFeatures();
-	const applied = applyFeatureFlags(current, parsed);
-	if (!applied.ok) {
-		console.error(applied.error);
-		return applied.exitCode;
-	}
-	const explicitFeatures = parsed.features.length > 0 || parsed.noFeatures.length > 0 || parsed.sets.length > 0;
 	const { installBrowser } = await import("../core/browser/setup.ts");
 	await installBrowser(false);
-	let next = applied.next;
-	if (!parsed.yes && !explicitFeatures) {
-		await (await import("../gateway/setup.ts")).setupGateway();
-		// Gateway setup persists its own feature choices. Do not overwrite them.
-		next = loadInstallFeatures();
-	} else {
-		const enabled = new Set([...applied.enabledIds, ...parsed.sets.map((set) => getFeatureSpec(set.id)?.id)]);
-		for (const id of enabled) {
-			if (!id) continue;
-			const state = next.features[id];
-			if (!state) continue;
-			if (!parsed.yes) await collectSecretsForFeature(id, applied.secrets);
-			await FEATURE_HANDLERS[id].apply({
-				previous: current.features[id],
-				next: state,
-				secrets: applied.secrets,
-				nonInteractive: parsed.yes,
-			});
-		}
-		for (const id of applied.disabledIds) await FEATURE_HANDLERS[id].disable({ purgeSecrets: false });
-	}
-
-	saveInstallFeatures(next);
 	appendInstallLog(`setup installerVersion=${VERSION}`);
-	console.log(`Writing ${getAgentDir()}/install-features.json`);
 	console.log("\nNext:");
 	console.log(`  1. Restart this shell (or add ${resolveInstallPrefix()}/bin to PATH)`);
 	console.log(`  2. Run:  ${APP_NAME}`);
 	console.log("  3. In the TUI:  /login");
 	return 0;
-}
-
-async function runFeatures(argv: string[]): Promise<number> {
-	const [sub, ...rest] = argv;
-	if (!sub || sub === "list") {
-		const file = loadInstallFeatures();
-		for (const spec of FEATURE_CATALOG) {
-			const enabled = file.features[spec.id]?.enabled ?? spec.defaultEnabled;
-			console.log(`${spec.id}: ${enabled ? "enabled" : "disabled"}  — ${spec.summary}`);
-		}
-		return 0;
-	}
-	if (sub === "enable") {
-		const id = rest[0];
-		if (!id || !getFeatureSpec(id)) {
-			console.error(id ? `unknown feature ${id}` : "features enable requires an id");
-			printFeaturesHelp();
-			return 2;
-		}
-		const flagArgv = ["--feature", id, ...rest.slice(1)];
-		const parsed = parseFeatureFlags(flagArgv);
-		if (!parsed.ok) {
-			console.error(parsed.error);
-			return 2;
-		}
-		if (!parsed.yes && !process.stdin.isTTY && rest.slice(1).length === 0) {
-			// --yes not required: enable with catalog defaults when non-interactive
-		}
-		const current = loadInstallFeatures();
-		const applied = applyFeatureFlags(current, parsed);
-		if (!applied.ok) {
-			console.error(applied.error);
-			return applied.exitCode;
-		}
-		const secrets: Record<string, string> = { ...applied.secrets };
-		if (process.stdin.isTTY && !parsed.yes) {
-			const spec = getFeatureSpec(id);
-			if (spec) {
-				for (const option of spec.options) {
-					if (option.type !== "boolean") continue;
-					if (applied.next.features[id]?.options[option.id] !== undefined) continue;
-					const currentBool =
-						typeof current.features[id]?.options[option.id] === "boolean"
-							? (current.features[id].options[option.id] as boolean)
-							: (option.default ?? false);
-					const value = await askYesNo(`  ${option.prompt}`, currentBool);
-					const state = applied.next.features[id] ?? { enabled: true, options: {} };
-					state.options[option.id] = value;
-					applied.next.features[id] = state;
-				}
-				await collectSecretsForFeature(id as FeatureId, secrets);
-			}
-		}
-		const state = applied.next.features[id];
-		if (state) {
-			await FEATURE_HANDLERS[id as FeatureId].apply({
-				previous: current.features[id],
-				next: state,
-				secrets,
-				nonInteractive: parsed.yes || !process.stdin.isTTY,
-			});
-		}
-		saveInstallFeatures(applied.next);
-		appendInstallLog(`features enable ${id}`);
-		console.log(`enabled ${id}`);
-		return 0;
-	}
-	if (sub === "disable") {
-		const id = rest[0];
-		if (!id || !getFeatureSpec(id)) {
-			console.error(id ? `unknown feature ${id}` : "features disable requires an id");
-			printFeaturesHelp();
-			return 2;
-		}
-		const purgeSecrets = rest.includes("--purge-secrets");
-		const current = loadInstallFeatures();
-		const prev = current.features[id];
-		current.features[id] = { enabled: false, options: { ...prev?.options } };
-		current.updatedAt = new Date().toISOString();
-		await FEATURE_HANDLERS[id as FeatureId].disable({ purgeSecrets });
-		saveInstallFeatures(current);
-		appendInstallLog(`features disable ${id}`);
-		console.log(`disabled ${id}`);
-		return 0;
-	}
-	if (sub === "--help" || sub === "-h") {
-		printFeaturesHelp();
-		return 0;
-	}
-	console.error(`unknown features subcommand ${sub}`);
-	printFeaturesHelp();
-	return 2;
 }
 
 function parseUninstallFlags(argv: string[]): { purge: boolean; yes: boolean } {
@@ -255,11 +78,10 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 					return 1;
 				}
 			}
-			await (await import("../gateway/service.ts")).teardownGatewayService();
 			if (existsSync(agentDir)) rmSync(agentDir, { recursive: true, force: true });
 			console.log(`purged ${agentDir}`);
 		} else {
-			console.log(`sessions, auth, and gateway config kept in ${agentDir}`);
+			console.log(`sessions, auth, and settings kept in ${agentDir}`);
 			console.log(`Add --purge to delete that directory.`);
 		}
 		if (!purge) appendInstallLog("uninstall npm purge=false");
@@ -280,7 +102,6 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 		}
 	}
 
-	await (await import("../gateway/service.ts")).teardownGatewayService();
 	const versions = join(prefix, "versions");
 	const bin = join(prefix, "bin");
 	if (existsSync(versions)) rmSync(versions, { recursive: true, force: true });
@@ -298,7 +119,7 @@ async function runProductUninstall(argv: string[]): Promise<number> {
 		}
 		console.log(`purged ${agentDir}`);
 	} else {
-		console.log(`sessions, auth, and gateway config kept in ${agentDir}`);
+		console.log(`sessions, auth, and settings kept in ${agentDir}`);
 	}
 	console.log("Remove the PATH line from your shell profile if you added one.");
 	if (!purge) appendInstallLog("uninstall purge=false");
@@ -325,15 +146,9 @@ export async function handleInstallCli(args: string[]): Promise<boolean> {
 		process.exitCode = await runSetup(rest);
 		return true;
 	}
-	if (verb === "features") {
-		process.exitCode = await runFeatures(rest);
-		return true;
-	}
 	if (verb === "uninstall" && isProductUninstallArgv(rest)) {
 		process.exitCode = await runProductUninstall(rest);
 		return true;
 	}
 	return false;
 }
-
-export type { InstallFeaturesFile };

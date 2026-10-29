@@ -1,6 +1,6 @@
 # lunR Documentation
 
-lunR is a terminal coding agent derived from pi. It stays small at the core while shipping MCP, subagents, permissions, read-only planning, todos, cron, and a Telegram/Discord gateway — and it still extends through TypeScript extensions, skills, prompt templates, themes, and packages.
+lunR is a terminal coding agent derived from pi. It stays small at the core while shipping MCP, subagents, permissions, read-only planning, todos and cron, and it still extends through TypeScript extensions, skills, prompt templates, themes, and packages.
 
 ## Quick start
 
@@ -20,14 +20,6 @@ lunr
 
 Authenticate with `/login` for subscription providers, or set an API key such as `ANTHROPIC_API_KEY` before starting lunR.
 
-Optional features (chat gateway):
-
-```bash
-lunr setup
-lunr features list
-lunr features enable chat-platforms
-```
-
 To uninstall the CLI, run `npm uninstall -g @ashx-j/lunr`. That keeps `~/.lunr/agent`. To delete that directory too, run `lunr uninstall --purge` first. It asks for confirmation, or pass `--yes`.
 
 `lunr uninstall` without `--purge` only prints the npm command for an npm install. `lunr uninstall <source>` removes an extension package (alias for `lunr remove`).
@@ -40,7 +32,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 
 - [Quickstart](quickstart.md) - install, authenticate, and run a first session.
 - [Using lunR](usage.md) - interactive mode, slash commands, context files, and CLI reference.
-- [Built-in features](features.md) - gateway, cron, MCP, LSP, subagents, plan, todos, and more.
+- [Built-in features](features.md) - cron, MCP, LSP, subagents, plan, todos, and more.
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
 - [Security](security.md) - project trust, sandbox boundaries, and vulnerability reporting.
 - [Containerization](containerization.md) - sandbox lunR with Gondolin, Docker, or OpenShell.

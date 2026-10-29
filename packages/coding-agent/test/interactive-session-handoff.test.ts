@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listHandoffCandidates, registerTransferHandler, SessionTransferError } from "../src/core/session-handoff.ts";
+import { registerTransferHandler, SessionTransferError } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
@@ -56,17 +56,7 @@ function harness() {
 	return { state, editor, submit, manager, directory };
 }
 
-describe("TUI handoff commands", () => {
-	it("marks and cancels without transferring or changing the unsent draft", async () => {
-		const { state, editor, directory, manager } = harness();
-		await editor.onSubmit!("/handoff");
-		expect(listHandoffCandidates(directory).map((record) => record.sessionId)).toEqual([manager.getSessionId()]);
-		expect(editor.getText()).toBe("unsent draft");
-		expect(state.runtimeHost.switchSession).not.toHaveBeenCalled();
-		await editor.onSubmit!("/handoff cancel");
-		expect(listHandoffCandidates(directory)).toEqual([]);
-	});
-
+describe("TUI session reclaim", () => {
 	it("keeps a detached terminal alive and its draft intact when the owner refuses transfer", async () => {
 		const { state, editor, submit, manager } = harness();
 		state.runtimeHost.isDetached = true;

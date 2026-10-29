@@ -682,7 +682,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
 		// Child spawn paths pass the owning session explicitly. Shared process
-		// environment cannot represent several simultaneous gateway parents.
+		// environment cannot represent several simultaneous parent sessions.
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
 		clearPendingForegroundControlNotices(state);
@@ -714,7 +714,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					return !result.isError;
 				},
 			});
-			// Results use the session file identity; gateway controls use its UUID.
+			// Results use the session file identity; cancellation controls use its UUID.
 			const ownedCancellation = {
 				...cancellation,
 				hasPendingWork: () => generation === sessionGeneration && state.currentSessionId === sessionId &&

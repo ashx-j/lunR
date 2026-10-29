@@ -1,5 +1,5 @@
 /**
- * lunR: cron job model + persistent store (Phase 1 of the cron/gateway roadmap).
+ * lunR: cron job model + persistent store.
  *
  * Jobs persist at `<agentDir>/cron/jobs.json` (`{ jobs: [...], updated_at }`),
  * agentDir resolved via getAgentDir() (honors PI_CODING_AGENT_DIR, defaults
@@ -13,28 +13,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	realpathSync,
-	renameSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { Cron } from "croner";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../../config.ts";
-import { loadGatewayConfig } from "../../gateway/config.ts";
-import {
-	chatPlatformDeliverBlockedMessage,
-	deliverMentionsChatPlatform,
-	isFeatureEnabled,
-} from "../install-features.ts";
 
 // ---------------------------------------------------------------------------
 // Model
@@ -50,15 +34,6 @@ export interface CronSchedule {
 	minutes?: number;
 	/** 5-field cron expression, cron kind only. */
 	expr?: string;
-}
-
-export interface CronJobOrigin {
-	/** Requester identity, absent on legacy jobs. Never persist adapter role grants. */
-	userId?: string;
-	platform: string;
-	chatId: string;
-	threadId?: string;
-	chatType?: string;
 }
 
 export type CronJobState = "scheduled" | "paused" | "completed" | "error";
@@ -79,9 +54,6 @@ export interface CronJob {
 	lastStatus: CronJobStatus | null;
 	lastError: string | null;
 	lastDeliveryError: string | null;
-	/** "local" | "origin" | "telegram[:chatId]" | "discord[:chatId]" (comma-combinable). v1 TUI only uses "local". */
-	deliver: string;
-	origin?: CronJobOrigin | null;
 	/** Job IDs whose latest output (8K chars cap each) is prepended to the prompt. */
 	contextFrom?: string[];
 	workdir?: string;
@@ -98,10 +70,8 @@ export interface CreateJobInput {
 	name?: string;
 	/** Repetition cap; null = forever. One-shots are always times=1. */
 	times?: number | null;
-	deliver?: string;
 	contextFrom?: string[];
 	workdir?: string;
-	origin?: CronJobOrigin | null;
 }
 
 export interface JobPatch {
@@ -109,12 +79,10 @@ export interface JobPatch {
 	prompt?: string;
 	/** Raw schedule input; reparsed and re-anchors nextRunAt. */
 	schedule?: string;
-	deliver?: string;
 	enabled?: boolean;
 	times?: number | null;
 	contextFrom?: string[];
 	workdir?: string;
-	origin?: CronJobOrigin | null;
 	/** Internal: manual-run trigger and delivery-error bookkeeping. */
 	nextRunAt?: string | null;
 	lastDeliveryError?: string | null;
@@ -396,7 +364,6 @@ function nextSlotAfter(job: CronJob, after: Date): Date | null {
 // ---------------------------------------------------------------------------
 
 let workdirRoots: string[] = [process.cwd(), homedir()];
-let deliverValidator: ((deliver: string, origin?: CronJobOrigin | null) => string | undefined) | undefined;
 
 /**
  * Configure the allowed absolute roots for cron job workdirs. Relative workdirs
@@ -407,21 +374,9 @@ export function setCronWorkdirRoots(roots: string[]): void {
 	workdirRoots = roots.map((r) => normalize(resolve(r)));
 }
 
-/**
- * Configure a deliver-target validator. When set, createJob/updateJob reject
- * deliver strings that the validator does not approve. The gateway uses this
- * to prevent delivery to arbitrary chats.
- */
-export function setCronDeliverValidator(
-	fn: ((deliver: string, origin?: CronJobOrigin | null) => string | undefined) | undefined,
-): void {
-	deliverValidator = fn;
-}
-
 /** Test seam: restore default validation state. */
 export function resetCronValidators(): void {
 	workdirRoots = [process.cwd(), homedir()];
-	deliverValidator = undefined;
 }
 
 function isPathUnderRoot(absPath: string, root: string): boolean {
@@ -429,31 +384,15 @@ function isPathUnderRoot(absPath: string, root: string): boolean {
 	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-function validateWorkdir(workdir: string, origin?: CronJobOrigin | null): string | undefined {
-	const candidate = origin ? realpathSync(resolve(workdir)) : resolve(workdir);
-	const roots = origin
-		? (loadGatewayConfig().projectRoots ?? []).flatMap((root) => {
-				try {
-					return [realpathSync(root)];
-				} catch {
-					return [];
-				}
-			})
-		: workdirRoots;
-	if (isAbsolute(workdir) && !roots.some((root) => isPathUnderRoot(candidate, root))) {
+function validateWorkdir(workdir: string): string | undefined {
+	const candidate = resolve(workdir);
+	if (isAbsolute(workdir) && !workdirRoots.some((root) => isPathUnderRoot(candidate, root))) {
 		return `workdir ${workdir} is outside allowed roots`;
 	}
-	if (!roots.some((root) => isPathUnderRoot(candidate, root))) {
+	if (!workdirRoots.some((root) => isPathUnderRoot(candidate, root))) {
 		return `workdir ${workdir} resolves outside allowed roots`;
 	}
 	return undefined;
-}
-
-function runDeliverValidation(deliver: string, origin?: CronJobOrigin | null): string | undefined {
-	if (deliverMentionsChatPlatform(deliver) && !isFeatureEnabled("chat-platforms")) {
-		return chatPlatformDeliverBlockedMessage();
-	}
-	return deliverValidator?.(deliver, origin);
 }
 
 function deriveName(prompt: string): string {
@@ -466,11 +405,7 @@ export async function createJob(input: CreateJobInput): Promise<CronJob> {
 		const prompt = input.prompt.trim();
 		if (!prompt) throw new Error("createJob: prompt is empty");
 		if (input.workdir) {
-			const err = validateWorkdir(input.workdir, input.origin);
-			if (err) throw new Error(`createJob: ${err}`);
-		}
-		if (input.deliver) {
-			const err = runDeliverValidation(input.deliver, input.origin);
+			const err = validateWorkdir(input.workdir);
 			if (err) throw new Error(`createJob: ${err}`);
 		}
 		const now = new Date();
@@ -495,8 +430,6 @@ export async function createJob(input: CreateJobInput): Promise<CronJob> {
 			lastStatus: null,
 			lastError: null,
 			lastDeliveryError: null,
-			deliver: input.deliver?.trim() || "local",
-			origin: input.origin ?? null,
 			contextFrom: input.contextFrom,
 			workdir: input.workdir,
 		};
@@ -531,15 +464,10 @@ export async function updateJob(idOrName: string, patch: JobPatch): Promise<Cron
 		if (patch.name !== undefined) job.name = patch.name.trim().slice(0, MAX_NAME_LEN) || job.name;
 		if (patch.workdir !== undefined) {
 			if (patch.workdir) {
-				const err = validateWorkdir(patch.workdir, patch.origin ?? job.origin);
+				const err = validateWorkdir(patch.workdir);
 				if (err) throw new Error(`updateJob: ${err}`);
 			}
 			job.workdir = patch.workdir;
-		}
-		if (patch.deliver !== undefined) {
-			const err = runDeliverValidation(patch.deliver, patch.origin ?? job.origin);
-			if (err) throw new Error(`updateJob: ${err}`);
-			job.deliver = patch.deliver.trim() || "local";
 		}
 		if (patch.prompt !== undefined) {
 			const prompt = patch.prompt.trim();
@@ -561,7 +489,6 @@ export async function updateJob(idOrName: string, patch: JobPatch): Promise<Cron
 			if (job.schedule.kind !== "once") job.repeat.times = patch.times;
 		}
 		if (patch.contextFrom !== undefined) job.contextFrom = patch.contextFrom;
-		if (patch.origin !== undefined) job.origin = patch.origin;
 		if (patch.nextRunAt !== undefined) job.nextRunAt = patch.nextRunAt;
 		if (patch.lastDeliveryError !== undefined) job.lastDeliveryError = patch.lastDeliveryError;
 		return job;

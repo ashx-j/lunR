@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { createJob, getJob, setCronBaseDir, updateJob } from "../src/core/cron/jobs.ts";
 import { startScheduler } from "../src/core/cron/scheduler.ts";
 
-// A TUI owner that skips due jobs it cannot run or deliver hands the lease to a gateway,
+// A TUI owner that skips due jobs from another project hands the lease to another TUI,
 // then backs off instead of taking it straight back.
 
 let dir: string;
@@ -32,8 +32,8 @@ async function dueJob(prompt: string) {
 	return job;
 }
 
-it("a TUI owner hands a job it cannot deliver to a waiting gateway", async () => {
-	const job = await dueJob("for the gateway");
+it("a TUI owner hands a job it cannot run to a waiting TUI", async () => {
+	const job = await dueJob("for the other project");
 	const tui = startScheduler({
 		intervalMs: 10,
 		handoffBackoffTicks: 1000,
@@ -45,7 +45,7 @@ it("a TUI owner hands a job it cannot deliver to a waiting gateway", async () =>
 	});
 	await waitUntil(() => tui.isOwner());
 	const ran: string[] = [];
-	const gateway = startScheduler({
+	const other = startScheduler({
 		intervalMs: 10,
 		runJob: async (_prompt, running) => {
 			ran.push(running.id);
@@ -54,11 +54,11 @@ it("a TUI owner hands a job it cannot deliver to a waiting gateway", async () =>
 		deliverResult: async () => {},
 	});
 	try {
-		await waitUntil(() => gateway.isOwner() && getJob(job.id).repeat.completed === 1);
+		await waitUntil(() => other.isOwner() && getJob(job.id).repeat.completed === 1);
 		expect(ran).toEqual([job.id]);
 		expect(tui.isOwner()).toBe(false);
 	} finally {
-		await gateway.stop();
+		await other.stop();
 		await tui.stop();
 	}
 });

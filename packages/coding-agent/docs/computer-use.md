@@ -10,7 +10,7 @@ not implemented. See [Known limitations](#known-limitations).
 
 Run `/computer setup` in the local lunR terminal. Setup verifies and installs the
 bundled runtime without downloading code, capturing the screen, or operating an
-application. It is unavailable in headless and gateway sessions.
+application. It is unavailable in headless sessions.
 
 Windows needs an active, unlocked desktop. On Apple Silicon macOS, setup prints
 the exact installed `CuaDriver.app` path. Add that app to Accessibility and
@@ -23,7 +23,6 @@ Computer use and Allow foreground control default to on. Windows x64/arm64 and
 Apple Silicon expose `computer_load`; detailed tools load on demand. Linux and
 Intel macOS have no native discovery tool. All computer tools except release
 require an image-capable model. There is no text-only accessibility fallback.
-Gateway sessions operate the gateway host, not the chat client's device.
 
 `computer_end` releases without approval. Read-only allows relevant observation
 and release, but blocks mutation. Yolo and Auto permit input. Auto allows
@@ -204,11 +203,7 @@ cancellation. Unconfirmed shutdown retains ownership. Cancellation cannot retrac
 already delivered input, and forced termination does not prove held input was
 released.
 
-Gateway cron creates fresh permission contexts with the configured default mode,
-without gateway approvals or its approval handler. Read-only blocks input, and
-missing approval blocks operations that still require confirmation.
-Session shutdown precedes disposal, even after partial extension binding failure.
-TUI cron continues to use its live permission context.
+Cron runs use the TUI's live permission context.
 
 ## Runtime and distribution
 

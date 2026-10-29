@@ -1,11 +1,6 @@
-# Gateway, ACP, PR watch and computer use
+# ACP, PR watch and computer use
 
-Read before changing the Discord/Telegram gateway, ACP mode, PR watch or native computer use.
-
-## Gateway
-
-- Paired and allowlisted users share one authorization. `ConversationBinding.owner` identifies the requester, not a tier; keep requester and fresh access checks on delayed approvals and deliveries. Legacy `owners` entries are ordinary grants. Busy-session `/stop` `/new` bypass the session guard; Telegram length = `string.length` (UTF-16). Telegram sends plain text (no `parse_mode`). Discord native commands in guild text use chat type `group`, like messages. Plan approval restores the pre-plan mode through `AgentSession.setPermissionMode` (saved); an unanswered plan prompt rejects with `PLAN_APPROVAL_TIMEOUT_REASON` so the model waits instead of revising.
-- Outbox: result entries keep their source across `/new`; prompts/notices use an epoch. Failed batches stay on disk with `failed: true`, newest 20 only, and a permanent failure sends one notice. Approval details longer than `maxMessageLength` go through the outbox before the buttons message. A crash between send and on-disk ack can duplicate the last chunk.
+Read before changing ACP mode, PR watch or native computer use.
 
 ## ACP
 

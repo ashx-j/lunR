@@ -4,6 +4,10 @@ lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.40`**. Versioned
 
 ## [Unreleased]
 
+### Removed
+
+- The Telegram and Discord gateway, with `lunr gateway`, `lunr features`, `/handoff`, the `/settings` Gateway menu and cron delivery to chats. Cron jobs now run only in an open TUI and save their output locally. `lunr setup` only installs Chromium. An old gateway startup service now prints a removal notice and exits; delete it by hand.
+
 ## [0.2.40] - 2026-10-25
 
 ### Added

@@ -3,7 +3,6 @@ export type PreloadLaunchMode = "interactive" | "deferred";
 const DEFERRED_COMMANDS = new Set([
 	"config",
 	"doctor",
-	"features",
 	"gateway",
 	"install",
 	"list",

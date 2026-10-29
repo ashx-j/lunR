@@ -7,7 +7,7 @@
   <a href="https://github.com/ashx-j/lunR"><img alt="GitHub" src="https://img.shields.io/badge/github-ashx--j%2FlunR-181717?style=flat-square&logo=github" /></a>
 </p>
 
-lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, ACP, and SDK modes, plus baked-in MCP, subagents, permission modes, planning in read-only mode (shown as `read` in the footer), todos, cron, and a Telegram/Discord gateway.
+lunR is a terminal coding agent derived from [pi](https://github.com/badlogic/pi-mono). It ships with interactive TUI, print/JSON, RPC, ACP, and SDK modes, plus baked-in MCP, subagents, permission modes, planning in read-only mode (shown as `read` in the footer), todos and cron.
 
 Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle those as [packages](#packages) and share them via npm or git.
 
@@ -72,11 +72,10 @@ lunr
 /login  # Then select provider
 ```
 
-Optional: install Chromium and configure the chat gateway:
+Optional: install Chromium for the browser tool:
 
 ```bash
 lunr setup
-lunr features list
 ```
 
 To remove the CLI, run `npm uninstall -g @ashx-j/lunr`. That keeps `~/.lunr/agent`. To delete that directory too, run `lunr uninstall --purge` first:
@@ -89,7 +88,7 @@ lunr uninstall npm:@foo/bar   # remove an extension package (alias for lunr remo
 
 Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override the agent dir with `PI_CODING_AGENT_DIR`.
 
-Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
+Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning and cron.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -160,7 +159,7 @@ npm test
 ```
 ````
 
-The payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR copies it without trimming whitespace and excludes both fence lines. A longer backtick or tilde fence can contain shorter fenced code. Incomplete streamed blocks remain readable but become clickable only after the closing fence arrives. Print, JSON, RPC, and gateway output keep the raw fences and never write to the clipboard.
+The payload starts after the opening fence's line break and ends before the line break immediately preceding the closing fence. lunR copies it without trimming whitespace and excludes both fence lines. A longer backtick or tilde fence can contain shorter fenced code. Incomplete streamed blocks remain readable but become clickable only after the closing fence arrives. Print, JSON and RPC output keep the raw fences and never write to the clipboard.
 
 ### Commands
 
@@ -500,8 +499,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 - **Read-only mode** — `/mode read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
-- **Cron** — `/cron`, `~/.lunr/agent/cron/` (TUI live session or gateway origin)
-- **Gateway** — `lunr gateway` for Telegram and Discord
+- **Cron** — `/cron`, `~/.lunr/agent/cron/` (runs in the TUI's live session)
 - **Web search, LSP, agent memory, goals, intercom, skill-creator, model tiers**
 
 See [docs/features.md](docs/features.md) for how those work. Build anything else with extensions.
@@ -517,12 +515,10 @@ lunr [options] [@files...] [messages...]
 ### Product Commands
 
 ```bash
-lunr setup                         # Install Chromium and configure optional features
+lunr setup                         # Install Chromium for the browser tool
 lunr browser install               # Repair missing Chromium after a skipped/failed install
-lunr features [list|enable|disable]
-lunr doctor                        # Check logins, default model, catalog, browser, Claude Code and gateway
+lunr doctor                        # Check logins, default model, catalog, browser and Claude Code
 lunr doctor keys                   # Test whether Shift+Enter, Alt+Enter and image paste reach lunR
-lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Print the npm removal command; --purge also deletes ~/.lunr/agent
 lunr uninstall <source> [-l]       # Remove an extension package (alias for remove)
 lunr install <source> [-l]         # Install package, -l for project-local
@@ -680,8 +676,6 @@ These variables keep pi's `PI_` prefix.
 | `PI_OFFLINE` | Disable startup network operations when set to `1`/`true`/`yes` |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
-
-Gateway bot tokens (optional) use `LUNR_TELEGRAM_BOT_TOKEN` / `LUNR_DISCORD_BOT_TOKEN` (or `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN`) and are stored in `~/.lunr/agent/gateway.json`.
 
 ---
 

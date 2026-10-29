@@ -11,7 +11,7 @@ PR watching polls GitHub every minute without model calls during quiet cycles. T
 Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
 - **yolo** auto-approves tools. Large subagent launch confirmation is optional and off by default. This is the default mode.
-- **auto** has a review model check each risky action before it runs, the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, informational shell commands, edits inside the project, todos and goal updates run straight away. Other shell commands, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches go to the reviewer first. The reviewer sees what you asked for, the agent's earlier actions this turn and the pending action, but never tool output, so text in files or web pages can't argue with it. A blocked action returns the reviewer's reason to the model. After 3 blocks in a row or 20 in a session, lunR asks you instead; the gateway asks on your phone, and cron or `-p` runs keep the action blocked. Each review is one extra request and appears in `/usage`.
+- **auto** has a review model check each risky action before it runs, the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, informational shell commands, edits inside the project, todos and goal updates run straight away. Other shell commands, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches go to the reviewer first. The reviewer sees what you asked for, the agent's earlier actions this turn and the pending action, but never tool output, so text in files or web pages can't argue with it. A blocked action returns the reviewer's reason to the model. After 3 blocks in a row or 20 in a session, lunR asks you instead, and cron or `-p` runs keep the action blocked. Each review is one extra request and appears in `/usage`.
 - **Which model reviews.** Anthropic sessions use Claude Sonnet 5, Claude Code's own reviewer, falling back to the session model when Sonnet 5 isn't available. OpenAI (API and Codex), xAI and Qwen sessions use the session model at low reasoning effort, since their agents don't name one. Other providers' own agents offer no reviewer, so entering auto warns you and opens the model list to pick one. `/settings` → Auto review model changes or resets the choice. Without a usable reviewer, auto asks you before each risky action.
 - **No questions** is separate from the permission mode. `/goal`, subagents and the ACP Autonomous mode work without stopping to ask you and skip the large-launch confirmation. Subagents follow their parent's mode: reviewed in auto, unreviewed in yolo.
 - **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
@@ -93,99 +93,19 @@ Costs use a provider's reported charge when available, otherwise catalog prices.
 
 ## Cron
 
-`/cron list | create <schedule> <prompt> | pause|resume|run|remove|rebind <id-or-name> | status`
+`/cron list | create <schedule> <prompt> | pause|resume|run|remove <id-or-name> | status`
 
-Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). One process owns scheduling for a profile until its work and shutdown settle. Interactive TUI cron admits a turn only when its live session is idle. `lunr gateway` uses fresh headless sessions and can deliver to platforms. A TUI owner saves output locally and records platform delivery as unavailable. Stop that operator before starting the gateway to move scheduling there. A nonowner manual run returns an owner conflict.
+Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`) and run only while a TUI is open. One TUI owns scheduling for a profile until its work and shutdown settle, and admits a turn only when its live session is idle. Each job runs in the project it was created in; a TUI open in another project leaves it due for one open in the right project. Output is saved under `~/.lunr/agent/cron/output/`. A nonowner manual run returns an owner conflict.
 
-Gateway creation preserves the requester, chat and approved project directory. Delivery checks current grants before every chunk. Legacy origin jobs keep local output but report a delivery error until an approved gateway requester uses `/cron rebind <id-or-name>`. Explicit approved destinations follow their own current grants. After a crash during started work, the next owner pauses that job with an unknown-effects error. Inspect its effects before using `/cron run` to retry deliberately. Timeout and stop cancel the owned request and wait for cleanup before recording one terminal result or releasing ownership.
-
-`cronFallbackModels` in settings is a hand-edited list of `provider/modelId` entries tried in order when gateway session setup fails before prompt dispatch. Failures after admission never replay the prompt through a fallback model.
+After a crash during started work, the next owner pauses that job with an unknown-effects error. Inspect its effects before using `/cron run` to retry deliberately. Timeout and stop cancel the owned request and wait for cleanup before recording one terminal result or releasing ownership.
 
 Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30m`), an ISO timestamp, or a 5-field cron expression.
-
-## Gateway for Telegram and Discord
-
-Run `lunr gateway setup` in your terminal. Use Up/Down and Enter to choose the platform, saved token and approved-user options, default project, startup preference, provider, and model. Long lists scroll; Escape cancels. Only a new bot token, user ID, or custom folder path needs typing. Token entry stays hidden. Setup explains bot creation, validates the bot identity, and asks before saving or starting the gateway. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
-
-Telegram uses BotFather and long polling. Discord needs the bot and `applications.commands` installation scopes. Enable Message Content Intent for ordinary text messages. GuildMembers intent is not required. Discord registers native slash commands; Telegram registers a command menu. Both platforms use buttons for selections and approvals.
-
-Your computer must stay awake and online. Startup cannot make a sleeping or disconnected computer available.
-
-### Service controls
-
-```bash
-lunr gateway setup
-lunr gateway start
-lunr gateway stop
-lunr gateway restart
-lunr gateway status
-lunr gateway logs
-lunr gateway doctor
-lunr gateway run
-lunr gateway autostart login
-lunr gateway autostart boot
-lunr gateway autostart off
-```
-
-Bare `lunr gateway` also runs in the foreground. The terminal's `/settings` Gateway menu opens setup, service controls, logs, and diagnostics.
-
-Login startup runs after you sign in. Boot startup runs before login and may require administrator approval or OS-managed account credentials. Linux uses a systemd user service, with lingering for boot startup. macOS uses a LaunchAgent for login or a LaunchDaemon running as your user for boot. Windows uses Scheduled Tasks; its boot option asks Windows to obtain the account credentials rather than saving the password in lunR. lunR checks the native installation command before recording a successful startup change. Changing or disabling startup removes the previous lunR service, not other applications' services.
-
-Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile.
-
-### Gateway access
-
-Configuration lives in `~/.lunr/agent/gateway.json` and may contain bot tokens. It is written with mode 0600 where supported; Windows security follows the profile directory's ACL. Tokens are not stored in `install-features.json` or startup command arguments. Environment tokens override file tokens in this order: `LUNR_<PLATFORM>_BOT_TOKEN`, then `<PLATFORM>_BOT_TOKEN`.
-
-If you skipped your user ID during setup, message the bot privately and approve its pairing code locally:
-
-```bash
-lunr gateway pair approve telegram <code>
-lunr gateway pair approve discord <code>
-lunr gateway pair list
-```
-
-Approval grants full gateway access, including local projects, saved TUI conversations, permission changes, and file downloads. Existing paired users work immediately without pairing again or receiving a separate owner grant. User allowlists and approved chats use the same access check for messages and commands. Only approve people and chats you trust with this computer. In shared chats, other members may see replies and downloaded files.
-
-Legacy `owners` entries and the `--owner` flag remain compatible, but do not grant a separate permission level. Unapproved users remain blocked. Removing every applicable access grant prevents later commands, approvals, and result delivery. Picker and approval buttons still belong to the user who requested them; session transfer and tool permission checks remain in effect.
-
-### Projects and mobile controls
-
-Approved users can send `/start` to check setup before the first task, `/model` to select an authenticated model before a task, and a normal message immediately when setup's default project remains approved. With multiple approved roots and no explicit default, choose `/project` first. Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
-
-**The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
-
-- `/model`, `/thinking`, `/settings`, and `/mode` control the active session. `/fast` controls Codex fast mode.
-- `/plan <task>` starts planning. The plan appears in chat with approval buttons. Approval returns the session to yolo mode.
-- `/goal`, `/cron`, `/run`, `/chain`, and `/parallel` use the same built-in extensions as the terminal. Pass arguments when an extension's interactive editor requires the terminal.
-- `/skill` selects a loaded skill and asks for a task. `/mcp` and `/lsp` expose their text status commands; the agent retains the configured coding tools.
-- `/usage` reports session tokens and provider-plan usage. `/status` includes the selected project.
-- `/stop` aborts the current turn and pending transfer. `/stopall` also requests cancellation of background subagents and tracked shell processes. `/processes` lists this session's processes; `/processes stop <pid>` requests a stop.
-- `/cancel` cancels a pending selection or transfer. `/new` aborts the current turn and drops queued input, but refuses to discard a session that still has attached background work.
-
-Upload images or documents in chat. Images reach the model as images; documents are saved under the project's `.lunr/gateway-uploads/` directory and passed to the model as paths. `/download <project-relative path>` sends a file back. Files are limited to 8 MB; common credential filenames are blocked from download. This filename check is not a content-based secret scanner. Only send files you intend to share with the chat platform.
-
-Foreground replies, follow-up answers, errors, and extension notices enter a disk-backed outbox before sending. Successfully sent chunks are acknowledged in order; failed sends retry up to five times per destination without blocking other chats. A failed final preview edit falls back to a full reply. Permanently failed deliveries remain in `gateway-outbox.json` with `failed: true` and an error in gateway logs for diagnosis; they do not retry forever. A send can still reach the platform just before the process exits without recording its acknowledgement, so a restart can repeat that chunk. Existing outbox entries without the newer fields remain eligible for delivery. Session changes cancel stale interactive prompts and notices, but finished assistant results still reach their originating chat when authorized. Revoked access prevents delivery. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
-
-### Continue between desktop and phone
-
-In the terminal, `/handoff` marks the current saved session for eight hours. Repeat it to refresh the mark; `/handoff cancel` removes it. Unsaved sessions must be persisted first.
-
-On your phone, `/continue` opens the only marked session, or offers a picker if several are marked. Without an active mark, it selects the latest TUI activity. TUI activation, user prompts, and state-changing user commands count as activity. Background results and file timestamps do not. Closed TUI sessions remain eligible.
-
-`/sessions [filter]` browses saved sessions across projects, including locally registered custom session paths. It works before you have sent the bot its first task. Continuation preserves the session file, selected conversation branch, original project directory, and permission checkpoint. Resuming `auto` or `yolo` asks for confirmation on the phone and defaults to read-only if declined.
-
-Only one updated lunR process may write a persistent session at a time. A running owner must release it cooperatively. If it is busy, choose Wait, Stop and continue, or Cancel. Wait retries busy requests for up to two minutes. Stop and continue aborts the foreground turn; it does not migrate children or shell processes. Those must finish or actually stop before transfer. Cancellation stops pending acquisition, but cannot undo extension shutdown once release has begun.
-
-A detached terminal keeps its draft and can use `/reclaim` to reopen fresh state after the phone releases ownership. It does not append from its old in-memory conversation. Marks remain until expiry or cancellation, even after a successful continuation. Expiry only removes the preference; it neither deletes the conversation nor disconnects it.
-
-All concurrent writers must use a lunR version with session ownership support. Old versions and external file editors cannot honor these locks. Recovery only clears an owner after verified local process death. Uncertain, foreign-host, or incomplete ownership records fail closed; inspect them rather than deleting a live lock.
 
 ## MCP, LSP, web search
 
 - **MCP** — `/mcp`, `/mcp-auth`. Footer MCP segment is on by default (`footerMcp`).
 - **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
-- **Web search** — `/search <query>[, query...]` opens the search curator; `/search` alone lists stored results. Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+- **Web search** — `/search <query>[, query...]` opens the search curator; `/search` alone lists stored results. Interactive TUI attaches web-access after first paint; print/RPC load it before the first turn.
 
 Stored web results belong to the current session. `get_search_content` returns pages of at most 50 KiB and 2,000 lines, including selector lists and errors. Start with `responseId` and a query or URL selector. If the page is truncated, repeat the same call with `offset` set to the returned `nextOffset`. Offsets count UTF-8 bytes. Direct HTTP extraction limits decoded bodies to 5 MiB for text and 20 MiB for PDFs before parsing.
 
@@ -199,17 +119,17 @@ See [Headless browser](browser.md) for action parameters, installation exception
 
 ## Computer use
 
-`/computer setup` installs the bundled runtime for image-only desktop control on Windows and Apple Silicon macOS. Setup is unavailable in headless and gateway sessions, and the computer tools need an image-capable model. See [Computer use](computer-use.md) for permissions and limits.
+`/computer setup` installs the bundled runtime for image-only desktop control on Windows and Apple Silicon macOS. Setup is unavailable in headless sessions, and the computer tools need an image-capable model. See [Computer use](computer-use.md) for permissions and limits.
 
 ## Thinking, usage, streaming, UI
 
 - `/thinking <level>` sets the level when the current model supports it; `/effort` and `/reasoning` are hidden aliases. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
 - `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth.
-- `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
+- `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
 - `/settings` Notifications (default off) rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. lunR asks the terminal for focus reports and stays quiet while you are looking at it; terminals without focus reports get every notice. Desktop notices use OSC 9, which iTerm2, WezTerm and Ghostty show. Other terminals ignore it, so pick the bell there.
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
-- Smooth streaming (`smoothStreaming`, default off) reveals assistant text and thinking in small character batches at about 30 FPS in the interactive TUI. The thinking preview shows the last four revealed lines. Completed thinking collapses after its reveal catches up. Message completion flushes any remaining text immediately. Print, RPC, and gateway stay unsmoothed.
+- Smooth streaming (`smoothStreaming`, default off) reveals assistant text and thinking in small character batches at about 30 FPS in the interactive TUI. The thinking preview shows the last four revealed lines. Completed thinking collapses after its reveal catches up. Message completion flushes any remaining text immediately. Print and RPC stay unsmoothed.
 - Image paste inserts `[image_n]` chips. Windows uses **Alt+V**; VS Code must forward it because it owns Ctrl+V and Alt+V. `/paste-image` bypasses terminal shortcuts.
 - Model selection: every child launch chooses exactly one of `tier: light|standard|heavy` (default) or an explicit `model: provider/id` when the user names a model. Configure tier routes in `/settings`. Optional `thinking` is only valid with an explicit model; tier launches use configured tier thinking. Direct model launches do not require tier mode. Missing, both, inherit, unavailable, or unauthenticated selections fail closed before spawn.
 - Settings changes stay on `/settings`. The agent does not get `settings_load` or other agent-managed settings tools, and direct file-tool writes to lunR `settings.json` are blocked.

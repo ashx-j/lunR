@@ -25,8 +25,7 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 | Command | Description |
 |---------|-------------|
 | `/resume` | Browse and select previous sessions |
-| `/handoff [cancel]` | Mark this saved TUI session for phone continuation, or remove the mark |
-| `/reclaim` | Reopen fresh state after a phone-owned session releases control |
+| `/reclaim` | Reopen fresh state after another lunR process releases this session |
 | `/new` | Start a new session |
 | `/name <name>` | Set the current session display name |
 | `/session` | Show session info |
@@ -38,11 +37,9 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 
 ## Session ownership
 
-Persistent sessions allow one writer at a time across the TUI, gateway, SDK, print, and RPC modes. Browsing and export use read-only snapshots. SDK callers that only inspect a saved file should use `SessionManager.openReadOnly(path)`. Mutable managers and sessions must be disposed before another writer opens the same file.
+Persistent sessions allow one writer at a time across the TUI, SDK, print, and RPC modes. Browsing and export use read-only snapshots. SDK callers that only inspect a saved file should use `SessionManager.openReadOnly(path)`. Mutable managers and sessions must be disposed before another writer opens the same file.
 
 The active branch and permission mode survive reopening. Transfers release the current runtime and create a fresh one; they do not move live child agents or shell processes. A heartbeat timeout alone never permits taking ownership from another process. All simultaneous lunR writers must use a version with ownership support.
-
-For marking a desktop session, choosing it on Telegram or Discord, and handling busy transfers, see [Continue between desktop and phone](features.md#continue-between-desktop-and-phone).
 
 ## Resuming and Deleting Sessions
 

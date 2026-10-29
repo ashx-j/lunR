@@ -768,7 +768,6 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		//  - no reset time was parseable: only a cron-fired turn resumes (the user
 		//    scheduled the wake-up explicitly; ordinary manual turns don't hijack —
 		//    /goal resume stays the manual path).
-		// Gateway cron fires are headless and cannot see this session's goal.
 		const resumeAfter = runtime.activeGoal?.resumeAfter;
 		const resumeDue = resumeAfter !== undefined && Date.now() >= resumeAfter;
 		const cronWakeUp = resumeAfter === undefined && isCronFire();

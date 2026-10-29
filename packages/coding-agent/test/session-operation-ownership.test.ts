@@ -594,7 +594,6 @@ describe("session operation ownership", () => {
 			session: h.session,
 			ui: { requestRender: vi.fn() },
 			isSessionDetached: () => false,
-			recordActivity: vi.fn(),
 		};
 		new PermissionModeController(host as unknown as PermissionControllerHost).applyPermissionMode("read-only", {
 			silent: true,

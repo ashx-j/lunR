@@ -4,7 +4,7 @@
  *
  * Tracks running processes so the user can see them (/processes), kill them,
  * and is prompted at quit time. Processes are tagged with the owning session id
- * so concurrent gateway chats do not share process visibility.
+ * so concurrent sessions in one process do not share process visibility.
  *
  * pause/resume are Unix-only (SIGSTOP/SIGCONT); they throw on win32.
  * restart re-spawns the recorded command detached and registers the new pid.
@@ -21,7 +21,7 @@ export interface TrackedProcess {
 	status: "running" | "paused" | "exited";
 	exitCode?: number;
 	exitedAt?: number;
-	/** Owning session id (gateway chats use this for isolation). */
+	/** Owning session id, used to isolate concurrent sessions. */
 	sessionId?: string;
 }
 

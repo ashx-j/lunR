@@ -10,7 +10,7 @@ function createController(defaultMode: "yolo" | "read-only") {
 		settingsManager: { getDefaultPermissionMode: () => defaultMode },
 		setPermissionMode: vi.fn(),
 	};
-	const host = { session, showStatus: vi.fn(), isSessionDetached: () => false, recordActivity: vi.fn() };
+	const host = { session, showStatus: vi.fn(), isSessionDetached: () => false };
 	return { controller: new PermissionModeController(host as unknown as PermissionControllerHost), host, session };
 }
 

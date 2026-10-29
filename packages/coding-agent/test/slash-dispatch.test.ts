@@ -9,7 +9,7 @@ import {
 } from "../src/modes/interactive/slash-dispatch.ts";
 
 // Builtins the submit handler runs itself, before its detached-session guard.
-const HANDLED_BEFORE_DISPATCH = ["handoff", "reclaim"];
+const HANDLED_BEFORE_DISPATCH = ["reclaim"];
 
 describe("slash dispatch", () => {
 	it("has a handler for every builtin table entry and nothing outside the table", () => {

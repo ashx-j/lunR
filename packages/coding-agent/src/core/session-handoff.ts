@@ -1,9 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { getAgentDir } from "../config.ts";
-import { SessionManager } from "./session-manager.ts";
+import type { SessionManager } from "./session-manager.ts";
 import {
 	canonicalSessionPath,
 	isSessionOwnerDead,
@@ -11,96 +9,6 @@ import {
 	SessionOwnership,
 	writeSessionJson,
 } from "./session-ownership.ts";
-
-export const HANDOFF_DURATION_MS = 8 * 60 * 60 * 1000;
-export interface HandoffCandidate {
-	version: 1;
-	sessionFile: string;
-	sessionId: string;
-	cwd: string;
-	sessionDir: string;
-	lastTuiActivityAt: number;
-	manualHandoff?: { markedAt: number; expiresAt: number };
-}
-
-function registry(agentDir = getAgentDir()): string {
-	return join(agentDir, "session-handoffs");
-}
-function recordPath(file: string, agentDir?: string): string {
-	return join(registry(agentDir), `${createHash("sha256").update(canonicalSessionPath(file)).digest("hex")}.json`);
-}
-function readRecord(file: string, agentDir?: string): HandoffCandidate | undefined {
-	try {
-		return JSON.parse(readFileSync(recordPath(file, agentDir), "utf8"));
-	} catch {
-		return undefined;
-	}
-}
-function saveRecord(manager: SessionManager, update: Partial<HandoffCandidate>, agentDir?: string): HandoffCandidate {
-	manager.assertWritable();
-	const file = manager.getSessionFile();
-	if (!manager.isPersisted() || !file) throw new Error("Only saved sessions can be handed off.");
-	const record: HandoffCandidate = {
-		version: 1,
-		lastTuiActivityAt: 0,
-		...readRecord(file, agentDir),
-		...update,
-		sessionFile: canonicalSessionPath(file),
-		sessionId: manager.getSessionId(),
-		cwd: manager.getCwd(),
-		sessionDir: manager.getSessionDir(),
-	};
-	mkdirSync(registry(agentDir), { recursive: true });
-	writeSessionJson(recordPath(file, agentDir), record);
-	return record;
-}
-export function recordTuiActivity(manager: SessionManager, agentDir?: string, now = Date.now()): void {
-	if (!manager.isPersisted()) return;
-	saveRecord(manager, { lastTuiActivityAt: now }, agentDir);
-}
-export function markSessionHandoff(manager: SessionManager, agentDir?: string, now = Date.now()): HandoffCandidate {
-	if (!manager.getSessionFile() || !existsSync(manager.getSessionFile()!))
-		throw new Error("Session is not saved yet. Complete a turn before marking it for handoff.");
-	return saveRecord(
-		manager,
-		{ manualHandoff: { markedAt: now, expiresAt: now + HANDOFF_DURATION_MS }, lastTuiActivityAt: now },
-		agentDir,
-	);
-}
-export function cancelSessionHandoff(manager: SessionManager, agentDir?: string): void {
-	saveRecord(manager, { manualHandoff: undefined }, agentDir);
-}
-export function listRegisteredSessions(agentDir?: string): HandoffCandidate[] {
-	const directory = registry(agentDir);
-	if (!existsSync(directory)) return [];
-	const records: HandoffCandidate[] = [];
-	for (const name of readdirSync(directory).filter((name) => name.endsWith(".json"))) {
-		try {
-			const record: HandoffCandidate = JSON.parse(readFileSync(join(directory, name), "utf8"));
-			if (
-				record.version !== 1 ||
-				typeof record.sessionFile !== "string" ||
-				!Number.isFinite(record.lastTuiActivityAt)
-			)
-				continue;
-			const snapshot = SessionManager.openReadOnly(record.sessionFile);
-			if (snapshot.getSessionId() !== record.sessionId) continue;
-			records.push(record);
-		} catch {}
-	}
-	return records;
-}
-export function listRegisteredSessionPaths(agentDir?: string): string[] {
-	return listRegisteredSessions(agentDir).map((record) => record.sessionFile);
-}
-export function listHandoffCandidates(agentDir?: string, now = Date.now()): HandoffCandidate[] {
-	return listRegisteredSessions(agentDir)
-		.filter((record) => record.manualHandoff && record.manualHandoff.expiresAt > now)
-		.sort((a, b) => b.manualHandoff!.markedAt - a.manualHandoff!.markedAt);
-}
-export function latestTuiSession(agentDir?: string): HandoffCandidate | undefined {
-	return listRegisteredSessions(agentDir).sort((a, b) => b.lastTuiActivityAt - a.lastTuiActivityAt)[0];
-}
 
 export class SessionTransferError extends Error {
 	readonly code: "busy" | "unsupported" | "timeout" | "changed" | "failed";

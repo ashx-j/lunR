@@ -56,7 +56,6 @@ function makeJob(partial: Partial<CronJob>): CronJob {
 		lastStatus: null,
 		lastError: null,
 		lastDeliveryError: null,
-		deliver: "local",
 		...partial,
 	};
 }
@@ -139,7 +138,6 @@ describe("CRUD + store", () => {
 		const job = await createJob({ prompt: "check the deploy status please", schedule: "every 30m" });
 		expect(job.id).toMatch(/^[0-9a-f]{12}$/);
 		expect(job.name).toBe("check the deploy status please");
-		expect(job.deliver).toBe("local");
 		expect(job.enabled).toBe(true);
 		expect(job.state).toBe("scheduled");
 		expect(job.repeat).toEqual({ times: null, completed: 0 });

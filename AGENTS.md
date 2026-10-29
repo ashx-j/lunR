@@ -1,6 +1,6 @@
 # lunR
 
-Custom CLI coding agent derived from pi. Builtin theme: `moon`. Has a TUI, baked-in features, cron, a Discord/Telegram gateway and ACP mode.
+Custom CLI coding agent derived from pi. Builtin theme: `moon`. Has a TUI, baked-in features, cron and ACP mode.
 
 ## Layout
 
@@ -33,7 +33,7 @@ Read the ones that match your task. Each lists facts and gotchas that are not ob
 | [docs/agents/models-and-providers.md](docs/agents/models-and-providers.md) | model catalog, `/model`, login, xAI, OpenAI/Codex, OpenCode, Claude subscriptions |
 | [docs/agents/subagents.md](docs/agents/subagents.md) | subagent launch, display, async runs, intercom, `/chain` |
 | [docs/agents/permissions-and-memory.md](docs/agents/permissions-and-memory.md) | permission modes, auto review, protected files, global AGENTS.md, memory |
-| [docs/agents/integrations.md](docs/agents/integrations.md) | gateway, ACP, PR watch, computer use |
+| [docs/agents/integrations.md](docs/agents/integrations.md) | ACP, PR watch, computer use |
 | [docs/agents/testing.md](docs/agents/testing.md) | writing or debugging tests and fixtures, known flakes |
 | [docs/agents/decisions.md](docs/agents/decisions.md) | before reversing a past choice; deferred work |
 
@@ -45,4 +45,5 @@ Feature docs that ship with the package live in `packages/coding-agent/docs/` (A
 - 0.2.40 builds catalog rows from models.dev data for every shipped provider, with wrong facts in `packages/ai/src/catalog/rules.ts`, and quarantines a shrunk models.dev provider alone instead of freezing the source. Live discovery reads every logged-in provider's model list (Anthropic and Google included) and resolves new ids with the generator's resolver and the published `facts.json`. 167 more models.dev providers ship as generic OpenAI/Anthropic-compatible providers (about 5,100 models in the published catalog, none in the CLI bundle). Claude subscriptions pin Claude Code 2.1.310. Review round 2 closed read-only bypasses, capped compaction for small windows, added the cron lease handover, made publishing run checks and tests first, cut the package to 5.41 MB and moved login and model commands out of `interactive-mode.ts`.
 - 0.2.39 added the onboarding screen, `/help`, unknown-`/word` suggestions, `/settings` sections with an Advanced submenu, Ctrl+D twice to quit, hidden slash commands (63 visible at `/` with a clean profile) with `/off`…`/max` removed and `/websearch`, `/chain-workflows`, `/chain-prompts` merged into `/search` and `/chain`, `login-flow.ts`, `slash-dispatch.ts`, `lunr --help` Common options, the `@ts-nocheck` count check and `docs/package-size-report.md`.
 - The live catalog reaches users through the hourly `model-catalog` publish without a CLI release.
+- Unreleased on master: the Telegram/Discord gateway is gone, with `lunr features`, `/handoff`, the `/settings` Gateway menu, `discord.js` and cron chat delivery. Cron runs only in an open TUI. `lunr gateway` prints a removal notice and exits 0 for old autostart services. The session transfer protocol and `/reclaim` remain as SDK session-ownership features.
 - Untracked locals on the owner's host may include `HANDOFF-*.md`, `LUNR_SYSTEM_INJECTION.md` and `.pi-subagents/`; `prompts/` is tracked.

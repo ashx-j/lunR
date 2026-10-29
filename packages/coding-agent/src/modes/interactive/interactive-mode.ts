@@ -117,13 +117,7 @@ import {
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import {
-	cancelSessionHandoff,
-	markSessionHandoff,
-	recordTuiActivity,
-	registerTransferHandler,
-	requestSessionTransfer,
-} from "../../core/session-handoff.ts";
+import { registerTransferHandler, requestSessionTransfer } from "../../core/session-handoff.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -1410,7 +1404,6 @@ export class InteractiveMode {
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		await this.waitForDeferredBuiltins();
 		this.unregisterSessionTransfer?.();
-		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		this.unregisterSessionTransfer = registerTransferHandler(this.sessionManager, async ({ stop, signal }) => {
 			this.transferInProgress = true;
 			try {
@@ -1418,7 +1411,7 @@ export class InteractiveMode {
 				await this.runtimeHost.releaseForTransfer({ stop, signal });
 				this.editor.setText(this.detachedDraft);
 				this.unregisterSessionTransfer?.();
-				this.showStatus("Session released for remote continuation. Draft retained. Use /reclaim to continue here.");
+				this.showStatus("Session released to another lunR process. Draft retained. Use /reclaim to continue here.");
 			} finally {
 				this.transferInProgress = false;
 			}
@@ -2530,31 +2523,6 @@ export class InteractiveMode {
 					"Session is detached or transferring. Draft retained. Use /reclaim, /reclaim stop, or /quit.",
 				);
 				return;
-			}
-			if (text === "/handoff" || text === "/handoff cancel") {
-				try {
-					if (text === "/handoff cancel")
-						cancelSessionHandoff(this.sessionManager, this.runtimeHost.services.agentDir);
-					else markSessionHandoff(this.sessionManager, this.runtimeHost.services.agentDir);
-					this.showStatus(
-						text === "/handoff cancel"
-							? "Handoff mark cancelled."
-							: "Marked for phone continuation for 8 hours. Busy work must finish or be explicitly stopped before transfer.",
-					);
-				} catch (error) {
-					this.showError(error instanceof Error ? error.message : String(error));
-				}
-				return;
-			}
-			if (
-				text &&
-				!this.runtimeHost.isDetached &&
-				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
-						text,
-					))
-			) {
-				recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 			}
 			if (!text) {
 				this.takeSubmittedImages(text);
@@ -3792,7 +3760,6 @@ export class InteractiveMode {
 
 	private cycleThinkingLevel(): void {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const newLevel = this.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
 			this.showStatus("Current model does not support thinking");
@@ -3804,7 +3771,6 @@ export class InteractiveMode {
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
 		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		try {
 			const result = await this.session.cycleModel(direction);
 			if (result === undefined) {
@@ -4611,39 +4577,6 @@ export class InteractiveMode {
 					onPlanUsageWindowChange: (window) => {
 						this.settingsManager.setPlanUsageWindow(window);
 					},
-					onGatewayAction: (action) => {
-						void (async () => {
-							if (this.session.isStreaming) {
-								this.showStatus("Wait for the current turn before managing the gateway.");
-								return;
-							}
-							if (action === "status") {
-								this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
-								return;
-							}
-							this.ui.stop();
-							try {
-								await new Promise<void>((resolve, reject) => {
-									const child = spawn(process.execPath, [process.argv[1], "gateway", ...action.split(" ")], {
-										stdio: "inherit",
-										env: process.env,
-									});
-									child.once("error", reject);
-									child.once("exit", (code) =>
-										code === 0
-											? resolve()
-											: reject(
-													new Error(`Gateway command exited with code ${code}. Run lunr gateway doctor.`),
-												),
-									);
-								});
-							} finally {
-								this.ui.start();
-								this.ui.requestRender(true);
-							}
-							this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
-						})().catch((error) => this.showStatus(error instanceof Error ? error.message : String(error)));
-					},
 					onDefaultPermissionModeChange: (mode) => {
 						this.settingsManager.setDefaultPermissionMode(mode);
 					},
@@ -5154,7 +5087,6 @@ export class InteractiveMode {
 				return mode.ui;
 			},
 			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
-			recordActivity: () => recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir),
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
 			showSelector: (create) => this.showSelector(create),

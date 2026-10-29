@@ -55,9 +55,9 @@ The bundle build rewrites `import.meta.url` to each module's original `dist/` pa
 - `pi-subagents/.../async-execution.ts` spawns `subagent-runner.js` for background subagents.
 - `pi-subagents/.../pi-args.ts` passes `subagent-prompt-runtime.js` and `extension/fanout-child.js` to child lunR processes as `--extension`. jiti loads them there.
 - `pi-lsp-extension/src/lsp-manager.ts` spawns the shared LSP daemon `lsp-daemon.js` with node (before 2026-10-21 it pointed at `lsp-daemon.ts` and a missing `lsp-daemon-launcher.cjs`).
-- `gateway/service.ts` writes `dist/cli.js` into the service unit. `modes/acp/process.ts` spawns `dist/cli.js` for workers.
+- `modes/acp/process.ts` spawns `dist/cli.js` for workers.
 
-The static import closure of those five child entry points is 162 loose `.js` files (2.1 MB). It reaches into loose `core/`, `utils/`, `gateway/` and `modes/` modules, not just `builtin-extensions/`. Apart from `cli.js`, `rpc.js` and the export-html templates, the other loose `.js` files (4.54 MB) only serve as the fallback that `cli.js` and `rpc.js` use when `dist/node-runtime` is missing.
+The static import closure of those five child entry points is 162 loose `.js` files (2.1 MB). It reaches into loose `core/`, `utils/` and `modes/` modules, not just `builtin-extensions/`. Apart from `cli.js`, `rpc.js` and the export-html templates, the other loose `.js` files (4.54 MB) only serve as the fallback that `cli.js` and `rpc.js` use when `dist/node-runtime` is missing.
 
 These data assets are read at runtime: `dist/catalog/models.json`, theme JSON, `core/export-html/*` (including its `.js` templates), skill-creator `SKILL.md`, `docs/` and `examples/` (the system prompt gives the model both paths, and doctor and auth guidance print doc paths), `README.md`, and `scripts/install-browser.mjs`.
 
