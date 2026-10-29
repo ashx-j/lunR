@@ -26,6 +26,12 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import {
+	type ApprovalRequest,
+	type ApprovalResponse,
+	NO_HANDLER_REASON,
+	registerApprovalHandler,
+} from "../../core/permissions.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import {
 	type AcpWorkerBridge,
@@ -168,6 +174,26 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		});
 	}
 
+	const parseConfirm = (r: RpcExtensionUIResponse): boolean =>
+		"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false;
+
+	/**
+	 * Plain RPC asks its client through a confirm dialog when auto review escalates or a large
+	 * subagent launch needs approval. An abort answers no. Plan approval stays a chat reply,
+	 * because a confirm can't carry the user's feedback on the plan.
+	 */
+	const requestClientApproval = async (request: ApprovalRequest): Promise<ApprovalResponse> => {
+		if (request.kind === "plan") throw new Error(NO_HANDLER_REASON);
+		const title = request.kind === "large-subagent-launch" ? "Launch subagents?" : `Allow ${request.toolName}?`;
+		const approved = await createDialogPromise(
+			{ signal: session.agent.signal },
+			false,
+			{ method: "confirm", title, message: request.detail },
+			parseConfirm,
+		);
+		return approved ? "once" : "reject";
+	};
+
 	/**
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
@@ -178,9 +204,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			),
 
 		confirm: (title, message, opts) =>
-			createDialogPromise(opts, false, { method: "confirm", title, message, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false,
-			),
+			createDialogPromise(opts, false, { method: "confirm", title, message, timeout: opts?.timeout }, parseConfirm),
 
 		input: (title, placeholder, opts) =>
 			createDialogPromise(opts, undefined, { method: "input", title, placeholder, timeout: opts?.timeout }, (r) =>
@@ -362,6 +386,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		session = runtimeHost.session;
 		acpWorker = createAcpWorkerBridge(session, output);
 		if (acpWorker) session.sessionManager.flush();
+		else registerApprovalHandler(requestClientApproval);
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",

@@ -1164,6 +1164,8 @@ Prompt the user for yes/no confirmation.
 
 Expected response: `extension_ui_response` with `confirmed: true/false` or `cancelled: true`.
 
+lunR's own approvals use this request too. When auto mode's reviewer keeps blocking an action, or has no usable model, the client gets `"title": "Allow <tool>?"` with the reviewer's reason and the call in `message`. With **Confirm large subagent launches** on, a big launch asks with `"title": "Launch subagents?"`. Aborting the turn answers no. `present_plan` does not ask; the user replies to the plan in chat.
+
 #### input
 
 Prompt the user for free-form text.
