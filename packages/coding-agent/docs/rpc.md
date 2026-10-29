@@ -16,6 +16,7 @@ Common options:
 - `--name <name>` / `-n <name>`: Set the session display name at startup
 - `--no-session`: Disable session persistence
 - `--session-dir <path>`: Custom session storage directory
+- `--no-builtin <names>`: Skip built-in extensions by name, comma-separated. A host with its own browser, scheduler or subagents can drop lunR's (`lunr-browser`, `lunr-cron`, `pi-subagents`, `pi-intercom`, `lunr-pr-watch`). `lunr --help` lists the flag; an unknown name exits with the list of valid ones.
 
 ## Protocol Overview
 

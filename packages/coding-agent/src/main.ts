@@ -8,7 +8,11 @@
 import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import chalk from "chalk";
-import { lightBuiltinExtensions, loadAllBuiltinExtensions } from "./builtin-extensions/index.ts";
+import {
+	BUILTIN_EXTENSION_NAMES,
+	lightBuiltinExtensions,
+	loadAllBuiltinExtensions,
+} from "./builtin-extensions/index.ts";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
@@ -619,6 +623,14 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	const parsed = parseArgs(args);
+	for (const name of parsed.noBuiltins ?? []) {
+		if (!BUILTIN_EXTENSION_NAMES.includes(name)) {
+			parsed.diagnostics.push({
+				type: "error",
+				message: `Unknown built-in extension "${name}" for --no-builtin. Known: ${BUILTIN_EXTENSION_NAMES.join(", ")}`,
+			});
+		}
+	}
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -781,9 +793,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	const loadedBuiltins = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
-	const builtinRoster = sessionOnly
-		? loadedBuiltins.filter((entry) => typeof entry === "function" || !ACP_DISABLED_BUILTINS.has(entry.name))
-		: loadedBuiltins;
+	const disabledBuiltins = new Set([...(sessionOnly ? ACP_DISABLED_BUILTINS : []), ...(parsed.noBuiltins ?? [])]);
+	const isEnabledBuiltin = (entry: InlineExtension) =>
+		typeof entry === "function" || !disabledBuiltins.has(entry.name);
+	const builtinRoster = loadedBuiltins.filter(isEnabledBuiltin);
 	const rememberAttachedFactories = (factories: InlineExtension[]) => {
 		const seen = new Set(
 			builtinRoster.map((entry) => (typeof entry === "function" ? undefined : entry.name)).filter(Boolean),
@@ -1128,7 +1141,9 @@ export async function main(args: string[], options?: MainOptions) {
 				: undefined,
 			startupView: startupView?.binding(),
 			deferredMaintenance: runSessionRetention,
-			deferredBuiltinFactories: parsed.noExtensions ? undefined : loadDeferredBuiltinExtensions,
+			deferredBuiltinFactories: parsed.noExtensions
+				? undefined
+				: async () => (await loadDeferredBuiltinExtensions()).filter(isEnabledBuiltin),
 			onDeferredBuiltinsAttached: rememberAttachedFactories,
 		});
 		if (startupBenchmark) {

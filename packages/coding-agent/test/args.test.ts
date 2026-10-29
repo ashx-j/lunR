@@ -365,6 +365,11 @@ describe("parseArgs", () => {
 			expect(result.excludeTools).toEqual(["read", "bash"]);
 		});
 
+		test("collects --no-builtin names across repeated flags", () => {
+			const result = parseArgs(["--no-builtin", "lunr-browser, pi-subagents", "--no-builtin", "lunr-cron"]);
+			expect(result.noBuiltins).toEqual(["lunr-browser", "pi-subagents", "lunr-cron"]);
+		});
+
 		test("parses -xt shorthand", () => {
 			const result = parseArgs(["-xt", "read,bash"]);
 			expect(result.excludeTools).toEqual(["read", "bash"]);

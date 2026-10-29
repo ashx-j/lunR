@@ -62,6 +62,12 @@ const DEFERRED_BUILTIN_LOADERS: Array<{
 
 export const DEFERRED_BUILTIN_EXTENSION_NAMES = DEFERRED_BUILTIN_LOADERS.map((entry) => entry.name);
 
+/** Names `--no-builtin` accepts. */
+export const BUILTIN_EXTENSION_NAMES: readonly string[] = [
+	...lightBuiltinExtensions.map((entry) => entry.name),
+	...DEFERRED_BUILTIN_EXTENSION_NAMES,
+];
+
 /** Flags registered only after deferred builtins attach. Do not fail CLI parse for these. */
 export const DEFERRED_BUILTIN_FLAGS = ["mcp-config"] as const;
 
