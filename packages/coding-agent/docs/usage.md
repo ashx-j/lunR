@@ -48,7 +48,7 @@ A streamed block stays readable while incomplete, but becomes clickable only aft
 
 Type `/` in the editor to open command completion. Extensions can register custom commands, skills are available as `/skill:name`, and prompt templates expand via `/templatename`.
 
-Built-in commands (from `slash-commands.ts`):
+Built-in commands:
 
 | Command | Description |
 |---------|-------------|
@@ -62,13 +62,13 @@ Built-in commands (from `slash-commands.ts`):
 | `/paste-image` | Paste an image from the clipboard |
 | `/name` | Set session display name |
 | `/session` | Show session info and stats |
-| `/usage` | This-session token totals, context, and every stored subscription plan (no `/token-usage`) |
+| `/usage` | This-session token totals, context, and every stored subscription plan |
 | `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
 | `/plan` | Switch to read-only mode, or `/plan <task>` to plan a task |
 | `/mode` | Set permission mode: `yolo`, `auto`, or `read` |
 | `/processes` | View and manage background processes started this session |
-| `/rollback` | Undo the last turn's file changes and rewind the conversation |
+| `/rollback` | Undo the last turn's file changes and rewind the conversation. Off by default; turn it on in `/settings` → Rollback |
 | `/help` | Show the commands and keys you need most |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/fork` | Create a new fork from a previous user message |
@@ -87,7 +87,7 @@ Built-in commands (from `slash-commands.ts`):
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/quit` | Quit lunR |
 
-Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`. There is no `/changelog` command.
+Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`.
 
 Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`. See [Built-in features](features.md).
 
@@ -179,7 +179,7 @@ lunr [options] [@files...] [messages...]
 lunr setup                         # First-run / reconfigure optional features
 lunr features [list|enable|disable]
 lunr gateway […]                   # Chat gateway (requires chat-platforms)
-lunr uninstall [--purge]           # Remove this lunR install (keeps ~/.lunr/agent unless --purge)
+lunr uninstall [--purge]           # Print the npm removal command; --purge also deletes ~/.lunr/agent
 lunr uninstall <source> [-l]       # Remove an extension package (alias for remove)
 lunr install <source> [-l]         # Install package, -l for project-local
 lunr remove <source> [-l]          # Remove package
@@ -189,7 +189,7 @@ lunr update                        # Reinstall global @ashx-j/lunr only
 lunr update --self                 # Same as lunr update
 ```
 
-`lunr update` does not take `--models`, `--all`, `--force`, or `--extensions`. Refresh catalogs with `/refresh`. Workspace `npx lunr` from this repo refuses to self-update.
+`lunr update` takes no other options. Refresh catalogs with `/refresh`.
 
 To uninstall lunR itself, see [Quickstart](quickstart.md#uninstall). `lunr config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command.
 
@@ -203,6 +203,7 @@ See [Packages](packages.md) for package sources and security notes.
 | `-p`, `--print` | Print response and exit |
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
 | `--mode rpc` | RPC mode over stdin/stdout; see [RPC mode](rpc.md) |
+| `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients; see [ACP](acp.md) |
 | `--export <in> [out]` | Export a session to HTML |
 
 In print mode, lunR also reads piped stdin and merges it into the initial prompt:
@@ -320,7 +321,7 @@ lunr --models "claude-*,gpt-4o"
 lunr --tools read,grep,find,ls -p "Review the code"
 
 # Disable one extension or built-in tool while keeping the rest available
-lunr --exclude-tools ask_question
+lunr --exclude-tools web_search
 
 # Offline (no startup network)
 lunr --offline
@@ -328,7 +329,7 @@ lunr --offline
 
 ### Environment Variables
 
-These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
+These variables keep pi's `PI_` prefix.
 
 | Variable | Description |
 |----------|-------------|
@@ -339,7 +340,7 @@ These names stay `PI_*`. Do not invent `LUNR_*` replacements for them.
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
 
-`PI_SKIP_VERSION_CHECK` and `PI_TELEMETRY` are not used by lunR. Gateway bot tokens optionally use `LUNR_TELEGRAM_BOT_TOKEN` / `LUNR_DISCORD_BOT_TOKEN`.
+Gateway bot tokens optionally use `LUNR_TELEGRAM_BOT_TOKEN` / `LUNR_DISCORD_BOT_TOKEN`.
 
 ## Design Principles
 

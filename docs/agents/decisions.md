@@ -4,6 +4,8 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
+- 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.
 - 2026-10-29: remove the issue and PR auto-close gates, because their approved list held pi's contributors, their message linked a CONTRIBUTING.md that doesn't exist, and the Questions link went to pi's Discord.
 - 2026-10-29: the published packages name ashx-j as author and the pi screenshots are gone from the docs, because npm showed Mario Zechner as the author of `@ashx-j/lunr` and its first image was pi; pi's credit stays in the README and THIRD_PARTY_NOTICES.
 - 2026-10-25: CI and the publish workflow install bun for the script tests instead of dropping `build-standalone.test.mjs`, because that test checks the standalone bundle keeps Chromium, HTML and PDF extraction, which the release binaries rely on.

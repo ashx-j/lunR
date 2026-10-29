@@ -16,7 +16,7 @@ Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The
 - **No questions** is separate from the permission mode. `/goal`, subagents and the ACP Autonomous mode work without stopping to ask you and skip the large-launch confirmation. Subagents follow their parent's mode: reviewed in auto, unreviewed in yolo.
 - **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
 
-Use `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
+Use `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists.
 
 ## Subagents
 
@@ -74,10 +74,6 @@ A child must have an active question-capable input channel. Only one question ma
 
 The agent must ask only when the child has missing context, the answer changes a concrete next decision, and waiting for completion would block progress or risk rework. It must use available results first and batch related questions. Routine progress checks, duplicate questions, polling, and step-by-step supervision are prohibited. A follow-up is appropriate only when the answer leaves the original decision unresolved.
 
-### Measuring communication cost
-
-Compare the same task, models, thinking levels, and starting checkout before and after a communication change. Count parent wakeups by their triggering event, provider calls in both parent and child sessions, duplicate deliveries, input/output tokens, cache reads/writes, elapsed time, and blocked time. Check task correctness and delivery of required escalations before comparing cost. Cached input is separate from uncached input; fewer messages or a quieter UI alone do not establish savings. Keep transcript evidence local.
-
 ## Token usage
 
 `/usage` and `/session` separate parent requests, completed child receipts, and their combined total. Input includes ordinary input, cache reads, and cache writes. Output includes reasoning when the provider reports it. Summary and automatic-title requests count as parent requests even though their text does not enter the chat. Goal token budgets use parent and child totals and retain consumed tokens after branch navigation.
@@ -92,7 +88,7 @@ Costs use a provider's reported charge when available, otherwise catalog prices.
 
 - **Todos** — lunr-todos is a full-replace list. `/settings` → Todos disables its system-prompt guidance, model-facing tool, and editor widget. Collapsed lists show all four active items; lists of five or more show three and a `+N more` line. Completed todos prune on the next user turn, so the footer does not leave a `✓ N done` line.
 - **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
-- **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file. The retired `behavior.md` file and behavior presets are no longer loaded.
+- **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file.
 - **Model instructions** — `/settings` can enable `~/.lunr/agent/agents/<model-name>/AGENTS.md` and choose **Both** (global then model-specific) or **Model only**. The folder name is provider-independent and filesystem-safe. Project `AGENTS.md`/`CLAUDE.md` files are unaffected, and `--no-context-files` disables all instruction files.
 
 ## Cron
@@ -135,7 +131,7 @@ Bare `lunr gateway` also runs in the foreground. The terminal's `/settings` Gate
 
 Login startup runs after you sign in. Boot startup runs before login and may require administrator approval or OS-managed account credentials. Linux uses a systemd user service, with lingering for boot startup. macOS uses a LaunchAgent for login or a LaunchDaemon running as your user for boot. Windows uses Scheduled Tasks; its boot option asks Windows to obtain the account credentials rather than saving the password in lunR. lunR checks the native installation command before recording a successful startup change. Changing or disabling startup removes the previous lunR service, not other applications' services.
 
-Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile. Native startup specifications have automated tests; installing and rebooting services on all three operating systems still requires host verification.
+Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile.
 
 ### Gateway access
 
@@ -201,10 +197,14 @@ The browser uses ephemeral session-owned contexts. Read-only mode blocks interac
 
 See [Headless browser](browser.md) for action parameters, installation exceptions, legacy setting precedence, private-network risks, lifecycle limits, and validation.
 
+## Computer use
+
+`/computer setup` installs the bundled runtime for image-only desktop control on Windows and Apple Silicon macOS. Setup is unavailable in headless and gateway sessions, and the computer tools need an image-capable model. See [Computer use](computer-use.md) for permissions and limits.
+
 ## Thinking, usage, streaming, UI
 
 - `/thinking <level>` sets the level when the current model supports it; `/effort` and `/reasoning` are hidden aliases. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
-- `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth. There is no `/token-usage`.
+- `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth.
 - `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
 - `/settings` Notifications (default off) rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. lunR asks the terminal for focus reports and stays quiet while you are looking at it; terminals without focus reports get every notice. Desktop notices use OSC 9, which iTerm2, WezTerm and Ghostty show. Other terminals ignore it, so pick the bell there.
@@ -216,11 +216,11 @@ See [Headless browser](browser.md) for action parameters, installation exception
 
 ## Updates, catalogs, local models
 
-- `lunr update` / `lunr update --self` reinstalls global `@ashx-j/lunr` only. Workspace `npx lunr` is not a published install and will not self-update.
+- `lunr update` / `lunr update --self` reinstalls global `@ashx-j/lunr` only.
 - Catalog refresh is `/refresh`. First paint is cache-only. `/model` lists stored-cred providers only.
 - **xAI SuperGrok:** `/login xai` can import `~/.grok/auth.json` from the Grok CLI. `/logout xai` does not delete that file.
 - **Ollama / LM Studio:** `/login` and select the local provider (localhost probe).
-- **OpenCode Zen:** `/login opencode` then `/refresh`. Do not add a second Zen provider.
+- **OpenCode Zen:** `/login opencode` then `/refresh`.
 
 ## Intercom and skill-creator
 

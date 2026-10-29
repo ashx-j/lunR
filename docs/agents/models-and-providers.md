@@ -4,7 +4,7 @@ Read before changing the model catalog, model selection, login or provider trans
 
 ## Catalog and selection
 
-- Catalog: see `packages/coding-agent/docs/model-catalog.md`. Humans edit the generator/adapters and regenerate JSON; never hand-edit `catalog/providers/*.json`.
+- Catalog: see `docs/agents/model-catalog.md`. Humans edit the generator/adapters and regenerate JSON; never hand-edit `catalog/providers/*.json`.
 - Model facts come from models.dev, not code. A wrong fact goes in `packages/ai/src/catalog/rules.ts` with a `why`; never add id lists or id regexes to the generator. Provider endpoints and transports live in `packages/ai/scripts/catalog-providers.ts`.
 - `npm --prefix packages/ai run generate-models -- --offline` regenerates from the last fetched sources, so two runs see identical inputs when comparing generator changes.
 - Tests that exercise a transport build fixture models instead of `getModel("provider", "id")`: upstream sources drop models, and a pinned id breaks the build on the next regeneration. Catalog tests feed fixture models.dev rows to `modelsDevModels`.

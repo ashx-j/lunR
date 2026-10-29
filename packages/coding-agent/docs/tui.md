@@ -88,23 +88,25 @@ Without this propagation, typing with an IME (Chinese, Japanese, Korean, etc.) w
 
 ## Using Components
 
-**In extensions** via `ctx.ui.custom()`:
+**In extensions** via `ctx.ui.custom()`. It takes a factory and returns a promise. The promise resolves with the value you pass to `done()`, and `done()` also closes the component and restores the normal UI:
 
 ```typescript
 pi.on("session_start", async (_event, ctx) => {
-  const handle = ctx.ui.custom(myComponent);
-  // handle.requestRender() - trigger re-render
-  // handle.close() - restore normal UI
+  const result = await ctx.ui.custom<string | null>(
+    (tui, theme, keybindings, done) => new MyComponent({ onClose: done })
+  );
+  // tui.requestRender() - trigger a re-render from inside the component
 });
 ```
 
-**In custom tools** via `pi.ui.custom()`:
+**In custom tools** via `ctx.ui.custom()` on the context passed to `execute()`:
 
 ```typescript
-async execute(toolCallId, params, onUpdate, ctx, signal) {
-  const handle = pi.ui.custom(myComponent);
+async execute(toolCallId, params, signal, onUpdate, ctx) {
+  const result = await ctx.ui.custom<string | null>(
+    (tui, theme, keybindings, done) => new MyComponent({ onClose: done })
+  );
   // ...
-  handle.close();
 }
 ```
 
@@ -378,22 +380,15 @@ pi.registerCommand("pick", {
   description: "Pick an item",
   handler: async (args, ctx) => {
     const items = ["Option A", "Option B", "Option C"];
-    const selector = new MySelector(items);
-    
-    let handle: { close: () => void; requestRender: () => void };
-    
-    await new Promise<void>((resolve) => {
-      selector.onSelect = (item) => {
-        ctx.ui.notify(`Selected: ${item}`, "info");
-        handle.close();
-        resolve();
-      };
-      selector.onCancel = () => {
-        handle.close();
-        resolve();
-      };
-      handle = ctx.ui.custom(selector);
+
+    const item = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
+      const selector = new MySelector(items);
+      selector.onSelect = (selected) => done(selected);
+      selector.onCancel = () => done(null);
+      return selector;
     });
+
+    if (item) ctx.ui.notify(`Selected: ${item}`, "info");
   }
 });
 ```
@@ -456,7 +451,13 @@ interface MyTheme {
 
 ## Debug logging
 
-Set `PI_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout.
+Set `PI_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout. The variable works with lunR and with any app built on `@ashx-j/lunr-tui`.
+
+```bash
+PI_TUI_WRITE_LOG=/tmp/tui-ansi.log lunr
+```
+
+From a repo checkout, you can also capture the demo app:
 
 ```bash
 PI_TUI_WRITE_LOG=/tmp/tui-ansi.log npx tsx packages/tui/test/chat-simple.ts
@@ -488,7 +489,7 @@ class CachedComponent {
 }
 ```
 
-Call `invalidate()` when state changes, then `handle.requestRender()` to trigger re-render.
+Call `invalidate()` when state changes, then `tui.requestRender()` to trigger a re-render.
 
 ## Invalidation and Theme Changes
 
@@ -522,11 +523,13 @@ Components that build content with theme colors must rebuild that content when `
 ```typescript
 class GoodComponent extends Container {
   private message: string;
+  private theme: Theme;
   private content: Text;
 
-  constructor(message: string) {
+  constructor(message: string, theme: Theme) {
     super();
     this.message = message;
+    this.theme = theme;
     this.content = new Text("", 1, 0);
     this.addChild(this.content);
     this.updateDisplay();
@@ -534,7 +537,7 @@ class GoodComponent extends Container {
 
   private updateDisplay(): void {
     // Rebuild content with current theme
-    this.content.setText(theme.fg("accent", this.message));
+    this.content.setText(this.theme.fg("accent", this.message));
   }
 
   override invalidate(): void {
@@ -551,10 +554,12 @@ For components with complex content:
 ```typescript
 class ComplexComponent extends Container {
   private data: SomeData;
+  private theme: Theme;
 
-  constructor(data: SomeData) {
+  constructor(data: SomeData, theme: Theme) {
     super();
     this.data = data;
+    this.theme = theme;
     this.rebuild();
   }
 
@@ -562,12 +567,12 @@ class ComplexComponent extends Container {
     this.clear();  // Remove all children
 
     // Build UI with current theme
-    this.addChild(new Text(theme.fg("accent", theme.bold("Title")), 1, 0));
+    this.addChild(new Text(this.theme.fg("accent", this.theme.bold("Title")), 1, 0));
     this.addChild(new Spacer(1));
 
     for (const item of this.data.items) {
       const color = item.active ? "success" : "muted";
-      this.addChild(new Text(theme.fg(color, item.label), 1, 0));
+      this.addChild(new Text(this.theme.fg(color, item.label), 1, 0));
     }
   }
 
@@ -887,9 +892,9 @@ class VimEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
-    // Factory receives theme and keybindings from the app
+    // Factory receives tui, theme and keybindings from the app
     ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-      new VimEditor(theme, keybindings)
+      new VimEditor(tui, theme, keybindings)
     );
   });
 }

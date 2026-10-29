@@ -26,19 +26,18 @@ Use `/logout` to remove the lunR connection. Most subscription providers store r
 ### OpenAI Codex
 
 - Requires ChatGPT Plus or Pro subscription
-- Officially endorsed by OpenAI: [Codex for OSS](https://developers.openai.com/community/codex-for-oss)
 
 ### Claude Pro/Max
 
-`/login anthropic` offers a Claude subscription connection that runs through Claude Code 2.1.310. The first time, lunR asks before downloading that exact Claude Code build (about 100 MB) from the npm registry into `~/.lunr/agent/claude-code/2.1.310/`. The download must match a hash pinned in lunR's source, or nothing is installed. You do not need Python or a separate Claude Code install, and lunR never changes another Claude Code on your machine.
+`/login anthropic` offers a Claude subscription connection that runs through a pinned Claude Code version. The first time, lunR asks before downloading that exact Claude Code build (about 100 MB) from the npm registry into `~/.lunr/agent/claude-code/<version>/`. The download must match a hash pinned in lunR's source, or nothing is installed. You do not need a separate Claude Code install, and lunR never changes another Claude Code on your machine.
 
 lunR's copy uses Claude Code's normal sign-in, so an existing Claude Code login is reused. Otherwise, confirm the terminal handoff to `claude auth login` and pick a Claude subscription.
 
 Claude Code owns your account session. lunR does not read its credentials or copy tokens into `auth.json`. For each generation, lunR builds the same Messages request it sends with an API key and starts one Claude Code process with its own tools turned off. Claude Code signs the request and sends it straight to Anthropic, so your sign-in never passes through lunR. lunR reads the answer from Claude Code's output and stops Claude Code once the answer is complete, so each generation is exactly one request. lunR still runs its own tools and manages history. `claude -p` runs, which is how lunR uses Claude Code, count against your plan's usage limits; see Anthropic's [Agent SDK plan article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for current credits.
 
-`/logout anthropic` removes only lunR's connection and cached provider models. Your Claude Code login stays, and so does the downloaded binary; delete `~/.lunr/agent/claude-code/` to remove it. Connections from the earlier Python-based setup, old lunR Anthropic OAuth tokens, and `ANTHROPIC_OAUTH_TOKEN` all need `/login anthropic` again. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
+`/logout anthropic` removes only lunR's connection and cached provider models. Your Claude Code login stays, and so does the downloaded binary; delete `~/.lunr/agent/claude-code/` to remove it. `ANTHROPIC_OAUTH_TOKEN` does not work. Run `/login anthropic` instead. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
 
-The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Models and routes come from Claude Code's model picker during setup, which lists what your plan offers. lunR skips variants that Claude Code bills from usage credits. A `[1m]` route gets a 1M context window, and every other model uses the window from lunR's model catalog. Setup sends nothing to Anthropic. New Claude models usually need a newer Claude Code: when lunR pins a newer one, `/refresh` says so, and `/login anthropic` downloads it and lists the new models. Connections saved before lunR 0.2.37 need `/login anthropic` once. The route passes offline checks against the real Claude Code 2.1.310 binary and a live Linux run, but is not yet qualified against a live account on every platform.
+The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Models and routes come from Claude Code's model picker during setup, which lists what your plan offers. lunR skips variants that Claude Code bills from usage credits. A `[1m]` route gets a 1M context window, and every other model uses the window from lunR's model catalog. Setup sends nothing to Anthropic. New Claude models usually need a newer Claude Code: when lunR pins a newer one, `/refresh` says so, and `/login anthropic` downloads it and lists the new models.
 
 ### GitHub Copilot
 
@@ -54,7 +53,7 @@ The displayed token cost is an estimated API list-price equivalent, not a subscr
 
 ### Radius
 
-Radius is a dynamic `pi-messages` gateway. `/login radius` stores OAuth tokens in `auth.json`; the gateway catalog is refreshed independently and cached in `models-store.json`. Custom Radius gateways can be declared in `models.json` with `"oauth": "radius"` and a gateway `baseUrl`.
+Radius is a dynamic model gateway. `/login radius` stores OAuth tokens in `auth.json`; the gateway catalog is refreshed independently and cached in `models-store.json`. Custom Radius gateways can be declared in `models.json` with `"oauth": "radius"` and a gateway `baseUrl`.
 
 ### Local Ollama and LM Studio
 
@@ -64,7 +63,7 @@ You can still add custom local entries in `~/.lunr/agent/models.json`; see [Cust
 
 ### OpenCode Zen
 
-`/login opencode` (or `OPENCODE_API_KEY`) then `/refresh`. Free rows rotate from live `/v1/models` intersected with models.dev. There is no second Zen provider.
+`/login opencode` (or `OPENCODE_API_KEY`) then `/refresh`. Free rows rotate from live `/v1/models` intersected with models.dev.
 
 ## API Keys
 
@@ -86,6 +85,7 @@ lunr
 | DeepSeek | `DEEPSEEK_API_KEY` | `deepseek` |
 | NVIDIA NIM | `NVIDIA_API_KEY` | `nvidia` |
 | Google Gemini | `GEMINI_API_KEY` | `google` |
+| Google Vertex AI | `GOOGLE_CLOUD_API_KEY` (or Application Default Credentials, see below) | `google-vertex` |
 | Amazon Bedrock | `AWS_BEARER_TOKEN_BEDROCK` | `amazon-bedrock` |
 | Mistral | `MISTRAL_API_KEY` | `mistral` |
 | Groq | `GROQ_API_KEY` | `groq` |
@@ -104,6 +104,8 @@ lunr
 | Fireworks | `FIREWORKS_API_KEY` | `fireworks` |
 | Together AI | `TOGETHER_API_KEY` | `together` |
 | Kimi For Coding | `KIMI_API_KEY` | `kimi-coding` |
+| Moonshot AI | `MOONSHOT_API_KEY` | `moonshotai` |
+| Moonshot AI (China) | `MOONSHOT_API_KEY` | `moonshotai-cn` |
 | MiniMax | `MINIMAX_API_KEY` | `minimax` |
 | MiniMax (China) | `MINIMAX_CN_API_KEY` | `minimax-cn` |
 | Xiaomi MiMo | `XIAOMI_API_KEY` | `xiaomi` |
@@ -112,6 +114,8 @@ lunr
 | Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | `xiaomi-token-plan-sgp` |
 | Qwen Token Plan | `DASHSCOPE_TOKEN_PLAN_API_KEY` | `qwen-token-plan` |
 | Qwen Token Plan (China) | `DASHSCOPE_TOKEN_PLAN_CN_API_KEY` | `qwen-token-plan-cn` |
+| Qwen Cloud | `DASHSCOPE_API_KEY` | `qwen-cloud` |
+| Qwen Cloud (China) | `DASHSCOPE_API_KEY` | `qwen-cloud-cn` |
 
 OpenCode Zen free models still require `/login opencode` (or `OPENCODE_API_KEY`). The free set rotates; `/refresh` after login pulls the official catalog shard.
 
@@ -298,7 +302,7 @@ export GOOGLE_CLOUD_PROJECT=your-project
 export GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
-Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
+Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file. Or skip ADC and set `GOOGLE_CLOUD_API_KEY`.
 
 ## Custom Providers
 

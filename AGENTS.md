@@ -37,7 +37,7 @@ Read the ones that match your task. Each lists facts and gotchas that are not ob
 | [docs/agents/testing.md](docs/agents/testing.md) | writing or debugging tests and fixtures, known flakes |
 | [docs/agents/decisions.md](docs/agents/decisions.md) | before reversing a past choice; deferred work |
 
-Feature docs that ship with the package live in `packages/coding-agent/docs/` (startup, model catalog, ACP, PR watch, computer use).
+Feature docs that ship with the package live in `packages/coding-agent/docs/` (ACP, PR watch, computer use). Maintainer notes on startup performance and the model catalog live in `docs/agents/interactive-startup.md` and `docs/agents/model-catalog.md`.
 
 ## Current state
 

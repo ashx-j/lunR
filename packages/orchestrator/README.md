@@ -1,17 +1,15 @@
-# @earendil-works/pi-orchestrator
+# lunR orchestrator
 
-Experimental. This package is under active development and may change or be removed without notice. Its CLI, APIs, and behavior are not yet stable.
+Internal and experimental. This package is not published to npm. Its CLI, APIs, and behavior may change or be removed without notice.
 
-Orchestrator package for pi.
+A local supervisor that starts `lunr --mode rpc` child processes and lets you list, control, and stop them over a Unix socket. When a stored Radius login or `RADIUS_API_KEY` exists, it also registers the machine and its instances with Radius, the hosted gateway service (default `https://radius.pi.dev/`).
 
 ## CLI
 
+Build the workspace, then run the CLI from the repo root:
+
 ```bash
-orchestrator --help
+node packages/orchestrator/dist/cli.js --help
 ```
 
-## Shutdown
-
-Owned RPC children get up to five seconds to exit after SIGTERM, then two seconds after SIGKILL. Disposal rejects if exit is still unconfirmed. Shutdown attempts every instance independently, and Radius failures never skip local child termination. Radius requests have a five-second deadline, including response bodies.
-
-Failed cleanup retains an error record and any unresolved child handle or Radius registration for retry with `stopInstance()`. Records include a diagnostic PID while child exit remains unconfirmed. After supervisor restart, a saved PID remains diagnostic only and never authorizes termination of a process. Service shutdown still stops Radius and removes its socket after child cleanup failures, reports the failures, and exits with status 1.
+Subcommands are `serve`, `list`, `spawn`, `status`, `stop`, `rpc`, and `rpc-stream`.
