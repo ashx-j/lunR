@@ -70,6 +70,7 @@ describe("permission modes", () => {
 		);
 		expect(await gateToolCall("bash", { command: "ls -la" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("read", { path: "/cwd/out" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("todo", { todos: [] }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("lsp_rename", { path: "/cwd/out", newName: "renamed" }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("code_rewrite", { pattern: "x", dry_run: true }, "/cwd")).toBeUndefined();
 		expect(await gateToolCall("code_rewrite", { pattern: "x", dry_run: false }, "/cwd")).toEqual({

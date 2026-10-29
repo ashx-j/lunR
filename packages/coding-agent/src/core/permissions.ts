@@ -76,7 +76,7 @@ export type ApprovalResponse =
 	| { decision: "reject"; feedback: string }
 	| { decision: "approve"; feedback?: string };
 
-/** Read-only tools that never need approval. ACP extends this list for its client approval gate. */
+/** Tools that never need approval and run in read-only mode. `todo` only updates the session's own list. */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"read",
 	"grep",
@@ -104,6 +104,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"contact_supervisor",
 	"present_plan",
 	"structured_output",
+	"todo",
 ]);
 
 export const NO_HANDLER_REASON = "Approval channel unavailable.";
