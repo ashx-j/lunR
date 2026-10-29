@@ -26,6 +26,7 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { getAllPlanUsageResults } from "../../core/usage-service.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import {
 	type AcpWorkerBridge,
@@ -645,6 +646,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			case "get_session_stats": {
 				const stats = session.getSessionStats();
 				return success(id, "get_session_stats", stats);
+			}
+
+			case "get_plan_usage": {
+				const usage = await getAllPlanUsageResults(session.model?.provider, session.modelRuntime);
+				return success(id, "get_plan_usage", usage);
 			}
 
 			case "export_html": {
