@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../src/config.ts";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
 
@@ -14,9 +14,9 @@ describe("buildSystemPrompt", () => {
 		});
 
 		expect(prompt).toContain(
-			"You are an expert coding assistant currently running ''openai/gpt-5.6'', operating inside lunR, a coding agent harness.",
+			"You are an expert coding assistant currently running `openai/gpt-5.6`, operating inside lunR, a coding agent harness.",
 		);
-		expect(prompt).toContain("Current working directory: ''C:/work/project''");
+		expect(prompt).toContain("Current working directory: `C:/work/project`");
 		expect(prompt).toContain("Behavior guidelines:");
 		expect(prompt).toContain("Memory stores established, durable facts and stable preferences.");
 		expect(prompt).toContain("should be click-to-copy");
@@ -33,7 +33,7 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain(`${getDocsPath()}/features.md`);
 		expect(prompt).toContain("Never modify this tree, including through shell commands.");
 		expect(prompt).not.toContain("behavior.md");
-		expect(prompt).toContain("Guidelines:");
+		expect(prompt).toContain("Tool guidelines:");
 		expect(prompt).toContain("lunR documentation");
 		expect(prompt).toContain(`- README: ${getReadmePath()}`);
 		expect(prompt).toContain(`- Documentation: ${getDocsPath()}`);
@@ -58,22 +58,16 @@ describe("buildSystemPrompt", () => {
 		).not.toContain("Launch subagents only");
 	});
 
-	test("includes todo guidance only while the todo tool is active", () => {
-		const withTodos = buildSystemPrompt({
-			selectedTools: ["read", "todo"],
-			contextFiles: [],
-			skills: [],
-			cwd: process.cwd(),
-		});
-		const withoutTodos = buildSystemPrompt({
-			selectedTools: ["read"],
-			contextFiles: [],
-			skills: [],
-			cwd: process.cwd(),
-		});
-
-		expect(withTodos).toContain("Use todo for meaningful multi-step work.");
-		expect(withoutTodos).not.toContain("Use todo for meaningful multi-step work.");
+	test("states the local date and operating system", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 9, 29, 23, 30));
+		try {
+			const prompt = buildSystemPrompt({ contextFiles: [], skills: [], cwd: process.cwd() });
+			expect(prompt).toContain("Current date: 2026-10-29\n");
+			expect(prompt).toMatch(/Operating system: \S+/);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	test("includes cron guidance only while the cron tool is active", () => {
@@ -105,7 +99,7 @@ describe("buildSystemPrompt", () => {
 			cwd: process.cwd(),
 		});
 
-		expect(prompt).toContain("currently running ''no model selected''");
+		expect(prompt).toContain("currently running `no model selected`");
 	});
 
 	test("keeps custom system prompt replacement behavior unchanged", () => {

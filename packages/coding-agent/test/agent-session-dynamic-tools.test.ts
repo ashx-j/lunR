@@ -142,18 +142,15 @@ describe("AgentSession dynamic tool registration", () => {
 
 		expect(session.getActiveToolNames()).toContain("todo");
 		expect(session.getAllTools().map((tool) => tool.name)).toContain("todo");
-		expect(session.systemPrompt).toContain("Use todo for meaningful multi-step work.");
 
 		settingsManager.setTodosEnabled(false);
 		session.refreshToolRegistry();
 		expect(session.getActiveToolNames()).not.toContain("todo");
 		expect(session.getAllTools().map((tool) => tool.name)).not.toContain("todo");
-		expect(session.systemPrompt).not.toContain("Use todo for meaningful multi-step work.");
 
 		settingsManager.setTodosEnabled(true);
 		session.refreshToolRegistry();
 		expect(session.getActiveToolNames()).toContain("todo");
-		expect(session.systemPrompt).toContain("Use todo for meaningful multi-step work.");
 		session.dispose();
 	});
 
