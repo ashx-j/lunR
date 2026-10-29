@@ -14,6 +14,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import {
+	PLAN_PASS_THROUGH_TEXT,
+	registerApprovalHandler,
+	requestAutoReviewDecision,
+	requestPlanApproval,
+} from "../src/core/permissions.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
@@ -283,6 +289,26 @@ describe("RPC prompt response semantics", () => {
 
 			await sleep(150);
 		} finally {
+			await cleanup();
+		}
+	});
+
+	it("asks the client about auto review escalations and leaves plan approval to a chat reply", async () => {
+		const { lineHandler, cleanup } = await startRpcMode({ withAuth: true, responseDelayMs: 0 });
+		try {
+			const decision = requestAutoReviewDecision({ toolName: "bash", detail: "Reviewer blocked rm -rf build" });
+			const request = await vi.waitFor(() => {
+				const found = parseOutputLines(rpcIo.outputLines).find(
+					(record) => record.type === "extension_ui_request" && record.method === "confirm",
+				);
+				expect(found).toMatchObject({ title: "Allow bash?", message: "Reviewer blocked rm -rf build" });
+				return found!;
+			});
+			lineHandler(JSON.stringify({ type: "extension_ui_response", id: request.id, confirmed: false }));
+			await expect(decision).resolves.toBe("reject");
+			await expect(requestPlanApproval("Plan")).resolves.toBe(PLAN_PASS_THROUGH_TEXT);
+		} finally {
+			registerApprovalHandler(undefined);
 			await cleanup();
 		}
 	});
