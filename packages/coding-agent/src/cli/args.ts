@@ -32,6 +32,7 @@ export interface Args {
 	excludeTools?: string[];
 	noTools?: boolean;
 	noBuiltinTools?: boolean;
+	noBuiltins?: string[];
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
@@ -122,6 +123,14 @@ export function parseArgs(args: string[]): Args {
 				.split(",")
 				.map((s) => s.trim())
 				.filter((name) => name.length > 0);
+		} else if (arg === "--no-builtin" && i + 1 < args.length) {
+			result.noBuiltins = [
+				...(result.noBuiltins ?? []),
+				...args[++i]
+					.split(",")
+					.map((s) => s.trim())
+					.filter((name) => name.length > 0),
+			];
 		} else if ((arg === "--exclude-tools" || arg === "-xt") && i + 1 < args.length) {
 			result.excludeTools = args[++i]
 				.split(",")
@@ -274,6 +283,7 @@ ${chalk.bold("All options:")}
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
+  --no-builtin <names>           Skip built-in extensions by name, comma-separated (e.g. lunr-browser,pi-subagents)
   --skill <path>                 Load a skill file or directory (can be used multiple times)
   --no-skills, -ns               Disable skills discovery and loading
   --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
