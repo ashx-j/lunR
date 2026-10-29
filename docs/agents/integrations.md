@@ -10,7 +10,7 @@ Read before changing the Discord/Telegram gateway, ACP mode, PR watch or native 
 ## ACP
 
 - Setup, limits and T3 settings: `packages/coding-agent/docs/acp.md`.
-- No-approval tools are core `READ_ONLY_TOOLS` plus `todo`; add side-effect-free tools there. Tool calls are announced at start and end only. Modes may change mid-turn; model and reasoning changes are idle-only and stay session-local. `clientScopedModelsOnly` narrows RPC `get_available_models`; workers read it at startup.
+- No-approval tools are core `READ_ONLY_TOOLS`, which includes `todo`; add side-effect-free tools there. Tool calls are announced at start and end only. Modes may change mid-turn; model and reasoning changes are idle-only and stay session-local. `clientScopedModelsOnly` narrows RPC `get_available_models`; workers read it at startup.
 - ACP cannot retract a form or approval; an expired request keeps its turn open until the host dismisses it. Startup dialogs return cancellation defaults. ACP sessions disable delegation guidance, browser, cron, goals and scheduled subagents (jobs can outlive a client turn) but keep MCP and explicit native children; child delegation strips temporary host MCP credentials. Child notices use content-based activity IDs.
 - T3 caches each ACP agent's model list until provider refresh or restart; logging out of lunR providers does not shrink it until then.
 

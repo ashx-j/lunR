@@ -12,9 +12,6 @@ import { getSubagentCancellation } from "../../core/subagent-cancellation.ts";
 import type { RpcAcpPermissionRequest, RpcExtensionUIResponse } from "../rpc/rpc-types.ts";
 import { ACP_WORKER_CONFIG_ENV, readAcpWorkerConfig } from "./worker-config.ts";
 
-// tools that run without a client approval: core read-only tools plus session-local todo updates.
-const APPROVAL_FREE_TOOLS: ReadonlySet<string> = new Set([...READ_ONLY_TOOLS, "todo"]);
-
 export function assertRpcConfigurationIdle(
 	session: Pick<AgentSession, "isIdle" | "isCompacting" | "isRetrying" | "isBashRunning">,
 ): void {
@@ -93,7 +90,7 @@ export function createAcpWorkerBridge(
 	};
 	const removeGate = session.addToolCallGate(async (toolName, input, toolCallId) => {
 		if (cancelled) return { block: true, reason: "ACP request cancelled." };
-		if (APPROVAL_FREE_TOOLS.has(toolName)) return undefined;
+		if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 		const description =
 			toolName === "subagent"
 				? "Approving full-access delegation authorizes the child's tools without individual ACP permission requests."
