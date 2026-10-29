@@ -5,8 +5,6 @@ body:
   - type: markdown
     attributes:
       value: |
-        The repository's contribution gate auto-closes issues from new contributors. Maintainers can reopen issues and approve contributors.
-
         Keep this short. If it doesn't fit on one screen, it's too long. Write in your own voice.
 
         **Important:** before reporting an issue in core, please validate first with `lunr --no-extensions` and report whether it still happens. This skips discovered extensions and deferred interactive built-ins; light built-ins remain active.
