@@ -572,6 +572,38 @@ Response:
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
+#### get_plan_usage
+
+Get subscription plan usage (the same windows as `/usage`) for every logged-in provider that reports it, plus the session's current provider.
+
+```json
+{"type": "get_plan_usage"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_plan_usage",
+  "success": true,
+  "data": {
+    "usages": [
+      {
+        "provider": "openai-codex",
+        "planLabel": "Pro",
+        "windows": [
+          {"label": "5h", "usedPercent": 12, "resetsAt": 1793232000000},
+          {"label": "Weekly", "usedPercent": 40, "resetsAt": 1793664000000}
+        ]
+      }
+    ],
+    "errors": []
+  }
+}
+```
+
+`resetsAt` is epoch milliseconds. Each provider's result is cached for 60 seconds. Providers without a usage adapter, including Anthropic subscriptions, are absent. Network failures leave a provider out; `errors` holds actionable auth failures such as an expired login.
+
 #### export_html
 
 Export session to an HTML file.

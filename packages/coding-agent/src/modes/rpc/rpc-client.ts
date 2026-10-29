@@ -11,6 +11,7 @@ import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.t
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
+import type { AllPlanUsageResult } from "../../core/usage-service.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
 
@@ -343,6 +344,14 @@ export class RpcClient {
 	 */
 	async getSessionStats(): Promise<SessionStats> {
 		const response = await this.send({ type: "get_session_stats" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Get subscription plan usage for every logged-in provider with a usage adapter.
+	 */
+	async getPlanUsage(): Promise<AllPlanUsageResult> {
+		const response = await this.send({ type: "get_plan_usage" });
 		return this.getData(response);
 	}
 
