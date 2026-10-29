@@ -3,22 +3,25 @@
  * the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, edits
  * inside the project and lunR's own bookkeeping tools skip review; everything else that read-only
  * mode would block goes to the reviewer. AgentSession calls these helpers from its tool gate.
+ *
+ * Subscriptions use their own agent's reviewer: Claude Code's auto mode reviews calls for a Claude
+ * subscription, and Codex's auto review (`codex-auto-review.ts`) for a ChatGPT sign-in.
  */
 
 import { isAbsolute, relative, sep } from "node:path";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
-import { readOnlyModeBlock } from "./permissions.ts";
+import { READ_ONLY_TOOLS, readOnlyModeBlock } from "./permissions.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
 /**
  * Providers whose own coding agent ships a review model for auto approvals. `reviewerModelId` is
- * that agent's documented reviewer; without one, lunR reviews with the session's own model.
+ * that agent's documented reviewer; without one, lunR reviews with the session's own model. Claude
+ * subscriptions and `openai-codex` use their agent's own reviewer instead (see `resolveAutoReviewer`).
  */
 export const AUTO_REVIEW_PROVIDERS: Readonly<Record<string, { agent: string; reviewerModelId?: string }>> = {
 	anthropic: { agent: "Claude Code", reviewerModelId: "claude-sonnet-5" },
 	openai: { agent: "Codex" },
-	"openai-codex": { agent: "Codex" },
 	xai: { agent: "Grok Build" },
 	"qwen-cloud": { agent: "Qwen Code" },
 	"qwen-cloud-cn": { agent: "Qwen Code" },
@@ -30,9 +33,20 @@ export const AUTO_REVIEW_PROVIDERS: Readonly<Record<string, { agent: string; rev
 export const SUBAGENT_CHILD_AUTO_REVIEW_ENV = "PI_SUBAGENT_CHILD_AUTO_REVIEW";
 export const AUTO_REVIEW_CONSECUTIVE_LIMIT = 3;
 export const AUTO_REVIEW_TOTAL_LIMIT = 20;
+/** Reviewer name for a Claude subscription, whose calls Claude Code's own auto mode reviews. */
+export const CLAUDE_CODE_REVIEWER = "Claude Code auto mode";
+/** Codex's own reviewer model for ChatGPT sign-ins. */
+export const CODEX_REVIEW_MODEL_ID = "codex-auto-review";
 
 export type AutoReviewer =
-	| { kind: "ready"; model: Model<Api>; ref: string; source: "parent" | "setting" | "provider" | "session" }
+	| {
+			kind: "ready";
+			model: Model<Api>;
+			ref: string;
+			source: "parent" | "setting" | "provider" | "session";
+			/** Set when the subscription's own agent reviews: Claude Code's auto mode or Codex's auto review. */
+			native?: "claude-code" | "codex";
+	  }
 	| { kind: "missing"; provider: string }
 	| { kind: "unavailable"; ref: string };
 
@@ -64,6 +78,11 @@ export function needsAutoReview(toolName: string, input: Record<string, unknown>
 	return true;
 }
 
+/** True for tools auto mode never reviews, whatever their input. */
+export function isNeverReviewed(toolName: string): boolean {
+	return REVIEW_FREE_TOOLS.has(toolName) || (READ_ONLY_TOOLS.has(toolName) && !URL_FETCH_TOOLS.has(toolName));
+}
+
 /**
  * True for a path inside the project, resolved the way the edit tools resolve it (`~`, `@`,
  * `file://`, symlinks), that isn't hidden. Dotfiles and folders such as `.git` or `.lunr` can
@@ -78,23 +97,39 @@ function isOrdinaryProjectFile(path: string, cwd: string): boolean {
 
 /**
  * Picks the review model: a parent's reviewer (for subagents), then the user's setting, then the
- * provider's documented reviewer, then the session model when the provider is supported.
+ * subscription's own reviewer, then the provider's documented reviewer, then the session model when
+ * the provider is supported. A parent's subscription reviewer only covers its own session, so a child
+ * picks its own.
  */
 export function resolveAutoReviewer(input: {
 	parentRef?: string;
 	configuredRef?: string;
 	sessionModel?: Model<Api>;
+	/** The session model runs through a Claude subscription. */
+	claudeSubscription?: boolean;
 	getModel(provider: string, modelId: string): Model<Api> | undefined;
 }): AutoReviewer {
+	const codexRef = `openai-codex/${CODEX_REVIEW_MODEL_ID}`;
 	const byRef = (ref: string, source: "parent" | "setting"): AutoReviewer => {
 		const slash = ref.indexOf("/");
 		const model = slash > 0 ? input.getModel(ref.slice(0, slash), ref.slice(slash + 1)) : undefined;
-		return model ? { kind: "ready", model, ref, source } : { kind: "unavailable", ref };
+		if (!model) return { kind: "unavailable", ref };
+		return { kind: "ready", model, ref, source, ...(ref === codexRef ? { native: "codex" as const } : {}) };
 	};
-	if (input.parentRef) return byRef(input.parentRef, "parent");
+	const parentNative = input.parentRef === CLAUDE_CODE_REVIEWER || input.parentRef === codexRef;
+	if (input.parentRef && !parentNative) return byRef(input.parentRef, "parent");
 	if (input.configuredRef) return byRef(input.configuredRef, "setting");
 	const session = input.sessionModel;
 	if (!session) return { kind: "missing", provider: "unknown" };
+	if (input.claudeSubscription)
+		return { kind: "ready", model: session, ref: CLAUDE_CODE_REVIEWER, source: "provider", native: "claude-code" };
+	if (session.provider === "openai-codex") {
+		// Codex reviews with the session model when the catalog lacks its reviewer.
+		const reviewer = input.getModel("openai-codex", CODEX_REVIEW_MODEL_ID);
+		const model = reviewer ?? session;
+		const ref = `${model.provider}/${model.id}`;
+		return { kind: "ready", model, ref, source: reviewer ? "provider" : "session", native: "codex" };
+	}
 	const supported = AUTO_REVIEW_PROVIDERS[session.provider];
 	if (!supported) return { kind: "missing", provider: session.provider };
 	const documented = supported.reviewerModelId

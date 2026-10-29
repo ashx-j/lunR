@@ -2,18 +2,22 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackClaudeCodeReview } from "../../ai/src/api/claude-code-review.ts";
 import {
 	AUTO_REVIEW_CONSECUTIVE_LIMIT,
 	AutoReviewTracker,
 	buildAutoReviewContext,
+	CLAUDE_CODE_REVIEWER,
 	needsAutoReview,
 	parseAutoReviewVerdict,
 	resolveAutoReviewer,
 } from "../src/core/auto-review.ts";
+import { parseCodexReview } from "../src/core/codex-auto-review.ts";
+import { CODEX_REVIEW_INSTRUCTIONS } from "../src/core/codex-review-policy.ts";
 import { AUTONOMOUS_ADDENDUM, registerApprovalHandler } from "../src/core/permissions.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
 
@@ -102,11 +106,37 @@ describe("choosing the review model", () => {
 			ref: "anthropic/claude-sonnet-5",
 			source: "provider",
 		});
-		expect(resolveAutoReviewer({ sessionModel: model("openai-codex", "gpt-6"), getModel })).toMatchObject({
+		expect(resolveAutoReviewer({ sessionModel: model("openai", "gpt-6"), getModel })).toMatchObject({
 			kind: "ready",
-			ref: "openai-codex/gpt-6",
+			ref: "openai/gpt-6",
 			source: "session",
 		});
+	});
+
+	it("lets a subscription's own agent review: Claude Code for Claude, codex-auto-review for ChatGPT", () => {
+		const claude = resolveAutoReviewer({
+			sessionModel: model("anthropic", "claude-opus-5"),
+			claudeSubscription: true,
+			getModel,
+		});
+		expect(claude).toMatchObject({ kind: "ready", ref: CLAUDE_CODE_REVIEWER, native: "claude-code" });
+
+		const codexSession = model("openai-codex", "gpt-6");
+		const withReviewer = (provider: string, id: string) =>
+			id === "codex-auto-review" ? model(provider, id) : getModel(provider, id);
+		expect(resolveAutoReviewer({ sessionModel: codexSession, getModel: withReviewer })).toMatchObject({
+			ref: "openai-codex/codex-auto-review",
+			source: "provider",
+			native: "codex",
+		});
+		// Codex reviews with the session model when the catalog lacks its reviewer.
+		expect(resolveAutoReviewer({ sessionModel: codexSession, getModel })).toMatchObject({
+			ref: "openai-codex/gpt-6",
+			native: "codex",
+		});
+		// A parent's subscription reviewer only covers the parent's own session.
+		const child = { sessionModel: model("openrouter", "some-model"), parentRef: CLAUDE_CODE_REVIEWER, getModel };
+		expect(resolveAutoReviewer(child)).toEqual({ kind: "missing", provider: "openrouter" });
 	});
 
 	it("needs a chosen model for unsupported providers, and the choice or a parent's reviewer wins", () => {
@@ -144,6 +174,18 @@ describe("reviewer answers and limits", () => {
 			reason: "Pushes to main.",
 		});
 		expect(parseAutoReviewVerdict(textReply("looks fine to me"))).toBeUndefined();
+	});
+
+	it("reads Codex's outcome and rationale, and treats anything else as no verdict", () => {
+		expect(parseCodexReview('{"outcome":"allow"}')).toEqual({ decision: "allow" });
+		expect(
+			parseCodexReview('Result: {"risk_level":"high","outcome":"deny","rationale":"Force-pushes main."}'),
+		).toEqual({
+			decision: "block",
+			reason: "Force-pushes main.",
+		});
+		expect(parseCodexReview('{"risk_level":"low"}')).toBeUndefined();
+		expect(parseCodexReview("looks fine")).toBeUndefined();
 	});
 
 	it("hands the decision to the user after three blocks in a row, and an allow resets the run", () => {
@@ -268,6 +310,88 @@ describe("auto mode in a session", () => {
 		expect(asked).toEqual([]);
 		expect(bash.commands).toEqual([]);
 		expect(toolResultText(harness)).toContain("Aborted before auto review finished.");
+	});
+
+	it("reviews with Codex's own reviewer on a ChatGPT sign-in, which may check files first", async () => {
+		const bash = fakeBash();
+		harness = await createHarness({ provider: "openai-codex", tools: [bash.tool] });
+		harness.session.setPermissionMode("auto");
+		const requests: Array<{ context: Context; options: SimpleStreamOptions | undefined }> = [];
+		const reviewer =
+			(answer: ReturnType<typeof fauxAssistantMessage>) => (context: Context, options?: SimpleStreamOptions) => {
+				requests.push({ context, options });
+				return answer;
+			};
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf ~/backups" })], { stopReason: "toolUse" }),
+			reviewer(fauxAssistantMessage([fauxToolCall("ls", { path: "." })], { stopReason: "toolUse" })),
+			reviewer(
+				fauxAssistantMessage(
+					'{"risk_level":"high","outcome":"deny","rationale":"Deletes backups nobody asked to remove."}',
+				),
+			),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "npm test > out.txt" })], { stopReason: "toolUse" }),
+			reviewer(fauxAssistantMessage('{"outcome":"allow"}')),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("run the tests");
+
+		expect(bash.commands).toEqual(["npm test > out.txt"]);
+		expect(toolResultText(harness)).toContain("Deletes backups nobody asked to remove.");
+		const [first, afterCheck, second] = requests;
+		expect(first.context.systemPrompt).toBe(CODEX_REVIEW_INSTRUCTIONS);
+		expect(first.options?.headers).toMatchObject({ "x-openai-subagent": "guardian" });
+		expect(first.context.tools?.map((tool) => tool.name)).toEqual(["read", "grep", "find", "ls"]);
+		const request = JSON.stringify(first.context.messages[0].content);
+		expect(request).toContain("[1] user: run the tests");
+		expect(request).toContain("rm -rf ~/backups");
+		expect(afterCheck.context.messages.at(-1)).toMatchObject({ role: "toolResult", toolName: "ls", isError: false });
+		// The second review sees the first call and its result as evidence.
+		expect(JSON.stringify(second.context.messages[0].content)).toContain("Deletes backups nobody asked to remove.");
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("uses Claude Code's own review on a Claude subscription and asks the user when there is none", async () => {
+		const bash = fakeBash();
+		const read: AgentTool = { ...bash.tool, name: "read", label: "read" };
+		harness = await createHarness({ provider: "anthropic", tools: [bash.tool, read] });
+		vi.spyOn(harness.session, "resolveAutoReviewer").mockReturnValue({
+			kind: "ready",
+			model: harness.getModel(),
+			ref: CLAUDE_CODE_REVIEWER,
+			source: "provider",
+			native: "claude-code",
+		});
+		expect(harness.session.claudeCodeAutoMode()).toBeUndefined();
+		harness.session.setPermissionMode("auto");
+		expect(harness.session.claudeCodeAutoMode()).toEqual({ allowTools: ["read"] });
+		const asked: string[] = [];
+		registerApprovalHandler(async (request) => {
+			asked.push(request.kind ?? "");
+			return "once";
+		});
+		trackClaudeCodeReview("toolu_publish", Promise.resolve({ decision: "block", reason: "[Create Public Surface]" }));
+		trackClaudeCodeReview("toolu_test", Promise.resolve({ decision: "allow" }));
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("bash", { command: "npm publish" }, { id: "toolu_publish" }),
+					fauxToolCall("bash", { command: "npm test > out.txt" }, { id: "toolu_test" }),
+					fauxToolCall("bash", { command: "git push" }, { id: "toolu_unreviewed" }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("run the tests");
+
+		expect([...bash.commands].sort()).toEqual(["git push", "npm test > out.txt"]);
+		expect(asked).toEqual(["auto-review"]);
+		expect(toolResultText(harness)).toContain("[Create Public Surface]");
+		// Claude Code reviewed inside the answer's request, so lunR sent no review request of its own.
+		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
 	it("keeps 'no questions' separate from auto", async () => {

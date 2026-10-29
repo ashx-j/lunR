@@ -25,8 +25,9 @@ async function listenOnLoopback(server: Server | TcpServer): Promise<number> {
 
 /**
  * Loopback MCP endpoint that lists lunR's tools so Claude Code accepts their `tool_use` blocks. Calls are
- * always refused; lunR runs tools itself. Claude Code sends its Messages request straight to Anthropic,
- * so nothing here ever sees its sign-in.
+ * always refused; lunR runs tools itself. In auto mode a call only arrives after Claude Code's reviewer
+ * allowed it, so `onToolCall` reports the call's `tool_use` id. Claude Code sends its Messages request
+ * straight to Anthropic, so nothing here ever sees its sign-in.
  *
  * The URL carries a random path prefix; keep it off command lines (write it to a private config file).
  * The Origin check keeps web pages out.
@@ -37,20 +38,31 @@ export class ClaudeCodeLoopback {
 	private readonly server: Server;
 	private readonly prefix: string;
 	private readonly tools: readonly ClaudeCodeTool[];
+	private readonly onToolCall: ((toolUseId: string) => void) | undefined;
 	private closed = false;
 
-	private constructor(server: Server, port: number, prefix: string, tools: readonly ClaudeCodeTool[]) {
+	private constructor(
+		server: Server,
+		port: number,
+		prefix: string,
+		tools: readonly ClaudeCodeTool[],
+		onToolCall: ((toolUseId: string) => void) | undefined,
+	) {
 		this.server = server;
 		this.prefix = prefix;
 		this.tools = tools;
+		this.onToolCall = onToolCall;
 		this.mcpUrl = `http://127.0.0.1:${port}${prefix}/mcp`;
 		server.on("request", (req, res) => this.handle(req, res));
 	}
 
-	static async open(tools: readonly ClaudeCodeTool[] = []): Promise<ClaudeCodeLoopback> {
+	static async open(
+		tools: readonly ClaudeCodeTool[] = [],
+		onToolCall?: (toolUseId: string) => void,
+	): Promise<ClaudeCodeLoopback> {
 		const server = createServer();
 		const port = await listenOnLoopback(server);
-		return new ClaudeCodeLoopback(server, port, `/${randomBytes(32).toString("base64url")}`, tools);
+		return new ClaudeCodeLoopback(server, port, `/${randomBytes(32).toString("base64url")}`, tools, onToolCall);
 	}
 
 	close(): void {
@@ -102,6 +114,10 @@ export class ClaudeCodeLoopback {
 	private mcpReply(message: unknown): object | undefined {
 		if (!message || typeof message !== "object" || !("method" in message) || !("id" in message)) return undefined;
 		const params = "params" in message && message.params && typeof message.params === "object" ? message.params : {};
+		if (message.method === "tools/call" && "_meta" in params && params._meta && typeof params._meta === "object") {
+			const toolUseId = (params._meta as Record<string, unknown>)["claudecode/toolUseId"];
+			if (typeof toolUseId === "string") this.onToolCall?.(toolUseId);
+		}
 		const result =
 			message.method === "initialize"
 				? {

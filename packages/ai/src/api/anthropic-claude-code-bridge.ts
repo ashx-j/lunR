@@ -16,6 +16,7 @@ import {
 	spawnClaudeCode,
 	stopProcessTree,
 } from "./claude-code-process.ts";
+import { type ClaudeCodeReview, trackClaudeCodeReview } from "./claude-code-review.ts";
 
 /** MCP server name prefix Claude Code puts on lunR's tools. Stripped again before lunR sees a tool call. */
 const TOOL_PREFIX = "mcp__lunr__";
@@ -171,6 +172,95 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 	};
 }
 
+const AUTO_MODE_UNAVAILABLE = "Claude Code's auto mode isn't available for this model.";
+
+/**
+ * Claude Code's auto-mode reviews of the tool calls in one answer. Claude Code reviews each call as soon as
+ * it has streamed, sometimes before the answer ends: an MCP call to the loopback means its reviewer allowed
+ * the call, and a `permission_denied` line means it blocked it. Reviews still open when Claude Code is done
+ * become unavailable.
+ */
+class AutoModeReviews {
+	/** False once Claude Code reports another starting mode, as it does for models auto mode doesn't support. */
+	active = true;
+	private readonly open = new Map<string, (review: ClaudeCodeReview) => void>();
+	/** An allowed call can reach the loopback before lunR has read its `tool_use` from Claude Code's output. */
+	private readonly early = new Map<string, ClaudeCodeReview>();
+	private onSettled: (() => void) | undefined;
+
+	/** Reads Claude Code's starting mode, the answer's tool calls and the reviewer's denials. */
+	observe(event: ClaudeCodeEvent): void {
+		if (event.type === "stream_event" && isRecord(event.event)) {
+			const block = event.event.content_block;
+			if (
+				event.event.type === "content_block_start" &&
+				isRecord(block) &&
+				block.type === "tool_use" &&
+				typeof block.id === "string"
+			)
+				this.track(block.id);
+			return;
+		}
+		if (event.type !== "system") return;
+		if (event.subtype === "init") this.active = event.permissionMode === "auto";
+		if (event.subtype !== "permission_denied" || typeof event.tool_use_id !== "string") return;
+		const reason = typeof event.decision_reason === "string" && event.decision_reason.trim();
+		this.settle(
+			event.tool_use_id,
+			event.decision_reason_type === "classifier"
+				? { decision: "block", reason: reason || "No reason given." }
+				: {
+						decision: "unavailable",
+						reason: this.active
+							? "Claude Code refused this call without its auto-mode reviewer."
+							: AUTO_MODE_UNAVAILABLE,
+					},
+		);
+	}
+
+	settle(toolUseId: string, review: ClaudeCodeReview): void {
+		const resolve = this.open.get(toolUseId);
+		if (!resolve) {
+			this.early.set(toolUseId, review);
+			return;
+		}
+		resolve(review);
+		this.open.delete(toolUseId);
+		if (!this.open.size) this.onSettled?.();
+	}
+
+	/** Resolves once every tracked call has a review. */
+	settled(): Promise<void> {
+		if (!this.open.size) return Promise.resolve();
+		return new Promise((resolve) => {
+			this.onSettled = resolve;
+		});
+	}
+
+	/** Marks every review still open as unavailable. */
+	close(reason: string): void {
+		for (const toolUseId of [...this.open.keys()]) this.settle(toolUseId, { decision: "unavailable", reason });
+	}
+
+	private track(toolUseId: string): void {
+		const early = this.early.get(toolUseId);
+		this.early.delete(toolUseId);
+		if (early) trackClaudeCodeReview(toolUseId, Promise.resolve(early));
+		else trackClaudeCodeReview(toolUseId, new Promise((resolve) => this.open.set(toolUseId, resolve)));
+	}
+}
+
+/** Passes each event to `observe` before yielding it. */
+async function* observeEvents(
+	events: AsyncGenerator<ClaudeCodeEvent>,
+	observe: (event: ClaudeCodeEvent) => void,
+): AsyncGenerator<ClaudeCodeEvent> {
+	for await (const event of events) {
+		observe(event);
+		yield event;
+	}
+}
+
 /** Reads events up to the next `result`, or undefined when Claude Code's output ends first. */
 async function nextResult(events: AsyncGenerator<ClaudeCodeEvent>): Promise<ClaudeCodeEvent | undefined> {
 	for (let next = await events.next(); !next.done; next = await events.next()) {
@@ -223,14 +313,16 @@ const sseEvent = (type: string, data: string) => `event: ${type}\ndata: ${data}\
 
 /**
  * Turns Claude Code's stream-json output into the Messages SSE body lunR's Anthropic client expects.
- * Each `stream_event` line carries one raw upstream event. The stream ends at `message_stop`; a `result`
- * before then becomes an SSE error. Cleanup runs once the stream ends, fails, or is cancelled.
+ * Each `stream_event` line carries one raw upstream event. The stream ends at `message_stop`, which calls
+ * `answered`; a `result` before then becomes an SSE error. Cleanup runs once the stream ends, fails, or is
+ * cancelled.
  */
 function answerStream(
 	first: ClaudeCodeEvent,
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	answered: () => Promise<void>,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
@@ -256,9 +348,8 @@ function answerStream(
 				const data = renameToolCall(event.event, inventory);
 				controller.enqueue(encoder.encode(sseEvent(event.event.type, JSON.stringify(data))));
 				if (data.type === "message_stop") {
-					// The answer is complete; stopping now also keeps Claude Code from any further request.
 					controller.close();
-					await finish();
+					await answered();
 				}
 			} catch (error) {
 				controller.error(error);
@@ -285,10 +376,17 @@ async function runClaudeCode(
 	signal: AbortSignal | undefined,
 	idleMs: number,
 	upstream: string | undefined,
+	autoMode: StreamOptions["claudeCodeAutoMode"],
 ): Promise<Response> {
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
-	const loopback = await ClaudeCodeLoopback.open(request.tools);
+	const reviews = autoMode ? new AutoModeReviews() : undefined;
+	// Set once Claude Code reviews the answer's tool calls; until then any cleanup leaves no review open.
+	let reviewing = false;
+	const loopback = await ClaudeCodeLoopback.open(
+		request.tools,
+		reviews && ((toolUseId) => reviews.settle(toolUseId, { decision: "allow" })),
+	);
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
 		loopback.close();
 		throw error;
@@ -300,6 +398,7 @@ async function runClaudeCode(
 	// a 401) gets CLAUDE_CODE_EXIT_GRACE_MS to exit before the tree is killed. A user abort ends the wait.
 	const finish = (graceful = false) => {
 		cleanup ??= (async () => {
+			if (!reviewing) reviews?.close("Claude Code stopped before reviewing this call.");
 			loopback.close();
 			if (graceful && exited && !signal?.aborted) {
 				let timer: NodeJS.Timeout | undefined;
@@ -325,7 +424,19 @@ async function runClaudeCode(
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
 		await writeFile(
 			join(directory, "settings.json"),
-			JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(request.extraBody) } }),
+			JSON.stringify({
+				env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(request.extraBody) },
+				// Allowed tools skip auto mode's reviewer.
+				...(autoMode
+					? {
+							permissions: {
+								allow: autoMode.allowTools
+									.filter((name) => request.tools.some((tool) => tool.name === name))
+									.map((name) => `${TOOL_PREFIX}${name}`),
+							},
+						}
+					: {}),
+			}),
 			{ encoding: "utf8", mode: 0o600 },
 		);
 		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
@@ -373,7 +484,7 @@ async function runClaudeCode(
 				"--max-turns",
 				"1",
 				"--permission-mode",
-				"dontAsk",
+				autoMode ? "auto" : "dontAsk",
 				"--no-session-persistence",
 			],
 			env,
@@ -401,7 +512,8 @@ async function runClaudeCode(
 			}
 		};
 
-		const events = claudeCodeEvents(child.stdout);
+		const output = claudeCodeEvents(child.stdout);
+		const events = reviews ? observeEvents(output, (event) => reviews.observe(event)) : output;
 		for (const [index, frame] of request.frames.entries()) {
 			// Earlier user turns are appended without a generation; Claude Code acknowledges each with a zero-turn result.
 			const replay = frame.type === "user" && index < request.frames.length - 1;
@@ -427,7 +539,23 @@ async function runClaudeCode(
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish), {
+		// Without auto mode the answer is all lunR needs, and stopping now keeps Claude Code from any further request.
+		// In auto mode Claude Code may still be reviewing the answer's tool calls. `--max-turns 1` ends it after that.
+		const answered = async () => {
+			if (!reviews?.active) {
+				reviews?.close(AUTO_MODE_UNAVAILABLE);
+				await finish();
+				return;
+			}
+			reviewing = true;
+			void (async () => {
+				const done = within(nextResult(events), "Claude Code review timed out.").catch(() => undefined);
+				await Promise.race([done, reviews.settled()]);
+				reviews.close("Claude Code ended without reviewing this call.");
+				await finish();
+			})();
+		};
+		return new Response(answerStream(first, next, inventory, finish, answered), {
 			status: 200,
 			headers: { "content-type": "text/event-stream" },
 		});
@@ -445,12 +573,14 @@ export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	autoMode?: StreamOptions["claudeCodeAutoMode"],
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const request = claudeCodeRequest(body, connection);
+			return await runClaudeCode(connection, request, signal, idleMs, upstream, autoMode);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -521,7 +651,7 @@ export function streamClaudeCode(
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream),
+		fetch: claudeCodeFetch(connection, idleMs, upstream, options.claudeCodeAutoMode),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,
@@ -536,6 +666,7 @@ export function streamClaudeCode(
 	const transportOptions = {
 		...options,
 		externalClaudeCode: undefined,
+		claudeCodeAutoMode: undefined,
 		client,
 		cacheRetention: "none" as const,
 	};

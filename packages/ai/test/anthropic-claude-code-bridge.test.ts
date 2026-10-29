@@ -8,6 +8,7 @@ import {
 	CLAUDE_CODE_UPDATE_REQUIRED,
 	streamClaudeCode,
 } from "../src/api/anthropic-claude-code-bridge.ts";
+import { takeClaudeCodeReview } from "../src/api/claude-code-review.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -19,7 +20,10 @@ import { isRetryableAssistantError } from "../src/utils/retry.ts";
  * fixture upstream: replayed user turns get zero-turn results; the Messages request goes straight to
  * ANTHROPIC_BASE_URL; each raw SSE event comes back as a `stream_event` line among other status lines;
  * an HTTP error ends in a `result` carrying `api_error_status`, and a refused connection in one without.
- * It records what it received next to itself. With no ANTHROPIC_BASE_URL (or a directory ending in
+ * In auto mode it reports its starting mode, then reviews each tool call before the `result`: an id ending
+ * in "_blocked" gets a classifier `permission_denied` line, any other an MCP `tools/call`. A directory ending
+ * in "early" makes those calls before printing the answer, and one ending in "no-auto" starts in default
+ * mode and reviews nothing. It records what it received next to itself. With no ANTHROPIC_BASE_URL (or a directory ending in
  * "signed-out") it stops as signed out. A directory ending in "lingers" keeps running briefly after the
  * answer and then writes "exited-cleanly"; one ending in "hangs" never exits. Both leave a "responded"
  * marker once the answer has been read.
@@ -43,9 +47,12 @@ process.stdin.on("data", (chunk) => {
 	}
 });
 process.stdin.on("end", async () => {
-	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
+	const settings = JSON.parse(readFileSync(flag("--settings"), "utf8"));
+	const extra = JSON.parse(settings.env.CLAUDE_CODE_EXTRA_BODY);
+	const auto = flag("--permission-mode") === "auto" && !__dirname.endsWith("no-auto");
+	if (flag("--permission-mode") === "auto") line({ type: "system", subtype: "init", permissionMode: auto ? "auto" : "default" });
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, settings, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
 	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -62,11 +69,27 @@ process.stdin.on("end", async () => {
 	const text = await response.text();
 	writeFileSync(join(__dirname, "responded"), "");
 	if (response.status === 200) {
+		const review = async () => {
+			const mcpUrl = JSON.parse(readFileSync(flag("--mcp-config"), "utf8")).mcpServers.lunr.url;
+			for (const event of auto ? text.split("\\n\\n") : []) {
+				const data = event.split("\\n").find((row) => row.startsWith("data: "));
+				const block = data && JSON.parse(data.slice(6)).content_block;
+				if (block?.type !== "tool_use") continue;
+				if (block.id.endsWith("_blocked")) {
+					line({ type: "system", subtype: "permission_denied", tool_use_id: block.id, decision_reason_type: "classifier", decision_reason: "[Create Public Surface]" });
+					continue;
+				}
+				const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read", arguments: {}, _meta: { "claudecode/toolUseId": block.id } } };
+				await fetch(mcpUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(call) });
+			}
+		};
+		if (__dirname.endsWith("early")) await review();
 		for (const event of text.split("\\n\\n")) {
 			const data = event.split("\\n").find((row) => row.startsWith("data: "));
 			if (data) line({ type: "stream_event", event: JSON.parse(data.slice(6)), parent_tool_use_id: null });
 			line({ type: "system", subtype: "thinking_tokens" });
 		}
+		if (!__dirname.endsWith("early")) await review();
 	} else {
 		line({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error" }] }, error: "unknown" });
 	}
@@ -83,7 +106,7 @@ process.stdin.on("end", async () => {
 const sse = (...events: object[]) =>
 	events.map((event) => `event: ${"type" in event ? event.type : ""}\ndata: ${JSON.stringify(event)}\n\n`).join("");
 
-function toolCallAnswer(toolName: string): string {
+function toolCallAnswer(toolName: string, extraToolId?: string): string {
 	return sse(
 		{
 			type: "message_start",
@@ -109,6 +132,21 @@ function toolCallAnswer(toolName: string): string {
 		},
 		{ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"path":"b.txt"}' } },
 		{ type: "content_block_stop", index: 1 },
+		...(extraToolId
+			? [
+					{
+						type: "content_block_start",
+						index: 2,
+						content_block: { type: "tool_use", id: extraToolId, name: toolName, input: {} },
+					},
+					{
+						type: "content_block_delta",
+						index: 2,
+						delta: { type: "input_json_delta", partial_json: '{"path":"c.txt"}' },
+					},
+					{ type: "content_block_stop", index: 2 },
+				]
+			: []),
 		{ type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 9 } },
 		{ type: "message_stop" },
 	);
@@ -399,6 +437,39 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			await until(() => !alive(join(directory, "pid")));
 			expect(alive(join(directory, "pid"))).toBe(false);
 		}, 15_000);
+	});
+
+	it("lets Claude Code's auto mode review the answer's tool calls", async () => {
+		const answer = toolCallAnswer("mcp__lunr__read", "toolu_3_blocked");
+		const { connection, upstream, directory } = await setup({ status: 200, body: answer });
+		const autoMode = { allowTools: ["read", "grep"] };
+		const options = { externalClaudeCode: connection, claudeCodeAutoMode: autoMode };
+		const result = await streamClaudeCode(model, context, options, true, upstream).result();
+
+		expect(result.stopReason).toBe("toolUse");
+		await expect(takeClaudeCodeReview("toolu_2")).resolves.toEqual({ decision: "allow" });
+		await expect(takeClaudeCodeReview("toolu_3_blocked")).resolves.toEqual({
+			decision: "block",
+			reason: "[Create Public Surface]",
+		});
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--permission-mode") + 1]).toBe("auto");
+		// Only offered tools are allowed past the reviewer.
+		expect(record.settings.permissions).toEqual({ allow: ["mcp__lunr__read"] });
+	});
+
+	it("keeps an allow that reaches the loopback before its tool call is read", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") }, "early");
+		const options = { externalClaudeCode: connection, claudeCodeAutoMode: { allowTools: [] } };
+		await streamClaudeCode(model, context, options, true, upstream).result();
+		await expect(takeClaudeCodeReview("toolu_2")).resolves.toEqual({ decision: "allow" });
+	});
+
+	it("reports no review when Claude Code starts outside auto mode", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") }, "no-auto");
+		const options = { externalClaudeCode: connection, claudeCodeAutoMode: { allowTools: [] } };
+		await streamClaudeCode(model, context, options, true, upstream).result();
+		await expect(takeClaudeCodeReview("toolu_2")).resolves.toMatchObject({ decision: "unavailable" });
 	});
 
 	it("rejects tool calls for tools lunR did not offer", async () => {
