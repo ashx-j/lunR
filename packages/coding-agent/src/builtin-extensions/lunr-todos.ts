@@ -211,7 +211,7 @@ export default function (pi: ExtensionAPI): void {
 			"Manage the session todo list shown above the user's editor. Full-replace semantics:",
 			"every call must send the ENTIRE list; send an empty array to clear it.",
 			"Each item: { id, content, status: 'pending' | 'in_progress' | 'completed' }.",
-			"Use it to track multi-step work; keep exactly one item in_progress at a time.",
+			"Use it for meaningful multi-step work; keep exactly one item in_progress at a time.",
 		].join("\n"),
 		parameters: Type.Object({
 			todos: Type.Array(
