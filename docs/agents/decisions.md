@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-29: the default prompt includes the gateway rule only when Telegram or Discord is turned on in `gateway.json`, because without a bot there is nothing to start, stop or leak, and the rule cost about 90 words on every request.
 - 2026-10-29: the default prompt states the local date and OS, because the model otherwise guesses the date and can run Linux commands on Windows; edit and todo usage rules moved into those tools' descriptions, where they were already mostly repeated.
 - 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
 - 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.

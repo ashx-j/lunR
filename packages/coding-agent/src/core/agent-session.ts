@@ -53,6 +53,7 @@ import {
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
+import { gatewayHasEnabledPlatform } from "../gateway/config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -1573,6 +1574,7 @@ export class AgentSession {
 			cwd: this._cwd,
 			modelSlug: this.model ? `${this.model.provider}/${this.model.id}` : undefined,
 			automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
+			gatewayConfigured: gatewayHasEnabledPlatform(),
 			skills: loadedSkills,
 			contextFiles,
 			customPrompt: loaderSystemPrompt,

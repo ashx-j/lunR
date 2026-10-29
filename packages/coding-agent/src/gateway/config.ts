@@ -151,6 +151,12 @@ export function loadGatewayConfig(): GatewayConfig {
 	}
 }
 
+/** True when `lunr gateway setup` has turned on Telegram or Discord; the default prompt only explains gateway commands then. */
+export function gatewayHasEnabledPlatform(): boolean {
+	const cfg = loadGatewayConfig();
+	return cfg.telegram.enabled || cfg.discord.enabled;
+}
+
 /** Write the whole config atomically (tmp + rename); chmod 0600 best-effort. */
 export function saveGatewayConfig(config: GatewayConfig): void {
 	writeJsonFileAtomic(gatewayConfigPath(), config, 0o600);

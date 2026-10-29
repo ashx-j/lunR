@@ -8,6 +8,7 @@ describe("buildSystemPrompt", () => {
 		const prompt = buildSystemPrompt({
 			modelSlug: "openai/gpt-5.6",
 			selectedTools: ["read", "bash", "edit", "write"],
+			gatewayConfigured: true,
 			contextFiles: [],
 			skills: [],
 			cwd,
@@ -74,6 +75,12 @@ describe("buildSystemPrompt", () => {
 		const options = { cwd: process.cwd(), contextFiles: [], skills: [] };
 		expect(buildSystemPrompt({ ...options, selectedTools: ["read", "cron"] })).toContain("Use cron only");
 		expect(buildSystemPrompt({ ...options, selectedTools: ["read"] })).not.toContain("Use cron only");
+	});
+
+	test("includes gateway guidance only when a gateway platform is set up", () => {
+		const options = { cwd: process.cwd(), contextFiles: [], skills: [] };
+		expect(buildSystemPrompt({ ...options, gatewayConfigured: true })).toContain("For gateway work");
+		expect(buildSystemPrompt(options)).not.toContain("For gateway work");
 	});
 
 	test("does not duplicate API tool definitions or tool prompt metadata", () => {

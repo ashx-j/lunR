@@ -18,6 +18,8 @@ export interface BuildSystemPromptOptions {
 	modelSlug?: string;
 	/** Whether the default prompt encourages autonomous delegation. */
 	automaticSubagentDelegation?: boolean;
+	/** Whether a Telegram or Discord gateway is set up; gateway guidance is omitted otherwise. */
+	gatewayConfigured?: boolean;
 	/** Active tools; used to decide whether read-dependent skill metadata is visible. */
 	selectedTools?: string[];
 	/** Legacy extension metadata retained for API compatibility; tool definitions are sent separately. */
@@ -40,6 +42,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		customPrompt,
 		modelSlug,
 		automaticSubagentDelegation = true,
+		gatewayConfigured = false,
 		selectedTools,
 		appendSystemPrompt,
 		cwd,
@@ -95,6 +98,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		!selectedTools || selectedTools.includes("cron")
 			? "- Use cron only when the user asks to schedule or manage unattended prompts.\n"
 			: "";
+	const gatewayGuideline = gatewayConfigured
+		? `- For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.\n`
+		: "";
 	const delegationBehavior = automaticSubagentDelegation
 		? "- Orchestrate subagents with intent! Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks. Use subagents as a tool when there is genuine benefit to it or the user explicitly asks for it."
 		: "- Work on tasks directly. Launch subagents only when the user specifically instructs you to delegate work.";
@@ -127,8 +133,7 @@ Tool guidelines:
 - Use edit for precise changes (edits[].oldText must match exactly)
 - Use write only for new files or complete rewrites.
 - Use ast_search for structural code matches.
-${cronGuideline}- For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.
-- Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.
+${cronGuideline}${gatewayGuideline}- Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.
 - Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.
 - Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.
 
