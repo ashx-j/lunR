@@ -4,6 +4,8 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-29: remove the issue and PR auto-close gates, because their approved list held pi's contributors, their message linked a CONTRIBUTING.md that doesn't exist, and the Questions link went to pi's Discord.
+- 2026-10-29: the published packages name ashx-j as author and the pi screenshots are gone from the docs, because npm showed Mario Zechner as the author of `@ashx-j/lunr` and its first image was pi; pi's credit stays in the README and THIRD_PARTY_NOTICES.
 - 2026-10-25: CI and the publish workflow install bun for the script tests instead of dropping `build-standalone.test.mjs`, because that test checks the standalone bundle keeps Chromium, HTML and PDF extraction, which the release binaries rely on.
 - 2026-10-25: pin Claude Code 2.1.310 and read only its picker at setup, taking non-`[1m]` windows from the catalog, because 2.1.263's picker has no 5.5 models and 2.1.310's `set_model`/`get_context_usage` contact Anthropic, which setup must not do.
 - 2026-10-25: drop a scoped model when its provider has no credential left (at logout and at startup), but keep bare ids, globs, unregistered providers and project settings, because a stale `provider/model` only printed a warning on every start while the others may still match.

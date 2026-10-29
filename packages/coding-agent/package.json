@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.2.40",
-	"description": "lunR — terminal coding agent CLI with read, bash, edit, write tools and session management",
+	"description": "Terminal coding agent with subagents, MCP, permission modes, scheduled prompts and a Telegram/Discord bot",
 	"type": "module",
 	"piConfig": {
 		"name": "lunr",
@@ -114,7 +114,7 @@
 		"tui",
 		"agent"
 	],
-	"author": "Mario Zechner",
+	"author": "ashx-j",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
