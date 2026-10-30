@@ -165,31 +165,13 @@ function resolveCheckInput(explicitInput, outputDir) {
 	throw new Error("No catalog bundle found at .artifacts/model-catalog or catalog/");
 }
 
-/**
- * Providers the CLI bundle leaves out. Generic models.dev providers ship their rows only in versioned
- * publications, which keeps thousands of rows out of the package and the startup cache.
- */
-function bundledProviderIds(bundle, versioned) {
-	const genericPath = join(bundle.inputDir, "generic-providers.json");
-	if (versioned || !existsSync(genericPath)) return bundle.providerIds;
-	const generic = new Set(readJson(genericPath));
-	return bundle.providerIds.filter((providerId) => !generic.has(providerId));
-}
-
 function syncBundle(bundle, outputDir, sourceCommit, versioned = false) {
 	const publicationDir = outputDir;
 	if (versioned) outputDir = join(outputDir, "snapshots", bundle.revision);
 	mkdirSync(join(outputDir, "providers"), { recursive: true });
-	const providerIds = bundledProviderIds(bundle, versioned);
-	if (providerIds.length === bundle.providerIds.length) {
-		copyFileSync(bundle.modelsPath, join(outputDir, "models.json"));
-		copyFileSync(bundle.providerIndexPath, join(outputDir, "providers.json"));
-	} else {
-		const models = readJson(bundle.modelsPath);
-		const shipped = Object.fromEntries(providerIds.map((providerId) => [providerId, models[providerId]]));
-		writeFileSync(join(outputDir, "models.json"), `${JSON.stringify(shipped)}\n`);
-		writeFileSync(join(outputDir, "providers.json"), `${JSON.stringify(providerIds)}\n`);
-	}
+	const providerIds = bundle.providerIds;
+	copyFileSync(bundle.modelsPath, join(outputDir, "models.json"));
+	copyFileSync(bundle.providerIndexPath, join(outputDir, "providers.json"));
 
 	const destProviders = join(outputDir, "providers");
 	const keep = new Set(providerIds.map((providerId) => `${providerId}.json`));
@@ -216,10 +198,7 @@ function syncBundle(bundle, outputDir, sourceCommit, versioned = false) {
 		generatedAt: new Date().toISOString(),
 		sourceCommit,
 		providerCount: providerIds.length,
-		modelCount:
-			providerIds.length === bundle.providerIds.length
-				? bundle.modelCount
-				: providerIds.reduce((sum, id) => sum + Object.keys(readJson(join(bundle.providersDir, `${id}.json`))).length, 0),
+		modelCount: bundle.modelCount,
 	};
 	const publicationPath = join(publicationDir, "publication.json");
 	// Data revisions are content-addressed; health timestamps remain in the manifest.

@@ -133,9 +133,8 @@ describe("formatCatalogRefreshSummary", () => {
 				providers: [
 					{ id: "xai", status: "error", error: "HTTP 403" },
 					{ id: "openrouter", status: "skipped" },
-					{ id: "qwen-cloud", status: "skipped" },
-					{ id: "qwen-cloud-cn", status: "skipped" },
-					{ id: "groq", status: "skipped" },
+					{ id: "google", status: "skipped" },
+					{ id: "zai", status: "skipped" },
 					{ id: "openai", status: "skipped" },
 					{ id: "deepseek", status: "skipped" },
 				],

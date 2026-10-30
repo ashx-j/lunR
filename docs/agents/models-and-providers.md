@@ -5,7 +5,7 @@ Read before changing the model catalog, model selection, login or provider trans
 ## Catalog and selection
 
 - Catalog: see `docs/agents/model-catalog.md`. Humans edit the generator/adapters and regenerate JSON; never hand-edit `catalog/providers/*.json`.
-- Model facts come from models.dev, not code. A wrong fact goes in `packages/ai/src/catalog/rules.ts` with a `why`; never add id lists or id regexes to the generator. Provider endpoints and transports live in `packages/ai/scripts/catalog-providers.ts`.
+- Model facts come from models.dev, not code. A wrong fact goes in `packages/ai/src/catalog/rules.ts` with a `why`; never add id lists or id regexes to the generator. Provider endpoints and transports live in `packages/ai/src/catalog/providers.ts`.
 - `npm --prefix packages/ai run generate-models -- --offline` regenerates from the last fetched sources, so two runs see identical inputs when comparing generator changes.
 - Tests that exercise a transport build fixture models instead of `getModel("provider", "id")`: upstream sources drop models, and a pinned id breaks the build on the next regeneration. Catalog tests feed fixture models.dev rows to `modelsDevModels`.
 - Multi-protocol providers pass their protocol union to `createProvider<...>` explicitly. Inferring it from the generated catalog broke compilation whenever upstream added or removed a protocol. `models.json` is one minified line on purpose; cache-only create prefers `official-catalog-cache.json`. There is no pi.dev catalog; `/refresh` is the only refresh command.
@@ -23,8 +23,8 @@ Read before changing the model catalog, model selection, login or provider trans
 - Codex uses each route's `context_window` as its compaction budget; `max_context_window` never becomes the default. Fast mode persists only for `openai-codex`.
 - OpenCode free models follow `zen/v1/models` ∩ models.dev, not models.dev `deprecated` status. Keep `opencode` in `UNLISTED_PROVIDERS` (`live-catalog.ts`).
 - Live discovery covers every built-in provider whose catalog transport has a list endpoint; `liveListProtocol` picks the request shape. A 400/404/405 from a list endpoint is a quiet `skipped`, because an `error` would show in `/refresh` and retry the whole refresh every minute instead of hourly. A 401/403 is an error that `refreshIfStale` does not retry early (`LIVE_LIST_REJECTED`). Anthropic and Google lists skip any login that is not a stored API key, since `getAuth` throws for old subscription and OAuth records.
-- Generic models.dev providers (`MODELS_DEV_PROVIDERS`) have no baked-in rows. Code that reads `bakedIn[0]` for a template or transport must fall back to the provider's definition. Keys lunR reads another way or that extensions register (`ollama-cloud`, `lmstudio`) stay out through `NOT_GENERIC` in `catalog/providers.ts`.
-- `sync-model-catalog.mjs` leaves generic providers out of the checked-in `catalog/` (the CLI bundle) and keeps them in versioned publications, so their 5,000+ rows never enter the package or the startup cache.
+- `/login` offers 10 built-in API-key providers (`builtinProviders()` in `providers/all.ts`) plus Ollama Cloud from its built-in extension. Copilot and Radius sign in with an account only. Read the 2026-10-30 entry in [decisions.md](decisions.md) before adding one; users reach other providers through the custom endpoint option in `/login`.
+- The Bedrock, Azure, Vertex and Mistral transports and the URL-based compat detection in `openai-completions.ts` stay for `models.json` providers. Their tests take rows from `packages/ai/test/transport-fixtures.ts`, since the catalog no longer has those providers.
 - New listed ids resolve through `discoveredModel` in `packages/ai/src/catalog/providers.ts`, the function the generator uses for OpenCode's live-only ids. Change model resolution there, not in `live-catalog.ts`.
 
 ## Claude subscriptions

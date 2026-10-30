@@ -48,7 +48,6 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - [Bundling and Tree Shaking](#bundling-and-tree-shaking)
 - [OAuth Providers](#oauth-providers)
   - [Anthropic subscriptions](#anthropic-subscriptions)
-  - [Vertex AI](#vertex-ai)
   - [CLI Login](#cli-login)
   - [Programmatic OAuth](#programmatic-oauth)
 - [Migrating from the Old Global API](#migrating-from-the-old-global-api)
@@ -57,38 +56,21 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 ## Supported Providers
 
 - **OpenAI**
-- **Ant Ling**
-- **Azure OpenAI (Responses)**
 - **OpenAI Codex** (ChatGPT Plus/Pro subscription, requires OAuth, see below)
-- **DeepSeek**
-- **NVIDIA NIM**
 - **Anthropic**
 - **Google**
-- **Vertex AI** (Gemini via Vertex AI)
-- **Mistral**
-- **Groq**
-- **Cerebras**
-- **Cloudflare AI Gateway**
-- **Cloudflare Workers AI**
 - **xAI**
 - **OpenRouter**
-- **Vercel AI Gateway**
-- **ZAI Coding Plan (Global)** (with separate China provider)
-- **MiniMax** (with separate China provider)
-- **Together AI**
-- **Hugging Face**
-- **Moonshot AI** (with separate China provider)
-- **GitHub Copilot** (requires OAuth, see below)
-- **Amazon Bedrock**
-- **OpenCode Zen**
-- **OpenCode Go**
-- **Fireworks** (uses OpenAI- and Anthropic-compatible APIs)
+- **DeepSeek**
+- **ZAI Coding Plan**
+- **MiniMax**
 - **Kimi For Coding** (Moonshot AI subscription endpoint, uses Anthropic-compatible API)
-- **Xiaomi MiMo** (defaults to API billing endpoint, with separate Token Plan providers for `cn`/`ams`/`sgp` regions)
-- **Qwen Cloud** (Alibaba DashScope, with separate China provider)
-- **Qwen Token Plan** (with separate China provider)
-- **Radius** (dynamic model gateway, API key or OAuth, models come from the gateway)
+- **OpenCode Zen**
+- **GitHub Copilot** (requires OAuth, see below)
+- **Radius** (dynamic model gateway, requires OAuth, models come from the gateway)
 - **Any OpenAI-compatible API**: Ollama, vLLM, LM Studio, etc.
+
+The Azure OpenAI Responses, Vertex AI, Mistral and Amazon Bedrock APIs remain available for [custom providers](#custom-providers).
 
 ## Installation
 
@@ -232,7 +214,7 @@ Snippets in the rest of this README assume a `models` collection set up like thi
 
 A **provider** is the runtime unit: it owns its model catalog, its auth (API key resolution, OAuth flows), and its stream behavior. A `Models` collection holds providers and routes every request to the provider that owns the model.
 
-Providers internally share **API implementations** (the wire protocols): Anthropic models use `anthropic-messages`, OpenAI uses `openai-responses`, while xAI, Groq, Cerebras, OpenRouter, and most others share `openai-completions`. Mixed-API providers (GitHub Copilot, OpenCode Zen) dispatch per model.
+Providers internally share **API implementations** (the wire protocols): Anthropic models use `anthropic-messages`, OpenAI uses `openai-responses`, while xAI, DeepSeek, OpenRouter and Z.AI share `openai-completions`. Mixed-API providers (GitHub Copilot, OpenCode Zen) dispatch per model.
 
 ### Provider Factories
 
@@ -243,7 +225,6 @@ import { createModels } from '@ashx-j/lunr-ai';
 import { anthropicProvider } from '@ashx-j/lunr-ai/providers/anthropic';
 import { openaiProvider } from '@ashx-j/lunr-ai/providers/openai';
 import { openrouterProvider } from '@ashx-j/lunr-ai/providers/openrouter';
-import { amazonBedrockProvider } from '@ashx-j/lunr-ai/providers/amazon-bedrock';
 // ...one module per provider in the Supported Providers list
 
 const models = createModels();
@@ -413,42 +394,15 @@ Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` ex
 | Provider | Environment Variable(s) |
 |----------|------------------------|
 | OpenAI | `OPENAI_API_KEY` |
-| Ant Ling | `ANT_LING_API_KEY` |
-| Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` (e.g. `https://{resource}.ai.azure.com`) or `AZURE_OPENAI_RESOURCE_NAME`. Supports `*.openai.azure.com`, `*.cognitiveservices.azure.com` and `*.ai.azure.com`; root endpoints auto-normalize to `/openai/v1`. Optional: `AZURE_OPENAI_API_VERSION` (default `v1`), `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`. |
 | Anthropic | `ANTHROPIC_API_KEY` for API billing. Claude subscriptions require the Claude Code setup below; `ANTHROPIC_OAUTH_TOKEN` is unsupported. |
 | DeepSeek | `DEEPSEEK_API_KEY` |
-| NVIDIA NIM | `NVIDIA_API_KEY` |
 | Google | `GEMINI_API_KEY` |
-| Vertex AI | `GOOGLE_CLOUD_API_KEY` or `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) + `GOOGLE_CLOUD_LOCATION` + ADC |
-| Mistral | `MISTRAL_API_KEY` |
-| Groq | `GROQ_API_KEY` |
-| Cerebras | `CEREBRAS_API_KEY` |
-| Cloudflare AI Gateway | `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_GATEWAY_ID` |
-| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` |
 | xAI | `XAI_API_KEY` |
-| Fireworks | `FIREWORKS_API_KEY` |
-| Together AI | `TOGETHER_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
-| Vercel AI Gateway | `AI_GATEWAY_API_KEY` |
-| ZAI Coding Plan (Global) | `ZAI_API_KEY` |
-| ZAI Coding Plan (China) | `ZAI_CODING_CN_API_KEY` |
-| MiniMax (Global) | `MINIMAX_API_KEY` |
-| MiniMax (China) | `MINIMAX_CN_API_KEY` |
-| Moonshot AI / Moonshot AI (China) | `MOONSHOT_API_KEY` |
-| Hugging Face | `HF_TOKEN` |
-| OpenCode Zen / OpenCode Go | `OPENCODE_API_KEY` |
+| ZAI Coding Plan | `ZAI_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| OpenCode Zen | `OPENCODE_API_KEY` |
 | Kimi For Coding | `KIMI_API_KEY` |
-| Xiaomi MiMo (API billing) | `XIAOMI_API_KEY` |
-| Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` |
-| Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` |
-| Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` |
-| Qwen Cloud / Qwen Cloud CN | `DASHSCOPE_API_KEY` or `QWEN_CLOUD_API_KEY` |
-| Qwen Token Plan | `DASHSCOPE_TOKEN_PLAN_API_KEY`, falls back to `DASHSCOPE_API_KEY` |
-| Qwen Token Plan CN | `DASHSCOPE_TOKEN_PLAN_CN_API_KEY`, falls back to `DASHSCOPE_TOKEN_PLAN_API_KEY`, then `DASHSCOPE_API_KEY` |
-| Radius | `RADIUS_API_KEY` |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
-
-Amazon Bedrock resolves ambient AWS credentials (`AWS_PROFILE`, access key pairs, `AWS_BEARER_TOKEN_BEDROCK`, ECS task roles, web identity tokens); its provider-owned login flow supports bearer tokens, AWS profiles, and the existing credential chain. Vertex AI resolves either an explicit key or gcloud Application Default Credentials plus project/location, with a provider-owned login flow for API keys, ADC, and service-account files.
 
 ## Tools
 
@@ -1344,7 +1298,7 @@ const response = await models.complete(model, {
 
 Browser compatibility notes:
 
-- Amazon Bedrock (`bedrock-converse-stream`) is not supported in browser environments. It can still appear in model lists; calls fail at runtime.
+- The Amazon Bedrock API (`bedrock-converse-stream`) is not supported in browser environments.
 - OAuth login flows are Node-only. They are lazy-loaded behind bundler-opaque imports, so registering an OAuth-capable provider does not pull Node-only code into a browser bundle — only actually logging in would.
 - Use a server-side proxy or backend service if you need Bedrock or OAuth-based auth from a web app.
 
@@ -1381,17 +1335,7 @@ esbuild app.js --bundle --platform=node --format=esm \
 
 This is only for Node bundles; it is not a browser or Cloudflare Workers workaround.
 
-Bedrock is Node-only. Add it like any other provider:
-
-```typescript
-import { createModels } from '@ashx-j/lunr-ai';
-import { amazonBedrockProvider } from '@ashx-j/lunr-ai/providers/amazon-bedrock';
-
-const models = createModels();
-models.setProvider(amazonBedrockProvider());
-```
-
-In normal Node package usage and code-split bundles, Bedrock loads its AWS SDK implementation lazily. For a standalone single-file bundle that must include Bedrock support, register the implementation module explicitly:
+The Bedrock API is Node-only. In normal Node package usage and code-split bundles, it loads its AWS SDK implementation lazily. For a standalone single-file bundle that must include Bedrock support, register the implementation module explicitly:
 
 ```typescript
 import { setBedrockProviderModule } from '@ashx-j/lunr-ai/api/bedrock-converse-stream.lazy';
@@ -1404,17 +1348,16 @@ That explicit override bundles the AWS SDK. Without it, Bedrock's opaque runtime
 
 ### Provider-Scoped Environment Overrides
 
-Pass `env` in stream options to scope provider configuration to a request. Values in `env` are used before process environment variables for provider auth and configuration such as Cloudflare account IDs, Azure OpenAI settings, Vertex project/location, Bedrock settings, `PI_CACHE_RETENTION`, and `HTTP_PROXY`/`HTTPS_PROXY`.
+Pass `env` in stream options to scope provider configuration to a request. Values in `env` are used before process environment variables for provider auth and configuration such as `PI_CACHE_RETENTION` and `HTTP_PROXY`/`HTTPS_PROXY`.
 
 ```typescript
 const models = builtinModels();
-const model = models.getModel('cloudflare-ai-gateway', 'workers-ai/@cf/moonshotai/kimi-k2.6')!;
+const model = models.getModel('openai', 'gpt-5.5')!;
 
 const response = await models.complete(model, context, {
   env: {
-    CLOUDFLARE_API_KEY: '...',
-    CLOUDFLARE_ACCOUNT_ID: 'account-id',
-    CLOUDFLARE_GATEWAY_ID: 'gateway-id'
+    OPENAI_API_KEY: 'sk-...',
+    HTTPS_PROXY: 'http://proxy.internal:8080'
   }
 });
 ```
@@ -1469,28 +1412,6 @@ Use `/login anthropic` in lunR for the terminal setup flow. SDK applications can
 
 Subscription requests build the normal Messages request, then an injected SDK client hands it to that Claude Code binary instead of sending HTTPS. They need a local Node or Bun environment that can start processes. Legacy Anthropic OAuth credentials, connections from the earlier Python-based setup, and `ANTHROPIC_OAUTH_TOKEN` fail closed; run setup again instead. Live subscription and cross-platform operation remain qualification limits. See the [provider guide](https://github.com/ashx-j/lunR/blob/master/packages/coding-agent/docs/providers.md) for the integration limits.
 
-### Vertex AI
-
-Vertex AI models support either a Google Cloud API key or Application Default Credentials (ADC). Its provider-owned API-key login flow can configure either method:
-
-- **API key**: Set `GOOGLE_CLOUD_API_KEY` or pass `apiKey` in the call options.
-- **Local development (ADC)**: Run `gcloud auth application-default login`
-- **CI/Production (ADC)**: Set `GOOGLE_APPLICATION_CREDENTIALS` to point to a service account JSON key file
-
-When using ADC, also set `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`. You can also pass `project`/`location` in the call options. When using `GOOGLE_CLOUD_API_KEY`, `project` and `location` are not required.
-
-```bash
-# Local (uses your user credentials)
-gcloud auth application-default login
-export GOOGLE_CLOUD_PROJECT="my-project"
-export GOOGLE_CLOUD_LOCATION="us-central1"
-
-# CI/Production (service account key file)
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-```
-
-Official docs: [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)
-
 ### CLI Login
 
 The quickest way to authenticate:
@@ -1510,8 +1431,6 @@ Built-in login and refresh flows are private provider implementations. Use `Mode
 Provider notes:
 
 **OpenAI Codex**: Requires a ChatGPT Plus or Pro subscription. Provides access to GPT-5.x Codex models with extended context windows and reasoning capabilities. The library automatically handles session-based prompt caching when `sessionId` is provided in stream options. You can set `transport` in stream options to `"sse"`, `"websocket"`, or `"auto"` for Codex Responses transport selection. When using WebSocket with a `sessionId`, connections are reused per session and expire after 5 minutes of inactivity.
-
-**Azure OpenAI (Responses)**: Uses the Responses API only. Set `AZURE_OPENAI_API_KEY` and either `AZURE_OPENAI_BASE_URL` or `AZURE_OPENAI_RESOURCE_NAME`. `AZURE_OPENAI_BASE_URL` supports both `https://<resource>.openai.azure.com` and `https://<resource>.cognitiveservices.azure.com`; root endpoints are normalized to `.../openai/v1` automatically. Use `AZURE_OPENAI_API_VERSION` (defaults to `v1`) to override the API version if needed. Deployment names are treated as model IDs by default, override with `azureDeploymentName` or `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` using comma-separated `model-id=deployment` pairs (for example `gpt-4o-mini=my-deployment,gpt-4o=prod`). Legacy deployment-based URLs are intentionally unsupported.
 
 **GitHub Copilot**: If you get "The requested model is not supported" error, enable the model manually in VS Code: open Copilot Chat, click the model selector, select the model (warning icon), and click "Enable".
 

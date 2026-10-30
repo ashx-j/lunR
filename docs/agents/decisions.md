@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-30: ship 10 API-key providers (Anthropic, OpenAI, Google, OpenRouter, xAI, DeepSeek, Z.AI, Kimi For Coding, MiniMax, OpenCode Zen) plus Ollama Cloud, and drop the 167 generic models.dev providers and 27 hand-written ones, because `/login` listed 206 API-key options and most users need a handful; the custom endpoint option covers the rest. Copilot and Radius lost their API-key option so the list stays at 11.
 - 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
 - 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.
 - 2026-10-29: remove the issue and PR auto-close gates, because their approved list held pi's contributors, their message linked a CONTRIBUTING.md that doesn't exist, and the Questions link went to pi's Discord.
@@ -12,12 +13,11 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 - 2026-10-25: pin Claude Code 2.1.310 and read only its picker at setup, taking non-`[1m]` windows from the catalog, because 2.1.263's picker has no 5.5 models and 2.1.310's `set_model`/`get_context_usage` contact Anthropic, which setup must not do.
 - 2026-10-25: drop a scoped model when its provider has no credential left (at logout and at startup), but keep bare ids, globs, unregistered providers and project settings, because a stale `provider/model` only printed a warning on every start while the others may still match.
 - 2026-10-25: build catalog rows from models.dev data for every shipped provider and keep model knowledge in one rules file, because hand-kept id lists in the 2,600-line generator silently dropped new models (MiniMax-M3.1-Flash) and gave new families wrong settings (Copilot routed Claude Fable and GPT-6 to chat completions; Claude Opus 5 had no adaptive thinking).
-- 2026-10-25: ship every models.dev provider with an OpenAI- or Anthropic-compatible endpoint and an API key variable as a generic provider (167 today), because models on providers nobody had written code for were unreachable; their rows stay out of the CLI bundle so the package and startup cache keep their size.
 - 2026-10-25: read every logged-in provider's own model list instead of eight, and resolve new ids with the generator's code plus a published facts file, because lab releases reached providers' lists hours or days before models.dev and lunR showed them only after both caught up.
 - 2026-10-25: a new id with no known facts starts without thinking controls, because sending a reasoning parameter to a model that rejects it breaks every turn, while omitting it only uses the model's default.
 - 2026-10-25: ship `facts.json` only in versioned publications, not the CLI bundle, because it is only needed for models newer than any bundle.
 - 2026-10-25: quarantine a shrunk provider instead of the whole models.dev source, because one dropped provider lunR never ships froze every new model for seven weeks. A provider that vanishes is let go (removal or rename); a total drop over 25% still falls back as a whole.
-- 2026-10-25: keep skipping models.dev `deprecated` rows for Together and Copilot only, because elsewhere "deprecated" often means superseded but still served (MiniMax-M2.7, GLM-5.2).
+- 2026-10-25: keep skipping models.dev `deprecated` rows for Copilot only, because elsewhere "deprecated" often means superseded but still served (MiniMax-M2.7, GLM-5.2).
 - 2026-10-25: the GPT-6 runtime overlay fills only thinking levels the catalog leaves open, so models.dev's effort "none" keeps "off" available.
 - 2026-10-25: hide thinking levels a model does not list instead of mapping them to a neighbor, so every level in the picker sends a value the provider accepts.
 - 2026-10-25: start direct OpenAI models at their base price tier's context window (272k) whenever models.dev lists a long-context tier, because requests above it bill at up to twice the rate; GPT-6 and the Pro models were the exceptions before.

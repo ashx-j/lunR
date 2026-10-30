@@ -1,5 +1,5 @@
 import { piMessagesApi } from "../api/pi-messages.lazy.ts";
-import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
+import { lazyOAuth } from "../auth/helpers.ts";
 import { loadRadiusOAuth } from "../auth/oauth/load.ts";
 import type { Provider } from "../models.ts";
 import {
@@ -28,10 +28,7 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 	return {
 		id,
 		name,
-		auth: {
-			apiKey: envApiKeyAuth("Radius API key", ["RADIUS_API_KEY"]),
-			oauth: lazyOAuth({ name, load: () => loadRadiusOAuth({ name, gateway }) }),
-		},
+		auth: { oauth: lazyOAuth({ name, load: () => loadRadiusOAuth({ name, gateway }) }) },
 		getModels: () => models,
 		refreshModels: (context) => {
 			inflightRefresh ??= (async () => {
@@ -49,12 +46,7 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 					}
 
 					if (!context.allowNetwork || context.signal?.aborted) return;
-					const apiKey =
-						context.credential?.type === "oauth"
-							? context.credential.access
-							: context.credential?.type === "api_key"
-								? context.credential.key
-								: undefined;
+					const apiKey = context.credential?.type === "oauth" ? context.credential.access : undefined;
 					const config = await loadRadiusGatewayConfig(gateway, apiKey, context.signal);
 					if (context.signal?.aborted) return;
 					models = getRadiusModelsFromConfig(id, config);

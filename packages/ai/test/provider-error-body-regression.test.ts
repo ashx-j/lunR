@@ -88,7 +88,7 @@ vi.mock("@aws-sdk/client-bedrock-runtime", () => {
 	};
 });
 
-import { getModel } from "../src/compat.ts";
+import { fixtureModel } from "./transport-fixtures.ts";
 
 const context: Context = {
 	systemPrompt: "",
@@ -178,7 +178,7 @@ describe("provider error body passthrough (per-tier regression)", () => {
 			$response: { statusCode: 403, body: '{"message":"blocked by gateway WAF"}' },
 		});
 
-		const model = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
+		const model = fixtureModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
 		const output = await drainResult(streamSimpleBedrock(model, { messages: context.messages }, {}));
 
 		expect(output.stopReason).toBe("error");

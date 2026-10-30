@@ -18,13 +18,6 @@ import type { Api, Context, Model, StreamOptions, Usage } from "../src/types.ts"
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
-import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
-import { hasBedrockCredentials } from "./bedrock-utils.ts";
-import {
-	hasCloudflareAiGatewayCredentials,
-	hasCloudflareWorkersAICredentials,
-	workersAiGatewayModel,
-} from "./cloudflare-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -199,27 +192,6 @@ describe("totalTokens field", () => {
 		);
 	});
 
-	describe.skipIf(!hasAzureOpenAICredentials())("Azure OpenAI Responses", () => {
-		it(
-			"gpt-4o-mini - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("azure-openai-responses", "gpt-4o-mini");
-				const azureDeploymentName = resolveAzureDeploymentName(llm.id);
-				const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
-
-				console.log(`\nAzure OpenAI Responses / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, azureOptions);
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
 	// =========================================================================
 	// Google
 	// =========================================================================
@@ -263,143 +235,6 @@ describe("totalTokens field", () => {
 	});
 
 	// =========================================================================
-	// Groq
-	// =========================================================================
-
-	describe.skipIf(!process.env.GROQ_API_KEY)("Groq", () => {
-		it(
-			"openai/gpt-oss-120b - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("groq", "openai/gpt-oss-120b");
-
-				console.log(`\nGroq / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.GROQ_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Cerebras
-	// =========================================================================
-
-	describe.skipIf(!process.env.CEREBRAS_API_KEY)("Cerebras", () => {
-		it(
-			"gpt-oss-120b - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("cerebras", "gpt-oss-120b");
-
-				console.log(`\nCerebras / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.CEREBRAS_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Cloudflare Workers AI
-	// =========================================================================
-
-	describe.skipIf(!hasCloudflareWorkersAICredentials())("Cloudflare Workers AI", () => {
-		it(
-			"@cf/moonshotai/kimi-k2.6 - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("cloudflare-workers-ai", "@cf/moonshotai/kimi-k2.6");
-
-				console.log(`\nCloudflare Workers AI / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, {
-					apiKey: process.env.CLOUDFLARE_API_KEY,
-				});
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Cloudflare AI Gateway
-	// =========================================================================
-
-	describe.skipIf(!hasCloudflareAiGatewayCredentials())("Cloudflare AI Gateway", () => {
-		it(
-			"workers-ai/@cf/moonshotai/kimi-k2.6 - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = workersAiGatewayModel();
-
-				console.log(`\nCloudflare AI Gateway / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, {
-					apiKey: process.env.CLOUDFLARE_API_KEY,
-				});
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Hugging Face
-	// =========================================================================
-
-	describe.skipIf(!process.env.HF_TOKEN)("Hugging Face", () => {
-		it("Kimi-K2.5 - should return totalTokens equal to sum of components", { retry: 3, timeout: 60000 }, async () => {
-			const llm = getModel("huggingface", "moonshotai/Kimi-K2.5");
-
-			console.log(`\nHugging Face / ${llm.id}:`);
-			const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.HF_TOKEN });
-
-			logUsage("First request", first);
-			logUsage("Second request", second);
-
-			assertTotalTokensEqualsComponents(first);
-			assertTotalTokensEqualsComponents(second);
-		});
-	});
-
-	// =========================================================================
-	// Together AI
-	// =========================================================================
-
-	describe.skipIf(!process.env.TOGETHER_API_KEY)("Together AI", () => {
-		it("Kimi-K3 - should return totalTokens equal to sum of components", { retry: 3, timeout: 60000 }, async () => {
-			const llm = getModel("together", "moonshotai/Kimi-K3");
-
-			console.log(`\nTogether AI / ${llm.id}:`);
-			const { first, second } = await testTotalTokensWithCache(llm, {
-				apiKey: process.env.TOGETHER_API_KEY,
-				reasoningEffort: "high",
-			});
-
-			logUsage("First request", first);
-			logUsage("Second request", second);
-
-			assertTotalTokensEqualsComponents(first);
-			assertTotalTokensEqualsComponents(second);
-		});
-	});
-
-	// =========================================================================
 	// z.ai
 	// =========================================================================
 
@@ -412,29 +247,6 @@ describe("totalTokens field", () => {
 
 				console.log(`\nz.ai / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.ZAI_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Mistral
-	// =========================================================================
-
-	describe.skipIf(!process.env.MISTRAL_API_KEY)("Mistral", () => {
-		it(
-			"devstral-medium-latest - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("mistral", "devstral-medium-latest");
-
-				console.log(`\nMistral / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.MISTRAL_API_KEY });
 
 				logUsage("First request", first);
 				logUsage("Second request", second);
@@ -469,104 +281,6 @@ describe("totalTokens field", () => {
 	});
 
 	// =========================================================================
-	// Xiaomi MiMo
-	// =========================================================================
-
-	describe.skipIf(!process.env.XIAOMI_API_KEY)("Xiaomi MiMo (API billing)", () => {
-		it(
-			"mimo-v2.5-pro - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("xiaomi", "mimo-v2.5-pro");
-
-				console.log(`\nXiaomi MiMo / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.XIAOMI_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Xiaomi MiMo Token Plan CN
-	// =========================================================================
-
-	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_CN_API_KEY)("Xiaomi MiMo Token Plan (CN)", () => {
-		it(
-			"mimo-v2.5-pro - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("xiaomi-token-plan-cn", "mimo-v2.5-pro");
-
-				console.log(`\nXiaomi MiMo Token Plan CN / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, {
-					apiKey: process.env.XIAOMI_TOKEN_PLAN_CN_API_KEY,
-				});
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Xiaomi MiMo Token Plan AMS
-	// =========================================================================
-
-	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_AMS_API_KEY)("Xiaomi MiMo Token Plan (AMS)", () => {
-		it(
-			"mimo-v2.5-pro - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("xiaomi-token-plan-ams", "mimo-v2.5-pro");
-
-				console.log(`\nXiaomi MiMo Token Plan AMS / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, {
-					apiKey: process.env.XIAOMI_TOKEN_PLAN_AMS_API_KEY,
-				});
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Xiaomi MiMo Token Plan SGP
-	// =========================================================================
-
-	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_SGP_API_KEY)("Xiaomi MiMo Token Plan (SGP)", () => {
-		it(
-			"mimo-v2.5-pro - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("xiaomi-token-plan-sgp", "mimo-v2.5-pro");
-
-				console.log(`\nXiaomi MiMo Token Plan SGP / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, {
-					apiKey: process.env.XIAOMI_TOKEN_PLAN_SGP_API_KEY,
-				});
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
 	// Kimi For Coding
 	// =========================================================================
 
@@ -579,29 +293,6 @@ describe("totalTokens field", () => {
 
 				console.log(`\nKimi For Coding / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.KIMI_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
-	// =========================================================================
-	// Vercel AI Gateway
-	// =========================================================================
-
-	describe.skipIf(!process.env.AI_GATEWAY_API_KEY)("Vercel AI Gateway", () => {
-		it(
-			"google/gemini-2.5-flash - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("vercel-ai-gateway", "google/gemini-2.5-flash");
-
-				console.log(`\nVercel AI Gateway / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.AI_GATEWAY_API_KEY });
 
 				logUsage("First request", first);
 				logUsage("Second request", second);
@@ -748,25 +439,6 @@ describe("totalTokens field", () => {
 
 	// =========================================================================
 	// =========================================================================
-
-	describe.skipIf(!hasBedrockCredentials())("Amazon Bedrock", () => {
-		it(
-			"claude-sonnet-4-5 - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-5-20250929-v1:0");
-
-				console.log(`\nAmazon Bedrock / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm);
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
 
 	// =========================================================================
 	// OpenAI Codex (OAuth)

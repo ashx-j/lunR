@@ -109,17 +109,14 @@ describe("GPT-6 Astra catalogs", () => {
 	);
 
 	it("publishes GPT-6 Astra in every official catalog shard used by refresh", () => {
-		for (const provider of ["openai", "openai-codex", "azure-openai-responses"]) {
+		for (const provider of ["openai", "openai-codex"]) {
 			const model = loadCatalogProvider(provider)["gpt-6-astra"];
 			expect(model).toBeDefined();
 			expect(model.provider).toBe(provider);
-			// Codex's default conversation limit and the OpenAI API's base price tier are 272k; Azure bills
-			// the full window at one rate.
-			expect(model.contextWindow).toBe(provider === "azure-openai-responses" ? 1050000 : 272000);
+			// Codex's default conversation limit and the OpenAI API's base price tier are 272k.
+			expect(model.contextWindow).toBe(272000);
 			expect(model.maxTokens).toBe(128000);
-			if (provider !== "azure-openai-responses") {
-				expect(model.compat).toMatchObject({ supportsToolSearch: true });
-			}
+			expect(model.compat).toMatchObject({ supportsToolSearch: true });
 			expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		}
 	});

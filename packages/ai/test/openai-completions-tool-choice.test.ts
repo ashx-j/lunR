@@ -1,10 +1,10 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { convertMessages } from "../src/api/openai-completions.ts";
 import { applyCatalogRules } from "../src/catalog/rules.ts";
 import { getModel, stream, streamSimple } from "../src/compat.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 import type { AssistantMessage, Model, SimpleStreamOptions, Tool, ToolResultMessage } from "../src/types.ts";
+import { fixtureModel } from "./transport-fixtures.ts";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -202,62 +202,6 @@ describe("openai-completions tool_choice", () => {
 		expect("strict" in (tool ?? {})).toBe(false);
 	});
 
-	it("maps groq qwen3 reasoning levels to default reasoning_effort", async () => {
-		const model = getModel("groq", "qwen/qwen3.6-27b")!;
-		let payload: unknown;
-
-		await streamSimple(
-			model,
-			{
-				messages: [
-					{
-						role: "user",
-						content: "Hi",
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{
-				apiKey: "test",
-				reasoning: "high",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
-		expect(params.reasoning_effort).toBe("default");
-	});
-
-	it("keeps normal reasoning_effort for groq models without compat mapping", async () => {
-		const model = getModel("groq", "openai/gpt-oss-20b")!;
-		let payload: unknown;
-
-		await streamSimple(
-			model,
-			{
-				messages: [
-					{
-						role: "user",
-						content: "Hi",
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{
-				apiKey: "test",
-				reasoning: "medium",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
-		expect(params.reasoning_effort).toBe("medium");
-	});
-
 	it("enables tool_stream for supported z.ai models with tools", async () => {
 		const model = getModel("zai", "glm-5.3")!;
 		const tools: Tool[] = [
@@ -303,11 +247,9 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("stores z.ai GLM-5.2 effort metadata", () => {
-		for (const provider of ["zai", "zai-coding-cn"] as const) {
-			const model = getModel(provider, "glm-5.2")!;
-			expect(model.compat?.supportsReasoningEffort).toBe(true);
-			expect(getSupportedThinkingLevels(model)).toEqual(["off", "high", "max"]);
-		}
+		const model = getModel("zai", "glm-5.2")!;
+		expect(model.compat?.supportsReasoningEffort).toBe(true);
+		expect(getSupportedThinkingLevels(model)).toEqual(["off", "high", "max"]);
 	});
 
 	it("maps z.ai GLM-5.2 thinking levels to reasoning_effort", async () => {
@@ -1076,25 +1018,13 @@ describe("openai-completions tool_choice", () => {
 		expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
 	});
 
-	it("stores Xiaomi MiMo reasoning replay compat in built-in metadata", () => {
-		const providers = ["xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp"] as const;
-
-		for (const provider of providers) {
-			const model = getModel(provider, "mimo-v2.5-pro")!;
-			expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
-			expect(model.compat?.thinkingFormat).toBe("deepseek");
-			expect(model.compat?.maxTokensField).toBeUndefined();
-			expect(model.compat?.supportsDeveloperRole).toBeUndefined();
-		}
-	});
-
-	it("replays Xiaomi MiMo assistant tool calls with empty reasoning_content when thinking is missing", async () => {
-		const model = getModel("xiaomi", "mimo-v2.5-pro")!;
+	it("replays DeepSeek assistant tool calls with empty reasoning_content when thinking is missing", async () => {
+		const model = getModel("deepseek", "deepseek-v4-pro")!;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
 			api: "openai-completions",
-			provider: "xiaomi",
-			model: "mimo-v2.5-pro",
+			provider: "deepseek",
+			model: "deepseek-v4-pro",
 			content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } }],
 			usage: {
 				input: 0,
@@ -1146,34 +1076,7 @@ describe("openai-completions tool_choice", () => {
 		expect(params.reasoning_effort).toBe("high");
 	});
 
-	it("normalizes OpenCode Go reasoning deltas to reasoning_content for replay", async () => {
-		mockState.chunks = [
-			{
-				id: "chatcmpl-opencode-go-reasoning",
-				choices: [{ delta: { reasoning: "think" }, finish_reason: "stop" }],
-			},
-		];
-
-		const { compat: _compat, ...baseModel } = getModel("opencode-go", "kimi-k2.6")!;
-		const model = { ...baseModel, api: "openai-completions" } as const;
-		const response = await streamSimple(
-			model,
-			{
-				messages: [{ role: "user", content: "Use reasoning.", timestamp: Date.now() }],
-			},
-			{ apiKey: "test" },
-		).result();
-
-		expect(response.content).toEqual([
-			{
-				type: "thinking",
-				thinking: "think",
-				thinkingSignature: "reasoning_content",
-			},
-		]);
-	});
-
-	it("keeps non-OpenCode Go reasoning deltas on the original reasoning field", async () => {
+	it("keeps reasoning deltas on the original reasoning field", async () => {
 		mockState.chunks = [
 			{
 				id: "chatcmpl-reasoning",
@@ -1200,64 +1103,8 @@ describe("openai-completions tool_choice", () => {
 		]);
 	});
 
-	it("replays OpenCode Go reasoning thinking blocks as reasoning_content", () => {
-		const { compat: _compat, ...baseModel } = getModel("opencode-go", "kimi-k2.6")!;
-		const model = { ...baseModel, api: "openai-completions" } as Model<"openai-completions">;
-		const messages = convertMessages(
-			model,
-			{
-				messages: [
-					{
-						role: "assistant",
-						api: "openai-completions",
-						provider: "opencode-go",
-						model: "kimi-k2.6",
-						content: [
-							{ type: "thinking", thinking: "think", thinkingSignature: "reasoning" },
-							{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
-						],
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
-						stopReason: "stop",
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{
-				...model.compat,
-				supportsStore: false,
-				supportsDeveloperRole: false,
-				supportsReasoningEffort: true,
-				supportsUsageInStreaming: true,
-				maxTokensField: "max_completion_tokens",
-				requiresToolResultName: false,
-				requiresAssistantAfterToolResult: false,
-				requiresThinkingAsText: false,
-				requiresReasoningContentOnAssistantMessages: false,
-				thinkingFormat: "openai",
-				openRouterRouting: {},
-				vercelGatewayRouting: {},
-				chatTemplateKwargs: {},
-				zaiToolStream: false,
-				supportsStrictMode: true,
-				sendSessionAffinityHeaders: false,
-				sessionAffinityFormat: "openai",
-				supportsLongCacheRetention: true,
-			},
-		);
-
-		expect(messages[0]).toMatchObject({ role: "assistant", reasoning_content: "think" });
-		expect(messages[0]).not.toHaveProperty("reasoning");
-	});
-
-	it("sends thinking disabled for OpenCode Go Kimi K2.6 when thinking is off", async () => {
-		const model = getModel("opencode-go", "kimi-k2.6")!;
+	it("sends thinking disabled for OpenCode Kimi K2.6 when thinking is off", async () => {
+		const model = getModel("opencode", "kimi-k2.6")!;
 		let payload: unknown;
 
 		await streamSimple(
@@ -1278,8 +1125,8 @@ describe("openai-completions tool_choice", () => {
 		expect(params.reasoning_effort).toBeUndefined();
 	});
 
-	it("sends thinking enabled for OpenCode Go Kimi K2.6 when thinking is enabled", async () => {
-		const model = getModel("opencode-go", "kimi-k2.6")!;
+	it("sends thinking enabled for OpenCode Kimi K2.6 when thinking is enabled", async () => {
+		const model = getModel("opencode", "kimi-k2.6")!;
 		let payload: unknown;
 
 		await streamSimple(
@@ -1301,56 +1148,8 @@ describe("openai-completions tool_choice", () => {
 		expect(params.reasoning_effort).toBeUndefined();
 	});
 
-	it("omits disabled thinking for Moonshot Kimi K2.7 Code models", async () => {
-		const cases = [getModel("moonshotai", "kimi-k2.7-code"), getModel("moonshotai-cn", "kimi-k2.7-code")];
-
-		for (const model of cases) {
-			expect(model).toBeDefined();
-			let payload: unknown;
-
-			await streamSimple(
-				model!,
-				{
-					messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-				},
-				{
-					apiKey: "test",
-					onPayload: (params: unknown) => {
-						payload = params;
-					},
-				},
-			).result();
-
-			const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
-			expect(params.thinking).toBeUndefined();
-			expect(params.reasoning_effort).toBeUndefined();
-		}
-	});
-
-	it("keeps disabled thinking for Moonshot Kimi K2.6 when thinking is off", async () => {
-		const model = getModel("moonshotai-cn", "kimi-k2.6")!;
-		let payload: unknown;
-
-		await streamSimple(
-			model,
-			{
-				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "test",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
-		expect(params.thinking).toEqual({ type: "disabled" });
-		expect(params.reasoning_effort).toBeUndefined();
-	});
-
 	it("sends max_tokens for OpenCode completions models", async () => {
-		const cases = [getModel("opencode-go", "kimi-k2.6")!, getModel("opencode", "big-pickle")!] as const;
+		const cases = [getModel("opencode", "kimi-k2.6")!, getModel("opencode", "big-pickle")!] as const;
 
 		for (const model of cases) {
 			let payload: unknown;
@@ -1625,7 +1424,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("uses Ant Ling compatibility metadata", async () => {
-		const model = getModel("ant-ling", "Ring-2.6-1T")!;
+		const model = fixtureModel("ant-ling", "Ring-2.6-1T")!;
 		let payload: unknown;
 
 		expect(model.compat).toMatchObject({
@@ -1678,7 +1477,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits Ant Ling reasoning for unmapped direct reasoning efforts and non-reasoning models", async () => {
-		const ring = getModel("ant-ling", "Ring-2.6-1T")!;
+		const ring = fixtureModel("ant-ling", "Ring-2.6-1T")!;
 		let payload: unknown;
 
 		await stream(
@@ -1697,7 +1496,7 @@ describe("openai-completions tool_choice", () => {
 
 		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
 
-		const ling = getModel("ant-ling", "Ling-2.6-flash")!;
+		const ling = fixtureModel("ant-ling", "Ling-2.6-flash")!;
 		await streamSimple(
 			ling,
 			{

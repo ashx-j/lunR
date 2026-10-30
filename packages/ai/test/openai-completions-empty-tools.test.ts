@@ -1,22 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL } from "../src/api/cloudflare.ts";
 import { getModel, streamSimple } from "../src/compat.ts";
-import type { Model } from "../src/types.ts";
-
-/** A Workers AI model behind the AI Gateway /compat endpoint. Request fields come from runtime detection. */
-const workersAiGatewayModel: Model<"openai-completions"> = {
-	id: "workers-ai/@cf/moonshotai/kimi-k2.6",
-	name: "Kimi K2.6",
-	api: "openai-completions",
-	provider: "cloudflare-ai-gateway",
-	baseUrl: CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
-	reasoning: true,
-	input: ["text"],
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: 262144,
-	maxTokens: 32768,
-	compat: { sendSessionAffinityHeaders: true },
-};
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -175,96 +158,6 @@ describe("openai-completions empty tools handling", () => {
 		const params = mockState.lastParams as { max_tokens?: number; max_completion_tokens?: number };
 		expect(params.max_tokens).toBeUndefined();
 		expect(params.max_completion_tokens).toBe(3904);
-	});
-
-	it("uses conservative OpenAI-compatible fields for Cloudflare AI Gateway /compat models", async () => {
-		process.env.CLOUDFLARE_API_KEY = "cf-token";
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = workersAiGatewayModel;
-
-		await streamSimple(
-			model,
-			{
-				systemPrompt: "You are helpful.",
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{ maxTokens: 1234, reasoning: "high" },
-		).result();
-
-		const params = mockState.lastParams as {
-			messages: Array<{ role: string }>;
-			max_tokens?: number;
-			max_completion_tokens?: number;
-			reasoning_effort?: string;
-			store?: boolean;
-		};
-		expect(params.messages[0].role).toBe("system");
-		expect(params.max_tokens).toBe(1234);
-		expect(params.max_completion_tokens).toBeUndefined();
-		expect(params.reasoning_effort).toBeUndefined();
-		expect(params.store).toBeUndefined();
-
-		const clientOptions = mockState.lastClientOptions as {
-			baseURL?: string;
-			defaultHeaders?: Record<string, unknown>;
-		};
-		expect(clientOptions.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat");
-		expect(clientOptions.defaultHeaders?.Authorization).toBeNull();
-		expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer cf-token");
-	});
-
-	it("resolves Cloudflare AI Gateway base URL through provider auth", async () => {
-		process.env.CLOUDFLARE_API_KEY = "cf-token";
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = workersAiGatewayModel;
-
-		await streamSimple(model, {
-			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-		}).result();
-
-		const clientOptions = mockState.lastClientOptions as { baseURL?: string };
-		expect(clientOptions.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat");
-	});
-
-	it("preserves inline upstream Authorization for Cloudflare AI Gateway BYOK requests", async () => {
-		process.env.CLOUDFLARE_API_KEY = "cf-token";
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "gpt-5.1")!;
-
-		await streamSimple(
-			model,
-			{
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{ headers: { Authorization: "Bearer upstream-token" } },
-		).result();
-
-		const clientOptions = mockState.lastClientOptions as { defaultHeaders?: Record<string, unknown> };
-		expect(clientOptions.defaultHeaders?.Authorization).toBe("Bearer upstream-token");
-		expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer cf-token");
-	});
-
-	it("sends session affinity headers for Workers AI through Cloudflare AI Gateway", async () => {
-		process.env.CLOUDFLARE_API_KEY = "cf-token";
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const workersModel = workersAiGatewayModel;
-
-		await streamSimple(
-			workersModel,
-			{
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{ sessionId: "session-1" },
-		).result();
-
-		const clientOptions = mockState.lastClientOptions as { defaultHeaders?: Record<string, string> };
-		expect(clientOptions.defaultHeaders?.session_id).toBe("session-1");
-		expect(clientOptions.defaultHeaders?.["x-client-request-id"]).toBe("session-1");
-		expect(clientOptions.defaultHeaders?.["x-session-affinity"]).toBe("session-1");
 	});
 
 	it("still emits tools: [] for Anthropic/LiteLLM proxy when conversation has tool history", async () => {

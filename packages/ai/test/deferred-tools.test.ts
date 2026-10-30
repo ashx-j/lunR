@@ -437,7 +437,7 @@ describe("deferred tools", () => {
 
 	it("leaves providers without deferred loading unchanged", async () => {
 		const context = makeContext([makeTool("base_tool"), makeTool("late_tool")]);
-		const payload = await capturePayload<OpenAIPayload>(getModel("groq", "llama-3.3-70b-versatile"), context);
+		const payload = await capturePayload<OpenAIPayload>(getModel("deepseek", "deepseek-v4-flash"), context);
 		expect(openAIToolNames(payload)).toEqual(["base_tool", "late_tool"]);
 	});
 

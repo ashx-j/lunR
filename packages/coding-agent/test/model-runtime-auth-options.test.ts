@@ -79,25 +79,12 @@ describe("ModelRuntime auth options", () => {
 			expect.arrayContaining([
 				expect.objectContaining({
 					type: "api_key",
-					provider: expect.objectContaining({ id: "amazon-bedrock", name: "Amazon Bedrock" }),
-					method: expect.objectContaining({ name: "AWS credentials or bearer token" }),
-				}),
-				expect.objectContaining({
-					type: "api_key",
-					provider: expect.objectContaining({ id: "google-vertex", name: "Google Vertex AI" }),
-					method: expect.objectContaining({ name: "Google Cloud credentials" }),
+					provider: expect.objectContaining({ id: "openai", name: "OpenAI" }),
+					method: expect.objectContaining({ name: "OpenAI API key" }),
 				}),
 				expect.objectContaining({
 					type: "oauth",
 					provider: expect.objectContaining({ id: "anthropic", name: "Anthropic" }),
-				}),
-				expect.objectContaining({
-					type: "api_key",
-					provider: expect.objectContaining({ id: "cloudflare-ai-gateway", name: "Cloudflare AI Gateway" }),
-				}),
-				expect.objectContaining({
-					type: "api_key",
-					provider: expect.objectContaining({ id: "cloudflare-workers-ai", name: "Cloudflare Workers AI" }),
 				}),
 			]),
 		);
