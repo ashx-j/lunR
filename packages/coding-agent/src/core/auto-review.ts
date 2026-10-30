@@ -1,6 +1,6 @@
 /**
  * lunR: reviewed auto mode. In auto, a review model checks each risky tool call before it runs,
- * the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, edits
+ * the way Claude Code, Codex and Grok Build do in their own auto modes. Reads, edits
  * inside the project and lunR's own bookkeeping tools skip review; everything else that read-only
  * mode would block goes to the reviewer. AgentSession calls these helpers from its tool gate.
  */
@@ -20,10 +20,6 @@ export const AUTO_REVIEW_PROVIDERS: Readonly<Record<string, { agent: string; rev
 	openai: { agent: "Codex" },
 	"openai-codex": { agent: "Codex" },
 	xai: { agent: "Grok Build" },
-	"qwen-cloud": { agent: "Qwen Code" },
-	"qwen-cloud-cn": { agent: "Qwen Code" },
-	"qwen-token-plan": { agent: "Qwen Code" },
-	"qwen-token-plan-cn": { agent: "Qwen Code" },
 };
 
 /** Child processes read the parent's reviewer here: empty when the parent is not in auto, "-" when it has none. */

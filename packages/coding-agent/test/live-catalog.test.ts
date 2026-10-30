@@ -1,5 +1,4 @@
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
-import { MODELS_DEV_PROVIDERS } from "@earendil-works/pi-ai/catalog/generic-providers";
 import { ModelsDevFacts } from "@earendil-works/pi-ai/catalog/models-dev";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -209,11 +208,11 @@ describe("live-catalog", () => {
 	});
 
 	it("skips new speech, image and embedding ids but keeps catalog ones", () => {
-		const groq = { ...template("groq"), id: "whisper-large-v3", baseUrl: "https://api.groq.com/openai/v1" };
+		const deepseek = { ...template("deepseek"), id: "whisper-large-v3", baseUrl: "https://api.deepseek.com" };
 		const ids = discoverLiveModels(
-			"groq",
+			"deepseek",
 			{ data: [{ id: "whisper-large-v3" }, { id: "playai-tts" }, { id: "llama-guard-5" }, { id: "kimi-k9" }] },
-			[groq],
+			[deepseek],
 		).map((entry) => entry.model.id);
 		expect(ids).toEqual(["whisper-large-v3", "kimi-k9"]);
 	});
@@ -231,16 +230,6 @@ describe("live-catalog", () => {
 			},
 		).map((entry) => entry.model.id);
 		expect(ids).toEqual(["gemini-9-pro"]);
-	});
-
-	it("discovers models for a generic models.dev provider with no baked-in rows", () => {
-		const definition = MODELS_DEV_PROVIDERS.find((candidate) => candidate.api === "openai-completions")!;
-		const [discovery] = discoverLiveModels(definition.id, { data: [{ id: "brand-new-model" }] }, []);
-		expect(discovery.model).toMatchObject({
-			provider: definition.id,
-			api: "openai-completions",
-			baseUrl: definition.baseUrl,
-		});
 	});
 
 	it("stays quiet when a provider has no list endpoint", async () => {

@@ -54,10 +54,8 @@ describe("OnboardingComponent", () => {
 		).map(([id, name]) => ({ id, name, authType: "oauth" as const })),
 		...(
 			[
-				["amazon-bedrock", "Amazon Bedrock"],
-				["ant-ling", "Ant Ling"],
 				["anthropic", "Anthropic"],
-				["azure-openai-responses", "Azure OpenAI"],
+				["deepseek", "DeepSeek"],
 				["google", "Google"],
 				["openai", "OpenAI"],
 				["openrouter", "OpenRouter"],

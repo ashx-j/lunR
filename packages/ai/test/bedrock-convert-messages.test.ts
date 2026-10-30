@@ -45,10 +45,10 @@ vi.mock("@aws-sdk/client-bedrock-runtime", () => {
 });
 
 import { stream as streamBedrock } from "../src/api/bedrock-converse-stream.ts";
-import { getModel } from "../src/compat.ts";
 import type { Context, Message } from "../src/types.ts";
+import { fixtureModel } from "./transport-fixtures.ts";
 
-const baseModel = getModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0");
+const baseModel = fixtureModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0");
 
 async function capturePayload(context: Context): Promise<unknown> {
 	let capturedPayload: unknown;

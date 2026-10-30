@@ -42,7 +42,7 @@ export const OPENAI_GPT6_THINKING_LEVEL_MAP = {
 	max: "max",
 } as const;
 
-const OPENAI_EFFORT_PROVIDER_IDS = new Set(["openai", "openai-codex", "azure-openai-responses"]);
+const OPENAI_EFFORT_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
 
 type OpenAiOverlayModel = {
 	id: string;

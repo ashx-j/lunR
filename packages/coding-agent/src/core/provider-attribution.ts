@@ -13,13 +13,7 @@ function matchesHost(baseUrl: string, expectedHost: string): boolean {
 
 function getSessionHeaders(model: Model<Api>, sessionId: string | undefined): Record<string, string> | undefined {
 	if (!sessionId) return undefined;
-	if (
-		model.provider !== "opencode" &&
-		model.provider !== "opencode-go" &&
-		!matchesHost(model.baseUrl, OPENCODE_HOST)
-	) {
-		return undefined;
-	}
+	if (model.provider !== "opencode" && !matchesHost(model.baseUrl, OPENCODE_HOST)) return undefined;
 	return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
 }
 

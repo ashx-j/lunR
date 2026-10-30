@@ -409,8 +409,8 @@ describe("resolveCliModel", () => {
 			id: "zai/glm-5",
 			name: "GLM-5",
 			api: "anthropic-messages",
-			provider: "vercel-ai-gateway",
-			baseUrl: "https://ai-gateway.vercel.sh",
+			provider: "my-gateway",
+			baseUrl: "https://gateway.example.com",
 			reasoning: true,
 			input: ["text"],
 			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
@@ -616,16 +616,9 @@ describe("default model selection", () => {
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");
 	});
 
-	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {
+	test("zai and minimax defaults track current models", () => {
 		expect(defaultModelPerProvider.zai).toBe("glm-5.1");
 		expect(defaultModelPerProvider.minimax).toBe("MiniMax-M2.7");
-		expect(defaultModelPerProvider["minimax-cn"]).toBe("MiniMax-M2.7");
-		expect(defaultModelPerProvider.cerebras).toBe("zai-glm-4.7");
-		expect(defaultModelPerProvider["ant-ling"]).toBe("Ring-2.6-1T");
-	});
-
-	test("ai-gateway default tracks current model", () => {
-		expect(defaultModelPerProvider["vercel-ai-gateway"]).toBe("zai/glm-5.1");
 	});
 
 	test("findInitialModel accepts explicit provider custom model ids", async () => {
@@ -643,34 +636,6 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("openai/ghost-model");
-	});
-
-	test("findInitialModel selects ai-gateway default when available", async () => {
-		const aiGatewayModel: Model<"anthropic-messages"> = {
-			id: "anthropic/claude-opus-4-6",
-			name: "Claude Opus 4.6",
-			api: "anthropic-messages",
-			provider: "vercel-ai-gateway",
-			baseUrl: "https://ai-gateway.vercel.sh",
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
-			contextWindow: 200000,
-			maxTokens: 8192,
-		};
-
-		const registry = {
-			getAvailable: async () => [aiGatewayModel],
-		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
-
-		const result = await findInitialModel({
-			scopedModels: [],
-			isContinuing: false,
-			modelRuntime: registry,
-		});
-
-		expect(result.model?.provider).toBe("vercel-ai-gateway");
-		expect(result.model?.id).toBe("anthropic/claude-opus-4-6");
 	});
 
 	test("findInitialModel ignores an unauthenticated saved default", async () => {

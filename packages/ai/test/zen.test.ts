@@ -4,10 +4,7 @@ import { MODELS } from "../src/models.generated.ts";
 import type { Api, Model } from "../src/types.ts";
 
 describe.skipIf(!process.env.OPENCODE_API_KEY)("OpenCode Models Smoke Test", () => {
-	const providers = [
-		{ key: "opencode", label: "OpenCode Zen" },
-		{ key: "opencode-go", label: "OpenCode Go" },
-	] as const;
+	const providers = [{ key: "opencode", label: "OpenCode Zen" }] as const;
 
 	providers.forEach(({ key, label }) => {
 		const providerModels = Object.values(MODELS[key]);

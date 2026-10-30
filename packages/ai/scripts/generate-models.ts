@@ -6,7 +6,7 @@
  * - models.dev supplies most providers and every model fact it carries (limits, prices,
  *   modalities, thinking levels). src/catalog/providers.ts says which providers ship and how to
  *   reach them.
- * - OpenRouter, Vercel AI Gateway and OpenAI's Codex list are read from their own APIs.
+ * - OpenRouter and OpenAI's Codex list are read from their own APIs.
  * - src/catalog/rules.ts patches the few facts the sources get wrong.
  *
  * Every tool-capable models.dev row of a shipped provider becomes a model unless a rule drops
@@ -29,13 +29,7 @@ import {
 } from "../src/catalog/models-dev.ts";
 import { applyCatalogRules } from "../src/catalog/rules.ts";
 import type { Api, Model } from "../src/types.ts";
-import {
-	LIVE_MODEL_LISTS,
-	type ModelsDevProviderDefinition,
-	modelsDevModels,
-	modelsDevProviderDefinitions,
-	normalizeLiveId,
-} from "../src/catalog/providers.ts";
+import { LIVE_MODEL_LISTS, modelsDevModels, normalizeLiveId } from "../src/catalog/providers.ts";
 import { EXTRA_MODELS } from "./catalog-extras.ts";
 import { CatalogSources } from "./catalog-sources.ts";
 import { parseZenModelIds } from "../src/catalog/opencode.ts";
@@ -43,7 +37,6 @@ import { parseZenModelIds } from "../src/catalog/opencode.ts";
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODEX_PUBLIC_CATALOG_URL = "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-const AI_GATEWAY_MODELS_URL = "https://ai-gateway.vercel.sh/v1/models";
 
 function readOptions(args: string[]) {
 	const options = { strict: false, offline: false, jsonOnly: false, jsonOutputDir: undefined as string | undefined };
@@ -138,44 +131,6 @@ function openRouterModels(payload: { data: OpenRouterRow[] }, facts: ModelsDevFa
 	});
 }
 
-interface GatewayRow {
-	id: string;
-	name?: string;
-	context_window?: number;
-	max_tokens?: number;
-	tags?: string[];
-	pricing?: Record<string, string | number | undefined>;
-}
-
-/** Vercel AI Gateway, reached through its Anthropic-compatible endpoint. models.dev adds thinking levels. */
-function gatewayModels(payload: { data: GatewayRow[] }, facts: ModelsDevFacts): Model<Api>[] {
-	return payload.data.flatMap((row): Model<Api>[] => {
-		const tags = row.tags ?? [];
-		if (!tags.includes("tool-use")) return [];
-		const known = facts.find(row.id, "vercel");
-		const model = modelFromModelsDev(row.id, { ...known, reasoning: tags.includes("reasoning") }, {
-			provider: "vercel-ai-gateway",
-			api: "anthropic-messages",
-			baseUrl: "https://ai-gateway.vercel.sh",
-		});
-		return [
-			{
-				...model,
-				name: row.name || row.id,
-				input: tags.includes("vision") ? ["text", "image"] : ["text"],
-				cost: {
-					input: perMillion(row.pricing?.input),
-					output: perMillion(row.pricing?.output),
-					cacheRead: perMillion(row.pricing?.input_cache_read),
-					cacheWrite: perMillion(row.pricing?.input_cache_write),
-				},
-				contextWindow: row.context_window || 4096,
-				maxTokens: row.max_tokens || 4096,
-			},
-		];
-	});
-}
-
 /** Public Codex metadata is the offline seed; account availability is discovered at runtime. */
 function codexModels(payload: unknown, models: readonly Model<Api>[]): Model<Api>[] {
 	const codex = parseCodexCatalog(payload, "https://chatgpt.com/backend-api");
@@ -190,14 +145,13 @@ function codexModels(payload: unknown, models: readonly Model<Api>[]): Model<Api
 }
 
 async function generateModels() {
-	const [modelsDev, openRouter, gateway, codex, liveLists] = await Promise.all([
+	const [modelsDev, openRouter, codex, liveLists] = await Promise.all([
 		load<ModelsDevCatalog>(MODELS_DEV_URL, (value) =>
 			["openai", "anthropic", "openrouter"].every(
 				(id) => Object.keys((value as ModelsDevCatalog | undefined)?.[id]?.models ?? {}).length > 0,
 			),
 		),
 		load<{ data: OpenRouterRow[] }>(OPENROUTER_MODELS_URL),
-		load<{ data: GatewayRow[] }>(AI_GATEWAY_MODELS_URL),
 		// The Codex seed has no fallback: without it the catalog would lose every Codex model.
 		sources
 			.fetch(CODEX_PUBLIC_CATALOG_URL, (value) => {
@@ -213,11 +167,9 @@ async function generateModels() {
 
 	const data = modelsDev ?? {};
 	const facts = new ModelsDevFacts(data);
-	const definitions = modelsDevProviderDefinitions(data);
 	const allModels: Model<Api>[] = [
-		...modelsDevModels(data, facts, liveLists, definitions),
+		...modelsDevModels(data, facts, liveLists),
 		...(openRouter ? openRouterModels(openRouter, facts) : []),
-		...(gateway ? gatewayModels(gateway, facts) : []),
 		...EXTRA_MODELS.map((model) => structuredClone(model)),
 	];
 	allModels.push(...codexModels(codex, allModels));
@@ -242,25 +194,16 @@ async function generateModels() {
 		]),
 	) as Record<string, Record<string, Model<Api>>>;
 
-	if (!options.jsonOnly) writeTypeScript(sorted, definitions);
-	if (options.jsonOutputDir) writeJson(options.jsonOutputDir, sorted, facts.toIndex(), definitions);
+	if (!options.jsonOnly) writeTypeScript(sorted);
+	if (options.jsonOutputDir) writeJson(options.jsonOutputDir, sorted, facts.toIndex());
 
 	console.log("\nModel statistics:");
 	console.log(`  Total: ${providerIds.reduce((sum, id) => sum + Object.keys(sorted[id]).length, 0)}`);
 	for (const provider of providerIds) console.log(`  ${provider}: ${Object.keys(sorted[provider]).length}`);
 }
 
-/**
- * Baked-in catalog for the ai package: one file per hand-written provider plus an aggregator, and the
- * generic provider definitions. Generic providers' models come from the published catalog only,
- * which keeps thousands of rows out of the package.
- */
-function writeTypeScript(
-	allProviders: Record<string, Record<string, Model<Api>>>,
-	definitions: readonly ModelsDevProviderDefinition[],
-) {
-	const generic = new Set(definitions.map((definition) => definition.id));
-	const providers = Object.fromEntries(Object.entries(allProviders).filter(([id]) => !generic.has(id)));
+/** Baked-in catalog for the ai package: one file per provider plus an aggregator. */
+function writeTypeScript(providers: Record<string, Record<string, Model<Api>>>) {
 	const header = "// This file is auto-generated by scripts/generate-models.ts\n// Do not edit manually - run 'npm run generate-models' to update\n\n";
 	const constName = (provider: string) => `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_MODELS`;
 	const emit = (model: Model<Api>) => {
@@ -290,15 +233,7 @@ function writeTypeScript(
 	const imports = ids.map((id) => `import { ${constName(id)} } from "./providers/${id}.models.ts";`).join("\n");
 	const entries = ids.map((id) => `\t${JSON.stringify(id)}: ${constName(id)},`).join("\n");
 	writeFileSync(join(packageRoot, "src/models.generated.ts"), `${header}${imports}\n\nexport const MODELS = {\n${entries}\n} as const;\n`);
-	writeFileSync(
-		join(providersDir, "models-dev-providers.generated.ts"),
-		`${header}import type { ModelsDevProviderDefinition } from "../catalog/providers.ts";
-
-/** models.dev providers lunR ships with generic settings. */
-export const MODELS_DEV_PROVIDERS: readonly ModelsDevProviderDefinition[] = ${JSON.stringify(definitions, null, "\t")};
-`,
-	);
-	console.log(`Generated ${ids.length} catalogs and ${definitions.length} generic providers under src/providers/`);
+	console.log(`Generated ${ids.length} catalogs under src/providers/`);
 }
 
 /**
@@ -309,7 +244,6 @@ function writeJson(
 	directory: string,
 	providers: Record<string, Record<string, Model<Api>>>,
 	facts: ModelFactsIndex,
-	definitions: readonly ModelsDevProviderDefinition[],
 ) {
 	const write = (path: string, value: unknown) => writeFileSync(path, `${JSON.stringify(value)}\n`);
 	rmSync(directory, { recursive: true, force: true });
@@ -318,8 +252,6 @@ function writeJson(
 	write(join(directory, "providers.json"), Object.keys(providers));
 	write(join(directory, "sources.json"), sources.statuses.sort((a, b) => a.url.localeCompare(b.url)));
 	write(join(directory, "facts.json"), facts);
-	// The CLI bundle leaves these providers out; their rows arrive with the published catalog.
-	write(join(directory, "generic-providers.json"), definitions.map((definition) => definition.id));
 	for (const [provider, models] of Object.entries(providers)) write(join(directory, "providers", `${provider}.json`), models);
 	console.log(`Generated JSON model catalog under ${directory}`);
 }

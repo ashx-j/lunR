@@ -116,7 +116,7 @@ For ChatGPT/Codex, lunR discovers the models available to your account directly,
 - Ollama and LM Studio via `/login` (localhost probe)
 - OpenCode Zen: `/login opencode` then `/refresh` (free rows rotate from live `/v1/models`)
 
-**API keys:** Anthropic, Ant Ling, OpenAI, Azure OpenAI, DeepSeek, NVIDIA NIM, Google Gemini, Google Vertex, Amazon Bedrock, Mistral, Groq, Cerebras, Cloudflare AI Gateway, Cloudflare Workers AI, xAI, OpenRouter, Vercel AI Gateway, ZAI Coding Plan, OpenCode Zen/Go, Hugging Face, Fireworks, Together AI, Kimi For Coding, Moonshot AI, MiniMax, Xiaomi MiMo, Qwen Token Plan, Qwen Cloud.
+**API keys:** Anthropic, OpenAI, Google Gemini, OpenRouter, xAI, DeepSeek, Z.AI Coding Plan, Kimi For Coding, MiniMax, OpenCode Zen, Ollama Cloud.
 
 See [docs/providers.md](docs/providers.md) for setup. **xAI SuperGrok:** `/login xai` can import `~/.grok/auth.json` from the Grok CLI; `/logout xai` does **not** delete that file.
 

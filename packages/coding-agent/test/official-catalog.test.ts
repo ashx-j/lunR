@@ -415,7 +415,8 @@ describe("loadOfficialCatalog", () => {
 });
 
 describe("bundled long-context pricing", () => {
-	it.each(["google", "google-vertex"])("retains reviewed Gemini tiers for %s", (provider) => {
+	it("retains reviewed Gemini tiers", () => {
+		const provider = "google";
 		const catalog = loadBundledOfficialCatalog();
 		for (const id of ["gemini-2.5-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"]) {
 			const entry = catalog.models.find((model) => model.provider === provider && model.id === id);

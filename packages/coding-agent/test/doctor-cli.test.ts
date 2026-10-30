@@ -67,8 +67,8 @@ describe("lunr doctor", () => {
 	});
 
 	it("counts env keys and models.json providers as ready and never names a missing /login", async () => {
-		const previousKey = process.env.GROQ_API_KEY;
-		process.env.GROQ_API_KEY = "gsk-doctor-secret";
+		const previousKey = process.env.DEEPSEEK_API_KEY;
+		process.env.DEEPSEEK_API_KEY = "ds-doctor-secret";
 		try {
 			writeFileSync(
 				join(agentDir, "models.json"),
@@ -89,12 +89,12 @@ describe("lunr doctor", () => {
 			);
 			const byLabel = Object.fromEntries((await collectDoctorChecks(agentDir)).map((check) => [check.label, check]));
 			expect(byLabel["Custom providers"]).toMatchObject({ status: "ok", detail: "mybox" });
-			expect(byLabel["Environment keys"]?.detail).toContain("groq");
+			expect(byLabel["Environment keys"]?.detail).toContain("deepseek");
 			expect(byLabel["Default model"]).toMatchObject({ status: "ok", detail: "mybox/small" });
 			expect(byLabel.Providers).toBeUndefined();
 		} finally {
-			if (previousKey === undefined) delete process.env.GROQ_API_KEY;
-			else process.env.GROQ_API_KEY = previousKey;
+			if (previousKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+			else process.env.DEEPSEEK_API_KEY = previousKey;
 		}
 
 		const unknown = checkDefaultModel("gone", "m", [], new Set(["openai"]));

@@ -1025,38 +1025,28 @@ describe("ModelRegistry", () => {
 		});
 
 		test("stored API key env propagates to request auth and resolves headers", async () => {
-			await authStorage.modify("cloudflare-ai-gateway", async () => ({
+			await authStorage.modify("deepseek", async () => ({
 				type: "api_key",
-				key: "$CLOUDFLARE_API_KEY",
-				env: {
-					CLOUDFLARE_API_KEY: "stored-cf-token",
-					CLOUDFLARE_ACCOUNT_ID: "stored-account",
-					CLOUDFLARE_GATEWAY_ID: "stored-gateway",
-				},
+				key: "$DEEPSEEK_API_KEY",
+				env: { DEEPSEEK_API_KEY: "stored-token", DEEPSEEK_ACCOUNT: "stored-account" },
 			}));
 			writeRawModelsJson({
-				"cloudflare-ai-gateway": {
-					headers: { "x-account": "$CLOUDFLARE_ACCOUNT_ID" },
+				deepseek: {
+					headers: { "x-account": "$DEEPSEEK_ACCOUNT" },
 				},
 			});
 
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);
-			const model = registry.getAll().find((m) => m.provider === "cloudflare-ai-gateway");
+			const model = registry.getAll().find((m) => m.provider === "deepseek");
 			expect(model).toBeDefined();
 
 			const auth = await registry.getApiKeyAndHeaders(model!);
 
 			expect(auth).toEqual({
 				ok: true,
-				apiKey: undefined,
-				headers: {
-					"cf-aig-authorization": "Bearer stored-cf-token",
-					"x-account": "stored-account",
-				},
-				env: {
-					CLOUDFLARE_ACCOUNT_ID: "stored-account",
-					CLOUDFLARE_GATEWAY_ID: "stored-gateway",
-				},
+				apiKey: "stored-token",
+				headers: { "x-account": "stored-account" },
+				env: { DEEPSEEK_API_KEY: "stored-token", DEEPSEEK_ACCOUNT: "stored-account" },
 			});
 		});
 

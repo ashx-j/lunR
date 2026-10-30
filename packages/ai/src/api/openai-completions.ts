@@ -410,11 +410,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					if (foundReasoningField) {
 						const delta = deltaFields[foundReasoningField];
 						if (typeof delta === "string" && delta.length > 0) {
-							const thinkingSignature =
-								model.provider === "opencode-go" && foundReasoningField === "reasoning"
-									? "reasoning_content"
-									: foundReasoningField;
-							const block = ensureThinkingBlock(thinkingSignature);
+							const block = ensureThinkingBlock(foundReasoningField);
 							block.thinking += delta;
 							stream.push({
 								type: "thinking_delta",
@@ -1019,10 +1015,7 @@ export function convertMessages(
 					}
 
 					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-					let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					if (model.provider === "opencode-go" && signature === "reasoning") {
-						signature = "reasoning_content";
-					}
+					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
 					if (signature && signature.length > 0) {
 						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
 					}

@@ -1,6 +1,5 @@
 import type { Api, Credential, Model } from "@earendil-works/pi-ai";
 import { codexModelsUrl, resolveCodexCatalogVersion } from "@earendil-works/pi-ai/catalog/codex";
-import { MODELS_DEV_PROVIDERS } from "@earendil-works/pi-ai/catalog/generic-providers";
 import { normalizeCatalogPricing } from "@earendil-works/pi-ai/catalog/metadata";
 import type { ModelsDevFacts, ModelsDevModel } from "@earendil-works/pi-ai/catalog/models-dev";
 import { discoveredModel } from "@earendil-works/pi-ai/catalog/providers";
@@ -15,37 +14,23 @@ export const DEFAULT_CONTEXT_WINDOW = 128000;
 export const DEFAULT_MAX_TOKENS = 8192;
 
 /** How lunR reads a provider's own model list. */
-export type LiveListProtocol = "codex" | "openai" | "anthropic" | "google" | "mistral";
+export type LiveListProtocol = "codex" | "openai" | "anthropic" | "google";
 
 /**
  * Providers whose list lunR does not read: OpenCode's free rows follow its Zen list and models.dev,
- * Copilot's picker arrives with its login, NIM's list is mostly not chat models, and the rest have
- * no fixed list endpoint.
+ * Copilot's picker arrives with its login, and Radius has no fixed list endpoint.
  */
-const UNLISTED_PROVIDERS = new Set([
-	// NIM's list mixes in embedding, reward and vision models; the catalog intersects it with models.dev.
-	"nvidia",
-	"opencode",
-	"opencode-go",
-	"github-copilot",
-	"cloudflare-ai-gateway",
-	"cloudflare-workers-ai",
-	"amazon-bedrock",
-	"google-vertex",
-	"azure-openai-responses",
-	"radius",
-]);
+const UNLISTED_PROVIDERS = new Set(["opencode", "github-copilot", "radius"]);
 
-/** The list protocol for a provider, from the transport its catalog or models.dev definition uses. */
+/** The list protocol for a provider, from the transport its catalog uses. */
 export function liveListProtocol(providerId: string, bakedIn: readonly Model<Api>[]): LiveListProtocol | undefined {
 	if (providerId === "openai-codex") return "codex";
 	if (UNLISTED_PROVIDERS.has(providerId)) return undefined;
-	const api = bakedIn[0]?.api ?? MODELS_DEV_PROVIDERS.find((definition) => definition.id === providerId)?.api;
+	const api = bakedIn[0]?.api;
 	if (api === "openai-completions" || api === "openai-responses") return "openai";
-	// Other Anthropic-compatible hosts (MiniMax, Kimi, Fireworks) have no documented list endpoint.
+	// Other Anthropic-compatible hosts (MiniMax, Kimi) have no documented list endpoint.
 	if (api === "anthropic-messages") return providerId === "anthropic" ? "anthropic" : undefined;
 	if (api === "google-generative-ai") return "google";
-	if (api === "mistral-conversations") return "mistral";
 	return undefined;
 }
 
@@ -182,7 +167,7 @@ function textAndImage(image: boolean): ("text" | "image")[] {
 	return image ? ["text", "image"] : ["text"];
 }
 
-/** An OpenAI-style row's optional capability fields (xAI, Groq, Qwen and others add some). */
+/** An OpenAI-style row's optional capability fields (xAI and others add some). */
 function reportedOpenAIFields(raw: Record<string, unknown>): ModelsDevModel {
 	const input = Array.isArray(raw.input_modalities)
 		? raw.input_modalities.filter((value): value is string => value === "text" || value === "image")
@@ -247,21 +232,6 @@ export function listedModels(protocol: Exclude<LiveListProtocol, "codex">, paylo
 		const id = typeof raw.id === "string" ? raw.id.trim() : "";
 		if (!id || raw.tool_call === false || raw.type === "embedding") return [];
 		if (protocol === "anthropic") return [{ id, raw, reported: reportedAnthropicFields(raw) }];
-		if (protocol === "mistral") {
-			const capabilities = isRecord(raw.capabilities) ? raw.capabilities : {};
-			if (capabilities.completion_chat === false || capabilities.function_calling === false) return [];
-			return [
-				{
-					id,
-					raw,
-					reported: {
-						name: typeof raw.name === "string" ? raw.name : undefined,
-						limit: { context: positive(raw.max_context_length) },
-						modalities: { input: textAndImage(capabilities.vision === true) },
-					},
-				},
-			];
-		}
 		return [{ id, raw, reported: reportedOpenAIFields(raw) }];
 	});
 }
@@ -410,10 +380,9 @@ export function discoverLiveModels(
 		// models.dev knows some new ids as models that cannot call tools.
 		if (!known && (NON_CHAT_ID.test(listed.id) || options.facts?.find(listed.id)?.tool_call === false)) continue;
 		const template = selectLiveTemplate(listed.id, bakedIn);
-		// Generic models.dev providers have no baked-in rows, so a known id resolves through models.dev too.
+		// A known id with no template to copy resolves through models.dev too.
 		const model =
-			((!known || !template) &&
-				discoveredModel(providerId, listed.id, listed.reported, options.facts, MODELS_DEV_PROVIDERS)) ||
+			((!known || !template) && discoveredModel(providerId, listed.id, listed.reported, options.facts)) ||
 			(template && templateModel(listed.id, { ...template, provider: providerId }));
 		if (model) discoveries.push(withReported(model, listed.reported));
 	}
@@ -586,7 +555,6 @@ function listRequest(
 		credential?.type === "oauth" && typeof credential.accountId === "string" ? credential.accountId : undefined;
 	const headers = { ...credentialAuthHeaders(credential), ...(accountId ? { "ChatGPT-Account-ID": accountId } : {}) };
 	if (protocol === "codex") return { url: codexModelsUrl(baseUrl, clientVersion), headers };
-	if (protocol === "mistral") return { url: `${base}/v1/models`, headers };
 	return { url: modelsListUrl(baseUrl), headers };
 }
 

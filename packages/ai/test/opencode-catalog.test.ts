@@ -6,7 +6,6 @@ import {
 	resolveOpencodeApi,
 } from "../src/catalog/opencode.ts";
 import { OPENCODE_MODELS } from "../src/providers/opencode.models.ts";
-import { OPENCODE_GO_MODELS } from "../src/providers/opencode-go.models.ts";
 
 describe("parseZenModelIds", () => {
 	it("reads OpenAI { data: [{ id }] } lists", () => {
@@ -60,13 +59,8 @@ describe("resolveOpencodeApi", () => {
 
 describe("OpenCode catalog", () => {
 	it("points every model at the endpoint for its protocol", () => {
-		for (const [models, basePath] of [
-			[OPENCODE_MODELS, "https://opencode.ai/zen"],
-			[OPENCODE_GO_MODELS, "https://opencode.ai/zen/go"],
-		] as const) {
-			for (const model of Object.values(models)) {
-				expect(model.baseUrl, model.id).toBe(opencodeBaseUrl(basePath, model.api));
-			}
+		for (const model of Object.values(OPENCODE_MODELS)) {
+			expect(model.baseUrl, model.id).toBe(opencodeBaseUrl("https://opencode.ai/zen", model.api));
 		}
 	});
 });

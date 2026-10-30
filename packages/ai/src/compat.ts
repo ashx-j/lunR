@@ -39,7 +39,6 @@ import { openAICompletionsApi } from "./api/openai-completions.lazy.ts";
 import { openAIResponsesApi } from "./api/openai-responses.lazy.ts";
 import { piMessagesApi } from "./api/pi-messages.lazy.ts";
 import { getEnvApiKey } from "./env-api-keys.ts";
-import type { ModelsApiStreamOptions } from "./models.ts";
 import { builtinModels, getBuiltinModel, getBuiltinModels, getBuiltinProviders } from "./providers/all.ts";
 
 export type { BuiltinProvider } from "./providers/all.ts";
@@ -217,8 +216,6 @@ function getCompatModels(): ReturnType<typeof builtinModels> {
 	compatModels ??= builtinModels();
 	return compatModels;
 }
-const AMBIENT_AUTH_MARKER = "<authenticated>";
-
 function hasExplicitApiKey(apiKey: string | undefined): apiKey is string {
 	return typeof apiKey === "string" && apiKey.trim().length > 0;
 }
@@ -229,12 +226,8 @@ function withEnvApiKey<TOptions extends StreamOptions>(
 ): TOptions | undefined {
 	if (hasExplicitApiKey(options?.apiKey)) return options;
 	const apiKey = getEnvApiKey(model.provider, options?.env);
-	if (!apiKey || apiKey === AMBIENT_AUTH_MARKER) return options;
+	if (!apiKey) return options;
 	return { ...options, apiKey } as TOptions;
-}
-
-function hasResolvedCloudflareAuth(options: StreamOptions | undefined): boolean {
-	return hasExplicitApiKey(options?.apiKey) || typeof options?.headers?.["cf-aig-authorization"] === "string";
 }
 
 function getBuiltinProviderForModel(model: Model<Api>) {
@@ -260,9 +253,6 @@ export function stream<TApi extends Api>(
 ): AssistantMessageEventStream {
 	const builtinProvider = getBuiltinProviderForModel(model);
 	if (builtinProvider) {
-		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
-			return getCompatModels().stream(model, context, options as ModelsApiStreamOptions<TApi> | undefined);
-		}
 		return builtinProvider.stream(model, context, withEnvApiKey(model, options) as ApiStreamOptions<TApi>);
 	}
 	const provider = resolveApiProvider(model.api);
@@ -285,9 +275,6 @@ export function streamSimple<TApi extends Api>(
 ): AssistantMessageEventStream {
 	const builtinProvider = getBuiltinProviderForModel(model);
 	if (builtinProvider) {
-		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
-			return getCompatModels().streamSimple(model, context, options);
-		}
 		return builtinProvider.streamSimple(model, context, withEnvApiKey(model, options));
 	}
 	const provider = resolveApiProvider(model.api);

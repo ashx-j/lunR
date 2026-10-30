@@ -10,7 +10,7 @@ import * as path from "node:path";
 import type { Api, AuthEvent, AuthPrompt, Credential } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
-import { getAgentDir, getAuthPath, getDocsPath } from "../../config.ts";
+import { getAgentDir, getAuthPath } from "../../config.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
 import { formatClaudeSubscriptionLogoutNote } from "../../core/auth-guidance.ts";
 import { hasGrokCliXaiAuth } from "../../core/grok-cli-auth.ts";
@@ -25,7 +25,6 @@ import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.ts";
-import { theme } from "./theme/theme.ts";
 
 // lunr: pre-connection ToS disclaimer for Anthropic subscription (OAuth) accounts.
 const ANTHROPIC_TOS_DISCLAIMER =
@@ -598,7 +597,7 @@ export async function completeProviderAuthentication(
 	if (isUnknownModel(previousModel)) {
 		const availableModels = await host.session.modelRuntime.getAvailable();
 		const providerModels = availableModels.filter((model) => model.provider === providerId);
-		// lunr: generic models.dev providers have no configured default; their first model stands in below.
+		// lunr: providers without a configured default (custom endpoints, extensions) take their first model below.
 		if (providerModels.length === 0) {
 			selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
 		} else {
@@ -684,14 +683,6 @@ export async function showApiKeyLoginDialog(
 		},
 		providerName,
 	);
-
-	if (providerId === "amazon-bedrock") {
-		dialog.showDetails([
-			theme.fg("text", "You can also use an AWS profile, IAM keys, or role-based credentials."),
-			theme.fg("muted", "See:"),
-			theme.fg("accent", `  ${path.join(getDocsPath(), "providers.md")}`),
-		]);
-	}
 
 	host.editorContainer.clear();
 	host.editorContainer.addChild(dialog);
