@@ -50,6 +50,32 @@ export interface SessionHeader {
 	parentSession?: string;
 	/** Set when print mode (`-p`, `--mode json`) created the session. Absent for interactive and older sessions. */
 	origin?: "print";
+	/** The app that owns this session (`--session-host`), such as Surface. Other lunR processes refuse to continue or fork it. */
+	host?: string;
+}
+
+/** The `--session-host` this process runs for. Sessions it creates carry it; sessions with another host are refused. */
+let processSessionHost: string | undefined;
+
+export function setSessionHost(host: string | undefined): void {
+	processSessionHost = host;
+}
+
+export class SessionHostError extends Error {
+	readonly sessionFile: string;
+	readonly host: string;
+	constructor(sessionFile: string, host: string) {
+		super(`This session belongs to ${host}. Continue it in ${host}: ${sessionFile}`);
+		this.name = "SessionHostError";
+		this.sessionFile = sessionFile;
+		this.host = host;
+	}
+}
+
+function assertSessionHost(header: SessionHeader | undefined, sessionFile: string): void {
+	if (header?.host !== undefined && header.host !== processSessionHost) {
+		throw new SessionHostError(sessionFile, header.host);
+	}
 }
 
 export interface NewSessionOptions {
@@ -1016,6 +1042,7 @@ export class SessionManager {
 			}
 
 			const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
+			assertSessionHost(header, this.sessionFile);
 			this.sessionId = header?.id ?? createSessionId();
 
 			if (migrateToCurrentVersion(this.fileEntries)) {
@@ -1055,6 +1082,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: options?.parentSession,
+			...(processSessionHost === undefined ? {} : { host: processSessionHost }),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
@@ -1593,6 +1621,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: this.persist ? previousSessionFile : undefined,
+			...(processSessionHost === undefined ? {} : { host: processSessionHost }),
 		};
 
 		// Collect labels for entries in the path
@@ -1705,6 +1734,7 @@ export class SessionManager {
 
 	static forkBranch(path: string, leafId: string, sessionDir?: string): SessionManager {
 		const manager = SessionManager.openReadOnly(path);
+		assertSessionHost(manager.getHeader() ?? undefined, canonicalSessionPath(path));
 		manager.readOnly = false;
 		manager.persist = true;
 		if (sessionDir) manager.sessionDir = sessionDir;
@@ -1773,6 +1803,7 @@ export class SessionManager {
 		if (!sourceHeader) {
 			throw new Error(`Cannot fork: source session has no header: ${resolvedSourcePath}`);
 		}
+		assertSessionHost(sourceHeader, resolvedSourcePath);
 
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(resolvedTargetCwd);
 		if (!existsSync(dir)) {
@@ -1796,6 +1827,7 @@ export class SessionManager {
 			timestamp,
 			cwd: resolvedTargetCwd,
 			parentSession: resolvedSourcePath,
+			...(processSessionHost === undefined ? {} : { host: processSessionHost }),
 		};
 		const manager = new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
 		try {

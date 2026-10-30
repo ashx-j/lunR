@@ -36,6 +36,10 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 | `/compact [prompt]` | Summarize older context; see [Compaction](compaction.md) |
 | `/export [file]` | Export session to HTML |
 
+## Sessions owned by another app
+
+`--session-host <name>` marks the sessions a run creates, its forks included, as owned by an app such as Surface. Any lunR run without the same `--session-host` refuses to continue or fork them and names the owner. Browsing and export still work. Surface passes `--session-host surface`, because a conversation changed outside Surface no longer matches its thread.
+
 ## Session ownership
 
 Persistent sessions allow one writer at a time across the TUI, gateway, SDK, print, and RPC modes. Browsing and export use read-only snapshots. SDK callers that only inspect a saved file should use `SessionManager.openReadOnly(path)`. Mutable managers and sessions must be disposed before another writer opens the same file.

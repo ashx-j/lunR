@@ -60,7 +60,7 @@ import {
 	MissingSessionCwdError,
 	type SessionCwdIssue,
 } from "./core/session-cwd.ts";
-import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
+import { assertValidSessionId, SessionManager, setSessionHost } from "./core/session-manager.ts";
 import { pruneOldSessions } from "./core/session-retention.ts";
 import { getSessionRetentionTargets, selectApprovedStartupSession } from "./core/session-startup-settings.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
@@ -619,6 +619,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	const parsed = parseArgs(args);
+	setSessionHost(parsed.sessionHost?.trim() || undefined);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
