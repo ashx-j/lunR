@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-10-30: remove the Bedrock, Azure OpenAI, Vertex and Mistral transports with their providers, because no shipped provider used them and they pulled the AWS and Mistral SDKs into every install; Mistral and most other hosts have an OpenAI-compatible endpoint.
 - 2026-10-30: ship 10 API-key providers (Anthropic, OpenAI, Google, OpenRouter, xAI, DeepSeek, Z.AI, Kimi For Coding, MiniMax, OpenCode Zen) plus Ollama Cloud, and drop the 167 generic models.dev providers and 27 hand-written ones, because `/login` listed 206 API-key options and most users need a handful; the custom endpoint option covers the rest. Copilot and Radius lost their API-key option so the list stays at 11.
 - 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
 - 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.

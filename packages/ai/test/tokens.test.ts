@@ -50,9 +50,7 @@ async function testTokensOnAbort<TApi extends Api>(llm: Model<TApi>, options: St
 	// MiniMax and Kimi report input tokens but not output tokens differently on aborted requests.
 	if (
 		llm.api === "openai-completions" ||
-		llm.api === "mistral-conversations" ||
 		llm.api === "openai-responses" ||
-		llm.api === "azure-openai-responses" ||
 		llm.api === "openai-codex-responses" ||
 		llm.provider === "zai"
 	) {
