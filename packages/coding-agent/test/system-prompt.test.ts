@@ -7,7 +7,7 @@ describe("buildSystemPrompt", () => {
 		const cwd = "C:\\work\\project";
 		const prompt = buildSystemPrompt({
 			modelSlug: "openai/gpt-5.6",
-			selectedTools: ["read", "bash", "edit", "write"],
+			selectedTools: ["read", "bash", "edit", "write", "subagent"],
 			contextFiles: [],
 			skills: [],
 			cwd,
@@ -56,6 +56,17 @@ describe("buildSystemPrompt", () => {
 		expect(
 			buildSystemPrompt({ ...options, customPrompt: "Custom", automaticSubagentDelegation: false }),
 		).not.toContain("Launch subagents only");
+	});
+
+	test("drops lunR subagent and intercom guidance when a host turns those tools off", () => {
+		const base = { contextFiles: [], skills: [], cwd: process.cwd() };
+		const withTools = buildSystemPrompt({ ...base, selectedTools: ["read", "subagent", "intercom"] });
+		expect(withTools).toContain("Resume a subagent");
+		expect(withTools).toContain("Use intercom instead");
+		const without = buildSystemPrompt({ ...base, selectedTools: ["read"] });
+		expect(without).toContain("Orchestrate subagents with intent!");
+		expect(without).not.toContain("Resume a subagent");
+		expect(without).not.toContain("intercom");
 	});
 
 	test("includes todo guidance only while the todo tool is active", () => {

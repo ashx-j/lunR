@@ -93,8 +93,19 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const delegationBehavior = automaticSubagentDelegation
 		? "- Orchestrate subagents with intent! Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks. Use subagents as a tool when there is genuine benefit to it or the user explicitly asks for it."
 		: "- Work on tasks directly. Launch subagents only when the user specifically instructs you to delegate work.";
-	const delegationGuideline = automaticSubagentDelegation
-		? "- Use subagents for independent parallel work, specialist analysis, or substantial research. Subagents start with fresh sessions. Use intercom instead to coordinate with an existing lunR session.\n"
+	// A host such as Surface can start lunR without its subagents or intercom (--no-builtin) and
+	// bring its own delegation tool; only the general delegation advice applies then.
+	const hasSubagentTool = !selectedTools || selectedTools.includes("subagent");
+	const intercomHint =
+		!selectedTools || selectedTools.includes("intercom")
+			? " Use intercom instead to coordinate with an existing lunR session."
+			: "";
+	const delegationGuideline =
+		automaticSubagentDelegation && hasSubagentTool
+			? `- Use subagents for independent parallel work, specialist analysis, or substantial research. Subagents start with fresh sessions.${intercomHint}\n`
+			: "";
+	const resumeGuideline = hasSubagentTool
+		? "- Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up. Otherwise launch a new subagent.\n"
 		: "";
 
 	let prompt = `You are an expert coding assistant currently running ''${currentModel}'', operating inside lunR, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
@@ -121,8 +132,7 @@ Guidelines:
 - Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.
 - Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.
 - Use write only for new files or complete rewrites.
-${todoGuideline}${delegationGuideline}- Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up. Otherwise launch a new subagent.
-- Use ast_search for structural code matches.
+${todoGuideline}${delegationGuideline}${resumeGuideline}- Use ast_search for structural code matches.
 ${cronGuideline}- For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.
 - Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.
 - ~/.lunr/agent/agents/ contains optional global and per-model AGENTS.md instructions written by the user. Never modify this tree, including through shell commands.
