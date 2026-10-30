@@ -1,0 +1,1 @@
+{"Qwen3.8-27B":{"id":"Qwen3.8-27B","name":"Qwen3.8 27B","api":"openai-completions","provider":"blueclaw","baseUrl":"https://openai.blueclaw.network/v1","reasoning":true,"thinkingLevelMap":{"minimal":null,"high":null,"xhigh":"xhigh"},"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":32768}}
