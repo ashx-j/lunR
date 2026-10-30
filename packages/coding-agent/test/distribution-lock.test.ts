@@ -17,9 +17,9 @@ describe("published dependency resolution", () => {
 			expect(packages[resolveDependencyPath(packages, name, "")].version, name).toBe(expected);
 		}
 		expect(packages[resolveDependencyPath(packages, "zod", "")].version).toBe("4.4.3");
-		for (const name of ["@mistralai/mistralai", "@modelcontextprotocol/sdk"]) {
-			expect(packages[resolveDependencyPath(packages, "zod", `node_modules/${name}`)].version).toBe("3.25.76");
-		}
+		expect(packages[resolveDependencyPath(packages, "zod", "node_modules/@modelcontextprotocol/sdk")].version).toBe(
+			"3.25.76",
+		);
 		expect(
 			Object.values(packages).filter((entry) => entry && typeof entry === "object" && "os" in entry),
 		).not.toHaveLength(0);

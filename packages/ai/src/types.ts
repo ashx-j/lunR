@@ -1,9 +1,5 @@
 import type { AnthropicOptions } from "./api/anthropic-messages.ts";
-import type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
-import type { BedrockOptions } from "./api/bedrock-converse-stream.ts";
 import type { GoogleOptions } from "./api/google-generative-ai.ts";
-import type { GoogleVertexOptions } from "./api/google-vertex.ts";
-import type { MistralOptions } from "./api/mistral-conversations.ts";
 import type { OpenAICodexResponsesOptions } from "./api/openai-codex-responses.ts";
 import type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
 import type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
@@ -16,14 +12,10 @@ export type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
 export type KnownApi =
 	| "openai-completions"
-	| "mistral-conversations"
 	| "openai-responses"
-	| "azure-openai-responses"
 	| "openai-codex-responses"
 	| "anthropic-messages"
-	| "bedrock-converse-stream"
 	| "google-generative-ai"
-	| "google-vertex"
 	| "pi-messages";
 
 export type Api = KnownApi | (string & {});
@@ -183,11 +175,7 @@ export interface ApiOptionsMap {
 	"openai-completions": OpenAICompletionsOptions;
 	"openai-responses": OpenAIResponsesOptions;
 	"openai-codex-responses": OpenAICodexResponsesOptions;
-	"azure-openai-responses": AzureOpenAIResponsesOptions;
 	"google-generative-ai": GoogleOptions;
-	"google-vertex": GoogleVertexOptions;
-	"mistral-conversations": MistralOptions;
-	"bedrock-converse-stream": BedrockOptions;
 	"pi-messages": PiMessagesOptions;
 }
 

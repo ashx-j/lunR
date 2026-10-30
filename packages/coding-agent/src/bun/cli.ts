@@ -12,5 +12,4 @@ import { restoreSandboxEnv } from "./restore-sandbox-env.ts";
 restoreSandboxEnv();
 
 await import("../core/extensions/host-static.ts");
-await import("./register-bedrock.ts");
 await import("../cli.ts");

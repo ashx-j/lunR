@@ -70,8 +70,6 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - **Radius** (dynamic model gateway, requires OAuth, models come from the gateway)
 - **Any OpenAI-compatible API**: Ollama, vLLM, LM Studio, etc.
 
-The Azure OpenAI Responses, Vertex AI, Mistral and Amazon Bedrock APIs remain available for [custom providers](#custom-providers).
-
 ## Installation
 
 ```bash
@@ -306,7 +304,7 @@ const fresh = models.getModel('llamacpp', 'qwen3-30b');
 
 ## Auth
 
-Every provider owns its auth: how API keys resolve (stored credentials, environment variables, ambient sources like AWS profiles or gcloud ADC) and, where supported, OAuth login/refresh flows.
+Every provider owns its auth: how API keys resolve (stored credentials, environment variables) and, where supported, OAuth login/refresh flows.
 
 ### How Auth Resolves
 
@@ -1065,11 +1063,7 @@ Built-in API implementations live under `./api/<api-id>`:
 | `openai-completions` | `OpenAICompletionsOptions` |
 | `openai-responses` | `OpenAIResponsesOptions` |
 | `openai-codex-responses` | `OpenAICodexResponsesOptions` |
-| `azure-openai-responses` | `AzureOpenAIResponsesOptions` |
 | `google-generative-ai` | `GoogleOptions` |
-| `google-vertex` | `GoogleVertexOptions` |
-| `mistral-conversations` | `MistralOptions` |
-| `bedrock-converse-stream` | `BedrockOptions` |
 
 Importing an implementation module loads its SDK. The `./api/<id>.lazy` wrappers (used by the provider factories) defer that load to the first request when the runtime or bundler supports dynamic import chunking. Legacy raw API subpaths from older releases (`./anthropic`, `./google`, `./mistral`, `./openai-completions`, ...) were removed; use `@ashx-j/lunr-ai/api/<api-id>`.
 
@@ -1298,9 +1292,8 @@ const response = await models.complete(model, {
 
 Browser compatibility notes:
 
-- The Amazon Bedrock API (`bedrock-converse-stream`) is not supported in browser environments.
 - OAuth login flows are Node-only. They are lazy-loaded behind bundler-opaque imports, so registering an OAuth-capable provider does not pull Node-only code into a browser bundle — only actually logging in would.
-- Use a server-side proxy or backend service if you need Bedrock or OAuth-based auth from a web app.
+- Use a server-side proxy or backend service if you need OAuth-based auth from a web app.
 
 ## Bundling and Tree Shaking
 
@@ -1320,7 +1313,7 @@ Rules:
 - `@ashx-j/lunr-ai/providers/<provider>` imports that provider's catalog and lazy API wrapper only.
 - `@ashx-j/lunr-ai/providers/all` imports every built-in provider factory and all catalogs. Use it only when you want the full built-in set.
 - With code splitting, provider SDKs stay in lazy chunks and load on first request.
-- Without code splitting, bundlers fold reachable lazy API implementations into the single bundle. A single-provider bundle then includes that provider's SDK; `providers/all` includes all statically visible SDKs. Bedrock is the exception: its AWS SDK implementation is loaded through a bundler-opaque Node-only import.
+- Without code splitting, bundlers fold reachable lazy API implementations into the single bundle. A single-provider bundle then includes that provider's SDK; `providers/all` includes all statically visible SDKs.
 - Importing `@ashx-j/lunr-ai/api/<api-id>` directly loads that API implementation and its SDK immediately.
 
 Avoid `@ashx-j/lunr-ai/compat` in new bundled apps; it preserves the old global API and imports the full built-in catalog surface.
@@ -1334,17 +1327,6 @@ esbuild app.js --bundle --platform=node --format=esm \
 ```
 
 This is only for Node bundles; it is not a browser or Cloudflare Workers workaround.
-
-The Bedrock API is Node-only. In normal Node package usage and code-split bundles, it loads its AWS SDK implementation lazily. For a standalone single-file bundle that must include Bedrock support, register the implementation module explicitly:
-
-```typescript
-import { setBedrockProviderModule } from '@ashx-j/lunr-ai/api/bedrock-converse-stream.lazy';
-import { bedrockProviderModule } from '@ashx-j/lunr-ai/bedrock-provider';
-
-setBedrockProviderModule(bedrockProviderModule);
-```
-
-That explicit override bundles the AWS SDK. Without it, Bedrock's opaque runtime import expects the package's Bedrock implementation file to be available at runtime.
 
 ### Provider-Scoped Environment Overrides
 
