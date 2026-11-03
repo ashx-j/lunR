@@ -1,0 +1,1 @@
+{"liquid.auto":{"id":"liquid.auto","name":"Liquid Auto","api":"openai-completions","provider":"liquid","baseUrl":"https://router.inference.ai.exchange/v1","reasoning":true,"thinkingLevelMap":{"off":null,"minimal":null,"low":null,"medium":null},"input":["text","image"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":10000000,"maxTokens":1048576}}
