@@ -1,0 +1,1 @@
+{"z-ai/glm-5.3-free":{"id":"z-ai/glm-5.3-free","name":"GLM-5.3 (free)","api":"openai-completions","provider":"tokenrouter","baseUrl":"https://api.tokenrouter.com/v1","reasoning":true,"thinkingLevelMap":{"minimal":null,"medium":null,"max":"max","off":null},"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":1000000,"maxTokens":131072}}
