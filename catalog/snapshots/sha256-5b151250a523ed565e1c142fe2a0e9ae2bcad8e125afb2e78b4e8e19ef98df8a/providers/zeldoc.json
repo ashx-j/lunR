@@ -1,0 +1,1 @@
+{"zdev":{"id":"zdev","name":"ZDev","api":"openai-completions","provider":"zeldoc","baseUrl":"https://api.zeldoc.ai/v1","reasoning":true,"thinkingLevelMap":{"minimal":null,"medium":null,"max":"max","off":null},"input":["text","image"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":1000000,"maxTokens":131072}}
