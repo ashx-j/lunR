@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "sha256-6f5fee810f4f5d50c81173a4e35897abd35b0eb33ef39610738a06c0fccb30a0",
+  "revision": "sha256-357fb4675d81e786f60672ad7a516f881372a212942df26cc1c1b6f289267877",
   "providers": [
     "302ai",
     "abacus",
@@ -298,7 +298,7 @@
     "jalapeno": "0c7d25d9bcbd754eefaa9d0997e1751eee24f2e48005ece191fb9b6ed8d71f4e",
     "jiekou": "a2b9ec60b0e369a544638b01f96132e3cbc13ed5ed49304bd20f98ef78d1920d",
     "kenari": "daa272f42599c7049f258694874510e0bb6ca89ad259fcb590a5d61d16c933d6",
-    "kilo": "488f5d2bfaae11c0c46d1451b8b690db84d2a290f7f19d4bb91de50d6f85d6d2",
+    "kilo": "03d81325f71fc5ec5fd0658a7e9b409cdfa428e66d29612e672da928bca31002",
     "kimi-coding": "5bc0b00604a59e90b1dc56960293d51c152719bc78ac799ff3e08982108c0f91",
     "klokintegration": "4a666a30e33206e72d8f98996810ed6c602a53405b79d3092236d9b8711eb064",
     "kosmik": "360a86a2e6db2b4c0baa989b8d1789281d9e8763a2cebccf09a4aa2fd4de63c5",
@@ -332,7 +332,7 @@
     "munito": "fdd31108d4ec192fa153073d667d04021eb5f23d05715406f02d809f9741037c",
     "munito-eu": "d6a4ae9b6a8451d86de64689ecc62c4ba9d45e4b2d849d6742501f350fd87107",
     "nan": "0d65d03218e6ab7a86fb78947d8277bbb7e3bd83e28c2763bf505eb45817043a",
-    "nano-gpt": "f311b3fecfafa4ce0a70889b0e05959e19d30dbca13cf047634cab67bc40634d",
+    "nano-gpt": "f30b9c40556fd0f61cdbe23696a4dbc079bfa685615afb8ca32f580234803e82",
     "nearai": "73ce30f9a7beed6ef8a88ac014fda05184ced5dc011b31a34efbcd0fc9def04b",
     "nebius": "6745977fd979bdbfc5b12c5a6782119a16cb0cc325acd55ee03a1861ebb577a8",
     "neuralwatt": "037f324c844956bff594354c57e33a30742d2caab4d8de12a88eb4a1d08bd5ec",
@@ -346,7 +346,7 @@
     "opencode": "bef057a4f56e23870cf31d4930c04ee72b31c1c5ed378aaa76619c3bb976d307",
     "opencode-go": "5295e33fcee3d614b954f8fa73a95b6524b10f2833f605541b2517467547215d",
     "openreason": "25be981a7994c7705977fab6b6b12368a2c160527cc7085d974b9d559632febb",
-    "openrouter": "63ccc6752b7bbdfd421b2c968d9c415a5306727a9f8abc12cb93334f495cd622",
+    "openrouter": "b0a9795a3db8ba7e840d8c8969deb16f74ca8becd86b3b5293236ac6b9a04bef",
     "opper": "3c9c8c1253f44cea78cc0e1f4235f09b4a12f817fadeac046657da50643b0270",
     "orcarouter": "4aee208d8e77c09c6c15c656364e61e3d0773279b8f1b4eb2355f8b50475bb4e",
     "ovhcloud": "8d93e4872d249b553f70b0418d67dddeb4d7d3245e0806ad4c6fdb3ed2d958ba",
@@ -355,7 +355,7 @@
     "pioneer": "48c024443c94fcc07e323e2b91afddb9e09b801f51b931ea01dfe7c6de313c07",
     "poe": "826bd72ee7dde31786f592fc1ef9e4218ed1e2d29577629c557113717370ac5b",
     "poolside": "26fea3dcd1fcc218d46b01fd69e08fb7a8c5393439b98671ced3b98fc9025835",
-    "prime": "cb77b47b459887000b421737a2a4d96b9ed5c85ace3126621b4734642a8bf7f4",
+    "prime": "582265b70f21bda39941dad215b7db4e9657cc99dd3fc69dedf963be7be9869d",
     "privatemode-ai": "c0675681bd379378ed3861de0d1f5a4f18c643e9bbabce228f8e5cb84ce0429a",
     "qihang-ai": "17ac81209a338a7cb5dd82c5277f718c1587f1a6b2f33cb9473bb5f2eb671bd7",
     "qiniu-ai": "d281b32f109be772c52b12787a5996bc0a863b71c55fc31295ac1bcdaa85d518",
@@ -425,56 +425,56 @@
     "zenmux": "46cff8a6a64c9143e156b44753a70c29989cdcb1c46808772934b8592faf8417",
     "zhipuai": "004821062b96c622baafe3ec6afd32a693a1dff6db7dc47a62497712834e3ea5"
   },
-  "facts": "4cf2d25b236130ffa546233ef28a047a60053ec703b8dbfd60f48d4f6a8365f7",
+  "facts": "8072c4bb83b194eb2d82325f2369e51f12745da40b433fbb029c1282a45e8d78",
   "sources": [
     {
       "url": "https://ai-gateway.vercel.sh/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.768Z",
-      "digest": "a48c3f29ceae5e09401c9333c43d889a4307f48eb38614816a06e32e0ad1c143"
+      "fetchedAt": "2026-11-08T15:17:18.033Z",
+      "digest": "28016d7b5c804fb9cf5438a9c96d097ff6cc7c96a914fb00ca84a47ea849fc26"
     },
     {
       "url": "https://integrate.api.nvidia.com/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.646Z",
+      "fetchedAt": "2026-11-08T15:17:17.961Z",
       "digest": "6a5a78487b8921205fe1c4bc650450f6a930f7031a288a12cefaf5fea9d9bfb6"
     },
     {
       "url": "https://models.dev/api.json",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.857Z",
-      "digest": "c8803bb111bcefd375ccc8ce3cc6002b2e2e58b77c0f37212c0e0f4313e45e45",
+      "fetchedAt": "2026-11-08T15:17:18.110Z",
+      "digest": "2a0f87633dc767bacacb990d6411740deb3a132b5c8a00b56addf6ee88a12ad7",
       "quarantined": [
-        "melious",
-        "hyper"
+        "hyper",
+        "melious"
       ]
     },
     {
       "url": "https://opencode.ai/zen/go/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.724Z",
-      "digest": "5353c298538c65373aa0526efa797e3509e6a92e3b7a6546d73a607799967b4a"
+      "fetchedAt": "2026-11-08T15:17:17.973Z",
+      "digest": "3aa22f7a2ed873bbeaaa5effe637833a8a25145ada6b50a938e06c11cc95dd82"
     },
     {
       "url": "https://opencode.ai/zen/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.733Z",
-      "digest": "6ec090dd9502fcdc7d8229ebe90c4075ee1659085da7ee753fc3e92333ab4ada"
+      "fetchedAt": "2026-11-08T15:17:17.967Z",
+      "digest": "6ee0778d5112e7681b4e70c91f5fe7ff1c40d3f4c7b7ebc9dd7ef230f41c97b2"
     },
     {
       "url": "https://openrouter.ai/api/v1/models",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.585Z",
-      "digest": "1f9f9c55ba6b1c4e169110d87b5469d571c490dab7125919198aa2925af6663e"
+      "fetchedAt": "2026-11-08T15:17:17.915Z",
+      "digest": "7ec1f43da7f00873970448a6d1a4c2b6591c00f170462449dcaf899ab0cd8ee0"
     },
     {
       "url": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "status": "fresh",
-      "fetchedAt": "2026-11-08T07:25:48.739Z",
+      "fetchedAt": "2026-11-08T15:17:17.887Z",
       "digest": "ac7525d7f37096237b1c3be73434fd43101b94049dbedcfad2cd24b3053ad310"
     }
   ],
-  "generatedAt": "2026-11-08T07:26:04.960Z",
+  "generatedAt": "2026-11-08T15:17:35.934Z",
   "sourceCommit": "89f45856f8d1a4d022a8a9a34e9dea7955387b2c",
   "providerCount": 210,
   "modelCount": 6846
