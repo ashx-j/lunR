@@ -35,6 +35,8 @@ Live caches are scoped to provider, endpoint, and credential/account identity us
 
 ## Publication
 
+The workflow is disabled in GitHub since 2026-11-11, because lunR is no longer developed. The `model-catalog` branch keeps its last publication, and `gh workflow enable publish-model-catalog.yml` restarts it. The rest of this section describes the workflow while it runs.
+
 The hourly `publish-model-catalog.yml` workflow validates sources and publication contracts, then publishes data directly to the dedicated `model-catalog` branch. Application code still goes through normal review. Each publication has an immutable content-addressed snapshot, per-shard checksums, source fetch timestamps/status, and a manifest. Clients fetch the manifest and only the shards for providers with stored credentials; the old master-branch index remains a fallback during migration. Custom catalog mirrors retain the legacy index/shard format.
 
 Source requests have bounded retries and a last-good cache. An invalid schema reuses the source's cached data. A provider that drops more than 25% of at least ten models keeps its cached models while the rest of the source updates; a flat model list that shrinks that much falls back as a whole. Both appear in the workflow summary and the manifest's `sources[]` (`cached` status or a `quarantined` list). Other sources can still update. A first run without a valid source cache fails closed. The final bundle must contain at least 500 models and include Anthropic, OpenAI, Codex, and OpenRouter, with valid limits, inputs, and prices.

@@ -1,5 +1,7 @@
 # lunR
 
+No longer developed, 0.2.40 is the last release.
+
 A coding agent that runs in your terminal. You tell it what you want, and it reads, edits and runs the code in your project.
 
 lunR is built on [pi](https://github.com/badlogic/pi-mono). It adds the things pi leaves to extensions, like subagents, MCP, permission modes, scheduled prompts and a Telegram or Discord bot.
