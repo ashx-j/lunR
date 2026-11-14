@@ -1,22 +1,40 @@
 /**
  * First-run onboarding: the slim box InteractiveMode shows in place of the editor when no
- * provider credential is saved. Each choice hands off to the existing /login flow.
+ * provider credential is saved. Each choice hands off to the existing /login flow. After that
+ * first login the same box asks once for the default permission mode.
  */
 
 import type { CredentialInfo } from "@earendil-works/pi-ai";
 import { type Component, getKeybindings, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { LOCAL_SERVERS } from "../../../builtin-extensions/lunr-local-providers/local-servers.ts";
+import type { PermissionMode } from "../../../core/permissions.ts";
 import { theme } from "../theme/theme.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 import type { AuthSelectorProvider } from "./oauth-selector.ts";
 
 export type OnboardingChoice = "oauth" | "api_key" | "custom" | "skip";
 
-export interface OnboardingOption {
-	choice: OnboardingChoice;
+export interface OnboardingOption<Choice extends string = OnboardingChoice> {
+	choice: Choice;
 	label: string;
 	description: string;
 }
+
+/** The box's heading, the lines under it, and what Escape reports and says. */
+export interface OnboardingText<Choice extends string> {
+	heading: string;
+	lines: readonly string[];
+	cancel: { choice: Choice; hint: string };
+}
+
+export const WELCOME_TEXT: OnboardingText<OnboardingChoice> = {
+	heading: "Welcome to lunR",
+	lines: [
+		"lunR needs a model provider before it can do anything.",
+		"Pick how you want to sign in. You can add more later with /login.",
+	],
+	cancel: { choice: "skip", hint: "skip" },
+};
 
 /** Text wraps at this many columns even when the chat is wider; the borders follow the chat width. */
 const MAX_TEXT_WIDTH = 80;
@@ -40,6 +58,36 @@ export function shouldShowOnboarding(
 ): boolean {
 	return credentials.length === 0 && (!model || model.provider === "unknown");
 }
+
+/**
+ * Whether to ask for the default permission mode after a login: only on a launch that showed
+ * onboarding (no saved credential, no model), so profiles that already had a login never see it,
+ * and only while the profile has no saved `defaultPermissionMode`, so a saved choice is final.
+ */
+export function shouldAskPermissionMode(state: {
+	onboardingShown: boolean;
+	loggedIn: boolean;
+	savedDefault: unknown;
+}): boolean {
+	return state.onboardingShown && state.loggedIn && state.savedDefault === undefined;
+}
+
+/** "keep" is Escape: the profile keeps today's default and saves nothing. */
+export type PermissionModeChoice = PermissionMode | "keep";
+
+export const PERMISSION_MODE_STEP_TEXT: OnboardingText<PermissionModeChoice> = {
+	heading: "How should lunR handle changes?",
+	lines: ["Sessions start in this permission mode.", "Shift+Tab switches it, and /settings changes the default."],
+	cancel: { choice: "keep", hint: "keep yolo" },
+};
+
+/** One row per mode, in Shift+Tab order. */
+export const PERMISSION_MODE_OPTIONS: readonly OnboardingOption<PermissionMode>[] = [
+	{ choice: "yolo", label: "YOLO", description: "Runs every tool without asking" },
+	{ choice: "auto", label: "Auto", description: "A review model checks risky actions first" },
+	{ choice: "ask", label: "Ask", description: "Asks you before each change; reads run straight away" },
+	{ choice: "read-only", label: "Read", description: "Reads and searches only; blocks changes" },
+];
 
 /**
  * "A, B, C and more" when only some names are shown, or "A, B and C" when all are. No count, so
@@ -94,14 +142,20 @@ export function buildOnboardingOptions(
 	return options;
 }
 
-/** The onboarding box. Enter reports the highlighted choice; Escape reports "skip". */
-export class OnboardingComponent implements Component {
+/** The onboarding box. Enter reports the highlighted choice; Escape reports `text.cancel.choice`. */
+export class OnboardingComponent<Choice extends string = OnboardingChoice> implements Component {
 	private selectedIndex = 0;
-	private readonly options: readonly OnboardingOption[];
-	private readonly onSelect: (choice: OnboardingChoice) => void;
+	private readonly options: readonly OnboardingOption<Choice>[];
+	private readonly onSelect: (choice: Choice) => void;
+	private readonly text: OnboardingText<Choice>;
 
-	constructor(options: readonly OnboardingOption[], onSelect: (choice: OnboardingChoice) => void) {
+	constructor(
+		options: readonly OnboardingOption<Choice>[],
+		text: OnboardingText<Choice>,
+		onSelect: (choice: Choice) => void,
+	) {
 		this.options = options;
+		this.text = text;
 		this.onSelect = onSelect;
 	}
 
@@ -119,7 +173,7 @@ export class OnboardingComponent implements Component {
 			const selected = this.options[this.selectedIndex];
 			if (selected) this.onSelect(selected.choice);
 		} else if (kb.matches(keyData, "tui.select.cancel")) {
-			this.onSelect("skip");
+			this.onSelect(this.text.cancel.choice);
 		}
 	}
 
@@ -132,15 +186,14 @@ export class OnboardingComponent implements Component {
 		return [
 			border,
 			"",
-			...wrap(theme.fg("accent", theme.bold("Welcome to lunR"))),
+			...wrap(theme.fg("accent", theme.bold(this.text.heading))),
 			"",
-			...wrap(theme.fg("text", "lunR needs a model provider before it can do anything.")),
-			...wrap(theme.fg("text", "Pick how you want to sign in. You can add more later with /login.")),
+			...this.text.lines.flatMap((line) => wrap(theme.fg("text", line))),
 			"",
 			...pad(this.renderOptions(textWidth)),
 			"",
 			...wrap(
-				`${rawKeyHint("↑↓", "navigate")}  ${keyHint("tui.select.confirm", "select")}  ${keyHint("tui.select.cancel", "skip")}`,
+				`${rawKeyHint("↑↓", "navigate")}  ${keyHint("tui.select.confirm", "select")}  ${keyHint("tui.select.cancel", this.text.cancel.hint)}`,
 			),
 			"",
 			border,

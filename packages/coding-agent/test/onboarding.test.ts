@@ -4,7 +4,11 @@ import { KeybindingsManager } from "../src/core/keybindings.ts";
 import {
 	buildOnboardingOptions,
 	OnboardingComponent,
+	PERMISSION_MODE_OPTIONS,
+	PERMISSION_MODE_STEP_TEXT,
+	shouldAskPermissionMode,
 	shouldShowOnboarding,
+	WELCOME_TEXT,
 } from "../src/modes/interactive/components/onboarding.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -27,6 +31,24 @@ describe("shouldShowOnboarding", () => {
 
 	it("skips onboarding when a credential and a model exist", () => {
 		expect(shouldShowOnboarding(savedLogin, { provider: "anthropic", id: "claude-sonnet-4-5" })).toBe(false);
+	});
+});
+
+describe("shouldAskPermissionMode", () => {
+	it("does not ask before any login", () => {
+		expect(shouldAskPermissionMode({ onboardingShown: true, loggedIn: false, savedDefault: undefined })).toBe(false);
+	});
+
+	it("asks after the first login on a launch that started without credentials", () => {
+		expect(shouldAskPermissionMode({ onboardingShown: true, loggedIn: true, savedDefault: undefined })).toBe(true);
+	});
+
+	it("does not ask a profile that already saved a default mode", () => {
+		expect(shouldAskPermissionMode({ onboardingShown: true, loggedIn: true, savedDefault: "yolo" })).toBe(false);
+	});
+
+	it("does not ask an upgraded profile that had a login before this launch", () => {
+		expect(shouldAskPermissionMode({ onboardingShown: false, loggedIn: true, savedDefault: undefined })).toBe(false);
 	});
 });
 
@@ -67,7 +89,7 @@ describe("OnboardingComponent", () => {
 	];
 
 	it.each([80, 120])("renders the welcome box at %i columns", (width) => {
-		const lines = new OnboardingComponent(buildOnboardingOptions(providers), () => {}).render(width);
+		const lines = new OnboardingComponent(buildOnboardingOptions(providers), WELCOME_TEXT, () => {}).render(width);
 		const text = lines.map((line) => stripAnsi(line).trimEnd());
 
 		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
@@ -89,9 +111,43 @@ describe("OnboardingComponent", () => {
 		]);
 	});
 
+	it.each([80, 120])("renders the permission mode step at %i columns", (width) => {
+		const lines = new OnboardingComponent(PERMISSION_MODE_OPTIONS, PERMISSION_MODE_STEP_TEXT, () => {}).render(width);
+		const text = lines.map((line) => stripAnsi(line).trimEnd());
+
+		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+		expect(text.slice(1, 14)).toEqual([
+			"",
+			" How should lunR handle changes?",
+			"",
+			" Sessions start in this permission mode.",
+			" Shift+Tab switches it, and /settings changes the default.",
+			"",
+			" → YOLO  Runs every tool without asking",
+			"   Auto  A review model checks risky actions first",
+			"   Ask   Asks you before each change; reads run straight away",
+			"   Read  Reads and searches only; blocks changes",
+			"",
+			" ↑↓ navigate  enter select  escape/ctrl+c keep yolo",
+			"",
+		]);
+	});
+
+	it("reports the picked mode, and Escape keeps the current default", () => {
+		const onSelect = vi.fn();
+		const step = new OnboardingComponent(PERMISSION_MODE_OPTIONS, PERMISSION_MODE_STEP_TEXT, onSelect);
+
+		step.handleInput("j");
+		step.handleInput("j");
+		step.handleInput("\r");
+		step.handleInput("\x1b");
+
+		expect(onSelect.mock.calls).toEqual([["ask"], ["keep"]]);
+	});
+
 	it("reports the highlighted choice and treats Escape as skip", () => {
 		const onSelect = vi.fn();
-		const onboarding = new OnboardingComponent(buildOnboardingOptions(providers), onSelect);
+		const onboarding = new OnboardingComponent(buildOnboardingOptions(providers), WELCOME_TEXT, onSelect);
 
 		onboarding.handleInput("j");
 		onboarding.handleInput("\r");

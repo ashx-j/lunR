@@ -52,7 +52,7 @@ export interface LoginFlowHost {
 	updateAvailableProviderCount(): Promise<void>;
 	invalidateFooter(): void;
 	updateEditorBorderColor(): void;
-	/** Opens /model when the session still has no model and one is available to pick. */
+	/** Runs after every login: on first run asks for the default permission mode, then opens /model when the session still has no model and one is available to pick. */
 	openModelSelectorIfUnset(): Promise<void>;
 }
 

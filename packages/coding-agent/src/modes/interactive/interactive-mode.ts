@@ -160,7 +160,16 @@ import { InjectedPromptMessageComponent } from "./components/injected-prompt-mes
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
-import { buildOnboardingOptions, OnboardingComponent, shouldShowOnboarding } from "./components/onboarding.ts";
+import {
+	buildOnboardingOptions,
+	OnboardingComponent,
+	PERMISSION_MODE_OPTIONS,
+	PERMISSION_MODE_STEP_TEXT,
+	type PermissionModeChoice,
+	shouldAskPermissionMode,
+	shouldShowOnboarding,
+	WELCOME_TEXT,
+} from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -479,6 +488,9 @@ export class InteractiveMode {
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
+
+	// True after this launch showed onboarding, until the permission mode step has run.
+	private onboardingShown = false;
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
@@ -1125,6 +1137,7 @@ export class InteractiveMode {
 			else await this.warnIfModelHasNoAuth();
 			return;
 		}
+		this.onboardingShown = true;
 		await this.waitForDeferredBuiltins();
 		await this.session.modelRuntime.getAvailable();
 		// Leave a selector or dialog the user opened in the meantime (such as /login) alone.
@@ -1147,7 +1160,7 @@ export class InteractiveMode {
 	private showOnboarding(): void {
 		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
 		this.showSelector((done) => {
-			const onboarding = new OnboardingComponent(options, (choice) => {
+			const onboarding = new OnboardingComponent(options, WELCOME_TEXT, (choice) => {
 				done();
 				if (choice === "skip") {
 					this.showStatus("No provider yet. Run /login when you are ready.");
@@ -1161,6 +1174,33 @@ export class InteractiveMode {
 			});
 			return { component: onboarding, focus: onboarding };
 		});
+	}
+
+	/**
+	 * After the first login on a launch that showed onboarding, asks once for the default permission
+	 * mode and saves it. Escape saves nothing and keeps today's default; the next launch has a login,
+	 * so it is not asked again.
+	 */
+	private async askDefaultPermissionModeAfterFirstLogin(): Promise<void> {
+		const savedDefault = this.settingsManager.getGlobalSettings().defaultPermissionMode;
+		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, loggedIn: true, savedDefault })) return;
+		this.onboardingShown = false;
+		const choice = await new Promise<PermissionModeChoice>((resolve) => {
+			this.showSelector((done) => {
+				const step = new OnboardingComponent<PermissionModeChoice>(
+					PERMISSION_MODE_OPTIONS,
+					PERMISSION_MODE_STEP_TEXT,
+					(picked) => {
+						done();
+						resolve(picked);
+					},
+				);
+				return { component: step, focus: step };
+			});
+		});
+		if (choice === "keep") return;
+		this.settingsManager.setDefaultPermissionMode(choice);
+		this.permissions.applyPermissionMode(choice);
 	}
 
 	/** After a login, opens /model when the session still has no model and there is one to pick. */
@@ -5118,7 +5158,10 @@ export class InteractiveMode {
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
-			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
+			openModelSelectorIfUnset: async () => {
+				await this.askDefaultPermissionModeAfterFirstLogin();
+				await this.openModelSelectorIfUnset();
+			},
 		};
 	}
 

@@ -56,7 +56,7 @@ cd /path/to/project
 lunr
 ```
 
-If no provider is set up, lunR opens an onboarding screen at launch that walks you through `/login`.
+If no provider is set up, lunR opens an onboarding screen at launch that walks you through `/login`, then asks once which [permission mode](#permission-modes) new sessions start in. Escape keeps `yolo`.
 
 Authenticate with an API key:
 
