@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
+import { formatSize } from "../src/core/tools/truncate.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -234,6 +235,48 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("definitely not a png");
 			expect(result.content.some((c: any) => c.type === "image")).toBe(false);
+		});
+
+		it("describes a binary file in one line instead of returning its bytes", async () => {
+			const allBytes = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+			const files = {
+				"random.bin": Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 131 + 7) % 256)),
+				// Mostly text, with one binary stream: only the NUL rule catches it.
+				"doc.pdf": Buffer.concat([
+					Buffer.from("%PDF-1.4\n".repeat(400)),
+					allBytes,
+					Buffer.from("trailer text\n".repeat(400)),
+				]),
+			};
+			for (const [name, bytes] of Object.entries(files)) {
+				const file = join(testDir, name);
+				writeFileSync(file, bytes);
+				const output = getTextOutput(await readTool.execute(`test-call-${name}`, { path: file }));
+				expect(output).toBe(
+					`[${file} is a binary file (${formatSize(bytes.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`,
+				);
+			}
+		});
+
+		it("reads Latin-1 text and UTF-16 files with a BOM as text", async () => {
+			const utf16 = Buffer.from("hello utf16\n", "utf16le");
+			const files = {
+				"latin1.txt": [Buffer.from("café déjà vu\n".repeat(50), "latin1"), "d\uFFFDj\uFFFD vu"],
+				"le.txt": [Buffer.concat([Buffer.from([0xff, 0xfe]), utf16]), "hello utf16"],
+				"be.txt": [Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(utf16).swap16()]), "hello utf16"],
+			} as const;
+			for (const [name, [bytes, expected]] of Object.entries(files)) {
+				const file = join(testDir, name);
+				writeFileSync(file, bytes);
+				const output = getTextOutput(await readTool.execute(`test-call-${name}`, { path: file }));
+				expect(output).toContain(expected);
+			}
+		});
+
+		it("says a directory is a directory and points at ls", async () => {
+			await expect(readTool.execute("test-call-dir", { path: testDir })).rejects.toThrow(
+				`${testDir} is a directory. Use ls to list its contents.`,
+			);
 		});
 	});
 
