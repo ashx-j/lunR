@@ -47,16 +47,20 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		// Tool shells run detached, so the terminal's Ctrl+C reaches only lunR. Kill them here.
+		const signals: Array<[NodeJS.Signals, number]> = [
+			["SIGINT", 130],
+			["SIGTERM", 143],
+		];
 		if (process.platform !== "win32") {
-			signals.push("SIGHUP");
+			signals.push(["SIGHUP", 129]);
 		}
 
-		for (const signal of signals) {
+		for (const [signal, exitCode] of signals) {
 			const handler = () => {
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(exitCode);
 				});
 			};
 			process.on(signal, handler);
