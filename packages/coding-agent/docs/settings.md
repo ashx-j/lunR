@@ -183,7 +183,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 |---------|------|---------|-------------|
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows); supports a leading `~` for the home directory |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
-| `bashTimeoutSeconds` | number | `120` | Seconds before the agent's bash tool stops a command that passes no `timeout` of its own. Your `!` commands have no timeout |
+| `bashTimeoutSeconds` | number | `120` | Seconds before the agent's bash tool stops a command that passes no `timeout` of its own. `0` turns the default off; a negative or non-number value uses `120`. Your `!` commands have no timeout |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
 
 ```json

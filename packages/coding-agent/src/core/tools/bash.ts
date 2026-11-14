@@ -207,7 +207,7 @@ export interface BashToolOptions {
 	shellPath?: string;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
-	/** Timeout in seconds for calls that pass none. Default: DEFAULT_BASH_TIMEOUT_SECONDS */
+	/** Timeout in seconds for calls that pass none; 0 means none. Default: DEFAULT_BASH_TIMEOUT_SECONDS */
 	defaultTimeout?: number;
 }
 
@@ -341,11 +341,16 @@ export function createBashToolDefinition(
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
-	const defaultTimeout = options?.defaultTimeout ?? DEFAULT_BASH_TIMEOUT_SECONDS;
+	// Capped at setTimeout's limit so a huge setting cannot make every call fail validation.
+	const defaultTimeout = Math.min(options?.defaultTimeout ?? DEFAULT_BASH_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS);
+	const timeoutText =
+		defaultTimeout > 0
+			? `Commands are stopped after ${defaultTimeout} seconds unless you pass a larger timeout in seconds.`
+			: "Commands have no default timeout; pass a timeout in seconds to limit one.";
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command. Each call starts a new shell in the session working directory, so cd and exported variables do not carry over to the next call. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Commands are stopped after ${defaultTimeout} seconds unless you pass a larger timeout in seconds.`,
+		description: `Execute a bash command. Each call starts a new shell in the session working directory, so cd and exported variables do not carry over to the next call. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. ${timeoutText}`,
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
 		parameters: bashSchema,
 		async execute(
@@ -448,7 +453,7 @@ export function createBashToolDefinition(
 					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
 						onData: handleData,
 						signal,
-						timeout: timeout ?? defaultTimeout,
+						timeout: timeout ?? (defaultTimeout > 0 ? defaultTimeout : undefined),
 						env: spawnContext.env,
 					});
 					exitCode = result.exitCode;

@@ -453,6 +453,16 @@ describe("SettingsManager", () => {
 			}
 		});
 
+		it("reads bashTimeoutSeconds as given, 0 as off, and anything invalid as unset", () => {
+			const read = (value: unknown) =>
+				SettingsManager.inMemory(JSON.parse(JSON.stringify({ bashTimeoutSeconds: value }))).getBashTimeoutSeconds();
+			expect(read(30)).toBe(30);
+			expect(read(0)).toBe(0);
+			expect(read(-5)).toBeUndefined();
+			expect(read("x")).toBeUndefined();
+			expect(SettingsManager.inMemory().getBashTimeoutSeconds()).toBeUndefined();
+		});
+
 		it("should resolve editor commands by precedence", () => {
 			setEditorEnv("vim", "nano");
 			expect(SettingsManager.inMemory({ externalEditor: "code --wait" }).getExternalEditorCommand()).toBe(

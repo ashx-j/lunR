@@ -169,7 +169,7 @@ export interface Settings {
 	subagentSpinner?: SubagentSpinnerName; // default: "braille" - running child indicator
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
-	bashTimeoutSeconds?: number; // default: 120 - bash tool timeout when the call passes none
+	bashTimeoutSeconds?: number; // default: 120 - bash tool timeout when the call passes none; 0 turns it off
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
@@ -1398,8 +1398,13 @@ export class SettingsManager {
 		return this.settings.shellCommandPrefix;
 	}
 
+	/**
+	 * The bash tool's default timeout in seconds, or 0 for none. Undefined for a missing or
+	 * invalid value (negative, not a number), so the tool falls back to its own 120 s default.
+	 */
 	getBashTimeoutSeconds(): number | undefined {
-		return this.settings.bashTimeoutSeconds;
+		const value = this.settings.bashTimeoutSeconds;
+		return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 	}
 
 	setShellCommandPrefix(prefix: string | undefined): void {

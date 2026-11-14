@@ -504,6 +504,21 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
+		it("passes no timeout and does not claim one when the default is off", async () => {
+			const timeouts: Array<number | undefined> = [];
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { timeout }) => {
+					timeouts.push(timeout);
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations, defaultTimeout: 0 });
+			await bash.execute("test-call-no-default-timeout", { command: "true" });
+			expect(timeouts).toEqual([undefined]);
+			expect(bash.description).toContain("Commands have no default timeout");
+			expect(bash.description).not.toContain("stopped after");
+		});
+
 		it("runs commands with editors, pagers and git prompts disabled", async () => {
 			const result = await bashTool.execute("test-call-env", {
 				command: 'echo "$GIT_EDITOR $GIT_TERMINAL_PROMPT $GIT_PAGER $PAGER"',
