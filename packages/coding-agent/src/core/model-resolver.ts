@@ -335,12 +335,43 @@ export async function resolveModelScopeWithDiagnostics(
 	return { scopedModels, diagnostics };
 }
 
-export async function resolveModelScope(patterns: string[], modelRuntime: ModelRuntime): Promise<ScopedModel[]> {
-	const { scopedModels, diagnostics } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime);
-	for (const diagnostic of diagnostics) {
-		console.warn(chalk.yellow(`Warning: ${diagnostic.message}`));
+/**
+ * Scope patterns whose provider has no credential left, such as `openai-codex/gpt-6` after
+ * `/logout openai-codex`. Only `provider/...` patterns for a registered provider count, so bare model ids,
+ * globs like `*sonnet*` and providers an extension has not registered yet always stay.
+ */
+export async function findSignedOutScopePatterns(
+	patterns: readonly string[],
+	modelRuntime: Pick<ModelRuntime, "getProvider" | "checkAuth">,
+): Promise<string[]> {
+	const signedOut = new Map<string, boolean>();
+	const result: string[] = [];
+	for (const pattern of patterns) {
+		const slash = pattern.indexOf("/");
+		if (slash <= 0) continue;
+		const providerId = pattern.slice(0, slash);
+		let isSignedOut = signedOut.get(providerId);
+		if (isSignedOut === undefined) {
+			isSignedOut = !!modelRuntime.getProvider(providerId) && !(await modelRuntime.checkAuth(providerId));
+			signedOut.set(providerId, isSignedOut);
+		}
+		if (isSignedOut) result.push(pattern);
 	}
-	return scopedModels;
+	return result;
+}
+
+/**
+ * Narrows an app's model list to the scoped models it contains, plus the current model so it stays
+ * selected. With no scoped model in the list, every model stays, like `/model` without a scope.
+ */
+export function narrowToScope<T extends Model<Api>>(
+	available: readonly T[],
+	scopedModels: readonly { model: Model<Api> }[],
+	current: Model<Api> | undefined,
+): readonly T[] {
+	const inScope = (model: T) => scopedModels.some((scoped) => modelsAreEqual(scoped.model, model));
+	if (!available.some(inScope)) return available;
+	return available.filter((model) => inScope(model) || modelsAreEqual(model, current));
 }
 
 export interface ResolveCliModelResult {

@@ -4,7 +4,7 @@ import { AssistantMessageComponent } from "../src/modes/interactive/components/a
 import { THINKING_TAIL_LINES } from "../src/modes/interactive/components/thinking-tail.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { sliceMessageContent } from "../src/modes/interactive/smooth-streaming.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -120,6 +120,48 @@ describe("AssistantMessageComponent", () => {
 		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
 	});
 
+	test("wrapped reply text hangs under the bullet", () => {
+		initTheme("moon");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "text", text: `${"word ".repeat(30).trim()}\n\nsecond paragraph` }]),
+		);
+		const lines = component.render(40).map((line) => stripAnsi(line).trimEnd());
+		const first = lines.findIndex((line) => line.startsWith(" ● word"));
+
+		expect(first).toBeGreaterThanOrEqual(0);
+		expect(lines[first + 1]).toMatch(/^ {3}word/);
+		expect(lines).toContain("   second paragraph");
+	});
+
+	test("a provider error shows its message and a /login hint, and a click shows the raw body", () => {
+		initTheme("moon");
+
+		const raw = '401: {"error":{"message":"Incorrect API key provided: bad","type":"invalid_request_error"}}';
+		const component = new AssistantMessageComponent({
+			...createAssistantMessage([], { stopReason: "error" }),
+			errorMessage: raw,
+		});
+		const collapsed = stripAnsi(component.render(100).join("\n"));
+		expect(collapsed).toContain("Error: 401: Incorrect API key provided: bad");
+		expect(collapsed).toContain("Run /login openai");
+		expect(collapsed).not.toContain('{"error"');
+
+		const y = component.render(100).findIndex((line) => stripAnsi(line).includes("Error:"));
+		expect(component.handleClick(y, 100)).toBe(true);
+		expect(stripAnsi(component.render(100).join("\n"))).toContain('{"error"');
+	});
+
+	test("an aborted reply is a dim status, not an error", () => {
+		initTheme("moon");
+
+		const component = new AssistantMessageComponent(createAssistantMessage([], { stopReason: "aborted" }));
+		const rendered = component.render(80).join("\n");
+
+		expect(stripAnsi(rendered)).toContain("Operation aborted");
+		expect(rendered).not.toContain(theme.fg("error", "Operation aborted"));
+	});
+
 	test("uses configured output padding for user messages", () => {
 		initTheme("moon");
 
@@ -166,7 +208,7 @@ describe("AssistantMessageComponent", () => {
 		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered).not.toContain("✻ Thought");
+		expect(rendered).toContain("✻ Thought");
 		expect(rendered).toContain("First sentence of reasoning. More detail follows here.");
 	});
 

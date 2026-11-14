@@ -1,6 +1,6 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ACP_SCHEDULING_DISABLED } from "../../../../modes/acp/policy.ts";
 import { SUBAGENT_ASYNC_GUIDANCE } from "../shared/async-guidance.ts";
 import type { ExtensionConfig, ToolDescriptionMode } from "../shared/types.ts";
 import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
@@ -9,10 +9,13 @@ const CUSTOM_TOOL_DESCRIPTION_FILE = "subagent-tool-description.md";
 const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 
 export const SUBAGENT_TIER_GUIDANCE = `TIER SELECTION:
-• Choose the lowest tier that can reliably complete the task.
-• light: Use for simple, straightforward tasks that require little reasoning. Good for quick checks, finding information, collecting facts for research, inspecting a small amount of code, or verifying a specific fact.
-• standard: Use for moderately difficult work and everyday coding tasks. Good for writing simple code, fixing a clearly described bug, reviewing a focused change, or completing work with clear requirements. Use heavy when the task requires deep architectural understanding or complex reasoning.
-• heavy: Use for complex or ambiguous tasks that require deep reasoning and strong code understanding. Good for implementing complex plans, debugging difficult or poorly understood problems, reviewing large or high-risk changes, and making architectural decisions.`;
+• Choose the tier for the child's specific assignment, not the size or importance of the overall project.
+• light: Use for bounded lookups, fact gathering, small code inspections, and straightforward verification.
+• standard: Default for implementation, debugging, testing, research synthesis, planning, and focused code review. Standard can handle multi-file changes and unfamiliar code when the assignment has a clear goal.
+• heavy: Reserve for tasks whose central difficulty requires reasoning across tightly coupled systems, resolving conflicting architectural constraints, diagnosing subtle concurrency or state bugs, or adversarial analysis of security-critical behavior.
+• Before choosing heavy, identify the specific difficulty that makes standard insufficient. Task length, file count, unfamiliarity, importance, or the words "review" and "architecture" are not enough by themselves.
+• When uncertain between standard and heavy, choose standard. Use heavy upfront when the difficulty is already clear; do not require a failed standard attempt.
+• If standard gets blocked, distinguish missing context, unavailable tools, and unclear requirements from a reasoning limitation. Escalate for the reasoning limitation, passing along findings rather than restarting the investigation.`;
 
 export const SUBAGENT_COORDINATION_GUIDANCE = "Define file ownership, local decision authority, and required outputs at launch. Establish shared contracts before dependent parallel work; use chains and artifacts to pass results. When enabled, native child intercom reaches the supervisor only, not siblings. Reserve parent relays for actionable exceptions, not routine progress or implementation approvals.";
 
@@ -30,6 +33,13 @@ ${SUBAGENT_TIER_GUIDANCE}
 • When Subagent communication is off in /settings, child contact and parent questions/steering are unavailable; final results and subagent_wait still work.
 • Artifacts/status essentials: chain outputs live under {chain_dir}; async runs expose asyncId/asyncDir with status.json, events.jsonl, output logs, and status via { action: "status", id }. Include output paths and residual risks when reporting results.`;
 
+const SCHEDULE_GUIDANCE = `SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
+• { action: "schedule", task, description, tier|model, thinking?, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
+• { action: "schedule-list" } - list scheduled runs for this session
+• { action: "schedule-status", id: "..." } - inspect one scheduled run
+• { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires`;
+const COMPACT_SCHEDULE_GUIDANCE = "• Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.";
+
 export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to generic children by prompting them directly. There are no named agent types.
 
 EXECUTION (use exactly ONE mode):
@@ -37,7 +47,7 @@ EXECUTION (use exactly ONE mode):
 • PARALLEL: { tasks: [{task, description, tier|model, thinking?, permissions?, count?, output?, reads?, progress?}, ...], concurrency?: number, worktree?: true } — one-call concurrent execution (default: all tasks at once; worktree: isolate each task in a git worktree)
 • CHAIN: { chain: [{task, description, tier|model, thinking?, permissions?}, {parallel:[{task, description, tier|model, thinking?, permissions?, count:3}]}] } — sequential pipeline with optional parallel fan-out. Use chain when a later child needs an earlier result.
 • description is required, single-line, max 80 characters. It is UI metadata only. task is the complete child prompt.
-• permissions: "full" (default) or "read-only". Full includes coding tools (read, search, shell, edit, write, web, LSP, MCP) and excludes parent-owned tools (cron, memory, behavior, goals, nested subagents). Read-only parents may launch only permissions: "read-only".
+• permissions: "full" (default) or "read-only". Full includes coding tools (read, search, shell, edit, write, web, LSP, MCP) and excludes parent-owned tools (computer use, cron, pr_watch, memory, present_plan, goals, nested subagent and subagent_wait). Read-only parents may launch only permissions: "read-only".
 • Model selection: pass tier by default ("light"|"standard"|"heavy"). Pass model: "provider/id" only when the user specifies a model. Exactly one of tier or model. Optional thinking only with model; tier uses configured thinking. Direct model launches do not require tier mode to be enabled. No inherit and no silent fallback for an explicit model.
 • Children always start with a fresh session (no inherited parent transcript).
 • Optional timeout: { timeoutMs } or { maxRuntimeMs } sets a run-level max runtime for foreground and async/background runs
@@ -48,7 +58,7 @@ CHAIN TEMPLATE VARIABLES (use in task and description strings):
 • {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-subagents-<scope>/chain-runs/abc123/)
 
 CHAIN EXAMPLES:
-• Sequential: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {task:"Plan based on {previous}", description:"Draft plan", tier:"heavy"}] }
+• Sequential: { chain: [{task:"Analyze {task}", description:"Analyze request", tier:"standard"}, {task:"Plan based on {previous}", description:"Draft plan", tier:"standard"}] }
 • Parallel fan-out: { chain: [{parallel: [{task:"Check part of {task}", description:"Check one part", tier:"light", permissions:"read-only", count: 3}]}] }
 • Mixed: { chain: [{task:"Research {task}", description:"Research request", tier:"standard", permissions:"read-only"}, {parallel: [{task:"Review {previous}", description:"Review findings", tier:"light", permissions:"read-only", count: 2}]}, {task:"Summarize {previous}", description:"Summarize reviews", tier:"standard"}] }
 
@@ -65,11 +75,7 @@ CONTROL (use action field, omit task/chain/tasks):
 • subagent_wait({ questionId }) - wait for that supervisor question answer/expiry/cancel. Answers stay separate from final run results.
 • { action: "append-step", id: "...", chain: [{task:"Use {previous}", description:"Follow-up step", tier:"standard"}] } - append one step to the tail of a running async chain
 
-SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
-• { action: "schedule", task, description, tier|model, thinking?, permissions?, schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a child launch until a future time. Also accepts tasks[] or chain[]. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
-• { action: "schedule-list" } - list scheduled runs for this session
-• { action: "schedule-status", id: "..." } - inspect one scheduled run
-• { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires
+${SCHEDULE_GUIDANCE}
 
 DIAGNOSTICS:
 • { action: "doctor" } - read-only report for runtime paths, sessions, and intercom
@@ -91,7 +97,7 @@ ${SUBAGENT_TIER_GUIDANCE}
 CONTROL:
 • Use action without execution fields: doctor, watchdog.status, watchdog.check, watchdog.recommend-model, status, interrupt, stop, resume, steer, append-step.
 • Async control actions: status, interrupt, stop, resume, steer, append-step. Use stop with an id for current-session top-level async runs. Use status view:"fleet" for active-run overview, view:"transcript" to tail child output, and steer for acknowledged live guidance. Steering delivery means lunR accepted the correlated user input, not model compliance; use index for a specific child.
-• Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
+${COMPACT_SCHEDULE_GUIDANCE}
 
 ASYNC / WAIT:
 • ${SUBAGENT_ASYNC_GUIDANCE}
@@ -110,6 +116,7 @@ function warn(options: ToolDescriptionOptions | undefined, message: string): voi
 }
 
 export interface ToolDescriptionOptions {
+	schedulingDisabled?: boolean;
 	cwd?: string;
 	agentDir?: string;
 	warn?: (message: string) => void;
@@ -217,6 +224,13 @@ export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "tool
 		}
 	} else {
 		description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+	}
+	if (options?.schedulingDisabled) {
+		description = description
+			.replaceAll(SCHEDULE_GUIDANCE, "")
+			.replaceAll(COMPACT_SCHEDULE_GUIDANCE, "")
+			.replaceAll("/schedule*", "");
+		return `${description.trim()}\n\n${ACP_SCHEDULING_DISABLED}`;
 	}
 	return description;
 }

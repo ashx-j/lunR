@@ -1,24 +1,17 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
-const packageJsonFiles = [];
-
-function collectPackageJsonFiles(directory) {
-	for (const entry of readdirSync(directory, { withFileTypes: true })) {
-		if (entry.isDirectory()) {
-			if (!ignoredDirectories.has(entry.name)) {
-				collectPackageJsonFiles(join(directory, entry.name));
-			}
-			continue;
-		}
-
-		if (entry.isFile() && entry.name === "package.json") {
-			packageJsonFiles.push(join(directory, entry.name));
-		}
-	}
+export function trackedManifests(root) {
+	return execFileSync("git", ["ls-files", "-z", "--", "package.json", ":(glob)**/package.json"], {
+		cwd: root,
+		encoding: "utf8",
+	})
+		.split("\0")
+		.filter(Boolean);
 }
 
 function isInternalWorkspaceDependency(name) {
@@ -37,27 +30,32 @@ function getVersionSpecifier(specifier) {
 	return aliasTarget.slice(versionSeparator + 1);
 }
 
-const failures = [];
+export function checkPinnedDependencies(root, packageJsonFiles = trackedManifests(root)) {
+	const failures = [];
 
-collectPackageJsonFiles(".");
+	for (const file of packageJsonFiles.sort()) {
+		const packageJson = JSON.parse(readFileSync(join(root, file), "utf8"));
 
-for (const file of packageJsonFiles.sort()) {
-	const packageJson = JSON.parse(readFileSync(file, "utf8"));
+		for (const section of dependencySections) {
+			const dependencies = packageJson[section];
+			if (!dependencies) continue;
 
-	for (const section of dependencySections) {
-		const dependencies = packageJson[section];
-		if (!dependencies) continue;
-
-		for (const [name, specifier] of Object.entries(dependencies)) {
-			if (isInternalWorkspaceDependency(name) || isNonRegistrySpecifier(specifier)) continue;
-			if (exactVersionPattern.test(getVersionSpecifier(specifier))) continue;
-			failures.push(`${file}: ${section}.${name} must be pinned, found ${specifier}`);
+			for (const [name, specifier] of Object.entries(dependencies)) {
+				if (isInternalWorkspaceDependency(name) || isNonRegistrySpecifier(specifier)) continue;
+				if (exactVersionPattern.test(getVersionSpecifier(specifier))) continue;
+				failures.push(`${file}: ${section}.${name} must be pinned, found ${specifier}`);
+			}
 		}
 	}
+
+	return failures;
 }
 
-if (failures.length > 0) {
-	console.error("Direct external dependencies must use exact versions:");
-	for (const failure of failures) console.error(`  ${failure}`);
-	process.exit(1);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	const failures = checkPinnedDependencies(process.cwd());
+	if (failures.length > 0) {
+		console.error("Direct external dependencies must use exact versions:");
+		for (const failure of failures) console.error(`  ${failure}`);
+		process.exit(1);
+	}
 }

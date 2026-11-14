@@ -1,14 +1,14 @@
 // @ts-nocheck
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, enqueueStepSteer, steerAcksDir, steerCapabilityPath, stepSteerInboxDir, watchAsyncControlInbox, type SteerAck, type SteerCapability, type SteerRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
-import { PI_CODING_AGENT_PACKAGE, getPiSpawnCommand, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
+import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, injectSingleOutputInstruction, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	type ActivityState,
@@ -61,7 +61,7 @@ import {
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { resolveChildExcludeTools } from "../shared/child-tools.ts";
-import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
+import { outputEntryFromAsyncResult, resolveOutputReferences, withChainHandoff } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
@@ -82,7 +82,7 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
-import { parseSessionTokens } from "../../shared/session-tokens.ts";
+import { parseSessionRequests, parseSessionUsage, sessionUsageDelta, tokenUsageFromUsage } from "../../shared/session-tokens.ts";
 import type { TokenUsage } from "../../shared/types.ts";
 import {
 	cleanupWorktrees,
@@ -103,6 +103,7 @@ import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudget
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
+import { createChildEventDecoder } from "../../../../../core/subagent-event-transport.ts";
 import { acquireSessionLease, type SessionLeaseRequest } from "../shared/session-lease.ts";
 import {
 	CHILD_WATCHDOG_CONFIG_ENV,
@@ -125,7 +126,6 @@ interface SubagentRunConfig {
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig?: Partial<ArtifactConfig>;
-	share?: boolean;
 	sessionDir?: string;
 	asyncDir: string;
 	sessionId?: string | null;
@@ -269,7 +269,7 @@ function findLatestSessionFile(sessionDir: string): string | null {
 			.filter((f) => f.endsWith(".jsonl"))
 			.map((f) => path.join(sessionDir, f));
 		if (files.length === 0) return null;
-		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs || b.localeCompare(a));
 		return files[0] ?? null;
 	} catch {
 		// Session lookup is optional metadata.
@@ -278,19 +278,16 @@ function findLatestSessionFile(sessionDir: string): string | null {
 }
 
 function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
 function tokenUsageFromAttempts(attempts: ModelAttempt[] | undefined): TokenUsage | null {
-	if (!attempts || attempts.length === 0) return null;
-	let input = 0;
-	let output = 0;
-	for (const attempt of attempts) {
-		input += attempt.usage?.input ?? 0;
-		output += attempt.usage?.output ?? 0;
+	if (!attempts?.some((attempt) => attempt.usage)) return null;
+	const usage = emptyUsage();
+	for (const attempt of attempts) if (attempt.usage) {
+		for (const key of Object.keys(usage) as Array<keyof Usage>) usage[key] += attempt.usage[key] ?? 0;
 	}
-	const total = input + output;
-	return total > 0 ? { input, output, total } : null;
+	return tokenUsageFromUsage(usage);
 }
 
 function costSummaryFromAttempts(attempts: ModelAttempt[] | undefined): CostSummary | undefined {
@@ -299,7 +296,7 @@ function costSummaryFromAttempts(attempts: ModelAttempt[] | undefined): CostSumm
 	let outputTokens = 0;
 	let costUsd = 0;
 	for (const attempt of attempts) {
-		inputTokens += attempt.usage?.input ?? 0;
+		inputTokens += (attempt.usage?.input ?? 0) + (attempt.usage?.cacheRead ?? 0) + (attempt.usage?.cacheWrite ?? 0);
 		outputTokens += attempt.usage?.output ?? 0;
 		costUsd += attempt.usage?.cost ?? 0;
 	}
@@ -342,6 +339,8 @@ interface ChildEventContext {
 }
 
 interface ChildUsage {
+	measurement?: "reported" | "partial" | "estimated" | "unknown";
+	costSource?: "reported" | "estimated" | "unknown";
 	input?: number;
 	inputTokens?: number;
 	output?: number;
@@ -479,11 +478,14 @@ function runPiStreaming(
 			else transcriptWriter?.writeStderrLine(line);
 		};
 
+		const decodeChildEvent = createChildEventDecoder();
 		const processStdoutLine = (line: string) => {
 			if (!line.trim()) return;
 			let event: ChildEvent;
 			try {
-				event = JSON.parse(line) as ChildEvent;
+				const assembled = decodeChildEvent(line);
+				if (assembled === undefined) return;
+				event = JSON.parse(assembled) as ChildEvent;
 			} catch {
 				rawStdoutTail.push(`${line}\n`);
 				writeOutputLine(line);
@@ -550,6 +552,9 @@ function runPiStreaming(
 					usage.cacheRead += eventUsage.cacheRead ?? 0;
 					usage.cacheWrite += eventUsage.cacheWrite ?? 0;
 					usage.cost += eventUsage.cost?.total ?? 0;
+					usage.unknownRequests += Number(eventUsage.measurement === "unknown");
+					usage.partialRequests += Number(eventUsage.measurement === "partial");
+					usage.unknownCosts += Number(eventUsage.costSource === "unknown");
 				}
 				if (isTerminalAssistantStop(event.message)) {
 					if (!event.message.errorMessage && extractTextFromContent(event.message.content).trim()) assistantError = undefined;
@@ -805,52 +810,6 @@ function runPiStreaming(
 	});
 }
 
-function resolvePiPackageRootFallback(): string {
-	const root = resolveInstalledPiPackageRoot();
-	if (root) return root;
-	throw new Error(`Could not resolve ${PI_CODING_AGENT_PACKAGE} package root`);
-}
-
-async function exportSessionHtml(sessionFile: string, outputDir: string, piPackageRoot?: string): Promise<string> {
-	const pkgRoot = piPackageRoot ?? resolvePiPackageRootFallback();
-	const exportModulePath = path.join(pkgRoot, "dist", "core", "export-html", "index.js");
-	const moduleUrl = pathToFileURL(exportModulePath).href;
-	const mod = await import(moduleUrl);
-	const exportFromFile = (mod as { exportFromFile?: (inputPath: string, options?: { outputPath?: string }) => string })
-		.exportFromFile;
-	if (typeof exportFromFile !== "function") {
-		throw new Error("exportFromFile not available");
-	}
-	const outputPath = path.join(outputDir, `${path.basename(sessionFile, ".jsonl")}.html`);
-	return exportFromFile(sessionFile, { outputPath });
-}
-
-function createShareLink(htmlPath: string): { shareUrl: string; gistUrl: string } | { error: string } {
-	try {
-		const auth = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-		if (auth.status !== 0) {
-			return { error: "GitHub CLI is not logged in. Run 'gh auth login' first." };
-		}
-	} catch {
-		return { error: "GitHub CLI (gh) is not installed." };
-	}
-
-	try {
-		const result = spawnSync("gh", ["gist", "create", htmlPath], { encoding: "utf-8" });
-		if (result.status !== 0) {
-			const err = (result.stderr || "").trim() || "Failed to create gist.";
-			return { error: err };
-		}
-		const gistUrl = (result.stdout || "").trim();
-		const gistId = gistUrl.split("/").pop();
-		if (!gistId) return { error: "Failed to parse gist ID." };
-		const shareUrl = `https://shittycodingagent.ai/session/?${gistId}`;
-		return { shareUrl, gistUrl };
-	} catch (err) {
-		return { error: String(err) };
-	}
-}
-
 function formatDuration(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
@@ -876,8 +835,6 @@ function writeRunLog(
 		truncated: boolean;
 		artifactsDir?: string;
 		sessionFile?: string;
-		shareUrl?: string;
-		shareError?: string;
 	},
 ): void {
 	const lines: string[] = [];
@@ -889,8 +846,6 @@ function writeRunLog(
 	lines.push(`- **Ended:** ${new Date(input.endedAt).toISOString()}`);
 	lines.push(`- **Duration:** ${formatDuration(input.endedAt - input.startedAt)}`);
 	if (input.sessionFile) lines.push(`- **Session:** ${input.sessionFile}`);
-	if (input.shareUrl) lines.push(`- **Share:** ${input.shareUrl}`);
-	if (input.shareError) lines.push(`- **Share error:** ${input.shareError}`);
 	if (input.artifactsDir) lines.push(`- **Artifacts:** ${input.artifactsDir}`);
 	lines.push("");
 	lines.push("## Steps");
@@ -915,6 +870,7 @@ function writeRunLog(
 interface SingleStepContext {
 	supervisorSessionId?: string;
 	previousOutput: string;
+	handoffToNext?: boolean;
 	outputs?: ChainOutputMap;
 	placeholder: string;
 	cwd: string;
@@ -974,6 +930,8 @@ export async function runSingleStep(
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
 	sessionFile?: string;
+	receiptUsage?: Usage;
+	usageRequests?: import("../../../../../core/usage-accounting.ts").AccountedRequest[];
 	intercomTarget?: string;
 	completionGuardTriggered?: boolean;
 	structuredOutput?: unknown;
@@ -1037,6 +995,8 @@ export async function runSingleStep(
 				model: imported.model,
 				attemptedModels: imported.attemptedModels,
 				modelAttempts: imported.modelAttempts,
+				receiptUsage: imported.usage,
+				usageRequests: imported.usageRequests,
 				totalCost: imported.totalCost,
 				structuredOutput: timedOut || stopped ? undefined : imported.structuredOutput,
 				structuredOutputPath: timedOut || stopped ? undefined : imported.structuredOutputPath,
@@ -1060,6 +1020,7 @@ export async function runSingleStep(
 		const acceptancePrompt = formatAcceptancePrompt(step.effectiveAcceptance);
 		if (acceptancePrompt) task = `${task}\n${acceptancePrompt}`;
 	}
+	task = withChainHandoff(task, ctx.handoffToNext === true);
 	const sessionEnabled = Boolean(step.sessionFile) || ctx.sessionEnabled;
 	const sessionDir = step.sessionFile ? undefined : ctx.sessionDir;
 
@@ -1092,6 +1053,7 @@ export async function runSingleStep(
 			: [undefined];
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
+	const priorRequestIds = new Set(parseSessionRequests(step.sessionFile ?? sessionDir).map((request) => request.id));
 	const attemptNotes: string[] = [];
 	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
 	let finalResult: RunPiStreamingResult | undefined;
@@ -1165,7 +1127,9 @@ export async function runSingleStep(
 			childWatchdog,
 			waitToolEnabled: step.waitToolEnabled,
 			parentPermissionMode,
+			parentAutoReview: step.parentAutoReview,
 		});
+		const usageBeforeAttempt = parseSessionUsage(step.sessionFile ?? sessionDir);
 		const run = await runPiStreaming(
 			args,
 			step.cwd ?? ctx.cwd,
@@ -1185,6 +1149,9 @@ export async function runSingleStep(
 			ctx.registerTurnBudgetAbort,
 			ctx.onWriterProcess,
 		);
+		const persistedUsage = parseSessionUsage(step.sessionFile ?? sessionDir);
+		if (persistedUsage) run.usage = sessionUsageDelta(persistedUsage, usageBeforeAttempt);
+
 		if (run.turnBudget) turnBudget = run.turnBudget;
 		else if (ctx.turnBudget) {
 			const assistantMessages = run.messages.filter((message) => message.role === "assistant");
@@ -1375,6 +1342,7 @@ export async function runSingleStep(
 		}
 	}
 
+	const usageRequests = parseSessionRequests(step.sessionFile ?? sessionDir).filter((request) => Boolean(step.sessionFile) || !priorRequestIds.has(request.id));
 	return {
 		childId: step.childId,
 		description: step.description,
@@ -1384,7 +1352,9 @@ export async function runSingleStep(
 		exitCode: effectiveFinalExitCode,
 		error: effectiveFinalError,
 		protocolError: finalResult?.protocolError,
-		sessionFile: step.sessionFile,
+		sessionFile: step.sessionFile ?? (sessionDir ? findLatestSessionFile(sessionDir) ?? undefined : undefined),
+		receiptUsage: step.sessionFile ? parseSessionUsage(step.sessionFile) ?? undefined : undefined,
+		usageRequests: usageRequests.length > 0 ? usageRequests : undefined,
 		intercomTarget: ctx.childIntercomTarget,
 		model: finalResult?.model,
 		attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
@@ -1423,9 +1393,6 @@ type RunnerStatusPayload = Omit<AsyncStatus, "steps" | "parallelGroups" | "pid" 
 	steps: RunnerStatusStep[];
 	lastUpdate: number;
 	artifactsDir?: string;
-	shareUrl?: string;
-	gistUrl?: string;
-	shareError?: string;
 	error?: string;
 };
 
@@ -1581,7 +1548,6 @@ async function runSubagent(
 	const outputs: ChainOutputMap = {};
 	const results: StepResult[] = [];
 	const overallStartTime = Date.now();
-	const shareEnabled = config.share === true;
 	const asyncDir = config.asyncDir;
 	const statusPath = path.join(asyncDir, "status.json");
 	const eventsPath = path.join(asyncDir, "events.jsonl");
@@ -1604,6 +1570,7 @@ async function runSubagent(
 	const stopMessage = "Subagent stopped by user.";
 	const timeoutAbortController = new AbortController();
 	const stopAbortController = new AbortController();
+	const launchInterruptController = new AbortController();
 	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
 	let latestSessionFile: string | undefined;
 
@@ -1684,7 +1651,6 @@ async function runSubagent(
 		}
 	}
 	const sessionEnabled = Boolean(config.sessionDir)
-		|| shareEnabled
 		|| flatSteps.some((step) => Boolean(step.sessionFile));
 	const statusPayload: RunnerStatusPayload = {
 		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -2340,7 +2306,7 @@ async function runSubagent(
 			step.turnCount = (step.turnCount ?? 0) + 1;
 			const usage = event.message.usage;
 			if (usage) {
-				const input = usage.input ?? usage.inputTokens ?? 0;
+				const input = (usage.input ?? usage.inputTokens ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
 				const output = usage.output ?? usage.outputTokens ?? 0;
 				const previousInput = step.tokens?.input ?? 0;
 				const previousOutput = step.tokens?.output ?? 0;
@@ -2424,10 +2390,18 @@ async function runSubagent(
 		activityTimer.unref?.();
 	}
 
+	const launchCancellation = {
+		signal: combinedAbortSignal([timeoutAbortController.signal, stopAbortController.signal, launchInterruptController.signal]),
+		onAbort: (task: SubagentStep) => stopped
+			? stoppedStepResult(task.agent)
+			: timedOut ? timedOutStepResult(task.agent) : pausedStepResult(task.agent),
+	};
+
 	const interruptRunner = () => {
 		consumeInterruptRequest(asyncDir);
 		if (interrupted || statusPayload.state !== "running") return;
 		interrupted = true;
+		launchInterruptController.abort();
 		const now = Date.now();
 		statusPayload.state = "paused";
 		currentActivityState = undefined;
@@ -2821,6 +2795,7 @@ async function runSubagent(
 				const singleResult = await runSingleStep(task, {
 					supervisorSessionId: config.sessionId ?? undefined,
 					previousOutput, placeholder, cwd, sessionEnabled,
+					handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
 					artifactsDir, artifactConfig, id,
@@ -2889,12 +2864,16 @@ async function runSubagent(
 				}));
 				if (singleResult.exitCode !== 0 && failFast) aborted = true;
 				return stopped || childStopped ? { ...singleResult, output: stopMessage, error: stopMessage, exitCode: 1, interrupted: false, timedOut: false, stopped: true, skipped: false } : timedOut ? { ...singleResult, output: timeoutMessage ?? "Subagent timed out.", error: timeoutMessage ?? "Subagent timed out.", exitCode: 1, interrupted: false, timedOut: true, skipped: false } : { ...singleResult, skipped: false };
-			}, globalSemaphore);
+			}, globalSemaphore, launchCancellation);
 
 			flatIndex += dynamicSteps.length;
 			for (const pr of parallelResults) {
 				results.push({
 					agent: pr.agent,
+					childId: pr.childId,
+					description: pr.description,
+					receiptUsage: pr.receiptUsage,
+					usageRequests: pr.usageRequests,
 					output: pr.output,
 					error: pr.error,
 					protocolError: pr.protocolError,
@@ -3117,7 +3096,7 @@ async function runSubagent(
 						}));
 
 						const taskSessionDir = config.sessionDir
-							? path.join(config.sessionDir, `parallel-${taskIdx}`)
+							? path.join(config.sessionDir, `parallel-${stepIndex}-${taskIdx}`)
 							: undefined;
 						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
 						flushPendingStepSteers(fi);
@@ -3125,6 +3104,7 @@ async function runSubagent(
 						const singleResult = await runSingleStep(taskForRun, {
 							supervisorSessionId: config.sessionId ?? undefined,
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
+							handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 							outputs,
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
@@ -3216,16 +3196,14 @@ async function runSubagent(
 						return stopped || childStopped ? { ...singleResult, output: stopMessage, error: stopMessage, exitCode: 1, interrupted: false, timedOut: false, stopped: true, skipped: false } : timedOut ? { ...singleResult, output: timeoutMessage ?? "Subagent timed out.", error: timeoutMessage ?? "Subagent timed out.", exitCode: 1, interrupted: false, timedOut: true, skipped: false } : { ...singleResult, skipped: false };
 					},
 					globalSemaphore,
+					launchCancellation,
 				);
 
 				flatIndex += group.parallel.length;
 
 				for (let t = 0; t < group.parallel.length; t++) {
 					const fi = groupStartFlatIndex + t;
-					const sessionTokens = config.sessionDir
-						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
-						: null;
-					const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
+					const taskTokens = tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
 					if (!taskTokens) continue;
 					statusPayload.steps[fi].tokens = taskTokens;
 					previousCumulativeTokens = {
@@ -3241,6 +3219,10 @@ async function runSubagent(
 				for (const pr of parallelResults) {
 					results.push({
 						agent: pr.agent,
+					childId: pr.childId,
+					description: pr.description,
+					receiptUsage: pr.receiptUsage,
+					usageRequests: pr.usageRequests,
 						output: pr.output,
 						error: pr.error,
 						protocolError: pr.protocolError,
@@ -3335,6 +3317,7 @@ async function runSubagent(
 			const singleResult = await runSingleStep(seqStep, {
 				supervisorSessionId: config.sessionId ?? undefined,
 				previousOutput, placeholder, cwd, sessionEnabled,
+				handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
@@ -3370,6 +3353,10 @@ async function runSubagent(
 			const childStopped = singleResult.stopped === true;
 			results.push({
 				agent: singleResult.agent,
+				childId: singleResult.childId,
+				description: singleResult.description,
+				receiptUsage: singleResult.receiptUsage,
+				usageRequests: singleResult.usageRequests,
 				output: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.output,
 				error: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.error,
 				protocolError: singleResult.protocolError,
@@ -3407,27 +3394,16 @@ async function runSubagent(
 			}
 			statusPayload.outputs = outputs;
 
-			const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
-			let stepTokens: TokenUsage | null = cumulativeTokens
-				? {
-						input: cumulativeTokens.input - previousCumulativeTokens.input,
-						output: cumulativeTokens.output - previousCumulativeTokens.output,
-						total: cumulativeTokens.total - previousCumulativeTokens.total,
-					}
-				: null;
-			if (cumulativeTokens) {
-				previousCumulativeTokens = cumulativeTokens;
-			} else {
-				stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
-				if (stepTokens) {
-					previousCumulativeTokens = {
-						input: previousCumulativeTokens.input + stepTokens.input,
-						output: previousCumulativeTokens.output + stepTokens.output,
-						total: previousCumulativeTokens.total + stepTokens.total,
-					};
-				}
+			const stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
+			if (stepTokens) {
+				previousCumulativeTokens = {
+					input: previousCumulativeTokens.input + stepTokens.input,
+					output: previousCumulativeTokens.output + stepTokens.output,
+					total: previousCumulativeTokens.total + stepTokens.total,
+					cacheRead: (previousCumulativeTokens.cacheRead ?? 0) + (stepTokens.cacheRead ?? 0),
+					cacheWrite: (previousCumulativeTokens.cacheWrite ?? 0) + (stepTokens.cacheWrite ?? 0),
+				};
 			}
-
 			const stepEndTime = Date.now();
 			const childInterrupted = singleResult.interrupted === true;
 			statusPayload.steps[flatIndex].status = stopped || childStopped ? "stopped" : timedOut ? "failed" : childInterrupted ? "paused" : singleResult.exitCode === 0 ? "complete" : "failed";
@@ -3516,6 +3492,14 @@ async function runSubagent(
 		outputTokens: sum.outputTokens + (result.totalCost?.outputTokens ?? 0),
 		costUsd: sum.costUsd + (result.totalCost?.costUsd ?? 0),
 	}), { inputTokens: 0, outputTokens: 0, costUsd: 0 });
+	statusPayload.totalTokens = results.reduce((total, result) => {
+		const usage = tokenUsageFromAttempts(result.modelAttempts);
+		if (usage) {
+			total.input += usage.input; total.output += usage.output; total.total += usage.total;
+			total.cacheRead += usage.cacheRead ?? 0; total.cacheWrite += usage.cacheWrite ?? 0;
+		}
+		return total;
+	}, { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 });
 	const finalTotalCost = totalCost.inputTokens > 0 || totalCost.outputTokens > 0 || totalCost.costUsd > 0 ? totalCost : undefined;
 	const finalFlatAgents = statusPayload.steps.map((step) => step.agent);
 	const agentName = finalFlatAgents.length === 1
@@ -3523,36 +3507,6 @@ async function runSubagent(
 		: resultMode === "parallel"
 			? `parallel:${finalFlatAgents.join("+")}`
 			: `chain:${finalFlatAgents.join("->")}`;
-	let sessionFile: string | undefined;
-	let shareUrl: string | undefined;
-	let gistUrl: string | undefined;
-	let shareError: string | undefined;
-
-	if (shareEnabled) {
-		sessionFile = config.sessionDir
-			? (findLatestSessionFile(config.sessionDir) ?? undefined)
-			: undefined;
-		if (!sessionFile && latestSessionFile) {
-			sessionFile = latestSessionFile;
-		}
-		if (sessionFile) {
-			try {
-				const exportDir = config.sessionDir ?? path.dirname(sessionFile);
-				const htmlPath = await exportSessionHtml(sessionFile, exportDir, config.piPackageRoot);
-				const share = createShareLink(htmlPath);
-				if ("error" in share) shareError = share.error;
-				else {
-					shareUrl = share.shareUrl;
-					gistUrl = share.gistUrl;
-				}
-			} catch (err) {
-				shareError = String(err);
-			}
-		} else {
-			shareError = "Session file not found.";
-		}
-	}
-
 	if (activityTimer) {
 		clearInterval(activityTimer);
 		activityTimer = undefined;
@@ -3565,7 +3519,7 @@ async function runSubagent(
 	closeSteerInbox(asyncDir, statusPayload.state);
 	disposeControlInbox();
 	for (const request of consumeSteerRequests(asyncDir)) deliverSteerRequest(request);
-	const effectiveSessionFile = sessionFile ?? latestSessionFile;
+	const effectiveSessionFile = latestSessionFile;
 	const steeringLifecycle = steeringStatus(statusPayload);
 	for (const request of steeringLifecycle.recent) {
 		let changed = false;
@@ -3596,9 +3550,6 @@ async function runSubagent(
 	statusPayload.lastUpdate = runEndedAt;
 	statusPayload.sessionFile = effectiveSessionFile;
 	statusPayload.totalCost = finalTotalCost;
-	statusPayload.shareUrl = shareUrl;
-	statusPayload.gistUrl = gistUrl;
-	statusPayload.shareError = shareError;
 	if (statusPayload.state === "failed" && !statusPayload.error) {
 		const failedStep = statusPayload.steps.find((s) => s.status === "failed");
 		if (failedStep?.agent) {
@@ -3634,8 +3585,6 @@ async function runSubagent(
 		truncated,
 		artifactsDir,
 		sessionFile: effectiveSessionFile,
-		shareUrl,
-		shareError,
 	});
 
 	try {
@@ -3679,6 +3628,11 @@ async function runSubagent(
 				attemptedModels: r.attemptedModels,
 				modelAttempts: r.modelAttempts,
 				totalCost: r.totalCost,
+				usageRequests: r.usageRequests,
+				usage: r.receiptUsage ?? r.modelAttempts?.reduce((total, attempt) => {
+					if (attempt.usage) for (const key of Object.keys(total)) total[key] += attempt.usage[key] ?? 0;
+					return total;
+				}, emptyUsage()),
 				artifactPaths: r.artifactPaths,
 				truncated: r.truncated,
 				transcriptPath: r.transcriptPath,
@@ -3703,9 +3657,6 @@ async function runSubagent(
 			sessionId: config.sessionId,
 			sessionFile: effectiveSessionFile,
 			intercomTarget: config.controlIntercomTarget,
-			shareUrl,
-			gistUrl,
-			shareError,
 			...(taskIndex !== undefined && { taskIndex }),
 			...(totalTasks !== undefined && { totalTasks }),
 		});

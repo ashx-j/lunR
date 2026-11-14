@@ -1,8 +1,8 @@
 /**
  * Inline Bash Extension - expands inline bash commands in user prompts.
  *
- * Start pi with this extension:
- *   pi -e ./examples/extensions/inline-bash.ts
+ * Start lunr with this extension:
+ *   lunr -e ./examples/extensions/inline-bash.ts
  *
  * Then type prompts with inline bash:
  *   What's in !{pwd}?

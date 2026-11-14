@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Vendored from https://github.com/ashx-j/ashxj-thinking @ 0330a34
 // ("Remove custom footer — keep only /thinking command"), single-file ashxj
 // convention. lunR patches are marked `// lunr:`.
@@ -7,9 +6,9 @@
  *
  * `/thinking [level]` slash command to view or set the reasoning level,
  * plus `/thinking show|hide|toggle` for thinking-block visibility.
- * `/effort` and `/reasoning` are full-parity aliases.
+ * `/effort` and `/reasoning` are hidden full-parity aliases.
  *
- * Loaded by pi via jiti — no build step, plain TypeScript.
+ * Registered as a built-in lunR extension and compiled with the coding-agent package.
  *
  * NOTE on type imports: this file deliberately declares structural types
  * rather than importing from `@earendil-works/pi-coding-agent` (or
@@ -24,6 +23,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { globalBridge } from "../core/global-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal structural types (see file header for why these are inline)
@@ -53,7 +53,7 @@ interface ExtensionContextLike {
 	model: ModelLike | undefined;
 	ui: {
 		notify(message: string, type?: "info" | "warning" | "error"): void;
-		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
+		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number; initialIndex?: number }): Promise<string | undefined>;
 	};
 }
 
@@ -71,6 +71,7 @@ interface ExtensionCommandContextLike extends ExtensionContextLike {
 interface ExtensionAPI {
 	registerCommand(name: string, options: {
 		description?: string;
+		hidden?: boolean;
 		getArgumentCompletions?(prefix: string): AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 		handler(args: string, ctx: ExtensionCommandContextLike): Promise<void> | void;
 	}): void;
@@ -176,8 +177,10 @@ interface CustomizeBridge {
 	setHideThinkingBlock(hide: boolean): void;
 }
 
+const customizeSlot = globalBridge<CustomizeBridge>(Symbol.for("@lunr/customize"));
+
 function getCustomizeBridge(): CustomizeBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/customize")] as CustomizeBridge | undefined;
+	return customizeSlot.get();
 }
 
 /** Returns the persisted `hideThinkingBlock` value (default false, matching
@@ -344,10 +347,9 @@ export default function (pi: ExtensionAPI): void {
 				const options = levels.map((lvl) =>
 					(lvl === currentLevel ? "\u25CF " : "  ") + formatLevelLabel(lvl),
 				);
-				const chosen = await ctx.ui.select(
-					`Thinking level (current: ${currentLevel})`,
-					options,
-				);
+				const chosen = await ctx.ui.select(`Thinking level (current: ${currentLevel})`, options, {
+					initialIndex: Math.max(0, levels.indexOf(currentLevel)),
+				});
 				if (chosen === undefined) return;
 				// Chosen string starts with the current-marker ("● ") or two-space
 				// gutter; strip the prefix and extract the first token (the level).
@@ -377,33 +379,18 @@ export default function (pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("thinking", thinkingSpec);
-	// lunr: /effort and /reasoning are full-parity aliases (same handler + completions).
+	// lunr: /effort and /reasoning are hidden full-parity aliases (same handler + completions).
+	// `/thinking <level>` is the only level entry point; the per-level commands were removed.
 	pi.registerCommand("effort", {
 		...thinkingSpec,
 		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
+		hidden: true,
 	});
 	pi.registerCommand("reasoning", {
 		...thinkingSpec,
 		description: `${THINKING_COMMAND_DESCRIPTION} (alias of /thinking)`,
+		hidden: true,
 	});
-
-	for (const level of ALL_LEVELS) {
-		pi.registerCommand(level, {
-			description: `Set thinking level to ${level}`,
-			handler: async (_args, ctx) => {
-				const levels = availableLevelsFor(ctx.model);
-				if (!levels.includes(level)) {
-					ctx.ui.notify(
-						`Invalid thinking level: "${level}". Valid: ${levels.join(", ")}`,
-						"error",
-					);
-					return;
-				}
-				if (pi.getThinkingLevel() === level) return;
-				pi.setThinkingLevel(level);
-			},
-		});
-	}
 }
 
 // ---------------------------------------------------------------------------

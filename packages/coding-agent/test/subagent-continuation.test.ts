@@ -146,7 +146,6 @@ function writeDescriptor(
 		acceptance,
 		controlConfig: CONTROL_CONFIG,
 		maxSubagentDepth: 2,
-		share: false,
 		sessionDir: path.join(dir, "session"),
 		artifactsDir: path.join(dir, "artifacts"),
 		artifactConfig: ARTIFACT_CONFIG,
@@ -272,6 +271,16 @@ describe("async recovery descriptor reader", () => {
 			});
 			const parsed = readAsyncRecoveryDescriptor(dir);
 			expect(parsed?.initialTurnBudget).toEqual({ maxTurns: 8, graceTurns: 1 });
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("still resumes descriptors written while session sharing existed", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-recovery-share-"));
+		try {
+			writeDescriptor(dir, { share: true });
+			expect(readAsyncRecoveryDescriptor(dir)?.childId).toBe("4970b7a6-0");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -534,6 +543,61 @@ describe("background completion after revival", () => {
 	] as const)("classifies negation: %s", (task, kind, mayMutate) => {
 		expect(classifyTaskMutationIntent("full", task).kind).toBe(kind);
 		expect(taskMayMutate(task)).toBe(mayMutate);
+	});
+});
+
+describe("subagent_wait outcome", () => {
+	it("counts a stopped run as stopped instead of folding it into done", async () => {
+		const sessionId = `sess-stop-${Date.now()}`;
+		const runId = `stop-${Date.now()}`;
+		const asyncRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-async-stop-"));
+		const resultsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-async-stop-results-"));
+		const statusPath = path.join(asyncRoot, runId, "status.json");
+		fs.mkdirSync(path.dirname(statusPath), { recursive: true });
+		const status = {
+			runId,
+			sessionId,
+			mode: "single",
+			state: "running",
+			pid: 1234,
+			startedAt: Date.now(),
+			lastUpdate: Date.now(),
+			steps: [
+				{
+					childId: `${runId}-0`,
+					description: "Long task",
+					permissions: "full",
+					agent: "Long task",
+					status: "running",
+				},
+			],
+		};
+		fs.writeFileSync(statusPath, JSON.stringify(status));
+		const state = {
+			currentSessionId: sessionId,
+			asyncJobs: new Map(),
+			foregroundControls: new Map(),
+			foregroundRuns: new Map(),
+		} as unknown as SubagentState;
+		try {
+			const waitResult = await waitForSubagents({ id: runId, timeoutMs: 2000 }, undefined, {
+				state,
+				asyncDirRoot: asyncRoot,
+				resultsDir: resultsRoot,
+				kill: () => true,
+				pollIntervalMs: 250,
+				sleep: async () => {
+					fs.writeFileSync(
+						statusPath,
+						JSON.stringify({ ...status, state: "stopped", steps: [{ ...status.steps[0], status: "stopped" }] }),
+					);
+				},
+			});
+			expect(waitResult.content[0]?.text ?? "").toContain("Outcome: 1 stopped.");
+		} finally {
+			fs.rmSync(asyncRoot, { recursive: true, force: true });
+			fs.rmSync(resultsRoot, { recursive: true, force: true });
+		}
 	});
 });
 

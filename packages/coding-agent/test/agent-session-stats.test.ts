@@ -96,7 +96,7 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
-	it("reports unknown current context usage immediately after compaction", async () => {
+	it("reports approximate current context usage immediately after compaction", async () => {
 		const { session, sessionManager } = await createSession();
 
 		try {
@@ -112,8 +112,10 @@ describe("AgentSession.getSessionStats", () => {
 			// Totals cover ALL entries, including history compacted away (180k + 195k).
 			expect(stats.tokens.input).toBe(375_000);
 			expect(stats.contextUsage).toBeDefined();
-			expect(stats.contextUsage?.tokens).toBeNull();
-			expect(stats.contextUsage?.percent).toBeNull();
+			expect(stats.contextUsage?.tokens).toBeGreaterThan(0);
+			expect(stats.contextUsage?.tokens).toBeLessThan(25_000);
+			expect(stats.contextUsage?.estimated).toBe(true);
+			expect(stats.contextUsage?.percent).toBeGreaterThan(0);
 		} finally {
 			session.dispose();
 		}
@@ -129,7 +131,7 @@ describe("AgentSession.getSessionStats", () => {
 			sessionManager.appendMessage(createAssistantMessage("response2", 195_000, 4));
 			sessionManager.appendCompaction("summary", keptUserId, 195_000);
 			sessionManager.appendMessage(createUserMessage("third", 5));
-			sessionManager.appendMessage(createAssistantMessage("response3", 25_000, 6));
+			sessionManager.appendMessage(createAssistantMessage("response3", 25_000, Date.now() + 1));
 			syncAgentMessages(session, sessionManager);
 
 			const stats = session.getSessionStats();
@@ -153,7 +155,7 @@ describe("AgentSession.getSessionStats", () => {
 			sessionManager.appendMessage(createAssistantMessage("response2", 195_000, 4));
 			sessionManager.appendCompaction("summary", keptUserId, 195_000);
 			sessionManager.appendMessage(createUserMessage("third", 5));
-			sessionManager.appendMessage(createAssistantMessage("response3", 25_000, 6));
+			sessionManager.appendMessage(createAssistantMessage("response3", 25_000, Date.now() + 1));
 			sessionManager.appendMessage(createUserMessage("continue", 7));
 			sessionManager.appendMessage(createAssistantMessage("partial", 0, 8));
 			syncAgentMessages(session, sessionManager);

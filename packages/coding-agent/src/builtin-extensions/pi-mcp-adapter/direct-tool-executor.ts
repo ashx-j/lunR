@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpExtensionState } from "./state.ts";
@@ -9,7 +8,7 @@ import { formatSchema } from "./tool-metadata.ts";
 import { resolveMcpResultContent, transformMcpContent } from "./tool-registrar.ts";
 import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
 import { maybeStartUiSession, type UiSessionRuntime } from "./ui-session.ts";
-import { authenticate, supportsOAuth } from "./mcp-auth-flow.ts";
+import { supportsOAuth } from "./mcp-auth-flow.ts";
 import { formatAuthRequiredMessage } from "./utils.ts";
 
 type DirectAutoAuthResult =
@@ -60,7 +59,7 @@ async function attemptDirectAutoAuth(
   }
 
   try {
-    await abortable(authenticate(serverName, definition.url, definition), signal);
+    await abortable(state.authFlow.authenticate(serverName, definition.url, definition), signal);
     throwIfAborted(signal);
     return { status: "success" };
   } catch (error) {

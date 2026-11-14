@@ -5,7 +5,7 @@ export const computerRelease = {
   "sourceCommit": "d8028a7943087ee258dc1b4d19dc12a7cd27669c",
   "repository": "https://github.com/trycua/cua",
   "prerelease": true,
-  "approval": "development-only; production release not approved",
+  "approval": "production-approved",
   "artifacts": [
     {
       "platform": "win32",

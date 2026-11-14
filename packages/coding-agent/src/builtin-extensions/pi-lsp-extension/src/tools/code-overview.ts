@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * code_overview — Summarize project structure, key files, and symbols.
  *

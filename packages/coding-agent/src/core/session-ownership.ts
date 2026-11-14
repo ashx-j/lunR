@@ -153,10 +153,14 @@ export class SessionOwnership {
 	release(): void {
 		if (this.released) return;
 		this.assert();
-		this.released = true;
 		const releasedDirectory = `${this.directory}.released-${this.owner.generation}`;
 		renameSync(this.directory, releasedDirectory);
-		unlinkSync(join(releasedDirectory, "owner.json"));
-		rmdirSync(releasedDirectory);
+		this.released = true;
+		try {
+			unlinkSync(join(releasedDirectory, "owner.json"));
+			rmdirSync(releasedDirectory);
+		} catch {
+			// Ownership is already relinquished. Cleanup must not reject the handoff.
+		}
 	}
 }

@@ -15,14 +15,14 @@ import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
-import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
+import { showStartupSelector } from "./cli/startup-ui.ts";
 import {
 	APP_NAME,
 	appendDebugLog,
 	ENV_SESSION_DIR,
 	expandTildePath,
 	getAgentDir,
-	getSessionsDir,
+	isOfflineModeEnabled,
 	VERSION,
 } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
@@ -31,12 +31,23 @@ import {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
-import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+import {
+	formatNoApiKeyFoundMessage,
+	formatNoModelSelectedMessage,
+	formatNoModelsAvailableMessage,
+} from "./core/auth-guidance.ts";
 import { registerCustomizeBridge } from "./core/customize.ts";
+import { ExtensionRunner, emitSessionShutdownEvent } from "./core/extensions/runner.ts";
 import type { InlineExtension, ProjectTrustContext } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { registerMemoryCapBridge } from "./core/memory-cap.ts";
-import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
+import { ModelRegistry } from "./core/model-registry.ts";
+import {
+	findSignedOutScopePatterns,
+	resolveCliModel,
+	resolveModelScopeWithDiagnostics,
+	type ScopedModel,
+} from "./core/model-resolver.ts";
 import type { ModelRuntime } from "./core/model-runtime.ts";
 import { registerModelTierBridge } from "./core/model-tiers.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
@@ -51,11 +62,13 @@ import {
 } from "./core/session-cwd.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { pruneOldSessions } from "./core/session-retention.ts";
+import { getSessionRetentionTargets, selectApprovedStartupSession } from "./core/session-startup-settings.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { applyInheritedSubagentPermissions } from "./core/subagent-permission-inherit.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
+import { ACP_DISABLED_BUILTINS, ACP_SETTINGS_OVERRIDES } from "./modes/acp/policy.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
@@ -162,7 +175,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
+function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "acp"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -322,6 +335,7 @@ async function createSessionManager(
 	sessionDir: string | undefined,
 	settingsManager: SettingsManager,
 	startupView?: InteractiveView,
+	deferSelection?: () => SessionManager,
 ): Promise<SessionManager> {
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -345,6 +359,7 @@ async function createSessionManager(
 				return forkSessionOrExit(resolved.path, cwd, sessionDir, parsed.sessionId);
 
 			case "not_found":
+				if (deferSelection) return deferSelection();
 				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
 				process.exit(1);
 		}
@@ -369,12 +384,14 @@ async function createSessionManager(
 			}
 
 			case "not_found":
+				if (deferSelection) return deferSelection();
 				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
 				process.exit(1);
 		}
 	}
 
 	if (parsed.resume) {
+		if (deferSelection) return deferSelection();
 		try {
 			const currentSessionsLoader = (onProgress?: Parameters<typeof SessionManager.list>[2]) =>
 				SessionManager.list(cwd, sessionDir, onProgress);
@@ -552,21 +569,34 @@ export interface MainOptions {
 }
 
 export async function main(args: string[], options?: MainOptions) {
+	const initialArgs = parseArgs(args);
+	if (initialArgs.mode === "acp" && !initialArgs.help && !initialArgs.version) {
+		const { runAcpMode } = await import("./modes/acp/acp-mode.ts");
+		await runAcpMode(args);
+		return;
+	}
 	resetTimings();
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+	const offlineMode = args.includes("--offline") || isOfflineModeEnabled();
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
 	}
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
-	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const sessionOnly = Boolean(process.env.LUNR_ACP_WORKER_CONFIG);
+	const settingsPolicy = { sessionOnly, runtimeOverrides: sessionOnly ? ACP_SETTINGS_OVERRIDES : undefined };
+	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, ...settingsPolicy });
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
 	if (["setup", "features", "uninstall", "browser"].includes(args[0])) {
 		const { handleInstallCli } = await import("./cli/install-cli.ts");
 		if (await handleInstallCli(args)) return;
+	}
+
+	if (args[0] === "doctor") {
+		const { handleDoctorCli } = await import("./cli/doctor-cli.ts");
+		if (await handleDoctorCli(args)) return;
 	}
 
 	if (args[0] === "update") {
@@ -644,7 +674,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(cwd);
 	time("runMigrations");
 
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
+	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false, ...settingsPolicy });
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 
 	// Register the model-tier bridge before extensions load so pi-subagents can read
@@ -654,32 +684,49 @@ export async function main(args: string[], options?: MainOptions) {
 	// lunr: same for the simple-pi-memory character cap — extensions read it via the
 	// bridge at load/runtime; re-pointed to the runtime settings manager below.
 	registerMemoryCapBridge(startupSettingsManager);
-	// lunr: TUI customize settings (spinner, dividers, rail, prompt symbol) read by
-	// ashxj-spinners and ashxj-tui via the bridge; re-pointed to runtime below.
+	// lunr: TUI customize settings (footer toggles, subagent spinner, Fast mode,
+	// thinking visibility) read by built-in extensions via the bridge; re-pointed to runtime below.
 	registerCustomizeBridge(startupSettingsManager);
-
-	// Experimental first-time setup: theme choice and analytics opt-in.
-	// Runs before any runtime services are created so the chosen settings apply everywhere.
-	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
-		startupView?.pause();
-		await showFirstTimeSetup(startupSettingsManager);
-		startupView?.resume();
-		time("firstTimeSetup");
-	}
 
 	// Decide the final runtime cwd before creating cwd-bound runtime services.
 	// --session and --resume may select a session from another project, so project-local
 	// settings, resources, provider registrations, and models must be resolved only after
-	// the target session cwd is known. The startup-cwd settings manager is used only for
-	// sessionDir lookup during session selection.
+	// the target session cwd is known. Initial lookup uses global settings or saved
+	// approval; newly approved settings are applied after the runtime trust decision.
+	const trustStore = new ProjectTrustStore(agentDir);
 	const envSessionDir = process.env[ENV_SESSION_DIR];
-	const sessionDir =
+	const explicitSessionDir =
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
-		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
-		startupSettingsManager.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager, startupView);
-	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
-	if (missingSessionCwdIssue) {
+		(envSessionDir ? expandTildePath(envSessionDir) : undefined);
+	// Saved approval and explicit trust allow custom session lookup before runtime hydration.
+	const lookupTrusted =
+		parsed.projectTrustOverride ??
+		trustStore.get(cwd) ??
+		startupSettingsManager.getDefaultProjectTrust() === "always";
+	const lookupSettings = lookupTrusted
+		? SettingsManager.create(cwd, agentDir, { projectTrusted: true, ...settingsPolicy })
+		: startupSettingsManager;
+	let sessionDir = explicitSessionDir ?? lookupSettings.getSessionDir();
+	let startupSelectionDeferred = false;
+	// A missing ID or the picker may need storage that the pending trust decision enables.
+	const deferSelection =
+		!lookupTrusted && !explicitSessionDir && hasTrustRequiringProjectResources(cwd)
+			? () => {
+					startupSelectionDeferred = true;
+					return SessionManager.create(cwd, sessionDir);
+				}
+			: undefined;
+	let sessionManager = await createSessionManager(
+		parsed,
+		cwd,
+		sessionDir,
+		startupSettingsManager,
+		startupView,
+		deferSelection,
+	);
+	const resolveStartupSessionCwd = async (manager: SessionManager): Promise<SessionManager> => {
+		const missingSessionCwdIssue = getMissingSessionCwdIssue(manager, cwd);
+		if (!missingSessionCwdIssue) return manager;
 		if (appMode === "interactive") {
 			const selectedCwd = await promptForMissingSessionCwd(
 				missingSessionCwdIssue,
@@ -689,34 +736,27 @@ export async function main(args: string[], options?: MainOptions) {
 			if (!selectedCwd) {
 				process.exit(0);
 			}
-			sessionManager.dispose();
-			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
+			manager.dispose();
+			return SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
 			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
 			process.exit(1);
 		}
-	}
-	if (parsed.name !== undefined) {
-		const name = parsed.name.trim();
-		if (!name) {
-			console.error(chalk.red("Error: --name requires a non-empty value"));
-			process.exit(1);
-		}
-		sessionManager.appendSessionInfo(name);
-	}
+	};
+	sessionManager = await resolveStartupSessionCwd(sessionManager);
 	time("createSessionManager");
 
 	const runSessionRetention = async () => {
 		try {
-			const retentionDays = startupSettingsManager.getSessionRetentionDays();
-			if (retentionDays <= 0) return;
-			const activeSessionFile = sessionManager.getSessionFile();
-			const { deleted } = await pruneOldSessions(getSessionsDir(), retentionDays, {
-				excludeFile: activeSessionFile,
-			});
-			if (sessionDir) {
-				const extra = await pruneOldSessions(sessionDir, retentionDays, { excludeFile: activeSessionFile });
-				deleted.push(...extra.deleted);
+			const activeSessionFile = runtime.session.sessionManager.getSessionFile();
+			const deleted: string[] = [];
+			for (const { directory, days } of getSessionRetentionTargets(
+				startupSettingsManager,
+				runtime.services.settingsManager,
+				explicitSessionDir,
+			)) {
+				const result = await pruneOldSessions(directory, days, { excludeFile: activeSessionFile });
+				deleted.push(...result.deleted);
 			}
 			if (deleted.length > 0) {
 				appendDebugLog(
@@ -728,7 +768,6 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 	};
 
-	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
 	const autoTrustOnReloadCwd =
 		parsed.projectTrustOverride === undefined && !hasTrustRequiringProjectResources(sessionCwd)
@@ -741,7 +780,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
-	const builtinRoster = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const loadedBuiltins = appMode === "interactive" ? [...lightBuiltinExtensions] : await loadAllBuiltinExtensions();
+	const builtinRoster = sessionOnly
+		? loadedBuiltins.filter((entry) => typeof entry === "function" || !ACP_DISABLED_BUILTINS.has(entry.name))
+		: loadedBuiltins;
 	const rememberAttachedFactories = (factories: InlineExtension[]) => {
 		const seen = new Set(
 			builtinRoster.map((entry) => (typeof entry === "function" ? undefined : entry.name)).filter(Boolean),
@@ -753,6 +795,7 @@ export async function main(args: string[], options?: MainOptions) {
 			builtinRoster.push(factory);
 		}
 	};
+	let startupDirectoryResolved = false;
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -771,7 +814,7 @@ export async function main(args: string[], options?: MainOptions) {
 			: (cachedProjectTrust ??
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
-		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted, ...settingsPolicy });
 		const skipMissingPackageInstall = isInitialRuntime && appMode === "interactive";
 		const services = await createAgentSessionServices({
 			cwd,
@@ -823,6 +866,55 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		if (isInitialRuntime && !parsed.noSession && !parsed.help && parsed.listModels === undefined) {
+			const maySelectAgain = !startupDirectoryResolved;
+			startupDirectoryResolved = true;
+			const approvedSessionDir = explicitSessionDir ?? settingsManager.getSessionDir();
+			if (startupSelectionDeferred || approvedSessionDir !== sessionDir) {
+				const selectCurrentProject =
+					maySelectAgain &&
+					(startupSelectionDeferred || (!parsed.session && !parsed.resume && !parsed.fork)) &&
+					cwd === sessionCwd;
+				const provisionalManager = sessionManager;
+				sessionManager = await selectApprovedStartupSession(
+					sessionManager,
+					approvedSessionDir,
+					selectCurrentProject
+						? () => createSessionManager(parsed, cwd, approvedSessionDir, settingsManager, startupView)
+						: undefined,
+				);
+				sessionDir = approvedSessionDir;
+				startupSelectionDeferred = false;
+				sessionManager = await resolveStartupSessionCwd(sessionManager);
+				if (sessionManager.getCwd() !== cwd) {
+					// No turn has started. Shut down bootstrap hooks before resolving the selected cwd once.
+					const extensions = resourceLoader.getExtensions();
+					const runner = new ExtensionRunner(
+						extensions.extensions,
+						extensions.runtime,
+						cwd,
+						provisionalManager,
+						new ModelRegistry(modelRuntime),
+					);
+					try {
+						await emitSessionShutdownEvent(runner, { type: "session_shutdown", reason: "resume" });
+					} finally {
+						extensions.runtime.invalidate();
+					}
+					return createRuntime({ cwd: sessionManager.getCwd(), agentDir, sessionManager, projectTrustContext });
+				}
+			}
+		}
+
+		if (isInitialRuntime && parsed.name !== undefined) {
+			const name = parsed.name.trim();
+			if (!name) {
+				console.error(chalk.red("Error: --name requires a non-empty value"));
+				process.exit(1);
+			}
+			sessionManager.appendSessionInfo(name);
+		}
+
 		if (
 			parsed.model &&
 			!resolveCliModel({
@@ -844,9 +936,19 @@ export async function main(args: string[], options?: MainOptions) {
 			})),
 		];
 
+		if (!parsed.models) {
+			// Scoped models of a provider signed out in an earlier run would only warn on every start.
+			const signedOut = await findSignedOutScopePatterns(settingsManager.getEnabledModels() ?? [], modelRuntime);
+			if (signedOut.length > 0) settingsManager.removeEnabledModels(signedOut);
+		}
 		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
-		const scopedModels =
-			modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRuntime) : [];
+		// Unmatched patterns join the diagnostics: a console write would land behind the first-paint TUI.
+		const modelScope =
+			modelPatterns && modelPatterns.length > 0
+				? await resolveModelScopeWithDiagnostics(modelPatterns, modelRuntime)
+				: undefined;
+		const scopedModels = modelScope?.scopedModels ?? [];
+		diagnostics.push(...(modelScope?.diagnostics ?? []));
 		const {
 			options: sessionOptions,
 			cliThinkingFromModel,
@@ -908,6 +1010,7 @@ export async function main(args: string[], options?: MainOptions) {
 		await runtime.dispose();
 		return;
 	}
+	sessionManager = runtime.session.sessionManager;
 	markStartupMilestone("runtime_hydrated");
 	time("createAgentSessionRuntime");
 	if (appMode !== "interactive") await runSessionRetention();
@@ -975,9 +1078,26 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createAgentSession");
 
-	if (appMode !== "interactive" && !session.model) {
-		console.error(chalk.red(formatNoModelsAvailableMessage()));
-		process.exit(1);
+	// Non-interactive modes have no /login, so these messages use print wording. In print and
+	// json mode a provider that is named (selected model or saved default) but has no key gets
+	// its own message; the key test is the one a prompt runs before its first request. RPC keeps
+	// running so a client can add a key and gets the error on its prompt instead.
+	if (appMode !== "interactive") {
+		const runtime = session.modelRuntime;
+		const hasAuth = async (provider: string) =>
+			runtime.hasConfiguredAuth(provider) || (await runtime.checkAuth(provider)) !== undefined;
+		const provider = session.model?.provider ?? settingsManager.getDefaultProvider();
+		if (appMode !== "rpc" && provider && !(await hasAuth(provider))) {
+			console.error(chalk.red(formatNoApiKeyFoundMessage(provider, "print")));
+			process.exit(1);
+		}
+		if (!session.model) {
+			const anyAvailable = (await runtime.getAvailable()).length > 0;
+			console.error(
+				chalk.red(anyAvailable ? formatNoModelSelectedMessage("print") : formatNoModelsAvailableMessage("print")),
+			);
+			process.exit(1);
+		}
 	}
 
 	if (startupBenchmark && appMode !== "interactive") {

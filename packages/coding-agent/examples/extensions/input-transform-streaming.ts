@@ -8,8 +8,8 @@
  * file changes, giving the model immediate context. During steering the
  * exec call is skipped so the correction reaches the model without delay.
  *
- * Start pi with this extension:
- *   pi -e ./examples/extensions/input-transform-streaming.ts
+ * Start lunr with this extension:
+ *   lunr -e ./examples/extensions/input-transform-streaming.ts
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

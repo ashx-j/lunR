@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as path from "node:path";
 
 const MAX_NESTED_ID_LENGTH = 128;

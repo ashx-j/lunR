@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { Socket } from "net";
 
 export const MAX_FRAME_BYTES = 1024 * 1024;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 export const SUBAGENT_WATCHDOG_WARNING_TYPE = "subagent_watchdog_warning";
 
 export const WATCHDOG_WARNING_SEVERITIES = ["concern", "blocker"] as const;

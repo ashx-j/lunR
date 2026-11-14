@@ -1,17 +1,21 @@
 import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
 	createReadStream,
 	existsSync,
+	fchmodSync,
+	fsyncSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
 	readSync,
+	renameSync,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
@@ -44,6 +48,8 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
+	/** Set when print mode (`-p`, `--mode json`) created the session. Absent for interactive and older sessions. */
+	origin?: "print";
 }
 
 export interface NewSessionOptions {
@@ -52,6 +58,8 @@ export interface NewSessionOptions {
 }
 
 export interface SessionEntryBase {
+	/** Copied context from another session, not newly incurred usage. */
+	inherited?: boolean;
 	type: string;
 	id: string;
 	parentId: string | null;
@@ -184,6 +192,8 @@ export interface SessionInfo {
 	name?: string;
 	/** Path to the parent session (if this session was forked). */
 	parentSessionPath?: string;
+	/** Copied from the header; `/resume` tags print runs. */
+	origin?: "print";
 	created: Date;
 	modified: Date;
 	messageCount: number;
@@ -473,6 +483,10 @@ export function buildSessionContext(
 	return { messages, thinkingLevel, model };
 }
 
+/** Transcripts can hold secrets: new session files are owner-only, as are directories lunR creates for them. */
+const SESSION_FILE_MODE = 0o600;
+const SESSION_DIR_MODE = 0o700;
+
 /**
  * Compute the default session directory for a cwd.
  * Encodes cwd into a safe directory name under ~/.pi/agent/sessions/.
@@ -487,7 +501,7 @@ function getDefaultSessionDirPath(cwd: string, agentDir: string = getDefaultAgen
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
 	const sessionDir = getDefaultSessionDirPath(cwd, agentDir);
 	if (!existsSync(sessionDir)) {
-		mkdirSync(sessionDir, { recursive: true });
+		mkdirSync(sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
 	}
 	return sessionDir;
 }
@@ -697,6 +711,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			cwd,
 			name,
 			parentSessionPath,
+			...(header.origin === "print" ? { origin: "print" as const } : {}),
 			created: new Date(header.timestamp),
 			modified,
 			messageCount,
@@ -785,6 +800,28 @@ async function listSessionsFromDir(
 	return sessions;
 }
 
+/** Atomically replace a log without changing the manager that owns it. */
+function writeSessionEntries(file: string, entries: FileEntry[]): void {
+	const mode = existsSync(file) ? statSync(file).mode & 0o777 : SESSION_FILE_MODE;
+	const temp = `${file}.${randomUUID()}.tmp`;
+	const fd = openSync(temp, "wx", mode);
+	try {
+		try {
+			fchmodSync(fd, mode);
+			for (const entry of entries) {
+				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			}
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		renameSync(temp, file);
+	} finally {
+		// Only this invocation's successfully created temporary file is owned.
+		if (existsSync(temp)) unlinkSync(temp);
+	}
+}
+
 /**
  * Manages conversation sessions as append-only trees stored in JSONL files.
  *
@@ -803,6 +840,7 @@ export class SessionManager {
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
+	private needsAppendSeparator = false;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
@@ -917,7 +955,7 @@ export class SessionManager {
 		this.sessionDir = normalizePath(sessionDir);
 		this.persist = persist;
 		if (persist && this.sessionDir && !existsSync(this.sessionDir)) {
-			mkdirSync(this.sessionDir, { recursive: true });
+			mkdirSync(this.sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
 		}
 
 		try {
@@ -952,13 +990,23 @@ export class SessionManager {
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
 			this.fileEntries = loadEntriesFromFile(this.sessionFile);
+			// Preserve accepted unterminated records and isolate truncated tails. The
+			// loader continues to skip malformed lines under its existing recovery policy.
+			const fd = openSync(this.sessionFile, "r");
+			try {
+				const size = statSync(this.sessionFile).size;
+				const lastByte = Buffer.alloc(1);
+				this.needsAppendSeparator = size > 0 && readSync(fd, lastByte, 0, 1, size - 1) === 1 && lastByte[0] !== 10;
+			} finally {
+				closeSync(fd);
+			}
 
 			// If file was empty, initialize it with a valid session header. If it was
-			// non-empty but did not parse as a pi session, fail without modifying it.
+			// non-empty but did not parse as a lunR session, fail without modifying it.
 			if (this.fileEntries.length === 0) {
 				const explicitPath = this.sessionFile;
 				if (statSync(explicitPath).size > 0) {
-					throw new Error(`Session file is not a valid pi session: ${explicitPath}`);
+					throw new Error(`Session file is not a valid lunR session: ${explicitPath}`);
 				}
 				this.initializeSession();
 				this.sessionFile = explicitPath;
@@ -1014,6 +1062,7 @@ export class SessionManager {
 		this.labelTimestampsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this.needsAppendSeparator = false;
 		this.permissionMode = undefined;
 
 		if (this.persist) {
@@ -1044,17 +1093,23 @@ export class SessionManager {
 		}
 	}
 
+	/** Replace only after the sibling log is written, synced and closed.
+	 * Rename protects the previous log on write failure, not against every power-loss scenario.
+	 */
 	private _rewriteFile(): void {
 		this.assertWritable();
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
-		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
-			}
-		} finally {
-			closeSync(fd);
-		}
+		const file = this.ownership?.owner.file ?? this.sessionFile;
+		writeSessionEntries(file, this.fileEntries);
+		this.needsAppendSeparator = false;
+	}
+
+	private _appendToFile(entry: SessionEntry): void {
+		if (!this.sessionFile) return;
+		appendFileSync(this.sessionFile, `${this.needsAppendSeparator ? "\n" : ""}${JSON.stringify(entry)}\n`, {
+			mode: SESSION_FILE_MODE,
+		});
+		this.needsAppendSeparator = false;
 	}
 
 	isPersisted(): boolean {
@@ -1088,7 +1143,7 @@ export class SessionManager {
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
 			if (this.flushed) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+				this._appendToFile(entry);
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
@@ -1097,7 +1152,7 @@ export class SessionManager {
 		}
 
 		if (!this.flushed) {
-			const fd = openSync(this.sessionFile, "wx");
+			const fd = openSync(this.sessionFile, "wx", SESSION_FILE_MODE);
 			try {
 				for (const e of this.fileEntries) {
 					writeFileSync(fd, `${JSON.stringify(e)}\n`);
@@ -1107,7 +1162,7 @@ export class SessionManager {
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			this._appendToFile(entry);
 		}
 	}
 
@@ -1126,6 +1181,7 @@ export class SessionManager {
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+		if (message.role === "assistant") message.usage.requestId ??= randomUUID();
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
@@ -1135,6 +1191,20 @@ export class SessionManager {
 		};
 		this._appendEntry(entry);
 		return entry.id;
+	}
+
+	/** Persist an auxiliary request without adding it to model context. */
+	appendRequestUsage(purpose: string, message: AssistantMessage): string {
+		const usage = { ...message.usage, requestId: message.usage.requestId ?? randomUUID() };
+		return this.appendCustomEntry("request-usage", {
+			id: usage.requestId,
+			purpose,
+			provider: message.provider,
+			model: message.responseModel ?? message.model,
+			timestamp: Date.now(),
+			usage,
+			stopReason: message.stopReason,
+		});
 	}
 
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
@@ -1354,6 +1424,13 @@ export class SessionManager {
 		return buildSessionContext(this.getEntries(), this.leafId, this.byId);
 	}
 
+	/** Print mode calls this for each session it binds. It only tags a session not yet written to disk, so resumed or opened sessions keep their header. */
+	markPrintOrigin(): void {
+		if (this.flushed) return;
+		const header = this.getHeader();
+		if (header) header.origin = "print";
+	}
+
 	/**
 	 * Get session header.
 	 */
@@ -1431,8 +1508,7 @@ export class SessionManager {
 		if (!this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
-		this.leafId = branchFromId;
-		this.flush();
+		this.moveLeaf(branchFromId);
 	}
 
 	/**
@@ -1442,8 +1518,18 @@ export class SessionManager {
 	 */
 	resetLeaf(): void {
 		this.assertWritable();
-		this.leafId = null;
-		this.flush();
+		this.moveLeaf(null);
+	}
+
+	private moveLeaf(leafId: string | null): void {
+		const previous = this.leafId;
+		this.leafId = leafId;
+		try {
+			this.flush();
+		} catch (error) {
+			this.leafId = previous;
+			throw error;
+		}
 	}
 
 	/**
@@ -1491,7 +1577,7 @@ export class SessionManager {
 		let pathParentId: string | null = null;
 		for (const entry of path) {
 			if (entry.type === "label") continue;
-			pathWithoutLabels.push({ ...entry, parentId: pathParentId });
+			pathWithoutLabels.push({ ...entry, inherited: true, parentId: pathParentId });
 			pathParentId = entry.id;
 		}
 
@@ -1537,25 +1623,37 @@ export class SessionManager {
 				parentId = labelEntry.id;
 			}
 
-			this.claim(newSessionFile);
-			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+			const entries: FileEntry[] = [header, ...pathWithoutLabels, ...labelEntries];
+			const hasAssistant = entries.some((e) => e.type === "message" && e.message.role === "assistant");
+			this.saveLeaf();
+			const nextOwnership = new SessionOwnership(canonicalSessionPath(newSessionFile));
+			let wroteFork = false;
+			try {
+				nextOwnership.bindSession(newSessionId);
+				if (hasAssistant) {
+					writeSessionEntries(nextOwnership.owner.file, entries);
+					wroteFork = true;
+				}
+				this.ownership?.release();
+			} catch (error) {
+				if (wroteFork) {
+					try {
+						unlinkSync(nextOwnership.owner.file);
+					} catch {
+						// The original session remains active even if failed-fork cleanup is unavailable.
+					}
+				}
+				nextOwnership.release();
+				throw error;
+			}
+			// Commit the replacement only after the new log has been written.
+			this.ownership = nextOwnership;
+			this.fileEntries = entries;
 			this.sessionId = newSessionId;
-			this.ownership?.bindSession(this.sessionId);
 			this.sessionFile = newSessionFile;
 			this._buildIndex();
-
-			// Only write the file now if it contains an assistant message.
-			// Otherwise defer to _persist(), which creates the file on the
-			// first assistant response, matching the newSession() contract
-			// and avoiding the duplicate-header bug when _persist()'s
-			// no-assistant guard later resets flushed to false.
-			const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
-			if (hasAssistant) {
-				this._rewriteFile();
-				this.flushed = true;
-			} else {
-				this.flushed = false;
-			}
+			this.flushed = hasAssistant;
+			this.needsAppendSeparator = false;
 
 			return newSessionFile;
 		}
@@ -1678,7 +1776,7 @@ export class SessionManager {
 
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(resolvedTargetCwd);
 		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
+			mkdirSync(dir, { recursive: true, mode: SESSION_DIR_MODE });
 		}
 
 		// Create new session file with new ID but forked content

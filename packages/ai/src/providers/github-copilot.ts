@@ -7,7 +7,7 @@ import { createProvider, type Provider } from "../models.ts";
 import { GITHUB_COPILOT_MODELS } from "./github-copilot.models.ts";
 
 export function githubCopilotProvider(): Provider<"anthropic-messages" | "openai-completions" | "openai-responses"> {
-	return createProvider({
+	return createProvider<"anthropic-messages" | "openai-completions" | "openai-responses">({
 		id: "github-copilot",
 		name: "GitHub Copilot",
 		baseUrl: "https://api.individual.githubcopilot.com",

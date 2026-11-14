@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { execFile } from "node:child_process";
 import type { ExtractedContent } from "./extract.ts";
 import type { GitHubUrlInfo } from "./github-extract.ts";

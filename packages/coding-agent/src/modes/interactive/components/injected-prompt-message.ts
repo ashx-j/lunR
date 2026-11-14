@@ -1,7 +1,7 @@
 import { Box, Markdown, type MarkdownTheme, Text } from "@earendil-works/pi-tui";
 import { INJECTED_PROMPT_LABELS, type InjectedPromptKind } from "../../../core/injected-prompt.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { keyText } from "./keybinding-hints.ts";
+import { expandKeyText } from "./keybinding-hints.ts";
 
 /**
  * lunr: renders an injected prompt (/research, /goal) as a collapsed
@@ -36,6 +36,12 @@ export class InjectedPromptMessageComponent extends Box {
 		this.updateDisplay();
 	}
 
+	/** A click toggles the card; `app.tools.expand` has no default key. */
+	handleClick(_localY: number, _width: number): boolean {
+		this.setExpanded(!this.expanded);
+		return true;
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.updateDisplay();
@@ -56,7 +62,7 @@ export class InjectedPromptMessageComponent extends Box {
 			const line =
 				theme.fg("customMessageLabel", `\x1b[1m[${label}]\x1b[22m `) +
 				theme.fg("customMessageText", this.summary) +
-				theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
+				theme.fg("dim", ` (${expandKeyText()} to expand)`);
 			this.addChild(new Text(line, 0, 0));
 		}
 	}

@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.2.38] - 2026-10-18
+
+- Align the package version with the lunR 0.2.38 release.
+
+## [0.2.37] - 2026-10-17
+
+- Align the package version with the lunR 0.2.37 release.
+
+## [0.2.36] - 2026-10-17
+
+- Align the package version with the lunR 0.2.36 release.
+
+## [0.2.35] - 2026-10-17
+
+- Align the package version with the lunR 0.2.35 release.
+
+## [0.2.34] - 2026-10-17
+
+- Align the package version with the lunR 0.2.34 release.
+
+## [0.2.33] - 2026-10-17
+
+- Align the package version with the lunR 0.2.33 release.
+
+## [0.2.32] - 2026-10-16
+
+- Align the package version with the lunR 0.2.32 release.
+
+## [0.2.31] - 2026-10-16
+
+- Align the package version with the lunR 0.2.31 release.
+
+## [0.2.30] - 2026-10-16
+
+- Align the package version with the lunR 0.2.30 release.
+
+## [0.2.29] - 2026-10-11
+
+- Align the package version with the lunR 0.2.29 release.
+
+## [0.2.28] - 2026-10-04
+
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Supervisor shutdown is bounded and retains ownership of unconfirmed children. Registration and heartbeat recovery stay within the current lifecycle.
+
+## [0.2.26] - 2026-09-27
+
 ## [0.2.25] - 2026-09-26
 
 ## [0.2.24] - 2026-09-24

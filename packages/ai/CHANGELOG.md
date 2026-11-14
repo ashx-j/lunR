@@ -1,5 +1,94 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.2.40] - 2026-10-25
+
+### Added
+
+- `builtinProviders()` registers 167 generic providers from models.dev (`providers/models-dev-providers.generated.ts`) after the hand-written ones. They have no baked-in rows; their models come from the published catalog and their model lists.
+- `catalog/models-dev` reads models.dev rows into models, and `catalog/providers` resolves an id a provider lists that the catalog lacks: the provider's own data first, then the closest models.dev model, then the catalog rules.
+- `Provider.supportsApi(api)` says whether a provider serves a protocol.
+
+### Changed
+
+- The catalog generator builds every shipped provider's rows from models.dev data. Model facts models.dev gets wrong live in `src/catalog/rules.ts`, each with a reason.
+- Multi-protocol providers pass their protocol union to `createProvider` explicitly instead of inferring it from the generated catalog.
+- Claude subscriptions pin Claude Code 2.1.310. Setup reads only its picker. `CLAUDE_CODE_VERSION` moved to `auth/anthropic-route.ts`.
+
+## [0.2.38] - 2026-10-18
+
+- Align the package version with the lunR 0.2.38 release.
+
+## [0.2.37] - 2026-10-17
+
+### Fixed
+
+- Claude subscription setup now reads each model's routes and context windows from Claude Code itself instead of a built-in table. It keeps the largest window Claude Code offers on the plan and skips variants Claude Code labels as drawing from usage credits, so Opus 5 uses its standard 200K route instead of the credit-billed 1M one. Setup records are now version 3; older ones need `/login anthropic` once.
+- Claude Code's `get_context_usage` token counts during setup reach only the discovery tripwire, which drops them without counting them as a request.
+
+## [0.2.36] - 2026-10-17
+
+- Align the package version with the lunR 0.2.36 release.
+
+## [0.2.35] - 2026-10-17
+
+### Fixed
+
+- Claude subscription models are listed in Claude Code's own picker order, so its default for the plan comes first.
+
+## [0.2.34] - 2026-10-17
+
+### Fixed
+
+- Claude subscription setup no longer fails with "model discovery tried to contact Anthropic" for signed-in accounts. The discovery tripwire now lets Claude Code's credential-free `HEAD /api/hello` warm-up through and still trips on any other request.
+
+## [0.2.33] - 2026-10-17
+
+### Fixed
+
+- Claude subscription turns no longer pass through a lunR relay. Claude Code sends each request straight to Anthropic, and lunR reads the answer from Claude Code's own stream output. Setup's model discovery uses a tripwire that drops connections without reading them.
+
+## [0.2.32] - 2026-10-16
+
+- Align the package version with the lunR 0.2.32 release.
+
+## [0.2.31] - 2026-10-16
+
+### Fixed
+
+- Claude subscription setup honors `CLAUDE_CONFIG_DIR`, re-downloads a Claude Code binary that fails its version check, aborts a download that stalls for 60 seconds, and skips malformed discovery lines.
+- The Claude Code relay uses separate secrets for messages and MCP, passes MCP configuration through a private file instead of argv, and follows `HTTPS_PROXY`/`NO_PROXY`.
+- Claude Code receives CA certificate, display, browser, user and XDG directory variables.
+- After a non-success upstream response, Claude Code has 2.5 seconds to exit before its process tree is stopped.
+- Version 1 Claude subscription records report as unavailable and resolve to the `/login anthropic` update message.
+
+## [0.2.30] - 2026-10-16
+
+### Changed
+
+- Anthropic subscription requests run through a lunR-managed Claude Code 2.1.263, downloaded after confirmation and checked against a pinned npm hash. The Python bridge and its vendored transport are removed. Subscription turns reuse the Messages request builder and stream parser, so usage, signed thinking, and upstream errors match the API-key route. Connections from the Python-based setup need `/login anthropic` again.
+
+## [0.2.29] - 2026-10-11
+
+- Align the package version with the lunR 0.2.29 release.
+
+## [0.2.28] - 2026-10-04
+
+### Fixed
+
+- Provider accounting retains usage on failed responses, reported charges, reasoning tokens, and cache retention. Gemini long-context pricing uses the reviewed tiers.
+- Request-aware context estimates include system instructions and tool definitions and reject obsolete prompt measurements.
+
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Provider requests retain their credential identity and report safe Claude Code bridge errors.
+- Packaged Claude Code workers resolve their physical assets and retain distribution notices.
+
+## [0.2.26] - 2026-09-27
+
 ## [0.2.25] - 2026-09-26
 
 ## [0.2.24] - 2026-09-24

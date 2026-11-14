@@ -6,7 +6,7 @@
  * Tools: memory_add, memory_remove, memory_load.
  * Command: /memory-char-cap [n] — view or set the character cap (1..30000, default 5000).
  *
- * Loaded by pi via jiti — no build step, plain TypeScript.
+ * Registered as a built-in lunR extension and compiled with the coding-agent package.
  *
  * Types are declared inline (see the batxj-thinking extension for why:
  * pi-coding-agent's index.d.ts re-exports from internal .d.ts files with
@@ -21,6 +21,7 @@ import { Type } from "@sinclair/typebox";
 // lunr: concrete core-module import (never the package barrel) — resolves the
 // memory dir next to the lunr agent dir instead of the hardcoded ~/.pi below.
 import { getAgentDir } from "../config.js";
+import { globalBridge } from "../core/global-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Paths and config
@@ -53,8 +54,10 @@ interface MemoryCapBridge {
 	setCharCap(cap: number): void;
 }
 
+const capSlot = globalBridge<MemoryCapBridge>(Symbol.for("@lunr/memory-cap"));
+
 function getCapBridge(): MemoryCapBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/memory-cap")] as MemoryCapBridge | undefined;
+	return capSlot.get();
 }
 
 function isMemoryEnabled(): boolean {

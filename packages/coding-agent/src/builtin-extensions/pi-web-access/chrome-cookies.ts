@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { execFile } from "node:child_process";
 import { pbkdf2Sync, createDecipheriv } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";

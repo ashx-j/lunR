@@ -24,6 +24,7 @@ import {
 } from "./lunr-npm-names.mjs";
 
 import { addPayloadDependencies, release as computerRelease, stagePayloadPackages } from "./computer-use-packages.mjs";
+import { stagePackageNotice } from "./distribution-assets.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -66,12 +67,15 @@ const { values: options } = parseArgs({
 	options: {
 		"dry-run": { type: "boolean", default: false },
 		"pack-dir": { type: "string" },
+		// --manifest <file> records each package's name, version and packed integrity for scripts/verify-npm-release.mjs.
+		manifest: { type: "string" },
 		channel: { type: "string", default: "stable" },
 		version: { type: "string" },
 	},
 });
 const dryRun = options["dry-run"];
 const packDirectory = options["pack-dir"];
+const manifestPath = options.manifest;
 if (packDirectory && (!dryRun || !existsSync(packDirectory) || !statSync(packDirectory).isDirectory())) {
 	throw new Error("--pack-dir requires --dry-run and an existing destination directory.");
 }
@@ -149,6 +153,7 @@ function copyPackageForPublish(directory) {
 			return true;
 		},
 	});
+	stagePackageNotice(dest);
 	const sourcePkg = readPackageJson(directory);
 	const rewritten = rewritePackageJsonForNpm(sourcePkg, rewriteOptions);
 	if (rewritten.name === NPM_DEV_CLI_PACKAGE) cpSync("scripts/lunr-dev-readme.md", join(dest, "README.md"));
@@ -215,6 +220,8 @@ const packageStates = packages.map((pkg) => ({
 	version: publishVersion,
 }));
 
+const manifest = [];
+
 await (async () => {
 	const temps = [];
 	try {
@@ -249,6 +256,7 @@ await (async () => {
 			console.log(
 				`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked\n`,
 			);
+			manifest.push({ name: pkg.publishedName, version: pkg.version, integrity: packed.integrity });
 		}
 
 		for (const pkg of payloadStates) {
@@ -256,7 +264,9 @@ await (async () => {
 			const result = run("npm", ["pack", ...(packDirectory ? ["--pack-destination", packDirectory] : ["--dry-run"]), "--ignore-scripts", "--json"], { capture: true, cwd: pkg.stageDir });
 			const packed = Object.values(JSON.parse(result.stdout))[0];
 			console.log(`  ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked`);
+			manifest.push({ name: pkg.publishedName, version: pkg.version, integrity: packed.integrity });
 		}
+		if (manifestPath) writeFileSync(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
 		if (dryRun) return;
 		if (packageStates.find((pkg) => pkg.workspaceName === "@earendil-works/pi-coding-agent").published && payloadStates.some((pkg) => !pkg.published)) {
 			throw new Error("Use a new lunR release version before publishing new optional payload packages.");

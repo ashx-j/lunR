@@ -96,6 +96,7 @@ export function extractModelIds(payload: unknown): string[] {
 
 /** Fetch JSON with a hard timeout; null on any network/HTTP/parse failure. Never throws. */
 async function fetchJson(url: string, timeoutMs: number, signal?: AbortSignal): Promise<unknown | null> {
+	if (signal?.aborted) return null;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	const onAbort = (): void => controller.abort();
@@ -129,7 +130,7 @@ export async function fetchLocalModelIds(
 ): Promise<string[] | null> {
 	const payload = await fetchJson(spec.modelsUrl, timeoutMs, signal);
 	if (payload !== null) return extractModelIds(payload);
-	if (spec.tagsUrl) {
+	if (spec.tagsUrl && !signal?.aborted) {
 		const fallback = await fetchJson(spec.tagsUrl, timeoutMs, signal);
 		if (fallback !== null) return extractModelIds(fallback);
 	}

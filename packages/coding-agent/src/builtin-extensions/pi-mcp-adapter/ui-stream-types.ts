@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { z } from "zod";
 
 export const UI_STREAM_HOST_CONTEXT_KEY = "pi-mcp-adapter/stream";

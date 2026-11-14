@@ -57,7 +57,7 @@ jobs:
         if: always()
         run: |
           if test -f .artifacts/model-catalog/sources.json; then
-            node -e 'const s=require("./.artifacts/model-catalog/sources.json"); for(const x of s) console.log(x.status+": "+x.url+" ("+x.fetchedAt+")")' >> "$GITHUB_STEP_SUMMARY"
+            node -e 'const s=require("./.artifacts/model-catalog/sources.json"); for(const x of s) console.log(x.status+": "+x.url+" ("+x.fetchedAt+")"+(x.quarantined?" quarantined: "+x.quarantined.join(", "):""))' >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         with:

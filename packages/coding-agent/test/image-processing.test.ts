@@ -5,6 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { convertToPng } from "../src/utils/image-convert.ts";
 import { formatDimensionNote, resizeImage } from "../src/utils/image-resize.ts";
+import { resizeImageInProcess } from "../src/utils/image-resize-core.ts";
+import { loadPhoton } from "../src/utils/photon.ts";
 
 // Small 2x2 red PNG image (base64) - generated with ImageMagick
 const TINY_PNG =
@@ -50,6 +52,33 @@ describe("convertToPng", () => {
 });
 
 describe("resizeImage", () => {
+	it.each([
+		[1, 10000],
+		[10000, 1],
+	])("keeps positive axes when resizing a %i x %i PNG", async (width, height) => {
+		const photon = await loadPhoton();
+		if (!photon) throw new Error("Photon fixture dependency is unavailable");
+		const source = new photon.PhotonImage(new Uint8Array(width * height * 4).fill(255), width, height);
+		try {
+			const result = await resizeImageInProcess(source.get_bytes(), "image/png");
+			expect(result).toMatchObject({
+				originalWidth: width,
+				originalHeight: height,
+				width: Math.min(width, 2000),
+				height: Math.min(height, 2000),
+			});
+			if (!result) throw new Error("Thin PNG resize failed");
+			expect(result.data.length).toBeLessThan(4.5 * 1024 * 1024);
+			const decoded = photon.PhotonImage.new_from_byteslice(Buffer.from(result.data, "base64"));
+			try {
+				expect([decoded.get_width(), decoded.get_height()]).toEqual([result.width, result.height]);
+			} finally {
+				decoded.free();
+			}
+		} finally {
+			source.free();
+		}
+	});
 	it("should keep caller input bytes intact", async () => {
 		const input = new Uint8Array(imageBytes(TINY_PNG));
 		const originalByteLength = input.byteLength;

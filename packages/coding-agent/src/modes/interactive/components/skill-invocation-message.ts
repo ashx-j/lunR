@@ -1,7 +1,7 @@
 import { Box, Markdown, type MarkdownTheme, Text } from "@earendil-works/pi-tui";
 import type { ParsedSkillBlock } from "../../../core/agent-session.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { keyText } from "./keybinding-hints.ts";
+import { expandKeyText } from "./keybinding-hints.ts";
 
 /**
  * Component that renders a skill invocation message with collapsed/expanded state.
@@ -23,6 +23,12 @@ export class SkillInvocationMessageComponent extends Box {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		this.updateDisplay();
+	}
+
+	/** A click toggles the card; `app.tools.expand` has no default key. */
+	handleClick(_localY: number, _width: number): boolean {
+		this.setExpanded(!this.expanded);
+		return true;
 	}
 
 	override invalidate(): void {
@@ -48,7 +54,7 @@ export class SkillInvocationMessageComponent extends Box {
 			const line =
 				theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) +
 				theme.fg("customMessageText", this.skillBlock.name) +
-				theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
+				theme.fg("dim", ` (${expandKeyText()} to expand)`);
 			this.addChild(new Text(line, 0, 0));
 		}
 	}

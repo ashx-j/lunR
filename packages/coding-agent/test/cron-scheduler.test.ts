@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CronJob,
 	createJob,
@@ -145,32 +145,86 @@ describe("runSchedulerTick", () => {
 			runJob: async () => {
 				// advanceNextRun already moved nextRunAt into the future before runJob.
 				advancedNextRunAt = getJob(job.id).nextRunAt;
-				await new Promise((resolve) => setTimeout(resolve, 5000));
+				// the run finishes 5s late: move the clock instead of sleeping.
+				vi.setSystemTime(Date.now() + 5000);
 				return "ok";
 			},
 		});
-		await runSchedulerTick(deps);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			await runSchedulerTick(deps);
+		} finally {
+			vi.useRealTimers();
+		}
 		const after = getJob(job.id);
 		// markJobRun must not re-anchor to the actual run time (now+5s) — it keeps
 		// the slot advanceNextRun computed before the run.
 		expect(after.nextRunAt).toBe(advancedNextRunAt);
 	});
 
-	it("times out a hanging job and records the error", async () => {
+	it("waits for timed-out work to settle and records only one failure", async () => {
 		const job = await createJob({ prompt: "p", schedule: "every 30m", name: "hangjob" });
 		await dueNow(job.id);
-		const { deps, calls } = makeDeps({
-			runJob: async () => {
-				await new Promise((resolve) => setTimeout(resolve, 10_000));
-				return "late";
-			},
+		let finish!: () => void;
+		let cancelled!: () => void;
+		const aborted = new Promise<void>((resolve) => {
+			cancelled = resolve;
 		});
-		await runSchedulerTick({ ...deps, jobTimeoutMs: 50 });
+		const delivered: string[] = [];
+		let settled = false;
+		const tick = runSchedulerTick({
+			jobTimeoutMs: 20,
+			runJob: async (_prompt, _job, signal) => {
+				signal.addEventListener("abort", cancelled, { once: true });
+				await new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+				return "late success";
+			},
+			deliverResult: async (_job, text) => {
+				delivered.push(text);
+			},
+		}).then(() => {
+			settled = true;
+		});
+		await aborted;
+		expect(settled).toBe(false);
+		expect(delivered).toEqual([]);
+		finish();
+		await tick;
+		expect(getJob(job.id).lastStatus).toBe("error");
+		expect(getJob(job.id).lastError).toContain("timed out");
+		expect(getJob(job.id).repeat.completed).toBe(1);
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toContain("failed");
+		expect(getLatestJobOutput(job.id)).toBeNull();
+	});
+
+	it("reports a one-shot missed beyond its grace through failure delivery", async () => {
+		const job = await createJob({ prompt: "p", schedule: "30m", name: "remindjob" });
+		await updateJob(job.id, { nextRunAt: new Date(Date.now() - 200_000).toISOString() });
+		const { deps, calls } = makeDeps({});
+		await runSchedulerTick(deps);
 		expect(calls.run).toHaveLength(0);
-		const after = getJob(job.id);
-		expect(after.lastStatus).toBe("error");
-		expect(after.lastError).toContain("timed out");
-		expect(calls.delivered[0]).toContain("Cron job 'hangjob' failed");
+		expect(calls.delivered).toEqual([
+			"Cron job 'remindjob' failed: missed one-shot schedule beyond the 120s recovery grace",
+		]);
+		expect(getJob(job.id).state).toBe("error");
+		await runSchedulerTick(deps);
+		expect(calls.delivered).toHaveLength(1);
+	});
+
+	it("leaves jobs the operator does not accept due and unclaimed", async () => {
+		const job = await createJob({ prompt: "p", schedule: "every 30m" });
+		await dueNow(job.id);
+		const slot = getJob(job.id).nextRunAt;
+		const { deps, calls } = makeDeps({});
+		await runSchedulerTick({ ...deps, accepts: () => false });
+		expect(calls.run).toHaveLength(0);
+		expect(getJob(job.id).nextRunAt).toBe(slot);
+		expect(getJob(job.id).activeRun).toBeUndefined();
+		await runSchedulerTick(deps);
+		expect(calls.run).toHaveLength(1);
 	});
 
 	it("completes one-shots after firing", async () => {
@@ -221,7 +275,7 @@ describe("startScheduler", () => {
 			expect(runs).toBe(1);
 			expect(getJob(job.id).state).toBe("completed");
 		} finally {
-			scheduler.stop();
+			await scheduler.stop();
 		}
 	});
 });

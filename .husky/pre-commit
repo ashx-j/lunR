@@ -8,31 +8,12 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Run the check script (formatting, linting, and type checking)
+# Run the check script (formatting, linting, repo rules and the browser smoke check)
 echo "Running formatting, linting, and type checking..."
 npm run check
 if [ $? -ne 0 ]; then
   echo "❌ Checks failed. Please fix the errors before committing."
   exit 1
-fi
-
-RUN_BROWSER_SMOKE=0
-for file in $STAGED_FILES; do
-  case "$file" in
-    packages/ai/*|packages/web-ui/*|package.json|package-lock.json)
-      RUN_BROWSER_SMOKE=1
-      break
-      ;;
-  esac
-done
-
-if [ $RUN_BROWSER_SMOKE -eq 1 ]; then
-  echo "Running browser smoke check..."
-  npm run check:browser-smoke
-  if [ $? -ne 0 ]; then
-    echo "❌ Browser smoke check failed."
-    exit 1
-  fi
 fi
 
 # Restage files that were previously staged and may have been modified by formatting

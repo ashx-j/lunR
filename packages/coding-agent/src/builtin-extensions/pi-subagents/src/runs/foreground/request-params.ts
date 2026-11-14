@@ -7,12 +7,22 @@ type RequestParams = {
 
 const LAUNCH_COMPATIBLE_ACTIONS = new Set(["schedule", "append-step", "resume", "steer"]);
 
+// Grok fills the flat schema, so a real single launch also carries dummy tasks/chain.
+// Edits the caller's fresh copy in place.
+function omitDummyFanoutBesideTask<T extends RequestParams>(params: T): T {
+	if (typeof params.task === "string" && params.task.length > 0) {
+		delete params.tasks;
+		delete params.chain;
+	}
+	return params;
+}
+
 function omitExecutionModeActionAlias<T extends RequestParams>(params: T): T {
 	const action = params.action?.toLowerCase();
 	if (action === "single" && params.task !== undefined) {
 		const rest = { ...params };
 		delete rest.action;
-		return rest;
+		return omitDummyFanoutBesideTask(rest);
 	}
 	if ((action === "parallel" || action === "tasks") && (params.tasks?.length ?? 0) > 0) {
 		const rest = { ...params };
@@ -33,12 +43,7 @@ function omitConflictingControlAction<T extends RequestParams>(params: T): T {
 	if (!action || LAUNCH_COMPATIBLE_ACTIONS.has(action) || !hasLaunchFields(params)) return params;
 	const rest = { ...params };
 	delete rest.action;
-	// Grok fills the flat schema, so a real single launch also carries dummy tasks/chain.
-	if (typeof rest.task === "string" && rest.task.length > 0) {
-		delete rest.tasks;
-		delete rest.chain;
-	}
-	return rest;
+	return omitDummyFanoutBesideTask(rest);
 }
 
 /** Drop execution-mode aliases and control actions mixed into a launch payload. */

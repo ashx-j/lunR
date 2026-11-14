@@ -107,6 +107,28 @@ describe("subagent async discovery and recovery guidance", () => {
 		expect(result).not.toContain("polling loops");
 	});
 
+	it("removes scheduling guidance in every ACP description mode", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-acp-guidance-"));
+		try {
+			fs.writeFileSync(
+				path.join(root, "subagent-tool-description.md"),
+				"{{fullDescription}}\n{{compactDescription}}",
+			);
+			for (const toolDescriptionMode of ["full", "compact", "custom"] as const) {
+				const text = buildSubagentToolDescription(
+					{ toolDescriptionMode },
+					{ cwd: root, agentDir: root, schedulingDisabled: true },
+				);
+				expect(text).toContain("Scheduled subagents are disabled in ACP sessions. Use the client's scheduler.");
+				expect(text).not.toContain("schedule-list");
+				expect(text).not.toContain("/schedule*");
+				expect(text).toContain(SUBAGENT_ASYNC_GUIDANCE);
+			}
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("describes omission, explicit foreground, and clarify in the schema", () => {
 		const properties = (SubagentParams as { properties: Record<string, { description?: string }> }).properties;
 		expect(properties.async.description).toContain("Defaults to true when omitted");

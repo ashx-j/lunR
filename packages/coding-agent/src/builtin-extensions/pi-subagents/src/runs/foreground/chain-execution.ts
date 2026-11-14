@@ -70,7 +70,7 @@ import { captureModelSelection, resolveExecutableChildModel } from "../shared/mo
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
-import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
+import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings, withChainHandoff } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
 import { acceptanceFailureMessage, aggregateAcceptanceReport, evaluateAcceptance, resolveEffectiveAcceptance } from "../shared/acceptance.ts";
@@ -115,7 +115,6 @@ interface ParallelChainRunInput {
 	sessionFileForIndex?: (idx?: number) => string | undefined;
 	sessionFileForTask?: (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
 	thinkingOverrideForTask?: (agentName: string, idx?: number, modelOverride?: string) => ChildRuntimeConfig["thinking"] | undefined;
-	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	signal?: AbortSignal;
@@ -295,7 +294,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(input.chainDir, behavior.output))
 				: undefined;
-			taskStr = injectSingleOutputInstruction(taskStr, outputPath, taskChildConfig);
+			taskStr = withChainHandoff(injectSingleOutputInstruction(taskStr, outputPath, taskChildConfig), input.stepIndex < input.totalSteps - 1);
 			const interruptController = new AbortController();
 			if (input.foregroundControl) {
 				input.foregroundControl.currentAgent = task.description || task.agent;
@@ -342,7 +341,6 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				sessionFile: input.sessionFileForTask?.(task.agent, input.globalTaskIndex + taskIndex, effectiveModel)
 					?? input.sessionFileForIndex?.(input.globalTaskIndex + taskIndex),
 				thinkingOverride: input.thinkingOverrideForTask?.(task.agent, input.globalTaskIndex + taskIndex, effectiveModel),
-				share: input.shareEnabled,
 				artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 				artifactConfig: input.artifactConfig,
 				outputPath,
@@ -426,6 +424,14 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			return result;
 		},
 		input.globalSemaphore,
+		{
+			signal: input.signal,
+			onAbort: (task) => ({
+				agent: task.agent, task: "(cancelled)", exitCode: 1, messages: [],
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+				error: "Subagent launch cancelled.",
+			}),
+		},
 	);
 
 	return parallelResults;
@@ -441,7 +447,6 @@ interface ChainExecutionParams {
 	signal?: AbortSignal;
 	runId: string;
 	cwd?: string;
-	shareEnabled: boolean;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
 	sessionFileForTask?: (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
@@ -510,7 +515,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		signal,
 		runId,
 		cwd,
-		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
 		sessionFileForTask,
@@ -750,7 +754,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					sessionFileForIndex,
 					sessionFileForTask,
 					thinkingOverrideForTask,
-					shareEnabled,
 					artifactConfig,
 					artifactsDir,
 					signal,
@@ -972,7 +975,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				sessionFileForIndex,
 				sessionFileForTask,
 				thinkingOverrideForTask,
-				shareEnabled,
 				artifactConfig,
 				artifactsDir,
 				signal,
@@ -1160,7 +1162,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 				: undefined;
-			stepTask = injectSingleOutputInstruction(stepTask, outputPath, agentConfig);
+			stepTask = withChainHandoff(injectSingleOutputInstruction(stepTask, outputPath, agentConfig), stepIndex < totalSteps - 1);
 			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`);
 			if (validationError) {
 				return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex }));
@@ -1230,7 +1232,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				sessionFile: sessionFileForTask?.(seqStep.agent, childIndex, effectiveModel)
 					?? sessionFileForIndex?.(childIndex),
 				thinkingOverride: thinkingOverrideForTask?.(seqStep.agent, childIndex, effectiveModel),
-				share: shareEnabled,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
 				outputPath,

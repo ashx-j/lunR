@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 
-export type Mode = "text" | "json" | "rpc";
+export type Mode = "text" | "json" | "rpc" | "acp";
 
 export interface Args {
 	provider?: string;
@@ -77,7 +77,7 @@ export function parseArgs(args: string[]): Args {
 			result.version = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc") {
+			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "acp") {
 				result.mode = mode;
 			}
 		} else if (arg === "--continue" || arg === "-c") {
@@ -220,7 +220,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
+	console.log(`${chalk.bold(APP_NAME)} - terminal coding agent with multi-provider models, subagents, cron and chat gateways
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
@@ -229,6 +229,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} setup                      Install Chromium and configure optional features
   ${APP_NAME} browser install            Repair Chromium after offline or ignored-script installs
   ${APP_NAME} features [list|enable|disable]
+  ${APP_NAME} doctor [keys]              Check logins, models, browser and gateway; keys tests shortcuts
   ${APP_NAME} uninstall                  Remove this ${APP_NAME} install (keeps agent dir unless --purge)
   ${APP_NAME} uninstall <source> [-l]    Remove an extension package (alias for remove)
   ${APP_NAME} install <source> [-l]      Install extension source and add to settings
@@ -238,13 +239,21 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} gateway […]                Chat gateway daemon (requires chat-platforms feature)
   ${APP_NAME} <command> --help           Show help for install/remove/uninstall/list/config
 
-${chalk.bold("Options:")}
-  --provider <name>              Provider name (default: google)
+${chalk.bold("Common options:")}
+  --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
+  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
+  --print, -p                    Non-interactive mode: process prompt and exit
+  --continue, -c                 Continue previous session
+  --resume, -r                   Select a session to resume
+  --mode <mode>                  Output mode: text (default), json, rpc, or acp
+
+${chalk.bold("All options:")}
+  --provider <name>              Provider to search for --model (default: any provider)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
-  --mode <mode>                  Output mode: text (default), json, or rpc
+  --mode <mode>                  Output mode: text (default), json, rpc, or acp
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
@@ -281,7 +290,7 @@ ${chalk.bold("Options:")}
   --help, -h                     Show this help
   --version, -v                  Show version number
 
-Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
+Extensions can register additional flags.${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
   # Interactive mode
@@ -326,11 +335,11 @@ ${chalk.bold("Examples:")}
   # Start with a specific thinking level
   ${APP_NAME} --thinking high "Solve this complex problem"
 
-  # Read-only mode (no file modifications possible)
+  # Allow only the file reading and search tools
   ${APP_NAME} --tools read,grep,find,ls -p "Review the code in src/"
 
   # Disable one tool while keeping the rest available
-  ${APP_NAME} --exclude-tools ask_question
+  ${APP_NAME} --exclude-tools web_search
 
   # Export a session file to HTML
   ${APP_NAME} --export ~/${CONFIG_DIR_NAME}/agent/sessions/--path--/session.jsonl
@@ -379,7 +388,6 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 
 ${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents

@@ -122,6 +122,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -524,11 +525,17 @@ function handleMetadata(
 	output: AssistantMessage,
 ): void {
 	if (event.usage) {
+		output.usage.measurement = "reported";
+		output.usage.cacheWrite1h = event.usage.cacheDetails
+			?.filter((detail) => detail.ttl === "1h")
+			.reduce((sum, detail) => sum + (detail.inputTokens ?? 0), 0);
 		output.usage.input = event.usage.inputTokens || 0;
 		output.usage.output = event.usage.outputTokens || 0;
 		output.usage.cacheRead = event.usage.cacheReadInputTokens || 0;
 		output.usage.cacheWrite = event.usage.cacheWriteInputTokens || 0;
-		output.usage.totalTokens = event.usage.totalTokens || output.usage.input + output.usage.output;
+		output.usage.totalTokens =
+			event.usage.totalTokens ??
+			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 		calculateCost(model, output.usage);
 	}
 }

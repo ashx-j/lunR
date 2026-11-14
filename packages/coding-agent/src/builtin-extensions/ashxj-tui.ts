@@ -11,7 +11,7 @@
  *     around the input.
  *   - No session-mode indicator anywhere (pi has no such concept).
  *
- * Loaded by pi via jiti — no build step, plain TypeScript.
+ * Registered as a built-in lunR extension and compiled with the coding-agent package.
  *
  * NOTE on type imports (see `ashxj-thinking`/`simple-memory` for the convention):
  * This file declares structural types inline rather than importing them from
@@ -22,7 +22,8 @@
  * self-contained with inline types and verify via the included `tsconfig.json`
  * (`moduleResolution: "Bundler"` + `skipLibCheck: true`).
  *
- * The ONE exception is `CustomEditor`, imported as a RUNTIME VALUE directly
+ * Besides the dependency-free `globalBridge` helper from `core/global-bridge.ts`,
+ * the ONE exception is `CustomEditor`, imported as a RUNTIME VALUE directly
  * from its defining module (`modes/interactive/components/custom-editor.ts`).
  * We must `extends` it to inherit pi's app keybindings (escape, ctrl+d, model
  * switching, extension shortcuts) — wrapping would lose those. It is imported
@@ -31,6 +32,7 @@
  * under vite-node (`Class extends value undefined`).
  */
 
+import { globalBridge } from "../core/global-bridge.ts";
 import { CustomEditor } from "../modes/interactive/components/custom-editor.js";
 
 const CUSTOMIZE_BRIDGE = Symbol.for("@lunr/customize");
@@ -52,14 +54,16 @@ interface CustomizeBridgeForPrompt {
 interface PermissionModeBridgeForFooter {
 	getMode(): string | undefined;
 }
+const customizeSlot = globalBridge<CustomizeBridgeForPrompt>(CUSTOMIZE_BRIDGE);
+const permissionModeSlot = globalBridge<PermissionModeBridgeForFooter>(PERMISSION_MODE_BRIDGE);
 function lunrCustomizeBridge(): CustomizeBridgeForPrompt | undefined {
-	return (globalThis as Record<symbol, unknown>)[CUSTOMIZE_BRIDGE] as CustomizeBridgeForPrompt | undefined;
+	return customizeSlot.get();
 }
 function lunrPermissionModeBridge(): PermissionModeBridgeForFooter | undefined {
-	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE] as PermissionModeBridgeForFooter | undefined;
+	return permissionModeSlot.get();
 }
-// lunr: footer toggles, read at render time. Bridgeless / missing-getter fallback
-// matches the settings-manager defaults: MCP on, LSP off, everything else on.
+// lunr: read footer toggles at render time, with settings-manager defaults
+// when the bridge or a getter is unavailable.
 function lunrFooterToggles(): {
 	mcp: boolean;
 	lsp: boolean;
@@ -77,23 +81,19 @@ function lunrFooterToggles(): {
 		mcp: bridge?.getFooterMcp?.() ?? true,
 		lsp: bridge?.getFooterLsp?.() ?? false,
 		context: bridge?.getFooterContext?.() ?? true,
-		tokens: bridge?.getFooterTokens?.() ?? true,
+		tokens: bridge?.getFooterTokens?.() ?? false,
 		cacheHitRate: bridge?.getFooterCacheHitRate?.() ?? true,
-		tps: bridge?.getFooterTps?.() ?? true,
+		tps: bridge?.getFooterTps?.() ?? false,
 		statuses: bridge?.getFooterStatuses?.() ?? true,
-		git: bridge?.getFooterGit?.() ?? true,
+		git: bridge?.getFooterGit?.() ?? false,
 		plan: bridge?.getFooterPlan?.() ?? true,
-		planBar: bridge?.getFooterPlanBar?.() ?? true,
+		planBar: bridge?.getFooterPlanBar?.() ?? false,
 	};
 }
 
-const USAGE_SERVICE_BRIDGE = Symbol.for("@lunr/usage-service");
 interface UsageServiceBridgeForFooter {
 	pickForFooter?(providerId: string): { label: string; usedPercent: number } | undefined;
 	prefetch?(providerId: string): void;
-}
-function lunrUsageBridge(): UsageServiceBridgeForFooter | undefined {
-	return (globalThis as Record<symbol, unknown>)[USAGE_SERVICE_BRIDGE] as UsageServiceBridgeForFooter | undefined;
 }
 
 function compactPlanBar(percent: number, theme: Theme): string {
@@ -234,6 +234,11 @@ interface ExtensionUIContextLike {
 
 /** Trimmed view of `ExtensionContext`. */
 interface ExtensionContextLike {
+	modelRegistry?: {
+		getUsageServiceBridge?(): UsageServiceBridgeForFooter | undefined;
+		/** Cached snapshot of models whose provider has a key or login. */
+		getAvailable?(): readonly unknown[];
+	};
 	mode: "tui" | "rpc" | "json" | "print";
 	hasUI: boolean;
 	model: ModelLike | undefined;
@@ -526,12 +531,18 @@ function colorEffort(theme: Theme | undefined, level: ThinkingLevel, text: strin
 	return painted;
 }
 
+// The agent's placeholder model (`unknown`/`unknown`) stands in when nothing is selected.
+function hasNoModel(model: ModelLike | undefined): boolean {
+	return !model || (model.provider === "unknown" && model.id === "unknown");
+}
+
 function buildChip(ctx: ExtensionContextLike, pi: ExtensionAPI): { left: string; effort: string; level: ThinkingLevel } {
+	const level = pi.getThinkingLevel();
+	if (hasNoModel(ctx.model)) return { left: "no model", effort: "", level };
 	const modelId = ctx.model?.id ?? "no-model";
 	const provider = ctx.model?.provider;
 	const providerLabel = formatProviderLabel(provider);
 	const fast = provider === "openai-codex" && lunrCustomizeBridge()?.getOpenAIFastMode?.() ? " · fast" : "";
-	const level = pi.getThinkingLevel();
 	const effort = formatChipEffort(level);
 	return { left: `${modelId}${fast} · ${providerLabel} · `, effort, level };
 }
@@ -588,14 +599,14 @@ export class ChatboxEditor extends CustomEditor {
 	}
 
 	override render(width: number): string[] {
-		// Too narrow to draw a box — defer to the base editor, clamped.
-		if (width <= 4) {
+		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
+		const glyphW = displayWidth(glyph);
+		// Leave at least one column after the rails and prompt gutter.
+		if (width <= 4 + glyphW) {
 			return clampLines(super.render(width), width);
 		}
 
 		// Rails: `│ ` (left) + ` │` (right) => 4 columns of chrome.
-		const glyph = lunrPromptGlyph(this.ctx.ui?.theme);
-		const glyphW = displayWidth(glyph);
 		const innerWidth = Math.max(1, width - 4 - glyphW);
 		const base = super.render(innerWidth);
 
@@ -748,7 +759,7 @@ export function renderStatsLine(
 	if (footerToggles.plan) {
 		const provider = ctx.model?.provider;
 		if (provider) {
-			const usage = lunrUsageBridge();
+			const usage = ctx.modelRegistry?.getUsageServiceBridge?.();
 			usage?.prefetch?.(provider);
 			const seg = usage?.pickForFooter?.(provider);
 			if (seg) {
@@ -760,8 +771,12 @@ export function renderStatsLine(
 		}
 	}
 
-	// 2) Context usage: `pct/window` (lunr: gated on footerContext).
-	if (footerToggles.context) {
+	// 2) Context usage: `pct/window` (lunr: gated on footerContext). Without a model it points at
+	// /model when some provider already has models, otherwise at /login.
+	if (footerToggles.context && hasNoModel(ctx.model)) {
+		const next = (ctx.modelRegistry?.getAvailable?.().length ?? 0) > 0 ? "/model" : "/login";
+		parts.push(color(theme, "dim", `no model · ${next}`));
+	} else if (footerToggles.context) {
 		const usage = ctx.getContextUsage();
 		const win = ctx.model?.contextWindow ?? usage?.contextWindow ?? 0;
 		const pct = usage?.percent == null ? "?" : `${Math.round(usage.percent)}%`;

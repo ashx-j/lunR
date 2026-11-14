@@ -67,7 +67,7 @@ export interface BashOperations {
 	 * @param command The command to execute
 	 * @param cwd Working directory
 	 * @param options Execution options
-	 * @returns Promise resolving to exit code (null if killed)
+	 * @returns Promise resolving to exit code (null if killed) and, when known, the signal that killed it
 	 */
 	exec: (
 		command: string,
@@ -78,7 +78,7 @@ export interface BashOperations {
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
 		},
-	) => Promise<{ exitCode: number | null }>;
+	) => Promise<{ exitCode: number | null; signal?: NodeJS.Signals | null }>;
 }
 
 /**
@@ -151,7 +151,7 @@ export function createLocalBashOperations(options?: { shellPath?: string; sessio
 				if (timedOut) {
 					throw new Error(`timeout:${timeout}`);
 				}
-				return { exitCode };
+				return { exitCode, signal: child.signalCode };
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
 				// lunr: unregister from /processes if the process has exited; keep it if still
@@ -425,6 +425,7 @@ export function createBashToolDefinition(
 
 			try {
 				let exitCode: number | null;
+				let exitSignal: NodeJS.Signals | null | undefined;
 				try {
 					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
 						onData: handleData,
@@ -433,6 +434,7 @@ export function createBashToolDefinition(
 						env: spawnContext.env,
 					});
 					exitCode = result.exitCode;
+					exitSignal = result.signal;
 				} catch (err) {
 					const snapshot = await finishOutput();
 					const { text } = formatOutput(snapshot, "");
@@ -448,7 +450,15 @@ export function createBashToolDefinition(
 
 				const snapshot = await finishOutput();
 				const { text: outputText, details } = formatOutput(snapshot);
-				if (exitCode !== 0 && exitCode !== null) {
+				if (exitCode === null) {
+					// No exit code means the process was killed (OOM killer, kill -9); never report that as success.
+					if (signal?.aborted) throw new Error(appendStatus(outputText, "Command aborted"));
+					const status = exitSignal
+						? `Command terminated by ${exitSignal}`
+						: "Command terminated without an exit code";
+					throw new Error(appendStatus(outputText, status));
+				}
+				if (exitCode !== 0) {
 					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
 				}
 				return { content: [{ type: "text", text: outputText }], details };

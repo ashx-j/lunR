@@ -51,7 +51,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `theme` | string | `"moon"` | Theme name (`"moon"` is the only built-in, or a custom theme name) |
+| `theme` | string | `"moon"` | Theme name (`"moon"` is the only built-in, or a custom theme name). `"<light>/<dark>"` picks the first theme on a light terminal background and the second otherwise |
 | `externalEditor` | string | `$VISUAL`, then `$EDITOR`, then Notepad on Windows or `nano` elsewhere | Command for Ctrl+G external editor; takes precedence over environment variables |
 | `quietStartup` | boolean | `false` | Hide startup header |
 | `smoothStreaming` | boolean | `false` | Reveal streamed responses grapheme by grapheme (~30 FPS). Interactive TUI only |
@@ -60,7 +60,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
-| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). Saved `"manual"` becomes yolo; saved `"plan"` becomes read-only. |
+| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). |
+| `autoReviewModel` | string | unset | `"provider/model"` that reviews risky actions in auto mode. Unset uses the provider's own reviewer (Claude Sonnet 5 for Anthropic, the session model for OpenAI, xAI and Qwen); other providers need one set |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
 | `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
 | `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |
@@ -68,9 +69,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |
-| `confirmLargeSubagentLaunches` | boolean | `true` | Ask once before aggregate launches of three or more children outside Auto mode |
-| `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |
-| `trackingId` | string | - | Analytics tracking identifier, generated when `enableAnalytics` is turned on |
+| `confirmLargeSubagentLaunches` | boolean | `false` | Ask once before aggregate launches of three or more children outside Auto mode |
 | `doubleEscapeAction` | string | `"tree"` | Idle action for double-escape: `"tree"`, `"fork"`, or `"none"`. Active async subagents take priority: double-Escape requests their stop |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
@@ -87,8 +86,6 @@ For VS Code, include `--wait` so lunR resumes after the editor exits:
 ```
 
 ### Offline and updates
-
-lunR does not use `enableInstallTelemetry`, `collapseChangelog`, `PI_SKIP_VERSION_CHECK`, or `PI_TELEMETRY`. There is no pi.dev latest-version or report-install ping.
 
 `lunr update` reinstalls global `@ashx-j/lunr` from npm. Catalog refresh is `/refresh`. Use `--offline` or `PI_OFFLINE=1` to skip startup network operations (npm update check, package update checks, live catalog probes). First interactive paint is already cache-only.
 
@@ -176,6 +173,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 | `terminal.showImages` | boolean | `true` | Show images in terminal (if supported) |
 | `terminal.imageWidthCells` | number | `60` | Preferred inline image width in terminal cells |
 | `terminal.clearOnShrink` | boolean | `false` | Clear empty rows when content shrinks (can cause flicker) |
+| `terminal.attentionNotification` | string | `"off"` | `"bell"` rings the terminal bell and `"desktop"` sends an OSC 9 notification when a run finishes or waits for an approval or question. Skipped while the terminal reports focus; terminals that don't report focus always get it |
 | `images.autoResize` | boolean | `true` | Resize images to 2000x2000 max |
 | `images.blockImages` | boolean | `false` | Block all images from being sent to LLM |
 
@@ -212,6 +210,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `enabledModels` | string[] | - | Model patterns for Ctrl+P cycling (same format as `--models` CLI flag) |
+| `clientScopedModelsOnly` | boolean | `false` | Apps connected over ACP or RPC, such as T3 Code, list only the `enabledModels` scope. The current model stays listed. With no scoped model available, apps list every model. Applies to app sessions started after the change |
 
 ```json
 {
@@ -232,14 +231,14 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | `footerMcp` | boolean | `true` | Show MCP status in the footer |
 | `footerLsp` | boolean | `false` | Show LSP status in the footer |
 | `footerContext` | boolean | `true` | Show context-usage pct/window |
-| `footerTokens` | boolean | `true` | Show ↑in ↓out token totals |
+| `footerTokens` | boolean | `false` | Show ↑in ↓out token totals |
 | `footerCacheHitRate` | boolean | `true` | Show the latest prompt cache-hit rate when reported |
-| `footerTps` | boolean | `true` | Show tokens/second. Independent of feature statuses |
+| `footerTps` | boolean | `false` | Show tokens/second. Independent of feature statuses |
 | `footerStatuses` | boolean | `true` | Show plan and goal status segments |
-| `footerGit` | boolean | `true` | Show git branch + added/removed |
+| `footerGit` | boolean | `false` | Show git branch + added/removed |
 | `footerPlan` | boolean | `true` | Show the subscription usage segment |
-| `footerPlanBar` | boolean | `true` | Show the █░ fill; off keeps the percent only |
-| `planUsageWindow` | string | `"5h"` | Preferred plan window: `"5h"` or `"weekly"`. Missing 5h falls back to weekly |
+| `footerPlanBar` | boolean | `false` | Show the █░ fill; off keeps the percent only |
+| `planUsageWindow` | string | `"weekly"` | Preferred plan window: `"5h"` or `"weekly"`. Missing 5h falls back to weekly |
 
 Customize these from `/settings` → Customize as well. The same menu controls `subagentSpinner` with an animated preview.
 
@@ -250,9 +249,9 @@ Customize these from `/settings` → Customize as well. The same menu controls `
 | `cronFallbackModels` | string[] | - | `provider/modelId` entries tried in order when a gateway cron fire fails. Hand-edited |
 | `rollbackEnabled` | boolean | `false` | Enable `/rollback` snapshots |
 | `rollbackTurns` | number | `2` | How many user-turns of snapshots to retain |
-| `rollbackCapture` | string | `"copies"` | Snapshot capture mode |
+| `rollbackCapture` | string | `"copies"` | Snapshot capture mode: `"copies"`, or `"hybrid"`, which also deletes files created outside tools when `rollbackScope` is `"tree"` |
 | `rollbackScope` | string | `"tools"` | What to snapshot |
-| `autoManageSubscriptions` | boolean | `false` | When true, subscription key switching is fully automatic (no manual picker) |
+| `autoManageSubscriptions` | boolean | `false` | Shown as Auto-rotate API keys. When true, lunR switches to the next saved API key after a usage limit without asking |
 
 ### Resources
 
@@ -268,7 +267,7 @@ Paths in `~/.lunr/agent/settings.json` resolve relative to `~/.lunr/agent`. Path
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands |
-| `skillTagCharacter` | `"+" \| "~" \| "$"` | `"+"` | Character that lists skills mid-message after a space |
+| `skillTagCharacter` | `"+" \| "~" \| "$"` | `"$"` | Character that lists skills mid-message after a space |
 
 Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.
 
@@ -278,7 +277,7 @@ String form loads all resources from a package:
 
 ```json
 {
-  "packages": ["pi-skills", "@org/my-extension"]
+  "packages": ["npm:@foo/lunr-tools", "npm:@org/my-extension"]
 }
 ```
 
@@ -288,8 +287,8 @@ Object form filters which resources to load:
 {
   "packages": [
     {
-      "source": "pi-skills",
-      "skills": ["brave-search", "transcribe"],
+      "source": "npm:@foo/lunr-tools",
+      "skills": ["review", "deploy"],
       "extensions": []
     }
   ]
@@ -316,7 +315,7 @@ See [packages.md](packages.md) for package management details.
     "maxRetries": 3
   },
   "enabledModels": ["claude-*", "gpt-4o"],
-  "packages": ["pi-skills"]
+  "packages": ["npm:@foo/lunr-tools"]
 }
 ```
 

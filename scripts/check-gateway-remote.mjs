@@ -54,8 +54,10 @@ const [{ AgentBridge }, { createRouter }, { loadGatewayConfig, saveGatewayConfig
 const { canonicalSessionPath } = await load("core/session-ownership.js");
 const cfg = loadGatewayConfig();
 cfg.telegram.enabled = true;
-cfg.telegram.allowedUsers = ["42"];
-cfg.owners = { telegram: ["42"], discord: [] };
+cfg.telegram.allowedUsers = [];
+cfg.owners = { telegram: [], discord: [] };
+const pairing = createPairingStore();
+assert.equal(pairing.approve("telegram", pairing.issueCode("telegram", "42")), "42");
 cfg.projectRoots = [workspace];
 cfg.defaultProject = workspace;
 cfg.streaming.enabled = false;
@@ -124,7 +126,7 @@ try {
 	} finally { reclaimed.dispose(); }
 	assert.equal(handoff.listHandoffCandidates().length, 1, "Continuation consumed the handoff mark");
 	await send("/new");
-	console.log("PASS: compiled gateway, first-use /start and /model, desktop continuation, write approval, failed final delivery recovery, /new, file download and reclaim.");
+	console.log("PASS: compiled gateway with ordinary pairing, first-use /start and /model, desktop continuation, write approval, failed final delivery recovery, /new, file download and reclaim.");
 } catch (error) {
 	process.exitCode = 1;
 	console.error(error);

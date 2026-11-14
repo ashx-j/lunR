@@ -1,12 +1,10 @@
 # Image-only computer use
 
-This dev-channel build combines stable lunR 0.2.25 and PR #77's current
-image-only computer use. The earlier image-only build shipped as
-`@ashx-j/lunr-dev@0.2.21-dev.12.1` and received user testing. The dev command
-is `lunr-dev`, including `lunr-dev update`; stable `lunr` stays separate. Both
-commands share `~/.lunr/agent` settings, credentials, and sessions. Smooth cursor
-animation is not implemented. Stable production publication remains blocked
-pending the native runtime's separate approval.
+Computer use lets the agent operate desktop applications from screenshots. The
+agent observes one window or the desktop as a single image, takes one action
+from that image, and gets a new image back. No accessibility tree is sent to
+the model. The native runtime is CuaDriver 0.28.1. Smooth cursor animation is
+not implemented. See [Known limitations](#known-limitations).
 
 ## Setup and permissions
 
@@ -43,13 +41,26 @@ Native tools are excluded from children and refuse child execution. Children
 with shell access are not OS-sandboxed. No raw driver administration, update,
 recording, or permission tool is exposed.
 
+## Recovery contract
+
+A failed tool result keeps its text, any recovery image, and structured outcome details together. The error flag does not mean the input had no effect. Results distinguish validation/preflight without dispatch from uncertain native delivery, and include the workflow state (`ready`, `stopped`, or `cleanup_unconfirmed`). A healthy workflow remains loaded after recoverable mistakes such as an expired or mismatched token or invalid coordinates. Use `computer_observe` directly for a new image and token; `computer_load` is not a runtime restart. Never replay an uncertain click or launch merely because the call reported an error. If the native response is settled and the target remains safe to capture, one recovery image may accompany the failure. When capture fails, do not infer the action failed or substitute another target automatically. An unavailable window calls for explicit app/window discovery or a desktop observation. Broken transport, cancellation, loss of ownership, and unconfirmed cleanup stop the workflow.
+
+Launch takes `{name}` only, without an observation token. It may activate an existing app, start a new one, or return without a usable window. If launch status or window discovery is uncertain, try `computer_apps` with the app name or a valid positive returned PID before deciding whether to launch again. Observe an exact discovered PID and window ID before input. Launch has a separate longer native timeout budget inside the 90-second workflow limit; a timeout does not prove that the app did not start.
+
 ## Observe, act, inspect
 
 1. Use `computer_apps` for app identities or windows for a PID. For a known app
    or title, pass `query` to avoid paging through unrelated identities. It matches
    a case-insensitive literal substring in `name`, `app_name`, or `title` before
-   pagination and display truncation. `total` counts matching rows. Omit `query`
-   to browse all rows. Results allowlist at most 50 rows and truncate titles to
+   pagination and display truncation in the requested collection: ordinary app
+   queries match apps, while a PID query matches that PID's windows. It does
+   not search every app's windows by title. `total` counts matching rows.
+   Omit `query` to browse all rows. With `include_windows:true`, a named app
+   query without `pid` also looks up windows for up to five matching running
+   PIDs, with at most 50 window rows. More than five matching PIDs asks for a
+   narrower query or an explicit PID, rather than choosing one arbitrarily.
+   Per-PID lookup failures and truncation are reported; an ordinary query
+   stays app-only and cheap. Results allowlist at most 50 rows and truncate titles to
    240 characters. Pass `next_offset` as `offset` with the same PID and query to
    retrieve more matches. Lists refresh per call, so changing native order can
    shift page boundaries. PID zero
@@ -60,13 +71,15 @@ recording, or permission tool is exposed.
 3. Choose one action from that image. Pass its `observation` token and coordinates
    in the returned image. The workflow applies the mapping; do not scale twice.
 4. Inspect the post-action image before continuing. The tool executes one action
-   and captures the same target once. It never polls or retries input internally.
+   and captures the same target once, including when a settled native refusal
+   permits safe recovery capture. It never polls or retries input internally.
 5. Call `computer_end` when finished.
 
 The token lasts 30 seconds, belongs to one exact target, and permits one action.
 Copy it exactly, without abbreviating or reconstructing it. A failed action
 consumes the active token. Capture again before any next action, including window
-focus. `background_unavailable` makes foreground input the next candidate after
+focus. Read-only app discovery preserves an existing token but does not renew
+its original 30-second expiry. `background_unavailable` makes foreground input the next candidate after
 a fresh capture, if permitted. Do not substitute another background shortcut.
 Token rejection does not prove foreground typing failed.
 
@@ -92,12 +105,15 @@ Pre-dispatch failures report `input:"not_dispatched"` and state that this call
 sent no input. They do not establish whether earlier calls had an effect. Token
 codes distinguish a missing active observation, a mismatched token, a wrong
 target, and expiry only while that state is available. A closed workflow cannot
-identify whether an old token was consumed or unknown. Once dispatch begins,
+identify whether an old token was consumed or unknown. Recoverable token
+rejections keep a healthy workflow open and report `input:"not_dispatched"`;
+they require a fresh image rather than a new load. Once dispatch begins,
 transport failure reports `input:"uncertain"` and possible effects. Neither path
 retries input. Unparseable driver text is omitted rather than forwarded as a
 message; structured refusal fields remain bounded and allowlisted.
 When input returns but its post-image fails, the tool reports possible effects
-and stops the workflow. Capture again before deciding; never repeat input blindly.
+and either allows an explicit fresh observation when safe or stops if runtime
+safety cannot be confirmed. Capture again before deciding; never repeat input blindly.
 After an unchanged post-image, the same action against identical captured pixels
 is refused. Pixel identity hashes decoded full-image RGBA values and dimensions,
 not PNG encoding bytes, before cropping or resizing. Full captures reuse the
@@ -112,6 +128,17 @@ index must equal the delivered count. The index is zero-based in Unicode code
 points, not UTF-16 units. Verify the field in a fresh image before considering a
 remaining suffix. `retryable` is driver advice, not permission or proof that
 repeating input is safe. The workflow never retries typing automatically.
+
+On supported Windows x64/arm64 hosts, `computer_hover` takes exactly
+`{desktop:true,foreground:true,observation,x,y}` from a fresh primary-desktop
+image. It moves the real pointer without pressing a button, waits about 700 ms
+with cancellation support, then returns one full-desktop post-image. A tooltip
+outside a selected crop may appear in that full image. Only the visible topmost
+application receives the hover, which can itself trigger application behavior;
+this is not background window hover or an all-monitor capture. Foreground
+control must be allowed and read-only mode blocks hover. The pinned Windows
+window-scoped movement is a synthetic overlay, so lunR does not offer window
+hover. macOS and unsupported platforms do not register this tool.
 
 ## Image contract and cost limits
 
@@ -144,23 +171,18 @@ capture. Post-action captures return the full target so dialogs outside a crop
 remain visible.
 
 Saved sessions retain the returned screenshots. Provider-facing screenshot
-history also accumulates until normal compaction. This change does not prune
-user images, rewrite saved sessions, or implement a generic rolling history
-filter. A targeted `context` hook could remove old computer screenshots while
-leaving sessions intact, but a rolling cutoff changes an earlier prompt prefix
-and can invalidate cached input. That tradeoff needs approved provider measurements
-before adopting a retention policy. Image-only is not automatically cheaper than
-text. Current cost controls bound each new payload, remove tree/JSON duplication,
-and combine one action with its post-image.
+history also accumulates until normal compaction. lunR does not prune
+old screenshots or rewrite saved sessions. Removing earlier images would change
+the prompt prefix and can invalidate cached input. Image-only is not
+automatically cheaper than text. lunR bounds each new payload, removes
+accessibility tree and raw JSON duplication, and combines one action with its
+post-image.
 
-## Cursor status
+## Cursor behavior
 
-Cursor animation remains a separate native-runtime decision. The inherited
-runtime launch still uses `--no-overlay`. Upstream Windows drag animation uses a
-timer separate from actual input, and desktop pointer movement can teleport.
-This branch does not claim smooth actual-cursor motion or synchronized drag
-feedback. Any eventual animation must stay local, preserve full gestures and
-cancellation, and send zero intermediate frames to the model.
+lunR does not animate the cursor. The runtime launches with `--no-overlay`, and
+desktop pointer movement can jump straight to its target. Smooth cursor motion
+and synchronized drag feedback are not provided.
 
 ## Ownership and cancellation
 
@@ -180,8 +202,7 @@ Release, cancellation, agent end, settings changes, and session shutdown close
 the owned runtime before releasing the lease. Queued work cannot survive
 cancellation. Unconfirmed shutdown retains ownership. Cancellation cannot retract
 already delivered input, and forced termination does not prove held input was
-released. Driver-internal helper lifetime and held-input cancellation still need
-native acceptance.
+released.
 
 Gateway cron creates fresh permission contexts with the configured default mode,
 without gateway approvals or its approval handler. Read-only blocks input, and
@@ -191,11 +212,8 @@ TUI cron continues to use its live permission context.
 
 ## Runtime and distribution
 
-The development pin is [CuaDriver 0.28.1](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.1),
-source `d8028a7943087ee258dc1b4d19dc12a7cd27669c`. Archive identities and approval
-are in `scripts/computer-use-release.json`; `release.generated.ts` derives from
-it. The upstream MIT license is under `native/computer-use`. No runtime pin or
-native binary changed in the image-only workflow work.
+lunR bundles [CuaDriver 0.28.1](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.1)
+as its native runtime. The upstream MIT license is under `native/computer-use`.
 
 The runtime resolves the host's optional payload package or matching archive
 beside a standalone executable. It verifies the archive, extracts a fresh
@@ -210,114 +228,19 @@ zero, disconnected sessions, and inaccessible/non-Default input desktops. It
 never switches desktops. Both platforms isolate profiles, strip inherited
 `CUA_*`, set standard permission mode, and disable telemetry/update checks.
 
-macOS preserves the unchanged signed app at its stable lunR-owned path, verifies
-its signature with `codesign --verify --deep --strict`, and launches that exact
-path through `open -n -g -W -a`. A private HOME, socket, stdin FIFO, and
-`--parent-liveness-stdio` isolate daemon state and lifetime. Shutdown uses the
-private PID-bound endpoint and waits for the app to exit. No re-signing occurs.
+On macOS, lunR launches the installed CuaDriver app with a private HOME, socket,
+and stdin pipe, so daemon state and lifetime stay isolated. Shutdown waits for
+the app to exit.
 
-Release staging creates exact-version host-specific optional payload packages.
-They contain unchanged archives and no install scripts. Workspace manifests keep
-unpublished payload dependencies out. Standalone asset copying selects one
-opaque archive. Stable publication remains gated on production approval and a
-new CLI version. Dev-channel update/publication changes were not ported here.
+The per-platform payload packages contain the unchanged upstream archive and no
+install scripts.
 
-## Verification and remaining acceptance
+## Known limitations
 
-After integrating v0.2.24 master, all five offline package builds and the Node
-bundle pass. With the PR #118 baseline repairs integrated, validation passes
-391 focused tests across 31 files and eight archive/package tests. Installation and archive staging tests now create inert
-fixtures, so source tests need no native release payload. The Windows installation
-test exercises real extraction, locking, cache reuse, and helper-tamper rejection
-without executing either fixture file. Fake-driver tests cover exact-token
-rejection with zero action dispatch, background refusal followed by fresh-capture
-foreground input, and uncertain or partial post-dispatch outcomes. Real PNG
-fixtures reproduce encoding-independent pixel identity and preserve crop mapping.
-First-paint and first-request checks pass for both browser settings; removing only
-`computer_load` reproduces master's unchanged tool hashes.
-
-All three pinned upstream archives match their committed byte counts and SHA-256
-hashes. Seven public-name tarballs staged with those unchanged real payloads pass
-relocated installation, first requests, all supported OS/CPU selections, omitted
-optional-payload recovery, and standalone installer `npm ci --ignore-scripts`.
-Staging validates rewritten JavaScript and declaration imports and exact payload
-versions in both locks. These checks ran on Windows x64 without launching the
-native driver; OS/CPU selection tests do not establish operation on other hardware.
-Archive integrity and packaging are verified, but native signing, permission and
-input acceptance remain separate. Production approval is still development-only;
-publication requires separate approval and a new CLI version.
-
-PR #77 also incorporates the separately tracked baseline repairs from PR #118.
-That work fixes AI catalog subpath resolution in extension loading and updates
-fixtures for current gateway, shutdown, provider and subscription contracts.
-Its 152 focused tests across ten files pass. The complete Ubuntu log before
-those repairs records 101 coding-agent failures across 27 suites and 11 AI
-failures, more than the subset exposed by check annotations. Agent passes
-181/181 in that run. Clean full-suite CI still requires broader baseline work;
-local Windows-only diagnostics are not evidence of Ubuntu failures.
-The automated checks did not operate a desktop or launch CuaDriver.
-
-A separately authorized Windows x64 smoke test used this branch's compiled
-computer tools with the real pinned runtime. It launched a new blank Notepad
-window, captured that exact window, and typed a fixed 39-character phrase using
-background delivery. The post-action screenshot showed the complete expected
-text and character count. The driver's outcome remained `unverifiable`; the
-image established the application effect. `computer_end` confirmed shutdown and
-released the desktop lease. No document was saved or installed CLI changed.
-This verifies basic launch, window capture and background text input only.
-A later Windows x64 test on an owned scratch Notepad window found that background
-Ctrl+A failed with `tool_invocation_failed`; a fresh image showed no selection.
-A fresh-token `foreground=true` retry initially returned the same XAML/UIA error.
-Pinned upstream source at `d8028a7943087ee258dc1b4d19dc12a7cd27669c`
-routes `hotkey` for a XAML window through UIA before checking `delivery_mode`.
-This native refusal was not a `background_unavailable` code. The unchanged
-screenshot established that the background shortcut had not selected the text.
-
-The Windows workflow now sends foreground modifier shortcuts without x/y through
-that pin's `press_key` with `modifiers`, whose foreground branch uses verified
-window focus and SendInput. Background shortcuts, keys with image coordinates,
-and non-Windows dispatch remain unchanged. On a subsequent parent-run test,
-foreground Ctrl+A selected all 39 characters in the same owned Notepad scratch;
-its post-action image showed the selection. Foreground Ctrl+N then opened a
-blank unsaved tab in that window, leaving the earlier scratch tab intact.
-
-The parent next cancelled a 2048-character `computer_text` call 86 ms after the
-real SDK call began, while it was still pending. The result reported
-`input_dispatch_failed`, `input:uncertain` and `cleanup:confirmed`. The native
-runtime exited and its desktop lease was absent before a fresh workflow captured
-the same owned window. That image showed exactly six characters in the new tab.
-This verifies partial text input followed by in-flight cancellation, cleanup and
-reacquisition, not a pre-dispatch cancellation or complete text delivery.
-`computer_end` shut down the new runtime and released its lease. Both tabs
-remained unsaved; other user documents were untouched. No global CLI changed.
-The complete-gesture tool API did not exercise held modifier or mouse-button
-release under abort, which remains unverified.
-
-The dev integration passed all five offline package builds, the Node bundle,
-265 focused tests across 23 suites, and eight archive/package tests. A real
-Photon fixture checks cropped pixels and coordinate mapping. First-paint and
-first-request checks passed with the regenerated supported-host fingerprint;
-removing only `computer_load` reproduced the unchanged unsupported-host baseline.
-Seven local dev tarballs passed relocated installation, OS/CPU payload selection,
-omitted-optional handling, and installer-lock checks. The dev publication workflow
-also passed. These historical results describe the dev integration. The current branch's
-stable packaging checks are recorded above.
-
-The user reported testing the published dev build; specific applications and
-scenarios were not supplied. This does not establish full platform acceptance.
-Native gates remain Windows locked/UAC/integrity states, other Electron/native
-apps, display scaling and moved/resized windows, Unicode, held modifier/button
-release under abort, and macOS TCC/LaunchServices/FIFO/shutdown on hardware.
-Provider-driven computer tool choice has not been live-qualified. Cursor/runtime
-changes need a separate scoped decision before implementation. Provider token
-savings remain unmeasured. An offline fake-driver discovery comparison finds a
-named app at row 118 of 139 synthetic apps in one query instead of three
-unfiltered pages. It
-returns one identity instead of 139 and 147 result-text characters instead of
-8699. The loaded computer-tool definitions grow by 230 serialized characters;
-the first-request definitions are unchanged because detailed tools load on demand.
-These are call and text-payload measurements, not model tokens or billing. The
-comparison uses no desktop, provider, screenshot resizing, or history pruning.
+- Behavior is not confirmed for Windows locked desktops, UAC prompts, elevated windows, Electron apps, display scaling, or moved and resized windows. macOS permission and shutdown behavior is also unconfirmed on real hardware.
+- Desktop hover coordinates and tooltips are untested on scaled displays.
+- Whether a held modifier key or mouse button is released when a call is cancelled during a gesture is untested.
+- How reliably models choose the computer tools, and any token savings, have not been measured.
 
 ## Privacy
 

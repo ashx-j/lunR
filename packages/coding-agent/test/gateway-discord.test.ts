@@ -411,12 +411,41 @@ describe("DiscordAdapter", () => {
 		await adapter.disconnect();
 	});
 
-	it("uses session model suggestions only for an authorized owner DM", async () => {
+	it("maps native commands in a guild channel to the same group session as messages there", async () => {
 		const client = new MockClient();
 		vi.spyOn(gatewayConfig, "loadGatewayConfig").mockReturnValue({
 			...gatewayConfig.defaultGatewayConfig(),
 			discord: CFG,
-			owners: { telegram: [], discord: ["42"] },
+		});
+		const { adapter, events } = await connectAdapter(client);
+		client.emit(Events.InteractionCreate, {
+			isButton: () => false,
+			isChatInputCommand: () => true,
+			isAutocomplete: () => false,
+			channelId: "guild-channel",
+			channel: { isThread: () => false, id: "guild-channel" },
+			user: { id: "42", username: "alice" },
+			inGuild: () => true,
+			commandName: "stop",
+			options: { getString: () => null },
+			id: "interaction-id",
+			reply: vi.fn().mockResolvedValue(undefined),
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events).toEqual([
+			expect.objectContaining({
+				text: "/stop",
+				source: expect.objectContaining({ chatId: "guild-channel", chatType: "group" }),
+			}),
+		]);
+		await adapter.disconnect();
+	});
+
+	it.each([true, false])("requires approval, not ownership, for model suggestions: %s", async (approved) => {
+		const client = new MockClient();
+		vi.spyOn(gatewayConfig, "loadGatewayConfig").mockReturnValue({
+			...gatewayConfig.defaultGatewayConfig(),
+			discord: { ...CFG, allowedUsers: approved ? ["42"] : [], allowedChats: [] },
 		});
 		const { adapter } = await connectAdapter(client);
 		const suggestions = vi.fn().mockResolvedValue(["provider/model-a", "provider/model-b"]);
@@ -434,7 +463,8 @@ describe("DiscordAdapter", () => {
 			respond,
 		});
 		await vi.advanceTimersByTimeAsync(0);
-		expect(respond).toHaveBeenCalledWith([{ name: "provider/model-b", value: "provider/model-b" }]);
+		expect(respond).toHaveBeenCalledWith(approved ? [{ name: "provider/model-b", value: "provider/model-b" }] : []);
+		expect(suggestions).toHaveBeenCalledTimes(approved ? 1 : 0);
 		await adapter.disconnect();
 	});
 

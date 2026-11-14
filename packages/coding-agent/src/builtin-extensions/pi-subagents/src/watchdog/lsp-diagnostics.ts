@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";

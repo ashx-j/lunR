@@ -4,24 +4,30 @@
  * Per-session only, with a configurable default for new sessions.
  *
  * - yolo: auto-approve tools; the agent may still ask questions.
- * - auto: fully autonomous; a system-prompt addendum steers the model to
- *         self-decide, and rollback is force-enabled for the session.
+ * - auto: like yolo, but AgentSession sends risky calls to a review model
+ *         first (see auto-review.ts), and rollback is force-enabled for the session.
  * - read-only: mutating tools are hard-blocked.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
- * the synchronous `_toolCallGates` loop. beforeToolCall is already async, so
- * awaiting the approval dialog is fine.
+ * the awaited `_toolCallGates` loop, which can also request host approval.
+ *
+ * "Autonomous" (no questions, AUTONOMOUS_ADDENDUM) is a separate per-session
+ * flag for /goal, subagents and ACP Autonomous, not a mode.
  *
  * State (mode + session-scoped approvals) is keyed by session id so
  * concurrent gateway chats do not share permission decisions.
  */
 
-import { dirname, join, resolve } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
-import { isUserInstructionsPath } from "./model-instructions.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
+import { protectedTargetWriteReason } from "./protected-targets.ts";
+
+export {
+	GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
+	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
+	SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
+} from "./protected-targets.ts";
 
 /** Shift+Tab cycle order. */
 export const PERMISSION_MODES = ["yolo", "auto", "read-only"] as const;
@@ -51,13 +57,14 @@ export function restorePermissionModeAfterPlan(
 
 export interface ApprovalRequest {
 	toolName: string;
-	/** "large-subagent-launch" or "plan" approval. */
+	/** "large-subagent-launch", "plan" or "auto-review" approval. */
 	action: string;
 	detail: string;
 	/** "large-subagent-launch" for aggregate child confirmation, "plan" for the
 	 *  present_plan plan-approval prompt — the UI renders a dedicated dialog
-	 *  for each instead of the generic tool dialog. */
-	kind?: "large-subagent-launch" | "plan";
+	 *  for each instead of the generic tool dialog. "auto-review" asks the user to
+	 *  decide an action after auto mode's review model kept blocking. */
+	kind?: "large-subagent-launch" | "plan" | "auto-review";
 }
 
 export type ApprovalDecision = "once" | "session" | "reject";
@@ -69,8 +76,8 @@ export type ApprovalResponse =
 	| { decision: "reject"; feedback: string }
 	| { decision: "approve"; feedback?: string };
 
-/** Read-only tools that never need approval. */
-const READ_ONLY_TOOLS = new Set([
+/** Read-only tools that never need approval. ACP extends this list for its client approval gate. */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"read",
 	"grep",
 	"find",
@@ -79,10 +86,6 @@ const READ_ONLY_TOOLS = new Set([
 	"web_fetch",
 	"fetch_content",
 	"get_search_content",
-	"sourcegraph",
-	"repo_map",
-	"symbol_outline",
-	"read_block",
 	"code_overview",
 	"ast_search",
 	"lsp_diagnostics",
@@ -95,6 +98,7 @@ const READ_ONLY_TOOLS = new Set([
 	"lsp_rename",
 	"memory_load",
 	"subagent_wait",
+	"pr_watch",
 	"subagent_supervisor",
 	"intercom",
 	"contact_supervisor",
@@ -103,6 +107,8 @@ const READ_ONLY_TOOLS = new Set([
 ]);
 
 export const NO_HANDLER_REASON = "Approval channel unavailable.";
+/** An approval channel rejects with this when nobody answered a plan prompt in time. */
+export const PLAN_APPROVAL_TIMEOUT_REASON = "Plan approval timed out.";
 export const LARGE_SUBAGENT_LAUNCH_REJECT_REASON = "Large subagent launch rejected by user.";
 export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch blocked: no approval channel available.";
 const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
@@ -110,6 +116,8 @@ const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 interface PermissionContext {
 	allowApprovals?: boolean;
 	mode: PermissionMode;
+	/** Set for /goal, subagents and ACP Autonomous: work without asking the user. */
+	autonomous?: boolean;
 	approvals: Set<string>;
 }
 
@@ -132,6 +140,16 @@ export function createPermissionContext(
 	contexts.set(sessionId, { mode, allowApprovals, approvals: new Set() });
 }
 
+/** Initialize shared session defaults without replacing caller-owned approval policy or grants. */
+export function initializePermissionContext(
+	sessionId: string,
+	mode: PermissionMode = defaultContext.mode,
+	overrideMode?: PermissionMode,
+): void {
+	if (!contexts.has(sessionId)) createPermissionContext(sessionId, mode);
+	if (overrideMode !== undefined) setPermissionMode(overrideMode, sessionId);
+}
+
 export function deletePermissionContext(sessionId: string): void {
 	contexts.delete(sessionId);
 }
@@ -142,6 +160,11 @@ export function getPermissionMode(sessionId?: string): PermissionMode {
 
 export function setPermissionMode(mode: PermissionMode, sessionId?: string): void {
 	getContext(sessionId).mode = mode;
+}
+
+/** Marks a session as working without asking the user, which also skips the large-launch confirmation. */
+export function setPermissionAutonomous(autonomous: boolean, sessionId?: string): void {
+	getContext(sessionId).autonomous = autonomous;
 }
 
 export function resetPermissions(defaultMode: PermissionMode = "yolo", sessionId?: string): void {
@@ -178,8 +201,30 @@ export function planApprovalResultText(resp: ApprovalResponse): string {
  * this fails OPEN when no approval handler is registered (or none is reachable,
  * e.g. a gateway turn without a chat context): headless sessions have no one to
  * show the dialog to, so the plan is presented and the user replies in chat
- * instead of deadlocking the turn. Everything else keeps fail-closed.
+ * instead of deadlocking the turn. A prompt nobody answered in time
+ * (PLAN_APPROVAL_TIMEOUT_REASON) reads the same way, not as a decline.
+ * Everything else keeps fail-closed.
  */
+/**
+ * Asks the user to decide an action auto mode's reviewer kept blocking or couldn't review.
+ * Returns undefined when no approval channel exists, so the caller keeps the block.
+ */
+export async function requestAutoReviewDecision(
+	request: { toolName: string; detail: string },
+	sessionId?: string,
+): Promise<"allow" | "reject" | undefined> {
+	const ctx = getContext(sessionId);
+	if (!approvalHandler || ctx.allowApprovals === false) return undefined;
+	const response = await approvalHandler({
+		toolName: request.toolName,
+		action: "auto-review",
+		detail: request.detail,
+		kind: "auto-review",
+	});
+	const decision = typeof response === "string" ? response : response.decision;
+	return decision === "reject" ? "reject" : "allow";
+}
+
 export async function requestPlanApproval(summary: string): Promise<string> {
 	if (!approvalHandler) return PLAN_PASS_THROUGH_TEXT;
 	let resp: ApprovalResponse;
@@ -187,7 +232,7 @@ export async function requestPlanApproval(summary: string): Promise<string> {
 		resp = await approvalHandler({ toolName: "present_plan", action: "plan", detail: summary, kind: "plan" });
 	} catch (err) {
 		const message = err instanceof Error ? err.message : "approval request failed";
-		if (message === NO_HANDLER_REASON) return PLAN_PASS_THROUGH_TEXT;
+		if (message === NO_HANDLER_REASON || message === PLAN_APPROVAL_TIMEOUT_REASON) return PLAN_PASS_THROUGH_TEXT;
 		return `Plan declined: ${message} — revise the plan and call present_plan again.`;
 	}
 	return planApprovalResultText(resp);
@@ -205,46 +250,13 @@ export function resetAllPermissionContexts(): void {
 }
 
 /** Appended to the system prompt while auto mode is active. */
-export const AUTO_MODE_ADDENDUM =
+export const AUTONOMOUS_ADDENDUM =
 	"You are running fully autonomously. Do not ask the user questions or wait for confirmation; make reasonable decisions and complete the task end-to-end.";
-
-function resolvePath(cwd: string, p: unknown): string {
-	if (typeof p !== "string") return "";
-	if (!p) return "";
-	return resolve(cwd, p);
-}
-
-export const GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON =
-	"The agents instruction tree is user-managed. The agent cannot change ~/.lunr/agent/agents/.";
-export const MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON =
-	"Memory is model-managed through the memory tools. Do not directly change ~/.lunr/simple-memory/memory.md.";
-export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
-	"lunR settings are user-managed through /settings. Do not directly change settings.json.";
 
 function protectedFileWriteReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
 	if (toolName !== "edit" && toolName !== "write" && toolName !== "code_rewrite") return undefined;
-	const target = resolvePath(cwd, input.path);
-	if (!target) return undefined;
-	const normalize = (path: string) => {
-		const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
-		return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-	};
-	if (isUserInstructionsPath(target, getAgentDir())) {
-		return GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON;
-	}
-	if (normalize(target) === normalize(join(dirname(getAgentDir()), "simple-memory", "memory.md"))) {
-		return MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON;
-	}
-	const globalSettings = normalize(join(getAgentDir(), "settings.json"));
-	const projectSettings = normalize(join(cwd, CONFIG_DIR_NAME, "settings.json"));
-	const normalizedTarget = normalize(target);
-	if (normalizedTarget === normalize(join(getAgentDir(), "install-features.json"))) {
-		return "Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.";
-	}
-	if (normalizedTarget === globalSettings || normalizedTarget === projectSettings) {
-		return SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON;
-	}
-	return undefined;
+	if (typeof input.path !== "string" || !input.path) return undefined;
+	return protectedTargetWriteReason(input.path, cwd);
 }
 
 interface RequestedChildLaunch {
@@ -322,18 +334,17 @@ function largeLaunchTaskSummary(
 }
 
 /**
- * Aggregate launch gate. A launch above LARGE_SUBAGENT_LAUNCH_THRESHOLD
- * parallel subagents in one `tasks`/`chain.parallel` call, or that many same-turn
- * SINGLE `subagent` calls) requires user approval in yolo mode; auto
- * mode runs it unconditionally.
- * Fail-closed without an approval handler.
+ * when confirmation is enabled, launches above the large-launch threshold
+ * require approval in yolo, including aggregate same-turn single calls.
+ * auto (where the reviewer checks launches) and autonomous sessions bypass
+ * confirmation. enabled confirmation fails closed without a handler.
  */
 async function gateLargeSubagentLaunch(
 	input: Record<string, unknown>,
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
-	if (ctx.mode === "auto") return undefined;
+	if (ctx.mode === "auto" || ctx.autonomous) return undefined;
 	if (options?.confirmLargeSubagentLaunches === false) return undefined;
 	const count = effectiveLargeSubagentLaunchCountForTurn(input, options?.assistantMessage);
 	if (count <= LARGE_SUBAGENT_LAUNCH_THRESHOLD) return undefined;
@@ -433,39 +444,49 @@ export async function gateToolCall(
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
-	if (ctx.mode === "read-only") {
-		const reason = readOnlyModeBlockReason(toolName, input);
-		if (reason) return { block: true, reason };
-		if (toolName === "mcp") {
-			if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
-				return { block: true, reason: "Read-only mode blocks MCP tool calls, connections, and authentication." };
-			}
-			return undefined;
-		}
-		if (toolName === "subagent") {
-			const action = input.action;
-			if (
-				getRequestedChildLaunches(input).some((child) => child.permissions === "full") ||
-				action === "resume" ||
-				action === "steer" ||
-				action === "append-step" ||
-				action === "schedule" ||
-				action === "schedule-cancel"
-			) {
-				return {
-					block: true,
-					reason: "Read-only mode cannot launch full-access children or change running children.",
-				};
-			}
-			return undefined;
-		}
-		if (toolName.startsWith("computer_")) return undefined;
-		if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
-		return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
-	}
+	if (ctx.mode === "read-only") return readOnlyModeBlock(toolName, input);
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);
 		if (launchResult) return launchResult;
 	}
 	return undefined;
+}
+
+/**
+ * Read-only mode's verdict for one tool call. ACP reuses it when the client
+ * switches to read-only while an approval for that call is still open.
+ */
+export function readOnlyModeBlock(
+	toolName: string,
+	input: Record<string, unknown>,
+): { block: true; reason: string } | undefined {
+	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
+	const reason = readOnlyModeBlockReason(toolName, input);
+	if (reason) return { block: true, reason };
+	if (toolName === "mcp") {
+		if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
+			return { block: true, reason: "Read-only mode blocks MCP tool calls, connections, and authentication." };
+		}
+		return undefined;
+	}
+	if (toolName === "subagent") {
+		const action = input.action;
+		if (
+			getRequestedChildLaunches(input).some((child) => child.permissions === "full") ||
+			action === "resume" ||
+			action === "steer" ||
+			action === "append-step" ||
+			action === "schedule" ||
+			action === "schedule-cancel"
+		) {
+			return {
+				block: true,
+				reason: "Read-only mode cannot launch full-access children or change running children.",
+			};
+		}
+		return undefined;
+	}
+	if (toolName.startsWith("computer_")) return undefined;
+	if (toolName === "bash" || toolName === "browser" || toolName === "code_rewrite") return undefined;
+	return { block: true, reason: `Read-only mode cannot verify that ${toolName} is safe.` };
 }

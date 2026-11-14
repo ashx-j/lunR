@@ -10,8 +10,10 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
+	stopPlanUsagePolling: () => void;
 	stopSmoothStreaming: () => void;
 	unregisterSignalHandlers: () => void;
+	session: { stopAdmission: () => void };
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
 	themeController: { disableAutoSync: () => void };
@@ -57,17 +59,21 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 
 		const order: string[] = [];
 		const dispose = deferred();
+		const disposeStarted = deferred();
 		const context: ShutdownThis = {
 			isShuttingDown: false,
+			stopPlanUsagePolling: vi.fn(),
 			stopSmoothStreaming: vi.fn(() => {
 				order.push("stopSmoothStreaming");
 			}),
 			unregisterSignalHandlers: vi.fn(() => {
 				order.push("unregister");
 			}),
+			session: { stopAdmission: vi.fn(() => order.push("stopAdmission")) },
 			runtimeHost: {
 				dispose: vi.fn(() => {
 					order.push("dispose");
+					disposeStarted.resolve();
 					return dispose.promise;
 				}),
 			},
@@ -85,15 +91,15 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		};
 
 		const shutdownPromise = callShutdown(context, { fromSignal: true });
-		await Promise.resolve();
+		await disposeStarted.promise;
 
-		expect(order).toEqual(["stopSmoothStreaming", "dispose"]);
+		expect(order).toEqual(["stopAdmission", "stopSmoothStreaming", "dispose"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 
 		dispose.resolve();
 		await shutdownPromise;
 
-		expect(order).toEqual(["stopSmoothStreaming", "dispose", "drainInput", "stop"]);
+		expect(order).toEqual(["stopAdmission", "stopSmoothStreaming", "dispose", "drainInput", "stop"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 	});
 });

@@ -39,8 +39,17 @@ export function keyDisplayText(keybinding: Keybinding): string {
 	return formatKeys(getKeybindings().getKeys(keybinding), { capitalize: true });
 }
 
+/**
+ * Key that toggles collapsed output, or "click" while `app.tools.expand` has no
+ * binding (the default). Use for "(<key> to expand)" hints on clickable cards.
+ */
+export function expandKeyText(): string {
+	return keyText("app.tools.expand") || "click";
+}
+
 export function keyHint(keybinding: Keybinding, description: string): string {
-	return theme.fg("dim", keyText(keybinding)) + theme.fg("muted", ` ${description}`);
+	const key = keybinding === "app.tools.expand" ? expandKeyText() : keyText(keybinding);
+	return theme.fg("dim", key) + theme.fg("muted", ` ${description}`);
 }
 
 export function rawKeyHint(key: string, description: string): string {

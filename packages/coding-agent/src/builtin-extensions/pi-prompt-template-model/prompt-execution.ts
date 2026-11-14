@@ -1,5 +1,4 @@
-// @ts-nocheck
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { substituteArgs } from "./args.ts";
 import { getResolvedModelRef, selectModelCandidate, type RegistryLike, type SelectedModelCandidate } from "./model-selection.ts";
 import type { PromptWithModel } from "./prompt-loader.ts";
@@ -17,7 +16,7 @@ export interface EmptyPromptAbort {
 }
 
 interface PromptExecutionOptions {
-	inheritedModel?: Model<any>;
+	inheritedModel?: Model<Api>;
 }
 
 export interface RenderedPrompt {
@@ -29,7 +28,7 @@ export interface RenderedPrompt {
 export function renderPromptForResolvedModel(
 	prompt: Pick<PromptWithModel, "name" | "content">,
 	args: string[],
-	model: Model<any>,
+	model: Model<Api>,
 ): RenderedPrompt {
 	const rendered = renderTemplateConditionals(prompt.content, getResolvedModelRef(model), prompt.name);
 	const content = substituteArgs(rendered.content, args);
@@ -45,7 +44,7 @@ export function renderPromptForResolvedModel(
 	};
 }
 
-function sameModel(a: Model<any> | undefined, b: Model<any> | undefined): boolean {
+function sameModel(a: Model<Api> | undefined, b: Model<Api> | undefined): boolean {
 	if (!a || !b) return a === b;
 	return a.provider === b.provider && a.id === b.id;
 }
@@ -53,7 +52,7 @@ function sameModel(a: Model<any> | undefined, b: Model<any> | undefined): boolea
 export async function preparePromptExecution(
 	prompt: Pick<PromptWithModel, "name" | "content" | "models">,
 	args: string[],
-	currentModel: Model<any> | undefined,
+	currentModel: Model<Api> | undefined,
 	modelRegistry: RegistryLike,
 	options?: PromptExecutionOptions,
 ): Promise<PreparedPromptExecution | EmptyPromptAbort | undefined> {

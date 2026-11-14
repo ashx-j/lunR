@@ -131,6 +131,9 @@ function shouldPollGitHead(repoDir: string): boolean {
 export class FooterDataProvider {
 	private cwd: string;
 	private static readonly WATCH_DEBOUNCE_MS = 500;
+	private static readonly DIFFSTAT_REFRESH_MS = 2000;
+	private diffstatTimer: ReturnType<typeof setTimeout> | null = null;
+	private diffstatStale = true;
 
 	private extensionStatuses = new Map<string, string>();
 	private cachedBranch: string | null | undefined = undefined;
@@ -164,8 +167,17 @@ export class FooterDataProvider {
 
 	/** Staged + unstaged added/removed vs HEAD. Null until the asynchronous lookup completes. */
 	getGitDiffstat(): { added: number; removed: number } | null {
-		if (this.cachedDiffstat === undefined && !this.refreshInFlight) {
+		if (this.diffstatStale && !this.refreshInFlight) {
 			void this.refreshGitData();
+		}
+		if (!this.disposed && !this.diffstatTimer) {
+			// Invalidate lazily. Only a footer that reads totals starts the next git lookup.
+			this.diffstatTimer = setTimeout(() => {
+				this.diffstatTimer = null;
+				this.diffstatStale = true;
+				this.notifyBranchChange();
+			}, FooterDataProvider.DIFFSTAT_REFRESH_MS);
+			this.diffstatTimer.unref();
 		}
 		return this.cachedDiffstat ?? null;
 	}
@@ -211,6 +223,8 @@ export class FooterDataProvider {
 		}
 
 		this.cwd = cwd;
+		this.clearDiffstatTimer();
+		this.diffstatStale = true;
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 			this.refreshTimer = null;
@@ -226,12 +240,18 @@ export class FooterDataProvider {
 	/** Internal: cleanup */
 	dispose(): void {
 		this.disposed = true;
+		this.clearDiffstatTimer();
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 			this.refreshTimer = null;
 		}
 		this.clearGitWatchers();
 		this.branchChangeCallbacks.clear();
+	}
+
+	private clearDiffstatTimer(): void {
+		if (this.diffstatTimer) clearTimeout(this.diffstatTimer);
+		this.diffstatTimer = null;
 	}
 
 	private notifyBranchChange(): void {
@@ -277,6 +297,7 @@ export class FooterDataProvider {
 			const diffChanged = prevDiff?.added !== nextDiff?.added || prevDiff?.removed !== nextDiff?.removed;
 			this.cachedBranch = nextBranch;
 			this.cachedDiffstat = nextDiff;
+			this.diffstatStale = false;
 			if (branchChanged || diffChanged) {
 				this.notifyBranchChange();
 			}

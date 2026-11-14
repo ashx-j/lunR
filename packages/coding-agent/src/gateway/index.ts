@@ -58,8 +58,8 @@ export const ADAPTER_FACTORIES: Record<string, (cfg: PlatformConfig) => Platform
 const KNOWN_PLATFORMS = ["telegram", "discord"] as const;
 
 const SETUP_INSTRUCTIONS: Record<string, string[]> = {
-	telegram: ["Telegram: run lunr gateway setup locally to configure the bot token and owner ID."],
-	discord: ["Discord: run lunr gateway setup locally to configure the bot token and owner ID."],
+	telegram: ["Telegram: run lunr gateway setup locally to configure the bot token and approved user ID."],
+	discord: ["Discord: run lunr gateway setup locally to configure the bot token and approved user ID."],
 };
 
 function printSetupInstructions(enabledButUnrunnable: string[]): void {
@@ -98,9 +98,7 @@ async function runPairApprove(platform: string, code: string | undefined, owner 
 		console.error(`Paired ${platform} user ${userId}, but could not persist allowedUsers: ${err}`);
 		return 1;
 	}
-	console.log(
-		`Approved ${platform} user ${userId}${owner ? " as owner with local project and TUI access" : " for chat only; owner access requires local --owner approval"}.`,
-	);
+	console.log(`Approved ${platform} user ${userId}. Gateway access includes local projects and saved sessions.`);
 	return 0;
 }
 
@@ -203,10 +201,11 @@ async function runDaemon(): Promise<number> {
 		if (stopping) return;
 		stopping = true;
 		owner.update(platformStatus, "stopping");
-		cron?.stop();
+		const cronStopped = cron?.stop();
 		for (const timer of retries) clearTimeout(timer);
 		stopButtonSweeper();
 		void (async () => {
+			await cronStopped;
 			await bridge.shutdown();
 			await Promise.all([...adapters.values()].map((adapter) => adapter.disconnect().catch(() => {})));
 			stopGatewayPresenter();

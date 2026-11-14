@@ -21,19 +21,32 @@ Extensions run wherever the `lunr` process runs. If you run host `lunr` with a t
 [Gondolin](https://github.com/earendil-works/gondolin) is a local Linux micro-VM.
 Use the [example extension](../examples/extensions/gondolin) when you want `lunr` on the host but all built-in tools routed into the VM.
 
-Setup:
+Setup. Copy the example from a git checkout of lunR:
 
 ```bash
-cp -R packages/coding-agent/examples/extensions/gondolin ~/.lunr/agent/extensions/gondolin
-cd ~/.lunr/agent/extensions/gondolin
+cp -R packages/coding-agent/examples/extensions/gondolin ~/lunr-gondolin
+```
+
+Or from a global npm install:
+
+```bash
+cp -R "$(npm root -g)/@ashx-j/lunr/examples/extensions/gondolin" ~/lunr-gondolin
+```
+
+Then install its dependencies:
+
+```bash
+cd ~/lunr-gondolin
 npm install --ignore-scripts
 ```
+
+Do not copy it into `~/.lunr/agent/extensions/`. lunR loads every extension in that folder in every session, so the VM (and QEMU) would start for all projects.
 
 Run from the project you want mounted:
 
 ```bash
 cd /path/to/project
-lunr -e ~/.lunr/agent/extensions/gondolin
+lunr -e ~/lunr-gondolin
 ```
 
 The extension mounts the host cwd at `/workspace` in the VM and overrides `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`.

@@ -1,8 +1,7 @@
-// @ts-nocheck
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { buildAllowAttribute } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type {
   CallToolRequest,
@@ -298,8 +297,10 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       }
 
       if (method === "GET" && url.pathname === "/app-bridge.bundle.js") {
-        // Serve the pre-bundled AppBridge module
-        const bundlePath = path.join(import.meta.dirname, "app-bridge.bundle.js");
+        // Serve the AppBridge browser bundle that scripts/build-node-runtime.mjs writes next to
+        // the compiled module. The Node bundle rewrites import.meta.url to that original dist path;
+        // source runs and the standalone binary have no bundle and answer 500.
+        const bundlePath = fileURLToPath(new URL("./app-bridge.bundle.js", import.meta.url));
         try {
           const content = await fs.readFile(bundlePath, "utf-8");
           res.writeHead(200, {

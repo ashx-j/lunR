@@ -40,6 +40,8 @@ function couldBeEmoji(segment: string): boolean {
 const zeroWidthRegex = /^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Mark}|\p{Surrogate})+$/v;
 const leadingNonPrintingRegex = /^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}\p{Surrogate}]+/v;
 const rgiEmojiRegex = /^\p{RGI_Emoji}$/v;
+// Code points that take a cell in wcwidth terminals: everything except nonspacing/enclosing marks and format/ignorable characters.
+const indicSpacingRegex = /[^\p{Mn}\p{Me}\p{Cf}\p{Default_Ignorable_Code_Point}]/gv;
 
 // Cache for non-ASCII strings
 const WIDTH_CACHE_SIZE = 512;
@@ -193,6 +195,15 @@ function graphemeWidth(segment: string): number {
 		return 2;
 	}
 
+	// Indic scripts (Devanagari through Sinhala) put spacing vowel signs and whole conjuncts such as
+	// "क्ष" into one grapheme. Terminals disagree on that cluster's width: wcwidth-based ones (xterm,
+	// VTE, xterm.js, Alacritty, tmux) give each code point except Mn/Me/Cf its own cell, so "हिन्दी"
+	// is 5, while grapheme-mode ones (kitty, Ghostty) give each cluster one cell. Use the per-code-point
+	// count, the larger of the two, so a line never overflows and auto-wraps.
+	if (cp >= 0x0900 && cp <= 0x0dff) {
+		return base.match(indicSpacingRegex)?.length ?? 0;
+	}
+
 	let width = eastAsianWidth(cp);
 
 	// Trailing halfwidth/fullwidth forms and AM vowels that segment with a base.
@@ -313,10 +324,14 @@ export function extractAnsiCode(str: string, pos: number): { code: string; lengt
 
 	const next = str[pos + 1];
 
-	// CSI sequence: ESC [ ... m/G/K/H/J
+	// CSI sequence: ESC [ parameter/intermediate bytes, then one final byte in 0x40-0x7E
 	if (next === "[") {
 		let j = pos + 2;
-		while (j < str.length && !/[mGKHJ]/.test(str[j]!)) j++;
+		while (j < str.length) {
+			const code = str.charCodeAt(j);
+			if (code >= 0x40 && code <= 0x7e) break;
+			j++;
+		}
 		if (j < str.length) return { code: str.substring(pos, j + 1), length: j + 1 - pos };
 		return null;
 	}

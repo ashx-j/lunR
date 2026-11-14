@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_diagnostics — Get compilation errors and warnings for a file or the whole workspace.
  *

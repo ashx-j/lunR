@@ -134,6 +134,9 @@ export function rewritePackageJsonForNpm(pkg, options = {}) {
 		out.bin = { "lunr-dev": "dist/dev-cli.js" };
 		out.piConfig = { ...out.piConfig, name: "lunr-dev" };
 	}
+	if (Array.isArray(out.files) && !out.files.includes("THIRD_PARTY_NOTICES")) {
+		out.files.push("THIRD_PARTY_NOTICES");
+	}
 
 	for (const field of DEP_FIELDS) {
 		const deps = out[field];

@@ -27,6 +27,16 @@ import {
   type StoredClientInfo,
 } from "./mcp-auth.ts"
 
+import { throwIfAborted } from "./abort.ts"
+
+/** Temporary authorization state belongs to one flow, never the credential cache. */
+export interface McpOAuthFlowState {
+  oauthState: string
+  codeVerifier?: string
+  signal: AbortSignal
+  clientInfo?: StoredClientInfo
+}
+
 // Callback server configuration
 const DEFAULT_OAUTH_CALLBACK_PORT = 19876
 const DEFAULT_OAUTH_CALLBACK_PATH = "/callback"
@@ -85,13 +95,22 @@ export interface McpOAuthCallbacks {
  */
 export class McpOAuthProvider implements OAuthClientProvider {
   private readonly redirectUrlSnapshot: string | undefined
+  private flowClientInfo?: StoredClientInfo
+  private flowClientInfoLoaded = false
 
   constructor(
     private serverName: string,
     private serverUrl: string,
     private config: McpOAuthConfig,
     private callbacks: McpOAuthCallbacks,
+    private flowState?: McpOAuthFlowState,
   ) {
+    if (flowState) {
+      const info = flowState.clientInfo
+      this.flowClientInfo = info?.clientSecretExpiresAt && info.clientSecretExpiresAt < Date.now() / 1000
+        ? undefined : info
+      this.flowClientInfoLoaded = true
+    }
     this.redirectUrlSnapshot = config.grantType === "client_credentials"
       ? undefined
       : config.redirectUri ?? `http://localhost:${getOAuthCallbackPort()}${getOAuthCallbackPath()}`
@@ -116,8 +135,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   get clientMetadata(): OAuthClientMetadata {
     if (this.usesClientCredentials) {
       return {
-        client_name: this.config.clientName ?? "Pi Coding Agent",
-        client_uri: this.config.clientUri ?? "https://github.com/nicobailon/pi-mcp-adapter",
+        client_name: this.config.clientName ?? "lunR",
+        ...(this.config.clientUri ? { client_uri: this.config.clientUri } : {}),
         redirect_uris: [],
         grant_types: ["client_credentials"],
         token_endpoint_auth_method: this.config.clientSecret ? "client_secret_post" : "none",
@@ -131,8 +150,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
     return {
       redirect_uris: [redirectUrl],
-      client_name: this.config.clientName ?? "Pi Coding Agent",
-      client_uri: this.config.clientUri ?? "https://github.com/nicobailon/pi-mcp-adapter",
+      client_name: this.config.clientName ?? "lunR",
+      ...(this.config.clientUri ? { client_uri: this.config.clientUri } : {}),
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: this.config.clientSecret ? "client_secret_post" : "none",
@@ -153,28 +172,28 @@ export class McpOAuthProvider implements OAuthClientProvider {
       }
     }
 
-    // Check stored client info (from dynamic registration)
-    // Use getAuthForUrl to validate credentials are for the current server URL
-    const entry = await getAuthForUrl(this.serverName, this.serverUrl)
-    if (entry?.clientInfo) {
-      // Check if client secret has expired
-      if (entry.clientInfo.clientSecretExpiresAt && entry.clientInfo.clientSecretExpiresAt < Date.now() / 1000) {
-        return undefined
-      }
-      return {
-        client_id: entry.clientInfo.clientId,
-        client_secret: entry.clientInfo.clientSecret,
-      }
+    // An active flow keeps the registration it started with even if another
+    // session uses the same server name with a different endpoint.
+    if (!this.flowState || !this.flowClientInfoLoaded) {
+      const entry = await getAuthForUrl(this.serverName, this.serverUrl)
+      throwIfAborted(this.flowState?.signal)
+      const info = entry?.clientInfo
+      this.flowClientInfo = info?.clientSecretExpiresAt && info.clientSecretExpiresAt < Date.now() / 1000
+        ? undefined : info
+      this.flowClientInfoLoaded = true
     }
-
-    // No client info or URL changed - will trigger dynamic registration
-    return undefined
+    if (!this.flowClientInfo) return undefined
+    return {
+      client_id: this.flowClientInfo.clientId,
+      client_secret: this.flowClientInfo.clientSecret,
+    }
   }
 
   /**
    * Save client information from dynamic registration.
    */
   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+    throwIfAborted(this.flowState?.signal)
     const redirectUris = info.redirect_uris ?? (this.redirectUrl ? [this.redirectUrl] : undefined)
     const clientInfo: StoredClientInfo = {
       clientId: info.client_id,
@@ -182,6 +201,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
       clientIdIssuedAt: info.client_id_issued_at,
       clientSecretExpiresAt: info.client_secret_expires_at,
       redirectUris,
+    }
+    if (this.flowState) {
+      this.flowClientInfo = clientInfo
+      this.flowClientInfoLoaded = true
     }
     updateClientInfo(this.serverName, clientInfo, this.serverUrl)
   }
@@ -210,11 +233,17 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * Save OAuth tokens.
    */
   async saveTokens(tokens: OAuthTokens): Promise<void> {
+    throwIfAborted(this.flowState?.signal)
     const storedTokens: StoredTokens = {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt: tokens.expires_in ? Date.now() / 1000 + tokens.expires_in : undefined,
       scope: tokens.scope,
+    }
+    // Keep the completed flow's registration with its tokens if another
+    // same-name endpoint replaced the shared credential entry meanwhile.
+    if (this.flowState && this.flowClientInfo) {
+      updateClientInfo(this.serverName, this.flowClientInfo, this.serverUrl)
     }
     updateTokens(this.serverName, storedTokens, this.serverUrl)
   }
@@ -223,14 +252,19 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * Redirect the user to the authorization URL.
    * This opens the browser for the user to authenticate.
    *
-   * Throws UnauthorizedError when called outside of a user-initiated flow
-   * (no oauthState saved by startAuth). That path is reached when the SDK
+   * Throws UnauthorizedError when called without owned or legacy flow state.
+   * That path is reached when the SDK
    * falls through from a failed refresh into a fresh authorization_code
    * flow, which library hosts cannot complete in-process.
    */
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     if (this.usesClientCredentials) {
       throw new Error("redirectToAuthorization is not used for client_credentials flow")
+    }
+    throwIfAborted(this.flowState?.signal)
+    if (this.flowState) {
+      await this.callbacks.onRedirect(authorizationUrl)
+      return
     }
     // No saved oauthState means we're on the post-refresh authorize fallback.
     const entry = await getAuthForUrl(this.serverName, this.serverUrl)
@@ -247,6 +281,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * Save the PKCE code verifier.
    */
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
+    throwIfAborted(this.flowState?.signal)
+    if (this.flowState) {
+      this.flowState.codeVerifier = codeVerifier
+      return
+    }
     updateCodeVerifier(this.serverName, codeVerifier, this.serverUrl)
   }
 
@@ -255,6 +294,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * @throws Error if no code verifier is stored
    */
   async codeVerifier(): Promise<string> {
+    throwIfAborted(this.flowState?.signal)
+    if (this.flowState) {
+      if (!this.flowState.codeVerifier) throw new Error(`No code verifier saved for MCP server: ${this.serverName}`)
+      return this.flowState.codeVerifier
+    }
     if (this.usesClientCredentials) {
       throw new Error("codeVerifier is not used for client_credentials flow")
     }
@@ -269,6 +313,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * Save the OAuth state parameter for CSRF protection.
    */
   async saveState(state: string): Promise<void> {
+    throwIfAborted(this.flowState?.signal)
+    if (this.flowState) {
+      this.flowState.oauthState = state
+      return
+    }
     updateOAuthState(this.serverName, state, this.serverUrl)
   }
 
@@ -277,6 +326,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * @throws UnauthorizedError if no flow is in progress (see redirectToAuthorization)
    */
   async state(): Promise<string> {
+    throwIfAborted(this.flowState?.signal)
+    if (this.flowState) return this.flowState.oauthState
     if (this.usesClientCredentials) {
       throw new Error("state is not used for client_credentials flow")
     }
@@ -294,6 +345,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * Clears tokens, client info, or all credentials based on the type.
    */
   async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
+    throwIfAborted(this.flowState?.signal)
+    if (this.flowState && type !== "tokens") {
+      this.flowClientInfo = undefined
+      this.flowClientInfoLoaded = true
+    }
     switch (type) {
       case "all":
         clearAllCredentials(this.serverName)

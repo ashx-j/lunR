@@ -1,4 +1,3 @@
-// @ts-nocheck
 interface CompletionDataLike {
 	id?: unknown;
 	agent?: unknown;

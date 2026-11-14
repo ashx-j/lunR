@@ -15,7 +15,6 @@ import { abortable, throwIfAborted } from "./abort.ts";
 
 type McpHeavyModules = {
   init: typeof import("./init.ts");
-  authFlow: typeof import("./mcp-auth-flow.ts");
   commands: typeof import("./commands.ts");
   proxyModes: typeof import("./proxy-modes.ts");
   directToolExecutor: typeof import("./direct-tool-executor.ts");
@@ -51,14 +50,13 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     if (heavyModules) return Promise.resolve(heavyModules);
     if (!heavyModulesPromise) {
       heavyModulesPromise = (async () => {
-        const [init, authFlow, commands, proxyModes, directToolExecutor] = await Promise.all([
+        const [init, commands, proxyModes, directToolExecutor] = await Promise.all([
           import("./init.ts"),
-          import("./mcp-auth-flow.ts"),
           import("./commands.ts"),
           import("./proxy-modes.ts"),
           import("./direct-tool-executor.ts"),
         ]);
-        const loaded: McpHeavyModules = { init, authFlow, commands, proxyModes, directToolExecutor };
+        const loaded: McpHeavyModules = { init, commands, proxyModes, directToolExecutor };
         heavyModules = loaded;
         return loaded;
       })().catch((error) => {
@@ -75,6 +73,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     if (existing) return existing;
 
     const shutdown = (async () => {
+      await currentState.authFlow.shutdown();
       if (currentState.uiServer) {
         currentState.uiServer.close(reason);
         currentState.uiServer = null;
@@ -113,11 +112,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     await Promise.all(pending.map((entry) => shutdownState(entry, "initialization_cancelled")));
   }
 
-  async function shutdownLoadedRuntime(): Promise<void> {
-    if (!heavyModules) return;
-    await heavyModules.authFlow.shutdownOAuth();
-  }
-
   async function runInitialize(
     generation: number,
     sessionPi: ExtensionAPI,
@@ -126,14 +120,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     const signal = sessionAbort.signal;
     const heavy = await loadHeavyModules();
     throwIfAborted(signal);
-    if (generation !== lifecycleGeneration) {
-      throw new Error("MCP initialization aborted (session changed)");
-    }
-
-    await heavy.authFlow.initializeOAuth().catch(err => {
-      console.error("MCP OAuth initialization failed:", err);
-    });
-
     if (generation !== lifecycleGeneration) {
       throw new Error("MCP initialization aborted (session changed)");
     }
@@ -236,6 +222,10 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   function createLazyDirectToolExecute(spec: DirectToolSpec) {
     return async function execute(toolCallId, params, incomingSignal, onUpdate, ctx) {
       const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
+      const currentSpec = currentDirectSpecs.get(spec.prefixedName);
+      if (!currentSpec || JSON.stringify(currentSpec) !== JSON.stringify(spec)) {
+        throw new Error("MCP tool is unavailable in the current trusted configuration");
+      }
       let currentState: McpExtensionState;
       try {
         currentState = await ensureState(pi, ctx, signal);
@@ -262,35 +252,48 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   const earlyConfigPath = getConfigPathFromArgv();
   const earlyConfig = loadMcpConfig(earlyConfigPath);
   const earlyCache = loadMetadataCache();
-  const prefix = earlyConfig.settings?.toolPrefix ?? "server";
+  const registeredDirectTools = new Map<string, string>();
+  let currentDirectSpecs = new Map<string, DirectToolSpec>();
+  function registerConfiguredTools(config: McpConfig, cache: MetadataCache | null) {
+    const prefix = config.settings?.toolPrefix ?? "server";
 
-  const envRaw = process.env.MCP_DIRECT_TOOLS;
-  const directSpecs = envRaw === "__none__"
-    ? []
-    : resolveDirectTools(
-        earlyConfig,
-        earlyCache,
-        prefix,
-        envRaw?.split(",").map(s => s.trim()).filter(Boolean),
-      );
-  const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(earlyConfig, earlyCache);
-  const shouldRegisterProxyTool =
-    earlyConfig.settings?.disableProxyTool !== true
-    || directSpecs.length === 0
-    || missingConfiguredDirectToolServers.length > 0;
+    const envRaw = process.env.MCP_DIRECT_TOOLS;
+    const directSpecs = envRaw === "__none__"
+      ? []
+      : resolveDirectTools(
+          config,
+          cache,
+          prefix,
+          envRaw?.split(",").map(s => s.trim()).filter(Boolean),
+        );
+    currentDirectSpecs = new Map(directSpecs.map(spec => [spec.prefixedName, spec]));
+    const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(config, cache);
+    const shouldRegisterProxyTool =
+      config.settings?.disableProxyTool !== true
+      || directSpecs.length === 0
+      || missingConfiguredDirectToolServers.length > 0;
 
-  for (const spec of directSpecs) {
-    (pi.registerTool as (tool: unknown) => unknown)({
-      name: spec.prefixedName,
-      label: `MCP: ${spec.originalName}`,
-      description: `${spec.description || "(no description)"}\nUnavailable in read-only mode; switch to yolo or auto to call.`,
-      promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
-      parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never),
-      execute: createLazyDirectToolExecute(spec),
-      renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
-      renderResult: renderMcpToolResult,
-    });
+    for (const spec of directSpecs) {
+      const fingerprint = JSON.stringify(spec);
+      if (registeredDirectTools.get(spec.prefixedName) === fingerprint) continue;
+      registeredDirectTools.set(spec.prefixedName, fingerprint);
+      (pi.registerTool as (tool: unknown) => unknown)({
+        name: spec.prefixedName,
+        label: `MCP: ${spec.originalName}`,
+        description: `${spec.description || "(no description)"}\nUnavailable in read-only mode; switch to yolo or auto to call.`,
+        promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
+        parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never),
+        execute: createLazyDirectToolExecute(spec),
+        renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
+        renderResult: renderMcpToolResult,
+      });
+    }
+
+    if (shouldRegisterProxyTool) registerProxyTool(config, cache, directSpecs);
+    return { names: directSpecs.map(spec => spec.prefixedName), proxy: shouldRegisterProxyTool };
   }
+
+  registerConfiguredTools(earlyConfig, earlyCache);
 
   const getPiTools = (): ToolInfo[] => pi.getAllTools();
 
@@ -312,7 +315,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       await Promise.all([
         shutdownState(previousState, "session_restart"),
         shutdownInitializingStates(),
-        shutdownLoadedRuntime(),
       ]);
     } catch (error) {
       console.error("MCP: failed to shut down previous session state", error);
@@ -323,8 +325,12 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     }
 
     const configPath = (pi.getFlag("mcp-config") as string | undefined) ?? earlyConfigPath;
-    const sessionConfig = loadMcpConfig(configPath, ctx.cwd);
+    const sessionConfig = loadMcpConfig(configPath, ctx.cwd, ctx.isProjectTrusted());
     const sessionCache = loadMetadataCache();
+    const registered = registerConfiguredTools(sessionConfig, sessionCache);
+    // Session replacement can reuse the factory. Retire definitions from its prior config.
+    const active = pi.getActiveTools().filter(name => !registeredDirectTools.has(name) && name !== "mcp");
+    pi.setActiveTools([...active, ...registered.names, ...(registered.proxy ? ["mcp"] : [])]);
 
     if (!shouldBackgroundAutostart(sessionConfig, sessionCache)) {
       return;
@@ -345,7 +351,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       await Promise.all([
         shutdownState(currentState, "session_shutdown"),
         shutdownInitializingStates(),
-        shutdownLoadedRuntime(),
       ]);
     } catch (error) {
       console.error("MCP: session shutdown cleanup failed", error);
@@ -440,15 +445,15 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         return;
       }
 
-      await heavy.commands.authenticateServer(serverName, currentState.config, ctx);
+      await heavy.commands.authenticateServer(serverName, currentState.config, ctx, currentState.authFlow);
     },
   });
 
-  if (shouldRegisterProxyTool) {
+  function registerProxyTool(config: McpConfig, cache: MetadataCache | null, specs: DirectToolSpec[]) {
     (pi.registerTool as (tool: unknown) => unknown)({
       name: "mcp",
       label: "MCP",
-      description: buildProxyDescription(earlyConfig, earlyCache, directSpecs),
+      description: buildProxyDescription(config, cache, specs),
       promptSnippet: "MCP gateway - connect to MCP servers and call their tools",
       renderCall: renderMcpProxyToolCall,
       parameters: Type.Object({

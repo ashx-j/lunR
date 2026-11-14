@@ -1,4 +1,3 @@
-// @ts-nocheck
 interface AsyncLaunchParams {
 	task?: unknown;
 	tasks?: unknown[];

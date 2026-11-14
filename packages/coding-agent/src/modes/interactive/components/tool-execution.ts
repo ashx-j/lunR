@@ -25,12 +25,12 @@ export class ToolExecutionComponent extends Container {
 	private topSpacer: Spacer;
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
-	private rendererState: any = {};
+	private rendererState: Record<string, unknown> = {};
 	private imageComponents: Image[] = [];
 	private imageSpacers: Spacer[] = [];
 	private toolName: string;
 	private toolCallId: string;
-	private args: any;
+	private args: unknown;
 	private expanded = false;
 	private showImages: boolean;
 	private imageWidthCells: number;
@@ -44,7 +44,7 @@ export class ToolExecutionComponent extends Container {
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
-		details?: any;
+		details?: unknown;
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
@@ -55,7 +55,7 @@ export class ToolExecutionComponent extends Container {
 	constructor(
 		toolName: string,
 		toolCallId: string,
-		args: any,
+		args: unknown,
 		options: ToolExecutionOptions = {},
 		toolDefinition: ToolDefinition<any, any> | undefined,
 		ui: TUI,
@@ -189,7 +189,7 @@ export class ToolExecutionComponent extends Container {
 		return new Text(theme.fg("toolOutput", output), 0, 0);
 	}
 
-	updateArgs(args: any): void {
+	updateArgs(args: unknown): void {
 		this.args = args;
 		this.updateDisplay();
 	}
@@ -209,7 +209,7 @@ export class ToolExecutionComponent extends Container {
 	updateResult(
 		result: {
 			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-			details?: any;
+			details?: unknown;
 			isError: boolean;
 		},
 		isPartial = false,
@@ -259,7 +259,7 @@ export class ToolExecutionComponent extends Container {
 		return true;
 	}
 
-	beginNextExecution(toolCallId: string, args: any): void {
+	beginNextExecution(toolCallId: string, args: unknown): void {
 		this.toolCallId = toolCallId;
 		this.args = args;
 		this.result = undefined;
@@ -335,7 +335,9 @@ export class ToolExecutionComponent extends Container {
 		// result exists. Async launch receipts (empty results) stay header-only.
 		if (this.toolName === "subagent") {
 			const details = this.result.details as { mode?: string; results?: unknown[] } | undefined;
-			if (!this.result.isError && this.args?.action === "steer") return true;
+			const action =
+				typeof this.args === "object" && this.args !== null && "action" in this.args ? this.args.action : undefined;
+			if (!this.result.isError && action === "steer") return true;
 			if (this.result.isError) return false;
 			if (Array.isArray(details?.results) && details.results.length > 0) return false;
 			if (details?.mode === "management") return false;

@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-orchestrator",
-	"version": "0.2.25",
-	"description": "experimental orchestrator package for pi",
+	"version": "0.2.40",
+	"description": "experimental internal orchestrator package for lunR",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -37,7 +37,7 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "^0.2.25"
+		"@earendil-works/pi-coding-agent": "^0.2.40"
 	},
 	"devDependencies": {
 		"shx": "0.4.0"

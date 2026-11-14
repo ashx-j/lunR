@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { SteeringNotice, SubagentState } from "../shared/types.ts";
 

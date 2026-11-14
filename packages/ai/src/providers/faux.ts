@@ -230,9 +230,11 @@ function withUsageEstimate(
 			const cachedChars = commonPrefixLength(previousPrompt, promptText);
 			cacheRead = estimateTokens(previousPrompt.slice(0, cachedChars));
 			cacheWrite = estimateTokens(promptText.slice(cachedChars));
-			input = Math.max(0, promptTokens - cacheRead);
+			cacheWrite = Math.max(0, promptTokens - cacheRead);
+			input = 0;
 		} else {
 			cacheWrite = promptTokens;
+			input = 0;
 		}
 		promptCache.set(sessionId, promptText);
 	}
@@ -240,6 +242,8 @@ function withUsageEstimate(
 	return {
 		...message,
 		usage: {
+			measurement: "estimated",
+			costSource: "estimated",
 			input,
 			output: outputTokens,
 			cacheRead,

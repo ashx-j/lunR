@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * pi-lsp-extension — Pi coding agent extension for LSP integration.
  *
@@ -36,7 +35,7 @@ import {
 import { DiagnosticSeverity } from "vscode-languageserver-protocol";
 
 import type { WorkspaceProvider } from "./workspace-provider.js";
-import { LspRuntimeHost, type LspRuntimeCallbacks } from "./runtime.js";
+import { LspRuntimeHost, type LspRuntimeBindOptions, type LspRuntimeCallbacks } from "./runtime.js";
 import { createDiagnosticsTool } from "./tools/diagnostics.js";
 import { createHoverTool } from "./tools/hover.js";
 import { createDefinitionTool } from "./tools/definition.js";
@@ -141,19 +140,6 @@ function registerToolWithRuntime<T extends TSchema, D>(pi: ExtensionAPI, tool: T
 }
 
 export default function lspExtension(pi: ExtensionAPI) {
-  // Prevent EPIPE errors from LSP server exits from crashing the host process.
-  // When an LSP server exits unexpectedly, in-flight writes to its stdin pipe
-  // can produce EPIPE errors that escape all connection-level error handlers.
-  const origListeners = process.listeners("uncaughtException");
-  process.on("uncaughtException", (err: any) => {
-    if (err?.code === "EPIPE") return; // swallow — LSP server exited, harmless
-    // Re-throw for other handlers
-    for (const listener of origListeners) (listener as any)(err);
-    if (origListeners.length === 0) {
-      console.error("[LSP] Uncaught exception:", err);
-    }
-  });
-
   const host = new LspRuntimeHost();
   let pendingProvider: WorkspaceProvider | null = null;
   let latestCtx: any = null;
@@ -257,7 +243,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     }
   };
 
-  const buildBindOptions = (cwd: string) => ({
+  const buildBindOptions = (cwd: string): LspRuntimeBindOptions => ({
     cwd,
     callbacks: makeCallbacks(),
     pendingProvider,
@@ -279,7 +265,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     latestCtx = ctx;
     sessionCwd = ctx.cwd;
 
-    projectConfig = loadProjectConfig(ctx.cwd);
+    projectConfig = ctx.isProjectTrusted() ? loadProjectConfig(ctx.cwd) : null;
     await host.bindSession(buildBindOptions(ctx.cwd));
 
     const statusText = pendingProvider?.getStatusText?.() ?? "";

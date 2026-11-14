@@ -230,12 +230,12 @@ describe("renderContextBox", () => {
 
 		expect(text).toContain("Context");
 		expect(text).toContain("anthropic/claude-sonnet-4-5");
-		expect(text).toContain("Estimated (chars/4), current session only");
+		expect(text).toContain("Estimated visible context, current session only");
 		expect(text).toContain("System prompt");
 		expect(text).toContain("Tool definitions");
 		expect(text).toContain("User messages (1)");
 		expect(text).toContain("Assistant text (1)");
-		expect(text).toContain("Thinking (1)");
+		expect(text).toContain("Visible thinking (1)");
 		expect(text).toContain("Estimated total");
 		expect(text).toContain("░");
 		// Bordered box chrome
@@ -251,7 +251,7 @@ describe("renderContextBox", () => {
 			contextWindow: 200_000,
 		});
 		const text = renderContextBox({ breakdown }, 80).join("\n");
-		expect(text).not.toContain("Thinking");
+		expect(text).not.toContain("Visible thinking");
 		expect(text).not.toContain("Tool results");
 		expect(text).not.toContain("Summaries");
 	});

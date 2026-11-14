@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_completions — Get completion suggestions at a position.
  *

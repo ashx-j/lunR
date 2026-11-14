@@ -3,9 +3,10 @@ import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
 	findInitialModel,
+	findSignedOutScopePatterns,
+	narrowToScope,
 	parseModelPattern,
 	resolveCliModel,
-	resolveModelScope,
 	resolveModelScopeWithDiagnostics,
 } from "../src/core/model-resolver.ts";
 
@@ -238,22 +239,45 @@ describe("resolveModelScopeWithDiagnostics", () => {
 			warn.mockRestore();
 		}
 	});
+});
 
-	test("resolveModelScope preserves CLI warning output", async () => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-		try {
-			const registry = {
-				getAvailable: () => allModels,
-			} as unknown as Parameters<typeof resolveModelScope>[1];
+describe("findSignedOutScopePatterns", () => {
+	test("returns only provider/... patterns of registered providers with no credential", async () => {
+		const runtime = {
+			getProvider: (id: string) => (["anthropic", "openai-codex"].includes(id) ? {} : undefined),
+			checkAuth: async (id: string) => (id === "anthropic" ? { source: "auth.json", type: "api_key" } : undefined),
+		} as unknown as Parameters<typeof findSignedOutScopePatterns>[1];
 
-			const scopedModels = await resolveModelScope(["missing"], registry);
+		const patterns = [
+			"openai-codex/gpt-6-luna",
+			"openai-codex/gpt-6.1-sol:high",
+			"openai-codex/*",
+			"anthropic/claude-sonnet-5",
+			"gpt-6-astra",
+			"*sonnet*",
+			"extension-provider/model",
+		];
 
-			expect(scopedModels).toEqual([]);
-			expect(warn).toHaveBeenCalledOnce();
-			expect(warn.mock.calls[0][0]).toContain('Warning: No models match pattern "missing"');
-		} finally {
-			warn.mockRestore();
-		}
+		expect(await findSignedOutScopePatterns(patterns, runtime)).toEqual([
+			"openai-codex/gpt-6-luna",
+			"openai-codex/gpt-6.1-sol:high",
+			"openai-codex/*",
+		]);
+	});
+});
+
+describe("narrowToScope", () => {
+	const [sonnet, gpt, qwen] = allModels;
+
+	test("keeps scoped models and the current model, in list order", () => {
+		expect(narrowToScope(allModels, [{ model: qwen }, { model: sonnet }], gpt)).toEqual([sonnet, gpt, qwen]);
+		expect(narrowToScope(allModels, [{ model: qwen }], undefined)).toEqual([qwen]);
+	});
+
+	test("keeps every model when no scoped model is in the list", () => {
+		const elsewhere = { ...sonnet, provider: "anthropic-vertex" };
+		expect(narrowToScope(allModels, [], gpt)).toBe(allModels);
+		expect(narrowToScope(allModels, [{ model: elsewhere }], gpt)).toBe(allModels);
 	});
 });
 

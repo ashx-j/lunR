@@ -50,6 +50,27 @@
       ]
     },
     {
+      "title": "Integrations",
+      "items": [
+        {
+          "title": "ACP clients",
+          "path": "acp.md"
+        },
+        {
+          "title": "Headless browser",
+          "path": "browser.md"
+        },
+        {
+          "title": "Computer use",
+          "path": "computer-use.md"
+        },
+        {
+          "title": "PR watching",
+          "path": "pr-watch.md"
+        }
+      ]
+    },
+    {
       "title": "Customization",
       "items": [
         {

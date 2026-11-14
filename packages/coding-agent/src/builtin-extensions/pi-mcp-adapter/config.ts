@@ -1,9 +1,9 @@
-// @ts-nocheck
 // config.ts - Config loading with import support
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
+import { acpMcpServerOverlay, readAcpWorkerConfig } from "../../modes/acp/worker-config.ts";
 import type { McpConfig, ServerEntry, McpSettings, ImportKind, ServerProvenance } from "./types.ts";
 
 const GENERIC_GLOBAL_CONFIG_PATH = join(homedir(), ".config", "mcp", "mcp.json");
@@ -194,15 +194,21 @@ export function getMcpDiscoverySummary(overridePath?: string, cwd = process.cwd(
   };
 }
 
-export function loadMcpConfig(overridePath?: string, cwd = process.cwd()): McpConfig {
+export function loadMcpConfig(overridePath?: string, cwd = process.cwd(), projectTrusted = false): McpConfig {
   let config: McpConfig = { mcpServers: {} };
 
   for (const source of getConfigSources(overridePath, cwd)) {
+    if (source.scope === "project" && !projectTrusted) continue;
     const loaded = readValidatedConfig(source.readPath, `MCP config from ${source.readPath}`);
     if (!loaded) continue;
-    config = mergeConfigs(config, expandImports(loaded, cwd));
+    config = mergeConfigs(config, expandImports(loaded, cwd, projectTrusted));
   }
 
+  // host servers override existing entries in memory, without writing user configuration.
+  const workerConfig = readAcpWorkerConfig();
+  if (workerConfig) {
+    config = { ...config, mcpServers: { ...config.mcpServers, ...acpMcpServerOverlay(workerConfig) } };
+  }
   return config;
 }
 
@@ -228,7 +234,7 @@ function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSou
 
   sources.push({
     id: "pi-global",
-    label: "Pi global override",
+    label: "lunR global override",
     readPath: userPath,
     writePath: userPath,
     kind: "user",
@@ -251,7 +257,7 @@ function getConfigSources(overridePath?: string, cwd = process.cwd()): ConfigSou
   if (projectPiPath !== userPath && projectPiPath !== projectPath) {
     sources.push({
       id: "pi-project",
-      label: "project Pi override",
+      label: "project lunR override",
       readPath: projectPiReadPath,
       writePath: projectPiPath,
       kind: "project",
@@ -288,12 +294,12 @@ function mergeImports(left: ImportKind[] | undefined, right: ImportKind[] | unde
   return [...new Set(merged)];
 }
 
-function expandImports(config: McpConfig, cwd = process.cwd()): McpConfig {
+function expandImports(config: McpConfig, cwd = process.cwd(), projectTrusted = false): McpConfig {
   if (!config.imports?.length) return config;
 
   const importedServers: Record<string, ServerEntry> = {};
   for (const importKind of config.imports) {
-    const importPath = resolveImportPath(importKind, cwd);
+    const importPath = resolveImportPath(importKind, cwd, projectTrusted);
     if (!importPath) continue;
 
     try {
@@ -316,9 +322,10 @@ function expandImports(config: McpConfig, cwd = process.cwd()): McpConfig {
   };
 }
 
-function resolveImportPath(importKind: ImportKind, cwd = process.cwd()): string | null {
+function resolveImportPath(importKind: ImportKind, cwd = process.cwd(), projectTrusted = true): string | null {
   const candidates = IMPORT_PATHS[importKind] ?? [];
   for (const candidate of candidates) {
+    if (candidate.startsWith(".") && !projectTrusted) continue;
     const fullPath = candidate.startsWith(".") ? resolve(cwd, candidate) : candidate;
     if (existsSync(fullPath)) {
       return fullPath;
@@ -618,17 +625,18 @@ export function writeSharedServerEntry(filePath: string, serverName: string, ent
   return filePath;
 }
 
-export function getServerProvenance(overridePath?: string, cwd = process.cwd()): Map<string, ServerProvenance> {
+export function getServerProvenance(overridePath?: string, cwd = process.cwd(), projectTrusted = false): Map<string, ServerProvenance> {
   const provenance = new Map<string, ServerProvenance>();
   const userPath = getPiGlobalConfigPath(overridePath);
 
   for (const source of getConfigSources(overridePath, cwd)) {
+    if (source.scope === "project" && !projectTrusted) continue;
     const loaded = readValidatedConfig(source.readPath, `MCP config from ${source.readPath}`);
     if (!loaded) continue;
 
     if (loaded.imports?.length) {
       for (const importKind of loaded.imports) {
-        const importPath = resolveImportPath(importKind, cwd);
+        const importPath = resolveImportPath(importKind, cwd, projectTrusted);
         if (!importPath) continue;
 
         try {

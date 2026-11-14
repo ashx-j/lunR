@@ -102,6 +102,11 @@ export interface Component {
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
+/** Options for `TUI.addInputListener`. */
+type InputListenerOptions = {
+	/** Also receive Kitty key-release events. Default false, matching `Component.wantsKeyRelease`. */
+	wantsKeyRelease?: boolean;
+};
 type PendingOsc11BackgroundQuery = {
 	settled: boolean;
 	resolve: ((rgb: RgbColor | undefined) => void) | undefined;
@@ -350,7 +355,7 @@ export class TUI extends Container {
 	private previousWidth = 0;
 	private previousHeight = 0;
 	private focusedComponent: Component | null = null;
-	private inputListeners = new Set<InputListener>();
+	private inputListeners = new Map<InputListener, InputListenerOptions>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
@@ -373,6 +378,9 @@ export class TUI extends Container {
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
 	private terminalColorSchemeNotificationsEnabled = false;
+	private focusReportingEnabled = false;
+	// Last focus report from the terminal; undefined until one arrives or when reporting is off.
+	private focusState: boolean | undefined;
 
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
@@ -688,37 +696,6 @@ export class TUI extends Container {
 		return start;
 	}
 
-	private findChatAnchor(previous: string[], next: string[], start: number, viewH: number): number | undefined {
-		for (let offset = 0; offset < Math.min(4, viewH, previous.length - start); offset++) {
-			const line = previous[start + offset];
-			if (!line || visibleWidth(line) === 0) continue;
-			const following = previous[start + offset + 1];
-			let best: number | undefined;
-			let bestScore = 0;
-			for (let match = next.indexOf(line); match !== -1; match = next.indexOf(line, match + 1)) {
-				if (following !== undefined && next[match + 1] !== following) continue;
-				const candidate = match - offset;
-				if (candidate < 0) continue;
-				let score = 1;
-				while (
-					score < 12 &&
-					start + offset + score < previous.length &&
-					previous[start + offset + score] === next[match + score]
-				)
-					score++;
-				if (
-					score > bestScore ||
-					(score === bestScore && (best === undefined || Math.abs(candidate - start) < Math.abs(best - start)))
-				) {
-					best = candidate;
-					bestScore = score;
-				}
-			}
-			if (best !== undefined) return best;
-		}
-		return undefined;
-	}
-
 	override render(width: number): string[] {
 		const pinIndex = this.getPinIndex();
 		if (pinIndex < 0) {
@@ -797,12 +774,8 @@ export class TUI extends Container {
 			if (this.chatScrollOffset > 0) {
 				const anchor =
 					cache && !fromCache
-						? (this.findChatAnchor(
-								cache.scrollLines,
-								scrollLines,
-								this.lastChatStart,
-								this.lastChatViewportHeight,
-							) ?? this.lastChatStart)
+						? (findChatAnchor(cache.scrollLines, scrollLines, this.lastChatStart, this.lastChatViewportHeight) ??
+							this.lastChatStart)
 						: this.lastChatStart;
 				const pendingScroll = this.chatScrollOffset - (this.lastChatScrollMax - this.lastChatStart);
 				this.chatScrollOffset = scrollMax - anchor + pendingScroll;
@@ -1008,12 +981,19 @@ export class TUI extends Container {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
 		}
+		if (this.focusReportingEnabled) {
+			this.terminal.write("\x1b[?1004h");
+		}
 		this.queryCellSize();
 		this.requestRender();
 	}
 
-	addInputListener(listener: InputListener): () => void {
-		this.inputListeners.add(listener);
+	/**
+	 * Run `listener` on raw input before the focused component sees it. Listeners skip
+	 * Kitty key-release events unless they pass `{ wantsKeyRelease: true }`.
+	 */
+	addInputListener(listener: InputListener, options: InputListenerOptions = {}): () => void {
+		this.inputListeners.set(listener, options);
 		return () => {
 			this.inputListeners.delete(listener);
 		};
@@ -1040,6 +1020,41 @@ export class TUI extends Container {
 		}
 	}
 
+	/**
+	 * Turns terminal focus reports (DECSET 1004) on or off. While on, `isTerminalFocused`
+	 * reflects the terminal's latest focus-in/focus-out report.
+	 */
+	setFocusReporting(enabled: boolean): void {
+		if (this.focusReportingEnabled === enabled) {
+			return;
+		}
+		this.focusReportingEnabled = enabled;
+		this.focusState = undefined;
+		if (!this.stopped) {
+			this.terminal.write(enabled ? "\x1b[?1004h" : "\x1b[?1004l");
+		}
+	}
+
+	/** True or false once the terminal has reported focus; undefined when unknown. */
+	isTerminalFocused(): boolean | undefined {
+		return this.focusState;
+	}
+
+	/**
+	 * Asks the terminal for the user's attention. "bell" rings the terminal bell; "desktop"
+	 * sends an OSC 9 notification with `message`, which terminals without OSC 9 ignore.
+	 */
+	notify(kind: "bell" | "desktop", message: string): void {
+		if (this.stopped) return;
+		if (kind === "bell") {
+			this.terminal.write("\x07");
+			return;
+		}
+		// OSC text ends at BEL or ESC, so strip control characters from the message.
+		const text = message.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim();
+		this.terminal.write(`\x1b]9;${text}\x07`);
+	}
+
 	private queryCellSize(): void {
 		// Only query if terminal supports images (cell size is only used for image rendering)
 		if (!getCapabilities().images) {
@@ -1050,7 +1065,9 @@ export class TUI extends Container {
 		this.terminal.write("\x1b[16t");
 	}
 
+	/** Restore the terminal. Safe to call more than once: later calls before the next `start()` do nothing. */
 	stop(): void {
+		if (this.stopped) return;
 		this.stopped = true;
 		this.started = false;
 		if (this.renderTimer) {
@@ -1059,6 +1076,9 @@ export class TUI extends Container {
 		}
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
+		}
+		if (this.focusReportingEnabled) {
+			this.terminal.write("\x1b[?1004l");
 		}
 		this.disableMouseTracking();
 		if (this.alternateScreenActive) {
@@ -1270,6 +1290,10 @@ export class TUI extends Container {
 		if (this.consumeTerminalColorSchemeReport(data)) {
 			return;
 		}
+		if (data === "\x1b[I" || data === "\x1b[O") {
+			if (this.focusReportingEnabled) this.focusState = data === "\x1b[I";
+			return;
+		}
 
 		const mouse = parseMouseEvent(data);
 		if (mouse) {
@@ -1279,7 +1303,8 @@ export class TUI extends Container {
 
 		if (this.inputListeners.size > 0) {
 			let current = data;
-			for (const listener of this.inputListeners) {
+			for (const [listener, options] of this.inputListeners) {
+				if (!options.wantsKeyRelease && isKeyRelease(current)) continue;
 				const result = listener(current);
 				if (result?.consume) {
 					return;
@@ -1603,15 +1628,51 @@ export class TUI extends Container {
 
 	private static readonly SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
 
-	private applyLineResets(lines: string[]): string[] {
+	/**
+	 * Normalize each text line, cut it to the terminal width and close its styles. Full and
+	 * partial redraws both write these lines, so an overflowing component cannot wrap the screen.
+	 * The first overflow per TUI writes the rendered lines to pi-crash.log for debugging.
+	 */
+	private applyLineResets(lines: string[], width: number): string[] {
 		const reset = TUI.SEGMENT_RESET;
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			if (!isImageLine(line)) {
-				lines[i] = normalizeTerminalOutput(line) + reset;
+			if (isImageLine(line)) continue;
+			let normalized = normalizeTerminalOutput(line);
+			if (visibleWidth(normalized) > width) {
+				this.logWidthOverflow(lines, i, width);
+				normalized = sliceByColumn(normalized, 0, width, true);
 			}
+			lines[i] = normalized + reset;
 		}
 		return lines;
+	}
+
+	private widthOverflowLogged = false;
+
+	private logWidthOverflow(lines: string[], index: number, width: number): void {
+		if (this.widthOverflowLogged) return;
+		this.widthOverflowLogged = true;
+		// lunr: tui cannot import coding-agent (layering) — env-first with .lunr fallback (was ~/.pi/agent)
+		const logPath = path.join(
+			process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".lunr", "agent"),
+			"pi-crash.log",
+		);
+		const data = [
+			`Line wider than the terminal at ${new Date().toISOString()}; truncated. A component is not truncating its output (use truncateToWidth()).`,
+			`Terminal width: ${width}`,
+			`Line ${index} visible width: ${visibleWidth(lines[index] ?? "")}`,
+			"",
+			"=== All rendered lines ===",
+			...lines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
+			"",
+		].join("\n");
+		try {
+			fs.mkdirSync(path.dirname(logPath), { recursive: true });
+			fs.writeFileSync(logPath, data);
+		} catch {
+			// a debug log must not break rendering
+		}
 	}
 
 	private collectKittyImageIds(lines: string[]): Set<number> {
@@ -1789,7 +1850,7 @@ export class TUI extends Container {
 		// Extract cursor position before applying line resets (marker must be found first)
 		const cursorPos = this.extractCursorPosition(newLines, height);
 
-		newLines = this.applyLineResets(newLines);
+		newLines = this.applyLineResets(newLines, width);
 
 		// Helper to clear scrollback and viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
@@ -2033,38 +2094,6 @@ export class TUI extends Container {
 			}
 
 			buffer += "\x1b[2K"; // Clear current line
-			if (!isImage && visibleWidth(line) > width) {
-				// Log all lines to crash file for debugging
-				// lunr: tui cannot import coding-agent (layering) — env-first with .lunr fallback (was ~/.pi/agent)
-				const crashLogPath = path.join(
-					process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".lunr", "agent"),
-					"pi-crash.log",
-				);
-				const crashData = [
-					`Crash at ${new Date().toISOString()}`,
-					`Terminal width: ${width}`,
-					`Line ${i} visible width: ${visibleWidth(line)}`,
-					"",
-					"=== All rendered lines ===",
-					...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
-					"",
-				].join("\n");
-				fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-				fs.writeFileSync(crashLogPath, crashData);
-
-				// Clean up terminal state before throwing
-				this.stop();
-
-				const errorMsg = [
-					`Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
-					"",
-					"This is likely caused by a custom TUI component not truncating its output.",
-					"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
-					"",
-					`Debug log written to: ${crashLogPath}`,
-				].join("\n");
-				throw new Error(errorMsg);
-			}
 			buffer += line;
 		}
 
@@ -2231,6 +2260,56 @@ export class TUI extends Container {
 			this.terminal.write("\x1b[?996n");
 		});
 	}
+}
+
+/**
+ * Finds the start row in `next` that keeps a scrolled-up chat view on the same content it showed at
+ * `previous[start]` after a re-layout. Up to four leading non-blank visible lines are tried in order.
+ * For each, the copy in `next` whose following lines match longest (up to 12) wins, ties going to the
+ * copy closest to `start` and then to the earlier one. Returns undefined when no line matches, so the
+ * caller keeps the old position (the width-reflow case).
+ *
+ * Copies are visited nearest-first and the search stops once a copy matches the longest possible run,
+ * so long runs of identical rows cost a few comparisons instead of a scan of the whole chat. When no
+ * copy reaches that run (the visible lines changed), it still checks every copy.
+ * Exported for tests only.
+ */
+export function findChatAnchor(
+	previous: readonly string[],
+	next: readonly string[],
+	start: number,
+	viewH: number,
+): number | undefined {
+	for (let offset = 0; offset < Math.min(4, viewH, previous.length - start); offset++) {
+		const at = start + offset;
+		const line = previous[at];
+		if (!line || visibleWidth(line) === 0) continue;
+		const following = previous[at + 1];
+		const maxScore = Math.min(12, previous.length - at);
+		// A copy at `match` anchors the view at `match - offset`, which must not be negative.
+		const lo = Math.max(offset, next.indexOf(line));
+		const hi = next.lastIndexOf(line);
+		if (hi < lo) continue;
+		let best: number | undefined;
+		let bestScore = 0;
+		// Visit rows at, at-1, at+1, at-2, at+2, ... so the order already encodes the distance tie-break
+		// and only a strictly longer run replaces the best.
+		const steps = 2 * Math.max(at - lo, hi - at);
+		for (let step = 0; step <= steps && bestScore < maxScore; step++) {
+			const distance = (step + 1) >> 1;
+			const match = step % 2 === 1 ? at - distance : at + distance;
+			if (match < lo || match > hi || next[match] !== line) continue;
+			if (following !== undefined && next[match + 1] !== following) continue;
+			let score = 1;
+			while (score < 12 && at + score < previous.length && previous[at + score] === next[match + score]) score++;
+			if (score > bestScore) {
+				best = match - offset;
+				bestScore = score;
+			}
+		}
+		if (best !== undefined) return best;
+	}
+	return undefined;
 }
 
 function padToWidth(line: string, width: number): string {

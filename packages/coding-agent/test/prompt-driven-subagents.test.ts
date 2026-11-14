@@ -36,7 +36,6 @@ import {
 	normalizeChildSpec,
 	validateChildDescription,
 } from "../src/builtin-extensions/pi-subagents/src/shared/child-spec.ts";
-import { REMOVED_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../src/builtin-extensions/pi-subagents/src/shared/types.ts";
 import { buildChainExpressionSteps } from "../src/builtin-extensions/pi-subagents/src/slash/slash-commands.ts";
 import { effectiveLargeSubagentLaunchCountForTurn } from "../src/core/large-subagent-launch.ts";
 import { MODEL_TIERS_BRIDGE_SYMBOL } from "../src/core/model-tiers.ts";
@@ -145,6 +144,16 @@ describe("prompt-driven subagent schema", () => {
 		expect(mixed.task).toBe("Review the web search hot path");
 		expect(mixed.tasks).toBeUndefined();
 		expect(mixed.chain).toBeUndefined();
+		const aliased = resolveSubagentRequestParams({
+			action: "single",
+			task: "Review the web search hot path",
+			description: "Review web perf",
+			tasks: [{ task: "x", description: "stub" }],
+			chain: [{ tier: "heavy" }],
+		});
+		expect(aliased.action).toBeUndefined();
+		expect(aliased.tasks).toBeUndefined();
+		expect(aliased.chain).toBeUndefined();
 		expect(
 			resolveSubagentRequestParams({
 				action: "status",
@@ -177,22 +186,15 @@ describe("prompt-driven subagent schema", () => {
 		}
 		expect((ParallelTaskSchema as { required?: string[] }).required ?? []).not.toContain("tier");
 		expect((DynamicParallelTemplateSchema as { required?: string[] }).required ?? []).not.toContain("tier");
-		for (const schema of [SubagentParams, ParallelTaskSchema]) {
+		for (const schema of [SubagentParams, ParallelTaskSchema, DynamicParallelTemplateSchema, ChainItem]) {
 			const description = nestedSchema(schema, ["properties", "tier"]).description as string;
-			expect(description).toContain("Choose the lowest model tier that can reliably complete the task");
-			expect(description).toContain("'light' for quick checks");
-			expect(description).toContain("'standard' for everyday coding");
-			expect(description).toContain("'heavy' for complex implementation");
+			expect(description).toContain("Choose for the child's specific assignment");
+			expect(description).toContain("'light' for bounded lookups");
+			expect(description).toContain("'standard' by default");
+			expect(description).toContain("'heavy' only for a specific reasoning difficulty");
+			expect(description).toContain("When uncertain, choose standard.");
+			expect(description).toContain("Heavy does not require a failed standard attempt");
 		}
-	});
-
-	it("removes agent-definition management actions", () => {
-		for (const action of REMOVED_SUBAGENT_ACTIONS) {
-			expect(SUBAGENT_ACTIONS).not.toContain(action);
-		}
-		expect(SUBAGENT_ACTIONS).toEqual(
-			expect.arrayContaining(["status", "interrupt", "stop", "resume", "steer", "doctor"]),
-		);
 	});
 
 	it("tool descriptions prompt children directly instead of roster discovery", () => {
@@ -322,6 +324,7 @@ describe("child-safe tool sets", () => {
 			else expect(excluded).toContain(tool);
 		}
 		expect(excluded).toContain("cron");
+		expect(excluded).toContain("pr_watch");
 		expect(excluded).toContain("memory_add");
 		expect(excluded).not.toContain("behavior_add");
 		expect(excluded).toContain("present_plan");
@@ -354,6 +357,25 @@ describe("same-turn large-launch gate counts generic singles", () => {
 			],
 		};
 		expect(effectiveLargeSubagentLaunchCountForTurn({ task: "one", description: "One" }, assistantMessage)).toBe(3);
+	});
+
+	it("sums fanout and single sibling calls in one turn", () => {
+		const twoTasks = {
+			tasks: [
+				{ task: "a", description: "A" },
+				{ task: "b", description: "B" },
+			],
+		};
+		const single = { task: "solo", description: "Solo" };
+		const assistantMessage = {
+			content: [twoTasks, twoTasks, single].map((arguments_) => ({
+				type: "toolCall",
+				name: "subagent",
+				arguments: arguments_,
+			})),
+		};
+		expect(effectiveLargeSubagentLaunchCountForTurn(twoTasks, assistantMessage)).toBe(5);
+		expect(effectiveLargeSubagentLaunchCountForTurn(single, assistantMessage)).toBe(5);
 	});
 });
 
@@ -637,7 +659,6 @@ describe("async recovery artifacts", () => {
 					cwd: process.cwd(),
 					outputMode: "inline",
 					maxSubagentDepth: 1,
-					share: false,
 				}),
 			);
 			const descriptor = readAsyncRecoveryDescriptor(dir);
@@ -692,7 +713,6 @@ describe("async recovery artifacts", () => {
 					cwd: process.cwd(),
 					outputMode: "inline",
 					maxSubagentDepth: 1,
-					share: false,
 				}),
 			);
 			const descriptor = readAsyncRecoveryDescriptor(dir);
@@ -730,7 +750,6 @@ describe("async recovery artifacts", () => {
 					cwd: process.cwd(),
 					outputMode: "inline",
 					maxSubagentDepth: 1,
-					share: false,
 				}),
 			);
 			expect(() => readAsyncRecoveryDescriptor(dir)).toThrow(/version must be 4/);

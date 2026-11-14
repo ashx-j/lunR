@@ -86,6 +86,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		!selectedTools || selectedTools.includes("todo")
 			? "- Use todo for meaningful multi-step work. Every update must send the complete list, with exactly one item in progress at a time.\n"
 			: "";
+	const cronGuideline =
+		!selectedTools || selectedTools.includes("cron")
+			? "- Use cron only when the user asks to schedule or manage unattended prompts.\n"
+			: "";
 	const delegationBehavior = automaticSubagentDelegation
 		? "- Orchestrate subagents with intent! Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks. Use subagents as a tool when there is genuine benefit to it or the user explicitly asks for it."
 		: "- Work on tasks directly. Launch subagents only when the user specifically instructs you to delegate work.";
@@ -119,8 +123,7 @@ Guidelines:
 - Use write only for new files or complete rewrites.
 ${todoGuideline}${delegationGuideline}- Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up. Otherwise launch a new subagent.
 - Use ast_search for structural code matches.
-- Use cron only when the user asks to schedule or manage unattended prompts.
-- For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.
+${cronGuideline}- For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.
 - Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.
 - ~/.lunr/agent/agents/ contains optional global and per-model AGENTS.md instructions written by the user. Never modify this tree, including through shell commands.
 - Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // tool-registrar.ts - MCP content transformation
 // NOTE: Tools are NOT registered with Pi - only the unified `mcp` proxy tool is registered.
 // This keeps the LLM context small (1 tool instead of 100s).

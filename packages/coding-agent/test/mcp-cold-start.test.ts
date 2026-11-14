@@ -38,6 +38,7 @@ type MockContext = {
 	hasUI: boolean;
 	mode: string;
 	cwd: string;
+	isProjectTrusted: () => boolean;
 	ui: {
 		notify: (message: string, level?: string) => void;
 		setStatus: (key: string, value: string | undefined) => void;
@@ -72,6 +73,7 @@ function collectStaticImports(filePath: string, seen = new Set<string>()): strin
 
 function createMockPi(cwd: string) {
 	const tools: RegisteredTool[] = [];
+	let activeTools: string[] = [];
 	const commands = new Map<string, RegisteredCommand>();
 	const flags = new Map<string, unknown>();
 	const handlers = new Map<string, SessionHandler[]>();
@@ -81,6 +83,7 @@ function createMockPi(cwd: string) {
 		hasUI: false,
 		mode: "print",
 		cwd,
+		isProjectTrusted: () => true,
 		ui: {
 			notify: (message, level) => {
 				notifications.push({ message, level });
@@ -98,6 +101,7 @@ function createMockPi(cwd: string) {
 		ctx,
 		registerTool(tool: RegisteredTool) {
 			tools.push(tool);
+			if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
 		},
 		registerCommand(name: string, spec: { description?: string; handler: RegisteredCommand["handler"] }) {
 			commands.set(name, { name, handler: spec.handler });
@@ -115,6 +119,10 @@ function createMockPi(cwd: string) {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
+		},
+		getActiveTools: () => activeTools,
+		setActiveTools: (names: string[]) => {
+			activeTools = names;
 		},
 		getAllTools() {
 			return tools.map((tool) => ({ name: tool.name }));
@@ -144,7 +152,6 @@ function mockHeavyModules(options?: {
 }) {
 	const gracefulShutdown = vi.fn(async () => {});
 	const shutdownOAuth = vi.fn(async () => {});
-	const initializeOAuth = vi.fn(async () => {});
 	const flushMetadataCache = vi.fn();
 	const updateStatusBar = vi.fn();
 	const executeStatus =
@@ -160,6 +167,7 @@ function mockHeavyModules(options?: {
 			initializeMcp:
 				options?.initializeMcp ??
 				(async () => ({
+					authFlow: { shutdown: shutdownOAuth },
 					uiServer: null,
 					lifecycle: { gracefulShutdown },
 					manager: { getAllConnections: () => new Map() },
@@ -171,10 +179,6 @@ function mockHeavyModules(options?: {
 			updateStatusBar,
 		};
 	});
-	vi.doMock("../src/builtin-extensions/pi-mcp-adapter/mcp-auth-flow.ts", () => ({
-		initializeOAuth,
-		shutdownOAuth,
-	}));
 	vi.doMock("../src/builtin-extensions/pi-mcp-adapter/commands.ts", () => ({
 		showStatus: vi.fn(async () => {}),
 		showTools: vi.fn(async () => {}),
@@ -205,7 +209,7 @@ function mockHeavyModules(options?: {
 			})),
 	}));
 
-	return { gracefulShutdown, shutdownOAuth, initializeOAuth, flushMetadataCache, updateStatusBar };
+	return { gracefulShutdown, shutdownOAuth, flushMetadataCache, updateStatusBar };
 }
 
 describe("mcp cold-start dependency split", () => {
@@ -256,6 +260,42 @@ describe("mcp cold-start dependency split", () => {
 		writeFileSync(path, JSON.stringify({ version: 1, servers }, null, 2), "utf8");
 		return path;
 	}
+
+	it.each([true, false])("project cached tools register only after trust=%s", async (trusted) => {
+		const agentDir = tempAgentDir();
+		const cwd = join(agentDir, "project");
+		mkdirSync(cwd);
+		vi.spyOn(process, "cwd").mockReturnValue(cwd);
+		const serverDef = { command: "inert-project-command", directTools: true };
+		writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { project: serverDef } }));
+		writeCache(agentDir, {
+			project: {
+				configHash: computeServerHash(serverDef),
+				cachedAt: Date.now(),
+				resources: [],
+				tools: [{ name: "inspect", description: "Project only", inputSchema: { type: "object", properties: {} } }],
+			},
+		});
+		process.argv = ["node", "lunr"];
+		const initializeMcp = vi.fn();
+		mockHeavyModules({ initializeMcp });
+		const { default: adapter } = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+		const pi = createMockPi(cwd);
+		pi.ctx.isProjectTrusted = () => trusted;
+		adapter(pi);
+		expect(pi.tools.map((tool) => tool.name)).not.toContain("project_inspect");
+		await emit(pi, "session_start");
+		expect(pi.tools.some((tool) => tool.name === "project_inspect")).toBe(trusted);
+		expect(initializeMcp).not.toHaveBeenCalled();
+		if (trusted) {
+			const tool = pi.tools.find((tool) => tool.name === "project_inspect")!;
+			pi.ctx.isProjectTrusted = () => false;
+			await emit(pi, "session_start");
+			expect(pi.getActiveTools()).not.toContain("project_inspect");
+			await expect(tool.execute!("stale", {}, undefined, undefined, pi.ctx)).rejects.toThrow("unavailable");
+			expect(initializeMcp).not.toHaveBeenCalled();
+		}
+	});
 
 	it("keeps index static imports free of heavy MCP runtime modules", () => {
 		const imports = collectStaticImports(join(ADAPTER_ROOT, "index.ts"));
@@ -325,7 +365,9 @@ describe("mcp cold-start dependency split", () => {
 		expect(pi.commands.has("mcp-auth")).toBe(true);
 
 		const direct = pi.tools.find((tool) => tool.name === "playwright_click");
-		expect(direct?.description).toBe("Click a selector");
+		expect(direct?.description).toBe(
+			"Click a selector\nUnavailable in read-only mode; switch to yolo or auto to call.",
+		);
 		expect(direct?.parameters).toBeTruthy();
 
 		const proxy = pi.tools.find((tool) => tool.name === "mcp");
@@ -367,6 +409,7 @@ describe("mcp cold-start dependency split", () => {
 					throw new Error("boom");
 				}
 				return {
+					authFlow: { shutdown: vi.fn(async () => {}) },
 					uiServer: null,
 					lifecycle: { gracefulShutdown: vi.fn(async () => {}) },
 					manager: { getAllConnections: () => new Map() },
@@ -406,6 +449,47 @@ describe("mcp cold-start dependency split", () => {
 		expect(loadCount).toBe(1);
 		expect(initCalls).toBe(2);
 	});
+
+	it.each(["session_start", "session_shutdown"])(
+		"%s closes only the departing factory's OAuth owner",
+		async (event) => {
+			const agentDir = tempAgentDir();
+			const configPath = writeConfig(agentDir, { mcpServers: {} });
+			process.argv = ["node", "lunr", "--mcp-config", configPath];
+			const shutdowns: Array<ReturnType<typeof vi.fn>> = [];
+			mockHeavyModules({
+				initializeMcp: async () => {
+					const shutdown = vi.fn(async () => {});
+					shutdowns.push(shutdown);
+					return {
+						authFlow: { shutdown },
+						uiServer: null,
+						lifecycle: { gracefulShutdown: vi.fn(async () => {}) },
+					};
+				},
+			});
+			const { default: install } = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+			const first = createMockPi(agentDir);
+			const second = createMockPi(agentDir);
+			install(first);
+			install(second);
+			await emit(first, "session_start");
+			await emit(second, "session_start");
+			await first.tools.find((tool) => tool.name === "mcp")!.execute!("first", {}, undefined, undefined, first.ctx);
+			await second.tools.find((tool) => tool.name === "mcp")!.execute!(
+				"second",
+				{},
+				undefined,
+				undefined,
+				second.ctx,
+			);
+			await emit(first, event);
+			expect(shutdowns[0]).toHaveBeenCalledOnce();
+			expect(shutdowns[1]).not.toHaveBeenCalled();
+			await emit(second, "session_shutdown");
+			expect(shutdowns[1]).toHaveBeenCalledOnce();
+		},
+	);
 
 	it("can cancel and shut down while implementation imports are stalled", async () => {
 		const agentDir = tempAgentDir();
@@ -475,6 +559,7 @@ describe("mcp cold-start dependency split", () => {
 				sawInitStart();
 				await initGate;
 				const state = {
+					authFlow: { shutdown: vi.fn(async () => {}) },
 					uiServer: null,
 					lifecycle: { gracefulShutdown },
 					manager: { getAllConnections: () => new Map() },
@@ -530,7 +615,11 @@ describe("mcp cold-start dependency split", () => {
 		let initSignal: AbortSignal | undefined;
 		mockHeavyModules({
 			initializeMcp: async (_pi, _ctx, options) => {
-				const partial = { uiServer: null, lifecycle: { gracefulShutdown } };
+				const partial = {
+					authFlow: { shutdown: vi.fn(async () => {}) },
+					uiServer: null,
+					lifecycle: { gracefulShutdown },
+				};
 				initSignal = options.signal;
 				options.onState?.(partial);
 				started();
@@ -563,7 +652,6 @@ describe("mcp cold-start dependency split", () => {
 		const lazyConnect = vi.fn(async () => false);
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/init.ts", () => ({ lazyConnect }));
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/mcp-auth-flow.ts", () => ({
-			authenticate,
 			supportsOAuth: () => true,
 		}));
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts");
@@ -572,6 +660,7 @@ describe("mcp cold-start dependency split", () => {
 		);
 		const close = vi.fn();
 		const state = {
+			authFlow: { authenticate },
 			config: {
 				settings: { autoAuth: true },
 				mcpServers: { remote: { url: "https://example.invalid", oauth: { grantType: "client_credentials" } } },
@@ -616,6 +705,7 @@ describe("mcp cold-start dependency split", () => {
 				sawInitStart();
 				await initGate;
 				return {
+					authFlow: { shutdown: vi.fn(async () => {}) },
 					uiServer: null,
 					lifecycle: { gracefulShutdown: async () => {} },
 					manager: { getAllConnections: () => new Map() },

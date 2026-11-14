@@ -1,7 +1,7 @@
 /**
  * lunr: Context window breakdown estimation for the /context command.
  *
- * Pure functions that estimate (chars/4, same heuristic as `estimateTokens` in
+ * Pure functions that estimate (shared text heuristic, as `estimateTokens` in
  * compaction.ts) what consumes the model's context window: the system prompt
  * (project context files are baked into it), the registered tool definitions,
  * and the live session messages split into user / assistant text / thinking /
@@ -13,6 +13,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
+import { estimateTextTokens } from "@earendil-works/pi-ai/compat";
 import { estimateTokens } from "./compaction/index.ts";
 
 export interface ContextBreakdownTool {
@@ -77,14 +78,13 @@ export interface ContextBreakdown {
 	};
 }
 
-const CHARS_PER_TOKEN = 4;
 const PROJECT_CONTEXT_RE = /<project_context>[\s\S]*?<\/project_context>/;
 const PROJECT_INSTRUCTIONS_RE = /<project_instructions(?:\s+path="([^"]*)")?>([\s\S]*?)<\/project_instructions>/g;
 const SKILLS_BLOCK_RE =
 	/\n\nThe following skills provide specialized instructions for specific tasks\.[\s\S]*<\/available_skills>/;
 
 function estimateChars(text: string): number {
-	return text.length === 0 ? 0 : Math.ceil(text.length / CHARS_PER_TOKEN);
+	return estimateTextTokens(text);
 }
 
 function contextFileLabel(
@@ -139,22 +139,22 @@ export function splitSystemPromptSections(systemPrompt: string): {
  * The wire format is roughly `{ name, description, parameters(JSON schema) }` per tool.
  */
 export function estimateToolDefinitionTokens(tools: ReadonlyArray<ContextBreakdownTool>): number {
-	let chars = 0;
+	let text = "";
 	for (const tool of tools) {
-		chars += tool.name.length + tool.description.length;
+		text += tool.name + tool.description;
 		try {
 			const schema = JSON.stringify(tool.parameters);
-			if (schema) chars += schema.length;
+			if (schema) text += schema;
 		} catch {
 			// Unserializable schema — skip rather than fail the whole breakdown.
 		}
 	}
-	return Math.ceil(chars / CHARS_PER_TOKEN);
+	return estimateTextTokens(text);
 }
 
 /**
  * Compute the estimated context window breakdown.
- * All numbers are chars/4 estimates, matching `estimateTokens`.
+ * All numbers use the shared text heuristic, matching `estimateTokens`.
  */
 export function computeContextBreakdown(input: ContextBreakdownInput): ContextBreakdown {
 	const sections = splitSystemPromptSections(input.systemPrompt);
@@ -184,26 +184,27 @@ export function computeContextBreakdown(input: ContextBreakdownInput): ContextBr
 	};
 
 	for (const message of input.messages) {
+		if (message.role === "bashExecution" && message.excludeFromContext) continue;
 		switch (message.role) {
 			case "assistant": {
-				let textChars = 0;
-				let thinkingChars = 0;
-				let toolCallChars = 0;
+				let text = "";
+				let thinkingText = "";
+				let toolCallText = "";
 				for (const block of (message as AssistantMessage).content) {
 					if (block.type === "text") {
-						textChars += block.text.length;
+						text += block.text;
 					} else if (block.type === "thinking") {
-						thinkingChars += block.thinking.length;
+						thinkingText += block.thinking;
 					} else if (block.type === "toolCall") {
-						toolCallChars += block.name.length + JSON.stringify(block.arguments).length;
+						toolCallText += block.name + JSON.stringify(block.arguments);
 					}
 				}
-				assistantText += Math.ceil(textChars / CHARS_PER_TOKEN);
-				thinking += Math.ceil(thinkingChars / CHARS_PER_TOKEN);
-				toolCalls += Math.ceil(toolCallChars / CHARS_PER_TOKEN);
-				if (textChars > 0) counts.assistantText++;
-				if (thinkingChars > 0) counts.thinking++;
-				if (toolCallChars > 0) counts.toolCalls++;
+				assistantText += estimateTextTokens(text);
+				thinking += estimateTextTokens(thinkingText);
+				toolCalls += estimateTextTokens(toolCallText);
+				if (text.length > 0) counts.assistantText++;
+				if (thinkingText.length > 0) counts.thinking++;
+				if (toolCallText.length > 0) counts.toolCalls++;
 				break;
 			}
 			case "user":

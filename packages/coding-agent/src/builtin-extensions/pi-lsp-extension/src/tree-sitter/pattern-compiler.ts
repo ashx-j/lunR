@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Pattern Compiler — parse metavariable patterns into matchable pattern trees.
  *

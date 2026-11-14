@@ -74,3 +74,11 @@ describe("visibleWidth", () => {
 		assert.strictEqual(visibleWidth(normalizeTerminalOutput("ຳabc")), visibleWidth("ຳabc"));
 	});
 });
+
+describe("visibleWidth with CSI sequences", () => {
+	it("ends a CSI sequence at any final byte", () => {
+		assert.strictEqual(visibleWidth("\x1b[?25lhello"), 5);
+		assert.strictEqual(visibleWidth("\x1b[2Ahi\x1b[?2004h"), 2);
+		assert.strictEqual(visibleWidth("\x1b[31mred\x1b[0m"), 3);
+	});
+});

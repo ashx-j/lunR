@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared position resolver — resolves a symbol name to a file position.
  *

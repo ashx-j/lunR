@@ -528,6 +528,14 @@ describe("decodeKittyPrintable", () => {
 		assert.strictEqual(decodeKittyPrintable("\x1b[57416u"), ",");
 		assert.strictEqual(decodeKittyPrintable("\x1b[57417u"), undefined);
 	});
+
+	it("should not decode other Kitty functional keys as text", () => {
+		assert.strictEqual(decodeKittyPrintable("\x1b[57363u"), undefined); // Menu
+		assert.strictEqual(decodeKittyPrintable("\x1b[57376u"), undefined); // F13
+		assert.strictEqual(decodeKittyPrintable("\x1b[57361u"), undefined); // Print Screen
+		assert.strictEqual(decodeKittyPrintable("\x1b[57428u"), undefined); // Media play
+		assert.strictEqual(decodePrintableKey("\x1b[57398u"), undefined); // F35
+	});
 });
 
 describe("decodePrintableKey", () => {

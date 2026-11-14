@@ -202,7 +202,7 @@ describe("ModelRuntime official shard fetch", () => {
 		expect(officialUrls.some((href) => href.endsWith("/providers.json"))).toBe(true);
 		expect(officialUrls.some((href) => href.endsWith("/providers/xai.json"))).toBe(true);
 		expect(officialUrls.some((href) => href.includes("/providers/openrouter.json"))).toBe(false);
-		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ thinkingFormat: "openrouter" });
+		expect(runtime.getModel("xai", "grok-4.7")?.compat).toEqual({ supportsLongCacheRetention: false });
 	});
 
 	it("applies official overlay to a non-live-list provider when a stored cred exists", async () => {
@@ -486,5 +486,27 @@ describe("ModelRuntime live catalog OAuth refresh", () => {
 		expect(readGrokCliXaiOAuth({ grokHome })).toMatchObject({ access: "fresh", refresh: "rotated" });
 		const raw = JSON.parse(readFileSync(grokAuthPath(grokHome), "utf-8")) as Record<string, Record<string, unknown>>;
 		expect(raw[grokOidcEntryKey()]).toMatchObject({ email: "user@example.com", user_id: "user-1" });
+	});
+});
+
+describe("ModelRuntime live list logins", () => {
+	it("skips Anthropic's list quietly for a login that is not an API key", async () => {
+		const fetchImpl = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async () => new Response("not found", { status: 404 }));
+		const credentials = AuthStorage.inMemory({
+			anthropic: { type: "oauth", access: "old-pi-token", refresh: "old-refresh", expires: 0 },
+		});
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			subscriptions: SubscriptionManager.inMemory(credentials),
+			allowModelNetwork: false,
+		});
+
+		const result = await runtime.refresh({ allowNetwork: true });
+		expect(result.live.find((entry) => entry.providerId === "anthropic")).toMatchObject({ status: "skipped" });
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("api.anthropic.com/v1/models"))).toBe(false);
 	});
 });

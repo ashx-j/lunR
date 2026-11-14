@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
 	SUBAGENT_WATCHDOG_WARNING_TYPE,
 	type WatchdogWarning,

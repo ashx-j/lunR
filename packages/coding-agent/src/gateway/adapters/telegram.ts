@@ -17,9 +17,10 @@
  * messages; texts starting with "/" flush immediately so commands never merge.
  * Callback queries are polled and mapped via callbackQueryToEvent().
  *
- * Outbound: sendMessage/editMessageText with parse_mode "Markdown" and a
- * one-shot plain-text retry when Telegram rejects the markup; send() honors
- * 429 retry_after once and then reports { success: false, retryable: true }.
+ * Outbound: sendMessage/editMessageText as plain text. Telegram's legacy
+ * Markdown read `_` and `*` in identifiers as formatting and dropped them;
+ * send() honors 429 retry_after once and then reports
+ * { success: false, retryable: true }.
  * Message splitting is NOT done here — the router owns that (text.ts).
  *
  * Typing: sendTyping() is a self-contained refresher — Telegram typing
@@ -54,7 +55,6 @@ const DEFAULT_DEBOUNCE_MS = 300;
 const TYPING_INTERVAL_MS = 4000; // bubbles expire after ~5s
 const TYPING_SAFETY_MS = 120_000; // auto-stop after 2min without a refresh
 const REPLY_TO_TEXT_MAX = 500;
-const MARKDOWN_PARSE_ERROR_RE = /can't parse|parse entities/i;
 const NOT_MODIFIED_RE = /message is not modified/i;
 
 // ---------------------------------------------------------------------------
@@ -604,7 +604,7 @@ export class TelegramAdapter implements PlatformAdapter {
 	// -----------------------------------------------------------------------
 
 	private buildSendBody(chatId: string, text: string, opts?: SendOptions): Record<string, unknown> {
-		const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: "Markdown" };
+		const body: Record<string, unknown> = { chat_id: chatId, text };
 		if (opts?.threadId !== undefined) body.message_thread_id = Number(opts.threadId);
 		if (opts?.replyTo !== undefined) body.reply_parameters = { message_id: Number(opts.replyTo) };
 		return body;
@@ -681,13 +681,6 @@ export class TelegramAdapter implements PlatformAdapter {
 				const { reply_parameters: _dropped, ...plain } = body;
 				return this.callSend(plain);
 			}
-			if (err instanceof TelegramApiError && err.status === 400 && body.parse_mode !== undefined) {
-				if (MARKDOWN_PARSE_ERROR_RE.test(err.message)) {
-					// Telegram rejected our markup: retry once as plain text.
-					const { parse_mode: _dropped, ...plain } = body;
-					return this.callSend(plain);
-				}
-			}
 			if (err instanceof TelegramApiError && err.status === 429) {
 				await this.sleep((err.retryAfter ?? 1) * 1000);
 				try {
@@ -710,7 +703,6 @@ export class TelegramAdapter implements PlatformAdapter {
 			chat_id: chatId,
 			message_id: Number(messageId),
 			text,
-			parse_mode: "Markdown",
 		};
 		const markup = this.buildReplyMarkup(buttons);
 		if (markup !== undefined) body.reply_markup = markup;
@@ -718,18 +710,8 @@ export class TelegramAdapter implements PlatformAdapter {
 			await this.callApi("editMessageText", body);
 			return { success: true, messageId };
 		} catch (err) {
-			if (err instanceof TelegramApiError && err.status === 400) {
-				if (NOT_MODIFIED_RE.test(err.message)) return { success: true, messageId };
-				if (MARKDOWN_PARSE_ERROR_RE.test(err.message) && body.parse_mode !== undefined) {
-					const { parse_mode: _dropped, ...plain } = body;
-					try {
-						await this.callApi("editMessageText", plain);
-						return { success: true, messageId };
-					} catch (retryErr) {
-						return { success: false, error: errMessage(retryErr) };
-					}
-				}
-			}
+			if (err instanceof TelegramApiError && err.status === 400 && NOT_MODIFIED_RE.test(err.message))
+				return { success: true, messageId };
 			return {
 				success: false,
 				error: errMessage(err),

@@ -24,8 +24,8 @@ describe("renderUsageBox", () => {
 				80,
 			),
 		);
-		expect(out).toContain("Session usage");
-		expect(out).toContain("input 12k");
+		expect(out).toContain("Parent usage including auxiliary requests");
+		expect(out).toContain("input 16k");
 		expect(out).toContain("output 3.0k");
 		expect(out).toContain("total 19k");
 		expect(out).toContain("cached 4.0k (25%)");

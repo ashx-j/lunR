@@ -1,4 +1,3 @@
-// @ts-nocheck
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
 export type ThinkingLevelMap = Partial<Record<ThinkingLevel, string | null>>;

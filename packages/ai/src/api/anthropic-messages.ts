@@ -500,6 +500,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -576,6 +577,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
+					output.usage.measurement = "partial";
 					output.usage.input = event.message.usage.input_tokens || 0;
 					output.usage.output = event.message.usage.output_tokens || 0;
 					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
@@ -716,6 +718,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
 					if (event.usage) {
+						output.usage.measurement = "reported";
 						if (event.usage.input_tokens != null) {
 							output.usage.input = event.usage.input_tokens;
 						}
@@ -773,7 +776,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
  * Note: effort "max" is available on all adaptive-thinking Claude models, while native
- * "xhigh" is only available on Opus 4.7/4.8, Sonnet 5, and Fable 5.
+ * "xhigh" is only available on Opus 4.7/4.8 and the Claude 5 family.
  */
 function mapThinkingLevelToEffort(
 	model: Model<"anthropic-messages">,
@@ -795,14 +798,18 @@ function mapThinkingLevelToEffort(
 	}
 }
 
-export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOptions> = (
+export const streamSimple: StreamFunction<
+	"anthropic-messages",
+	SimpleStreamOptions & Pick<AnthropicOptions, "client">
+> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
-	options?: SimpleStreamOptions,
+	options?: SimpleStreamOptions & Pick<AnthropicOptions, "client">,
 ): AssistantMessageEventStream => {
-	assertRequestAuth(model.provider, options?.apiKey, options?.headers);
+	// An injected client brings its own transport and authentication.
+	if (!options?.client) assertRequestAuth(model.provider, options?.apiKey, options?.headers);
 
-	const base = buildBaseOptions(model, context, options, options?.apiKey);
+	const base = { ...buildBaseOptions(model, context, options, options?.apiKey), client: options?.client };
 	if (!options?.reasoning) {
 		return stream(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
 	}

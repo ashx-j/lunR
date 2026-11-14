@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_definition — Go to the definition of a symbol.
  */

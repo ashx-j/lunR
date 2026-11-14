@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * code_rewrite — Transform code matching a structural pattern into a replacement.
  *
@@ -9,6 +8,7 @@
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "../../../../core/tools/truncate.js";
+import { resolveToCwd } from "../../../../core/tools/path-utils.js";
 import { relative } from "node:path";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
@@ -32,13 +32,15 @@ interface RewriteDetails {
   matchCount: number;
   filesModified: number;
   dryRun: boolean;
+  failures?: { file: string; reason: string; writeAttempted?: boolean }[];
+  skippedFiles?: string[];
 }
 
 export function createCodeRewriteTool(
   rootDirOrGetter: string | (() => string),
   treeSitter: TreeSitterManager,
   fileChangeCallback?: RewriteFileChangeCallback,
-): ToolDefinition<typeof RewriteParams> {
+): ToolDefinition<typeof RewriteParams, RewriteDetails> {
   const getRootDir = typeof rootDirOrGetter === "function" ? rootDirOrGetter : () => rootDirOrGetter;
 
   return {
@@ -48,6 +50,7 @@ export function createCodeRewriteTool(
       "Transform code matching a structural pattern into a replacement. " +
       "Use $NAME to capture and reuse single nodes, $$$NAME for sequences. " +
       "Defaults to dry-run mode (preview only). Set dry_run=false to apply changes. " +
+      "Apply rejects protected targets and stale source snapshots. Files apply sequentially; a later failure leaves earlier changes in place and reports skipped files. Search again after a stale-source failure. Inspect failed writes before retrying. " +
       "For symbol renames, prefer lsp_rename instead (semantically correct).",
     parameters: RewriteParams,
 
@@ -60,9 +63,9 @@ export function createCodeRewriteTool(
       let compiled;
       try {
         compiled = await compilePattern(patternStr, language, treeSitter);
-      } catch (e: any) {
+      } catch (e) {
         return {
-          content: [{ type: "text", text: `Error: ${e.message}` }],
+          content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
           details: { matchCount: 0, filesModified: 0, dryRun: isDryRun },
         };
       }
@@ -83,7 +86,7 @@ export function createCodeRewriteTool(
 
       // Find matches
       const matches = await searchFiles(compiled, rootDir, treeSitter, {
-        path,
+        path: path ? resolveToCwd(path, rootDir) : undefined,
         maxResults: 500,
       });
 
@@ -133,17 +136,21 @@ export function createCodeRewriteTool(
       }
 
       // Apply mode
-      const result = await applyRewrites(matches, replacement);
+      const result = await applyRewrites(matches, replacement, rootDir);
 
       // Notify FileSync about modified files so LSP servers get updated
       if (fileChangeCallback && result.filesModified > 0) {
-        const modifiedFiles = new Set(result.changes.map((c) => c.file));
-        for (const file of modifiedFiles) {
+        for (const file of result.modifiedFiles) {
           fileChangeCallback.onFileModified(file);
         }
       }
 
       const lines: string[] = [];
+      if (result.failures.length) {
+        lines.push(`Rewrite stopped. ${result.filesModified} file(s) changed before failure; earlier changes remain. ${result.skippedFiles.length} file(s) skipped.`);
+        if (result.failures.some((failure) => failure.writeAttempted)) lines.push("A failed write may have partially changed its target. Inspect that file before retrying.");
+        for (const failure of result.failures) lines.push(`${relative(rootDir, failure.file)}: ${failure.reason}`);
+      }
       lines.push(`Applied ${result.changes.length} change${result.changes.length !== 1 ? "s" : ""} across ${result.filesModified} file${result.filesModified !== 1 ? "s" : ""}:\n`);
 
       for (const c of result.changes) {
@@ -162,7 +169,7 @@ export function createCodeRewriteTool(
 
       return {
         content: [{ type: "text", text: output }],
-        details: { matchCount: matches.length, filesModified: result.filesModified, dryRun: false },
+        details: { matchCount: matches.length, filesModified: result.filesModified, dryRun: false, failures: result.failures, skippedFiles: result.skippedFiles },
       };
     },
   };

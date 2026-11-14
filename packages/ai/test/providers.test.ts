@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { AuthContext, AuthEvent } from "../src/auth/types.ts";
+import { findEnvKeys } from "../src/env-api-keys.ts";
 import { createModels, createProvider } from "../src/models.ts";
 import { InMemoryModelsStore, type ModelsStoreEntry } from "../src/models-store.ts";
 import { builtinModels, builtinProviders } from "../src/providers/all.ts";
@@ -10,6 +11,7 @@ import { cloudflareAIGatewayProvider } from "../src/providers/cloudflare-ai-gate
 import { cloudflareWorkersAIProvider } from "../src/providers/cloudflare-workers-ai.ts";
 import { fauxAssistantMessage, fauxProvider } from "../src/providers/faux.ts";
 import { googleVertexProvider } from "../src/providers/google-vertex.ts";
+import { MODELS_DEV_PROVIDERS } from "../src/providers/models-dev-providers.generated.ts";
 import type { Api, Context, Model, ProviderStreams } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 
@@ -35,25 +37,22 @@ describe("builtin providers", () => {
 		const all = models.getModels();
 		expect(all.length).toBeGreaterThan(500);
 
-		// Static providers list models immediately; Radius is purely dynamic.
+		// Hand-written providers list models immediately. Radius is purely dynamic, and generic models.dev
+		// providers get their rows from the published catalog after login.
+		const generic = new Set(MODELS_DEV_PROVIDERS.map((definition) => definition.id));
 		for (const provider of providers) {
 			const list = models.getModels(provider.id);
-			if (provider.id === "radius") expect(list).toEqual([]);
+			if (provider.id === "radius" || generic.has(provider.id)) expect(list).toEqual([]);
 			else expect(list.length).toBeGreaterThan(0);
 			expect(list.every((m) => m.provider === provider.id)).toBe(true);
 		}
 	});
 
-	it("uses official Kimi K3 pricing for Moonshot providers", () => {
-		const models = builtinModels();
-		for (const provider of ["moonshotai", "moonshotai-cn"]) {
-			expect(models.getModel(provider, "kimi-k3")?.cost).toEqual({
-				input: 3,
-				output: 15,
-				cacheRead: 0.3,
-				cacheWrite: 0,
-			});
-		}
+	it("registers each generic models.dev provider with its API key variable", () => {
+		const [definition] = MODELS_DEV_PROVIDERS;
+		const provider = builtinProviders().find((candidate) => candidate.id === definition.id);
+		expect(provider).toMatchObject({ name: definition.name, baseUrl: definition.baseUrl });
+		expect(findEnvKeys(definition.id, { [definition.env[0]]: "key" })).toEqual([definition.env[0]]);
 	});
 
 	it("rejects ambient Anthropic OAuth tokens while preserving real API keys", async () => {

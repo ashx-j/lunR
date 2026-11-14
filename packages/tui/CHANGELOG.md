@@ -1,5 +1,74 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.2.40] - 2026-10-25
+
+### Fixed
+
+- Lines wider than the terminal are truncated in both redraw paths instead of wrapping into the next row.
+- Picker text is cut at word ends.
+- Chat anchor lookup searches nearest-first, which takes a frame at 20K rows from about 16 ms to under 0.01 ms.
+- Indic text is measured per code point.
+- Kitty key releases and unmapped Kitty keys no longer type characters, escape sequences split across reads are joined, and surrogate pairs stay intact.
+- `stop()` can be called more than once.
+
+## [0.2.39] - 2026-10-20
+
+- `SettingsList` accepts `{ kind: "section", label }` rows. They render as dim headings, navigation, search and the row counter skip them, and a section without a label adds a blank row.
+- `SettingItem.searchTerms` lists extra names search matches, such as a submenu's rows. While a query matches some of them, the row shows those names in place of its value.
+- `Editor.onSubmit` receives the untrimmed text as a second argument, so callers can tell a leading space apart.
+
+## [0.2.38] - 2026-10-18
+
+- `TUI.setFocusReporting()` turns terminal focus reports on or off, `TUI.isTerminalFocused()` returns the last report, and `TUI.notify()` rings the bell or sends an OSC 9 notice. Focus reports are always consumed instead of reaching the focused component.
+
+## [0.2.37] - 2026-10-17
+
+- Align the package version with the lunR 0.2.37 release.
+
+## [0.2.36] - 2026-10-17
+
+- Align the package version with the lunR 0.2.36 release.
+
+## [0.2.35] - 2026-10-17
+
+- Align the package version with the lunR 0.2.35 release.
+
+## [0.2.34] - 2026-10-17
+
+- Align the package version with the lunR 0.2.34 release.
+
+## [0.2.33] - 2026-10-17
+
+- Align the package version with the lunR 0.2.33 release.
+
+## [0.2.32] - 2026-10-16
+
+- Align the package version with the lunR 0.2.32 release.
+
+## [0.2.31] - 2026-10-16
+
+- Align the package version with the lunR 0.2.31 release.
+
+## [0.2.30] - 2026-10-16
+
+- Align the package version with the lunR 0.2.30 release.
+
+## [0.2.29] - 2026-10-11
+
+- Align the package version with the lunR 0.2.29 release.
+
+## [0.2.28] - 2026-10-04
+
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Terminal output sanitization handles Unicode control sequences. Editor undo and narrow rendering retain the intended draft state.
+
+## [0.2.26] - 2026-09-27
+
 ## [0.2.25] - 2026-09-26
 
 ## [0.2.24] - 2026-09-24

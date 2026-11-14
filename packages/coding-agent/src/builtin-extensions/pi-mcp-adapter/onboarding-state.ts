@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";

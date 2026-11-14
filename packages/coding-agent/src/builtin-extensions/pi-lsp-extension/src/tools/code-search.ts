@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * ast_search — Find code matching a structural pattern with metavariables.
  *

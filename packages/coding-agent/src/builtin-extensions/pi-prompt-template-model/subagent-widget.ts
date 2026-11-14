@@ -108,7 +108,8 @@ function getTaskHeader(
 	theme: Theme,
 ): string {
 	const status = progress?.status ?? "pending";
-	const modelLabel = normalizeModelLabel(progress?.model ?? task.model);
+	// Prefer the child's reported model; otherwise show the tier the request asked for.
+	const modelLabel = normalizeModelLabel(progress?.model ?? task.tier);
 	const modelSuffix = modelLabel ? ` ${theme.fg("dim", modelLabel)}` : "";
 	const label = `task ${index + 1} · ${task.agent}`;
 	if (status === "running") return `${theme.fg("toolTitle", label)}${modelSuffix} ${theme.fg("warning", "running")}`;
@@ -261,7 +262,7 @@ export function createDelegatedProgressWidget(
 	const parallelTasks = tasks ?? [];
 	const isParallel = parallelTasks.length > 0;
 	const parallelModels = [...new Set(parallelTasks
-		.map((task) => normalizeModelLabel(task.model))
+		.map((task) => task.tier)
 		.filter((entry): entry is string => !!entry))];
 	const requestModel = isParallel
 		? (parallelModels.length === 1 ? parallelModels[0] : undefined)

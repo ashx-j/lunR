@@ -161,6 +161,7 @@ function createEmptyUsage(): PiMessagesUsage {
 		cacheRead: 0,
 		cacheWrite: 0,
 		totalTokens: 0,
+		measurement: "unknown",
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
@@ -194,7 +195,7 @@ function createEventConverter(model: Model<"pi-messages">) {
 			case "done":
 				Object.assign(partial, {
 					stopReason: event.reason,
-					usage: event.usage,
+					usage: { ...event.usage, measurement: event.usage.measurement ?? "reported" },
 					responseId: event.responseId,
 				});
 				appendRewriteDiagnostic(partial, event.rewrite);
@@ -202,7 +203,7 @@ function createEventConverter(model: Model<"pi-messages">) {
 			case "error":
 				Object.assign(partial, {
 					stopReason: event.reason,
-					usage: event.usage,
+					usage: { ...event.usage, measurement: event.usage.measurement ?? "reported" },
 					errorMessage: event.errorMessage,
 					responseId: event.responseId,
 				});
@@ -352,6 +353,7 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 ): AssistantMessageEventStream => {
 	const eventStream = new AssistantMessageEventStream();
 	const convertEvent = createEventConverter(model);
+	let latestMessage: AssistantMessage | undefined;
 
 	void (async () => {
 		try {
@@ -406,6 +408,14 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 
 			for await (const piEvent of readPiMessagesEvents(response.body)) {
 				const event = convertEvent(piEvent);
+				latestMessage =
+					"partial" in event
+						? event.partial
+						: event.type === "done"
+							? event.message
+							: event.type === "error"
+								? event.error
+								: latestMessage;
 				eventStream.push(event);
 				if (event.type === "done" || event.type === "error") {
 					return;
@@ -414,7 +424,13 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 
 			throw new Error(`${model.provider} stream ended without a terminal event`);
 		} catch (error) {
-			eventStream.push(createErrorEvent(model, error, options?.signal?.aborted ?? false));
+			const event = createErrorEvent(model, error, options?.signal?.aborted ?? false);
+			if (event.type === "error" && latestMessage) {
+				event.error.content = latestMessage.content;
+				event.error.usage = latestMessage.usage;
+				event.error.responseId = latestMessage.responseId;
+			}
+			eventStream.push(event);
 		}
 	})();
 

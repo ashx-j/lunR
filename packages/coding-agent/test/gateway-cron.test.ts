@@ -5,10 +5,25 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import lunrCron from "../src/builtin-extensions/lunr-cron.ts";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { beginCronFire, endCronFire, isCronFire } from "../src/core/cron/fire-guard.ts";
-import { type CronJob, createJob, getJob, resetCronValidators, setCronBaseDir } from "../src/core/cron/jobs.ts";
+import {
+	type CronJob,
+	createJob,
+	getJob,
+	getLatestJobOutput,
+	listJobs,
+	resetCronValidators,
+	setCronBaseDir,
+	updateJob,
+} from "../src/core/cron/jobs.ts";
 import { currentOrigin, runWithOrigin } from "../src/core/cron/origin-context.ts";
+import { runSchedulerTick } from "../src/core/cron/scheduler.ts";
 import { saveInstallFeatures } from "../src/core/install-features.ts";
-import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
+import {
+	defaultGatewayConfig,
+	type GatewayConfig,
+	loadGatewayConfig,
+	saveGatewayConfig,
+} from "../src/gateway/config.ts";
 import { createPlatformDeliverer, startGatewayCron, wrapCronContent } from "../src/gateway/cron.ts";
 import type { ButtonSpec, CallbackEvent, PlatformAdapter, SendOptions, SendResult } from "../src/gateway/types.ts";
 
@@ -60,7 +75,7 @@ class FakeAdapter implements PlatformAdapter {
 
 let dir: string;
 let prevAgentDir: string | undefined;
-const stoppers: Array<() => void> = [];
+const stoppers: Array<() => Promise<void>> = [];
 
 function enableChatPlatforms(): void {
 	saveInstallFeatures({
@@ -79,10 +94,11 @@ beforeEach(() => {
 	process.env[ENV_AGENT_DIR] = dir;
 	setCronBaseDir(dir);
 	enableChatPlatforms();
+	makeConfig();
 });
 
-afterEach(() => {
-	for (const stop of stoppers.splice(0)) stop();
+afterEach(async () => {
+	for (const stop of stoppers.splice(0)) await stop();
 	resetCronValidators();
 	setCronBaseDir(undefined);
 	if (prevAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
@@ -92,7 +108,10 @@ afterEach(() => {
 
 function makeConfig(mutate?: (cfg: GatewayConfig) => void): GatewayConfig {
 	const cfg = defaultGatewayConfig();
+	cfg.projectRoots = [dir];
+	cfg.telegram.allowedUsers = ["creator"];
 	mutate?.(cfg);
+	saveGatewayConfig(cfg);
 	return cfg;
 }
 
@@ -146,7 +165,7 @@ describe("fire-guard", () => {
 
 describe("origin-context", () => {
 	it("propagates through an awaited async chain", async () => {
-		const origin = { platform: "telegram", chatId: "c1", threadId: "t1", chatType: "dm" };
+		const origin = { platform: "telegram", userId: "creator", chatId: "c1", threadId: "t1", chatType: "dm" };
 		const seen = await runWithOrigin(origin, async () => {
 			await new Promise((resolve) => setTimeout(resolve, 1));
 			const inner = async () => {
@@ -160,7 +179,7 @@ describe("origin-context", () => {
 
 	it("is undefined outside runWithOrigin and after it returns", async () => {
 		expect(currentOrigin()).toBeUndefined();
-		await runWithOrigin({ platform: "telegram", chatId: "c1" }, async () => {});
+		await runWithOrigin({ platform: "telegram", userId: "creator", chatId: "c1" }, async () => {});
 		expect(currentOrigin()).toBeUndefined();
 	});
 });
@@ -170,6 +189,9 @@ describe("origin-context", () => {
 // ---------------------------------------------------------------------------
 
 type CronToolDef = {
+	name: string;
+	description: string;
+	parameters: unknown;
 	execute: (
 		toolCallId: string,
 		params: Record<string, unknown>,
@@ -194,7 +216,13 @@ function loadCronTool(): CronToolDef {
 	return tool;
 }
 
-const idleCtx = { isIdle: () => true, ui: { notify: () => {} } };
+const idleCtx = {
+	get cwd() {
+		return dir;
+	},
+	isIdle: () => true,
+	ui: { notify: () => {} },
+};
 
 describe("lunr-cron tool", () => {
 	it("refuses while a cron-fired turn is in flight", async () => {
@@ -210,7 +238,7 @@ describe("lunr-cron tool", () => {
 
 	it("stamps origin + deliver='origin' when created inside a gateway origin context", async () => {
 		const tool = loadCronTool();
-		const origin = { platform: "telegram", chatId: "chat9", threadId: "77", chatType: "dm" };
+		const origin = { platform: "telegram", userId: "creator", chatId: "chat9", threadId: "77", chatType: "dm" };
 		const result = await runWithOrigin(origin, () =>
 			tool.execute("t2", { action: "create", prompt: "check deploy", schedule: "every 30m" }, null, null, idleCtx),
 		);
@@ -228,7 +256,7 @@ describe("lunr-cron tool", () => {
 			{ action: "create", prompt: "check deploy", schedule: "every 30m" },
 			null,
 			null,
-			idleCtx,
+			{ ...idleCtx, cwd: process.cwd() },
 		);
 		const id = /Created cron job '[^']+' \(([a-z0-9]+)\)/.exec(result.content[0].text)?.[1];
 		const job = getJob(id!);
@@ -250,7 +278,7 @@ describe("lunr-cron tool", () => {
 
 	it("an explicit deliver param beats the origin default", async () => {
 		const tool = loadCronTool();
-		const origin = { platform: "telegram", chatId: "chat9" };
+		const origin = { platform: "telegram", userId: "creator", chatId: "chat9" };
 		const result = await runWithOrigin(origin, () =>
 			tool.execute(
 				"t4",
@@ -285,7 +313,7 @@ describe("createPlatformDeliverer", () => {
 		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), makeConfig());
 		const job = fakeJob({
 			deliver: "origin",
-			origin: { platform: "telegram", chatId: "chat1", threadId: "th9" },
+			origin: { platform: "telegram", userId: "creator", chatId: "chat1", threadId: "th9" },
 		});
 		const err = await deliver(job, "result text");
 		expect(err).toBeNull();
@@ -295,15 +323,15 @@ describe("createPlatformDeliverer", () => {
 		expect(adapter.sent[0].text).toBe("Cron: testjob\n———\nresult text");
 	});
 
-	it("'origin' with a missing origin falls back to the platform homeChannel", async () => {
+	it("'origin' with missing identity refuses the homeChannel fallback", async () => {
 		const adapter = new FakeAdapter("telegram");
 		const cfg = makeConfig((c) => {
 			c.telegram.homeChannel = "homeChat";
 		});
 		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
 		const err = await deliver(fakeJob({ deliver: "origin", origin: null }), "hi");
-		expect(err).toBeNull();
-		expect(adapter.sent[0].chatId).toBe("homeChat");
+		expect(err).toContain("requester identity");
+		expect(adapter.sent).toEqual([]);
 	});
 
 	it("'origin' with no origin and no homeChannel returns an error string", async () => {
@@ -367,7 +395,7 @@ describe("createPlatformDeliverer", () => {
 		const err = await deliver(
 			fakeJob({
 				deliver: "telegram:attackerChat",
-				origin: { platform: "telegram", chatId: "originChat" },
+				origin: { platform: "telegram", userId: "creator", chatId: "originChat" },
 			}),
 			"hi",
 		);
@@ -384,7 +412,7 @@ describe("createPlatformDeliverer", () => {
 		const err = await deliver(
 			fakeJob({
 				deliver: "telegram:originChat",
-				origin: { platform: "telegram", chatId: "originChat" },
+				origin: { platform: "telegram", userId: "creator", chatId: "originChat" },
 			}),
 			"hi",
 		);
@@ -459,8 +487,9 @@ describe("wrapCronContent", () => {
 describe("startGatewayCron", () => {
 	function stubSessionFactory(text: string, onPrompt?: () => void, onShutdown?: (event: unknown) => void) {
 		return async () => ({
-			prompt: async () => {
+			promptWithCompletion: async () => {
 				onPrompt?.();
+				return { messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }] };
 			},
 			abort: async () => {},
 			subscribe: () => () => {},
@@ -489,7 +518,7 @@ describe("startGatewayCron", () => {
 			schedule: runAt,
 			name: "e2ejob",
 			deliver: "telegram:123",
-			origin: { platform: "telegram", chatId: "123" },
+			origin: { platform: "telegram", userId: "creator", chatId: "123" },
 		});
 
 		let guardSeenDuringPrompt = false;
@@ -524,7 +553,7 @@ describe("startGatewayCron", () => {
 		expect(after.state).toBe("completed"); // one-shot fired
 		expect(after.lastStatus).toBe("ok");
 
-		cron.stop();
+		await cron.stop();
 		const sendsAfterStop = adapter.sent.length;
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(adapter.sent).toHaveLength(sendsAfterStop);
@@ -549,7 +578,7 @@ describe("startGatewayCron", () => {
 			fakeJob({
 				deliver: "telegram:321",
 				name: "bridgejob",
-				origin: { platform: "telegram", chatId: "321" },
+				origin: { platform: "telegram", userId: "creator", chatId: "321" },
 			}),
 			"via bridge",
 		);
@@ -577,7 +606,7 @@ describe("startGatewayCron", () => {
 				prompt: "p",
 				schedule: "30m",
 				deliver: "telegram:attackerChat",
-				origin: { platform: "telegram", chatId: "originChat" },
+				origin: { platform: "telegram", userId: "creator", chatId: "originChat" },
 			}),
 		).rejects.toThrow(/not an allowed chat/);
 
@@ -585,7 +614,7 @@ describe("startGatewayCron", () => {
 			prompt: "p",
 			schedule: "30m",
 			deliver: "telegram:allowed1",
-			origin: { platform: "telegram", chatId: "originChat" },
+			origin: { platform: "telegram", userId: "creator", chatId: "originChat" },
 		});
 		expect(allowedExplicit.deliver).toBe("telegram:allowed1");
 	});
@@ -631,7 +660,7 @@ describe("startGatewayCron", () => {
 			prompt: "p",
 			schedule: "30m",
 			deliver: "origin",
-			origin: { platform: "telegram", chatId: "chat1" },
+			origin: { platform: "telegram", userId: "creator", chatId: "chat1" },
 		});
 		expect(job.deliver).toBe("origin");
 	});
@@ -644,8 +673,9 @@ describe("startGatewayCron", () => {
 describe("startGatewayCron fallback models", () => {
 	function makeSession(text: string, onPrompt?: () => Promise<void> | void) {
 		return {
-			prompt: async () => {
+			promptWithCompletion: async () => {
 				await onPrompt?.();
+				return { messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }] };
 			},
 			abort: async () => {},
 			subscribe: () => () => {},
@@ -663,7 +693,7 @@ describe("startGatewayCron fallback models", () => {
 		}
 	}
 
-	it("falls back to the configured model when the default attempt fails", async () => {
+	it("falls back to the configured model when default session setup fails before dispatch", async () => {
 		const adapter = new FakeAdapter("telegram");
 		const seen: string[] = [];
 		const job = await createJob({
@@ -671,7 +701,7 @@ describe("startGatewayCron fallback models", () => {
 			schedule: new Date(Date.now() + 700).toISOString(),
 			name: "fallbackjob",
 			deliver: "telegram:123",
-			origin: { platform: "telegram", chatId: "123" },
+			origin: { platform: "telegram", userId: "creator", chatId: "123" },
 		});
 		const cron = startGatewayCron({
 			adapters: new Map([["telegram", adapter]]),
@@ -680,9 +710,8 @@ describe("startGatewayCron fallback models", () => {
 			fallbackModels: [{ provider: "ollama-cloud", modelId: "glm-5.2" }],
 			sessionFactory: async (_job, modelOverride) => {
 				seen.push(modelOverride ? `${modelOverride.provider}/${modelOverride.modelId}` : "default");
-				return makeSession("fallback result", () => {
-					if (!modelOverride) throw new Error("rate limited");
-				});
+				if (!modelOverride) throw new Error("setup failed");
+				return makeSession("fallback result");
 			},
 		});
 		stoppers.push(cron.stop);
@@ -700,7 +729,7 @@ describe("startGatewayCron fallback models", () => {
 			schedule: new Date(Date.now() + 700).toISOString(),
 			name: "allfail",
 			deliver: "telegram:123",
-			origin: { platform: "telegram", chatId: "123" },
+			origin: { platform: "telegram", userId: "creator", chatId: "123" },
 		});
 		const cron = startGatewayCron({
 			adapters: new Map([["telegram", adapter]]),
@@ -730,7 +759,7 @@ describe("startGatewayCron fallback models", () => {
 			schedule: new Date(Date.now() + 700).toISOString(),
 			name: "nofallback",
 			deliver: "telegram:123",
-			origin: { platform: "telegram", chatId: "123" },
+			origin: { platform: "telegram", userId: "creator", chatId: "123" },
 		});
 		const cron = startGatewayCron({
 			adapters: new Map([["telegram", adapter]]),
@@ -750,4 +779,207 @@ describe("startGatewayCron fallback models", () => {
 		expect(seen).toEqual(["default"]);
 		expect(adapter.sent[0].text).toContain("Cron job 'nofallback' failed:");
 	});
+});
+
+describe("current cron delivery grants", () => {
+	it("blocks a revoked requester between chunks", async () => {
+		const adapter = new FakeAdapter("telegram", 40);
+		const cfg = makeConfig();
+		const send = adapter.send.bind(adapter);
+		adapter.send = async (...args) => {
+			const result = await send(...args);
+			cfg.telegram.allowedUsers = [];
+			saveGatewayConfig(cfg);
+			return result;
+		};
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), () => loadGatewayConfig());
+		const error = await deliver(
+			fakeJob({ deliver: "origin", origin: { platform: "telegram", chatId: "dm", userId: "creator" } }),
+			"word ".repeat(50),
+		);
+		expect(adapter.sent).toHaveLength(1);
+		expect(error).toContain("revoked");
+	});
+
+	it("blocks removal of an independently approved destination between chunks", async () => {
+		const adapter = new FakeAdapter("telegram", 40);
+		const cfg = makeConfig((cfg) => {
+			cfg.telegram.allowedChats = ["group"];
+		});
+		const send = adapter.send.bind(adapter);
+		adapter.send = async (...args) => {
+			const result = await send(...args);
+			cfg.telegram.allowedChats = [];
+			saveGatewayConfig(cfg);
+			return result;
+		};
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), () => loadGatewayConfig());
+		const error = await deliver(fakeJob({ deliver: "telegram:group" }), "word ".repeat(50));
+		expect(adapter.sent).toHaveLength(1);
+		expect(error).toContain("not an allowed chat");
+	});
+
+	it("keeps legacy origin jobs and local output while recording visible delivery failure", async () => {
+		const adapter = new FakeAdapter("telegram");
+		const cfg = makeConfig((cfg) => {
+			cfg.telegram.homeChannel = "legacy-chat";
+		});
+		const job = await createJob({
+			prompt: "p",
+			schedule: "30m",
+			deliver: "origin",
+			origin: { platform: "telegram", chatId: "legacy-chat" },
+		});
+		await updateJob(job.id, { nextRunAt: new Date().toISOString() });
+		const deliver = createPlatformDeliverer(new Map([["telegram", adapter]]), cfg);
+		await runSchedulerTick({
+			runJob: async () => "local result",
+			deliverResult: async (job, text) => {
+				const error = await deliver(job, text);
+				if (error) throw new Error(error);
+			},
+		});
+		expect(adapter.sent).toEqual([]);
+		expect(getLatestJobOutput(job.id)).toBe("local result");
+		expect(getJob(job.id).lastStatus).toBe("ok");
+		expect(getJob(job.id).lastDeliveryError).toContain("/cron rebind");
+	});
+});
+
+it("both creation paths preserve requester and approved project, and command rebind is explicit", async () => {
+	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+	let tool!: CronToolDef;
+	lunrCron({
+		on: () => {},
+		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) =>
+			commands.set(name, command),
+		registerTool: (definition: CronToolDef) => {
+			tool = definition;
+		},
+	} as never);
+	const origin = { platform: "telegram", chatId: "chat", userId: "creator", threadId: "thread", chatType: "dm" };
+	await runWithOrigin(origin, () => commands.get("cron")!.handler("create every 30m command prompt", idleCtx));
+	await runWithOrigin(origin, () =>
+		tool.execute(
+			"id",
+			{ action: "create", schedule: "every 30m", prompt: "tool prompt", deliver: "local" },
+			null,
+			null,
+			idleCtx,
+		),
+	);
+	const jobs = listJobs();
+	expect(jobs).toHaveLength(2);
+	for (const job of jobs) {
+		expect(job.origin).toEqual(origin);
+		expect(job.workdir).toBe(dir);
+	}
+	expect(jobs[0].deliver).toBe("origin");
+	expect(jobs[1].deliver).toBe("local");
+	const legacy = await createJob({ prompt: "legacy", schedule: "30m", deliver: "origin" });
+	await runWithOrigin(origin, () => commands.get("cron")!.handler(`rebind ${legacy.id}`, idleCtx));
+	expect(getJob(legacy.id).origin).toEqual(origin);
+});
+
+it("does not retry admitted external effects with a fallback model", async () => {
+	const job = await createJob({ prompt: "effects", schedule: "30m" });
+	await updateJob(job.id, { nextRunAt: new Date().toISOString() });
+	const candidates: unknown[] = [];
+	const cron = startGatewayCron({
+		adapters: new Map(),
+		cfg: makeConfig(),
+		intervalMs: 10,
+		fallbackModels: [{ provider: "fallback", modelId: "fake" }],
+		sessionFactory: async (_job, model) => {
+			candidates.push(model);
+			return {
+				promptWithCompletion: async () => {
+					throw new Error("effects may have occurred");
+				},
+				dispose: () => {},
+			} as never;
+		},
+	});
+	stoppers.push(cron.stop);
+	const deadline = Date.now() + 2000;
+	while (getJob(job.id).repeat.completed === 0 && Date.now() < deadline)
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	expect(candidates).toEqual([undefined]);
+	expect(getJob(job.id).lastStatus).toBe("error");
+});
+
+it("gateway stop waits for owned request cancellation and fresh-session cleanup", async () => {
+	const first = await createJob({ prompt: "first", schedule: "30m" });
+	const second = await createJob({ prompt: "second", schedule: "30m" });
+	for (const job of [first, second]) await updateJob(job.id, { nextRunAt: new Date().toISOString() });
+	let begin!: () => void;
+	const entered = new Promise<void>((resolve) => {
+		begin = resolve;
+	});
+	let cancel!: () => void;
+	const cancelled = new Promise<void>((resolve) => {
+		cancel = resolve;
+	});
+	let settle!: () => void;
+	const settled = new Promise<void>((resolve) => {
+		settle = resolve;
+	});
+	const events: string[] = [];
+	const created: string[] = [];
+	const cron = startGatewayCron({
+		adapters: new Map(),
+		cfg: makeConfig(),
+		intervalMs: 10,
+		sessionFactory: async (job) => {
+			created.push(job.id);
+			return {
+				promptWithCompletion: async (_prompt: string, options?: { signal?: AbortSignal }) => {
+					options?.signal?.addEventListener(
+						"abort",
+						() => {
+							events.push("cancel");
+							cancel();
+						},
+						{ once: true },
+					);
+					begin();
+					await settled;
+					events.push("request settled");
+					options?.signal?.throwIfAborted();
+					return { messages: [] };
+				},
+				drain: async () => {
+					events.push("drain");
+				},
+				extensionRunner: {
+					hasHandlers: () => true,
+					emit: async () => {
+						events.push("extension shutdown");
+					},
+				},
+				dispose: () => {
+					events.push("dispose");
+				},
+			} as never;
+		},
+	});
+	stoppers.push(cron.stop);
+	await entered;
+	let stopped = false;
+	const stopping = cron.stop().then(() => {
+		stopped = true;
+	});
+	await cancelled;
+	expect(stopped).toBe(false);
+	expect(events).toEqual(["cancel"]);
+	settle();
+	await stopping;
+	expect(events).toEqual(["cancel", "request settled", "drain", "extension shutdown", "dispose"]);
+	expect(created).toEqual([first.id]);
+	expect(getJob(second.id).repeat.completed).toBe(0);
+});
+
+it("cron tool inventory explains the operator and delivery requirements", () => {
+	const tool = loadCronTool();
+	expect({ name: tool.name, description: tool.description, parameters: tool.parameters }).toMatchSnapshot();
 });

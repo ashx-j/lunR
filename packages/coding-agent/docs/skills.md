@@ -63,7 +63,7 @@ For project-level Claude Code skills, add to `.lunr/settings.json`:
 
 ## How Skills Work
 
-1. At startup, pi scans skill locations and extracts names and descriptions
+1. At startup, lunR scans skill locations and extracts names and descriptions
 2. The system prompt includes available skills in XML format per the [specification](https://agentskills.io/integrate-skills)
 3. When a task matches, the agent uses `read` to load the full SKILL.md (models don't always do this; use prompting or `/skill:name` to force it)
 4. The agent follows the instructions, using relative paths to reference scripts and assets
@@ -91,13 +91,13 @@ Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 
 ### Skill tags
 
-`/settings` → Skill tag picks `+`, `~`, or `$` (default `+`). After a space — or at the start of a line — that character lists loaded skills, the same picker `/` opens at the start of the TUI. Completing inserts a tag; it does not expand SKILL.md the way `/skill:name` does.
+`/settings` → Skill tag picks `+`, `~`, or `$` (default `$`). After a space — or at the start of a line — that character lists loaded skills, the same picker `/` opens at the start of the TUI. Completing inserts a tag; it does not expand SKILL.md the way `/skill:name` does.
 
 ```text
-Please use +pdf-tools on this file
+Please use $pdf-tools on this file
 ```
 
-`xyz+` does not open the list. `xyz +` does. When the tag character is `~`, `~/path` still completes as a file path.
+`xyz$` does not open the list. `xyz $` does. When the tag character is `~`, `~/path` still completes as a file path.
 
 ## Skill Structure
 
@@ -238,4 +238,3 @@ cd /path/to/brave-search && npm install
 ## Skill Repositories
 
 - [Anthropic Skills](https://github.com/anthropics/skills) - Document processing (docx, pdf, pptx, xlsx), web development
-- [lunR Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription

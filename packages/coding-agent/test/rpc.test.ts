@@ -3,10 +3,29 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RpcClient } from "../src/modes/rpc/rpc-client.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+type SessionFileEntry = {
+	type: string;
+	summary?: string;
+	name?: string;
+	message?: { role: string; output?: string };
+};
+
+/** Parse the one session file under `<agentDir>/sessions/<cwd>/`; throws while it is missing. */
+function readSessionEntries(agentDir: string): SessionFileEntry[] {
+	const sessionsPath = join(agentDir, "sessions");
+	const cwdSessionDir = join(sessionsPath, readdirSync(sessionsPath)[0]);
+	const sessionFiles = readdirSync(cwdSessionDir).filter((f) => f.endsWith(".jsonl"));
+	expect(sessionFiles).toHaveLength(1);
+	return readFileSync(join(cwdSessionDir, sessionFiles[0]), "utf8")
+		.trim()
+		.split("\n")
+		.map((line): SessionFileEntry => JSON.parse(line));
+}
 
 /**
  * RPC mode tests.
@@ -54,36 +73,21 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		const messageEndEvents = events.filter((e) => e.type === "message_end");
 		expect(messageEndEvents.length).toBeGreaterThanOrEqual(2); // user + assistant
 
-		// Wait for file writes
-		await new Promise((resolve) => setTimeout(resolve, 200));
+		// Verify the session file once the writes land
+		await vi.waitFor(() => {
+			const entries = readSessionEntries(sessionDir);
 
-		// Verify session file
-		const sessionsPath = join(sessionDir, "sessions");
-		expect(existsSync(sessionsPath)).toBe(true);
+			// First entry should be session header
+			expect(entries[0].type).toBe("session");
 
-		const sessionDirs = readdirSync(sessionsPath);
-		expect(sessionDirs.length).toBeGreaterThan(0);
+			// Should have user and assistant messages
+			const messages = entries.filter((e) => e.type === "message");
+			expect(messages.length).toBeGreaterThanOrEqual(2);
 
-		const cwdSessionDir = join(sessionsPath, sessionDirs[0]);
-		const sessionFiles = readdirSync(cwdSessionDir).filter((f) => f.endsWith(".jsonl"));
-		expect(sessionFiles.length).toBe(1);
-
-		const sessionContent = readFileSync(join(cwdSessionDir, sessionFiles[0]), "utf8");
-		const entries = sessionContent
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-
-		// First entry should be session header
-		expect(entries[0].type).toBe("session");
-
-		// Should have user and assistant messages
-		const messages = entries.filter((e: { type: string }) => e.type === "message");
-		expect(messages.length).toBeGreaterThanOrEqual(2);
-
-		const roles = messages.map((m: { message: { role: string } }) => m.message.role);
-		expect(roles).toContain("user");
-		expect(roles).toContain("assistant");
+			const roles = messages.map((m) => m.message?.role);
+			expect(roles).toContain("user");
+			expect(roles).toContain("assistant");
+		});
 	}, 90000);
 
 	test("should handle manual compaction", async () => {
@@ -97,23 +101,12 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		expect(result.summary).toBeDefined();
 		expect(result.tokensBefore).toBeGreaterThan(0);
 
-		// Wait for file writes
-		await new Promise((resolve) => setTimeout(resolve, 200));
-
-		// Verify compaction in session file
-		const sessionsPath = join(sessionDir, "sessions");
-		const sessionDirs = readdirSync(sessionsPath);
-		const cwdSessionDir = join(sessionsPath, sessionDirs[0]);
-		const sessionFiles = readdirSync(cwdSessionDir).filter((f) => f.endsWith(".jsonl"));
-		const sessionContent = readFileSync(join(cwdSessionDir, sessionFiles[0]), "utf8");
-		const entries = sessionContent
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-
-		const compactionEntries = entries.filter((e: { type: string }) => e.type === "compaction");
-		expect(compactionEntries.length).toBe(1);
-		expect(compactionEntries[0].summary).toBeDefined();
+		// Verify compaction in session file once the writes land
+		await vi.waitFor(() => {
+			const compactionEntries = readSessionEntries(sessionDir).filter((e) => e.type === "compaction");
+			expect(compactionEntries.length).toBe(1);
+			expect(compactionEntries[0].summary).toBeDefined();
+		});
 	}, 120000);
 
 	test("should execute bash command", async () => {
@@ -135,26 +128,14 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		const uniqueValue = `test-${Date.now()}`;
 		await client.bash(`echo ${uniqueValue}`);
 
-		// Wait for file writes
-		await new Promise((resolve) => setTimeout(resolve, 200));
-
-		// Verify bash message in session
-		const sessionsPath = join(sessionDir, "sessions");
-		const sessionDirs = readdirSync(sessionsPath);
-		const cwdSessionDir = join(sessionsPath, sessionDirs[0]);
-		const sessionFiles = readdirSync(cwdSessionDir).filter((f) => f.endsWith(".jsonl"));
-		const sessionContent = readFileSync(join(cwdSessionDir, sessionFiles[0]), "utf8");
-		const entries = sessionContent
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-
-		const bashMessages = entries.filter(
-			(e: { type: string; message?: { role: string } }) =>
-				e.type === "message" && e.message?.role === "bashExecution",
-		);
-		expect(bashMessages.length).toBe(1);
-		expect(bashMessages[0].message.output).toContain(uniqueValue);
+		// Verify bash message in session once the writes land
+		await vi.waitFor(() => {
+			const bashMessages = readSessionEntries(sessionDir).filter(
+				(e) => e.type === "message" && e.message?.role === "bashExecution",
+			);
+			expect(bashMessages.length).toBe(1);
+			expect(bashMessages[0].message?.output).toContain(uniqueValue);
+		});
 	}, 90000);
 
 	test("should include bash output in LLM context", async () => {
@@ -356,22 +337,11 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		state = await client.getState();
 		expect(state.sessionName).toBe("my-test-session");
 
-		// Wait for file writes
-		await new Promise((resolve) => setTimeout(resolve, 200));
-
-		// Verify session_info entry in session file
-		const sessionsPath = join(sessionDir, "sessions");
-		const sessionDirs = readdirSync(sessionsPath);
-		const cwdSessionDir = join(sessionsPath, sessionDirs[0]);
-		const sessionFiles = readdirSync(cwdSessionDir).filter((f) => f.endsWith(".jsonl"));
-		const sessionContent = readFileSync(join(cwdSessionDir, sessionFiles[0]), "utf8");
-		const entries = sessionContent
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-
-		const sessionInfoEntries = entries.filter((e: { type: string }) => e.type === "session_info");
-		expect(sessionInfoEntries.length).toBe(1);
-		expect(sessionInfoEntries[0].name).toBe("my-test-session");
+		// Verify session_info entry in session file once the writes land
+		await vi.waitFor(() => {
+			const sessionInfoEntries = readSessionEntries(sessionDir).filter((e) => e.type === "session_info");
+			expect(sessionInfoEntries.length).toBe(1);
+			expect(sessionInfoEntries[0].name).toBe("my-test-session");
+		});
 	}, 60000);
 });

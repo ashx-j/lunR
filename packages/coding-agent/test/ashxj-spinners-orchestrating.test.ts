@@ -6,8 +6,4 @@ describe("composeWorkingMessage", () => {
 		expect(composeWorkingMessage("(ᵕ—ᴗ—)")).toBe("(ᵕ—ᴗ—)");
 		expect(composeWorkingMessage("")).toBe("");
 	});
-
-	it("does not prefix Orchestrating…", () => {
-		expect(composeWorkingMessage("(ᵕ—ᴗ—)")).not.toContain("Orchestrating");
-	});
 });

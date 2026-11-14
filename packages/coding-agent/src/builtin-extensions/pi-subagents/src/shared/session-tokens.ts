@@ -1,45 +1,81 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { TokenUsage } from "./types.ts";
+import type { SessionEntry } from "../../../../core/session-manager.ts";
+import { type AccountedRequest, collectUsageRequests, totalRequestUsage } from "../../../../core/usage-accounting.ts";
+import type { TokenUsage, Usage } from "./types.ts";
 
-function findLatestSessionFile(sessionDir: string): string | null {
+/** Scan all attempts, including older files; stable request IDs prevent fork duplication. */
+export function parseSessionRequests(sessionPath: string | undefined): AccountedRequest[] {
+	if (!sessionPath) return [];
 	try {
-		const files = fs.readdirSync(sessionDir)
-			.filter((f) => f.endsWith(".jsonl"))
-			.map((f) => path.join(sessionDir, f));
-		if (files.length === 0) return null;
-		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-		return files[0] ?? null;
+		const files = fs.statSync(sessionPath).isDirectory()
+			? fs
+					.readdirSync(sessionPath)
+					.filter((name) => name.endsWith(".jsonl"))
+					.map((name) => path.join(sessionPath, name))
+			: [sessionPath];
+		const requests = new Map<string, AccountedRequest>();
+		for (const file of files) {
+			const entries: SessionEntry[] = [];
+			for (const line of fs.readFileSync(file, "utf-8").split("\n")) {
+				try {
+					const entry = JSON.parse(line) as SessionEntry;
+					if (entry?.type) entries.push(entry);
+				} catch {
+					/* A child may still be flushing its final line. */
+				}
+			}
+			for (const request of collectUsageRequests(entries)) requests.set(request.id, request);
+		}
+		return [...requests.values()];
 	} catch {
-		// Session token lookup is optional metadata.
-		return null;
+		return [];
 	}
 }
 
+export function parseSessionUsage(sessionPath: string | undefined): Usage | null {
+	const requests = parseSessionRequests(sessionPath);
+	if (requests.length === 0) return null;
+	const total = totalRequestUsage(requests);
+	return {
+		input: total.input,
+		output: total.output,
+		cacheRead: total.cacheRead,
+		cacheWrite: total.cacheWrite,
+		cost: total.cost,
+		turns: requests.length,
+		unknownRequests: total.unknownRequests,
+		partialRequests: total.partialRequests,
+		unknownCosts: total.unknownCosts,
+	};
+}
+
+export function sessionUsageDelta(current: Usage, previous: Usage | null): Usage {
+	return {
+		unknownRequests: Math.max(0, (current.unknownRequests ?? 0) - (previous?.unknownRequests ?? 0)),
+		partialRequests: Math.max(0, (current.partialRequests ?? 0) - (previous?.partialRequests ?? 0)),
+		unknownCosts: Math.max(0, (current.unknownCosts ?? 0) - (previous?.unknownCosts ?? 0)),
+		input: Math.max(0, current.input - (previous?.input ?? 0)),
+		output: Math.max(0, current.output - (previous?.output ?? 0)),
+		cacheRead: Math.max(0, current.cacheRead - (previous?.cacheRead ?? 0)),
+		cacheWrite: Math.max(0, current.cacheWrite - (previous?.cacheWrite ?? 0)),
+		cost: Math.max(0, current.cost - (previous?.cost ?? 0)),
+		turns: Math.max(0, current.turns - (previous?.turns ?? 0)),
+	};
+}
+
+export function tokenUsageFromUsage(usage: Usage): TokenUsage {
+	const input = usage.input + usage.cacheRead + usage.cacheWrite;
+	return {
+		input,
+		output: usage.output,
+		total: input + usage.output,
+		cacheRead: usage.cacheRead,
+		cacheWrite: usage.cacheWrite,
+	};
+}
+
 export function parseSessionTokens(sessionDir: string): TokenUsage | null {
-	const sessionFile = findLatestSessionFile(sessionDir);
-	if (!sessionFile) return null;
-	try {
-		const content = fs.readFileSync(sessionFile, "utf-8");
-		let input = 0;
-		let output = 0;
-		for (const line of content.split("\n")) {
-			if (!line.trim()) continue;
-			try {
-				const entry = JSON.parse(line);
-				const usage = entry.usage ?? entry.message?.usage;
-				if (usage) {
-					input += usage.inputTokens ?? usage.input ?? 0;
-					output += usage.outputTokens ?? usage.output ?? 0;
-				}
-			} catch {
-				// Ignore malformed lines while scanning usage entries.
-			}
-		}
-		return { input, output, total: input + output };
-	} catch {
-		// Usage extraction should not fail the run.
-		return null;
-	}
+	const usage = parseSessionUsage(sessionDir);
+	return usage ? tokenUsageFromUsage(usage) : null;
 }

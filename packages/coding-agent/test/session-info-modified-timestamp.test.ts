@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -37,17 +37,24 @@ function createSessionFile(path: string): void {
 		stopReason: "stop",
 		timestamp: Date.now(),
 	});
+	mgr.dispose();
 }
 
 describe("SessionInfo.modified", () => {
+	const tempDirs: string[] = [];
+	const managers: SessionManager[] = [];
 	beforeAll(() => initTheme("moon"));
 
 	afterEach(() => {
+		for (const manager of managers.splice(0)) manager.dispose();
+		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 
 	it("uses last user/assistant message timestamp instead of file mtime", async () => {
-		const filePath = join(tmpdir(), `pi-session-${Date.now()}-modified.jsonl`);
+		const dir = mkdtempSync(join(tmpdir(), "lunr-session-modified-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "session.jsonl");
 		createSessionFile(filePath);
 
 		const before = await stat(filePath);
@@ -55,6 +62,7 @@ describe("SessionInfo.modified", () => {
 		await new Promise((r) => setTimeout(r, 10));
 
 		const mgr = SessionManager.open(filePath);
+		managers.push(mgr);
 		const msgTime = Date.now();
 		mgr.appendMessage({
 			role: "assistant",
