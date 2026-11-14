@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 
 const CONFLICTS = [
 	"ANTHROPIC_API_KEY",
@@ -138,6 +138,22 @@ export async function stopProcessTree(pid: number | undefined): Promise<void> {
 	}
 	try {
 		process.kill(-pid, "SIGKILL");
+	} catch {
+		/* Already exited. */
+	}
+}
+
+/** `stopProcessTree` for a process `exit` handler, where only synchronous work runs. */
+export function stopProcessTreeSync(pid: number | undefined): void {
+	if (pid === undefined || !Number.isSafeInteger(pid) || pid < 1) return;
+	try {
+		if (process.platform === "win32")
+			spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+				stdio: "ignore",
+				windowsHide: true,
+				timeout: 3000,
+			});
+		else process.kill(-pid, "SIGKILL");
 	} catch {
 		/* Already exited. */
 	}
