@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Value } from "@sinclair/typebox/value";
@@ -416,8 +416,10 @@ describe("PR watch boundaries", () => {
 		const root = mkdtempSync(join(tmpdir(), "lunr-pr-watch-store-"));
 		let store: PrWatchPersistence | undefined;
 		try {
+			const identity = { version: 1 as const, sessionId: "session", project: "/project", watches: [] };
+			const watch = fixture(memoryStore(identity)).watcher.start(url, 300_000);
 			store = new PrWatchStore(root, "session", "/project");
-			store.save(store.load());
+			store.save({ ...store.load(), watches: [watch] });
 			expect(() => new PrWatchStore(root, "session", "/project")).toThrow(/owned/);
 			store.close();
 			store = new PrWatchStore(root, "session", "/other-project");
@@ -427,6 +429,23 @@ describe("PR watch boundaries", () => {
 			expect(store.load().watches).toEqual([]);
 		} finally {
 			store?.close();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a session's file only while it has a watch", () => {
+		const root = mkdtempSync(join(tmpdir(), "lunr-pr-watch-store-"));
+		const store = new PrWatchStore(root, "session-1", "/project");
+		const files = () => readdirSync(root).filter((name) => name.endsWith(".json"));
+		try {
+			store.save(store.load());
+			expect(files()).toEqual([]);
+			store.save({ ...store.load(), watches: [fixture().watcher.start(url, 300_000)] });
+			expect(files()).toHaveLength(1);
+			store.save({ ...store.load(), watches: [] });
+			expect(files()).toEqual([]);
+		} finally {
+			store.close();
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
