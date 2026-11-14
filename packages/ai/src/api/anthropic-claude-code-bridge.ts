@@ -233,12 +233,16 @@ function apiError(result: ClaudeCodeEvent): { status: number; body: string } | u
 	return { status, body: JSON.stringify(body) };
 }
 
-/** Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. */
+/**
+ * Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. A bare
+ * lunR name passes too: the model calls an unloaded tool by the name `load_tools`' catalog shows, and the
+ * agent loop answers that call with a load hint.
+ */
 function renameToolCall(event: Record<string, unknown>, inventory: ReadonlySet<string>): Record<string, unknown> {
 	const block = event.content_block;
 	if (event.type !== "content_block_start" || !isRecord(block) || block.type !== "tool_use") return event;
-	const name = block.name;
-	const tool = typeof name === "string" && name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : "";
+	const name = typeof block.name === "string" ? block.name : "";
+	const tool = name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name;
 	if (!inventory.has(tool)) throw new Error("Claude Code returned a tool outside lunR's tool list");
 	return { ...event, content_block: { ...block, name: tool } };
 }

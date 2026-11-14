@@ -469,6 +469,19 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(result.errorMessage).toContain("outside lunR's tool list");
 	});
 
+	it("passes a call by lunR's bare tool name through for the agent loop to answer", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("read") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read" }));
+	});
+
 	it("rejects a call to the loopback's reserved tool", async () => {
 		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__reserved") });
 		const result = await streamClaudeCode(
