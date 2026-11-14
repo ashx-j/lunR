@@ -425,9 +425,8 @@ function isMutatingSegment(segment: string): boolean {
 	const globs = unquotedGlobs(segment);
 	if (globs.leading && OPTION_GLOB_SENSITIVE.has(command)) return true;
 
-	if (command === "sed") {
-		return args.some((a) => a === "-i" || a.startsWith("-i") || a.startsWith("--in-place") || /^-[^-]*i/.test(a));
-	}
+	if (command === "sed") return isMutatingSed(args, globs.any);
+	if (command === "date") return isSettingDate(args);
 	if (command === "find") {
 		return args.some((a) =>
 			["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(a),
@@ -513,6 +512,274 @@ function isMutatingSegment(segment: string): boolean {
 
 	// Final gate: the command must be in the read-only allowlist.
 	return !ALLOWED_COMMANDS.has(command);
+}
+
+/** sed options that change neither where the script comes from nor what sed writes. */
+const SED_SAFE_SHORT = new Set("nErsuzb");
+const SED_SAFE_LONG = new Set([
+	"--quiet",
+	"--silent",
+	"--regexp-extended",
+	"--separate",
+	"--unbuffered",
+	"--null-data",
+	"--zero-terminated",
+	"--posix",
+	"--debug",
+	"--sandbox",
+	"--follow-symlinks",
+	"--binary",
+	"--help",
+	"--version",
+]);
+
+/**
+ * sed writes with -i, -f hides the script, and the script itself can write (w, W, s///w) or run
+ * commands (e, s///e). Unknown or abbreviated options fail closed. GNU sed permutes options and
+ * operands, so options count anywhere before `--`.
+ */
+function isMutatingSed(args: string[], hasGlob: boolean): boolean {
+	const scripts: string[] = [];
+	const operands: string[] = [];
+	for (let k = 0; k < args.length; k++) {
+		const arg = args[k];
+		if (arg === "--") {
+			operands.push(...args.slice(k + 1));
+			break;
+		}
+		if (arg.startsWith("--")) {
+			const eq = arg.indexOf("=");
+			const name = eq < 0 ? arg : arg.slice(0, eq);
+			const value = eq < 0 ? undefined : arg.slice(eq + 1);
+			if (name === "--expression" || name === "--line-length") {
+				const taken = value ?? args[++k];
+				if (taken === undefined) return true;
+				if (name === "--expression") scripts.push(taken);
+			} else if (value !== undefined || !SED_SAFE_LONG.has(name)) {
+				return true;
+			}
+			continue;
+		}
+		if (arg.length > 1 && arg.startsWith("-")) {
+			for (let j = 1; j < arg.length; j++) {
+				const flag = arg[j];
+				if (flag === "e" || flag === "l") {
+					const taken = arg.slice(j + 1) || args[++k];
+					if (taken === undefined) return true;
+					if (flag === "e") scripts.push(taken);
+					break;
+				}
+				if (!SED_SAFE_SHORT.has(flag)) return true;
+			}
+			continue;
+		}
+		operands.push(arg);
+	}
+	if (scripts.length === 0) {
+		if (operands[0] === undefined) return false;
+		scripts.push(operands[0]);
+	}
+	// GNU sed joins -e scripts with newlines.
+	const script = scripts.join("\n");
+	// With an unquoted glob in the command, glob characters here may mean the script is a file name.
+	if (hasGlob && /[*?[]/.test(script)) return true;
+	return sedScriptWritesOrRuns(script);
+}
+
+/**
+ * Walks a sed script with GNU sed's grammar. True when a command or `s` flag writes a file or runs a
+ * command, and for anything the walk does not understand. `r` and `R` only read.
+ */
+function sedScriptWritesOrRuns(script: string): boolean {
+	let i = 0;
+	const fail = (): never => {
+		throw new Error("unparsed sed script");
+	};
+	const skipWhile = (test: RegExp) => {
+		while (i < script.length && test.test(script[i])) i++;
+	};
+	const skipToLineEnd = () => {
+		while (i < script.length && script[i] !== "\n") i++;
+	};
+	// Up to and past the closing delimiter. A bracket expression may hold the delimiter.
+	const skipRegex = (delim: string) => {
+		for (;;) {
+			const ch = script[i++];
+			if (ch === undefined || ch === "\n") fail();
+			if (ch === "\\") {
+				if (script[i++] === undefined) fail();
+			} else if (ch === delim) {
+				return;
+			} else if (ch === "[") {
+				if (script[i] === "^") i++;
+				if (script[i] === "]") i++;
+				for (;;) {
+					const inner = script[i++];
+					// Escapes inside brackets differ between seds, so they fail closed.
+					if (inner === undefined || inner === "\n" || inner === "\\") fail();
+					if (inner === "]") break;
+					if (inner === "[" && /[:.=]/.test(script[i] ?? "")) {
+						const close = script.indexOf(`${script[i]}]`, i + 1);
+						if (close < 0) fail();
+						i = close + 2;
+					}
+				}
+			}
+		}
+	};
+	const skipText = (delim: string) => {
+		for (;;) {
+			const ch = script[i++];
+			if (ch === undefined || ch === "\n") fail();
+			if (ch === "\\") {
+				if (script[i++] === undefined) fail();
+			} else if (ch === delim) {
+				return;
+			}
+		}
+	};
+	const delimiter = () => {
+		const delim = script[i++];
+		if (delim === undefined || delim === "\n" || delim === "\\" || delim === "[") fail();
+		return delim;
+	};
+	const address = (): boolean => {
+		const ch = script[i];
+		if (ch === undefined) return false;
+		if (/\d/.test(ch)) {
+			skipWhile(/\d/);
+			if (script[i] === "~") {
+				i++;
+				skipWhile(/\d/);
+			}
+		} else if (ch === "$") {
+			i++;
+		} else if (ch === "/" || ch === "\\") {
+			i++;
+			skipRegex(ch === "/" ? "/" : delimiter());
+			skipWhile(/[IM]/);
+		} else {
+			return false;
+		}
+		return true;
+	};
+	const endCommand = () => {
+		skipWhile(/[ \t]/);
+		if (i < script.length && !/[;\n}]/.test(script[i])) fail();
+	};
+	try {
+		while (i < script.length) {
+			skipWhile(/[\s;]/);
+			if (i >= script.length) break;
+			if (script[i] === "#") {
+				skipToLineEnd();
+				continue;
+			}
+			if (address()) {
+				skipWhile(/[ \t]/);
+				if (script[i] === ",") {
+					i++;
+					skipWhile(/[ \t]/);
+					if (/[+~]/.test(script[i] ?? "")) {
+						i++;
+						if (!/\d/.test(script[i] ?? "")) fail();
+						skipWhile(/\d/);
+					} else if (!address()) {
+						fail();
+					}
+				}
+			}
+			skipWhile(/[ \t!]/);
+			const command = script[i++];
+			switch (command) {
+				case "{":
+				case "}":
+					break;
+				case "=":
+				case "d":
+				case "D":
+				case "g":
+				case "G":
+				case "h":
+				case "H":
+				case "n":
+				case "N":
+				case "p":
+				case "P":
+				case "x":
+				case "z":
+				case "F":
+					endCommand();
+					break;
+				case "l":
+				case "q":
+				case "Q":
+					skipWhile(/[ \t]/);
+					skipWhile(/\d/);
+					endCommand();
+					break;
+				case ":":
+				case "b":
+				case "t":
+				case "T":
+				case "v":
+					while (i < script.length && !/[;\n]/.test(script[i])) i++;
+					break;
+				case "a":
+				case "i":
+				case "c":
+					// Text runs to the first unescaped newline.
+					while (i < script.length && script[i] !== "\n") i += script[i] === "\\" ? 2 : 1;
+					break;
+				case "r":
+				case "R":
+					skipToLineEnd();
+					break;
+				case "s": {
+					const delim = delimiter();
+					skipRegex(delim);
+					skipText(delim);
+					skipWhile(/[gpiImM\d]/);
+					if (script[i] === "w" || script[i] === "e") return true;
+					endCommand();
+					break;
+				}
+				case "y": {
+					const delim = delimiter();
+					skipText(delim);
+					skipText(delim);
+					endCommand();
+					break;
+				}
+				default:
+					// w, W and e write or run; anything else is not understood.
+					return true;
+			}
+		}
+	} catch {
+		return true;
+	}
+	return false;
+}
+
+/**
+ * `date` sets the system clock with -s/--set or a bare MMDDhhmm operand. Only display forms are
+ * allowed: +FORMAT, -u, -R, -I, --debug and the -d/-r inputs.
+ */
+function isSettingDate(args: string[]): boolean {
+	for (let k = 0; k < args.length; k++) {
+		const arg = args[k];
+		if (arg === "-d" || arg === "-r" || arg === "--date" || arg === "--reference") {
+			k++;
+			continue;
+		}
+		const display =
+			arg.startsWith("+") ||
+			/^-(?:u|R|I\w*|[dr].+)$/.test(arg) ||
+			/^--(?:utc|universal|rfc-email|debug|iso-8601(?:=\w+)?|rfc-3339=\w+|date=.*|reference=.*)$/s.test(arg);
+		if (!display) return true;
+	}
+	return false;
 }
 
 /**
