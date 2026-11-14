@@ -8,8 +8,8 @@ const srcDir = join(dirname(fileURLToPath(import.meta.url)), "../src");
 describe("lunR terminal tab title", () => {
 	it("CLI runtime sets the stable or dev title before importing main", () => {
 		const src = readFileSync(join(srcDir, "cli-runtime.ts"), "utf8");
-		const titleIdx = src.indexOf("process.title = startupAppName");
-		const oscIdx = src.indexOf("process.stdout.write(`\\x1b]0;");
+		const titleIdx = src.indexOf('process.title = isDevChannel ? "lunr-dev" : "lunr"');
+		const oscIdx = src.indexOf("\\x1b]0;lunr-dev\\x07");
 		const mainIdx = src.indexOf('import("./main.ts")');
 		expect(src).toContain('? "lunr-dev" : "lunr"');
 		expect(titleIdx).toBeGreaterThan(-1);
