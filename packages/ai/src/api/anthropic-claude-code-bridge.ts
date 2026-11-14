@@ -34,9 +34,7 @@ const SUPPORTED_PARAMS: ReadonlySet<string> = new Set([
 const USER_BLOCKS: ReadonlySet<unknown> = new Set(["text", "image", "document", "tool_result"]);
 const ASSISTANT_BLOCKS: ReadonlySet<unknown> = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 const REQUEST_ENV = {
-	// With Claude Code's ToolSearch on, it passes lunR's tool_reference blocks and defer_loading through
-	// (see the loopback's tools/list). Recheck on every CLAUDE_CODE_VERSION bump.
-	ENABLE_TOOL_SEARCH: "true",
+	ENABLE_TOOL_SEARCH: "false",
 	CLAUDE_CODE_MAX_RETRIES: "0",
 	DISABLE_AUTO_COMPACT: "1",
 	DISABLE_COMPACT: "1",
@@ -95,21 +93,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Gives a tool_result's tool_reference entries the MCP names Claude Code knows lunR's tools by. A
- * reference to a tool the bridge left out for its name is dropped, because the API rejects a reference
- * to a tool the request does not declare.
+ * Renames a tool_result's tool_reference entries, or drops one when `rename` returns undefined. The API
+ * rejects a reference to a tool the request does not declare as deferred.
  */
-function prefixToolReferences(block: Block): Block {
-	if (!Array.isArray(block.content)) return block;
+function mapToolReferences(block: Block, rename: (name: string) => string | undefined): Block {
+	if (block.type !== "tool_result" || !Array.isArray(block.content)) return block;
 	const content = block.content.flatMap((entry: unknown) => {
 		if (!isRecord(entry) || entry.type !== "tool_reference" || typeof entry.tool_name !== "string") return [entry];
-		return TOOL_NAME.test(entry.tool_name) ? [{ ...entry, tool_name: `${TOOL_PREFIX}${entry.tool_name}` }] : [];
+		const name = rename(entry.tool_name);
+		return name ? [{ ...entry, tool_name: name }] : [];
 	});
 	if (content.length) return { ...block, content };
 	// The tool's output already follows as a sibling text block, and tool_result content is optional.
 	const { content: _dropped, ...rest } = block;
 	return rest;
 }
+
+/** Claude Code knows lunR's tools by their MCP names. A tool the bridge left out for its name loses its reference. */
+const prefixedToolName = (name: string) => (TOOL_NAME.test(name) ? `${TOOL_PREFIX}${name}` : undefined);
 
 function contentBlocks(content: unknown, allowed: ReadonlySet<unknown>): Block[] {
 	if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
@@ -118,7 +119,7 @@ function contentBlocks(content: unknown, allowed: ReadonlySet<unknown>): Block[]
 		if (!isRecord(block) || !allowed.has(block.type))
 			throw new Error(`Claude Code subscription does not support ${isRecord(block) ? block.type : "this"} content`);
 		if (block.type === "tool_use") return { ...block, name: `${TOOL_PREFIX}${block.name}` };
-		return block.type === "tool_result" ? prefixToolReferences(block) : block;
+		return mapToolReferences(block, prefixedToolName);
 	});
 }
 
@@ -238,9 +239,24 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 		},
 	};
 	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
-	return Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT
-		? { ...request, frames: [queryFrame(history)], extraBody }
-		: request;
+	if (Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT)
+		return { ...request, frames: [queryFrame(history)], extraBody };
+	// Claude Code strips tool_reference blocks from a replayed transcript, which would leave loaded tools
+	// unloaded. The replay sends every tool undeferred and drops the references instead.
+	return {
+		...request,
+		frames: history.map((frame) => ({
+			...frame,
+			message: {
+				...frame.message,
+				content: frame.message.content.map((block) => mapToolReferences(block, () => undefined)),
+			},
+		})),
+		extraBody: {
+			...request.extraBody,
+			tools: request.extraBody.tools.map(({ defer_loading: _deferred, ...tool }) => tool),
+		},
+	};
 }
 
 /** Reads events up to the next `result`, or undefined when Claude Code's output ends first. */
@@ -433,10 +449,8 @@ async function runClaudeCode(
 				"--verbose",
 				// Emits each raw Messages stream event, which lunR replays as the SSE body.
 				"--include-partial-messages",
-				// Only Claude Code's ToolSearch, which keeps tool_reference blocks alive. lunR's extra body
-				// replaces the tools array, so ToolSearch itself never reaches the model.
 				"--tools",
-				"ToolSearch",
+				"",
 				"--system-prompt-file",
 				join(directory, "system.md"),
 				"--settings",
