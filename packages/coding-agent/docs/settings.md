@@ -66,6 +66,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
 | `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |
 | `todosEnabled` | boolean | `true` | Enable todo guidance, the `todo` tool, and its editor widget. Global-only |
+| `deferredToolsEnabled` | boolean | `true` | Start new sessions with rarely used tools unloaded; the model loads them with `load_tools` when a task needs them. Applies to Claude Sonnet, Opus and Fable 4.5 or newer on the `anthropic` provider (API key or Claude subscription). A running session keeps its tool list. Global-only |
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |
