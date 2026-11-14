@@ -199,6 +199,7 @@ export interface Settings {
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
 	todosEnabled?: boolean; // default: true - expose the todo tool and its prompt guidance
+	deferredToolsEnabled?: boolean; // default: true - new sessions start rarely used tools unloaded (load_tools)
 	// lunr: footer element toggles (ashxj-tui stats line)
 	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
@@ -1175,6 +1176,17 @@ export class SettingsManager {
 	setTodosEnabled(enabled: boolean): void {
 		this.globalSettings.todosEnabled = enabled;
 		this.markModified("todosEnabled");
+		this.save();
+	}
+
+	getDeferredToolsEnabled(): boolean {
+		return this.globalSettings.deferredToolsEnabled ?? true;
+	}
+
+	/** Applies to sessions started afterwards; a running session keeps its tool list. */
+	setDeferredToolsEnabled(enabled: boolean): void {
+		this.globalSettings.deferredToolsEnabled = enabled;
+		this.markModified("deferredToolsEnabled");
 		this.save();
 	}
 

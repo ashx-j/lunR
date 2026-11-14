@@ -482,6 +482,8 @@ export class AgentSession {
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
+	// lunr: tools this session started unloaded, in declared order (see setDeferredToolsByName).
+	private _deferredToolNames: string[] = [];
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
@@ -1444,12 +1446,27 @@ export class AgentSession {
 			}
 		}
 		this.agent.state.tools = tools;
+		// lunr: every registry refresh ends here, so the declared deferred tools always carry current wrappers.
+		this.agent.state.deferredTools = this._deferredToolNames.flatMap((name) => this._toolRegistry.get(name) ?? []);
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
 		this.agent.state.systemPrompt = this._withSystemPromptAppend(
 			this._systemPromptOverride ?? this._baseSystemPrompt,
 		);
+	}
+
+	/**
+	 * lunr: start these registered tools unloaded. They leave the active set and stay declared to providers
+	 * with native deferred loading (`Context.deferredTools`). Accepts nothing when the session has an
+	 * explicit tool allowlist or the user turned off loading tools on demand. Returns the accepted names.
+	 */
+	setDeferredToolsByName(toolNames: string[]): string[] {
+		if (this._allowedToolNames || !this.settingsManager.getDeferredToolsEnabled()) return [];
+		this._deferredToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
+		const deferred = new Set(this._deferredToolNames);
+		this.setActiveToolsByName(this.getActiveToolNames().filter((name) => !deferred.has(name)));
+		return [...this._deferredToolNames];
 	}
 
 	/** Rebuild the registry after a settings-backed feature changes availability. */
@@ -3326,6 +3343,7 @@ export class AgentSession {
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
+				setDeferredTools: (toolNames) => this.setDeferredToolsByName(toolNames),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
 				setModel: async (model) => {
@@ -3543,6 +3561,8 @@ export class AgentSession {
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
+		// lunr: reload reactivates every extension tool; the loader declares its deferred set again at the next prompt.
+		this._deferredToolNames = [];
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,

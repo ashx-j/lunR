@@ -54,6 +54,7 @@ const config: SettingsConfig = {
 	memoryEnabled: true,
 	memoryCharCap: 4000,
 	todosEnabled: true,
+	deferredToolsEnabled: true,
 	searchCurator: undefined,
 	footerMcp: true,
 	footerLsp: true,

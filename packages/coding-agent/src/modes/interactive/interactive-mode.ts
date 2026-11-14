@@ -4319,6 +4319,7 @@ export class InteractiveMode {
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					todosEnabled: this.settingsManager.getTodosEnabled(),
+					deferredToolsEnabled: this.settingsManager.getDeferredToolsEnabled(),
 					searchCurator: getSearchCuratorSetting(),
 					// lunr: TUI customize settings
 					footerMcp: this.settingsManager.getFooterMcp(),
@@ -4566,6 +4567,10 @@ export class InteractiveMode {
 						this.settingsManager.setMemoryEnabled(enabled);
 						this.session.refreshToolRegistry();
 						this.showStatus(`Agent memory: ${enabled ? "on" : "off"}`);
+					},
+					// lunr: saved only; a running session keeps its tool list.
+					onDeferredToolsEnabledChange: (enabled) => {
+						this.settingsManager.setDeferredToolsEnabled(enabled);
 					},
 					onTodosEnabledChange: (enabled) => {
 						this.settingsManager.setTodosEnabled(enabled);

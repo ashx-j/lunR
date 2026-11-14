@@ -1339,6 +1339,14 @@ export interface ExtensionAPI {
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
 
+	/**
+	 * Start these registered tools unloaded. They leave the active set and stay advertised to providers
+	 * with native deferred loading. Load one by adding it back with `setActiveTools` from a tool's
+	 * `execute`. Returns the accepted names: none when the session has an explicit tool allowlist or the
+	 * user turned off loading tools on demand.
+	 */
+	setDeferredTools(toolNames: string[]): string[];
+
 	/** Get available slash commands in the current session. Hidden extension commands are left out. */
 	getCommands(): SlashCommandInfo[];
 
@@ -1570,6 +1578,8 @@ export type GetCommandsHandler = () => SlashCommandInfo[];
 
 export type SetActiveToolsHandler = (toolNames: string[]) => void;
 
+export type SetDeferredToolsHandler = (toolNames: string[]) => string[];
+
 export type RefreshToolsHandler = () => void;
 
 export type SetModelHandler = (model: Model<Api>) => Promise<boolean>;
@@ -1616,6 +1626,7 @@ export interface ExtensionActions {
 	getActiveTools: GetActiveToolsHandler;
 	getAllTools: GetAllToolsHandler;
 	setActiveTools: SetActiveToolsHandler;
+	setDeferredTools: SetDeferredToolsHandler;
 	refreshTools: RefreshToolsHandler;
 	getCommands: GetCommandsHandler;
 	setModel: SetModelHandler;

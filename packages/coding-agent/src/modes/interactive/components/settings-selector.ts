@@ -126,6 +126,7 @@ export interface SettingsConfig {
 	memoryEnabled: boolean;
 	memoryCharCap: number;
 	todosEnabled: boolean;
+	deferredToolsEnabled: boolean;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
@@ -205,6 +206,7 @@ export interface SettingsCallbacks {
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onTodosEnabledChange: (enabled: boolean) => void;
+	onDeferredToolsEnabledChange: (enabled: boolean) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
 	onFooterMcpChange: (enabled: boolean) => void;
@@ -1509,6 +1511,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "deferred-tools",
+				label: "Load tools on demand",
+				description:
+					"Start sessions with rarely used tools unloaded. The model loads them when a task needs them. Applies to new sessions.",
+				currentValue: config.deferredToolsEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "show-hardware-cursor",
 				label: "Show hardware cursor",
 				description: "Terminal cursor for input method editors",
@@ -2051,6 +2061,9 @@ export class SettingsSelectorComponent extends Container {
 					break;
 				case "todos":
 					callbacks.onTodosEnabledChange(newValue === "on");
+					break;
+				case "deferred-tools":
+					callbacks.onDeferredToolsEnabledChange(newValue === "on");
 					break;
 				case "search-curator":
 					callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);

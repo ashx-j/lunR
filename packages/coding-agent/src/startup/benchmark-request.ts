@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { type Api, createFauxCore, fauxAssistantMessage, fauxToolCall, type Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "../core/agent-session.ts";
 import { markStartupMilestone } from "./startup-milestones.ts";
 
@@ -9,6 +9,8 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 	const toolUrl = process.env.PI_STARTUP_BENCHMARK_TOOL_URL;
 	if (toolUrl && new URL(toolUrl).hostname !== "127.0.0.1") throw new Error("Startup tool fixture must be local");
 	const requestedTool = process.env.PI_STARTUP_BENCHMARK_TOOL;
+	// With native tool loading the session starts the deferred groups unloaded and registers load_tools.
+	const deferred = process.env.PI_STARTUP_BENCHMARK_DEFERRED === "1";
 	let toolCall = toolUrl ? fauxToolCall("fetch_content", { url: toolUrl }) : undefined;
 	if (requestedTool === "mcp") toolCall = fauxToolCall("mcp", {});
 	else if (requestedTool === "subagent") toolCall = fauxToolCall("subagent", { action: "status", view: "fleet" });
@@ -23,8 +25,15 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 				throw new Error("Startup request lost registered tools or instructions");
 			}
 			const toolSchemaHash = createHash("sha256").update(JSON.stringify(context.tools)).digest("hex");
+			const loader = context.tools?.find((tool) => tool.name === "load_tools");
+			const deferredFields = deferred
+				? {
+						deferredTools: context.deferredTools?.map((tool) => tool.name) ?? [],
+						loaderHash: loader && createHash("sha256").update(JSON.stringify(loader)).digest("hex"),
+					}
+				: {};
 			process.stderr.write(
-				`LUNR_STARTUP_REQUEST ${JSON.stringify({ tools: actual, toolSchemaHash, hasSystemPrompt: true })}\n`,
+				`LUNR_STARTUP_REQUEST ${JSON.stringify({ tools: actual, toolSchemaHash, hasSystemPrompt: true, ...deferredFields })}\n`,
 			);
 			return toolCall
 				? fauxAssistantMessage([toolCall], { stopReason: "toolUse" })
@@ -47,13 +56,17 @@ export function prepareBenchmarkRequest(session: AgentSession): () => Promise<vo
 			return fauxAssistantMessage("startup-request-ok");
 		},
 	]);
+	// The flag goes on the registered rows: a registry refresh replaces the session model with its row.
+	const models: Model<Api>[] = deferred
+		? faux.models.map((model) => ({ ...model, compat: { supportsToolReferences: true } }))
+		: faux.models;
 	session.modelRuntime.registerProvider("lunr-startup-benchmark", {
 		api: faux.api,
 		apiKey: "local-benchmark-only",
-		models: faux.models,
+		models,
 		streamSimple: faux.streamSimple,
 	});
-	session.agent.state.model = faux.getModel();
+	session.agent.state.model = models[0];
 	return async () => {
 		await session.prompt(
 			toolCall ? "Use the local startup fixture tool." : "Reply with startup-request-ok. Do not use tools.",
