@@ -206,15 +206,17 @@ export default function (pi: ExtensionAPI) {
 		return { operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, localCwd) };
 	});
 
-	// Replace local cwd with remote cwd in system prompt
+	// The prompt's environment block describes the local directory, git state and OS; over SSH only
+	// the remote directory is known, so those lines become one remote line.
 	pi.on("before_agent_start", async (event) => {
 		const ssh = getSsh();
-		if (ssh) {
-			const modified = event.systemPrompt.replace(
-				`Current working directory: ${localCwd}`,
-				`Current working directory: ${ssh.remoteCwd} (via SSH: ${ssh.remote})`,
-			);
-			return { systemPrompt: modified };
-		}
+		if (!ssh) return;
+		const prompt = event.systemPrompt;
+		const start = prompt.indexOf(`- Working directory: ${localCwd.replace(/\\/g, "/")}\n`);
+		const end = start < 0 ? -1 : prompt.indexOf("\n- Session started:", start);
+		if (end < 0) return;
+		return {
+			systemPrompt: `${prompt.slice(0, start)}- Working directory: ${ssh.remoteCwd} (via SSH: ${ssh.remote})${prompt.slice(end)}`,
+		};
 	});
 }
