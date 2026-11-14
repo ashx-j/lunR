@@ -1605,7 +1605,7 @@ export class SettingsSelectorComponent extends Container {
 								value: "default",
 								label: "Provider default",
 								description:
-									"The newest Claude Sonnet the login offers for Anthropic; the session model for OpenAI, xAI and Qwen. Other providers need a chosen model.",
+									"The newest Claude Sonnet the login offers for Anthropic, else the session model; the session model for OpenAI, xAI and Qwen. Other providers need a chosen model.",
 							},
 							{ value: "choose", label: "Choose a model", description: "Opens the model list" },
 						],

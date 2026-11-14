@@ -200,6 +200,15 @@ describe("choosing the review model", () => {
 			expect(sessionHarness.session.resolveAutoReviewer()).toMatchObject({ ref: "anthropic/claude-sonnet-5-5" });
 			snapshot.mockReturnValue([model("other", "claude-sonnet-9")]);
 			expect(sessionHarness.session.resolveAutoReviewer()).toMatchObject({ ref: "anthropic/claude-sonnet-5" });
+
+			// A reviewer chosen under an older Claude Code that this login no longer lists.
+			snapshot.mockReturnValue([model("anthropic", "claude-opus-5-5"), model("anthropic", "claude-sonnet-5-5")]);
+			vi.spyOn(runtime, "getModel").mockReturnValue(model("anthropic", "claude-sonnet-5"));
+			vi.spyOn(sessionHarness.settingsManager, "getAutoReviewModel").mockReturnValue("anthropic/claude-sonnet-5");
+			expect(sessionHarness.session.resolveAutoReviewer()).toEqual({
+				kind: "unavailable",
+				ref: "anthropic/claude-sonnet-5",
+			});
 		} finally {
 			await sessionHarness.session.shutdown();
 			sessionHarness.cleanup();
