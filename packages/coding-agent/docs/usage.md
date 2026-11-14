@@ -200,7 +200,7 @@ See [Packages](packages.md) for package sources and security notes.
 | Flag | Description |
 |------|-------------|
 | default | Interactive mode |
-| `-p`, `--print` | Print response and exit |
+| `-p`, `--print` | Print response and exit. Needs a prompt argument, `@file` or piped stdin |
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
 | `--mode rpc` | RPC mode over stdin/stdout; see [RPC mode](rpc.md) |
 | `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients; see [ACP](acp.md) |
