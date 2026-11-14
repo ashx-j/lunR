@@ -83,17 +83,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Gives a tool_result's tool_reference entries the MCP names Claude Code knows lunR's tools by. */
+/**
+ * Gives a tool_result's tool_reference entries the MCP names Claude Code knows lunR's tools by. A
+ * reference to a tool the bridge left out for its name is dropped, because the API rejects a reference
+ * to a tool the request does not declare.
+ */
 function prefixToolReferences(block: Block): Block {
 	if (!Array.isArray(block.content)) return block;
-	return {
-		...block,
-		content: block.content.map((entry: unknown) =>
-			isRecord(entry) && entry.type === "tool_reference" && typeof entry.tool_name === "string"
-				? { ...entry, tool_name: `${TOOL_PREFIX}${entry.tool_name}` }
-				: entry,
-		),
-	};
+	const content = block.content.flatMap((entry: unknown) => {
+		if (!isRecord(entry) || entry.type !== "tool_reference" || typeof entry.tool_name !== "string") return [entry];
+		return TOOL_NAME.test(entry.tool_name) ? [{ ...entry, tool_name: `${TOOL_PREFIX}${entry.tool_name}` }] : [];
+	});
+	if (content.length) return { ...block, content };
+	// The tool's output already follows as a sibling text block, and tool_result content is optional.
+	const { content: _dropped, ...rest } = block;
+	return rest;
 }
 
 function contentBlocks(content: unknown, allowed: ReadonlySet<unknown>): Block[] {
@@ -152,14 +156,16 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 				: "";
 
 	// Claude Code's MCP names cap the length; one long or unusual tool name is left out rather than failing the turn.
-	const tools = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool): ClaudeCodeTool[] =>
+	const listed = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
 		isRecord(tool) && typeof tool.name === "string" && TOOL_NAME.test(tool.name) && isRecord(tool.input_schema)
 			? [
 					{
-						name: tool.name,
-						description: typeof tool.description === "string" ? tool.description : "",
-						inputSchema: tool.input_schema,
-						...(tool.defer_loading === true ? { deferLoading: true } : {}),
+						tool: {
+							name: tool.name,
+							description: typeof tool.description === "string" ? tool.description : "",
+							inputSchema: tool.input_schema,
+						} satisfies ClaudeCodeTool,
+						deferLoading: tool.defer_loading === true,
 					},
 				]
 			: [],
@@ -171,14 +177,14 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 		route,
 		system,
 		frames: historyFrames(body.messages, body.model),
-		tools,
+		tools: listed.map(({ tool }) => tool),
 		maxTokens,
 		extraBody: {
-			tools: tools.map((tool) => ({
+			tools: listed.map(({ tool, deferLoading }) => ({
 				name: `${TOOL_PREFIX}${tool.name}`,
 				description: tool.description,
 				input_schema: tool.inputSchema,
-				...(tool.deferLoading ? { defer_loading: true } : {}),
+				...(deferLoading ? { defer_loading: true } : {}),
 			})),
 			...(thinking ? { thinking } : {}),
 			// Claude Code's own clear-thinking context edits are invalid once thinking is disabled.

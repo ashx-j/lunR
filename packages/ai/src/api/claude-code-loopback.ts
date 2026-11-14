@@ -7,8 +7,6 @@ export interface ClaudeCodeTool {
 	name: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
-	/** lunR sends this tool with `defer_loading`. The bridge reads it; the MCP listing leaves it out. */
-	deferLoading?: boolean;
 }
 
 /**
@@ -131,12 +129,7 @@ export class ClaudeCodeLoopback {
 							// Always-load keeps Claude Code from deferring lunR's tools in its own bookkeeping and from
 							// telling the model to fetch them through ToolSearch. Recheck on every CLAUDE_CODE_VERSION bump.
 							tools: [
-								...this.tools.map(({ name, description, inputSchema }) => ({
-									name,
-									description,
-									inputSchema,
-									_meta: { "anthropic/alwaysLoad": true },
-								})),
+								...this.tools.map((tool) => ({ ...tool, _meta: { "anthropic/alwaysLoad": true } })),
 								RESERVED_TOOL,
 							],
 						}

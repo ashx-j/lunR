@@ -264,6 +264,8 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 	it("passes deferred tools and their tool_reference loads through with Claude Code's tool names", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
 		const tool = (name: string) => ({ name, description: name, parameters: { type: "object", properties: {} } });
+		// Too long for Claude Code's MCP names, so the bridge leaves out the tool and its reference.
+		const longName = "x".repeat(60);
 		const loaded: Context = {
 			systemPrompt: "You are lunR.",
 			messages: [
@@ -283,12 +285,12 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 					toolCallId: "toolu_1",
 					toolName: "load_tools",
 					content: [{ type: "text", text: "Loaded tools: cron." }],
-					addedToolNames: ["cron"],
+					addedToolNames: ["cron", longName],
 					isError: false,
 					timestamp: 3,
 				},
 			],
-			tools: [tool("read"), tool("load_tools"), tool("cron")],
+			tools: [tool("read"), tool("load_tools"), tool("cron"), tool(longName)],
 			deferredTools: [tool("cron"), tool("web_search")],
 		};
 		const result = await streamClaudeCode(model, loaded, { externalClaudeCode: connection }, true, upstream).result();
