@@ -10,6 +10,7 @@ import { computerSettingsChanged } from "./computer-use/policy.ts";
 import { globalBridge } from "./global-bridge.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+import type { PermissionRuleSettings } from "./permission-rules.ts";
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "./pr-watch/types.ts";
 import {
 	DEFAULT_SUBAGENT_SPINNER,
@@ -87,7 +88,7 @@ export interface MarkdownSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
-export type DefaultPermissionMode = "yolo" | "auto" | "read-only";
+export type DefaultPermissionMode = "yolo" | "auto" | "ask" | "read-only";
 export type SkillTagCharacter = "+" | "~" | "$";
 export const SKILL_TAG_CHARACTERS: readonly SkillTagCharacter[] = ["+", "~", "$"];
 export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "$";
@@ -214,6 +215,7 @@ export interface Settings {
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
 	autoReviewModel?: string; // "provider/model" that reviews auto-mode actions; unset = the provider's own reviewer
+	permissions?: PermissionRuleSettings; // allow/deny rules (permission-rules.ts); project allow rules need a trusted project
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
@@ -1325,7 +1327,29 @@ export class SettingsManager {
 	getDefaultPermissionMode(): DefaultPermissionMode {
 		const value: unknown = this.settings.defaultPermissionMode;
 		if (value === "plan") return "read-only";
-		return value === "auto" || value === "read-only" ? value : "yolo";
+		return value === "auto" || value === "ask" || value === "read-only" ? value : "yolo";
+	}
+
+	/** Allow and deny rules per scope. Project settings are empty when the project isn't trusted. */
+	getPermissionRuleSettings(): {
+		global: PermissionRuleSettings | undefined;
+		project: PermissionRuleSettings | undefined;
+		projectTrusted: boolean;
+	} {
+		return {
+			global: this.globalSettings.permissions,
+			project: this.projectSettings.permissions,
+			projectTrusted: this.projectTrusted,
+		};
+	}
+
+	/** Adds a global allow rule; an "always allow" answer saves one. */
+	addPermissionAllowRule(rule: string): void {
+		const permissions = this.globalSettings.permissions ?? {};
+		if (permissions.allow?.includes(rule)) return;
+		this.globalSettings.permissions = { ...permissions, allow: [...(permissions.allow ?? []), rule] };
+		this.markModified("permissions", "allow");
+		this.save();
 	}
 
 	setDefaultPermissionMode(mode: DefaultPermissionMode): void {

@@ -97,7 +97,7 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import { type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
+import { type ApprovalRequest, type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
@@ -848,7 +848,7 @@ export class InteractiveMode {
 		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
-			if (req.kind === "large-subagent-launch") {
+			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
 				return this.showLargeSubagentLaunchApprovalDialog(req);
 			}
 			// Approval restores writing access before the model's next tool call.
@@ -2550,7 +2550,7 @@ export class InteractiveMode {
 				text &&
 				!this.runtimeHost.isDetached &&
 				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|ask|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
 						text,
 					))
 			) {
@@ -5907,26 +5907,31 @@ export class InteractiveMode {
 		if (this.session.isStreaming) this.notifyAttention("input");
 	}
 
-	// Approval dialog for one subagent call launching more than two children.
+	// Approval dialog for one subagent call launching more than two children, and for ask mode's
+	// question before one call (`title`, plus "Always allow" when the request carries a `rule`).
 	// "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showLargeSubagentLaunchApprovalDialog(req: {
-		toolName: string;
-		action: string;
-		detail: string;
-	}): Promise<ApprovalResponse> {
+	private async showLargeSubagentLaunchApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
+		const always = req.rule ? `Always allow (saves ${req.rule})` : undefined;
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
-					"Approve large subagent launch?",
-					["Approve once", "Approve for this session", "Reject", "Reject with feedback"],
+					req.title ?? "Approve large subagent launch?",
+					[
+						"Approve once",
+						"Approve for this session",
+						...(always ? [always] : []),
+						"Reject",
+						"Reject with feedback",
+					],
 					(option) => {
 						done();
 						if (option === "Approve once") resolve("once");
 						else if (option === "Approve for this session") resolve("session");
+						else if (option === always) resolve("always");
 						else if (option === "Reject with feedback") {
 							void this.showExtensionInput(
-								"Reject large subagent launch",
+								req.kind === "tool" ? `Reject ${req.toolName}` : "Reject large subagent launch",
 								"feedback for the agent (optional)",
 							).then((feedback) => {
 								const trimmed = feedback?.trim();

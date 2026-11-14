@@ -1553,7 +1553,7 @@ export class SettingsSelectorComponent extends Container {
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
 				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
-				values: ["yolo", "auto", "read"],
+				values: ["yolo", "auto", "ask", "read"],
 			},
 			{
 				id: "thinking",

@@ -1,12 +1,18 @@
 /**
- * lunR: permission modes (YOLO / Auto / Read-only).
+ * lunR: permission modes (YOLO / Auto / Ask / Read-only).
  *
  * Per-session only, with a configurable default for new sessions.
  *
  * - yolo: auto-approve tools; the agent may still ask questions.
  * - auto: like yolo, but AgentSession sends risky calls to a review model
  *         first (see auto-review.ts), and rollback is force-enabled for the session.
+ * - ask: asks the user before every call read-only mode would block. Without
+ *        an approval channel such calls are blocked.
  * - read-only: mutating tools are hard-blocked.
+ *
+ * Allow and deny rules (permission-rules.ts) arrive through GateOptions. Deny
+ * rules block in every mode; allow rules skip the ask-mode question and, in
+ * AgentSession, the auto review. Neither overrides protected targets or read-only.
  *
  * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
  * the awaited `_toolCallGates` loop, which can also request host approval.
@@ -20,8 +26,10 @@
 
 import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
+import { type CompiledPermissionRules, suggestAllowRule } from "./permission-rules.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
 import { protectedTargetWriteReason } from "./protected-targets.ts";
+import { resolveToCwd } from "./tools/path-utils.ts";
 
 export {
 	GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON,
@@ -29,8 +37,8 @@ export {
 	SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
 } from "./protected-targets.ts";
 
-/** Shift+Tab cycle order. */
-export const PERMISSION_MODES = ["yolo", "auto", "read-only"] as const;
+/** Shift+Tab cycle order: each step is stricter than the last, then it wraps to yolo. */
+export const PERMISSION_MODES = ["yolo", "auto", "ask", "read-only"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 export function nextPermissionMode(current: PermissionMode): PermissionMode {
@@ -57,17 +65,23 @@ export function restorePermissionModeAfterPlan(
 
 export interface ApprovalRequest {
 	toolName: string;
-	/** "large-subagent-launch", "plan" or "auto-review" approval. */
+	/** "large-subagent-launch", "plan", "auto-review" or "ask" approval. */
 	action: string;
 	detail: string;
 	/** "large-subagent-launch" for aggregate child confirmation, "plan" for the
 	 *  present_plan plan-approval prompt — the UI renders a dedicated dialog
 	 *  for each instead of the generic tool dialog. "auto-review" asks the user to
-	 *  decide an action after auto mode's review model kept blocking. */
-	kind?: "large-subagent-launch" | "plan" | "auto-review";
+	 *  decide an action after auto mode's review model kept blocking. "tool" is
+	 *  ask mode's question before one call that changes state. */
+	kind?: "large-subagent-launch" | "plan" | "auto-review" | "tool";
+	/** Heading for a "tool" question. */
+	title?: string;
+	/** Allow rule an "always" answer saves; absent when no rule can cover the call. */
+	rule?: string;
 }
 
-export type ApprovalDecision = "once" | "session" | "reject";
+/** "always" also saves the request's `rule`; channels that can't save rules never return it. */
+export type ApprovalDecision = "once" | "session" | "always" | "reject";
 /** Handlers may return a bare decision string, a reject carrying user feedback
  *  that becomes the block reason the model sees, or an approve carrying optional
  *  feedback (plan approval with comments). */
@@ -110,6 +124,7 @@ export const NO_HANDLER_REASON = "Approval channel unavailable.";
 /** An approval channel rejects with this when nobody answered a plan prompt in time. */
 export const PLAN_APPROVAL_TIMEOUT_REASON = "Plan approval timed out.";
 export const LARGE_SUBAGENT_LAUNCH_REJECT_REASON = "Large subagent launch rejected by user.";
+export const ASK_REJECT_REASON = "The user rejected this call.";
 export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch blocked: no approval channel available.";
 const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 
@@ -296,6 +311,10 @@ function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChi
 export interface GateOptions {
 	/** Global preference for aggregate confirmation. Defaults to enabled. */
 	confirmLargeSubagentLaunches?: boolean;
+	/** Settings allow and deny rules. */
+	rules?: CompiledPermissionRules;
+	/** Saves an allow rule to global settings after an "always" answer. */
+	saveAllowRule?: (rule: string) => void;
 	/** Assistant message that issued this tool call. Same-turn sibling SINGLE
 	 *  `subagent` calls count toward the aggregate threshold. */
 	assistantMessage?: {
@@ -418,9 +437,94 @@ function sanitizeDetail(value: unknown): string {
 	return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
+/** What a session approval covers: the exact command, the exact file, or the whole tool otherwise. */
+function askApprovalKey(toolName: string, input: Record<string, unknown>, cwd: string): string {
+	if (toolName === "bash" && typeof input.command === "string") return `ask:bash:${input.command.trim()}`;
+	if (typeof input.path === "string" && input.path) return `ask:${toolName}:${resolveToCwd(input.path, cwd)}`;
+	if (toolName === "mcp" && typeof input.tool === "string")
+		return `ask:mcp:${String(input.server ?? "")}/${input.tool}`;
+	return `ask:${toolName}`;
+}
+
+function askQuestion(toolName: string, input: Record<string, unknown>): { title: string; detail: string } {
+	if (toolName === "subagent") {
+		const children = getRequestedChildLaunches(input).filter((child) => child.permissions === "full");
+		const warning = "It runs commands and edits files without asking you.";
+		if (children.length === 0) {
+			return {
+				title: `Allow subagent ${String(input.action)}? ${warning}`,
+				detail: sanitizeDetail(JSON.stringify(input)),
+			};
+		}
+		return {
+			title: `Launch ${children.length === 1 ? "a full-access subagent" : `${children.length} full-access subagents`}? ${warning}`,
+			detail: sanitizeDetail(children.map((child) => child.description).join("\n")),
+		};
+	}
+	const detail =
+		toolName === "bash"
+			? input.command
+			: typeof input.path === "string"
+				? input.path
+				: JSON.stringify(input, null, 1);
+	return { title: `Allow ${toolName}?`, detail: String(detail ?? "").slice(0, 2000) };
+}
+
+/**
+ * Ask mode: a call read-only mode would block runs only after the user allows it, an allow rule
+ * covers it or an earlier "this session" answer covers it. Without an approval channel (print
+ * mode, cron, a subagent) it is blocked with a reason that says how to proceed.
+ */
+async function gateAskMode(
+	toolName: string,
+	input: Record<string, unknown>,
+	cwd: string,
+	ctx: PermissionContext,
+	options?: GateOptions,
+): Promise<{ block: true; reason: string } | undefined> {
+	if (!readOnlyModeBlock(toolName, input) || options?.rules?.allowed(toolName, input)) return undefined;
+	const key = askApprovalKey(toolName, input, cwd);
+	if (ctx.approvals.has(key)) return undefined;
+	const rule = suggestAllowRule(toolName, input, cwd);
+	if (!approvalHandler || ctx.allowApprovals === false) {
+		return {
+			block: true,
+			reason: `Ask mode needs the user's approval for this ${toolName} call, and nobody can answer here (print mode, cron or a subagent), so it did not run. Tell the user what you need to run. They can allow it with ${rule ? `the rule "${rule}"` : `a "${toolName}" rule`} in permissions.allow in settings.json, or run in yolo or auto mode.`,
+		};
+	}
+	const question = askQuestion(toolName, input);
+	let resp: ApprovalResponse;
+	try {
+		resp = await approvalHandler({
+			toolName,
+			action: "ask",
+			kind: "tool",
+			title: question.title,
+			detail: question.detail,
+			...(rule && options?.saveAllowRule ? { rule } : {}),
+		});
+	} catch (err) {
+		return { block: true, reason: err instanceof Error ? err.message : NO_HANDLER_REASON };
+	}
+	const decision = typeof resp === "string" ? resp : resp.decision;
+	if (decision === "reject") {
+		const feedback = typeof resp === "string" ? undefined : resp.feedback?.trim();
+		return {
+			block: true,
+			reason: feedback
+				? `${ASK_REJECT_REASON} Their feedback: ${feedback}`
+				: `${ASK_REJECT_REASON} Don't retry it; ask the user how to proceed.`,
+		};
+	}
+	if (decision === "always" && rule) options?.saveAllowRule?.(rule);
+	if (decision === "session" || decision === "always") ctx.approvals.add(key);
+	return undefined;
+}
+
 /**
  * Returns a block result when the tool call should be blocked, else undefined.
- * Read-only tools always pass. YOLO and Auto pass mutating tools. Read-only
+ * Protected targets and deny rules block first. Read-only tools always pass.
+ * YOLO and Auto pass mutating tools. Ask mode asks before them. Read-only
  * mode hard-blocks mutating tools without prompting.
  */
 export async function gateToolCall(
@@ -442,9 +546,20 @@ export async function gateToolCall(
 	if (protectedWriteReason) {
 		return { block: true, reason: protectedWriteReason };
 	}
+	const deniedBy = options?.rules?.denied(toolName, input);
+	if (deniedBy) {
+		return {
+			block: true,
+			reason: `The deny rule "${deniedBy}" in settings blocks this call. Don't reach the same result another way; tell the user what you need.`,
+		};
+	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
 	if (ctx.mode === "read-only") return readOnlyModeBlock(toolName, input);
+	if (ctx.mode === "ask") {
+		const askBlock = await gateAskMode(toolName, input, cwd, ctx, options);
+		if (askBlock) return askBlock;
+	}
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);
 		if (launchResult) return launchResult;

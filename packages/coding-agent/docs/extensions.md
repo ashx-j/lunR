@@ -1803,7 +1803,7 @@ lunR sends each tool's `name`, `description` and `parameters` to the model. Put 
 
 Note: Some models include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
 
-Permission modes apply to extension tools. `yolo` runs them. In `auto`, a review model checks each call first. `read-only` blocks them with the message `Read-only mode cannot verify that my_tool is safe`, and a custom tool has no way to declare itself read-only. See [features.md](features.md) for the modes.
+Permission modes apply to extension tools. `yolo` runs them. In `auto`, a review model checks each call first. `ask` asks the user before each call. `read-only` blocks them with the message `Read-only mode cannot verify that my_tool is safe`, and a custom tool has no way to declare itself read-only. See [features.md](features.md) for the modes.
 
 If your custom tool mutates files, use `withFileMutationQueue()` so it participates in the same per-file queue as built-in `edit` and `write`. This matters because tool calls run in parallel by default. Without the queue, two tools can read the same old file contents, compute different updates, and then whichever write lands last overwrites the other.
 

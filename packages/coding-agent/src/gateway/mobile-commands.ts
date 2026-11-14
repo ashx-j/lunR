@@ -24,7 +24,7 @@ export const MOBILE_COMMANDS = [
 	{ name: "project", description: "Browse folders and choose a project" },
 	{ name: "continue", description: "Continue a handoff or the latest TUI session" },
 	{ name: "sessions", description: "Browse saved sessions across projects" },
-	{ name: "mode", description: "Choose yolo, auto, or read-only permissions" },
+	{ name: "mode", description: "Choose yolo, auto, ask, or read-only permissions" },
 	{ name: "plan", description: "Plan work and approve it from this chat" },
 	{ name: "settings", description: "Change this session's model, thinking, or permissions" },
 	{ name: "stopall", description: "Stop this session and its background subagents" },
@@ -521,7 +521,7 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 	if (!requested || ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 	const mode = requested === "read" ? "read-only" : requested;
 	if (!PERMISSION_MODES.includes(mode as (typeof PERMISSION_MODES)[number]))
-		throw new Error("Choose yolo, auto, or read-only.");
+		throw new Error(`Choose ${PERMISSION_MODES.join(", ")}.`);
 	const problem = mode === "auto" ? autoReviewerProblem(session) : undefined;
 	if (problem) {
 		await ctx.adapter.send(ctx.event.source.chatId, problem);
