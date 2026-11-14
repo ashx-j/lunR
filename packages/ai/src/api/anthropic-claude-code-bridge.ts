@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import {
 	claudeCodeEvents,
 	spawnClaudeCode,
 	stopProcessTree,
+	stopProcessTreeSync,
 } from "./claude-code-process.ts";
 
 /** MCP server name prefix Claude Code puts on lunR's tools. Stripped again before lunR sees a tool call. */
@@ -225,15 +227,18 @@ const sseEvent = (type: string, data: string) => `event: ${type}\ndata: ${data}\
  * Turns Claude Code's stream-json output into the Messages SSE body lunR's Anthropic client expects.
  * Each `stream_event` line carries one raw upstream event. The stream ends at `message_stop`; a `result`
  * before then becomes an SSE error. Cleanup runs once the stream ends, fails, or is cancelled.
+ * `onEnd` runs once when the stream ends, with whether a complete answer stopped for tool calls.
  */
 function answerStream(
 	first: ClaudeCodeEvent,
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	onEnd: (toolUse: boolean) => void,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
+	let toolUse = false;
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
@@ -249,23 +254,28 @@ function answerStream(
 						});
 					controller.enqueue(encoder.encode(sseEvent("error", body)));
 					controller.close();
+					onEnd(false);
 					await finish(!!error);
 					return;
 				}
 				if (!isRecord(event.event) || typeof event.event.type !== "string") return;
 				const data = renameToolCall(event.event, inventory);
 				controller.enqueue(encoder.encode(sseEvent(event.event.type, JSON.stringify(data))));
+				if (data.type === "message_delta" && isRecord(data.delta)) toolUse = data.delta.stop_reason === "tool_use";
 				if (data.type === "message_stop") {
 					// The answer is complete; stopping now also keeps Claude Code from any further request.
 					controller.close();
+					onEnd(toolUse);
 					await finish();
 				}
 			} catch (error) {
 				controller.error(error);
+				onEnd(false);
 				await finish();
 			}
 		},
 		async cancel() {
+			onEnd(false);
 			await finish();
 		},
 	});
@@ -279,13 +289,86 @@ function localFailure(message: string): Response {
 	});
 }
 
-async function runClaudeCode(
+/** One stream-json input line. Claude Code appends a replayed user turn without a generation and acknowledges it. */
+interface InputLine {
+	text: string;
+	replay: boolean;
+}
+
+/**
+ * Input lines for a request's frames: every user turn but the last is a replay. With `allReplays` the
+ * last one is too, which is how a prewarmed process holds history before the next turn exists.
+ */
+function inputLines(frames: readonly Frame[], allReplays = false): InputLine[] {
+	return frames.map((frame, index) => {
+		const replay = frame.type === "user" && (allReplays || index < frames.length - 1);
+		return { text: `${JSON.stringify(replay ? { ...frame, shouldQuery: false } : frame)}\n`, replay };
+	});
+}
+
+/** Everything about a request that a started Claude Code process fixes, apart from its frames. */
+function launchKey(connection: ExternalClaudeCodeCredential, request: ClaudeCodeRequest, upstream?: string): string {
+	const { route, system, tools, extraBody, maxTokens } = request;
+	return JSON.stringify([
+		connection.command,
+		connection.configDir,
+		upstream,
+		route,
+		system,
+		tools,
+		extraBody,
+		maxTokens,
+	]);
+}
+
+/** A started Claude Code process with its MCP endpoint and private directory. */
+interface ClaudeCodeProcess {
+	child: ChildProcessWithoutNullStreams;
+	events: AsyncGenerator<ClaudeCodeEvent>;
+	loopback: ClaudeCodeLoopback;
+	exited: Promise<void>;
+	/** Rejects when the process fails to start or run; attached at spawn, before the error can fire. */
+	failed: Promise<never>;
+	/** Kills the process tree, closes the MCP endpoint and removes the directory. Runs once. */
+	stop: () => Promise<void>;
+	/** `stop` for process exit, where asynchronous cleanup never runs. */
+	stopNow: () => void;
+}
+
+async function within<T>(promise: Promise<T>, message: string, ms: number, interrupted: Promise<never>): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(message)), ms);
+	});
+	try {
+		return await Promise.race([promise, timeout, interrupted]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Writes input lines, waiting for Claude Code to acknowledge each replayed user turn. */
+async function writeLines(
+	claude: ClaudeCodeProcess,
+	lines: readonly InputLine[],
+	wait: <T>(promise: Promise<T>, message: string) => Promise<T>,
+): Promise<void> {
+	for (const line of lines) {
+		claude.child.stdin.write(line.text);
+		if (!line.replay) continue;
+		const ack = await wait(nextResult(claude.events), "Claude Code history replay timed out.");
+		if (!ack) throw new Error("Claude Code exited during history replay");
+		if (ack.num_turns !== 0 || ack.is_error) throw new Error("Claude Code rejected the history replay");
+	}
+}
+
+/** Starts Claude Code for a request. It sends nothing to Anthropic until it reads a user turn that queries. */
+async function startClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
-	signal: AbortSignal | undefined,
-	idleMs: number,
 	upstream: string | undefined,
-): Promise<Response> {
+	signal?: AbortSignal,
+): Promise<ClaudeCodeProcess> {
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open(request.tools);
@@ -294,32 +377,16 @@ async function runClaudeCode(
 		throw error;
 	});
 	let pid: number | undefined;
-	let cleanup: Promise<void> | undefined;
-	let exited: Promise<void> | undefined;
-	// With `graceful`, a Claude Code that is still saving its own state (for example a sign-in refreshed after
-	// a 401) gets CLAUDE_CODE_EXIT_GRACE_MS to exit before the tree is killed. A user abort ends the wait.
-	const finish = (graceful = false) => {
-		cleanup ??= (async () => {
+	let stopping: Promise<void> | undefined;
+	const stop = () => {
+		stopping ??= (async () => {
 			loopback.close();
-			if (graceful && exited && !signal?.aborted) {
-				let timer: NodeJS.Timeout | undefined;
-				const aborted = new Promise<void>((resolve) =>
-					signal?.addEventListener("abort", () => resolve(), { once: true }),
-				);
-				const grace = new Promise<void>((resolve) => {
-					timer = setTimeout(resolve, CLAUDE_CODE_EXIT_GRACE_MS);
-				});
-				await Promise.race([exited, grace, aborted]);
-				clearTimeout(timer);
-			}
 			await stopProcessTree(pid);
 			// Windows can hold the working directory briefly after the process tree ends.
 			await rm(directory, { recursive: true, force: true }).catch(() => {});
 		})();
-		return cleanup;
+		return stopping;
 	};
-	// An abort while lunR reads the body must still end Claude Code and close the MCP endpoint.
-	signal?.addEventListener("abort", () => void finish(), { once: true });
 	try {
 		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
@@ -341,7 +408,6 @@ async function runClaudeCode(
 			...(upstream ? { ANTHROPIC_BASE_URL: upstream } : {}),
 			...(request.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxTokens) } : {}),
 		};
-		// Cleanup that already ran during the writes above had no process to stop, so never start one.
 		if (signal?.aborted) throw new Error("Claude Code request cancelled");
 		// Claude Code tells the model its working directory in an environment note it adds to every request,
 		// so it runs in lunR's own directory. Empty setting sources keep that directory's CLAUDE.md and settings out.
@@ -380,40 +446,192 @@ async function runClaudeCode(
 			process.cwd(),
 		);
 		pid = child.pid;
-		// Output already written stays readable after the process closes, so cleanup is safe here too.
-		exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
-		child.once("close", () => void finish());
-		const interrupted = new Promise<never>((_, reject) => {
-			child.once("error", reject);
-			if (signal?.aborted) reject(new Error("Claude Code request cancelled"));
-			signal?.addEventListener("abort", () => reject(new Error("Claude Code request cancelled")), { once: true });
-		});
-		interrupted.catch(() => {});
-		const within = async <T>(promise: Promise<T>, message: string): Promise<T> => {
-			let timer: NodeJS.Timeout | undefined;
-			const timeout = new Promise<never>((_, reject) => {
-				timer = setTimeout(() => reject(new Error(message)), idleMs);
-			});
+		// Output already written stays readable after the process closes.
+		const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
+		const failed = new Promise<never>((_, reject) => child.once("error", reject));
+		failed.catch(() => {});
+		const stopNow = () => {
+			loopback.close();
+			stopProcessTreeSync(pid);
 			try {
-				return await Promise.race([promise, timeout, interrupted]);
-			} finally {
-				clearTimeout(timer);
+				rmSync(directory, { recursive: true, force: true });
+			} catch {
+				/* Best effort while exiting. */
 			}
 		};
+		return { child, events: claudeCodeEvents(child.stdout), loopback, exited, failed, stop, stopNow };
+	} catch (error) {
+		await stop();
+		throw error;
+	}
+}
 
-		const events = claudeCodeEvents(child.stdout);
-		for (const [index, frame] of request.frames.entries()) {
-			// Earlier user turns are appended without a generation; Claude Code acknowledges each with a zero-turn result.
-			const replay = frame.type === "user" && index < request.frames.length - 1;
-			child.stdin.write(`${JSON.stringify(replay ? { ...frame, shouldQuery: false } : frame)}\n`);
-			if (!replay) continue;
-			const ack = await within(nextResult(events), "Claude Code history replay timed out.");
-			if (!ack) throw new Error("Claude Code exited during history replay");
-			if (ack.num_turns !== 0 || ack.is_error) throw new Error("Claude Code rejected the history replay");
-		}
-		child.stdin.end();
+/**
+ * A Claude Code process started while a turn is answered and its tools run. It holds that session's known
+ * history as replays, so the next request only writes its new frames. It never gets a user turn that queries unless
+ * a matching request claims it.
+ */
+interface Prewarm {
+	key: string;
+	lines: InputLine[];
+	/** The process once every replay is acknowledged. Rejects when start or replay fails. */
+	ready: Promise<ClaudeCodeProcess>;
+	/** Hands the process to a request: discarding no longer stops it. */
+	claim: () => void;
+	discard: () => void;
+}
 
-		const first = await within(nextAnswerEvent(events), "Claude Code request timed out.");
+/** At most one prewarmed process per session id. */
+const prewarms = new Map<string, Prewarm>();
+/** Prewarmed processes not yet claimed, stopped synchronously if lunR exits first. */
+const unclaimed = new Set<ClaudeCodeProcess>();
+let exitHookInstalled = false;
+
+/**
+ * Starts the process for a session's next request from the request now being answered, so it is ready
+ * when that answer's tool results are. It is discarded when the answer does not stop for tool calls,
+ * after `idleMs` without a claim, when `signal` aborts, or when the session's next request does not match.
+ */
+function prewarm(
+	session: string,
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	upstream: string | undefined,
+	idleMs: number,
+	signal: AbortSignal | undefined,
+): Prewarm | undefined {
+	prewarms.get(session)?.discard();
+	if (signal?.aborted) return undefined;
+	if (!exitHookInstalled) {
+		exitHookInstalled = true;
+		process.once("exit", () => {
+			for (const claude of unclaimed) claude.stopNow();
+		});
+	}
+	let state: "waiting" | "claimed" | "discarded" = "waiting";
+	const lines = inputLines(request.frames, true);
+	const started = startClaudeCode(connection, request, upstream);
+	const ready = started.then(async (claude) => {
+		if (state === "discarded") throw new Error("Claude Code prewarm discarded");
+		await writeLines(claude, lines, (promise, message) => within(promise, message, idleMs, claude.failed));
+		return claude;
+	});
+	const timer = setTimeout(() => entry.discard(), idleMs);
+	timer.unref();
+	const onAbort = () => entry.discard();
+	const settle = () => {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
+		if (prewarms.get(session) === entry) prewarms.delete(session);
+	};
+	const entry: Prewarm = {
+		key: launchKey(connection, request, upstream),
+		lines,
+		ready,
+		claim() {
+			state = "claimed";
+			settle();
+			void started.then(
+				(claude) => unclaimed.delete(claude),
+				() => {},
+			);
+		},
+		discard() {
+			if (state !== "waiting") return;
+			state = "discarded";
+			settle();
+			void started.then(
+				(claude) => {
+					unclaimed.delete(claude);
+					return claude.stop();
+				},
+				() => {},
+			);
+		},
+	};
+	void started.then(
+		(claude) => {
+			if (state === "waiting") unclaimed.add(claude);
+			claude.child.once("close", () => entry.discard());
+		},
+		() => entry.discard(),
+	);
+	ready.catch(() => entry.discard());
+	signal?.addEventListener("abort", onAbort, { once: true });
+	prewarms.set(session, entry);
+	return entry;
+}
+
+/**
+ * Takes the session's prewarmed process when it was started with the same launch settings and holds
+ * exactly the first lines of this request. Any other prewarm for the session is discarded.
+ */
+async function claimPrewarm(session: string, key: string, lines: readonly InputLine[]) {
+	const warm = prewarms.get(session);
+	if (!warm) return undefined;
+	const matches =
+		warm.key === key &&
+		lines.length > warm.lines.length &&
+		warm.lines.every((line, index) => line.text === lines[index]?.text);
+	if (!matches) {
+		warm.discard();
+		return undefined;
+	}
+	warm.claim();
+	const claude = await warm.ready.catch(() => undefined);
+	return claude && { claude, written: warm.lines.length };
+}
+
+async function runClaudeCode(
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	signal: AbortSignal | undefined,
+	idleMs: number,
+	upstream: string | undefined,
+	session: string,
+): Promise<Response> {
+	const lines = inputLines(request.frames);
+	const warm = await claimPrewarm(session, launchKey(connection, request, upstream), lines);
+	const claude = warm?.claude ?? (await startClaudeCode(connection, request, upstream, signal));
+	let cleanup: Promise<void> | undefined;
+	// With `graceful`, a Claude Code that is still saving its own state (for example a sign-in refreshed after
+	// a 401) gets CLAUDE_CODE_EXIT_GRACE_MS to exit before the tree is killed. A user abort ends the wait.
+	const finish = (graceful = false) => {
+		cleanup ??= (async () => {
+			claude.loopback.close();
+			if (graceful && !signal?.aborted) {
+				let timer: NodeJS.Timeout | undefined;
+				const aborted = new Promise<void>((resolve) =>
+					signal?.addEventListener("abort", () => resolve(), { once: true }),
+				);
+				const grace = new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, CLAUDE_CODE_EXIT_GRACE_MS);
+				});
+				await Promise.race([claude.exited, grace, aborted]);
+				clearTimeout(timer);
+			}
+			await claude.stop();
+		})();
+		return cleanup;
+	};
+	// An abort while lunR reads the body must still end Claude Code and close the MCP endpoint.
+	signal?.addEventListener("abort", () => void finish(), { once: true });
+	let upcoming: Prewarm | undefined;
+	try {
+		if (signal?.aborted) throw new Error("Claude Code request cancelled");
+		claude.child.once("close", () => void finish());
+		const cancelled = new Promise<never>((_, reject) => {
+			signal?.addEventListener("abort", () => reject(new Error("Claude Code request cancelled")), { once: true });
+		});
+		const interrupted = Promise.race([claude.failed, cancelled]);
+		interrupted.catch(() => {});
+		const wait = <T>(promise: Promise<T>, message: string) => within(promise, message, idleMs, interrupted);
+
+		await writeLines(claude, lines.slice(warm?.written ?? 0), wait);
+		claude.child.stdin.end();
+		upcoming = prewarm(session, connection, request, upstream, idleMs, signal);
+
+		const first = await wait(nextAnswerEvent(claude.events), "Claude Code request timed out.");
 		if (first?.type !== "stream_event") {
 			const error = first && apiError(first);
 			// An API error without an HTTP status means Claude Code never got an answer, such as a refused connection.
@@ -422,16 +640,21 @@ async function runClaudeCode(
 					`Claude Code network error: ${typeof first.result === "string" ? first.result : "no answer"}`,
 				);
 			if (!error) throw new Error(stoppedBeforeRequest(first));
+			upcoming?.discard();
 			await finish(true);
 			return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
-		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish), {
+		const next = () => wait(nextAnswerEvent(claude.events), "Claude Code request timed out.");
+		const onEnd = (toolUse: boolean) => {
+			if (!toolUse) upcoming?.discard();
+		};
+		return new Response(answerStream(first, next, inventory, finish, onEnd), {
 			status: 200,
 			headers: { "content-type": "text/event-stream" },
 		});
 	} catch (error) {
+		upcoming?.discard();
 		await finish();
 		throw error;
 	}
@@ -439,18 +662,20 @@ async function runClaudeCode(
 
 /**
  * `fetch` for the Anthropic SDK that sends each Messages request through lunR's pinned Claude Code
- * instead of HTTPS. Exported for tests, which point `upstream` at a loopback fixture.
+ * instead of HTTPS. `session` scopes prewarmed processes to one conversation. Exported for tests, which
+ * point `upstream` at a loopback fixture.
  */
 export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	session = "",
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream, session);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -521,7 +746,7 @@ export function streamClaudeCode(
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream),
+		fetch: claudeCodeFetch(connection, idleMs, upstream, options.sessionId),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,

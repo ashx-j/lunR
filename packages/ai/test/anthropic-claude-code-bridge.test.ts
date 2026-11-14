@@ -1,4 +1,13 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +28,7 @@ import { isRetryableAssistantError } from "../src/utils/retry.ts";
  * fixture upstream: replayed user turns get zero-turn results; the Messages request goes straight to
  * ANTHROPIC_BASE_URL; each raw SSE event comes back as a `stream_event` line among other status lines;
  * an HTTP error ends in a `result` carrying `api_error_status`, and a refused connection in one without.
- * It records what it received next to itself. With no ANTHROPIC_BASE_URL (or a directory ending in
+ * It marks its start with a "started-<pid>" file and records what it received next to itself. With no ANTHROPIC_BASE_URL (or a directory ending in
  * "signed-out") it stops as signed out. A directory ending in "lingers" keeps running briefly after the
  * answer and then writes "exited-cleanly"; one ending in "hangs" never exits. Both leave a "responded"
  * marker once the answer has been read.
@@ -28,6 +37,7 @@ const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
 const { readFileSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const argv = process.argv.slice(2);
+writeFileSync(join(__dirname, "started-" + process.pid), "");
 const flag = (name) => argv[argv.indexOf(name) + 1];
 const frames = [];
 let buffer = "";
@@ -45,7 +55,7 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ pid: process.pid, argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
 	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -399,6 +409,70 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			await until(() => !alive(join(directory, "pid")));
 			expect(alive(join(directory, "pid"))).toBe(false);
 		}, 15_000);
+	});
+
+	it("prepares the next request's Claude Code before tool results exist and drops it when earlier history changes", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const started = () =>
+			readdirSync(directory).flatMap((name) => (name.startsWith("started-") ? [Number(name.slice(8))] : []));
+		const alive = (pid: number) => {
+			try {
+				process.kill(pid, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		const until = async (condition: () => boolean) => {
+			for (let waited = 0; !condition() && waited < 5000; waited += 20) await new Promise((r) => setTimeout(r, 20));
+		};
+		const servedBy = () => JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		const controller = new AbortController();
+		const options = { externalClaudeCode: connection, sessionId: "prewarm", signal: controller.signal };
+
+		const answer = await streamClaudeCode(model, context, options, true, upstream).result();
+		const firstPid = servedBy().pid;
+		// A second process starts for the next request while this one is answered.
+		await until(() => started().length === 2);
+		const warmPid = started().find((pid) => pid !== firstPid);
+		const toolResult: Message = {
+			role: "toolResult",
+			toolCallId: "toolu_2",
+			toolName: "read",
+			content: [{ type: "text", text: "contents of b" }],
+			isError: false,
+			timestamp: 5,
+		};
+		const next: Context = { ...context, messages: [...context.messages, answer, toolResult] };
+		expect((await streamClaudeCode(model, next, options, true, upstream).result()).errorMessage).toBeUndefined();
+		expect(servedBy().pid).toBe(warmPid);
+		expect(
+			servedBy().frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
+		).toEqual([
+			["user", false],
+			["assistant", undefined],
+			["user", false],
+			["assistant", undefined],
+			["user", undefined],
+		]);
+
+		// Request 2 prepared another process, but this request rewrote the first prompt.
+		await until(() => started().length === 3);
+		const stalePid = started().find((pid) => pid !== firstPid && pid !== warmPid) ?? 0;
+		const edited: Context = {
+			...next,
+			messages: [{ role: "user", content: "Read c.txt", timestamp: 1 }, ...next.messages.slice(1)],
+		};
+		expect((await streamClaudeCode(model, edited, options, true, upstream).result()).errorMessage).toBeUndefined();
+		expect(servedBy().pid).not.toBe(stalePid);
+		await until(() => !alive(stalePid));
+		expect(alive(stalePid)).toBe(false);
+		// An abort while tools run drops the process prepared for the next request.
+		await until(() => started().length === 5);
+		const lastPid = Math.max(...started());
+		controller.abort();
+		await until(() => !alive(lastPid));
+		expect(alive(lastPid)).toBe(false);
 	});
 
 	it("rejects tool calls for tools lunR did not offer", async () => {
