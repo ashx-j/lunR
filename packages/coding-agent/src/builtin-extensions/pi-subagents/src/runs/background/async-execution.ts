@@ -1092,6 +1092,14 @@ export function executeAsyncSingle(
 		const injection = buildSkillInjection(resolvedSkills);
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 	}
+	// Refuse before the run directory exists, so a refused launch leaves nothing behind.
+	const effectiveOutput = normalizeSingleOutputOverride(params.output ?? spec.output, typeof spec.output === "string" ? spec.output : undefined);
+	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
+	const childToolShape = { tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined };
+	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, childToolShape);
+	const outputMode = params.outputMode ?? spec.outputMode ?? "inline";
+	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`) ?? outputTargetError(outputPath, ctx.cwd);
+	if (validationError) return formatAsyncStartError("single", validationError);
 	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
 	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
 	const asyncDir = inheritedNestedRoute
@@ -1108,13 +1116,6 @@ export function executeAsyncSingle(
 		};
 	}
 
-	const effectiveOutput = normalizeSingleOutputOverride(params.output ?? spec.output, typeof spec.output === "string" ? spec.output : undefined);
-	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
-	const childToolShape = { tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined };
-	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, childToolShape);
-	const outputMode = params.outputMode ?? spec.outputMode ?? "inline";
-	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`) ?? outputTargetError(outputPath, ctx.cwd);
-	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, childToolShape);
 	const primaryModel = resolveExecutableChildModel({
 		modelSelection: spec.modelSelection,

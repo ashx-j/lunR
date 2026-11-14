@@ -1045,7 +1045,7 @@ async function runSingleAttempt(
 				fullOutput = fullOutput.trim() || recoveredResult.error || recoveredResult.finalOutput || "Detached child exited without final output.";
 				recoveredResult.outputMode = options.outputMode ?? "inline";
 				if (options.outputPath && recoveredResult.exitCode === 0) {
-					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, runtimeCwd);
 					fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 					recoveredResult.savedOutputPath = resolvedOutput.savedPath;
 					recoveredResult.outputSaveError = resolvedOutput.saveError;
@@ -1253,7 +1253,7 @@ async function runSingleAttempt(
 		}));
 	}
 		if (options.outputPath && result.exitCode === 0) {
-			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, runtimeCwd);
 			fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 			result.savedOutputPath = resolvedOutput.savedPath;
 			result.outputSaveError = resolvedOutput.saveError;

@@ -170,9 +170,10 @@ export function captureSingleOutputSnapshot(outputPath: string | undefined): Sin
 function persistSingleOutput(
 	outputPath: string | undefined,
 	fullOutput: string,
+	cwd: string,
 ): { savedPath?: string; error?: string } {
 	if (!outputPath) return {};
-	const blocked = outputTargetError(outputPath, process.cwd());
+	const blocked = outputTargetError(outputPath, cwd);
 	if (blocked) return { error: blocked };
 	try {
 		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -183,10 +184,12 @@ function persistSingleOutput(
 	}
 }
 
+/** `cwd` is the session's directory, which decides the project `.lunr/settings.json` it may not write. */
 export function resolveSingleOutput(
 	outputPath: string | undefined,
 	fallbackOutput: string,
 	beforeRun: SingleOutputSnapshot | undefined,
+	cwd: string,
 ): { fullOutput: string; savedPath?: string; saveError?: string } {
 	if (!outputPath) return { fullOutput: fallbackOutput };
 
@@ -217,7 +220,7 @@ export function resolveSingleOutput(
 		}
 	}
 
-	const save = persistSingleOutput(outputPath, fallbackOutput);
+	const save = persistSingleOutput(outputPath, fallbackOutput, cwd);
 	if (save.savedPath) return { fullOutput: fallbackOutput, savedPath: save.savedPath };
 	return { fullOutput: fallbackOutput, saveError: save.error };
 }

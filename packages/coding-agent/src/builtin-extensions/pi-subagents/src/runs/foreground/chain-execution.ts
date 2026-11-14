@@ -192,6 +192,23 @@ function buildChainExecutionErrorResult(message: string, input: ChainExecutionDe
 	};
 }
 
+/** The first protected-target refusal among the outputs the chain's steps name directly. */
+function staticChainOutputError(chainSteps: ChainStep[], chainDir: string, cwd: string): string | undefined {
+	const outputs = chainSteps.flatMap((step) =>
+		isParallelStep(step)
+			? step.parallel.map((task) => task.output)
+			: isDynamicParallelStep(step)
+				? [step.parallel.output]
+				: [(step as SequentialStep).output],
+	);
+	for (const output of outputs) {
+		if (typeof output !== "string" || !output) continue;
+		const error = outputTargetError(path.isAbsolute(output) ? output : path.join(chainDir, output), cwd);
+		if (error) return error;
+	}
+	return undefined;
+}
+
 function ensureParallelProgressFile(
 	chainDir: string,
 	progressCreated: boolean,
@@ -591,6 +608,12 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	}
 
 	const chainDir = createChainDir(runId, chainDirBase);
+	// A later step's output is otherwise checked only when that step starts, after earlier children ran.
+	const outputError = staticChainOutputError(chainSteps, chainDir, ctx.cwd);
+	if (outputError) {
+		removeChainDir(chainDir);
+		return buildChainExecutionErrorResult(outputError, makeDetailsInput());
+	}
 	const hasParallelSteps = chainSteps.some((step) => isParallelStep(step) || isDynamicParallelStep(step));
 	let templates: ResolvedTemplates = resolveChainTemplates(chainSteps);
 	const shouldClarify = clarify === true && ctx.hasUI && !hasParallelSteps;

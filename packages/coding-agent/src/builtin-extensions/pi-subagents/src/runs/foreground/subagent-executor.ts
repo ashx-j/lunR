@@ -1433,8 +1433,12 @@ async function maybeBuildForegroundIntercomReceipt(input: {
 		...(input.nestedChildren?.length ? { nestedChildren: input.nestedChildren } : {}),
 	});
 	if (!payload) return null;
+	// The receipt replaces the result text, so output files that failed to save must be named here.
+	const warnings = input.details.results.flatMap((result) =>
+		result.outputSaveError ? [`Output warning (${result.agent}): ${result.outputSaveError}`] : [],
+	);
 	return {
-		text: formatSubagentResultReceipt({ mode: input.mode, runId: input.runId, payload }),
+		text: [formatSubagentResultReceipt({ mode: input.mode, runId: input.runId, payload }), ...warnings].join("\n"),
 		details: stripDetailsOutputsForIntercomReceipt(input.details),
 	};
 }
@@ -2352,7 +2356,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	}
 	const chainDetails = rawChainDetails ? compactForegroundDetails(rawChainDetails) : undefined;
 	if (chainDetails) rememberForegroundRun(deps.state, { runId, mode: "chain", cwd: effectiveCwd, sessionId: data.parentSessionId, results: chainDetails.results });
-	const intercomReceipt = chainDetails && !chainDetails.results.some((result) => result.interrupted || result.detached)
+	// An error result keeps its own text: the receipt would report the chain as completed.
+	const intercomReceipt = !chainResult.isError && chainDetails && !chainDetails.results.some((result) => result.interrupted || result.detached)
 		? await maybeBuildForegroundIntercomReceipt({
 			pi: deps.pi,
 			intercomBridge: data.intercomBridge,

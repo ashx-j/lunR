@@ -13,13 +13,30 @@ export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
 export const PR_WATCH_STATE_WRITE_BLOCK_REASON =
 	"PR watch state is client-managed. Use pr_watch start/wait; only the user can cancel or restart through /pr-watch.";
 
-export const SECRET_STORE_WRITE_BLOCK_REASON =
-	"This file holds gateway, MCP login or Claude Code data that lunR manages itself. The agent cannot change it.";
+export const LUNR_MANAGED_STATE_WRITE_BLOCK_REASON =
+	"This is gateway, MCP login or Claude Code state that lunR manages itself. The agent cannot change it.";
 
 /** Windows and macOS (APFS, HFS+) are case-insensitive by default, so `SETTINGS.JSON` is settings.json there. */
 function normalize(path: string): string {
 	const normalized = resolve(path);
 	return process.platform === "win32" || process.platform === "darwin" ? normalized.toLowerCase() : normalized;
+}
+
+const canonicalRootCache = new Map<string, string[]>();
+
+/**
+ * A policy path and its canonical form, cached because canonicalizing walks the filesystem and every
+ * edit and write checks every policy. A symlink created later at a protected path is not seen, but
+ * creating one takes a shell command, which could change the file directly anyway.
+ */
+function canonicalRoots(path: string): string[] {
+	let roots = canonicalRootCache.get(path);
+	if (!roots) {
+		if (canonicalRootCache.size >= 256) canonicalRootCache.clear();
+		roots = [normalize(path), normalize(canonicalizeTargetPath(path))];
+		canonicalRootCache.set(path, roots);
+	}
+	return roots;
 }
 
 function isWithin(target: string, root: string): boolean {
@@ -45,13 +62,13 @@ export function protectedTargetWriteReason(path: string, cwd: string): string | 
 					"Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.",
 			},
 			// Bot tokens, approved gateway users, MCP OAuth tokens and the pinned binary the Claude bridge runs.
-			{ path: join(agentDir, "gateway.json"), reason: SECRET_STORE_WRITE_BLOCK_REASON },
-			{ path: join(agentDir, "pairing"), tree: true, reason: SECRET_STORE_WRITE_BLOCK_REASON },
-			{ path: join(agentDir, "mcp-oauth"), tree: true, reason: SECRET_STORE_WRITE_BLOCK_REASON },
-			{ path: join(agentDir, "claude-code"), tree: true, reason: SECRET_STORE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "gateway.json"), reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "pairing"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "mcp-oauth"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "claude-code"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
 		];
 		for (const policy of policies) {
-			const roots = [normalize(policy.path), normalize(canonicalizeTargetPath(policy.path))];
+			const roots = canonicalRoots(policy.path);
 			if (
 				targets.some((candidate) =>
 					roots.some((root) => (policy.tree ? isWithin(candidate, root) : candidate === root)),

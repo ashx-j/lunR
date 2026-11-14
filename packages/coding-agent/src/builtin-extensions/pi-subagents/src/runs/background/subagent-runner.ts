@@ -1248,7 +1248,7 @@ export async function runSingleStep(
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const outputForPersistence = stripAcceptanceReport(rawOutput);
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
-		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot)
+		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot, ctx.cwd)
 		: { fullOutput: outputForPersistence };
 	const output = stripAcceptanceReport(resolvedOutput.fullOutput);
 	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;

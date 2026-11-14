@@ -35,13 +35,15 @@ describe("protected destinations", () => {
 		const settings = join(agentDir, "settings.json");
 		await writeFile(settings, "{}");
 		expect(outputTargetError(settings, profile)).toContain("settings are user-managed");
-		const saved = resolveSingleOutput(settings, "child reply", captureSingleOutputSnapshot(settings));
+		const saved = resolveSingleOutput(settings, "child reply", captureSingleOutputSnapshot(settings), profile);
 		expect(saved.saveError).toContain("settings are user-managed");
 		expect(await readFile(settings, "utf-8")).toBe("{}");
 
 		const report = join(profile, "out", "report.md");
 		expect(outputTargetError(report, profile)).toBeUndefined();
-		expect(resolveSingleOutput(report, "child reply", captureSingleOutputSnapshot(report)).savedPath).toBe(report);
+		expect(resolveSingleOutput(report, "child reply", captureSingleOutputSnapshot(report), profile).savedPath).toBe(
+			report,
+		);
 		expect(await readFile(report, "utf-8")).toBe("child reply");
 	});
 
