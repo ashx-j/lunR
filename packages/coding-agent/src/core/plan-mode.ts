@@ -554,6 +554,8 @@ function isMutatingSed(args: string[], hasGlob: boolean): boolean {
 			if (name === "--expression" || name === "--line-length") {
 				const taken = value ?? args[++k];
 				if (taken === undefined) return true;
+				// BSD sed's -l takes no value, so a non-number here could be the script there.
+				if (name === "--line-length" && !/^\d+$/.test(taken)) return true;
 				if (name === "--expression") scripts.push(taken);
 			} else if (value !== undefined || !SED_SAFE_LONG.has(name)) {
 				return true;
@@ -566,6 +568,7 @@ function isMutatingSed(args: string[], hasGlob: boolean): boolean {
 				if (flag === "e" || flag === "l") {
 					const taken = arg.slice(j + 1) || args[++k];
 					if (taken === undefined) return true;
+					if (flag === "l" && !/^\d+$/.test(taken)) return true;
 					if (flag === "e") scripts.push(taken);
 					break;
 				}
@@ -763,21 +766,36 @@ function sedScriptWritesOrRuns(script: string): boolean {
 }
 
 /**
- * `date` sets the system clock with -s/--set or a bare MMDDhhmm operand. Only display forms are
- * allowed: +FORMAT, -u, -R, -I, --debug and the -d/-r inputs.
+ * `date` sets the system clock with -s/--set or a bare MMDDhhmm operand. Only GNU display forms are
+ * allowed: +FORMAT, -u, -R, -I, --debug and the -d/-r inputs, bundled or not. BSD's -j/-f/-v need
+ * their own parsing, so they block.
  */
 function isSettingDate(args: string[]): boolean {
 	for (let k = 0; k < args.length; k++) {
 		const arg = args[k];
-		if (arg === "-d" || arg === "-r" || arg === "--date" || arg === "--reference") {
+		if (arg.startsWith("+")) continue;
+		if (arg === "--date" || arg === "--reference") {
 			k++;
 			continue;
 		}
-		const display =
-			arg.startsWith("+") ||
-			/^-(?:u|R|I\w*|[dr].+)$/.test(arg) ||
-			/^--(?:utc|universal|rfc-email|debug|iso-8601(?:=\w+)?|rfc-3339=\w+|date=.*|reference=.*)$/s.test(arg);
-		if (!display) return true;
+		if (arg.startsWith("--")) {
+			if (!/^--(?:utc|universal|rfc-email|debug|iso-8601(?:=\w+)?|rfc-3339=\w+|date=.*|reference=.*)$/s.test(arg)) {
+				return true;
+			}
+			continue;
+		}
+		if (!/^-./.test(arg)) return true;
+		for (let j = 1; j < arg.length; j++) {
+			const flag = arg[j];
+			if (flag === "u" || flag === "R") continue;
+			// -I takes an optional attached precision; -d and -r take the rest or the next word.
+			if (flag === "I") break;
+			if (flag === "d" || flag === "r") {
+				if (j === arg.length - 1) k++;
+				break;
+			}
+			return true;
+		}
 	}
 	return false;
 }

@@ -136,6 +136,13 @@ describe("isMutatingBashCommand", () => {
 		"date -s 2020-01-01",
 		"date --set=2020-01-01",
 		"date 010100002020",
+		"sed -l 's/a/b/w x' f",
+		"sed -l5x p f",
+		"sed --line-length=p f",
+		"sed --line-length 'w x' f",
+		"date -us 2020-01-01",
+		"date -v-1d +%F",
+		"date -j -f %s 0 +%F",
 	])("blocks %s, which writes, runs code, hides its script or can't be parsed", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
 	});
@@ -155,6 +162,13 @@ describe("isMutatingBashCommand", () => {
 		"date +%Y-%m-%d",
 		"date -u -d 'last sunday' +%s",
 		"date -Iseconds",
+		"date -ud @0",
+		"date -uR",
+		"date -uIseconds",
+		"date -ud @0 +%F",
+		"sed -l 80 -n l a.ts",
+		"sed -l80 -n l a.ts",
+		"sed --line-length=80 -n l a.ts",
 	])("allows %s", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(false);
 	});
