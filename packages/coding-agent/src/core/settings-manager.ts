@@ -21,6 +21,7 @@ export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	ceilingTokens?: number; // default: unset (off)
 }
 
 export interface BranchSummarySettings {
@@ -929,11 +930,32 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionCeilingTokens(): number | undefined {
+		const ceiling = this.settings.compaction?.ceilingTokens;
+		return typeof ceiling === "number" && ceiling > 0 ? ceiling : undefined;
+	}
+
+	/** `undefined` turns the ceiling off. */
+	setCompactionCeilingTokens(ceilingTokens: number | undefined): void {
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.ceilingTokens = ceilingTokens;
+		this.markModified("compaction", "ceilingTokens");
+		this.save();
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+		ceilingTokens?: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			ceilingTokens: this.getCompactionCeilingTokens(),
 		};
 	}
 

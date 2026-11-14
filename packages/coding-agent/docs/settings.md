@@ -108,6 +108,7 @@ For VS Code, include `--wait` so lunR resumes after the editor exits:
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
+| `compaction.ceilingTokens` | number | unset | Compact once context passes this many tokens, even when the model's window is larger. Raised to at least the size of a freshly compacted context. See [compaction.md](compaction.md#when-it-triggers) |
 
 ```json
 {
