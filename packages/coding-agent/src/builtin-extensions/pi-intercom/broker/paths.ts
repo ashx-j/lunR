@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, readFileSync } from "fs";
-import { isAbsolute, join, resolve } from "path";
-import { homedir } from "os";
+import { chmodSync, lstatSync, mkdirSync, readFileSync } from "fs";
+import { createHash } from "crypto";
+import { dirname, isAbsolute, join, resolve } from "path";
+import { homedir, tmpdir } from "os";
 
 export const INTERCOM_DIR_MODE = 0o700;
 export const INTERCOM_RUNTIME_FILE_MODE = 0o600;
@@ -64,15 +65,53 @@ export function getBrokerPortFilePath(intercomDir: string = getIntercomDirPath()
   return join(intercomDir, "broker.port.json");
 }
 
+// sun_path holds 108 bytes on Linux and 104 on macOS and the BSDs, including the NUL.
+function maxSocketPathBytes(platform: NodeJS.Platform): number {
+  return platform === "linux" ? 107 : 103;
+}
+
+/**
+ * Broker socket path shared by the broker and its clients. The socket lives in the profile's
+ * intercom dir when that path fits in sun_path, so existing profiles keep their socket. A longer
+ * profile path gets a per-user private dir under XDG_RUNTIME_DIR (or the OS temp dir) and a
+ * socket named by a hash of the agent dir, which keeps one broker per profile.
+ */
 export function getBrokerSocketPath(
   platform: NodeJS.Platform = process.platform,
   agentDir: string = getAgentDirPath(),
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (platform === "win32") {
     return `\\\\.\\pipe\\pi-intercom-${sanitizePipeSegment(agentDir)}`;
   }
 
-  return join(getIntercomDirPath(agentDir), "broker.sock");
+  const profileSocket = join(getIntercomDirPath(agentDir), "broker.sock");
+  if (Buffer.byteLength(profileSocket) <= maxSocketPathBytes(platform)) {
+    return profileSocket;
+  }
+
+  const runtimeDir = env.XDG_RUNTIME_DIR?.trim();
+  const baseDir = runtimeDir && isAbsolute(runtimeDir) ? runtimeDir : tmpdir();
+  const hash = createHash("sha256").update(agentDir).digest("hex").slice(0, 16);
+  return join(baseDir, `lunr-intercom-${process.getuid?.() ?? "user"}`, `${hash}.sock`);
+}
+
+/**
+ * Creates the directory that holds a short socket path and refuses one that another user owns or
+ * that is a symlink, since a shared temp dir lets anyone create the name first.
+ */
+export function ensurePrivateSocketDir(socketPath: string, agentDir: string = getAgentDirPath()): void {
+  const socketDir = dirname(socketPath);
+  if (socketDir === getIntercomDirPath(agentDir)) {
+    return;
+  }
+
+  mkdirSync(socketDir, { recursive: true, mode: INTERCOM_DIR_MODE });
+  const stat = lstatSync(socketDir);
+  if (!stat.isDirectory() || (process.getuid && stat.uid !== process.getuid())) {
+    throw new Error(`Intercom socket directory ${socketDir} is not a directory owned by this user`);
+  }
+  chmodSync(socketDir, INTERCOM_DIR_MODE);
 }
 
 export function getBrokerConnectTarget(
@@ -103,7 +142,12 @@ export function getBrokerConnectTarget(
     return { transport: "tcp", host: endpoint.host, port: endpoint.port, stateId: endpoint.stateId };
   }
 
-  return getBrokerSocketPath(platform, getAgentDirPath(env));
+  const agentDir = getAgentDirPath(env);
+  const socketPath = getBrokerSocketPath(platform, agentDir, env);
+  if (platform !== "win32") {
+    ensurePrivateSocketDir(socketPath, agentDir);
+  }
+  return socketPath;
 }
 
 export function getBrokerListenTarget(
@@ -114,7 +158,7 @@ export function getBrokerListenTarget(
     return { transport: "tcp", host: INTERCOM_TCP_HOST, port: 0 };
   }
 
-  return getBrokerSocketPath(platform, getAgentDirPath(env));
+  return getBrokerSocketPath(platform, getAgentDirPath(env), env);
 }
 
 export function ensureIntercomRuntimeDir(

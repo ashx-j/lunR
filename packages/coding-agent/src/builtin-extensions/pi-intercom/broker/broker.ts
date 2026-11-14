@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { writeMessage, createMessageReader } from "./framing.ts";
 import {
   ensureIntercomRuntimeDir,
+  ensurePrivateSocketDir,
   getBrokerListenTarget,
   getBrokerPortFilePath,
   getIntercomDirPath,
@@ -129,6 +130,10 @@ function isSessionRegistration(value: unknown): value is SessionRegistration {
   return session.status === undefined || typeof session.status === "string";
 }
 
+function describeTarget(target: BrokerConnectTarget): string {
+  return typeof target === "string" ? target : `${target.host}:${target.port}`;
+}
+
 class IntercomBroker {
   private sessions = new Map<string, ConnectedSession>();
   private askEdges = new Map<string, AskEdge>();
@@ -141,6 +146,7 @@ class IntercomBroker {
   constructor() {
     ensureIntercomRuntimeDir(INTERCOM_DIR);
     if (typeof LISTEN_TARGET === "string" && process.platform !== "win32") {
+      ensurePrivateSocketDir(LISTEN_TARGET);
       try {
         unlinkSync(LISTEN_TARGET);
       } catch {
@@ -173,6 +179,11 @@ class IntercomBroker {
       console.log(`Intercom broker started (pid: ${process.pid})`);
     };
 
+    // Without this handler a failed listen is an unhandled 'error' event and a stack trace.
+    this.server.on("error", (error) => {
+      console.error(`Intercom broker failed to listen on ${describeTarget(LISTEN_TARGET)}: ${error.message}`);
+      process.exit(1);
+    });
     if (typeof LISTEN_TARGET === "string") {
       this.server.listen(LISTEN_TARGET, onListening);
     } else {
@@ -633,4 +644,9 @@ class IntercomBroker {
   }
 }
 
-new IntercomBroker().start();
+try {
+  new IntercomBroker().start();
+} catch (error) {
+  console.error(`Intercom broker failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}

@@ -7,13 +7,13 @@ import ts from "typescript";
 import { afterEach, expect, it } from "vitest";
 
 const sourceDir = fileURLToPath(new URL("../src/builtin-extensions/pi-intercom/", import.meta.url));
-const fixtures: string[] = [];
+const fixtures: Array<{ root: string; agentDir: string }> = [];
 
-function fixture() {
+function fixture(agentName = "agent profile") {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-intercom-"));
-	fixtures.push(root);
 	const extensionDir = path.join(root, "compiled extension");
-	const agentDir = path.join(root, "agent profile");
+	const agentDir = path.join(root, agentName);
+	fixtures.push({ root, agentDir });
 	fs.mkdirSync(path.join(extensionDir, "broker"), { recursive: true });
 	fs.mkdirSync(path.join(agentDir, "intercom"), { recursive: true });
 	fs.writeFileSync(path.join(extensionDir, "package.json"), JSON.stringify({ type: "module" }));
@@ -34,7 +34,7 @@ function fixture() {
 		}).outputText;
 		fs.writeFileSync(path.join(extensionDir, file.replace(/\.ts$/, ".js")), compiled);
 	}
-	const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: agentDir };
+	const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: agentDir, XDG_RUNTIME_DIR: root };
 	for (const key of Object.keys(env)) {
 		if (/^PI_SUBAGENT|^PI_INTERCOM/.test(key)) delete env[key];
 	}
@@ -64,8 +64,8 @@ function fixture() {
 }
 
 afterEach(async () => {
-	for (const root of fixtures.splice(0)) {
-		const pidFile = path.join(root, "agent profile", "intercom", "broker.pid");
+	for (const { root, agentDir } of fixtures.splice(0)) {
+		const pidFile = path.join(agentDir, "intercom", "broker.pid");
 		if (fs.existsSync(pidFile)) {
 			try {
 				const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
@@ -131,6 +131,36 @@ it("launches the compiled broker with spaced paths, reuses it, and exchanges a q
 	expect(result.status, result.stderr).toBe(0);
 	expect(result.stdout).toContain("broker-health-and-messaging-ok");
 }, 20_000);
+
+it.skipIf(process.platform === "win32")(
+	"keeps the broker socket short and private when the profile path is too long for one",
+	() => {
+		const f = fixture(`agent profile ${"x".repeat(120)}`);
+		const result = f.run(`
+		await spawnBrokerIfNeeded('npx', ['--no-install', 'tsx']);
+		const pidFile = agentDir + '/intercom/broker.pid';
+		const pid = fs.readFileSync(pidFile, 'utf8');
+		await spawnBrokerIfNeeded('npx', ['--no-install', 'tsx']);
+		assert.equal(fs.readFileSync(pidFile, 'utf8'), pid);
+		const socketDir = process.env.XDG_RUNTIME_DIR + '/lunr-intercom-' + process.getuid();
+		const [socket] = fs.readdirSync(socketDir);
+		assert.equal(fs.statSync(socketDir).mode & 0o777, 0o700);
+		assert.ok(fs.statSync(socketDir + '/' + socket).isSocket());
+		const client = new IntercomClient();
+		try {
+			await client.connect({ cwd: agentDir, model: 'fixture', pid: process.pid, startedAt: Date.now(), lastActivity: Date.now(), name: 'only' }, 'only');
+			assert.deepEqual((await client.listSessions()).map(s => s.id), ['only']);
+			console.log('long-profile-broker-ok');
+		} finally {
+			await client.disconnect();
+		}
+	`);
+		expect(result.error).toBeUndefined();
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("long-profile-broker-ok");
+	},
+	20_000,
+);
 
 it.each([0, 23])(
 	"reports early broker exit %i with a fresh diagnostic log",
