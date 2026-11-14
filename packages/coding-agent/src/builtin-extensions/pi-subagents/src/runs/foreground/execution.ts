@@ -58,7 +58,7 @@ import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-a
 import { READ_ONLY_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, outputTargetError, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
@@ -1311,7 +1311,7 @@ export async function runSync(
 			error,
 		};
 	}
-	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`);
+	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`) ?? outputTargetError(options.outputPath, runtimeCwd);
 	if (outputModeValidationError) {
 		return {
 			childId: spec.childId,

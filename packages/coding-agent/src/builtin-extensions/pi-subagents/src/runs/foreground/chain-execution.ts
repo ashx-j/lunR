@@ -68,7 +68,7 @@ import {
 } from "../../shared/types.ts";
 import { captureModelSelection, resolveExecutableChildModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
-import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
+import { injectSingleOutputInstruction, outputTargetError, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
 import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings, withChainHandoff } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
@@ -728,7 +728,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					const outputPath = typeof behavior.output === "string"
 						? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 						: undefined;
-					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]!.agent})`);
+					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]!.agent})`) ?? outputTargetError(outputPath, ctx.cwd);
 					if (validationError) return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex + taskIndex }));
 				}
 				progressCreated = ensureParallelProgressFile(chainDir, progressCreated, parallelBehaviors);
@@ -946,7 +946,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				const outputPath = typeof behavior.output === "string"
 					? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 					: undefined;
-				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]!.agent})`);
+				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]!.agent})`) ?? outputTargetError(outputPath, ctx.cwd);
 				if (validationError) {
 					dynamicGroupStatuses[stepIndex] = { status: "failed", error: validationError };
 					return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex + taskIndex }));
@@ -1163,7 +1163,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 				: undefined;
 			stepTask = withChainHandoff(injectSingleOutputInstruction(stepTask, outputPath, agentConfig), stepIndex < totalSteps - 1);
-			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`);
+			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`) ?? outputTargetError(outputPath, ctx.cwd);
 			if (validationError) {
 				return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex }));
 			}

@@ -19,5 +19,6 @@ Read before changing permission modes, the auto reviewer, protected files, globa
 ## Global instructions and memory
 
 - Global behavior is optional `~/.lunr/agent/agents/AGENTS.md`: never auto-create it, add an in-app editor, or let model file tools modify it. A leftover `~/.lunr/agent/AGENTS.md` migrates there when the new path is empty. Per-model files are `~/.lunr/agent/agents/<model>/AGENTS.md` behind `/settings` Model instructions. Context breakdown labels it `Global AGENTS.md`. `behavior.md` is inert.
+- Protected targets also cover `gateway.json`, `pairing/`, `mcp-oauth/` and `claude-code/` in the agent dir. `models.json`, `mcp.json` and `web-search.json` stay writable on purpose, since users ask lunR to edit them. A subagent's `output` path is checked with `outputTargetError` (`pi-subagents/src/runs/shared/single-output.ts`) at every launch site and again before the runtime writes the child's reply, because that write bypasses the file tools.
 - Memory (`~/.lunr/simple-memory/memory.md`) is durable facts only; the toggle removes injection/tools but keeps the file.
 - `core/protected-targets.ts` blocks direct file-tool writes to global instructions, memory, settings.json, `pr-watches/` and `install-features.json`.

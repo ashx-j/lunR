@@ -13,6 +13,9 @@ export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
 export const PR_WATCH_STATE_WRITE_BLOCK_REASON =
 	"PR watch state is client-managed. Use pr_watch start/wait; only the user can cancel or restart through /pr-watch.";
 
+export const SECRET_STORE_WRITE_BLOCK_REASON =
+	"This file holds gateway, MCP login or Claude Code data that lunR manages itself. The agent cannot change it.";
+
 /** Windows and macOS (APFS, HFS+) are case-insensitive by default, so `SETTINGS.JSON` is settings.json there. */
 function normalize(path: string): string {
 	const normalized = resolve(path);
@@ -41,6 +44,11 @@ export function protectedTargetWriteReason(path: string, cwd: string): string | 
 				reason:
 					"Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.",
 			},
+			// Bot tokens, approved gateway users, MCP OAuth tokens and the pinned binary the Claude bridge runs.
+			{ path: join(agentDir, "gateway.json"), reason: SECRET_STORE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "pairing"), tree: true, reason: SECRET_STORE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "mcp-oauth"), tree: true, reason: SECRET_STORE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "claude-code"), tree: true, reason: SECRET_STORE_WRITE_BLOCK_REASON },
 		];
 		for (const policy of policies) {
 			const roots = [normalize(policy.path), normalize(canonicalizeTargetPath(policy.path))];

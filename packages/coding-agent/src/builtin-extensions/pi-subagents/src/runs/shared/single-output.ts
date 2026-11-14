@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
+import { protectedTargetWriteReason } from "../../../../../core/protected-targets.ts";
 import { hasMutationToolCapability } from "./completion-guard.ts";
 
 export interface SingleOutputSnapshot {
@@ -144,6 +145,17 @@ export function validateFileOnlyOutputMode(outputMode: OutputMode | undefined, o
 	return undefined;
 }
 
+/**
+ * Why a child's output can't go to `outputPath`, or undefined. The runtime writes the child's reply
+ * there itself, outside the file tools, so the file tools' protected targets are checked here: at
+ * launch and again before the write.
+ */
+export function outputTargetError(outputPath: string | undefined, cwd: string): string | undefined {
+	if (!outputPath) return undefined;
+	const reason = protectedTargetWriteReason(outputPath, cwd);
+	return reason ? `Subagent output can't go to ${outputPath}: ${reason}` : undefined;
+}
+
 export function captureSingleOutputSnapshot(outputPath: string | undefined): SingleOutputSnapshot | undefined {
 	if (!outputPath) return undefined;
 	try {
@@ -160,6 +172,8 @@ function persistSingleOutput(
 	fullOutput: string,
 ): { savedPath?: string; error?: string } {
 	if (!outputPath) return {};
+	const blocked = outputTargetError(outputPath, process.cwd());
+	if (blocked) return { error: blocked };
 	try {
 		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 		fs.writeFileSync(outputPath, fullOutput, "utf-8");
