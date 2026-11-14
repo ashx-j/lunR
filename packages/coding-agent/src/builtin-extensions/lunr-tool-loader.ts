@@ -19,15 +19,11 @@ import { supportsDeferredToolLoading } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 
-/**
- * The only list of deferred tools. A group loads as a whole; a tool not named here stays loaded.
- * `blurb` follows a tool in the catalog, and a group's `blurb` follows its whole tool list.
- */
-export const DEFERRED_TOOL_GROUPS: ReadonlyArray<{
-	name: string;
-	blurb?: string;
-	tools: ReadonlyArray<{ name: string; blurb?: string }>;
-}> = [
+/** A group of deferred tools. `blurb` follows a tool in the catalog, and a group's `blurb` follows its whole tool list. */
+type Group = { name: string; blurb?: string; tools: ReadonlyArray<{ name: string; blurb?: string }> };
+
+/** The only list of deferred tools. A group loads as a whole; a tool not named here stays loaded. */
+export const DEFERRED_TOOL_GROUPS: readonly Group[] = [
 	{
 		name: "subagents",
 		tools: [
@@ -65,8 +61,6 @@ export const DEFERRED_TOOL_GROUPS: ReadonlyArray<{
 
 const LOADER_INTRO =
 	"Load tools that exist but are not loaded yet. The tools listed below have no schema in this conversation until you load them, so calling one directly fails. Call load_tools with the tool or group names you need, then call the tools in your next step. Loading is permanent for the session; load only what the task needs.";
-
-type Group = { name: string; blurb?: string; tools: Array<{ name: string; blurb?: string }> };
 
 /** The table narrowed to the tools this session deferred, without groups that lost every tool. */
 function acceptedGroups(accepted: ReadonlySet<string>): Group[] {
@@ -134,6 +128,9 @@ export default function toolLoader(pi: ExtensionAPI): void {
 		pi.registerTool({
 			name: "load_tools",
 			label: "Load tools",
+			// The wrapper records every tool activated while a tool runs. Running alone keeps a parallel call's
+			// result from claiming this load.
+			executionMode: "sequential",
 			description: loaderDescription(groups),
 			parameters: Type.Object({
 				names: Type.Array(Type.String(), {

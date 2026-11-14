@@ -143,6 +143,17 @@ describe("lunr-tool-loader", () => {
 		session.dispose();
 	});
 
+	it("records a load only on the load_tools result when another tool runs in the same step", async () => {
+		const session = await startSession();
+		await run(session, [[fauxToolCall("always_tool", {}), loadCall("cron")]]);
+
+		expect(toolResults(session).map((result) => [result.toolName, result.addedToolNames])).toEqual([
+			["always_tool", undefined],
+			["load_tools", ["cron"]],
+		]);
+		session.dispose();
+	});
+
 	it("answers an unknown name with the valid names", async () => {
 		const session = await startSession();
 		await run(session, [[loadCall("nope")]]);
