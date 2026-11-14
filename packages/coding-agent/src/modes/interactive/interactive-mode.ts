@@ -4267,6 +4267,8 @@ export class InteractiveMode {
 			const selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
+					compactionCeilingEffectiveTokens: this.session.getCompactionCeiling()?.effective,
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -4346,6 +4348,9 @@ export class InteractiveMode {
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onCompactionCeilingChange: (ceilingTokens) => {
+						this.settingsManager.setCompactionCeilingTokens(ceilingTokens);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
@@ -5886,7 +5891,10 @@ export class InteractiveMode {
 			return;
 		}
 
-		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
+		const lines = renderContextBox(
+			{ breakdown, model: `${model.provider}/${model.id}`, compactionCeiling: this.session.getCompactionCeiling() },
+			this.ui.terminal.columns,
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();

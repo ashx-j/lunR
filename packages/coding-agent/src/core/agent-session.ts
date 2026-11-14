@@ -72,9 +72,11 @@ import {
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
+	type CompactionSettings,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
+	compactionThreshold,
 	estimateContextTokens,
 	estimateTokens,
 	generateBranchSummary,
@@ -494,6 +496,7 @@ export class AgentSession {
 	private _systemPromptAppend?: string;
 	// lunr: core-owned tool-call gates (read-only mode) checked before extension tool_call handlers
 	private _toolCallGates: ToolCallGate[] = [];
+	private _compactionPrefixCache: { systemPrompt: string; tools: readonly AgentTool[]; tokens: number } | undefined;
 	// lunr: "no questions" for /goal, subagents and ACP Autonomous, separate from the permission mode.
 	private _autonomous = false;
 	// lunr: ACP clients approve tools themselves, so their sessions skip auto review.
@@ -764,14 +767,17 @@ export class AgentSession {
 			};
 			const model = this.model;
 			const settings = this.settingsManager.getCompactionSettings();
+			// Codex has a hard window, and a ceiling exists for long runs, so both check between tool turns.
 			if (
-				model?.provider === "openai-codex" &&
+				model &&
+				(model.provider === "openai-codex" || settings.ceilingTokens !== undefined) &&
 				settings.enabled &&
 				shouldCompact(
 					estimateRequestContextTokens({ ...previousContext, messages: convertToLlm(previousContext.messages) })
 						.tokens,
 					model.contextWindow,
 					settings,
+					this._compactionPrefixTokens(settings),
 				)
 			) {
 				const previousCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
@@ -2892,10 +2898,41 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
+		if (shouldCompact(contextTokens, contextWindow, settings, this._compactionPrefixTokens(settings))) {
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
+	}
+
+	/**
+	 * System prompt and tool schema tokens, which a compacted context still carries. Only the ceiling
+	 * needs them. Cached on the prompt string and tools array, since counting a 65k-character prefix
+	 * takes 1 to 3 ms and the ceiling checks it every tool turn.
+	 */
+	private _compactionPrefixTokens(settings: CompactionSettings): number {
+		if (!settings.ceilingTokens) return 0;
+		const systemPrompt = this.systemPrompt;
+		const tools = this.agent.state.tools;
+		const cached = this._compactionPrefixCache;
+		if (cached?.systemPrompt === systemPrompt && cached.tools === tools) return cached.tokens;
+		const tokens = estimateRequestContextTokens({ systemPrompt, tools, messages: [] }).tokens;
+		this._compactionPrefixCache = { systemPrompt, tools, tokens };
+		return tokens;
+	}
+
+	/**
+	 * The configured compaction ceiling and the token count this session compacts at (the raised
+	 * ceiling, capped by the window threshold), when a ceiling is set.
+	 */
+	getCompactionCeiling(): { configured: number; effective: number } | undefined {
+		const settings = this.settingsManager.getCompactionSettings();
+		if (settings.ceilingTokens === undefined) return undefined;
+		const effective = compactionThreshold(
+			this.model?.contextWindow ?? 0,
+			settings,
+			this._compactionPrefixTokens(settings),
+		);
+		return { configured: settings.ceilingTokens, effective };
 	}
 
 	/**

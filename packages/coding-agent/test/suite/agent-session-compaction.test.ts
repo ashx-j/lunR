@@ -256,6 +256,78 @@ describe("AgentSession compaction characterization", () => {
 		});
 	});
 
+	// One run of tool turns whose reported usage is `usage[i]` per request. Returns, per request, whether it
+	// already carried the compaction summary.
+	async function runToolTurns(harness: Harness, usage: number[]): Promise<boolean[]> {
+		const sawSummary: boolean[] = [];
+		harness.session.agent.streamFn = (_model, context) => {
+			const index = sawSummary.length;
+			sawSummary.push(JSON.stringify(context.messages).includes("ceiling summary"));
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const last = index === usage.length - 1;
+				const message = createAssistant(harness, {
+					stopReason: last ? "stop" : "toolUse",
+					totalTokens: usage[index],
+				});
+				message.content = last ? [{ type: "text", text: "done" }] : [fauxToolCall("dump", {})];
+				stream.push({ type: "done", reason: message.stopReason, message });
+			});
+			return stream;
+		};
+		await harness.session.prompt("start");
+		return sawSummary;
+	}
+
+	async function createCeilingHarness(toolDescription: string): Promise<Harness> {
+		const dumpTool: AgentTool = {
+			name: "dump",
+			label: "Dump",
+			description: toolDescription,
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "x".repeat(800) }], details: {} }),
+		};
+		const harness = await createHarness({
+			models: [{ id: "big-window", contextWindow: 1_000_000, maxTokens: 100 }],
+			tools: [dumpTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "ceiling summary",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		harness.settingsManager.applyOverrides({
+			compaction: { reserveTokens: 100, keepRecentTokens: 1, ceilingTokens: 5000 },
+		});
+		return harness;
+	}
+
+	it("compacts at the ceiling between tool turns on any provider, inside one prompt", async () => {
+		const harness = await createCeilingHarness("Return a large result");
+		const sawSummary = await runToolTurns(harness, [3000, 6000, 1000, 100]);
+		// The request after the turn that crossed 5000 tokens already carries the summary.
+		expect(sawSummary).toEqual([false, false, true, true]);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+	});
+
+	it("counts the system prompt and tool schemas when it raises a low ceiling", async () => {
+		// About 10k tokens of tool schema raise the 5000-token ceiling to about 20k.
+		const harness = await createCeilingHarness("y ".repeat(20_000));
+		const sawSummary = await runToolTurns(harness, [15_000, 15_000, 15_000]);
+		expect(sawSummary).toEqual([false, false, false]);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(harness.session.getCompactionCeiling()?.configured).toBe(5000);
+		expect(harness.session.getCompactionCeiling()?.effective).toBeGreaterThan(20_000);
+	});
+
 	it("cancels in-progress manual compaction when abortCompaction is called", async () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },

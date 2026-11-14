@@ -7,6 +7,8 @@ export interface ContextViewData {
 	breakdown: ContextBreakdown;
 	/** provider/model id shown in the box, when known. */
 	model?: string;
+	/** Set when `compaction.ceilingTokens` makes compaction start before the window fills. */
+	compactionCeiling?: { configured: number; effective: number };
 }
 
 interface BreakdownRow {
@@ -65,6 +67,16 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	content.push(
 		`  ${"Estimated total".padEnd(labelWidth)}  ${usageBar(usedPercent)}  ${formatTokens(breakdown.total)} / ${formatTokens(breakdown.contextWindow)} (${Math.round(usedPercent)}%)`,
 	);
+	const ceiling = data.compactionCeiling;
+	if (ceiling) {
+		const why =
+			ceiling.effective > ceiling.configured
+				? `ceiling ${formatTokens(ceiling.configured)}, raised`
+				: ceiling.effective < ceiling.configured
+					? "window limit, below the ceiling"
+					: "ceiling";
+		content.push(theme.fg("dim", `  Compacts at ${formatTokens(ceiling.effective)} (${why})`));
+	}
 
 	return renderThemedBox(" Context ", content, maxWidth);
 }

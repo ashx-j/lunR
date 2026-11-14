@@ -21,6 +21,7 @@ export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	ceilingTokens?: number; // default: unset (off)
 }
 
 export interface BranchSummarySettings {
@@ -260,6 +261,10 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	return result;
 }
 
+function isValidCompactionCeiling(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
 	const timeoutMs = parseHttpIdleTimeoutMs(value);
 	if (timeoutMs !== undefined) {
@@ -433,6 +438,26 @@ export class SettingsManager {
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
 		this.settings = this.mergeSettings();
+		this.reportInvalidCompactionCeiling();
+	}
+
+	/** Records a settings error, which startup prints as a warning, for a ceiling lunR has to ignore. */
+	private reportInvalidCompactionCeiling(): void {
+		for (const [scope, settings] of [
+			["global", this.globalSettings],
+			["project", this.projectSettings],
+		] as const) {
+			const compaction: unknown = settings.compaction;
+			if (!compaction || typeof compaction !== "object" || !("ceilingTokens" in compaction)) continue;
+			const value = compaction.ceilingTokens;
+			if (value === undefined || isValidCompactionCeiling(value)) continue;
+			this.recordError(
+				scope,
+				new Error(
+					`compaction.ceilingTokens must be a positive whole number of tokens, got ${JSON.stringify(value)}. The compaction ceiling is off.`,
+				),
+			);
+		}
 	}
 
 	private mergeSettings(): Settings {
@@ -929,11 +954,33 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	/** The ceiling when it is a positive whole number; anything else is off (and warned about at load). */
+	getCompactionCeilingTokens(): number | undefined {
+		const ceiling: unknown = this.settings.compaction?.ceilingTokens;
+		return isValidCompactionCeiling(ceiling) ? ceiling : undefined;
+	}
+
+	/** `undefined` turns the ceiling off. */
+	setCompactionCeilingTokens(ceilingTokens: number | undefined): void {
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.ceilingTokens = ceilingTokens;
+		this.markModified("compaction", "ceilingTokens");
+		this.save();
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+		ceilingTokens?: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			ceilingTokens: this.getCompactionCeilingTokens(),
 		};
 	}
 

@@ -113,6 +113,8 @@ export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	/** Compact once context passes this many tokens, even when the window is larger. Unset means off. */
+	ceilingTokens?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
@@ -202,12 +204,43 @@ export function compactionSettingsForWindow(
 }
 
 /**
- * Check if compaction should trigger based on context usage. The reserve is scaled to the window
- * (see `compactionSettingsForWindow`).
+ * The ceiling compaction actually uses, or undefined when none is set. `prefixTokens` is the system
+ * prompt plus tool schemas. A freshly compacted context still holds the prefix, the kept messages and
+ * a summary of up to the reserve, so the ceiling is raised to at least twice that size: every
+ * compaction then frees at least as much room as it keeps, and a low ceiling cannot compact on every
+ * prompt.
  */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
+export function effectiveCompactionCeiling(
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+): number | undefined {
+	if (!settings.ceilingTokens || settings.ceilingTokens <= 0) return undefined;
+	const scaled = compactionSettingsForWindow(settings, contextWindow);
+	return Math.max(settings.ceilingTokens, 2 * (prefixTokens + scaled.keepRecentTokens + scaled.reserveTokens));
+}
+
+/**
+ * Token count above which compaction triggers: the window minus the scaled reserve, or the
+ * effective ceiling when that is lower.
+ */
+export function compactionThreshold(contextWindow: number, settings: CompactionSettings, prefixTokens = 0): number {
+	const windowThreshold = contextWindow - compactionSettingsForWindow(settings, contextWindow).reserveTokens;
+	const ceiling = effectiveCompactionCeiling(contextWindow, settings, prefixTokens);
+	return ceiling === undefined ? windowThreshold : Math.min(windowThreshold, ceiling);
+}
+
+/**
+ * Check if compaction should trigger based on context usage (see `compactionThreshold`).
+ */
+export function shouldCompact(
+	contextTokens: number,
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - compactionSettingsForWindow(settings, contextWindow).reserveTokens;
+	return contextTokens > compactionThreshold(contextWindow, settings, prefixTokens);
 }
 
 // ============================================================================
