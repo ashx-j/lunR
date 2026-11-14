@@ -13,6 +13,7 @@ import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { readPipedStdin, readsStdinBeforeTurn } from "./cli/piped-stdin.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { showStartupSelector } from "./cli/startup-ui.ts";
@@ -75,71 +76,6 @@ import { markStartupMilestone } from "./startup/startup-milestones.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
-
-const PIPED_STDIN_SILENCE_MS = 10_000;
-
-/**
- * Read piped stdin for print mode. Returns undefined if stdin is a TTY.
- *
- * Reads until the writer closes stdin, so a slow producer is not cut off.
- * A non-TTY that never emits or closes (a spawner that leaves the pipe open, a
- * leftover redirected handle) must not block forever, so reading also stops
- * after `silenceMs` with no new bytes, with a note on stderr. Either way the
- * stream is paused afterwards so an open pipe does not keep the process alive
- * once the turn is done.
- */
-export async function readPipedStdin(
-	stream: NodeJS.ReadStream = process.stdin,
-	options: { silenceMs?: number } = {},
-): Promise<string | undefined> {
-	if (stream.isTTY) {
-		return undefined;
-	}
-
-	const silenceMs = options.silenceMs ?? PIPED_STDIN_SILENCE_MS;
-
-	return new Promise((resolve) => {
-		let data = "";
-		let settled = false;
-		let silenceTimer: ReturnType<typeof setTimeout> | undefined;
-
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(silenceTimer);
-			stream.off("data", onData);
-			stream.off("end", finish);
-			stream.off("error", finish);
-			stream.pause();
-			resolve(data.trim() || undefined);
-		};
-
-		const armSilenceTimer = () => {
-			clearTimeout(silenceTimer);
-			silenceTimer = setTimeout(() => {
-				const rest = data ? "with what arrived" : "without it";
-				console.error(
-					chalk.yellow(
-						`Warning: stdin sent nothing for ${silenceMs / 1000} s, continuing ${rest}. Close stdin or pass "< /dev/null" to skip this wait.`,
-					),
-				);
-				finish();
-			}, silenceMs);
-		};
-
-		const onData = (chunk: string | Buffer) => {
-			data += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-			armSilenceTimer();
-		};
-
-		stream.setEncoding("utf8");
-		stream.on("data", onData);
-		stream.on("end", finish);
-		stream.on("error", finish);
-		armSilenceTimer();
-		stream.resume();
-	});
-}
 
 function collectSettingsDiagnostics(
 	settingsManager: SettingsManager,
@@ -573,6 +509,8 @@ async function promptForMissingSessionCwd(
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 	startupView?: InteractiveView;
+	/** Piped stdin read that cli-runtime started before importing main.ts. */
+	pipedStdin?: Promise<string | undefined>;
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -658,6 +596,13 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	// Start reading piped stdin now, unless cli-runtime already did, so its first-byte wait
+	// overlaps runtime startup. RPC owns stdin, and the startup benchmark must not read it.
+	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+	const readsStdin = appMode !== "rpc" && !startupBenchmark;
+	const earlyStdin =
+		options?.pipedStdin ??
+		(readsStdin && appMode !== "interactive" && !readsStdinBeforeTurn(parsed) ? readPipedStdin() : undefined);
 	const interactiveModeImport =
 		appMode === "interactive" ? import("./modes/interactive/interactive-mode.ts") : undefined;
 	const startupView = appMode === "interactive" ? options?.startupView : undefined;
@@ -1043,9 +988,8 @@ export async function main(args: string[], options?: MainOptions) {
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC.
 	// Startup benchmark must stay interactive even if a leftover redirected handle has bytes.
 	let stdinContent: string | undefined;
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
-	if (appMode !== "rpc" && !startupBenchmark) {
-		stdinContent = await readPipedStdin();
+	if (readsStdin) {
+		stdinContent = await (earlyStdin ?? readPipedStdin());
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
 		}

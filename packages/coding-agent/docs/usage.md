@@ -212,7 +212,7 @@ In print mode, lunR also reads piped stdin and puts it before the initial prompt
 cat README.md | lunr -p "Summarize this text"
 ```
 
-lunR reads stdin until the writer closes it. If stdin sends nothing for 10 seconds, before the first byte or between bytes, lunR prints a warning and continues with what has arrived. A program that runs `lunr -p` should close stdin or connect it to `/dev/null` to skip that wait.
+lunR waits up to 3 seconds for the first byte of stdin. The wait starts early in startup, so it overlaps the time lunR takes to load. If nothing arrives, it prints a warning and continues without stdin. Once bytes arrive, lunR reads until the writer closes stdin, or until stdin sends nothing for 10 seconds. A program that runs `lunr -p` should close stdin or connect it to `/dev/null` to skip the wait.
 
 ### Model Options
 
