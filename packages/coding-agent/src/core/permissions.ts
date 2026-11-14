@@ -18,6 +18,9 @@
  * concurrent gateway chats do not share permission decisions.
  */
 
+import { tmpdir } from "node:os";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { canonicalizeTargetPath } from "../utils/paths.ts";
 import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
@@ -287,6 +290,56 @@ function collectRequestedChildLaunches(value: unknown, launches: RequestedChildL
 	}
 }
 
+/** Every `output` a launch names: top level, `tasks`, chain steps and parallel groups. */
+function collectRequestedOutputs(value: unknown, outputs: unknown[]): void {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return;
+	const input = value as Record<string, unknown>;
+	if ("output" in input) outputs.push(input.output);
+	for (const key of ["tasks", "chain", "parallel"] as const) {
+		const children = input[key];
+		if (Array.isArray(children)) {
+			for (const child of children) collectRequestedOutputs(child, outputs);
+		} else if (key === "parallel") {
+			collectRequestedOutputs(children, outputs);
+		}
+	}
+}
+
+/**
+ * True for a place a read-only child's output may go: no file, a name relative to the run's own
+ * output directory (without `..` or `~`), or an absolute path in pi-subagents' temp tree
+ * (`<tmpdir>/pi-subagents-*`) or a subagent artifact tree (`.pi-subagents/`, `subagent-artifacts/`).
+ * Not the whole temp directory: a project can live there. `relativeAllowed` is false for `chainDir`,
+ * which resolves a relative path against the project.
+ */
+function isRunLocalOutput(value: unknown, relativeAllowed: boolean): boolean {
+	if (
+		value === undefined ||
+		value === true ||
+		value === false ||
+		value === "true" ||
+		value === "false" ||
+		value === ""
+	)
+		return true;
+	if (typeof value !== "string" || value.startsWith("~")) return false;
+	if (!isAbsolute(value)) return relativeAllowed && !value.split(/[\\/]/).includes("..");
+	const target = canonicalizeTargetPath(resolve(value));
+	const fromTemp = relative(canonicalizeTargetPath(tmpdir()), target);
+	if (!isAbsolute(fromTemp) && fromTemp.split(sep)[0]?.startsWith("pi-subagents-")) return true;
+	const segments = target.split(sep);
+	return segments.includes(".pi-subagents") || segments.includes("subagent-artifacts");
+}
+
+/** The first `output` or `chainDir` that would put a read-only child's output in the project. */
+function outsideRunOutput(input: Record<string, unknown>): string | undefined {
+	const outputs: unknown[] = [];
+	collectRequestedOutputs(input, outputs);
+	const blocked = outputs.find((output) => !isRunLocalOutput(output, true));
+	if (blocked !== undefined) return String(blocked);
+	return isRunLocalOutput(input.chainDir, false) ? undefined : String(input.chainDir);
+}
+
 function getRequestedChildLaunches(input: Record<string, unknown>): RequestedChildLaunch[] {
 	const launches: RequestedChildLaunch[] = [];
 	collectRequestedChildLaunches(input, launches);
@@ -482,6 +535,14 @@ export function readOnlyModeBlock(
 			return {
 				block: true,
 				reason: "Read-only mode cannot launch full-access children or change running children.",
+			};
+		}
+		// The runtime writes a child's reply to `output` itself, so a read-only child could otherwise replace a project file.
+		const blockedOutput = outsideRunOutput(input);
+		if (blockedOutput !== undefined) {
+			return {
+				block: true,
+				reason: `Read-only mode cannot write a subagent's output to ${blockedOutput}. Leave output unset or name a file relative to the run's artifacts.`,
 			};
 		}
 		return undefined;

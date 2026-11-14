@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildProxyDescription } from "../src/builtin-extensions/pi-mcp-adapter/direct-tools.ts";
@@ -195,6 +196,38 @@ describe("large subagent launch", () => {
 		expect((await gateToolCall("subagent", { task: "write" }, "/cwd"))?.block).toBe(true);
 		expect((await gateToolCall("subagent", { action: "resume", id: "old-run" }, "/cwd"))?.block).toBe(true);
 		expect(await gateToolCall("subagent", { action: "status", id: "old-run" }, "/cwd")).toBeUndefined();
+	});
+
+	it("keeps a read-only child's output out of the project in read-only mode", async () => {
+		setPermissionMode("read-only");
+		const child = (output: unknown) => ({ task: "review", permissions: "read-only", output });
+		for (const output of [
+			undefined,
+			true,
+			"false",
+			"review.md",
+			"notes/review.md",
+			join(tmpdir(), "pi-subagents-1000", "artifacts", "review.md"),
+			"/p/.pi-subagents/artifacts/outputs/x.md",
+		]) {
+			expect(await gateToolCall("subagent", child(output), "/p"), String(output)).toBeUndefined();
+		}
+		for (const input of [
+			child("/p/src.ts"),
+			child(join(tmpdir(), "project", "src.ts")),
+			child("../src.ts"),
+			child("notes/../../src.ts"),
+			child("~/src.ts"),
+			child("/p/.pi-subagents/../src.ts"),
+			{ tasks: [child("review.md"), child("/p/src.ts")] },
+			{ chain: [child("review.md"), { parallel: [child("/p/src.ts")] }] },
+			{ chain: [child("review.md")], chainDir: "/p/src" },
+			{ chain: [child("review.md")], chainDir: "runs" },
+		]) {
+			const result = await gateToolCall("subagent", input, "/p");
+			expect(result?.block, JSON.stringify(input)).toBe(true);
+			expect(result?.reason).toContain("Read-only mode cannot write a subagent's output");
+		}
 	});
 });
 
