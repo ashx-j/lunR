@@ -123,6 +123,57 @@ describe("isMutatingBashCommand", () => {
 		expect(isMutatingBashCommand("ls &> /tmp/list.txt")).toBe(true);
 	});
 
+	it.each([
+		"rg foo src 2>/dev/null",
+		"rg foo src > /dev/null",
+		"ls -la 2>&1",
+		"ls 1>&2",
+		"ls >&2",
+		"ls >/dev/null 2>&1",
+		"ls &>/dev/null",
+		"ls 2>/dev/null | head",
+		"cd src && ls",
+		"cd /abs/path; rg foo",
+		"cd 'dir with space' && ls 2>/dev/null",
+	])("allows %s, which only discards output, duplicates a descriptor or changes directory", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+
+	it.each([
+		"ls >/dev/null/../x",
+		"ls >/dev/nullx",
+		'ls >"/dev/null"',
+		"ls >'/dev/null'",
+		"ls >\\/dev/null",
+		"ls >|/dev/null",
+		"ls >>/dev/null",
+		"ls >>x",
+		"ls &>x",
+		"ls <>x",
+		"ls <>/dev/null",
+		"ls >&-",
+		"ls >&x",
+		"ls >&/dev/null",
+		"ls 2>&1x",
+		"ls >/dev/null>x",
+		"ls 2>/dev/null; touch x",
+		"cd src && touch x",
+		"cd src; rm x",
+		"cd",
+		"cd -",
+		"cd -P src",
+		"cd a b",
+		"cd sr* && ls",
+		"FOO=1 cd src && ls",
+		"cd src && git status",
+		"cd src && gh pr view 1",
+		"cd src && npm ls",
+		"cd /tmp/x; /usr/bin/git log",
+		"ls; cd src; FOO=1 git status",
+	])("still blocks %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
 	it("blocks command substitution and process substitution", () => {
 		expect(isMutatingBashCommand("echo $(rm -rf .)")).toBe(true);
 		expect(isMutatingBashCommand("echo `rm -rf .`")).toBe(true);
