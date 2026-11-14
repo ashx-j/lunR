@@ -95,33 +95,51 @@ describe("choosing the review model", () => {
 		["openrouter/some-model", model("openrouter", "some-model")],
 	]);
 	const getModel = (provider: string, id: string) => known.get(`${provider}/${id}`);
+	const offering =
+		(...ids: string[]) =>
+		(provider: string) =>
+			ids.map((id) => model(provider, id));
 
-	it("uses the provider's documented reviewer, else the session model for supported providers", () => {
-		expect(resolveAutoReviewer({ sessionModel: model("anthropic", "claude-opus-5"), getModel })).toMatchObject({
-			kind: "ready",
-			ref: "anthropic/claude-sonnet-5",
-			source: "provider",
-		});
-		expect(resolveAutoReviewer({ sessionModel: model("openai-codex", "gpt-6"), getModel })).toMatchObject({
-			kind: "ready",
-			ref: "openai-codex/gpt-6",
-			source: "session",
-		});
+	it("uses the newest documented reviewer the credential offers, else the session model", () => {
+		// A Claude subscription offers only what Claude Code's picker listed at setup.
+		const subscription = offering("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5");
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("anthropic", "claude-opus-5-5"),
+				getModel,
+				getOffered: subscription,
+			}),
+		).toMatchObject({ kind: "ready", ref: "anthropic/claude-sonnet-5-5", source: "provider" });
+		const apiKey = offering("claude-sonnet-4-5-20250929", "claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5");
+		expect(
+			resolveAutoReviewer({ sessionModel: model("anthropic", "claude-opus-5"), getModel, getOffered: apiKey }),
+		).toMatchObject({ ref: "anthropic/claude-sonnet-5-5", source: "provider" });
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("anthropic", "claude-opus-5-5"),
+				getModel,
+				getOffered: offering("claude-opus-5-5"),
+			}),
+		).toMatchObject({ kind: "ready", ref: "anthropic/claude-opus-5-5", source: "session" });
+		expect(
+			resolveAutoReviewer({ sessionModel: model("openai-codex", "gpt-6"), getModel, getOffered: offering("gpt-6") }),
+		).toMatchObject({ kind: "ready", ref: "openai-codex/gpt-6", source: "session" });
 	});
 
 	it("needs a chosen model for unsupported providers, and the choice or a parent's reviewer wins", () => {
 		const session = model("openrouter", "some-model");
-		expect(resolveAutoReviewer({ sessionModel: session, getModel })).toEqual({
+		const getOffered = offering("some-model");
+		expect(resolveAutoReviewer({ sessionModel: session, getModel, getOffered })).toEqual({
 			kind: "missing",
 			provider: "openrouter",
 		});
 		expect(
-			resolveAutoReviewer({ sessionModel: session, configuredRef: "openrouter/some-model", getModel }),
+			resolveAutoReviewer({ sessionModel: session, configuredRef: "openrouter/some-model", getModel, getOffered }),
 		).toMatchObject({
 			kind: "ready",
 			source: "setting",
 		});
-		expect(resolveAutoReviewer({ sessionModel: session, configuredRef: "x/gone", getModel })).toEqual({
+		expect(resolveAutoReviewer({ sessionModel: session, configuredRef: "x/gone", getModel, getOffered })).toEqual({
 			kind: "unavailable",
 			ref: "x/gone",
 		});
@@ -131,6 +149,7 @@ describe("choosing the review model", () => {
 				parentRef: "anthropic/claude-sonnet-5",
 				configuredRef: "x/gone",
 				getModel,
+				getOffered,
 			}),
 		).toMatchObject({ kind: "ready", source: "parent" });
 	});
