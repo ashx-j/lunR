@@ -26,7 +26,7 @@
 
 import { computerPolicy } from "./computer-use/policy.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
-import { type CompiledPermissionRules, suggestAllowRule } from "./permission-rules.ts";
+import { type CompiledPermissionRules, PATH_TOOLS, suggestAllowRule } from "./permission-rules.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
 import { protectedTargetWriteReason } from "./protected-targets.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
@@ -76,6 +76,8 @@ export interface ApprovalRequest {
 	kind?: "large-subagent-launch" | "plan" | "auto-review" | "tool";
 	/** Heading for a "tool" question. */
 	title?: string;
+	/** False when a "tool" question has no "for this session" answer. */
+	allowSession?: boolean;
 	/** Allow rule an "always" answer saves; absent when no rule can cover the call. */
 	rule?: string;
 }
@@ -125,6 +127,11 @@ export const NO_HANDLER_REASON = "Approval channel unavailable.";
 export const PLAN_APPROVAL_TIMEOUT_REASON = "Plan approval timed out.";
 export const LARGE_SUBAGENT_LAUNCH_REJECT_REASON = "Large subagent launch rejected by user.";
 export const ASK_REJECT_REASON = "The user rejected this call.";
+/** An approval channel rejects with this when nobody answered a tool question in time. */
+export const APPROVAL_TIMEOUT_REASON = "Approval request timed out";
+
+/** Tools that only update lunR's own state: auto mode doesn't review them and ask mode doesn't ask. */
+export const REVIEW_FREE_TOOLS: ReadonlySet<string> = new Set(["todo", "goal_complete", "goal_blocked"]);
 export const NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON = "Large subagent launch blocked: no approval channel available.";
 const LARGE_SUBAGENT_LAUNCH_ACTION = "large-subagent-launch";
 
@@ -437,27 +444,32 @@ function sanitizeDetail(value: unknown): string {
 	return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
-/** What a session approval covers: the exact command, the exact file, or the whole tool otherwise. */
-function askApprovalKey(toolName: string, input: Record<string, unknown>, cwd: string): string {
+/**
+ * What a session approval covers: the exact command or the exact file. Other tools get no session
+ * answer, because one subagent, browser, MCP or cron call says nothing about the next one.
+ */
+function askApprovalKey(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
 	if (toolName === "bash" && typeof input.command === "string") return `ask:bash:${input.command.trim()}`;
-	if (typeof input.path === "string" && input.path) return `ask:${toolName}:${resolveToCwd(input.path, cwd)}`;
-	if (toolName === "mcp" && typeof input.tool === "string")
-		return `ask:mcp:${String(input.server ?? "")}/${input.tool}`;
-	return `ask:${toolName}`;
+	if (PATH_TOOLS.has(toolName) && typeof input.path === "string" && input.path) {
+		return `ask:${toolName}:${resolveToCwd(input.path, cwd)}`;
+	}
+	return undefined;
 }
 
 function askQuestion(toolName: string, input: Record<string, unknown>): { title: string; detail: string } {
 	if (toolName === "subagent") {
 		const children = getRequestedChildLaunches(input).filter((child) => child.permissions === "full");
-		const warning = "It runs commands and edits files without asking you.";
 		if (children.length === 0) {
 			return {
-				title: `Allow subagent ${String(input.action)}? ${warning}`,
+				title: `Allow subagent ${String(input.action)}? The child runs commands and edits files without asking you.`,
 				detail: sanitizeDetail(JSON.stringify(input)),
 			};
 		}
 		return {
-			title: `Launch ${children.length === 1 ? "a full-access subagent" : `${children.length} full-access subagents`}? ${warning}`,
+			title:
+				children.length === 1
+					? "Launch a full-access subagent? It runs commands and edits files without asking you."
+					: `Launch ${children.length} full-access subagents? They run commands and edit files without asking you.`,
 			detail: sanitizeDetail(children.map((child) => child.description).join("\n")),
 		};
 	}
@@ -470,10 +482,16 @@ function askQuestion(toolName: string, input: Record<string, unknown>): { title:
 	return { title: `Allow ${toolName}?`, detail: String(detail ?? "").slice(0, 2000) };
 }
 
+/** Why an ask-mode call did not run when nobody could answer, and how the model and the user can proceed. */
+function askUnansweredReason(toolName: string, why: string, rule: string | undefined): string {
+	return `Ask mode needs the user's approval for this ${toolName} call, and ${why}, so it did not run. Tell the user what you need to run. They can allow it with ${rule ? `the rule "${rule}"` : `a "${toolName}" rule`} in permissions.allow in settings.json, or switch to yolo or auto mode.`;
+}
+
 /**
  * Ask mode: a call read-only mode would block runs only after the user allows it, an allow rule
  * covers it or an earlier "this session" answer covers it. Without an approval channel (print
- * mode, cron, a subagent) it is blocked with a reason that says how to proceed.
+ * mode, cron, a subagent, an RPC or SDK session without a handler) it is blocked with a reason
+ * that says how to proceed. lunR's bookkeeping tools never ask.
  */
 async function gateAskMode(
 	toolName: string,
@@ -482,15 +500,13 @@ async function gateAskMode(
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
-	if (!readOnlyModeBlock(toolName, input) || options?.rules?.allowed(toolName, input)) return undefined;
+	if (REVIEW_FREE_TOOLS.has(toolName) || !readOnlyModeBlock(toolName, input)) return undefined;
+	if (options?.rules?.allowed(toolName, input)) return undefined;
 	const key = askApprovalKey(toolName, input, cwd);
-	if (ctx.approvals.has(key)) return undefined;
+	if (key && ctx.approvals.has(key)) return undefined;
 	const rule = suggestAllowRule(toolName, input, cwd);
 	if (!approvalHandler || ctx.allowApprovals === false) {
-		return {
-			block: true,
-			reason: `Ask mode needs the user's approval for this ${toolName} call, and nobody can answer here (print mode, cron or a subagent), so it did not run. Tell the user what you need to run. They can allow it with ${rule ? `the rule "${rule}"` : `a "${toolName}" rule`} in permissions.allow in settings.json, or run in yolo or auto mode.`,
-		};
+		return { block: true, reason: askUnansweredReason(toolName, "nobody can answer in this session", rule) };
 	}
 	const question = askQuestion(toolName, input);
 	let resp: ApprovalResponse;
@@ -501,10 +517,18 @@ async function gateAskMode(
 			kind: "tool",
 			title: question.title,
 			detail: question.detail,
+			allowSession: key !== undefined,
 			...(rule && options?.saveAllowRule ? { rule } : {}),
 		});
 	} catch (err) {
-		return { block: true, reason: err instanceof Error ? err.message : NO_HANDLER_REASON };
+		const message = err instanceof Error ? err.message : NO_HANDLER_REASON;
+		if (message === NO_HANDLER_REASON) {
+			return { block: true, reason: askUnansweredReason(toolName, "nobody can answer in this chat", rule) };
+		}
+		if (message === APPROVAL_TIMEOUT_REASON) {
+			return { block: true, reason: askUnansweredReason(toolName, "nobody answered the question in time", rule) };
+		}
+		return { block: true, reason: message };
 	}
 	const decision = typeof resp === "string" ? resp : resp.decision;
 	if (decision === "reject") {
@@ -517,7 +541,7 @@ async function gateAskMode(
 		};
 	}
 	if (decision === "always" && rule) options?.saveAllowRule?.(rule);
-	if (decision === "session" || decision === "always") ctx.approvals.add(key);
+	if (key && (decision === "session" || decision === "always")) ctx.approvals.add(key);
 	return undefined;
 }
 
@@ -559,6 +583,8 @@ export async function gateToolCall(
 	if (ctx.mode === "ask") {
 		const askBlock = await gateAskMode(toolName, input, cwd, ctx, options);
 		if (askBlock) return askBlock;
+		// The ask question already named every full-access child, so a large launch asks only once.
+		if (toolName === "subagent" && readOnlyModeBlock(toolName, input)) return undefined;
 	}
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);

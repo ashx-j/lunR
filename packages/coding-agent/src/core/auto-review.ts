@@ -8,7 +8,7 @@
 import { isAbsolute, relative, sep } from "node:path";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
-import { readOnlyModeBlock } from "./permissions.ts";
+import { REVIEW_FREE_TOOLS, readOnlyModeBlock } from "./permissions.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
 /**
@@ -36,8 +36,7 @@ export type AutoReviewer =
 	| { kind: "missing"; provider: string }
 	| { kind: "unavailable"; ref: string };
 
-/** Tools that only update lunR's own state, so reviewing them would cost a request for nothing. */
-export const REVIEW_FREE_TOOLS: ReadonlySet<string> = new Set(["todo", "goal_complete", "goal_blocked"]);
+export { REVIEW_FREE_TOOLS };
 const PROJECT_EDIT_TOOLS = new Set(["edit", "write", "code_rewrite"]);
 /** Read-only for the project, but a URL can carry data out, so auto reviews them. */
 const URL_FETCH_TOOLS = new Set(["web_fetch", "fetch_content"]);

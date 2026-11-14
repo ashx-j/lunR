@@ -8,6 +8,7 @@ import {
 } from "../src/core/large-subagent-launch.ts";
 import { compilePermissionRules } from "../src/core/permission-rules.ts";
 import {
+	APPROVAL_TIMEOUT_REASON,
 	type ApprovalRequest,
 	type ApprovalResponse,
 	clearSessionApprovals,
@@ -18,6 +19,7 @@ import {
 	getPermissionMode,
 	isReadOnlyModeActive,
 	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
+	NO_HANDLER_REASON,
 	NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON,
 	nextPermissionMode,
 	PERMISSION_MODES,
@@ -279,7 +281,7 @@ describe("ask mode", () => {
 
 	it("blocks with a way forward when nobody can answer", async () => {
 		const result = await gateToolCall("bash", { command: "npm test" }, "/cwd");
-		expect(result?.reason).toContain("nobody can answer here");
+		expect(result?.reason).toContain("nobody can answer in this session");
 		expect(result?.reason).toContain('"bash(npm test)"');
 		createPermissionContext("cron", "ask", false);
 		answer("once");
@@ -311,8 +313,77 @@ describe("ask mode", () => {
 	});
 });
 
+describe("ask mode details", () => {
+	beforeEach(() => setPermissionMode("ask"));
+	const record = (response: ApprovalResponse | (() => never)) => {
+		const asked: ApprovalRequest[] = [];
+		registerApprovalHandler(async (req) => {
+			asked.push(req);
+			return typeof response === "function" ? response() : response;
+		});
+		return asked;
+	};
+
+	it("never asks before todo and goal updates, even with nobody to answer", async () => {
+		for (const tool of ["todo", "goal_complete", "goal_blocked"]) {
+			expect(await gateToolCall(tool, { action: "add" }, "/cwd")).toBeUndefined();
+		}
+	});
+
+	it("offers a session answer only for shell commands and file tools", async () => {
+		const asked = record("session");
+		await gateToolCall("bash", { command: "make" }, "/cwd");
+		await gateToolCall("browser", { action: "act", interaction: "click" }, "/cwd");
+		await gateToolCall("browser", { action: "act", interaction: "click" }, "/cwd");
+		await gateToolCall("subagent", { action: "steer", id: "a" }, "/cwd");
+		await gateToolCall("subagent", { task: "delete everything in ~", description: "Cleaner" }, "/cwd");
+		expect(asked.map((req) => [req.toolName, req.allowSession])).toEqual([
+			["bash", true],
+			["browser", false],
+			["browser", false],
+			["subagent", false],
+			["subagent", false],
+		]);
+	});
+
+	it("tells the model how to proceed when a gateway chat can't answer or nobody answers in time", async () => {
+		record(() => {
+			throw new Error(NO_HANDLER_REASON);
+		});
+		expect((await gateToolCall("bash", { command: "make" }, "/cwd"))?.reason).toContain(
+			"nobody can answer in this chat",
+		);
+		record(() => {
+			throw new Error(APPROVAL_TIMEOUT_REASON);
+		});
+		expect((await gateToolCall("bash", { command: "make" }, "/cwd"))?.reason).toContain(
+			'nobody answered the question in time, so it did not run. Tell the user what you need to run. They can allow it with the rule "bash(make)"',
+		);
+	});
+
+	it("asks once for a large full-access launch and names the children in the plural", async () => {
+		const asked = record("once");
+		const tasks = ["a", "b", "c"].map((name) => ({ task: `do ${name}`, description: name }));
+		expect(
+			await gateToolCall("subagent", { tasks }, "/cwd", undefined, { confirmLargeSubagentLaunches: true }),
+		).toBeUndefined();
+		expect(asked.map((req) => req.title)).toEqual([
+			"Launch 3 full-access subagents? They run commands and edit files without asking you.",
+		]);
+	});
+});
+
 describe("allow and deny rules in other modes", () => {
-	it("blocks a denied call in yolo, and deny wins over allow", async () => {
+	it("blocks a denied call in yolo", async () => {
+		const options = { rules: compilePermissionRules({ deny: ["bash(git push*)"] }, undefined, true, "/cwd") };
+		expect(await gateToolCall("bash", { command: "git push" }, "/cwd", undefined, options)).toMatchObject({
+			block: true,
+		});
+	});
+
+	it("lets a deny rule win over an allow rule in ask mode", async () => {
+		setPermissionMode("ask");
+		registerApprovalHandler(async () => "once");
 		const options = {
 			rules: compilePermissionRules(
 				{ allow: ["bash(git push*)"], deny: ["bash(git push*)"] },

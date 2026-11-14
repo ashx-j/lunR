@@ -8,6 +8,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import {
+	APPROVAL_TIMEOUT_REASON,
 	type ApprovalRequest,
 	type ApprovalResponse,
 	NO_HANDLER_REASON,
@@ -153,7 +154,9 @@ async function createApprovalPrompt(
 				: [
 						[
 							{ label: "✓ Approve once", data: makeCallbackData(id, "once") },
-							{ label: "✓ Approve session", data: makeCallbackData(id, "session") },
+							...(req.allowSession === false
+								? []
+								: [{ label: "✓ Approve session", data: makeCallbackData(id, "session") }]),
 						],
 						[{ label: "✗ Reject", data: makeCallbackData(id, "reject") }],
 					];
@@ -164,7 +167,7 @@ async function createApprovalPrompt(
 		const timeout = setTimeout(() => {
 			pending.delete(id);
 			// An unanswered plan is not a decline: present_plan tells the model to wait for the user.
-			reject(new Error(req.kind === "plan" ? PLAN_APPROVAL_TIMEOUT_REASON : "Approval request timed out"));
+			reject(new Error(req.kind === "plan" ? PLAN_APPROVAL_TIMEOUT_REASON : APPROVAL_TIMEOUT_REASON));
 			if (messageId) {
 				const expired =
 					req.kind === "plan"

@@ -1,24 +1,29 @@
 /**
  * lunR: allow and deny rules from `permissions.allow` / `permissions.deny` in settings.
  *
- * A rule is `tool` (every call of that tool) or `tool(pattern)`:
- * - `bash(pattern)` matches the command as a glob over the whole text, where `*` matches anything
- *   (`bash(npm test)` is exactly `npm test`, `bash(git push*)` is any git push).
- * - For tools with a `path` argument (edit, write, read, ...) the pattern is a path glob resolved
- *   against the working directory: `*` stays inside one folder, `**` crosses folders, `~/` is home.
- * - Other tools ignore patterns; a rule with a pattern never matches them.
+ * A rule is `tool` (every call of that tool) or `tool(pattern)`. Tool names match in any case, and
+ * Claude Code's `:*` suffix reads as `*`.
+ * - `bash(pattern)` is a glob over the command, where `*` matches anything, flags included
+ *   (`bash(npm test)` is exactly `npm test`, `bash(git diff*)` also matches `git diff --output=f`).
+ * - For the path tools (`PATH_TOOLS`) the pattern is a path glob resolved against the working
+ *   directory: `*` stays inside one folder, `**` crosses folders, `~/` is home.
+ * - Other tools take no pattern; such a rule never matches, and settings load warns about it.
  *
- * Deny rules match a bash command when any `;`, `&&`, `|`, `(` or backtick segment matches, so
- * chaining cannot hide a denied command. Allow rules never match a command with shell control or
- * expansion characters, so `bash(npm test*)` cannot approve `npm test; rm -rf ~`. Both are
- * heuristics over the text, like read-only mode's bash check, not a sandbox.
+ * Allow rules match strictly: never a command with shell control or expansion characters, and only
+ * a path whose real location matches, so `bash(npm test*)` can't approve `npm test; rm -rf ~`.
+ * Deny rules over-match, because a deny that blocks too much fails closed: they check every command
+ * the text could run after normalizing it (see `deniedCommandLines`) and let options sit between the
+ * pattern's words (`bash(git push*)` matches `git -C repo push`). Both read the command text; a
+ * command built at run time (`T=touch; $T f`) or a hard link to a denied file gets past them. They
+ * stop a cooperating model from running something by accident, they are not a sandbox.
  *
- * Rules compile once per settings change (`compilePermissionRules` memoizes on the rule arrays).
+ * Rules compile once per settings change and working directory (`compilePermissionRules`).
  */
 
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
+import { shellWords, splitShellSegments } from "./plan-mode.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
 export interface PermissionRuleSettings {
@@ -26,11 +31,22 @@ export interface PermissionRuleSettings {
 	deny?: string[];
 }
 
-type Matcher = (input: Record<string, unknown>) => boolean;
+/** Tools whose rule pattern is a path glob over their `path` argument. */
+export const PATH_TOOLS: ReadonlySet<string> = new Set(["read", "edit", "write", "ls", "grep", "find", "code_rewrite"]);
+
+/** One call as rules see it. Each part is computed at most once per call, and only when a rule asks. */
+interface CallView {
+	command(): string | undefined;
+	/** Normalized commands the text can run, for deny rules. */
+	deniedCommandLines(): string[];
+	/** The resolved path and its real location, for path rules. */
+	paths(): { target: string; real: string | undefined } | undefined;
+}
+
+type Matcher = (call: CallView) => boolean;
 
 interface CompiledRule {
 	source: string;
-	tool: string;
 	matches?: Matcher;
 }
 
@@ -44,20 +60,177 @@ export interface CompiledPermissionRules {
 const RULE_SYNTAX = /^([A-Za-z0-9_.:-]+)(?:\((.*)\))?$/s;
 /** Shell characters that chain, redirect or expand; an allow rule never matches a command with one. */
 const SHELL_CONTROL = /[;&|<>$`()\n\r\\]/;
-/** Splits a command into the pieces a deny rule checks. */
-const SHELL_SEGMENT_SPLIT = /\$\(|[;&|\n\r()`]/;
-const ENV_ASSIGNMENT_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Words that start a command without being it. */
+const COMMAND_PREFIX_WORDS = new Set(["!", "{", "(", "if", "then", "do", "else", "elif", "while", "until"]);
+/** Commands that run the command after them, with the options of each that take a value. */
+const WRAPPERS = new Map<string, ReadonlySet<string>>([
+	["command", new Set()],
+	["builtin", new Set()],
+	["exec", new Set(["-a"])],
+	["env", new Set(["-u", "-C", "-S", "--unset", "--chdir"])],
+	["nohup", new Set()],
+	["time", new Set()],
+	["timeout", new Set(["-s", "-k", "--signal", "--kill-after"])],
+	["nice", new Set(["-n", "--adjustment"])],
+	["stdbuf", new Set(["-i", "-o", "-e"])],
+	["xargs", new Set(["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a"])],
+	["sudo", new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"])],
+]);
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+const MAX_NESTING = 4;
 
 function escapeRegex(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function commandRegex(pattern: string): RegExp {
-	return new RegExp(`^${pattern.trim().split("*").map(escapeRegex).join(".*")}$`, "s");
+function globRegex(pattern: string): RegExp {
+	return new RegExp(`^${pattern.split("*").map(escapeRegex).join(".*")}$`, "s");
+}
+
+function basenameOf(word: string): string {
+	return word.split(/[\\/]/).pop() ?? word;
+}
+
+/** Bodies of `$(...)`, `<(...)`, `>(...)` and backticks, which bash runs as commands of their own. */
+function substitutionBodies(command: string): string[] {
+	const bodies: string[] = [];
+	for (let i = 0; i < command.length; i++) {
+		const opens = (command[i] === "$" || command[i] === "<" || command[i] === ">") && command[i + 1] === "(";
+		if (opens) {
+			let depth = 1;
+			let j = i + 2;
+			for (; j < command.length && depth > 0; j++) {
+				if (command[j] === "(") depth++;
+				else if (command[j] === ")") depth--;
+			}
+			bodies.push(command.slice(i + 2, j - 1));
+			i = j - 1;
+		} else if (command[i] === "`") {
+			const end = command.indexOf("`", i + 1);
+			bodies.push(command.slice(i + 1, end === -1 ? undefined : end));
+			if (end === -1) break;
+			i = end;
+		}
+	}
+	return bodies;
+}
+
+/** Index of the first word after a wrapper's own options (and timeout's duration). */
+function skipWrapper(name: string, words: string[], start: number): number {
+	const valued = WRAPPERS.get(name) ?? new Set<string>();
+	let i = start;
+	while (i < words.length && (words[i].startsWith("-") || (name === "env" && ASSIGNMENT.test(words[i])))) {
+		if (words[i] === "--") return i + 1;
+		i += valued.has(words[i]) ? 2 : 1;
+	}
+	if (name === "timeout" && i < words.length) i++;
+	return i;
+}
+
+/** The commands one segment's words can run, each normalized to `name arg...`. */
+function commandLinesFromWords(input: string[], depth: number): string[] {
+	const words = input.map((word) => word.replace(/^[({]+/, "").replace(/[)}]+$/, "")).filter(Boolean);
+	let i = 0;
+	let viaXargs = false;
+	while (i < words.length) {
+		const name = basenameOf(words[i]);
+		if (COMMAND_PREFIX_WORDS.has(words[i]) || ASSIGNMENT.test(words[i])) i++;
+		else if (WRAPPERS.has(name)) {
+			viaXargs ||= name === "xargs";
+			i = skipWrapper(name, words, i + 1);
+		} else break;
+	}
+	if (i >= words.length) return [];
+	const name = basenameOf(words[i]);
+	const args = words.slice(i + 1);
+	const line = [name, ...args].join(" ");
+	// xargs adds arguments from its input, so the command may get more than the text shows.
+	const lines = viaXargs ? [line, `${line} _`] : [line];
+	if (depth >= MAX_NESTING) return lines;
+	if (SHELLS.has(name)) {
+		const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg));
+		if (flag !== -1 && args[flag + 1] !== undefined) lines.push(...commandLines(args[flag + 1], depth + 1));
+	} else if (name === "eval") {
+		lines.push(...commandLines(args.join(" "), depth + 1));
+	} else if (name === "find") {
+		args.forEach((arg, index) => {
+			if (!FIND_EXEC.has(arg)) return;
+			const end = args.findIndex((word, after) => after > index && (word === ";" || word === "+"));
+			lines.push(...commandLinesFromWords(args.slice(index + 1, end === -1 ? undefined : end), depth + 1));
+		});
+	}
+	return lines;
+}
+
+/**
+ * Every command the text can run, normalized for deny rules: split into segments the way read-only
+ * mode splits them, unquoted, with substitutions, `sh -c`, `eval` and `find -exec` bodies opened,
+ * leading assignments and wrappers (`command`, `env`, `timeout 5`, `xargs`, ...) dropped and the
+ * command word reduced to its base name.
+ */
+function commandLines(command: string, depth = 0): string[] {
+	const lines =
+		depth < MAX_NESTING ? substitutionBodies(command).flatMap((body) => commandLines(body, depth + 1)) : [];
+	for (const segment of splitShellSegments(command)) {
+		lines.push(...commandLinesFromWords(shellWords(segment) ?? segment.split(/\s+/), depth));
+	}
+	return lines;
+}
+
+/**
+ * Deny matching over words: the first pattern word is the command name, later ones may have option
+ * words (and one value after each) before them, and a last word ending in `*` takes the rest.
+ */
+function wordsMatch(
+	pattern: readonly RegExp[],
+	last: RegExp | undefined,
+	words: readonly string[],
+	p = 0,
+	w = 0,
+): boolean {
+	if (p === pattern.length) {
+		if (!last) return w === words.length;
+		if (last.test(words.slice(w).join(" "))) return true;
+	} else if (w < words.length && pattern[p].test(words[w]) && wordsMatch(pattern, last, words, p + 1, w + 1)) {
+		return true;
+	}
+	if (p === 0 || w >= words.length || !words[w].startsWith("-")) return false;
+	if (wordsMatch(pattern, last, words, p, w + 1)) return true;
+	return !words[w].includes("=") && w + 1 < words.length && wordsMatch(pattern, last, words, p, w + 2);
+}
+
+function bashMatcher(pattern: string, kind: "allow" | "deny"): Matcher {
+	const whole = globRegex(pattern);
+	if (kind === "allow") {
+		return (call) => {
+			const command = call.command();
+			return command !== undefined && !SHELL_CONTROL.test(command) && whole.test(command);
+		};
+	}
+	const words = pattern.split(/\s+/);
+	const tail = words.at(-1)?.endsWith("*") ? words.pop() : undefined;
+	const regexes = words.map(globRegex);
+	const last = tail === undefined ? undefined : globRegex(tail);
+	return (call) => {
+		const command = call.command();
+		if (command === undefined) return false;
+		if (whole.test(command)) return true;
+		// A one-word starred pattern (`git*`) matches the whole line.
+		return call
+			.deniedCommandLines()
+			.some((line) => (regexes.length === 0 ? whole.test(line) : wordsMatch(regexes, last, line.split(" "))));
+	};
 }
 
 function toSlashes(path: string): string {
 	return path.replace(/\\/g, "/");
+}
+
+/** Windows and macOS file systems ignore case by default, as `protected-targets.ts` assumes. */
+function caseFlags(): string {
+	return process.platform === "win32" || process.platform === "darwin" ? "si" : "s";
 }
 
 function pathGlobRegex(absoluteGlob: string): RegExp {
@@ -73,7 +246,15 @@ function pathGlobRegex(absoluteGlob: string): RegExp {
 		else if (ch === "?") body += "[^/]";
 		else body += escapeRegex(ch);
 	}
-	return new RegExp(`^${body}$`, "s");
+	return new RegExp(`^${body}$`, caseFlags());
+}
+
+function safeCanonical(path: string): string | undefined {
+	try {
+		return canonicalizeTargetPath(path);
+	} catch {
+		return undefined;
+	}
 }
 
 /** The glob with its literal folder prefix replaced by that folder's real path, so symlinks compare equal. */
@@ -85,84 +266,109 @@ function canonicalGlob(absoluteGlob: string): string {
 	return prefix ? `${prefix.replace(/[/\\]$/, "")}${absoluteGlob.slice(cut)}` : absoluteGlob;
 }
 
-function safeCanonical(path: string): string | undefined {
-	try {
-		return canonicalizeTargetPath(path);
-	} catch {
-		return undefined;
-	}
-}
-
 function pathMatcher(pattern: string, cwd: string, kind: "allow" | "deny"): Matcher {
 	const expanded = pattern === "~" || pattern.startsWith("~/") ? `${homedir()}${pattern.slice(1)}` : pattern;
 	const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
 	const raw = pathGlobRegex(absolute);
 	const canonical = pathGlobRegex(canonicalGlob(absolute));
-	return (input) => {
-		if (typeof input.path !== "string" || !input.path) return false;
-		const target = resolveToCwd(input.path, cwd);
-		const real = safeCanonical(target);
+	return (call) => {
+		const paths = call.paths();
+		if (!paths) return false;
+		const real = paths.real === undefined ? undefined : toSlashes(paths.real);
 		// Allow needs the real path to match, so a symlink inside an allowed folder can't reach outside it.
-		if (kind === "allow") return real !== undefined && canonical.test(toSlashes(real));
-		return raw.test(toSlashes(target)) || (real !== undefined && canonical.test(toSlashes(real)));
+		if (kind === "allow") return real !== undefined && canonical.test(real);
+		return raw.test(toSlashes(paths.target)) || (real !== undefined && canonical.test(real));
 	};
 }
 
-function bashMatcher(pattern: string, kind: "allow" | "deny"): Matcher {
-	const regex = commandRegex(pattern);
-	return (input) => {
-		if (typeof input.command !== "string") return false;
-		const command = input.command.trim();
-		if (kind === "allow") return !SHELL_CONTROL.test(command) && regex.test(command);
-		if (regex.test(command)) return true;
-		return command
-			.split(SHELL_SEGMENT_SPLIT)
-			.some((segment) => regex.test(segment.trim().replace(ENV_ASSIGNMENT_PREFIX, "")));
-	};
-}
-
-/** Parses one rule, or returns undefined for text that isn't `tool` or `tool(pattern)`. */
+/** Reads `tool` or `tool(pattern)`, or undefined for anything else, including empty parentheses. */
 export function parsePermissionRule(source: string): { tool: string; pattern?: string } | undefined {
 	const match = RULE_SYNTAX.exec(source.trim());
 	if (!match) return undefined;
-	const pattern = match[2]?.trim();
-	return { tool: match[1], ...(pattern ? { pattern } : {}) };
+	const tool = match[1].toLowerCase();
+	if (match[2] === undefined) return { tool };
+	const pattern = match[2].trim().replace(/:\*$/, "*");
+	return pattern ? { tool, pattern } : undefined;
 }
 
-function compileRule(source: string, cwd: string, kind: "allow" | "deny"): CompiledRule | undefined {
+/** Settings-load warnings for rules that would never match, one per rule. */
+export function permissionRuleProblems(list: unknown, name: string): string[] {
+	if (list === undefined) return [];
+	if (!Array.isArray(list)) return [`${name} must be a list of rules such as "bash(npm test)"; it is ignored.`];
+	return list.flatMap((source): string[] => {
+		if (typeof source !== "string")
+			return [`${name} has ${JSON.stringify(source)}, which is not a rule; it is ignored.`];
+		const parsed = parsePermissionRule(source);
+		if (!parsed) {
+			return [`${name} has "${source}", which is not tool or tool(pattern); it is ignored.`];
+		}
+		if (parsed.pattern && parsed.tool !== "bash" && !PATH_TOOLS.has(parsed.tool)) {
+			return [
+				`${name} has "${source}", but ${parsed.tool} rules take no pattern, so it never matches. Write "${parsed.tool}".`,
+			];
+		}
+		return [];
+	});
+}
+
+function compileRule(source: string, cwd: string, kind: "allow" | "deny"): [string, CompiledRule] | undefined {
 	const parsed = parsePermissionRule(source);
 	if (!parsed) return undefined;
-	if (!parsed.pattern) return { source, tool: parsed.tool };
-	const matches = parsed.tool === "bash" ? bashMatcher(parsed.pattern, kind) : pathMatcher(parsed.pattern, cwd, kind);
-	return { source, tool: parsed.tool, matches };
+	if (!parsed.pattern) return [parsed.tool, { source }];
+	if (parsed.tool === "bash") return [parsed.tool, { source, matches: bashMatcher(parsed.pattern, kind) }];
+	if (PATH_TOOLS.has(parsed.tool)) return [parsed.tool, { source, matches: pathMatcher(parsed.pattern, cwd, kind) }];
+	return [parsed.tool, { source, matches: () => false }];
 }
 
-function compileList(rules: readonly string[], cwd: string, kind: "allow" | "deny"): Map<string, CompiledRule[]> {
+function compileList(rules: readonly unknown[], cwd: string, kind: "allow" | "deny"): Map<string, CompiledRule[]> {
 	const byTool = new Map<string, CompiledRule[]>();
 	for (const source of rules) {
 		if (typeof source !== "string") continue;
-		const rule = compileRule(source, cwd, kind);
-		if (!rule) continue;
-		byTool.set(rule.tool, [...(byTool.get(rule.tool) ?? []), rule]);
+		const compiled = compileRule(source, cwd, kind);
+		if (!compiled) continue;
+		const [tool, rule] = compiled;
+		byTool.set(tool, [...(byTool.get(tool) ?? []), rule]);
 	}
 	return byTool;
+}
+
+function callView(input: Record<string, unknown>, cwd: string): CallView {
+	let lines: string[] | undefined;
+	let paths: { target: string; real: string | undefined } | undefined | null = null;
+	const command = () => (typeof input.command === "string" ? input.command.trim() : undefined);
+	return {
+		command,
+		deniedCommandLines: () => {
+			lines ??= commandLines(command() ?? "");
+			return lines;
+		},
+		paths: () => {
+			if (paths === null) {
+				const target = typeof input.path === "string" && input.path ? resolveToCwd(input.path, cwd) : undefined;
+				paths = target === undefined ? undefined : { target, real: safeCanonical(target) };
+			}
+			return paths;
+		},
+	};
 }
 
 function firstMatch(
 	rules: Map<string, CompiledRule[]>,
 	toolName: string,
-	input: Record<string, unknown>,
+	view: () => CallView,
 ): CompiledRule | undefined {
-	return rules.get(toolName)?.find((rule) => !rule.matches || rule.matches(input));
+	const candidates = rules.get(toolName.toLowerCase());
+	if (!candidates) return undefined;
+	const call = view();
+	return candidates.find((rule) => !rule.matches || rule.matches(call));
 }
 
-const EMPTY: readonly string[] = [];
-let memo:
-	| {
-			key: readonly unknown[];
-			rules: CompiledPermissionRules;
-	  }
-	| undefined;
+function asList(value: unknown): readonly unknown[] {
+	return Array.isArray(value) ? value : [];
+}
+
+/** One compiled set per working directory, so gateway sessions in different folders don't recompile. */
+const memo = new Map<string, { key: readonly unknown[]; rules: CompiledPermissionRules }>();
 
 /**
  * Global rules apply everywhere. Project deny rules always add; project allow rules count only in a
@@ -174,19 +380,30 @@ export function compilePermissionRules(
 	projectTrusted: boolean,
 	cwd: string,
 ): CompiledPermissionRules {
-	const key = [global?.allow, global?.deny, project?.allow, project?.deny, projectTrusted, cwd];
-	if (memo && memo.key.length === key.length && memo.key.every((part, i) => part === key[i])) return memo.rules;
+	const key = [global?.allow, global?.deny, project?.allow, project?.deny, projectTrusted, process.platform];
+	const cached = memo.get(cwd);
+	if (cached?.key.every((part, i) => part === key[i])) return cached.rules;
 	const allow = compileList(
-		[...(global?.allow ?? EMPTY), ...(projectTrusted ? (project?.allow ?? EMPTY) : EMPTY)],
+		[...asList(global?.allow), ...(projectTrusted ? asList(project?.allow) : [])],
 		cwd,
 		"allow",
 	);
-	const deny = compileList([...(global?.deny ?? EMPTY), ...(project?.deny ?? EMPTY)], cwd, "deny");
-	const rules: CompiledPermissionRules = {
-		denied: (toolName, input) => firstMatch(deny, toolName, input)?.source,
-		allowed: (toolName, input) => firstMatch(allow, toolName, input) !== undefined,
+	const deny = compileList([...asList(global?.deny), ...asList(project?.deny)], cwd, "deny");
+	// The gate asks deny, then allow, about the same arguments object; both share one view of it.
+	const views = new WeakMap<Record<string, unknown>, CallView>();
+	const view = (input: Record<string, unknown>) => () => {
+		let call = views.get(input);
+		if (!call) {
+			call = callView(input, cwd);
+			views.set(input, call);
+		}
+		return call;
 	};
-	memo = { key, rules };
+	const rules: CompiledPermissionRules = {
+		denied: (toolName, input) => firstMatch(deny, toolName, view(input))?.source,
+		allowed: (toolName, input) => firstMatch(allow, toolName, view(input)) !== undefined,
+	};
+	memo.set(cwd, { key, rules });
 	return rules;
 }
 
@@ -201,7 +418,7 @@ export function suggestAllowRule(toolName: string, input: Record<string, unknown
 		if (!command || SHELL_CONTROL.test(command) || command.includes("*")) return undefined;
 		return `bash(${command})`;
 	}
-	if (typeof input.path === "string" && input.path) {
+	if (PATH_TOOLS.has(toolName) && typeof input.path === "string" && input.path) {
 		const path = resolveToCwd(input.path, cwd);
 		return /[*?()]/.test(path) ? undefined : `${toolName}(${path})`;
 	}

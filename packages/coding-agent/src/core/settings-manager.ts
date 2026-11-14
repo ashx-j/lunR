@@ -10,7 +10,7 @@ import { computerSettingsChanged } from "./computer-use/policy.ts";
 import { globalBridge } from "./global-bridge.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
-import type { PermissionRuleSettings } from "./permission-rules.ts";
+import { type PermissionRuleSettings, permissionRuleProblems } from "./permission-rules.ts";
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "./pr-watch/types.ts";
 import {
 	DEFAULT_SUBAGENT_SPINNER,
@@ -406,6 +406,8 @@ export class SettingsManager {
 	private projectSettings: Settings;
 	private settings: Settings;
 	private projectTrusted: boolean;
+	/** Project `permissions.deny`, read even when the project is untrusted, since deny rules only restrict. */
+	private projectDenyRules: unknown;
 	private readonly runtimeOverrides: Partial<Settings>;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
@@ -465,7 +467,7 @@ export class SettingsManager {
 			initialErrors.push({ scope: "project", error: projectLoad.error });
 		}
 
-		return new SettingsManager(
+		const manager = new SettingsManager(
 			storage,
 			globalLoad.settings,
 			projectLoad.settings,
@@ -475,6 +477,8 @@ export class SettingsManager {
 			projectTrusted,
 			options.runtimeOverrides,
 		);
+		manager.loadPermissionRules();
+		return manager;
 	}
 
 	/** Create an in-memory SettingsManager (no file I/O) */
@@ -640,6 +644,7 @@ export class SettingsManager {
 		}
 
 		this.settings = this.mergeSettings();
+		this.loadPermissionRules();
 	}
 
 	/** Apply additional overrides on top of current settings */
@@ -1336,11 +1341,49 @@ export class SettingsManager {
 		project: PermissionRuleSettings | undefined;
 		projectTrusted: boolean;
 	} {
+		const deny = this.projectDenyRules;
 		return {
 			global: this.globalSettings.permissions,
-			project: this.projectSettings.permissions,
+			project: {
+				allow: this.projectTrusted ? this.projectSettings.permissions?.allow : undefined,
+				deny: Array.isArray(deny) ? deny : undefined,
+			},
 			projectTrusted: this.projectTrusted,
 		};
+	}
+
+	/**
+	 * Reads the project's deny rules straight from its file, trusted or not, and records a settings
+	 * warning (printed at startup) for every rule that can never match.
+	 */
+	private loadPermissionRules(): void {
+		let content: string | undefined;
+		this.storage.withLock("project", (current) => {
+			content = current;
+			return undefined;
+		});
+		let project: unknown;
+		try {
+			project = content ? JSON.parse(content) : undefined;
+		} catch {
+			// A trusted project's parse error is already reported by the normal load.
+		}
+		const projectPermissions =
+			project && typeof project === "object" && "permissions" in project ? project.permissions : undefined;
+		const projectDeny =
+			projectPermissions && typeof projectPermissions === "object" && "deny" in projectPermissions
+				? projectPermissions.deny
+				: undefined;
+		this.projectDenyRules = projectDeny;
+		const global = this.globalSettings.permissions;
+		for (const [scope, name, list] of [
+			["global", "permissions.allow", global?.allow],
+			["global", "permissions.deny", global?.deny],
+			["project", "permissions.allow", this.projectTrusted ? this.projectSettings.permissions?.allow : undefined],
+			["project", "permissions.deny", projectDeny],
+		] as const) {
+			for (const problem of permissionRuleProblems(list, name)) this.recordError(scope, new Error(problem));
+		}
 	}
 
 	/** Adds a global allow rule; an "always allow" answer saves one. */

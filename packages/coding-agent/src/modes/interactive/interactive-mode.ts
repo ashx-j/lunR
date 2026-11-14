@@ -849,7 +849,7 @@ export class InteractiveMode {
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
 			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
-				return this.showLargeSubagentLaunchApprovalDialog(req);
+				return this.showToolApprovalDialog(req);
 			}
 			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
@@ -5908,18 +5908,18 @@ export class InteractiveMode {
 	}
 
 	// Approval dialog for one subagent call launching more than two children, and for ask mode's
-	// question before one call (`title`, plus "Always allow" when the request carries a `rule`).
-	// "Reject with feedback" collects a one-line
+	// question before one call (`title`; no session answer when `allowSession` is false; "Always
+	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showLargeSubagentLaunchApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
-		const always = req.rule ? `Always allow (saves ${req.rule})` : undefined;
+	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
+		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					req.title ?? "Approve large subagent launch?",
 					[
 						"Approve once",
-						"Approve for this session",
+						...(req.allowSession === false ? [] : ["Approve for this session"]),
 						...(always ? [always] : []),
 						"Reject",
 						"Reject with feedback",
