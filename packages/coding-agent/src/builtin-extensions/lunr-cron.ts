@@ -278,6 +278,7 @@ export default function (pi: ExtensionAPI): void {
 		label: "Cron",
 		description: [
 			"Manage profile-wide scheduled jobs. One operator owns execution; busy sessions defer scheduled work.",
+			"Use cron only when the user asks to schedule or manage unattended prompts.",
 			"TUI execution requires the job's saved project to match the current project. Recreate jobs without a saved project from the intended project.",
 			"Actions: create (needs prompt + schedule), list, update (id + fields), pause, resume, remove, run (trigger on the owning TUI operator; otherwise returns an owner error).",
 			"Schedule formats: 'every 30m' / 'every 2h' / 'every 1d' (recurring), '30m'/'2h' or an ISO timestamp (one-shot), or a 5-field cron expression.",
