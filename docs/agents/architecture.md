@@ -3,7 +3,7 @@
 Read before adding features, extensions or bridges, or before syncing from upstream pi.
 
 - **Features = baked-in extensions + bridges.** `builtin-extensions/` (factories registered in `builtin-extensions/index.ts`; hidden; vendored; 60 files still `// @ts-nocheck`: pi-subagents 39, pi-mcp-adapter 9, pi-web-access 7, pi-prompt-template-model 3, pi-intercom 2; biome-excluded).
-  - Light roster: simple-pi-memory, pi-tps, ashxj-tui, ashxj-spinners, ashxj-thinking, lunr-local-providers, lunr-todos, lunr-plan-tools, lunr-skill-creator.
+  - Light roster: simple-pi-memory, pi-tps, ashxj-tui, ashxj-spinners, ashxj-thinking, lunr-local-providers, lunr-todos, lunr-plan-tools, lunr-tool-loader, lunr-skill-creator.
   - Deferred (interactive after paint; print/RPC/gateway before first turn): pi-ollama-cloud, narumiruna-pi-goal, lunr-cron, lunr-pr-watch, pi-intercom, pi-prompt-template-model, pi-subagents, pi-web-access, lunr-browser, pi-lsp-extension, pi-mcp-adapter, lunr-computer-use.
   - Removed: lunr-settings-tools, lunr-behavior, context-mode, MattDevy + narumiruna collections. Extension absorption was rolled back; **never merge `archive/extension-absorption-DO-NOT-MERGE`.**
 - **Bridges:** `globalThis[Symbol.for("@lunr/...")]`, read and written through `globalBridge<T>(symbol)` in `core/global-bridge.ts`. Never runtime-barrel-import `@earendil-works/pi-coding-agent` under `builtin-extensions/`, only concrete modules. `complete`/`streamSimple`/`getModel` come from `@earendil-works/pi-ai/compat`.
@@ -40,4 +40,5 @@ Read before adding features, extensions or bridges, or before syncing from upstr
 
 - Tool schemas are the always-available discovery layer. Keep recovery/workflow instructions conditional in tool results where possible; reserve base-prompt rules for guidance required before the first call.
 - First-request fixtures hash the full default tool payload. Refresh both browser hashes after any agent-facing schema change (see [testing.md](testing.md)).
+- Deferred tools: `DEFERRED_TOOL_GROUPS` in `lunr-tool-loader.ts` is the only list of tools that start unloaded; everything else stays loaded. A new builtin tool fails the deferred first-paint run until it is in that table or in the script's always-loaded list. The system prompt must not depend on whether a deferred tool is active (the cron line moved into the cron description for this), and `load_tools`'s description is built once per session, because either change rewrites the cached prefix at a load. A tool goes in the table only when the model reaches for it after deciding on that kind of work; tools an inbound message, goal state, plan mode or a fact worth remembering trigger stay loaded.
 - `LUNR_SYSTEM_INJECTION.md` is a local point-in-time effective-prompt snapshot, not an input. Regenerate it after changes to `system-prompt.ts`, active tools/extensions, `AGENTS.md`, skills, permission mode, goal state, memory, or `~/.lunr/agent/agents/AGENTS.md`.
