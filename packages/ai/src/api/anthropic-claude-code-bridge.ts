@@ -40,6 +40,8 @@ const REQUEST_ENV = {
 	DISABLE_COMPACT: "1",
 	// lunR owns token budgets; Claude Code's replayed reminder would invalidate cached history.
 	CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
+	// Empty --setting-sources does not stop Claude Code adding the user's auto-memory MEMORY.md to the request.
+	CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
 } as const;
 const NOT_SIGNED_IN = "Claude Code is not signed in to a Claude subscription. Run /login anthropic.";
 /** Anthropic's error type for each HTTP status, used when rebuilding an error Claude Code reported. */
