@@ -1618,6 +1618,8 @@ pi.setActiveTools(["read", "bash"]); // Limit to read and bash
 
 `pi.getAllTools()` returns `name`, `description`, `parameters`, `promptGuidelines`, and `sourceInfo`.
 
+`pi.setDeferredTools(names)` starts registered tools unloaded. They leave the active set, and models with native deferred loading keep seeing them as deferred definitions. Load one later by adding it back with `pi.setActiveTools()` from a tool's `execute`. It returns the accepted names, and accepts none when the session has an explicit tool allowlist (`--tools`, `--no-tools`) or the user turned off "Load tools on demand" in `/settings`. See [Dynamic Tool Loading](#dynamic-tool-loading).
+
 Typical `sourceInfo.source` values:
 - `builtin` for built-in tools
 - `sdk` for tools passed via `createAgentSession({ customTools })`
@@ -2261,6 +2263,14 @@ For all other models and providers, dynamic activation still works: lunR sends t
 lunR also uses this safe fallback when the active set is not purely additive, such as replacing one group of tools with another. Tool removals therefore work, but they do not use deferred loading.
 
 For the best cache behavior, keep the loader tool active for the whole session and add tools instead of replacing the active set.
+
+#### Declaring the deferred set
+
+Call `pi.setDeferredTools(names)` instead of removing tools with `pi.setActiveTools()` when the tools should start unloaded. On Anthropic models with native loading, lunR then sends every declared tool with `defer_loading` from the first request in a fixed order, loaded or not. The `tools` array stays byte-identical when a tool result loads one, so the cached tools and system prompt survive the load. Tools that are removed with `pi.setActiveTools()` instead are absent until they load, and the first load rewrites the cached prefix.
+
+Call it at the first `before_agent_start`, after the tools are registered. Each call adds its names after the ones declared earlier in the session, so several extensions can declare their own tools; a name declared earlier keeps its place and its loaded state. A direct call to a declared tool that is not loaded yet returns an error telling the model to load it first. Other providers ignore the declaration and send a loaded declared tool as a normal tool.
+
+lunR's builtin `lunr-tool-loader` uses this for its own rarely used tools (subagents, web, LSP, browser, `code_rewrite`, cron, PR watch) and registers `load_tools` as their loader on Anthropic models with native loading.
 
 #### Search tool example
 

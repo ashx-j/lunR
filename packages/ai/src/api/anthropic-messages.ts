@@ -29,7 +29,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
-import { splitDeferredTools } from "../utils/deferred-tools.ts";
+import { defaultSupportsToolReferences, splitDeferredTools } from "../utils/deferred-tools.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
@@ -179,20 +179,6 @@ function getAnthropicCompat(
 		allowEmptySignature: model.compat?.allowEmptySignature ?? false,
 		supportsToolReferences: model.compat?.supportsToolReferences ?? defaultSupportsToolReferences(model),
 	};
-}
-
-/**
- * Default for `supportsToolReferences`: first-party Anthropic models except
- * Haiku (rejects client-side tool_reference blocks) and models that predate
- * tool search (Claude 3.x, Opus/Sonnet 4.0, Opus 4.1).
- */
-function defaultSupportsToolReferences(model: Model<"anthropic-messages">): boolean {
-	if (model.provider !== "anthropic" || model.id.includes("haiku")) return false;
-	const version = model.id.match(/^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$)/);
-	if (!version) return false;
-	const major = Number(version[1]);
-	const minor = version[2] && version[2].length < 8 ? Number(version[2]) : 0;
-	return major > 4 || (major === 4 && minor >= 5);
 }
 
 export interface AnthropicOptions extends StreamOptions {
@@ -926,15 +912,30 @@ function buildParams(
 	const toolPlacement = splitDeferredTools(
 		{ ...context, messages: transformedMessages },
 		compat.supportsToolReferences,
-		normalizeToolName,
+		{
+			declared: "upFront",
+			normalizeName: normalizeToolName,
+		},
 	);
 	let immediateTools = toolPlacement.immediate;
-	let deferredTools = [...toolPlacement.deferred.values()];
-	if (immediateTools.length === 0 && deferredTools.length > 0) {
-		immediateTools = deferredTools;
-		deferredTools = [];
+	let deferredTools: Tool[] = [];
+	let deferredToolNames = new Set<string>();
+	if (immediateTools.length === 0) {
+		// The API rejects a tool list where every tool is deferred.
+		immediateTools = [...toolPlacement.deferred.values()];
+	} else {
+		// lunr: the session's declared set goes first in its fixed order, loaded or not, so `tools` stays
+		// byte-identical when a tool result loads one. Other result-loaded tools follow, as before.
+		const declared = compat.supportsToolReferences ? (context.deferredTools ?? []) : [];
+		const immediateNames = new Set(immediateTools.map((tool) => normalizeToolName(tool.name)));
+		const declaredNames = new Set(declared.map((tool) => normalizeToolName(tool.name)));
+		deferredTools = [
+			...declared.filter((tool) => !immediateNames.has(normalizeToolName(tool.name))),
+			...[...toolPlacement.deferred.values()].filter((tool) => !declaredNames.has(normalizeToolName(tool.name))),
+		];
+		// Only a tool a result loaded gets a tool_reference.
+		deferredToolNames = new Set(toolPlacement.deferred.keys());
 	}
-	const deferredToolNames = new Set(deferredTools.map((tool) => normalizeToolName(tool.name)));
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
 		messages: convertMessages(

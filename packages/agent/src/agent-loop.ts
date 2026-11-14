@@ -311,6 +311,7 @@ async function streamAssistantResponse(
 		systemPrompt: context.systemPrompt,
 		messages: llmMessages,
 		tools: context.tools,
+		deferredTools: context.deferredTools,
 	};
 
 	const streamFunction = streamFn || streamSimple;
@@ -700,9 +701,15 @@ async function prepareToolCall(
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
+		// lunr: a declared but unloaded tool tells the model how to load it.
+		const deferred = currentContext.deferredTools?.some((t) => t.name === toolCall.name);
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+			result: createErrorToolResult(
+				deferred
+					? `Tool ${toolCall.name} is not loaded. Call load_tools with ["${toolCall.name}"], then call it again.`
+					: `Tool ${toolCall.name} not found`,
+			),
 			isError: true,
 		};
 	}

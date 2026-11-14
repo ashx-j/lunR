@@ -2,13 +2,23 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.ts";
 import { getModel, streamSimple } from "../src/compat.ts";
-import type { Api, AssistantMessage, Context, Model, Tool, ToolResultMessage, UserMessage } from "../src/types.ts";
+import type {
+	Api,
+	AssistantMessage,
+	Context,
+	Message,
+	Model,
+	Tool,
+	ToolResultMessage,
+	UserMessage,
+} from "../src/types.ts";
 import { estimateContextTokens } from "../src/utils/estimate.ts";
 
 interface AnthropicToolPayload {
 	name: string;
 	description?: string;
 	defer_loading?: boolean;
+	cache_control?: unknown;
 }
 
 interface AnthropicContentBlock {
@@ -47,7 +57,7 @@ interface OpenAIToolSearchOutput {
 
 interface OpenAIPayload {
 	tools?: Array<{ name?: string; function?: { name: string } }>;
-	input?: Array<OpenAIToolSearchCall | OpenAIToolSearchOutput | { type?: string }>;
+	input?: Array<OpenAIToolSearchCall | OpenAIToolSearchOutput | { type?: string; call_id?: string }>;
 }
 
 interface KimiTool {
@@ -464,5 +474,140 @@ describe("deferred tools", () => {
 
 		expect(marked.tokens).toBeGreaterThan(plain.tokens + 500);
 		expect(marked.trailingTokens).toBeGreaterThan(plain.trailingTokens + 500);
+	});
+});
+
+describe("declared deferred tools", () => {
+	const declared = [makeTool("cron"), makeTool("web_search"), makeTool("fetch_content")];
+	const anthropic = getModel("anthropic", "claude-opus-4-6");
+	const codex = getModel("openai-codex", "gpt-5.5");
+
+	type Turn = Pick<AssistantMessage, "api" | "provider" | "model">;
+	const anthropicTurn: Turn = { api: anthropic.api, provider: anthropic.provider, model: anthropic.id };
+	const codexTurn: Turn = { api: codex.api, provider: codex.provider, model: codex.id };
+
+	/** One load_tools call and its result; `names` are the tools that result activated. */
+	function load(id: string, names: string[], turn: Turn = anthropicTurn): Message[] {
+		return [
+			{
+				...makeAssistantToolCall(),
+				...turn,
+				content: [{ type: "toolCall", id, name: "load_tools", arguments: {} }],
+			},
+			{ ...makeToolResult(names), toolCallId: id, toolName: "load_tools" },
+		];
+	}
+
+	/** A session context with the loader active, the declared set, and `names` loaded so far. */
+	function sessionContext(messages: Message[], loaded: string[] = []): Context {
+		return {
+			messages,
+			tools: [makeTool("base_tool"), makeTool("load_tools"), ...loaded.map(makeTool)],
+			deferredTools: declared,
+		};
+	}
+
+	async function codexPayload(context: Context): Promise<OpenAIPayload> {
+		return capturePayload<OpenAIPayload>(codex, context, makeCodexToken());
+	}
+
+	function searchPairs(payload: OpenAIPayload): Array<OpenAIToolSearchCall | OpenAIToolSearchOutput> {
+		return (payload.input ?? []).filter(
+			(item): item is OpenAIToolSearchCall | OpenAIToolSearchOutput =>
+				item.type === "tool_search_call" || item.type === "tool_search_output",
+		);
+	}
+
+	it("advertises the declared set after the immediate tools, in order and without cache markers", async () => {
+		const payload = await capturePayload<AnthropicPayload>(anthropic, sessionContext([makeUserMessage(1)]));
+
+		expect(payload.tools?.map((tool) => [tool.name, tool.defer_loading])).toEqual([
+			["base_tool", undefined],
+			["load_tools", undefined],
+			["cron", true],
+			["web_search", true],
+			["fetch_content", true],
+		]);
+		expect(payload.tools?.filter((tool) => tool.defer_loading).some((tool) => tool.cache_control)).toBe(false);
+	});
+
+	it("keeps the tools bytes unchanged when a result loads a declared tool", async () => {
+		const before = await capturePayload<AnthropicPayload>(anthropic, sessionContext([makeUserMessage(1)]));
+		const after = await capturePayload<AnthropicPayload>(
+			anthropic,
+			sessionContext([makeUserMessage(1), ...load("call_1", ["cron"]), makeUserMessage(4)], ["cron"]),
+		);
+
+		expect(JSON.stringify(after.tools)).toBe(JSON.stringify(before.tools));
+		expect(findAnthropicToolResult(after).content).toEqual([{ type: "tool_reference", tool_name: "cron" }]);
+	});
+
+	it("keeps the tools bytes unchanged when a direct call to a declared tool precedes its load", async () => {
+		const before = await capturePayload<AnthropicPayload>(anthropic, sessionContext([makeUserMessage(1)]));
+		const directCall: Message[] = [
+			{ ...makeAssistantToolCall(), content: [{ type: "toolCall", id: "call_0", name: "cron", arguments: {} }] },
+			{ ...makeToolResult([]), toolCallId: "call_0", toolName: "cron", isError: true },
+		];
+		const after = await capturePayload<AnthropicPayload>(
+			anthropic,
+			sessionContext([makeUserMessage(1), ...directCall, ...load("call_1", ["cron"]), makeUserMessage(4)], ["cron"]),
+		);
+
+		expect(JSON.stringify(after.tools)).toBe(JSON.stringify(before.tools));
+		const results = after.messages.flatMap((message) =>
+			typeof message.content === "string" ? [] : message.content.filter((block) => block.type === "tool_result"),
+		);
+		expect(results.find((block) => block.tool_use_id === "call_1")?.content).toEqual([
+			{ type: "tool_reference", tool_name: "cron" },
+		]);
+	});
+
+	it("emits a declared tool that is active without a load result once, in the immediate block", async () => {
+		const payload = await capturePayload<AnthropicPayload>(anthropic, sessionContext([makeUserMessage(1)], ["cron"]));
+
+		expect(payload.tools?.map((tool) => [tool.name, tool.defer_loading])).toEqual([
+			["base_tool", undefined],
+			["load_tools", undefined],
+			["cron", undefined],
+			["web_search", true],
+			["fetch_content", true],
+		]);
+	});
+
+	it("advertises no declared tools to a model without tool references", async () => {
+		const payload = await capturePayload<AnthropicPayload>(
+			getModel("anthropic", "claude-haiku-4-5"),
+			sessionContext([makeUserMessage(1)]),
+		);
+
+		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "load_tools"]);
+	});
+
+	it.each([
+		[
+			"openai-responses",
+			() => capturePayload<OpenAIPayload>(getModel("openai", "gpt-5.4"), sessionContext([makeUserMessage(1)])),
+		],
+		["openai-codex-responses", () => codexPayload(sessionContext([makeUserMessage(1)]))],
+	] as const)("ignores the declared set on %s", async (_api, build) => {
+		const payload = await build();
+
+		expect(openAIToolNames(payload)).toEqual(["base_tool", "load_tools"]);
+		expect(JSON.stringify(payload.input)).not.toContain("web_search");
+	});
+
+	it.each([
+		["a Codex load", codexTurn],
+		["a load made under Anthropic", anthropicTurn],
+	] as const)("replays %s of declared tools to Codex as plain tools", async (_case, turn) => {
+		const payload = await codexPayload(
+			sessionContext(
+				[makeUserMessage(1), ...load("call_1", ["web_search", "fetch_content"], turn), makeUserMessage(4)],
+				["web_search", "fetch_content"],
+			),
+		);
+
+		expect(openAIToolNames(payload)).toEqual(["base_tool", "load_tools", "web_search", "fetch_content"]);
+		expect(searchPairs(payload)).toEqual([]);
 	});
 });

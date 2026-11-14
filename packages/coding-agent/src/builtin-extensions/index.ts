@@ -17,6 +17,7 @@ import ashxjThinking from "./ashxj-thinking.ts";
 import lunrLocalProviders from "./lunr-local-providers/index.ts";
 import lunrTodos from "./lunr-todos.ts";
 import lunrPlanTools from "./lunr-plan-tools.ts";
+import lunrToolLoader from "./lunr-tool-loader.ts";
 import lunrSkillCreator from "./lunr-skill-creator/index.ts";
 
 /**
@@ -39,6 +40,7 @@ export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("lunr-local-providers", lunrLocalProviders),
 	ext("lunr-todos", lunrTodos),
 	ext("lunr-plan-tools", lunrPlanTools),
+	ext("lunr-tool-loader", lunrToolLoader),
 	ext("lunr-skill-creator", lunrSkillCreator),
 ];
 

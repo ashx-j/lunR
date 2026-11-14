@@ -76,6 +76,7 @@ function createMutableAgentState(
 		systemPrompt: initialState?.systemPrompt ?? "",
 		model: initialState?.model ?? DEFAULT_MODEL,
 		thinkingLevel: initialState?.thinkingLevel ?? "off",
+		deferredTools: initialState?.deferredTools?.slice(),
 		get tools() {
 			return tools;
 		},
@@ -480,6 +481,7 @@ export class Agent {
 			systemPrompt: this._state.systemPrompt,
 			messages: this._state.messages.slice(),
 			tools: this._state.tools.slice(),
+			deferredTools: this._state.deferredTools,
 		};
 	}
 

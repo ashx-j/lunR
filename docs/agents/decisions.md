@@ -4,6 +4,12 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-11-14: start 17 rarely used tools (7 groups in `lunr-tool-loader.ts`) unloaded behind `load_tools` on Anthropic models with tool references, because their schemas were 17,541 of the 33,492 tokens of a first subscription request and most sessions never call them.
+- 2026-11-14: send the whole deferred set with `defer_loading` from the first request in a fixed order, loaded or not, because adding a tool only when it loads rewrites the cached tools and system prefix at every load.
+- 2026-11-14: defer `subagent` with `subagent_wait` instead of shortening its description, because it is 42% of all tool tokens, the base prompt already says when to delegate, and rewriting its vendored prompt changes delegation on every provider.
+- 2026-11-14: keep `mcp`, `intercom` and `subagent_supervisor` loaded, because `mcp` is already a discovery tool that the MCP adapter re-adds at session start, and the other two answer messages that arrive outside the model's plan.
+- 2026-11-14: keep deferral off for Codex and OpenAI Responses, because lunR's undeclared `tool_search` pair differs from OpenAI's documented contract in 3 ways and a rejected pair would fail every later request of the session.
+- 2026-11-14: send declared tools to Codex and OpenAI Responses as plain tools once loaded, never as a `tool_search` pair, because a session that loaded tools on Anthropic and switched to Codex would otherwise send that unproven pair.
 - 2026-10-29: move `interactive-startup.md` and `model-catalog.md` from the package docs to `docs/agents/`, because they are maintainer notes (benchmarks, generator internals) that shipped in the npm docs.
 - 2026-10-29: keep `@earendil-works/pi-*` imports in the repo's example extensions, because the root tsconfig paths and vitest resolve those names and the publish step rewrites them to `@ashx-j/*`; the docs say the loader accepts both.
 - 2026-10-29: remove the issue and PR auto-close gates, because their approved list held pi's contributors, their message linked a CONTRIBUTING.md that doesn't exist, and the Questions link went to pi's Discord.
@@ -111,6 +117,10 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Deferred
 
+- Deferred tools on Codex: needs a live `openai-codex/gpt-5.5` run (load accepted, loaded tool called, cached tokens kept, a second load) before `supportsDeferredToolLoading` includes `openai-codex-responses`.
+- Claude subscription thinking: every replayed thinking block comes back `thinking_dropped` (`prefix_binding_mismatch`) because Claude Code moves its context blocks and date message on every request. The only fix found keeps one Claude Code session alive across requests (`--resume`), a bridge redesign.
+- Claude subscription history cache: every request pays cache-write price for the whole message history. A marker on the last user frame before the last assistant frame turns it into reads; separate PR, needs the owner's go-ahead.
+- `subagent` description (9,544 characters): shortening it is the next saving for providers without deferred loading; needs its own delegation evaluation.
 - Gateway cold first slash after daemon start can hang minutes; local scripted-provider first-use flow passes but does not establish a cold-start latency bound.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
 - Claude subscriptions: live runs used one signed-in account; macOS and ARM remain unqualified.
