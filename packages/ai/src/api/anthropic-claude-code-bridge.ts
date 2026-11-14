@@ -34,7 +34,9 @@ const SUPPORTED_PARAMS: ReadonlySet<string> = new Set([
 const USER_BLOCKS: ReadonlySet<unknown> = new Set(["text", "image", "document", "tool_result"]);
 const ASSISTANT_BLOCKS: ReadonlySet<unknown> = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 const REQUEST_ENV = {
-	ENABLE_TOOL_SEARCH: "false",
+	// With Claude Code's ToolSearch on, it passes lunR's tool_reference blocks and defer_loading through
+	// (see the loopback's tools/list). Recheck on every CLAUDE_CODE_VERSION bump.
+	ENABLE_TOOL_SEARCH: "true",
 	CLAUDE_CODE_MAX_RETRIES: "0",
 	DISABLE_AUTO_COMPACT: "1",
 	DISABLE_COMPACT: "1",
@@ -81,13 +83,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Gives a tool_result's tool_reference entries the MCP names Claude Code knows lunR's tools by. */
+function prefixToolReferences(block: Block): Block {
+	if (!Array.isArray(block.content)) return block;
+	return {
+		...block,
+		content: block.content.map((entry: unknown) =>
+			isRecord(entry) && entry.type === "tool_reference" && typeof entry.tool_name === "string"
+				? { ...entry, tool_name: `${TOOL_PREFIX}${entry.tool_name}` }
+				: entry,
+		),
+	};
+}
+
 function contentBlocks(content: unknown, allowed: ReadonlySet<unknown>): Block[] {
 	if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
 	if (!Array.isArray(content)) throw new Error("Invalid Claude Code message content");
 	return content.map((block) => {
 		if (!isRecord(block) || !allowed.has(block.type))
 			throw new Error(`Claude Code subscription does not support ${isRecord(block) ? block.type : "this"} content`);
-		return block.type === "tool_use" ? { ...block, name: `${TOOL_PREFIX}${block.name}` } : block;
+		if (block.type === "tool_use") return { ...block, name: `${TOOL_PREFIX}${block.name}` };
+		return block.type === "tool_result" ? prefixToolReferences(block) : block;
 	});
 }
 
@@ -143,6 +159,7 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 						name: tool.name,
 						description: typeof tool.description === "string" ? tool.description : "",
 						inputSchema: tool.input_schema,
+						...(tool.defer_loading === true ? { deferLoading: true } : {}),
 					},
 				]
 			: [],
@@ -161,6 +178,7 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 				name: `${TOOL_PREFIX}${tool.name}`,
 				description: tool.description,
 				input_schema: tool.inputSchema,
+				...(tool.deferLoading ? { defer_loading: true } : {}),
 			})),
 			...(thinking ? { thinking } : {}),
 			// Claude Code's own clear-thinking context edits are invalid once thinking is disabled.
@@ -358,8 +376,10 @@ async function runClaudeCode(
 				"--verbose",
 				// Emits each raw Messages stream event, which lunR replays as the SSE body.
 				"--include-partial-messages",
+				// Only Claude Code's ToolSearch, which keeps tool_reference blocks alive. lunR's extra body
+				// replaces the tools array, so ToolSearch itself never reaches the model.
 				"--tools",
-				"",
+				"ToolSearch",
 				"--system-prompt-file",
 				join(directory, "system.md"),
 				"--settings",
@@ -501,8 +521,8 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 /**
  * Streams one Anthropic turn for a Claude subscription. lunR builds the same Messages request it sends
  * with an API key; the injected client hands it to Claude Code, which authenticates and sends it.
- * Tool references, eager tool input, cache markers, and sampling stay off because Claude Code manages
- * those parts of its own request.
+ * Tool references and deferred tools pass through Claude Code unchanged. Eager tool input, cache
+ * markers, and sampling stay off because Claude Code manages those parts of its own request.
  */
 export function streamClaudeCode(
 	model: Model<"anthropic-messages">,
@@ -527,7 +547,6 @@ export function streamClaudeCode(
 		...model,
 		compat: {
 			...model.compat,
-			supportsToolReferences: false,
 			supportsEagerToolInputStreaming: false,
 			supportsCacheControlOnTools: false,
 			supportsTemperature: false,

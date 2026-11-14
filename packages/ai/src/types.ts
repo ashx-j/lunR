@@ -472,6 +472,12 @@ export interface Context {
 	systemPrompt?: string;
 	messages: Message[];
 	tools?: Tool[];
+	/**
+	 * Tools the session starts unloaded, in a fixed order, whether or not they have loaded since.
+	 * Providers with native deferred loading advertise them (Anthropic: `defer_loading`) so a later
+	 * load leaves the request prefix unchanged. Every other provider ignores the field.
+	 */
+	deferredTools?: Tool[];
 }
 
 /**

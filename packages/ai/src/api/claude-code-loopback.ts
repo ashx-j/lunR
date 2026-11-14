@@ -7,7 +7,21 @@ export interface ClaudeCodeTool {
 	name: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+	/** lunR sends this tool with `defer_loading`. The bridge reads it; the MCP listing leaves it out. */
+	deferLoading?: boolean;
 }
+
+/**
+ * Listed after lunR's tools without the always-load flag. Claude Code keeps tool_reference blocks only
+ * while it believes at least one MCP tool is deferred, and every lunR tool is marked always-load.
+ * The bridge's inventory leaves it out, so a call to it fails the turn. Recheck on every
+ * CLAUDE_CODE_VERSION bump.
+ */
+const RESERVED_TOOL = {
+	name: "reserved",
+	description: "Reserved by lunR. Never call or load this tool.",
+	inputSchema: { type: "object", properties: {} },
+};
 
 const MAX_MCP_BODY = 1024 * 1024;
 
@@ -113,7 +127,19 @@ export class ClaudeCodeLoopback {
 						serverInfo: { name: "lunr-tools", version: "1" },
 					}
 				: message.method === "tools/list"
-					? { tools: this.tools }
+					? {
+							// Always-load keeps Claude Code from deferring lunR's tools in its own bookkeeping and from
+							// telling the model to fetch them through ToolSearch. Recheck on every CLAUDE_CODE_VERSION bump.
+							tools: [
+								...this.tools.map(({ name, description, inputSchema }) => ({
+									name,
+									description,
+									inputSchema,
+									_meta: { "anthropic/alwaysLoad": true },
+								})),
+								RESERVED_TOOL,
+							],
+						}
 					: message.method === "tools/call"
 						? { isError: true, content: [{ type: "text", text: "Denied: lunR runs its own tools." }] }
 						: {};

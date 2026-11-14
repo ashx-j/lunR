@@ -45,7 +45,7 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL, toolSearch: process.env.ENABLE_TOOL_SEARCH }));
 	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -226,7 +226,9 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(record.argv).toEqual(
 			expect.arrayContaining(["--model", "claude-opus-4-8[1m]", "--max-turns", "1", "--include-partial-messages"]),
 		);
-		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("");
+		// Claude Code keeps tool_reference blocks only with its ToolSearch tool and tool search on.
+		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("ToolSearch");
+		expect(record.toolSearch).toBe("true");
 		// Claude Code reaches the upstream itself; lunR is not in between.
 		expect(record.baseUrl).toBe(upstream);
 		// The MCP config is a file, and its secret path does not appear on the command line.
@@ -257,6 +259,57 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		]);
 		expect(record.extra.tools.map((tool: { name: string }) => tool.name)).toEqual(["mcp__lunr__read"]);
 		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
+	it("passes deferred tools and their tool_reference loads through with Claude Code's tool names", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
+		const tool = (name: string) => ({ name, description: name, parameters: { type: "object", properties: {} } });
+		const loaded: Context = {
+			systemPrompt: "You are lunR.",
+			messages: [
+				{ role: "user", content: "Load cron", timestamp: 1 },
+				{
+					role: "assistant",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-opus-4-8",
+					content: [{ type: "toolCall", id: "toolu_1", name: "load_tools", arguments: { names: ["cron"] } }],
+					usage,
+					stopReason: "toolUse",
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "toolu_1",
+					toolName: "load_tools",
+					content: [{ type: "text", text: "Loaded tools: cron." }],
+					addedToolNames: ["cron"],
+					isError: false,
+					timestamp: 3,
+				},
+			],
+			tools: [tool("read"), tool("load_tools"), tool("cron")],
+			deferredTools: [tool("cron"), tool("web_search")],
+		};
+		const result = await streamClaudeCode(model, loaded, { externalClaudeCode: connection }, true, upstream).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(
+			record.extra.tools.map((entry: { name: string; defer_loading?: boolean }) => [
+				entry.name,
+				entry.defer_loading,
+			]),
+		).toEqual([
+			["mcp__lunr__read", undefined],
+			["mcp__lunr__load_tools", undefined],
+			["mcp__lunr__cron", true],
+			["mcp__lunr__web_search", true],
+		]);
+		expect(record.frames.at(-1).message.content[0]).toMatchObject({
+			type: "tool_result",
+			content: [{ type: "tool_reference", tool_name: "mcp__lunr__cron" }],
+		});
 	});
 
 	it("accepts an explicit automatic tool choice", async () => {
@@ -411,6 +464,18 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			upstream,
 		).result();
 		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("outside lunR's tool list");
+	});
+
+	it("rejects a call to the loopback's reserved tool", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__reserved") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
 		expect(result.errorMessage).toContain("outside lunR's tool list");
 	});
 

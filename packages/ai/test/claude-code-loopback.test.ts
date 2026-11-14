@@ -69,7 +69,11 @@ describe("Claude Code loopback", () => {
 		expect((await initialize.json()).result.protocolVersion).toBe("2025-06-18");
 		expect((await mcp(loopback, { jsonrpc: "2.0", method: "notifications/initialized" })).status).toBe(202);
 		const list = await (await mcp(loopback, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
-		expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["read"]);
+		// lunR's tools are always-load; the reserved tool without the flag keeps Claude Code's tool references on.
+		expect(list.result.tools.map((tool: { name: string; _meta?: object }) => [tool.name, tool._meta])).toEqual([
+			["read", { "anthropic/alwaysLoad": true }],
+			["reserved", undefined],
+		]);
 		const call = await (
 			await mcp(loopback, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "read" } })
 		).json();
