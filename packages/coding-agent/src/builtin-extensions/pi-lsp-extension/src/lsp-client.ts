@@ -27,6 +27,7 @@ import type {
   Diagnostic,
   PublishDiagnosticsParams,
 } from "vscode-languageserver-protocol";
+import { debug } from "./shared/debug.js";
 
 export interface LspClientOptions {
   /** Command to start the LSP server */
@@ -155,7 +156,7 @@ export class LspClient {
 
     // Handle connection-level errors to prevent unhandled exceptions
     this.connection.onError(([err]) => {
-      console.error(`[LSP ${this.languageId}] Connection error: ${err.message}`);
+      debug(`LSP ${this.languageId}`, "Connection error", err);
     });
 
     this.connection.onClose(() => {
@@ -237,11 +238,13 @@ export class LspClient {
     // Error listeners belong to this child and its streams, never the host process.
     for (const stream of [child.stdin, child.stdout, child.stderr]) {
       stream?.on("error", (err: Error) => {
-        if (!this._disposed) console.error(`[LSP ${this.languageId}] Transport error: ${err.message}`);
+        if (!this._disposed) debug(`LSP ${this.languageId}`, "Transport error", err);
       });
     }
     child.on("error", (err) => {
-      if (!this._disposed) console.error(`[LSP ${this.languageId}] Process error: ${err.message}`);
+      // lunr: never write to the terminal here. A missing server (spawn ENOENT) used to print
+      // while the TUI owned the screen, which shifted the cursor and left stale tool-card rows.
+      if (!this._disposed) debug(`LSP ${this.languageId}`, "Process error", err);
       this._initialized = false;
       this.disposeConnection();
     });
@@ -373,7 +376,7 @@ export class LspClient {
     if (!this.connection || !this._initialized) return;
     const report = (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      if (!this._disposed) console.error(`[LSP ${this.languageId}] Notification failed: ${message}`);
+      if (!this._disposed) debug(`LSP ${this.languageId}`, "Notification failed", message);
     };
     try {
       void this.connection.sendNotification(method, params).catch(report);
