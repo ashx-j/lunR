@@ -52,7 +52,9 @@ export interface LoginFlowHost {
 	updateAvailableProviderCount(): Promise<void>;
 	invalidateFooter(): void;
 	updateEditorBorderColor(): void;
-	/** Runs after every login: on first run asks for the default permission mode, then opens /model when the session still has no model and one is available to pick. */
+	/** Runs after every successful login, before /model: on first run it asks for the default permission mode. */
+	onLoginSucceeded(): Promise<void>;
+	/** Opens /model when the session still has no model and one is available to pick. */
 	openModelSelectorIfUnset(): Promise<void>;
 }
 
@@ -418,12 +420,14 @@ export async function showCustomProviderWizard(host: LoginFlowHost): Promise<voi
 			);
 			if (choice === "Skip") {
 				host.showStatus(`Custom provider '${name}' added (1 model). ${refineNote}`);
+				await host.onLoginSucceeded();
 				return;
 			}
 			if (choice === "Select model") {
 				try {
 					await host.session.setModel(model);
 					host.showStatus(`Custom provider '${name}' added (1 model). Selected ${model.id}. ${refineNote}`);
+					await host.onLoginSucceeded();
 					return;
 				} catch (error: unknown) {
 					host.showError(
@@ -436,6 +440,7 @@ export async function showCustomProviderWizard(host: LoginFlowHost): Promise<voi
 	host.showStatus(
 		`Custom provider '${name}' added (${modelCount} model${modelCount === 1 ? "" : "s"}). ${refineNote}`,
 	);
+	await host.onLoginSucceeded();
 	await host.openModelSelectorIfUnset();
 }
 
@@ -630,6 +635,7 @@ export async function completeProviderAuthentication(
 			void host.maybeWarnAboutAnthropicSubscriptionAuth();
 		}
 	}
+	await host.onLoginSucceeded();
 	await host.openModelSelectorIfUnset();
 }
 

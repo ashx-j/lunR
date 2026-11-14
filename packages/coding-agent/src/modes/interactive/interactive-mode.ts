@@ -164,8 +164,8 @@ import {
 	buildOnboardingOptions,
 	OnboardingComponent,
 	PERMISSION_MODE_OPTIONS,
-	PERMISSION_MODE_STEP_TEXT,
 	type PermissionModeChoice,
+	permissionModeStepText,
 	shouldAskPermissionMode,
 	shouldShowOnboarding,
 	WELCOME_TEXT,
@@ -1177,19 +1177,20 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * After the first login on a launch that showed onboarding, asks once for the default permission
-	 * mode and saves it. Escape saves nothing and keeps today's default; the next launch has a login,
-	 * so it is not asked again.
+	 * `onLoginSucceeded`: after the first successful login on a launch that showed onboarding, asks once
+	 * for the default permission mode and saves it once the session is in that mode (for auto, after the
+	 * review model picker). Escape saves nothing and keeps the current mode; the next launch has a
+	 * login, so it is not asked again. A failed write shows a warning.
 	 */
 	private async askDefaultPermissionModeAfterFirstLogin(): Promise<void> {
 		const savedDefault = this.settingsManager.getGlobalSettings().defaultPermissionMode;
-		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, loggedIn: true, savedDefault })) return;
+		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, savedDefault })) return;
 		this.onboardingShown = false;
 		const choice = await new Promise<PermissionModeChoice>((resolve) => {
 			this.showSelector((done) => {
 				const step = new OnboardingComponent<PermissionModeChoice>(
 					PERMISSION_MODE_OPTIONS,
-					PERMISSION_MODE_STEP_TEXT,
+					permissionModeStepText(this.session.permissionMode),
 					(picked) => {
 						done();
 						resolve(picked);
@@ -1199,8 +1200,16 @@ export class InteractiveMode {
 			});
 		});
 		if (choice === "keep") return;
+		// Auto may open the review model picker first; save only a mode the session actually entered.
+		const applied = await new Promise<boolean>((resolve) =>
+			this.permissions.applyPermissionMode(choice, { onSettled: resolve }),
+		);
+		if (!applied) return;
 		this.settingsManager.setDefaultPermissionMode(choice);
-		this.permissions.applyPermissionMode(choice);
+		await this.settingsManager.flush();
+		for (const { error } of this.settingsManager.drainErrors()) {
+			this.showWarning(`Couldn't save ${choice} as the default mode: ${error.message}`);
+		}
 	}
 
 	/** After a login, opens /model when the session still has no model and there is one to pick. */
@@ -5158,10 +5167,8 @@ export class InteractiveMode {
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
-			openModelSelectorIfUnset: async () => {
-				await this.askDefaultPermissionModeAfterFirstLogin();
-				await this.openModelSelectorIfUnset();
-			},
+			onLoginSucceeded: () => this.askDefaultPermissionModeAfterFirstLogin(),
+			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
 		};
 	}
 

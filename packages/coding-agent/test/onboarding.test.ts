@@ -5,11 +5,13 @@ import {
 	buildOnboardingOptions,
 	OnboardingComponent,
 	PERMISSION_MODE_OPTIONS,
-	PERMISSION_MODE_STEP_TEXT,
+	type PermissionModeChoice,
+	permissionModeStepText,
 	shouldAskPermissionMode,
 	shouldShowOnboarding,
 	WELCOME_TEXT,
 } from "../src/modes/interactive/components/onboarding.ts";
+import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -35,20 +37,79 @@ describe("shouldShowOnboarding", () => {
 });
 
 describe("shouldAskPermissionMode", () => {
-	it("does not ask before any login", () => {
-		expect(shouldAskPermissionMode({ onboardingShown: true, loggedIn: false, savedDefault: undefined })).toBe(false);
-	});
-
-	it("asks after the first login on a launch that started without credentials", () => {
-		expect(shouldAskPermissionMode({ onboardingShown: true, loggedIn: true, savedDefault: undefined })).toBe(true);
+	it("asks after a login on a launch that started without credentials", () => {
+		expect(shouldAskPermissionMode({ onboardingShown: true, savedDefault: undefined })).toBe(true);
 	});
 
 	it("does not ask a profile that already saved a default mode", () => {
-		expect(shouldAskPermissionMode({ onboardingShown: true, loggedIn: true, savedDefault: "yolo" })).toBe(false);
+		expect(shouldAskPermissionMode({ onboardingShown: true, savedDefault: "yolo" })).toBe(false);
 	});
 
 	it("does not ask an upgraded profile that had a login before this launch", () => {
-		expect(shouldAskPermissionMode({ onboardingShown: false, loggedIn: true, savedDefault: undefined })).toBe(false);
+		expect(shouldAskPermissionMode({ onboardingShown: false, savedDefault: undefined })).toBe(false);
+	});
+});
+
+describe("the permission mode step after a login", () => {
+	beforeAll(() => initTheme("moon"));
+
+	// Runs InteractiveMode's post-login hook on a stand-in with `applied` as the mode change's outcome.
+	async function runStep(options: {
+		onboardingShown?: boolean;
+		pick?: "\r" | "\x1b";
+		moves?: number;
+		applied?: boolean;
+		writeError?: string;
+	}) {
+		const saved: string[] = [];
+		const warnings: string[] = [];
+		const errors = options.writeError ? [{ scope: "global", error: new Error(options.writeError) }] : [];
+		let shown: OnboardingComponent<PermissionModeChoice> | undefined;
+		const mode = {
+			onboardingShown: options.onboardingShown ?? true,
+			session: { permissionMode: "yolo" },
+			settingsManager: {
+				getGlobalSettings: () => ({}),
+				setDefaultPermissionMode: (value: string) => saved.push(value),
+				flush: async () => {},
+				drainErrors: () => errors.splice(0),
+			},
+			permissions: {
+				applyPermissionMode: (_mode: string, opts: { onSettled: (applied: boolean) => void }) =>
+					opts.onSettled(options.applied ?? true),
+			},
+			showWarning: (message: string) => warnings.push(message),
+			showSelector: (create: (done: () => void) => { component: OnboardingComponent<PermissionModeChoice> }) => {
+				shown = create(() => {}).component;
+			},
+		};
+		const step = Reflect.get(InteractiveMode.prototype, "askDefaultPermissionModeAfterFirstLogin") as (
+			this: typeof mode,
+		) => Promise<void>;
+		const done = step.call(mode);
+		for (let i = 0; i < (options.moves ?? 0); i++) shown?.handleInput("j");
+		shown?.handleInput(options.pick ?? "\r");
+		await done;
+		return { saved, warnings, shown };
+	}
+
+	it("saves the picked mode once the session is in it", async () => {
+		expect((await runStep({ moves: 2 })).saved).toEqual(["ask"]);
+	});
+
+	it("saves nothing when auto's review model picker is cancelled", async () => {
+		expect((await runStep({ moves: 1, applied: false })).saved).toEqual([]);
+	});
+
+	it("saves nothing on Escape, and never shows on a launch without onboarding", async () => {
+		expect((await runStep({ pick: "\x1b" })).saved).toEqual([]);
+		expect((await runStep({ onboardingShown: false })).shown).toBeUndefined();
+	});
+
+	it("warns when the default can't be written", async () => {
+		expect((await runStep({ writeError: "EACCES" })).warnings).toEqual([
+			"Couldn't save yolo as the default mode: EACCES",
+		]);
 	});
 });
 
@@ -112,7 +173,9 @@ describe("OnboardingComponent", () => {
 	});
 
 	it.each([80, 120])("renders the permission mode step at %i columns", (width) => {
-		const lines = new OnboardingComponent(PERMISSION_MODE_OPTIONS, PERMISSION_MODE_STEP_TEXT, () => {}).render(width);
+		const lines = new OnboardingComponent(PERMISSION_MODE_OPTIONS, permissionModeStepText("yolo"), () => {}).render(
+			width,
+		);
 		const text = lines.map((line) => stripAnsi(line).trimEnd());
 
 		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
@@ -133,9 +196,20 @@ describe("OnboardingComponent", () => {
 		]);
 	});
 
+	it("names the session's current mode in the Escape hint", () => {
+		const lines = new OnboardingComponent(
+			PERMISSION_MODE_OPTIONS,
+			permissionModeStepText("read-only"),
+			() => {},
+		).render(80);
+		expect(lines.map((line) => stripAnsi(line).trimEnd())).toContain(
+			" ↑↓ navigate  enter select  escape/ctrl+c keep read",
+		);
+	});
+
 	it("reports the picked mode, and Escape keeps the current default", () => {
 		const onSelect = vi.fn();
-		const step = new OnboardingComponent(PERMISSION_MODE_OPTIONS, PERMISSION_MODE_STEP_TEXT, onSelect);
+		const step = new OnboardingComponent(PERMISSION_MODE_OPTIONS, permissionModeStepText("yolo"), onSelect);
 
 		step.handleInput("j");
 		step.handleInput("j");

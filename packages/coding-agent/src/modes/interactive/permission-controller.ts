@@ -179,16 +179,25 @@ export class PermissionModeController {
 	/**
 	 * `cancelMode` is where to go if auto needs a review model and the user cancels the picker; without it
 	 * the mode stays as it was. `fromCycle` (Shift+Tab) lets the cycle key skip past auto from that picker.
+	 * `onSettled` reports whether `mode` was applied, after the review model picker closes if auto opened it.
 	 */
 	applyPermissionMode(
 		mode: PermissionMode,
-		opts?: { silent?: boolean; cancelMode?: PermissionMode; fromCycle?: boolean },
+		opts?: {
+			silent?: boolean;
+			cancelMode?: PermissionMode;
+			fromCycle?: boolean;
+			onSettled?: (applied: boolean) => void;
+		},
 	): void {
-		if (this.host.isSessionDetached()) return;
+		if (this.host.isSessionDetached()) {
+			opts?.onSettled?.(false);
+			return;
+		}
 		if (mode === "auto") {
 			const reviewer = this.host.session.resolveAutoReviewer();
 			if (reviewer.kind !== "ready") {
-				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode, opts?.fromCycle);
+				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode, opts?.fromCycle, opts?.onSettled);
 				return;
 			}
 		}
@@ -205,6 +214,7 @@ export class PermissionModeController {
 		} else if (mode !== "auto" && prev === "auto") {
 			disableRollbackForSession(this.host.session.sessionManager.getSessionId());
 		}
+		opts?.onSettled?.(true);
 
 		if (opts?.silent) return;
 
@@ -231,6 +241,7 @@ export class PermissionModeController {
 		reviewer?: Exclude<AutoReviewer, { kind: "ready" }>,
 		cancelMode?: PermissionMode,
 		fromCycle?: boolean,
+		onSettled?: (applied: boolean) => void,
 	): void {
 		const note =
 			reviewer?.kind === "missing"
@@ -249,7 +260,7 @@ export class PermissionModeController {
 				(model) => {
 					done();
 					this.host.session.settingsManager.setAutoReviewModel(`${model.provider}/${model.id}`);
-					if (reviewer) this.applyPermissionMode("auto");
+					if (reviewer) this.applyPermissionMode("auto", { onSettled });
 					else this.host.showStatus(`Auto review model: ${model.provider}/${model.id}`);
 				},
 				() => {
@@ -263,6 +274,7 @@ export class PermissionModeController {
 							`No review model picked. ${switched ? "Switched to" : "Still in"} ${mode} mode.`,
 						);
 					}
+					onSettled?.(false);
 					this.host.ui.requestRender();
 				},
 				undefined,
@@ -273,6 +285,7 @@ export class PermissionModeController {
 					onCyclePermissionMode: fromCycle
 						? () => {
 								done();
+								onSettled?.(false);
 								this.applyPermissionMode(nextPermissionMode("auto"), { silent: true });
 								this.host.ui.requestRender();
 							}

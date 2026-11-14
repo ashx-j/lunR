@@ -7,7 +7,7 @@
 import type { CredentialInfo } from "@earendil-works/pi-ai";
 import { type Component, getKeybindings, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { LOCAL_SERVERS } from "../../../builtin-extensions/lunr-local-providers/local-servers.ts";
-import type { PermissionMode } from "../../../core/permissions.ts";
+import { PERMISSION_MODES, type PermissionMode } from "../../../core/permissions.ts";
 import { theme } from "../theme/theme.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 import type { AuthSelectorProvider } from "./oauth-selector.ts";
@@ -60,34 +60,39 @@ export function shouldShowOnboarding(
 }
 
 /**
- * Whether to ask for the default permission mode after a login: only on a launch that showed
- * onboarding (no saved credential, no model), so profiles that already had a login never see it,
- * and only while the profile has no saved `defaultPermissionMode`, so a saved choice is final.
+ * Whether a successful login should ask for the default permission mode: only on a launch that
+ * showed onboarding (no saved credential, no model), so profiles that already had a login never
+ * see it, and only while the profile has no saved `defaultPermissionMode`, so a saved choice is final.
  */
-export function shouldAskPermissionMode(state: {
-	onboardingShown: boolean;
-	loggedIn: boolean;
-	savedDefault: unknown;
-}): boolean {
-	return state.onboardingShown && state.loggedIn && state.savedDefault === undefined;
+export function shouldAskPermissionMode(state: { onboardingShown: boolean; savedDefault: unknown }): boolean {
+	return state.onboardingShown && state.savedDefault === undefined;
 }
 
-/** "keep" is Escape: the profile keeps today's default and saves nothing. */
+/** "keep" is Escape: the session keeps its current mode and nothing is saved. */
 export type PermissionModeChoice = PermissionMode | "keep";
 
-export const PERMISSION_MODE_STEP_TEXT: OnboardingText<PermissionModeChoice> = {
-	heading: "How should lunR handle changes?",
-	lines: ["Sessions start in this permission mode.", "Shift+Tab switches it, and /settings changes the default."],
-	cancel: { choice: "keep", hint: "keep yolo" },
+/** One row per mode. A `Record` so a new mode without a row fails the type check. */
+const PERMISSION_MODE_ROWS: Record<PermissionMode, { label: string; description: string }> = {
+	yolo: { label: "YOLO", description: "Runs every tool without asking" },
+	auto: { label: "Auto", description: "A review model checks risky actions first" },
+	ask: { label: "Ask", description: "Asks you before each change; reads run straight away" },
+	"read-only": { label: "Read", description: "Reads and searches only; blocks changes" },
 };
 
-/** One row per mode, in Shift+Tab order. */
-export const PERMISSION_MODE_OPTIONS: readonly OnboardingOption<PermissionMode>[] = [
-	{ choice: "yolo", label: "YOLO", description: "Runs every tool without asking" },
-	{ choice: "auto", label: "Auto", description: "A review model checks risky actions first" },
-	{ choice: "ask", label: "Ask", description: "Asks you before each change; reads run straight away" },
-	{ choice: "read-only", label: "Read", description: "Reads and searches only; blocks changes" },
-];
+/** The step's rows, in Shift+Tab order. */
+export const PERMISSION_MODE_OPTIONS: readonly OnboardingOption<PermissionMode>[] = PERMISSION_MODES.map((choice) => ({
+	choice,
+	...PERMISSION_MODE_ROWS[choice],
+}));
+
+/** The step's text; Escape keeps `current`, the mode the session is in. */
+export function permissionModeStepText(current: PermissionMode): OnboardingText<PermissionModeChoice> {
+	return {
+		heading: "How should lunR handle changes?",
+		lines: ["Sessions start in this permission mode.", "Shift+Tab switches it, and /settings changes the default."],
+		cancel: { choice: "keep", hint: `keep ${PERMISSION_MODE_ROWS[current].label.toLowerCase()}` },
+	};
+}
 
 /**
  * "A, B, C and more" when only some names are shown, or "A, B and C" when all are. No count, so
