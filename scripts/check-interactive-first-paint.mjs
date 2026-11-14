@@ -241,8 +241,8 @@ registerHooks({load(url, context, nextLoad) {
 			assert.equal(
 				request.loaderHash,
 				browserEnabled
-					? "438b2ce30371a8f7e05d8c31358935b6c60715adfc69a14e34908a8279a4d2a4"
-					: "050152541e0ffd935a1e6063f9cc92a437ffb47bfb3decc038b8621189f0b44d",
+					? "be7cae2b3656eb818095ac382ae0ba30ed6cee81444cface2bc5aab526215c5f"
+					: "9cf40099c2718ca495d89e54aa05fe3c850f985f660ab75636de2db4ea96be27",
 				"load_tools description or schema differs from the baseline fixture",
 			);
 		} else {
