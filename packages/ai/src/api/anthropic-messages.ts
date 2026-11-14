@@ -912,7 +912,10 @@ function buildParams(
 	const toolPlacement = splitDeferredTools(
 		{ ...context, messages: transformedMessages },
 		compat.supportsToolReferences,
-		normalizeToolName,
+		{
+			declared: "upFront",
+			normalizeName: normalizeToolName,
+		},
 	);
 	let immediateTools = toolPlacement.immediate;
 	let deferredTools: Tool[] = [];

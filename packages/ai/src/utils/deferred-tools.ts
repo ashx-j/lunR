@@ -2,18 +2,25 @@ import type { Api, Context, Model, Tool } from "../types.ts";
 
 type ToolNameNormalizer = (name: string) => string;
 
-const identityToolName: ToolNameNormalizer = (name) => name;
-
-/** Split current tools into prefix and transcript-loaded definitions. */
+/**
+ * Split current tools into prefix and transcript-loaded definitions. A tool a result loaded moves to
+ * `deferred`, unless the model called it before that load. For tools in `context.deferredTools`,
+ * `declared` says how the provider treats the session's declared set:
+ *  - "upFront": the provider advertises it from the first request (Anthropic), so a load always
+ *    defers the tool, even after a direct call to it, and the tools prefix stays unchanged.
+ *  - "immediate": the provider has no proven load for it (OpenAI), so those tools stay immediate.
+ */
 export function splitDeferredTools(
 	context: Context,
 	enabled: boolean,
-	normalizeName: ToolNameNormalizer = identityToolName,
+	options: { declared: "upFront" | "immediate"; normalizeName?: ToolNameNormalizer },
 ): { immediate: Tool[]; deferred: Map<string, Tool> } {
+	const normalizeName = options.normalizeName ?? ((name: string) => name);
 	const uniqueTools = new Map<string, Tool>();
 	for (const tool of context.tools ?? []) uniqueTools.set(normalizeName(tool.name), tool);
 	if (!enabled) return { immediate: [...uniqueTools.values()], deferred: new Map() };
 
+	const declaredNames = new Set((context.deferredTools ?? []).map((tool) => normalizeName(tool.name)));
 	const deferredNames = new Set<string>();
 	const usedNames = new Set<string>();
 	for (const message of context.messages) {
@@ -24,7 +31,9 @@ export function splitDeferredTools(
 		} else if (message.role === "toolResult") {
 			for (const name of message.addedToolNames ?? []) {
 				const normalizedName = normalizeName(name);
-				if (!usedNames.has(normalizedName)) deferredNames.add(normalizedName);
+				const isDeclared = declaredNames.has(normalizedName);
+				if (isDeclared ? options.declared === "upFront" : !usedNames.has(normalizedName))
+					deferredNames.add(normalizedName);
 			}
 		}
 	}

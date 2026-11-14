@@ -542,6 +542,26 @@ describe("declared deferred tools", () => {
 		expect(findAnthropicToolResult(after).content).toEqual([{ type: "tool_reference", tool_name: "cron" }]);
 	});
 
+	it("keeps the tools bytes unchanged when a direct call to a declared tool precedes its load", async () => {
+		const before = await capturePayload<AnthropicPayload>(anthropic, sessionContext([makeUserMessage(1)]));
+		const directCall: Message[] = [
+			{ ...makeAssistantToolCall(), content: [{ type: "toolCall", id: "call_0", name: "cron", arguments: {} }] },
+			{ ...makeToolResult([]), toolCallId: "call_0", toolName: "cron", isError: true },
+		];
+		const after = await capturePayload<AnthropicPayload>(
+			anthropic,
+			sessionContext([makeUserMessage(1), ...directCall, ...load("call_1", ["cron"]), makeUserMessage(4)], ["cron"]),
+		);
+
+		expect(JSON.stringify(after.tools)).toBe(JSON.stringify(before.tools));
+		const results = after.messages.flatMap((message) =>
+			typeof message.content === "string" ? [] : message.content.filter((block) => block.type === "tool_result"),
+		);
+		expect(results.find((block) => block.tool_use_id === "call_1")?.content).toEqual([
+			{ type: "tool_reference", tool_name: "cron" },
+		]);
+	});
+
 	it("emits a declared tool that is active without a load result once, in the immediate block", async () => {
 		const payload = await capturePayload<AnthropicPayload>(anthropic, sessionContext([makeUserMessage(1)], ["cron"]));
 
@@ -576,62 +596,18 @@ describe("declared deferred tools", () => {
 		expect(JSON.stringify(payload.input)).not.toContain("web_search");
 	});
 
-	it("loads a 2-tool group on Codex as 1 tool-search pair right after the loader output", async () => {
-		const context = sessionContext(
-			[makeUserMessage(1), ...load("call_1", ["web_search", "fetch_content"], codexTurn), makeUserMessage(4)],
-			["web_search", "fetch_content"],
-		);
-		const payload = await codexPayload(context);
-		const input = payload.input ?? [];
-		const output = input.findIndex((item) => item.type === "function_call_output");
-
-		expect(openAIToolNames(payload)).toEqual(["base_tool", "load_tools"]);
-		expect(searchPairs(payload)).toHaveLength(2);
-		expect(input[output + 1]?.type).toBe("tool_search_call");
-		const searchOutput = input[output + 2] as OpenAIToolSearchOutput;
-		expect(searchOutput.type).toBe("tool_search_output");
-		expect(searchOutput.tools.map((tool) => tool.name)).toEqual(["web_search", "fetch_content"]);
-	});
-
-	it("replays earlier Codex input unchanged when the session grows", async () => {
-		const history = [makeUserMessage(1), ...load("call_1", ["cron"], codexTurn), makeUserMessage(4)];
-		const first = await codexPayload(sessionContext(history, ["cron"]));
-		const reply: AssistantMessage = {
-			...makeAssistantToolCall(),
-			...codexTurn,
-			content: [{ type: "text", text: "Loaded." }],
-			stopReason: "stop",
-			timestamp: 5,
-		};
-		const second = await codexPayload(sessionContext([...history, reply, makeUserMessage(6)], ["cron"]));
-
-		expect(first.input?.length).toBeGreaterThan(4);
-		expect(second.input?.slice(0, first.input?.length)).toEqual(first.input);
-	});
-
-	it("adds a second Codex pair for a second load and leaves the first unchanged", async () => {
-		const once = [makeUserMessage(1), ...load("call_1", ["web_search", "fetch_content"], codexTurn)];
-		const first = await codexPayload(sessionContext([...once, makeUserMessage(4)], ["web_search", "fetch_content"]));
-		const second = await codexPayload(
+	it.each([
+		["a Codex load", codexTurn],
+		["a load made under Anthropic", anthropicTurn],
+	] as const)("replays %s of declared tools to Codex as plain tools", async (_case, turn) => {
+		const payload = await codexPayload(
 			sessionContext(
-				[...once, ...load("call_2", ["cron"], codexTurn), makeUserMessage(4)],
-				["web_search", "fetch_content", "cron"],
+				[makeUserMessage(1), ...load("call_1", ["web_search", "fetch_content"], turn), makeUserMessage(4)],
+				["web_search", "fetch_content"],
 			),
 		);
 
-		expect(searchPairs(second)).toHaveLength(4);
-		expect(searchPairs(second).slice(0, 2)).toEqual(searchPairs(first));
-	});
-
-	it("replays a load made under Anthropic to Codex with the pair", async () => {
-		const payload = await codexPayload(
-			sessionContext([makeUserMessage(1), ...load("call_1", ["cron"]), makeUserMessage(4)], ["cron"]),
-		);
-		const searchOutput = searchPairs(payload).find(
-			(item): item is OpenAIToolSearchOutput => item.type === "tool_search_output",
-		);
-
-		expect(openAIToolNames(payload)).toEqual(["base_tool", "load_tools"]);
-		expect(searchOutput?.tools.map((tool) => tool.name)).toEqual(["cron"]);
+		expect(openAIToolNames(payload)).toEqual(["base_tool", "load_tools", "web_search", "fetch_content"]);
+		expect(searchPairs(payload)).toEqual([]);
 	});
 });
