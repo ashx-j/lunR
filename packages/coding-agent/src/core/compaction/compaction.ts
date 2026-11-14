@@ -204,29 +204,50 @@ export function compactionSettingsForWindow(
 }
 
 /**
- * The ceiling compaction actually uses, or undefined when none is set. `prefixTokens` is the system
- * prompt plus tool schemas. A freshly compacted context still holds the prefix, the kept messages and
- * a summary of up to the reserve, so the ceiling is raised to at least twice that size: every
- * compaction then frees at least as much room as it keeps, and a low ceiling cannot compact on every
- * prompt.
+ * The ceiling compaction actually uses, or undefined when none is set. A freshly compacted context
+ * still holds the prompt and tool schemas (`prefixTokens`), the kept messages and a summary of up to
+ * the reserve, so the ceiling is raised to at least twice that size: every compaction then frees at
+ * least as much room as it keeps, and a low ceiling cannot compact on every prompt. When the last
+ * compaction measurably kept more (`compactedTokens`, the first request after it, for example a tool
+ * batch larger than `keepRecentTokens`), twice that counts instead, so compaction waits until the
+ * context has grown by what it kept rather than firing again on every tool turn.
  */
 export function effectiveCompactionCeiling(
 	contextWindow: number,
 	settings: CompactionSettings,
 	prefixTokens = 0,
+	compactedTokens = 0,
 ): number | undefined {
 	if (!settings.ceilingTokens || settings.ceilingTokens <= 0) return undefined;
+	return Math.max(
+		settings.ceilingTokens,
+		compactionCeilingFloor(contextWindow, settings, prefixTokens, compactedTokens),
+	);
+}
+
+/** The lowest ceiling lunR uses: twice a compacted context (see `effectiveCompactionCeiling`). */
+export function compactionCeilingFloor(
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+	compactedTokens = 0,
+): number {
 	const scaled = compactionSettingsForWindow(settings, contextWindow);
-	return Math.max(settings.ceilingTokens, 2 * (prefixTokens + scaled.keepRecentTokens + scaled.reserveTokens));
+	return 2 * Math.max(prefixTokens + scaled.keepRecentTokens + scaled.reserveTokens, compactedTokens);
 }
 
 /**
  * Token count above which compaction triggers: the window minus the scaled reserve, or the
  * effective ceiling when that is lower.
  */
-export function compactionThreshold(contextWindow: number, settings: CompactionSettings, prefixTokens = 0): number {
+export function compactionThreshold(
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+	compactedTokens = 0,
+): number {
 	const windowThreshold = contextWindow - compactionSettingsForWindow(settings, contextWindow).reserveTokens;
-	const ceiling = effectiveCompactionCeiling(contextWindow, settings, prefixTokens);
+	const ceiling = effectiveCompactionCeiling(contextWindow, settings, prefixTokens, compactedTokens);
 	return ceiling === undefined ? windowThreshold : Math.min(windowThreshold, ceiling);
 }
 
@@ -238,9 +259,10 @@ export function shouldCompact(
 	contextWindow: number,
 	settings: CompactionSettings,
 	prefixTokens = 0,
+	compactedTokens = 0,
 ): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > compactionThreshold(contextWindow, settings, prefixTokens);
+	return contextTokens > compactionThreshold(contextWindow, settings, prefixTokens, compactedTokens);
 }
 
 // ============================================================================

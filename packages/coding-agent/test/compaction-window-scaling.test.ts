@@ -88,12 +88,18 @@ describe("compaction ceiling", () => {
 		expect(shouldCompact(300_001, 1_000_000, withCeiling(300_000))).toBe(true);
 	});
 
+	it("raises the floor to twice what the last compaction measurably kept", () => {
+		// A kept tool batch of 119k is more than the estimated 66k compacted size.
+		expect(compactionThreshold(1_000_000, withCeiling(10_000), 30_000, 119_000)).toBe(238_000);
+		expect(compactionThreshold(1_000_000, withCeiling(10_000), 30_000, 20_000)).toBe(2 * (30_000 + 20_000 + 16384));
+	});
+
 	it("never raises the threshold above the window's own", () => {
 		expect(compactionThreshold(200_000, withCeiling(500_000))).toBe(200_000 - 16384);
 	});
 
 	it("raises a low ceiling to twice a freshly compacted context, so each compaction frees as much as it keeps", () => {
-		// 30k of system prompt and tools, plus 20k kept and the 16k reserve for the summary.
+		// A 30k prefix (system prompt and tools), plus 20k kept and the 16k reserve for the summary.
 		const compactedSize = 30_000 + 20_000 + 16384;
 		for (const ceiling of [10_000, 60_000]) {
 			expect(compactionThreshold(1_000_000, withCeiling(ceiling), 30_000)).toBe(2 * compactedSize);

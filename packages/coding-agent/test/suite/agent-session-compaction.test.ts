@@ -279,7 +279,11 @@ describe("AgentSession compaction characterization", () => {
 		return sawSummary;
 	}
 
-	async function createCeilingHarness(toolDescription: string): Promise<Harness> {
+	async function createCeilingHarness(
+		toolDescription: string,
+		options: { cancelCompaction?: boolean } = {},
+	): Promise<Harness & { compactionAttempts: () => number }> {
+		let attempts = 0;
 		const dumpTool: AgentTool = {
 			name: "dump",
 			label: "Dump",
@@ -292,13 +296,17 @@ describe("AgentSession compaction characterization", () => {
 			tools: [dumpTool],
 			extensionFactories: [
 				(pi) => {
-					pi.on("session_before_compact", async (event) => ({
-						compaction: {
-							summary: "ceiling summary",
-							firstKeptEntryId: event.preparation.firstKeptEntryId,
-							tokensBefore: event.preparation.tokensBefore,
-						},
-					}));
+					pi.on("session_before_compact", async (event) => {
+						attempts++;
+						if (options.cancelCompaction) return { cancel: true };
+						return {
+							compaction: {
+								summary: "ceiling summary",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+							},
+						};
+					});
 				},
 			],
 		});
@@ -307,8 +315,24 @@ describe("AgentSession compaction characterization", () => {
 		harness.settingsManager.applyOverrides({
 			compaction: { reserveTokens: 100, keepRecentTokens: 1, ceilingTokens: 5000 },
 		});
-		return harness;
+		return Object.assign(harness, { compactionAttempts: () => attempts });
 	}
+
+	it("waits until the context grows by what the last compaction kept before compacting again", async () => {
+		const harness = await createCeilingHarness("Return a large result");
+		// The compaction after the first request keeps 6000 tokens, more than the 5000 ceiling, so the
+		// next compaction waits for twice that.
+		await runToolTurns(harness, [6000, 6000, 7000, 8000, 13_000, 100]);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(2);
+	});
+
+	it("does not retry a failed ceiling compaction until the next prompt", async () => {
+		const harness = await createCeilingHarness("Return a large result", { cancelCompaction: true });
+		await runToolTurns(harness, [6000, 7000, 8000, 9000, 100]);
+		expect(harness.compactionAttempts()).toBe(1);
+		await runToolTurns(harness, [9000, 9500, 100]);
+		expect(harness.compactionAttempts()).toBe(2);
+	});
 
 	it("compacts at the ceiling between tool turns on any provider, inside one prompt", async () => {
 		const harness = await createCeilingHarness("Return a large result");

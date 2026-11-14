@@ -152,3 +152,38 @@ describe("InteractiveMode /compact outcomes", () => {
 		expect(mode.showError).toHaveBeenCalledWith("No model selected.");
 	});
 });
+
+describe("messages queued during a compaction", () => {
+	const flush = Reflect.get(InteractiveMode.prototype, "flushCompactionQueue") as (
+		this: object,
+		options?: { willRetry?: boolean },
+	) => Promise<void>;
+
+	function createQueueMode(isStreaming: boolean) {
+		const fakeThis = {
+			compactionQueuedMessages: [{ text: "steer me please", mode: "steer" as const }],
+			session: { isStreaming, steer: vi.fn(async () => {}), followUp: vi.fn(async () => {}), clearQueue: vi.fn() },
+			isExtensionCommand: () => false,
+			promptAfterDeferredBuiltins: vi.fn(async () => {}),
+			updatePendingMessagesDisplay: vi.fn(),
+			showError: vi.fn(),
+		};
+		Object.setPrototypeOf(fakeThis, InteractiveMode.prototype);
+		return fakeThis;
+	}
+
+	test("steers them into a run that goes on after a failed or cancelled compaction", async () => {
+		const mode = createQueueMode(true);
+		await flush.call(mode, { willRetry: false });
+		expect(mode.session.steer).toHaveBeenCalledWith("steer me please", undefined);
+		expect(mode.promptAfterDeferredBuiltins).not.toHaveBeenCalled();
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	test("sends them as a new prompt once the run has ended", async () => {
+		const mode = createQueueMode(false);
+		await flush.call(mode, { willRetry: false });
+		expect(mode.session.steer).not.toHaveBeenCalled();
+		expect(mode.promptAfterDeferredBuiltins).toHaveBeenCalledWith("steer me please", { images: undefined });
+	});
+});

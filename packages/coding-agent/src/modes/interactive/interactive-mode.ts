@@ -4172,8 +4172,9 @@ export class InteractiveMode {
 		};
 
 		try {
-			if (options?.willRetry) {
-				// When retry is pending, queue messages for the retry turn
+			// A retry is pending, or a compaction between tool turns ended (failed or cancelled included)
+			// while the run goes on: queue the messages into that run instead of starting a new prompt.
+			if (options?.willRetry || this.session.isStreaming) {
 				for (const message of queuedMessages) {
 					if (this.isExtensionCommand(message.text)) {
 						await this.promptAfterDeferredBuiltins(message.text);
@@ -4268,7 +4269,7 @@ export class InteractiveMode {
 				{
 					autoCompact: this.session.autoCompactionEnabled,
 					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
-					compactionCeilingEffectiveTokens: this.session.getCompactionCeiling()?.effective,
+					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor(),
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),

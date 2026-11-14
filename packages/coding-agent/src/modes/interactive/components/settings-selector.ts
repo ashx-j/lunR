@@ -70,14 +70,24 @@ const DEFAULT_PROJECT_TRUST_LABELS: Record<DefaultProjectTrust, string> = {
 	never: "Never trust",
 };
 
-const COMPACTION_CEILING_CHOICES = [100_000, 200_000, 300_000, 500_000];
+/** Above the floor lunR raises a ceiling to (about 105k with its own tools), so each choice takes effect. */
+const COMPACTION_CEILING_CHOICES = [150_000, 200_000, 300_000, 500_000];
 
+/** Whole thousands read as "300k"; a hand-edited value shows exactly, so it saves back unchanged. */
 function formatCompactionCeiling(tokens: number | undefined): string {
-	return tokens ? `${tokens / 1000}k` : "off";
+	if (!tokens) return "off";
+	return tokens % 1000 === 0 ? `${tokens / 1000}k` : String(tokens);
 }
 
 function parseCompactionCeiling(value: string): number | undefined {
-	return value === "off" ? undefined : Number.parseFloat(value) * 1000;
+	if (value === "off") return undefined;
+	return Math.round(Number.parseFloat(value) * (value.endsWith("k") ? 1000 : 1));
+}
+
+function compactionCeilingDescription(ceiling: number | undefined, floor: number | undefined): string {
+	return ceiling && floor && floor > ceiling
+		? `Raised to ${Math.round(floor / 1000)}k here, twice the size of a compacted context`
+		: "Compact at this many tokens even when the model allows more";
 }
 
 /** Keeps a hand-edited ceiling in the cycle so the row can show it. */
@@ -94,8 +104,8 @@ export interface SettingsConfig {
 	autoCompact: boolean;
 	/** Unset means no ceiling. */
 	compactionCeilingTokens?: number;
-	/** What this session compacts at when lunR raised the ceiling (see `effectiveCompactionCeiling`). */
-	compactionCeilingEffectiveTokens?: number;
+	/** The lowest ceiling this session uses (`compactionCeilingFloor`); a lower setting is raised to it. */
+	compactionCeilingFloorTokens?: number;
 	showImages: boolean;
 	imageWidthCells: number;
 	autoResizeImages: boolean;
@@ -1566,6 +1576,14 @@ export class SettingsSelectorComponent extends Container {
 			},
 		];
 
+		// The description follows the chosen value, so the change handler rewrites it.
+		const compactionCeilingRow: SettingItem = {
+			id: "compaction-ceiling",
+			label: "Compaction ceiling",
+			description: compactionCeilingDescription(config.compactionCeilingTokens, config.compactionCeilingFloorTokens),
+			currentValue: formatCompactionCeiling(config.compactionCeilingTokens),
+			values: compactionCeilingValues(config.compactionCeilingTokens),
+		};
 		const subscriptionCallbacks = callbacks.subscriptions;
 		const items: (SettingItem | SettingSection)[] = [
 			{ kind: "section", label: "Model" },
@@ -1688,17 +1706,7 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.autoCompact ? "on" : "off",
 				values: ["on", "off"],
 			},
-			{
-				id: "compaction-ceiling",
-				label: "Compaction ceiling",
-				description:
-					config.compactionCeilingEffectiveTokens &&
-					config.compactionCeilingEffectiveTokens > (config.compactionCeilingTokens ?? 0)
-						? `Raised to ${Math.round(config.compactionCeilingEffectiveTokens / 1000)}k here, twice the size of a compacted context`
-						: "Compact at this many tokens even when the model allows more",
-				currentValue: formatCompactionCeiling(config.compactionCeilingTokens),
-				values: compactionCeilingValues(config.compactionCeilingTokens),
-			},
+			compactionCeilingRow,
 			{
 				id: "steering-mode",
 				label: "Steering mode",
@@ -1997,9 +2005,15 @@ export class SettingsSelectorComponent extends Container {
 				case "autocompact":
 					callbacks.onAutoCompactChange(newValue === "on");
 					break;
-				case "compaction-ceiling":
-					callbacks.onCompactionCeilingChange(parseCompactionCeiling(newValue));
+				case "compaction-ceiling": {
+					const ceiling = parseCompactionCeiling(newValue);
+					compactionCeilingRow.description = compactionCeilingDescription(
+						ceiling,
+						config.compactionCeilingFloorTokens,
+					);
+					callbacks.onCompactionCeilingChange(ceiling);
 					break;
+				}
 				case "show-images":
 					callbacks.onShowImagesChange(newValue === "on");
 					break;
