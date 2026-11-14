@@ -38,6 +38,14 @@ const standIns: ExtensionFactory = (pi) => {
 		});
 };
 
+/** The tool names the prompt builder saw at each prompt, which its tool checks read. */
+const promptTools: string[][] = [];
+const promptProbe: ExtensionFactory = (pi) => {
+	pi.on("before_agent_start", (event) => {
+		promptTools.push([...(event.systemPromptOptions.selectedTools ?? [])]);
+	});
+};
+
 /** What one provider request carried. */
 interface Request {
 	tools: string[];
@@ -49,6 +57,7 @@ interface Request {
 const directories: string[] = [];
 afterEach(() => {
 	for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+	promptTools.length = 0;
 });
 
 async function startSession(
@@ -73,7 +82,7 @@ async function startSession(
 		cwd,
 		agentDir,
 		settingsManager,
-		extensionFactories: [standIns, toolLoader],
+		extensionFactories: [standIns, toolLoader, promptProbe],
 	});
 	await resourceLoader.reload();
 	const { session } = await createAgentSession({
@@ -180,6 +189,8 @@ describe("lunr-tool-loader", () => {
 
 	it("keeps the system prompt and loader description byte-identical while every group loads", async () => {
 		const session = await startSession();
+		// The first prompt decides deferral; the second loads every group; the third follows the loads.
+		await run(session);
 		const requests = await run(
 			session,
 			DEFERRED_TOOL_GROUPS.map((group) => [loadCall(group.name)]),
@@ -188,6 +199,12 @@ describe("lunr-tool-loader", () => {
 		expect(requests).toHaveLength(DEFERRED_TOOL_GROUPS.length + 1);
 		expect(new Set(requests.map((request) => request.systemPrompt)).size).toBe(1);
 		expect(new Set(requests.map((request) => request.loaderDescription)).size).toBe(1);
+		// The prompt's tool checks see the same names before the loads and after them.
+		const [afterLoads] = await run(session);
+		expect(afterLoads.systemPrompt).toBe(requests[0].systemPrompt);
+		expect(promptTools).toHaveLength(3);
+		expect(promptTools[2]).toEqual(promptTools[1]);
+		expect(promptTools[1]).toEqual(expect.arrayContaining(DEFERRED));
 		expect(requests.at(-1)?.tools).toEqual(expect.arrayContaining(DEFERRED));
 		session.dispose();
 	});

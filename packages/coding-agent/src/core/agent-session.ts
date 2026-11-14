@@ -1557,7 +1557,13 @@ export class AgentSession {
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
-		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
+		// lunr: declared deferred tools count as selected whether loaded or not, in declared order after the
+		// rest. The prompt's tool checks then give the same text before and after a load, so a load keeps
+		// the cached prefix and the model keeps the guidance that tells it when to load a tool.
+		const validToolNames = [
+			...toolNames.filter((name) => !this._deferredToolNames.includes(name)),
+			...this._deferredToolNames,
+		].filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
 		const promptGuidelines: string[] = [];
 		for (const name of validToolNames) {
