@@ -116,6 +116,49 @@ describe("isMutatingBashCommand", () => {
 		}
 	});
 
+	it.each([
+		"sed 's/a/b/w x' f",
+		"sed -n 'w y' f",
+		"sed '1e touch x' f",
+		"sed -e p -e 'W out' f",
+		"sed 's/a/touch x/e' f",
+		"sed --expression='$w out' f",
+		"sed 's/[/]/x/;w out' f",
+		"sed '/a/{p;w out\n}' f",
+		"sed f -i",
+		"sed -ni p f",
+		"sed -f script.sed f",
+		"sed --file=script.sed f",
+		"sed --exp='s/a/b/' f",
+		"sed -n 'p;k' f",
+		"sed 's/a/b' f",
+		"sed -n x* f",
+		"date -s 2020-01-01",
+		"date --set=2020-01-01",
+		"date 010100002020",
+	])("blocks %s, which writes, runs code, hides its script or can't be parsed", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"sed -n '10,20p' src/a.ts",
+		"sed -n 10,20p src/a.ts",
+		"sed 's/foo/bar/g' a.ts",
+		"sed -E 's#(a|b)/w#x#2g' a.ts",
+		"sed -n -e '/^[a-z]*w/p' -e '$=' a.ts",
+		"sed -n '/start/,/end/{/skip/!p}' a.ts",
+		"sed '1i\\\nheader' a.ts",
+		"sed -n '1~2p;$!N;r other.txt' a.ts",
+		"sed 'y/abc/xyz/;q 3' a.ts",
+		"sed -es/i/x/ a.ts",
+		"date",
+		"date +%Y-%m-%d",
+		"date -u -d 'last sunday' +%s",
+		"date -Iseconds",
+	])("allows %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+
 	it("blocks output redirects outside quotes", () => {
 		expect(isMutatingBashCommand("echo hello > file.txt")).toBe(true);
 		expect(isMutatingBashCommand("cat a >> b")).toBe(true);
