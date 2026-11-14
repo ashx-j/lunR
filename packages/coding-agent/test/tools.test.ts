@@ -235,6 +235,27 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("definitely not a png");
 			expect(result.content.some((c: any) => c.type === "image")).toBe(false);
 		});
+
+		it("describes a binary file in one line instead of returning its bytes", async () => {
+			const binaryFile = join(testDir, "random.bin");
+			writeFileSync(binaryFile, Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 131 + 7) % 256)));
+			const oddFile = join(testDir, "latin1.txt");
+			writeFileSync(oddFile, Buffer.from("caf\xe9 ol\xe9 with a few odd bytes\nline 2\n", "latin1"));
+
+			const binary = getTextOutput(await readTool.execute("test-call-bin", { path: binaryFile }));
+			const odd = getTextOutput(await readTool.execute("test-call-odd", { path: oddFile }));
+
+			expect(binary).toBe(
+				`[${binaryFile} is a binary file (2.9KB). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`,
+			);
+			expect(odd).toContain("with a few odd bytes\nline 2");
+		});
+
+		it("says a directory is a directory and points at ls", async () => {
+			await expect(readTool.execute("test-call-dir", { path: testDir })).rejects.toThrow(
+				`${testDir} is a directory. Use ls to list its contents.`,
+			);
+		});
 	});
 
 	describe("write tool", () => {
