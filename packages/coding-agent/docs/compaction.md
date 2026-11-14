@@ -36,6 +36,8 @@ By default, `reserveTokens` is 16384 tokens (configurable in `~/.lunr/agent/sett
 
 On small context windows lunR caps both settings by window size. The effective `reserveTokens` is at most 25% of the context window, and the effective `keepRecentTokens` is at most 40%. Windows of about 65k tokens or more keep the configured values.
 
+`compaction.ceilingTokens` compacts earlier on large windows. With it set, compaction triggers at the smaller of `contextWindow - reserveTokens` and the ceiling. On a 1M-token model the default threshold is about 984k tokens, and every request before then sends the whole context; a ceiling of `300000` compacts at 300k instead. It is off by default. Set it in settings.json or in `/settings` under Agent > Compaction ceiling. lunR raises a ceiling below the size of a freshly compacted context (system prompt and tool schemas plus `keepRecentTokens` plus `reserveTokens`) to that size, so a low ceiling cannot compact on every turn.
+
 For Codex OAuth models, lunR checks the threshold after each complete batch of tool results. If the batch crosses the threshold, lunR compacts before sending the next provider request.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary. Running `/compact` again at an unchanged compaction boundary is a no-op.

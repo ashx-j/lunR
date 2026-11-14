@@ -72,6 +72,7 @@ import {
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
+	type CompactionSettings,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
@@ -772,6 +773,7 @@ export class AgentSession {
 						.tokens,
 					model.contextWindow,
 					settings,
+					this._compactionPrefixTokens(settings),
 				)
 			) {
 				const previousCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
@@ -2892,10 +2894,20 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
+		if (shouldCompact(contextTokens, contextWindow, settings, this._compactionPrefixTokens(settings))) {
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
+	}
+
+	/** System prompt and tool schema tokens, which a compacted context still carries. Only the ceiling needs them. */
+	private _compactionPrefixTokens(settings: CompactionSettings): number {
+		if (!settings.ceilingTokens) return 0;
+		return estimateRequestContextTokens({
+			systemPrompt: this.systemPrompt,
+			tools: this.agent.state.tools,
+			messages: [],
+		}).tokens;
 	}
 
 	/**

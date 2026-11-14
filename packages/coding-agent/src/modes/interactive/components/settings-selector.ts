@@ -70,12 +70,30 @@ const DEFAULT_PROJECT_TRUST_LABELS: Record<DefaultProjectTrust, string> = {
 	never: "Never trust",
 };
 
+const COMPACTION_CEILING_CHOICES = [100_000, 200_000, 300_000, 500_000];
+
+function formatCompactionCeiling(tokens: number | undefined): string {
+	return tokens ? `${tokens / 1000}k` : "off";
+}
+
+function parseCompactionCeiling(value: string): number | undefined {
+	return value === "off" ? undefined : Number.parseFloat(value) * 1000;
+}
+
+/** Keeps a hand-edited ceiling in the cycle so the row can show it. */
+function compactionCeilingValues(current: number | undefined): string[] {
+	const choices = new Set([...COMPACTION_CEILING_CHOICES, ...(current ? [current] : [])]);
+	return ["off", ...[...choices].sort((a, b) => a - b).map(formatCompactionCeiling)];
+}
+
 const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 	Object.entries(DEFAULT_PROJECT_TRUST_LABELS).map(([value, label]) => [label, value as DefaultProjectTrust]),
 );
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	/** Unset means no ceiling. */
+	compactionCeilingTokens?: number;
 	showImages: boolean;
 	imageWidthCells: number;
 	autoResizeImages: boolean;
@@ -156,6 +174,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onCompactionCeilingChange: (ceilingTokens: number | undefined) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -1668,6 +1687,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "compaction-ceiling",
+				label: "Compaction ceiling",
+				description: "Compact at this many tokens even when the model allows more",
+				currentValue: formatCompactionCeiling(config.compactionCeilingTokens),
+				values: compactionCeilingValues(config.compactionCeilingTokens),
+			},
+			{
 				id: "steering-mode",
 				label: "Steering mode",
 				description: "How new messages interrupt a streaming response",
@@ -1964,6 +1990,9 @@ export class SettingsSelectorComponent extends Container {
 			switch (id) {
 				case "autocompact":
 					callbacks.onAutoCompactChange(newValue === "on");
+					break;
+				case "compaction-ceiling":
+					callbacks.onCompactionCeilingChange(parseCompactionCeiling(newValue));
 					break;
 				case "show-images":
 					callbacks.onShowImagesChange(newValue === "on");

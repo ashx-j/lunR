@@ -113,6 +113,8 @@ export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	/** Compact once context passes this many tokens, even when the window is larger. Unset means off. */
+	ceilingTokens?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
@@ -202,12 +204,30 @@ export function compactionSettingsForWindow(
 }
 
 /**
- * Check if compaction should trigger based on context usage. The reserve is scaled to the window
- * (see `compactionSettingsForWindow`).
+ * Token count above which compaction triggers: the window minus the scaled reserve, or the ceiling
+ * when that is lower. `prefixTokens` is the system prompt plus tool schemas. The ceiling is raised to
+ * at least prefix + kept + reserve, the size of a freshly compacted context, so a low ceiling cannot
+ * compact on every turn.
  */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
+export function compactionThreshold(contextWindow: number, settings: CompactionSettings, prefixTokens = 0): number {
+	const scaled = compactionSettingsForWindow(settings, contextWindow);
+	const windowThreshold = contextWindow - scaled.reserveTokens;
+	if (!settings.ceilingTokens || settings.ceilingTokens <= 0) return windowThreshold;
+	const ceiling = Math.max(settings.ceilingTokens, prefixTokens + scaled.keepRecentTokens + scaled.reserveTokens);
+	return Math.min(windowThreshold, ceiling);
+}
+
+/**
+ * Check if compaction should trigger based on context usage (see `compactionThreshold`).
+ */
+export function shouldCompact(
+	contextTokens: number,
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - compactionSettingsForWindow(settings, contextWindow).reserveTokens;
+	return contextTokens > compactionThreshold(contextWindow, settings, prefixTokens);
 }
 
 // ============================================================================
