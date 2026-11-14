@@ -32,6 +32,8 @@ describe("protected destinations", () => {
 			for (const target of [
 				join(agentDir, "settings.json"),
 				join(agentDir, "install-features.json"),
+				join(agentDir, "auth.json"),
+				join(agentDir, "subscriptions.json"),
 				join(agentDir, "agents", "AGENTS.md"),
 				join(profile, "simple-memory", "memory.md"),
 				join(profile, ".lunr", "settings.json"),
