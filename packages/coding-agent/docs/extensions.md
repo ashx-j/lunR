@@ -2268,7 +2268,7 @@ For the best cache behavior, keep the loader tool active for the whole session a
 
 Call `pi.setDeferredTools(names)` instead of removing tools with `pi.setActiveTools()` when the tools should start unloaded. On Anthropic models with native loading, lunR then sends every declared tool with `defer_loading` from the first request in a fixed order, loaded or not. The `tools` array stays byte-identical when a tool result loads one, so the cached tools and system prompt survive the load. Tools that are removed with `pi.setActiveTools()` instead are absent until they load, and the first load rewrites the cached prefix.
 
-Call it once per session, for example at the first `before_agent_start`, after the tools are registered. A direct call to a declared tool that is not loaded yet returns an error telling the model to load it first. Other providers ignore the declaration.
+Call it at the first `before_agent_start`, after the tools are registered. Each call adds its names after the ones declared earlier in the session, so several extensions can declare their own tools; a name declared earlier keeps its place and its loaded state. A direct call to a declared tool that is not loaded yet returns an error telling the model to load it first. Other providers ignore the declaration and send a loaded declared tool as a normal tool.
 
 lunR's builtin `lunr-tool-loader` uses this for its own rarely used tools (subagents, web, LSP, browser, `code_rewrite`, cron, PR watch) and registers `load_tools` as their loader on Anthropic models with native loading.
 

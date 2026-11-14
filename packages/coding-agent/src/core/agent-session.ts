@@ -763,6 +763,7 @@ export class AgentSession {
 				...(previousSnapshot?.context ?? turn.context),
 				systemPrompt: this._withSystemPromptAppend(this._systemPromptOverride ?? this._baseSystemPrompt),
 				tools: this.agent.state.tools.slice(),
+				deferredTools: this.agent.state.deferredTools,
 			};
 			const model = this.model;
 			const settings = this.settingsManager.getCompactionSettings();
@@ -1457,16 +1458,19 @@ export class AgentSession {
 	}
 
 	/**
-	 * lunr: start these registered tools unloaded. They leave the active set and stay declared to providers
-	 * with native deferred loading (`Context.deferredTools`). Accepts nothing when the session has an
-	 * explicit tool allowlist or the user turned off loading tools on demand. Returns the accepted names.
+	 * lunr: start these registered tools unloaded. They leave the active set and join the set declared to
+	 * providers with native deferred loading (`Context.deferredTools`), after any names declared earlier.
+	 * A name declared earlier keeps its place and stays loaded if it loaded since. Accepts nothing when the
+	 * session has an explicit tool allowlist or the user turned off loading tools on demand. Returns the
+	 * accepted names.
 	 */
 	setDeferredToolsByName(toolNames: string[]): string[] {
 		if (this._allowedToolNames || !this.settingsManager.getDeferredToolsEnabled()) return [];
-		this._deferredToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
-		const deferred = new Set(this._deferredToolNames);
-		this.setActiveToolsByName(this.getActiveToolNames().filter((name) => !deferred.has(name)));
-		return [...this._deferredToolNames];
+		const accepted = [...new Set(toolNames.filter((name) => this._toolRegistry.has(name)))];
+		const added = new Set(accepted.filter((name) => !this._deferredToolNames.includes(name)));
+		this._deferredToolNames = [...this._deferredToolNames, ...added];
+		this.setActiveToolsByName(this.getActiveToolNames().filter((name) => !added.has(name)));
+		return accepted;
 	}
 
 	/** Rebuild the registry after a settings-backed feature changes availability. */
@@ -3486,7 +3490,8 @@ export class AgentSession {
 			}
 		} else if (options?.includeAllExtensionTools) {
 			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
+				// lunr: a declared deferred tool stays unloaded until something loads it.
+				if (!this._deferredToolNames.includes(tool.name)) nextActiveToolNames.push(tool.name);
 			}
 		} else if (!options?.activeToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {

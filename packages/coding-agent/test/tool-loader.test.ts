@@ -154,6 +154,18 @@ describe("lunr-tool-loader", () => {
 		session.dispose();
 	});
 
+	it("brings every tool back when a reload follows turning the setting off", async () => {
+		const session = await startSession();
+		await run(session);
+		session.settingsManager.setDeferredToolsEnabled(false);
+		await session.reload();
+		const [afterReload] = await run(session);
+
+		expect(afterReload.tools).toEqual(expect.arrayContaining([...DEFERRED, "always_tool"]));
+		expect(afterReload.deferredTools ?? []).toEqual([]);
+		session.dispose();
+	});
+
 	it("answers an unknown name with the valid names", async () => {
 		const session = await startSession();
 		await run(session, [[loadCall("nope")]]);
