@@ -1654,3 +1654,127 @@ describe("exported loop preparation failures", () => {
 		expect(events.some((event) => event.type === "agent_end")).toBe(false);
 	});
 });
+
+describe("parallel tool calls with toolCallMutates", () => {
+	const fileSchema = Type.Object({ path: Type.String(), content: Type.Optional(Type.String()) });
+
+	// read and write tools over an in-memory file map that log when each call starts and ends.
+	function createFileTools(onWrite?: () => void) {
+		const files = new Map<string, string>();
+		const log: string[] = [];
+		const tool = (name: string): AgentTool<typeof fileSchema, Record<string, never>> => ({
+			name,
+			label: name,
+			description: name,
+			parameters: fileSchema,
+			async execute(toolCallId, params) {
+				log.push(`start ${toolCallId}`);
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				if (name === "write") {
+					onWrite?.();
+					files.set(params.path, params.content ?? "");
+				}
+				log.push(`end ${toolCallId}`);
+				const text = name === "write" ? "written" : (files.get(params.path) ?? "missing");
+				return { content: [{ type: "text", text }], details: {} };
+			},
+		});
+		return { files, log, tools: [tool("read"), tool("write")] };
+	}
+
+	async function runBatch(
+		calls: Array<{ id: string; name: string; path: string }>,
+		options: { onWrite?: (controller: AbortController) => void } = {},
+	) {
+		const controller = new AbortController();
+		const { log, tools } = createFileTools(() => options.onWrite?.(controller));
+		const gated: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolCallMutates: (toolCall) => toolCall.name === "write",
+			beforeToolCall: async ({ toolCall }) => {
+				gated.push(toolCall.id);
+				return undefined;
+			},
+		};
+		let llmCalls = 0;
+		const stream = agentLoop(
+			[createUserMessage("go")],
+			{ systemPrompt: "", messages: [], tools },
+			config,
+			controller.signal,
+			() => {
+				const mockStream = new MockAssistantStream();
+				const first = llmCalls++ === 0;
+				queueMicrotask(() => {
+					const message = first
+						? createAssistantMessage(
+								calls.map((call) => ({
+									type: "toolCall" as const,
+									id: call.id,
+									name: call.name,
+									arguments: { path: call.path, content: call.id },
+								})),
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+					mockStream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+				});
+				return mockStream;
+			},
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+		const results = (await stream.result()).filter((message) => message.role === "toolResult");
+		return {
+			log,
+			gated,
+			llmCalls,
+			results: results.map((result) => ({
+				id: result.toolCallId,
+				text: result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+			})),
+		};
+	}
+
+	it("runs reads together, and a mutating call after earlier calls and before later ones", async () => {
+		const { log, gated, results } = await runBatch([
+			{ id: "r1", name: "read", path: "a" },
+			{ id: "r2", name: "read", path: "a" },
+			{ id: "w", name: "write", path: "a" },
+			{ id: "r3", name: "read", path: "a" },
+			{ id: "r4", name: "read", path: "a" },
+		]);
+
+		expect(log.slice(0, 2).sort()).toEqual(["start r1", "start r2"]);
+		expect(log.slice(4, 6)).toEqual(["start w", "end w"]);
+		expect(log.slice(6, 8).sort()).toEqual(["start r3", "start r4"]);
+		expect(gated).toEqual(["r1", "r2", "w", "r3", "r4"]);
+		expect(results).toEqual([
+			{ id: "r1", text: "missing" },
+			{ id: "r2", text: "missing" },
+			{ id: "w", text: "written" },
+			{ id: "r3", text: "w" },
+			{ id: "r4", text: "w" },
+		]);
+	});
+
+	it("does not start later calls after an abort during a mutating call", async () => {
+		const { log, llmCalls, results } = await runBatch(
+			[
+				{ id: "w", name: "write", path: "a" },
+				{ id: "r", name: "read", path: "a" },
+			],
+			{ onWrite: (controller) => controller.abort() },
+		);
+
+		expect(log).toEqual(["start w", "end w"]);
+		expect(llmCalls).toBe(1);
+		expect(results).toEqual([
+			{ id: "w", text: "written" },
+			{ id: "r", text: "Operation aborted" },
+		]);
+	});
+});
