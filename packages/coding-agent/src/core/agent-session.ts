@@ -128,7 +128,7 @@ import {
 	setPermissionAutonomous,
 	setPermissionMode,
 } from "./permissions.ts";
-import { READ_ONLY_MODE_ADDENDUM } from "./plan-mode.ts";
+import { READ_ONLY_MODE_ADDENDUM, readOnlyModeBlockReason } from "./plan-mode.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
@@ -643,6 +643,10 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
+		// lunr: calls read-only mode knows to change state (edit, write, mutating bash, ...) run in
+		// the order the model wrote them; other calls in the same message still run concurrently.
+		// Unknown extension tools stay concurrent; they can opt out with executionMode "sequential".
+		this.agent.toolCallMutates = (toolCall, args) => readOnlyModeBlockReason(toolCall.name, args) !== undefined;
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 			// lunr: the permission gate runs before host gates and may request approval.
 			const permBlock = await gateToolCall(
