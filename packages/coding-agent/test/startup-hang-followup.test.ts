@@ -27,11 +27,23 @@ describe("startup hang follow-ups", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("readPipedStdin returns undefined when no first chunk arrives", async () => {
-		const stream = new FakeStdin() as unknown as NodeJS.ReadStream;
+	it("readPipedStdin returns undefined and pauses stdin when nothing arrives", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const stream = new FakeStdin();
+		const pause = vi.spyOn(stream, "pause");
 		const started = Date.now();
-		await expect(readPipedStdin(stream, { firstChunkMs: 20, idleMs: 50 })).resolves.toBeUndefined();
+		await expect(readPipedStdin(stream as unknown as NodeJS.ReadStream, { silenceMs: 20 })).resolves.toBeUndefined();
 		expect(Date.now() - started).toBeLessThan(500);
+		expect(pause).toHaveBeenCalled();
+	});
+
+	it("readPipedStdin waits for a producer that starts late", async () => {
+		const stream = new FakeStdin();
+		const read = readPipedStdin(stream as unknown as NodeJS.ReadStream, { silenceMs: 200 });
+		setTimeout(() => stream.emit("data", "late "), 100);
+		setTimeout(() => stream.emit("data", "input"), 250);
+		setTimeout(() => stream.emit("end"), 400);
+		await expect(read).resolves.toBe("late input");
 	});
 
 	it("showDeprecationWarnings does not wait for a key when stdin is not a TTY", async () => {

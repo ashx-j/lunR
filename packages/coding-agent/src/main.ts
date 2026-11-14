@@ -76,60 +76,67 @@ import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
 
-/**
- * Read all content from piped stdin.
- * Returns undefined if stdin is a TTY (interactive terminal).
- */
-const PIPED_STDIN_FIRST_CHUNK_MS = 50;
-const PIPED_STDIN_IDLE_MS = 2000;
+const PIPED_STDIN_SILENCE_MS = 10_000;
 
 /**
- * Read piped stdin. A non-TTY that never emits data (Windows console, leftover
- * redirected handle) must not block interactive start forever.
+ * Read piped stdin for print mode. Returns undefined if stdin is a TTY.
+ *
+ * Reads until the writer closes stdin, so a slow producer is not cut off.
+ * A non-TTY that never emits or closes (a spawner that leaves the pipe open, a
+ * leftover redirected handle) must not block forever, so reading also stops
+ * after `silenceMs` with no new bytes, with a note on stderr. Either way the
+ * stream is paused afterwards so an open pipe does not keep the process alive
+ * once the turn is done.
  */
 export async function readPipedStdin(
 	stream: NodeJS.ReadStream = process.stdin,
-	options: { firstChunkMs?: number; idleMs?: number } = {},
+	options: { silenceMs?: number } = {},
 ): Promise<string | undefined> {
 	if (stream.isTTY) {
 		return undefined;
 	}
 
-	const firstChunkMs = options.firstChunkMs ?? PIPED_STDIN_FIRST_CHUNK_MS;
-	const idleMs = options.idleMs ?? PIPED_STDIN_IDLE_MS;
+	const silenceMs = options.silenceMs ?? PIPED_STDIN_SILENCE_MS;
 
 	return new Promise((resolve) => {
 		let data = "";
 		let settled = false;
-		let sawData = false;
-		let idleTimer: ReturnType<typeof setTimeout> | undefined;
-		const firstChunkTimer = setTimeout(() => {
-			if (!sawData) finish(undefined);
-		}, firstChunkMs);
+		let silenceTimer: ReturnType<typeof setTimeout> | undefined;
 
-		const finish = (value: string | undefined) => {
+		const finish = () => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(firstChunkTimer);
-			if (idleTimer) clearTimeout(idleTimer);
+			clearTimeout(silenceTimer);
 			stream.off("data", onData);
-			stream.off("end", onEnd);
-			stream.off("error", onEnd);
-			resolve(value);
+			stream.off("end", finish);
+			stream.off("error", finish);
+			stream.pause();
+			resolve(data.trim() || undefined);
 		};
 
-		const onEnd = () => finish(data.trim() || undefined);
+		const armSilenceTimer = () => {
+			clearTimeout(silenceTimer);
+			silenceTimer = setTimeout(() => {
+				const rest = data ? "with what arrived" : "without it";
+				console.error(
+					chalk.yellow(
+						`Warning: stdin sent nothing for ${silenceMs / 1000} s, continuing ${rest}. Close stdin or pass "< /dev/null" to skip this wait.`,
+					),
+				);
+				finish();
+			}, silenceMs);
+		};
+
 		const onData = (chunk: string | Buffer) => {
-			sawData = true;
 			data += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-			if (idleTimer) clearTimeout(idleTimer);
-			idleTimer = setTimeout(onEnd, idleMs);
+			armSilenceTimer();
 		};
 
 		stream.setEncoding("utf8");
 		stream.on("data", onData);
-		stream.on("end", onEnd);
-		stream.on("error", onEnd);
+		stream.on("end", finish);
+		stream.on("error", finish);
+		armSilenceTimer();
 		stream.resume();
 	});
 }
