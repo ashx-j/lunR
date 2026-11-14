@@ -48,7 +48,7 @@ async function startup(options: {
 	const extension = join(root, "probe.ts");
 	write(
 		extension,
-		`import {writeFileSync} from 'node:fs'; export default pi => { pi.on('project_trust', () => { writeFileSync(${JSON.stringify(decision)}, JSON.stringify(${options.trusted})); console.error('TRUST_DECISION:${options.trusted}'); return {trusted:${JSON.stringify(options.trusted ? "yes" : "no")}, remember:false}; }); pi.on('session_start', (_,ctx) => { writeFileSync(${JSON.stringify(observed)}, JSON.stringify({cwd:ctx.cwd, directory:ctx.sessionManager.getSessionDir(), id:ctx.sessionManager.getSessionId(), trusted:ctx.isProjectTrusted()})); }); };`,
+		`import {writeFileSync} from 'node:fs'; export default pi => { pi.on('project_trust', () => { writeFileSync(${JSON.stringify(decision)}, JSON.stringify(${options.trusted})); console.error('TRUST_DECISION:${options.trusted}'); return {trusted:${JSON.stringify(options.trusted ? "yes" : "no")}, remember:false}; }); pi.on('session_start', (_,ctx) => { writeFileSync(${JSON.stringify(observed)}, JSON.stringify({cwd:ctx.cwd, directory:ctx.sessionManager.getSessionDir(), id:ctx.sessionManager.getSessionId(), trusted:ctx.isProjectTrusted()})); }); pi.on('input', () => ({action:'handled'})); };`,
 	);
 	const args = [
 		"--mode",
@@ -71,6 +71,8 @@ async function startup(options: {
 	else if (options.selection === "resume") args.push("--resume");
 	else if (options.foreign) args.push("--session-id", id);
 	if (options.explicit) args.push("--session-dir", join(root, "explicit-sessions"));
+	// Print mode needs a prompt. The probe marks it handled, so startup runs fully without a model request.
+	args.push("startup probe");
 	const main = pathToFileURL(resolve(__dirname, "../src/main.ts")).href;
 	// Replace only the picker UI. Its actual session loaders and the rest of main run normally.
 	const pickerSource = `import {readFileSync,writeFileSync} from 'node:fs'; export async function selectSession(current, all) { const sessions = await current(); const allSessions = await all(); writeFileSync(${JSON.stringify(picker)}, JSON.stringify({trusted:JSON.parse(readFileSync(${JSON.stringify(decision)},'utf8')), ids:sessions.map(session=>session.id), allIds:allSessions.map(session=>session.id)})); return sessions[0]?.path ?? null; }`;
