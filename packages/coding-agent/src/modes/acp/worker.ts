@@ -60,6 +60,8 @@ export function createAcpWorkerBridge(
 	// ACP's "auto" is Autonomous: no questions, while the client still approves each tool, so no auto review.
 	session.setAutoReviewEnabled?.(false);
 	const permissionModeChanged = () => {
+		// The client already approves each tool, so lunR's ask mode would ask twice; it runs as Build.
+		if (session.permissionMode === "ask") session.setPermissionMode?.("yolo");
 		session.setAutonomous?.(session.permissionMode === "auto");
 		if (session.permissionMode && session.permissionMode !== "read-only")
 			previousWritableMode = session.permissionMode;

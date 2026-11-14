@@ -9,6 +9,8 @@ Read before changing permission modes, the auto reviewer, protected files, globa
 - Read-only = `gateToolCall` + `readOnlyModeBlockReason` + `READ_ONLY_MODE_ADDENDUM`. It blocks unclassified extension tools, including direct MCP tools; the `mcp` proxy allows status, search, describe and ui-messages. Saved `manual`/`plan` values read as yolo/read-only without rewriting. Gateway switches to a saved writable mode pause in read-only until confirmed. Read-only does not revoke running full-access children.
 - Auto = yolo plus the AgentSession review step (`core/auto-review.ts`).
 - "No questions" (`AUTONOMOUS_ADDENDUM`) is a per-session flag set by `/goal`, children and ACP Autonomous, not a mode.
+- Ask sits between auto and read-only in `PERMISSION_MODES` and the Shift+Tab cycle. Ask = `gateAskMode` in `permissions.ts`: asks through the shared approval handler (`kind: "tool"`) before any call `readOnlyModeBlock` would block, so it has no classifier of its own and unknown tools ask. Session approvals key on the exact command or resolved path, else the tool name (the removed manual mode keyed on the tool, so one "session" answer allowed every later bash). No system prompt addendum: rejections return their reason. ACP maps ask to yolo because its client already approves each tool. `/goal` does not leave ask.
+- Allow/deny rules (`core/permission-rules.ts`) come from `getPermissionRuleSettings()` per scope, never the merged settings, so project allow rules can be gated on trust. `compilePermissionRules` memoizes on the rule array identities; `addPermissionAllowRule` replaces the array so the memo misses. Deny runs before `READ_ONLY_TOOLS`, so it can block reads.
 
 ## Auto review
 

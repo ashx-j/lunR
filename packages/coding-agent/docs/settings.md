@@ -60,6 +60,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
+| `permissions` | object | - | `{ "allow": [...], "deny": [...] }` rules such as `bash(npm test)` or `edit(src/**)`. Project allow rules count only in a trusted project. `defaultPermissionMode` also takes `"ask"`. See [Allow and deny rules](features.md#allow-and-deny-rules) |
 | `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). |
 | `autoReviewModel` | string | unset | `"provider/model"` that reviews risky actions in auto mode. Unset uses the provider's own reviewer (Claude Sonnet 5 for Anthropic, the session model for OpenAI, xAI and Qwen); other providers need one set |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |

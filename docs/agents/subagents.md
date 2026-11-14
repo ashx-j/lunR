@@ -17,7 +17,7 @@ Read before changing pi-subagents, intercom, `/chain` or the subagent tool schem
 
 ## Permissions
 
-- Child `permissions: "full"` is not parent-equivalent: coding tools (read/search/shell/edit/write/web/LSP/MCP), no cron, memory, goals, present_plan or nested `subagent` unless fanout-authorized. The parent snapshots `PI_SUBAGENT_CHILD_PERMISSION` and, in auto, its reviewer in `PI_SUBAGENT_CHILD_AUTO_REVIEW`; full runs in auto when that is set and yolo otherwise, read-only as read-only, and every child is autonomous. A read-only parent rejects full launches. Non-child `lunr -p` stays fail-closed.
+- Child `permissions: "full"` is not parent-equivalent: coding tools (read/search/shell/edit/write/web/LSP/MCP), no cron, memory, goals, present_plan or nested `subagent` unless fanout-authorized. The parent snapshots `PI_SUBAGENT_CHILD_PERMISSION` and, in auto, its reviewer in `PI_SUBAGENT_CHILD_AUTO_REVIEW`; full runs in auto when that is set and yolo otherwise, read-only as read-only, and every child is autonomous. A read-only parent rejects full launches; an ask parent asks first, saying the child runs without asking. Non-child `lunr -p` stays fail-closed.
 
 ## Display
 

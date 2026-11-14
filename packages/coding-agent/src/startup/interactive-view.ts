@@ -93,7 +93,7 @@ export class InteractiveView {
 		registerPermissionModeBridge(() =>
 			permission === "plan"
 				? "read-only"
-				: permission === "auto" || permission === "read-only"
+				: permission === "auto" || permission === "ask" || permission === "read-only"
 					? permission
 					: "yolo",
 		);
