@@ -9,7 +9,7 @@
  *    prefix stays fixed.
  *  - `load_tools` activates whole groups with `pi.setActiveTools`. The tool wrapper records the activation
  *    as `addedToolNames` on the result, which providers turn into their native load point.
- *  - On resume or fork, groups the branch already loaded or called start active.
+ *  - On resume or fork, groups the branch already loaded or ran start active.
  *
  * Runtime imports stay on concrete core modules — never the package barrel.
  */
@@ -91,18 +91,17 @@ function resolve(groups: readonly Group[], names: readonly string[]): { tools: s
 	return { tools: [...new Set(tools)], unknown };
 }
 
-/** Deferred tools the branch already used: loaded by a result or called by the model, before compaction too. */
+/**
+ * Deferred tools the branch already used, before compaction too: loaded by a result, or run with a
+ * successful result. A call that failed as not loaded never ran, so it does not count.
+ */
 function usedOnBranch(ctx: ExtensionContext, accepted: ReadonlySet<string>): string[] {
 	const used = new Set<string>();
 	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message") continue;
+		if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
 		const message = entry.message;
-		if (message.role === "toolResult") {
-			for (const name of message.addedToolNames ?? []) if (accepted.has(name)) used.add(name);
-		} else if (message.role === "assistant") {
-			for (const block of message.content)
-				if (block.type === "toolCall" && accepted.has(block.name)) used.add(block.name);
-		}
+		for (const name of message.addedToolNames ?? []) if (accepted.has(name)) used.add(name);
+		if (!message.isError && accepted.has(message.toolName)) used.add(message.toolName);
 	}
 	return [...used];
 }

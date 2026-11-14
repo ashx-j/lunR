@@ -218,9 +218,10 @@ describe("lunr-tool-loader", () => {
 	});
 
 	it.each([
-		["a cron load", [loadCall("cron")], ["cron"]],
-		["a subagent call without a load", [fauxToolCall("subagent", {})], ["subagent", "subagent_wait"]],
-	] as const)("restores the groups a resumed branch used: %s", async (_case, calls, restored) => {
+		["a cron load", [loadCall("cron")], false, ["cron"]],
+		["a subagent call without a load", [fauxToolCall("subagent", {})], false, ["subagent", "subagent_wait"]],
+		["a subagent call that failed as not loaded", [fauxToolCall("subagent", {})], true, []],
+	] as const)("restores the groups a resumed branch used: %s", async (_case, calls, isError, restored) => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
 		sessionManager.appendMessage({ ...fauxAssistantMessage([...calls], { stopReason: "toolUse" }), timestamp: 2 });
@@ -230,7 +231,7 @@ describe("lunr-tool-loader", () => {
 			toolName: calls[0].name,
 			content: [{ type: "text", text: "ok" }],
 			...(calls[0].name === "load_tools" ? { addedToolNames: ["cron"] } : {}),
-			isError: false,
+			isError,
 			timestamp: 3,
 		});
 		const session = await startSession({ sessionManager });

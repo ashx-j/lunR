@@ -358,9 +358,68 @@ describe("agentLoop with AgentMessage", () => {
 			message.role === "toolResult" && message.content[0]?.type === "text" ? [message.content[0].text] : [],
 		);
 		expect(results).toEqual([
-			'Tool cron is not loaded. Call load_tools with ["cron"], then call it again.',
+			"Tool cron is not loaded. Load it first, then call it again.",
 			"Tool missing not found",
 		]);
+	});
+
+	it("runs a declared tool that an earlier call in the same message loaded", async () => {
+		const cron: AgentTool = {
+			name: "cron",
+			label: "cron",
+			description: "cron",
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "no jobs" }], details: undefined };
+			},
+		};
+		const loader: AgentTool = {
+			name: "load_tools",
+			label: "load_tools",
+			description: "load",
+			parameters: Type.Object({}),
+			executionMode: "sequential",
+			async execute() {
+				return {
+					content: [{ type: "text", text: "Loaded tools: cron." }],
+					details: undefined,
+					addedToolNames: ["cron"],
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [loader], deferredTools: [cron] };
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex++ === 0
+						? createAssistantMessage(
+								[
+									{ type: "toolCall", id: "tool-1", name: "load_tools", arguments: {} },
+									{ type: "toolCall", id: "tool-2", name: "cron", arguments: {} },
+								],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
+			});
+			return stream;
+		};
+
+		const messages = await runAgentLoop(
+			[createUserMessage("go")],
+			context,
+			{ model: createModel(), convertToLlm: identityConverter },
+			() => {},
+			undefined,
+			streamFn,
+		);
+
+		const results = messages.flatMap((message) =>
+			message.role === "toolResult" && message.content[0]?.type === "text" ? [message.content[0].text] : [],
+		);
+		expect(results).toEqual(["Loaded tools: cron.", "no jobs"]);
 	});
 
 	it("should not execute tool calls from a length-truncated assistant message", async () => {

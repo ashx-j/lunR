@@ -119,7 +119,6 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 - Deferred tools on Codex: needs a live `openai-codex/gpt-5.5` run (load accepted, loaded tool called, cached tokens kept, a second load) before `supportsDeferredToolLoading` includes `openai-codex-responses`.
 - Claude subscription thinking: every replayed thinking block comes back `thinking_dropped` (`prefix_binding_mismatch`) because Claude Code moves its context blocks and date message on every request. The only fix found keeps one Claude Code session alive across requests (`--resume`), a bridge redesign.
-- Claude subscription history cache: every request pays cache-write price for the whole message history. A marker on the last user frame before the last assistant frame turns it into reads; separate PR, needs the owner's go-ahead.
 - `subagent` description (9,544 characters): shortening it is the next saving for providers without deferred loading; needs its own delegation evaluation.
 - Gateway cold first slash after daemon start can hang minutes; local scripted-provider first-use flow passes but does not establish a cold-start latency bound.
 - Live verify: Ollama/LM Studio, zai Bearer, multi-key rotation, catalog `/refresh` + `/model` after stability merge.
