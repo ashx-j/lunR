@@ -206,11 +206,13 @@ See [Packages](packages.md) for package sources and security notes.
 | `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients; see [ACP](acp.md) |
 | `--export <in> [out]` | Export a session to HTML |
 
-In print mode, lunR also reads piped stdin and merges it into the initial prompt:
+In print mode, lunR also reads piped stdin and puts it before the initial prompt, separated by a blank line:
 
 ```bash
 cat README.md | lunr -p "Summarize this text"
 ```
+
+lunR waits up to 3 seconds for the first byte of stdin. The wait starts early in startup, so it overlaps the time lunR takes to load. If nothing arrives, it prints a warning and continues without stdin. Once bytes arrive, lunR reads until the writer closes stdin, or until stdin sends nothing for 10 seconds. A program that runs `lunr -p` should close stdin or connect it to `/dev/null` to skip the wait.
 
 ### Model Options
 
