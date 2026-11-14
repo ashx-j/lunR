@@ -169,6 +169,7 @@ export interface Settings {
 	subagentSpinner?: SubagentSpinnerName; // default: "braille" - running child indicator
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
+	bashTimeoutSeconds?: number; // default: 120 - bash tool timeout when the call passes none
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
@@ -1395,6 +1396,10 @@ export class SettingsManager {
 
 	getShellCommandPrefix(): string | undefined {
 		return this.settings.shellCommandPrefix;
+	}
+
+	getBashTimeoutSeconds(): number | undefined {
+		return this.settings.bashTimeoutSeconds;
 	}
 
 	setShellCommandPrefix(prefix: string | undefined): void {

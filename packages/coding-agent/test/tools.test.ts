@@ -497,6 +497,20 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
+		it("stops a command with no timeout after the default and says how to raise it", async () => {
+			const bash = createBashTool(testDir, { defaultTimeout: 1 });
+			await expect(bash.execute("test-call-default-timeout", { command: "sleep 5" })).rejects.toThrow(
+				"Command timed out after 1 seconds. If it needs longer, run it again with a larger timeout (in seconds).",
+			);
+		});
+
+		it("runs commands with editors, pagers and git prompts disabled", async () => {
+			const result = await bashTool.execute("test-call-env", {
+				command: 'echo "$GIT_EDITOR $GIT_TERMINAL_PROMPT $GIT_PAGER $PAGER"',
+			});
+			expect(getTextOutput(result).trim()).toBe("true 0 cat cat");
+		});
+
 		it("should include full output path for truncated timeout and abort errors", async () => {
 			for (const testCase of [
 				{ error: "timeout:5", expected: "Command timed out after 5 seconds" },

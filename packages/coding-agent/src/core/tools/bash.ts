@@ -30,6 +30,8 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
+/** Seconds a tool call may run when neither the call nor the `bashTimeoutSeconds` setting gives a timeout. */
+export const DEFAULT_BASH_TIMEOUT_SECONDS = 120;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 
 function resolveTimeoutMs(timeout: number | undefined): number | undefined {
@@ -47,7 +49,9 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	timeout: Type.Optional(
+		Type.Number({ description: "Timeout in seconds. Raise it for commands that need longer than the default" }),
+	),
 });
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -178,8 +182,19 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
+/**
+ * The agent cannot answer an editor, pager or credential prompt, so tool commands get settings
+ * that make git and pagers return instead of waiting. User `!` commands keep the plain shell env.
+ */
+const NON_INTERACTIVE_ENV = {
+	GIT_EDITOR: "true",
+	GIT_TERMINAL_PROMPT: "0",
+	GIT_PAGER: "cat",
+	PAGER: "cat",
+};
+
 function resolveSpawnContext(command: string, cwd: string, spawnHook?: BashSpawnHook): BashSpawnContext {
-	const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+	const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv(), ...NON_INTERACTIVE_ENV } };
 	return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -192,6 +207,8 @@ export interface BashToolOptions {
 	shellPath?: string;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/** Timeout in seconds for calls that pass none. Default: DEFAULT_BASH_TIMEOUT_SECONDS */
+	defaultTimeout?: number;
 }
 
 const BASH_PREVIEW_LINES = 5;
@@ -324,10 +341,11 @@ export function createBashToolDefinition(
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
+	const defaultTimeout = options?.defaultTimeout ?? DEFAULT_BASH_TIMEOUT_SECONDS;
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Execute a bash command. Each call starts a new shell in the session working directory, so cd and exported variables do not carry over to the next call. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Commands are stopped after ${defaultTimeout} seconds unless you pass a larger timeout in seconds.`,
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
 		parameters: bashSchema,
 		async execute(
@@ -430,7 +448,7 @@ export function createBashToolDefinition(
 					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
 						onData: handleData,
 						signal,
-						timeout,
+						timeout: timeout ?? defaultTimeout,
 						env: spawnContext.env,
 					});
 					exitCode = result.exitCode;
@@ -443,7 +461,12 @@ export function createBashToolDefinition(
 					}
 					if (err instanceof Error && err.message.startsWith("timeout:")) {
 						const timeoutSecs = err.message.split(":")[1];
-						throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
+						throw new Error(
+							appendStatus(
+								text,
+								`Command timed out after ${timeoutSecs} seconds. If it needs longer, run it again with a larger timeout (in seconds).`,
+							),
+						);
 					}
 					throw err;
 				}
