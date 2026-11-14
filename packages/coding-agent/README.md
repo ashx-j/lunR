@@ -341,7 +341,7 @@ lunR loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 - Parent directories (walking up from cwd)
 - Current directory
 
-Use `~/.lunr/agent/agents/AGENTS.md` for optional global behavior and instructions; the model cannot change this user-managed file. `/settings` can enable model-specific instructions and choose whether they append to or replace global instructions. Model folders use a provider-independent, filesystem-safe name derived from the active model. Use project files for project conventions and commands; they remain independent of that mode. Run `/reload` after adding or editing a context file while lunR is open.
+Use `~/.lunr/agent/agents/AGENTS.md` for optional global behavior and instructions; the model's edit and write tools cannot change this user-managed file, though a shell command still can. `/settings` can enable model-specific instructions and choose whether they append to or replace global instructions. Model folders use a provider-independent, filesystem-safe name derived from the active model. Use project files for project conventions and commands; they remain independent of that mode. Run `/reload` after adding or editing a context file while lunR is open.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 
