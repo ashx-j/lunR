@@ -307,6 +307,62 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("tells the model to load a declared but unloaded tool and keeps not-found for unknown tools", async () => {
+		const tool = (name: string): AgentTool => ({
+			name,
+			label: name,
+			description: name,
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "ran" }], details: undefined };
+			},
+		});
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool("echo")],
+			deferredTools: [tool("cron")],
+		};
+		const requests: Array<string[] | undefined> = [];
+		let callIndex = 0;
+		const streamFn = (_model: Model<"openai-responses">, llmContext: { deferredTools?: { name: string }[] }) => {
+			requests.push(llmContext.deferredTools?.map((t) => t.name));
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex++ === 0
+						? createAssistantMessage(
+								[
+									{ type: "toolCall", id: "tool-1", name: "cron", arguments: {} },
+									{ type: "toolCall", id: "tool-2", name: "missing", arguments: {} },
+								],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
+			});
+			return stream;
+		};
+
+		const messages = await runAgentLoop(
+			[createUserMessage("go")],
+			context,
+			{ model: createModel(), convertToLlm: identityConverter },
+			() => {},
+			undefined,
+			streamFn,
+		);
+
+		expect(requests[0]).toEqual(["cron"]);
+		const results = messages.flatMap((message) =>
+			message.role === "toolResult" && message.content[0]?.type === "text" ? [message.content[0].text] : [],
+		);
+		expect(results).toEqual([
+			'Tool cron is not loaded. Call load_tools with ["cron"], then call it again.',
+			"Tool missing not found",
+		]);
+	});
+
 	it("should not execute tool calls from a length-truncated assistant message", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

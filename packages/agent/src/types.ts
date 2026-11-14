@@ -329,6 +329,8 @@ export interface AgentState {
 	/** Available tools. Assigning a new array copies the top-level array. */
 	set tools(tools: AgentTool<any>[]);
 	get tools(): AgentTool<any>[];
+	/** Tools the session started unloaded, in a fixed order, loaded or not. Passed to `Context.deferredTools`. */
+	deferredTools?: AgentTool<any>[];
 	/** Conversation transcript. Assigning a new array copies the top-level array. */
 	set messages(messages: AgentMessage[]);
 	get messages(): AgentMessage[];
@@ -403,6 +405,8 @@ export interface AgentContext {
 	messages: AgentMessage[];
 	/** Tools available for this run. */
 	tools?: AgentTool<any>[];
+	/** Tools the session started unloaded. A call to one that is not in `tools` gets a load hint. */
+	deferredTools?: AgentTool<any>[];
 }
 
 /**
