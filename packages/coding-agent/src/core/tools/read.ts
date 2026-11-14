@@ -105,20 +105,37 @@ const BINARY_SAMPLE_BYTES = 8192;
 /** Control characters that occur in ordinary text: backspace, tab, newline, vertical tab, form feed, carriage return, escape. */
 const TEXT_CONTROL_CODES = new Set([8, 9, 10, 11, 12, 13, 27]);
 
+function utf16Encoding(buffer: Buffer): "utf-16le" | "utf-16be" | undefined {
+	if (buffer[0] === 0xff && buffer[1] === 0xfe) return "utf-16le";
+	if (buffer[0] === 0xfe && buffer[1] === 0xff) return "utf-16be";
+	return undefined;
+}
+
 /**
- * True when more than 10% of the file's first 8 KB is control characters or invalid UTF-8.
- * A text file with a few odd bytes stays under that. Files with a UTF-16 BOM keep the text path.
+ * Binary when the first 8 KB has a NUL byte (git's rule), more than 10% other control
+ * characters, or more than half invalid UTF-8. Text in a legacy encoding such as Latin-1
+ * stays under the last limit. Files with a UTF-16 BOM are text.
  */
 function looksBinary(buffer: Buffer): boolean {
-	if ((buffer[0] === 0xff && buffer[1] === 0xfe) || (buffer[0] === 0xfe && buffer[1] === 0xff)) return false;
+	if (utf16Encoding(buffer)) return false;
+	const sample = buffer.subarray(0, BINARY_SAMPLE_BYTES);
+	if (sample.includes(0)) return true;
 	let total = 0;
-	let suspicious = 0;
-	for (const char of buffer.subarray(0, BINARY_SAMPLE_BYTES).toString("utf-8")) {
+	let controls = 0;
+	let invalid = 0;
+	for (const char of sample.toString("utf-8")) {
 		const code = char.charCodeAt(0);
 		total++;
-		if (code === 0xfffd || code === 0x7f || (code < 0x20 && !TEXT_CONTROL_CODES.has(code))) suspicious++;
+		if (code === 0xfffd) invalid++;
+		else if (code === 0x7f || (code < 0x20 && !TEXT_CONTROL_CODES.has(code))) controls++;
 	}
-	return suspicious > total * 0.1;
+	return controls > total * 0.1 || invalid > total * 0.5;
+}
+
+/** Decodes UTF-16 files marked with a BOM (PowerShell redirects write these), everything else as UTF-8. */
+function decodeText(buffer: Buffer): string {
+	const encoding = utf16Encoding(buffer);
+	return encoding ? new TextDecoder(encoding).decode(buffer) : buffer.toString("utf-8");
 }
 
 function toPosixPath(filePath: string): string {
@@ -250,9 +267,9 @@ export function createReadToolDefinition(
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+							const buffer = await ops.readFile(absolutePath);
 							if (mimeType) {
 								// Read image as binary.
-								const buffer = await ops.readFile(absolutePath);
 								const processed = await processImage(buffer, mimeType, { autoResizeImages });
 								if (!processed.ok) {
 									let textNote = `Read image file [${mimeType}]\n${processed.message}`;
@@ -267,68 +284,60 @@ export function createReadToolDefinition(
 										{ type: "image", data: processed.data, mimeType: processed.mimeType },
 									];
 								}
+							} else if (looksBinary(buffer)) {
+								const text = `[${path} is a binary file (${formatSize(buffer.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`;
+								content = [{ type: "text", text }];
 							} else {
 								// Read text content.
-								const buffer = await ops.readFile(absolutePath);
-								if (looksBinary(buffer)) {
-									const text = `[${path} is a binary file (${formatSize(buffer.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`;
-									content = [{ type: "text", text }];
-								} else {
-									const textContent = buffer.toString("utf-8");
-									const allLines = textContent.split("\n");
-									const totalFileLines = allLines.length;
-									// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
-									const startLine = offset ? Math.max(0, offset - 1) : 0;
-									const startLineDisplay = startLine + 1;
-									// Check if offset is out of bounds.
-									if (startLine >= allLines.length) {
-										throw new Error(
-											`Offset ${offset} is beyond end of file (${allLines.length} lines total)`,
-										);
-									}
-									let selectedContent: string;
-									let userLimitedLines: number | undefined;
-									// If limit is specified by the user, honor it first. Otherwise truncateHead decides.
-									if (limit !== undefined) {
-										const endLine = Math.min(startLine + limit, allLines.length);
-										selectedContent = allLines.slice(startLine, endLine).join("\n");
-										userLimitedLines = endLine - startLine;
-									} else {
-										selectedContent = allLines.slice(startLine).join("\n");
-									}
-									// Apply truncation, respecting both line and byte limits.
-									const truncation = truncateHead(selectedContent);
-									let outputText: string;
-									if (truncation.firstLineExceedsLimit) {
-										// First line alone exceeds the byte limit. Point the model at a bash fallback.
-										const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
-										outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
-										details = { truncation };
-									} else if (truncation.truncated) {
-										// Truncation occurred. Build an actionable continuation notice.
-										const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
-										const nextOffset = endLineDisplay + 1;
-										outputText = truncation.content;
-										if (truncation.truncatedBy === "lines") {
-											outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
-										} else {
-											outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
-										}
-										details = { truncation };
-									} else if (
-										userLimitedLines !== undefined &&
-										startLine + userLimitedLines < allLines.length
-									) {
-										// User-specified limit stopped early, but the file still has more content.
-										const remaining = allLines.length - (startLine + userLimitedLines);
-										const nextOffset = startLine + userLimitedLines + 1;
-										outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
-									} else {
-										// No truncation and no remaining user-limited content.
-										outputText = truncation.content;
-									}
-									content = [{ type: "text", text: outputText }];
+								const textContent = decodeText(buffer);
+								const allLines = textContent.split("\n");
+								const totalFileLines = allLines.length;
+								// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
+								const startLine = offset ? Math.max(0, offset - 1) : 0;
+								const startLineDisplay = startLine + 1;
+								// Check if offset is out of bounds.
+								if (startLine >= allLines.length) {
+									throw new Error(`Offset ${offset} is beyond end of file (${allLines.length} lines total)`);
 								}
+								let selectedContent: string;
+								let userLimitedLines: number | undefined;
+								// If limit is specified by the user, honor it first. Otherwise truncateHead decides.
+								if (limit !== undefined) {
+									const endLine = Math.min(startLine + limit, allLines.length);
+									selectedContent = allLines.slice(startLine, endLine).join("\n");
+									userLimitedLines = endLine - startLine;
+								} else {
+									selectedContent = allLines.slice(startLine).join("\n");
+								}
+								// Apply truncation, respecting both line and byte limits.
+								const truncation = truncateHead(selectedContent);
+								let outputText: string;
+								if (truncation.firstLineExceedsLimit) {
+									// First line alone exceeds the byte limit. Point the model at a bash fallback.
+									const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
+									outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
+									details = { truncation };
+								} else if (truncation.truncated) {
+									// Truncation occurred. Build an actionable continuation notice.
+									const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+									const nextOffset = endLineDisplay + 1;
+									outputText = truncation.content;
+									if (truncation.truncatedBy === "lines") {
+										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
+									} else {
+										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
+									}
+									details = { truncation };
+								} else if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
+									// User-specified limit stopped early, but the file still has more content.
+									const remaining = allLines.length - (startLine + userLimitedLines);
+									const nextOffset = startLine + userLimitedLines + 1;
+									outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+								} else {
+									// No truncation and no remaining user-limited content.
+									outputText = truncation.content;
+								}
+								content = [{ type: "text", text: outputText }];
 							}
 
 							if (aborted) return;
