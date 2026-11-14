@@ -1292,9 +1292,10 @@ export class AgentSession {
 			getModel: (provider, modelId) => this._modelRuntime.getModel(provider, modelId),
 			getOffered: (provider) => {
 				const offered = this._modelRuntime.getAvailableSnapshot().filter((model) => model.provider === provider);
-				// An ambient env key lists no models but can call the whole catalog.
-				return offered.length > 0 ? offered : this._modelRuntime.getModels(provider);
+				// An ambient env key, or a subscription saved without a model list, lists nothing to check against.
+				return offered.length > 0 ? offered : undefined;
 			},
+			getCatalog: (provider) => this._modelRuntime.getModels(provider),
 		});
 	}
 

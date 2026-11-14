@@ -88,13 +88,20 @@ export function resolveAutoReviewer(input: {
 	configuredRef?: string;
 	sessionModel?: Model<Api>;
 	getModel(provider: string, modelId: string): Model<Api> | undefined;
-	/** Models the session's credential can call for `provider`. */
-	getOffered(provider: string): readonly Model<Api>[];
+	/** Models the stored credential lists for `provider`, or undefined when it lists none to check against. */
+	getOffered(provider: string): readonly Model<Api>[] | undefined;
+	/** The catalog's models for `provider`, used when the credential lists none. */
+	getCatalog(provider: string): readonly Model<Api>[];
 }): AutoReviewer {
 	const byRef = (ref: string, source: "parent" | "setting"): AutoReviewer => {
 		const slash = ref.indexOf("/");
 		const model = slash > 0 ? input.getModel(ref.slice(0, slash), ref.slice(slash + 1)) : undefined;
-		return model ? { kind: "ready", model, ref, source } : { kind: "unavailable", ref };
+		// A login with a model list, such as a Claude subscription, can't call a model outside it.
+		const offered = model && input.getOffered(model.provider);
+		if (!model || (offered && !offered.some((candidate) => candidate.id === model.id))) {
+			return { kind: "unavailable", ref };
+		}
+		return { kind: "ready", model, ref, source };
 	};
 	if (input.parentRef) return byRef(input.parentRef, "parent");
 	if (input.configuredRef) return byRef(input.configuredRef, "setting");
@@ -103,7 +110,10 @@ export function resolveAutoReviewer(input: {
 	const supported = AUTO_REVIEW_PROVIDERS[session.provider];
 	if (!supported) return { kind: "missing", provider: session.provider };
 	const documented = supported.reviewerFamily
-		? newestOfFamily(input.getOffered(session.provider), supported.reviewerFamily)
+		? newestOfFamily(
+				input.getOffered(session.provider) ?? input.getCatalog(session.provider),
+				supported.reviewerFamily,
+			)
 		: undefined;
 	const model = documented ?? session;
 	return { kind: "ready", model, ref: `${model.provider}/${model.id}`, source: documented ? "provider" : "session" };
