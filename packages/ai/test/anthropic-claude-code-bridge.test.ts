@@ -51,7 +51,8 @@ process.stdin.on("end", async () => {
 		process.exit(1);
 	}
 	line({ type: "system", subtype: "status", status: "requesting" });
-	const body = { ...extra, model: flag("--model"), messages: frames.map((frame) => frame.message), stream: true };
+	// Like Claude Code, fields from CLAUDE_CODE_EXTRA_BODY replace its own, including messages.
+	const body = { model: flag("--model"), messages: frames.map((frame) => frame.message), ...extra, stream: true };
 	let response;
 	try {
 		response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", { method: "POST", body: JSON.stringify(body) });
@@ -205,7 +206,7 @@ const context: Context = {
 const model = ANTHROPIC_MODELS["claude-opus-4-8"];
 
 describe.skipIf(process.platform === "win32")("Claude Code subscription bridge", () => {
-	it("replays history through Claude Code and returns the upstream turn with lunR tool names", async () => {
+	it("sends lunR's history in the request body and returns the upstream turn with lunR tool names", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const result = await streamClaudeCode(
 			model,
@@ -235,6 +236,47 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(mcpUrl.pathname).toBe(`/${mcpSecret}/mcp`);
 		expect(record.argv.join("\n")).not.toContain(mcpSecret);
 		expect(record.system).toBe("You are lunR.");
+		// Claude Code queries once with the first prompt text, which its billing header fingerprints.
+		expect(record.frames).toEqual([
+			{
+				type: "user",
+				client_composed: true,
+				message: { role: "user", content: [{ type: "text", text: "Read a.txt" }] },
+			},
+		]);
+		// The body carries the history exactly, so Claude Code's own per-request context cannot move the cached prefix.
+		expect(record.extra.messages).toEqual([
+			{ role: "user", content: [{ type: "text", text: "Read a.txt" }] },
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "Need a.txt.", signature: "sig-old" },
+					{ type: "tool_use", id: "toolu_1", name: "mcp__lunr__read", input: { path: "a.txt" } },
+				],
+			},
+			{
+				role: "user",
+				content: [
+					expect.objectContaining({ type: "tool_result", tool_use_id: "toolu_1" }),
+					{ type: "text", text: "Now b.txt", cache_control: { type: "ephemeral", ttl: "1h" } },
+				],
+			},
+		]);
+		expect(record.extra.tools.map((tool: { name: string }) => tool.name)).toEqual(["mcp__lunr__read"]);
+		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
+	it("replays a history too large for Claude Code's settings file through stdin", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const large: Context = {
+			...context,
+			messages: [{ role: "user", content: "x".repeat(2_200_000), timestamp: 0 }, ...context.messages.slice(1)],
+		};
+		const result = await streamClaudeCode(model, large, { externalClaudeCode: connection }, true, upstream).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.extra.messages).toBeUndefined();
 		expect(
 			record.frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
 		).toEqual([
@@ -243,20 +285,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			["user", undefined],
 		]);
 		// Claude Code keeps signed thinking only when the replayed turn names its model.
-		expect(record.frames[1].message).toEqual({
-			role: "assistant",
-			model: "claude-opus-4-8",
-			content: [
-				{ type: "thinking", thinking: "Need a.txt.", signature: "sig-old" },
-				{ type: "tool_use", id: "toolu_1", name: "mcp__lunr__read", input: { path: "a.txt" } },
-			],
-		});
-		expect(record.frames[2].message.content.map((block: { type: string }) => block.type)).toEqual([
-			"tool_result",
-			"text",
-		]);
-		expect(record.extra.tools.map((tool: { name: string }) => tool.name)).toEqual(["mcp__lunr__read"]);
-		expect(record.extra.output_config).toEqual({ effort: "high" });
+		expect(record.frames[1].message.model).toBe("claude-opus-4-8");
 	});
 
 	it("accepts an explicit automatic tool choice", async () => {
