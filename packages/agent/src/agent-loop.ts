@@ -488,7 +488,8 @@ type ExecutedToolCallBatch = {
 /**
  * lunr: makes declared tools a result just loaded callable by the rest of the same message. The run's
  * `tools` snapshot otherwise only refreshes at the next turn, so `[load_tools(cron), cron(...)]` failed.
- * Sequential execution only, which a loader opts into; parallel calls are all prepared before any runs.
+ * Sequential execution only, which a loader opts into. Parallel execution may prepare a call before an
+ * earlier call in the same message has run.
  */
 function addLoadedDeferredTools(currentContext: AgentContext, addedToolNames: string[] | undefined): void {
 	if (!addedToolNames?.length || !currentContext.deferredTools) return;

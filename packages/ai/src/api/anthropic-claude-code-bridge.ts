@@ -242,19 +242,30 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 	if (Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT)
 		return { ...request, frames: [queryFrame(history)], extraBody };
 	// Claude Code strips tool_reference blocks from a replayed transcript, which would leave loaded tools
-	// unloaded. The replay sends every tool undeferred and drops the references instead.
+	// unloaded. The replay drops the references and sends the deferred tools the history loaded or called
+	// as normal tools. Deferred tools it never used stay out, so the model cannot call them unloaded.
+	const used = new Set<unknown>();
+	const frames = history.map((frame) => ({
+		...frame,
+		message: {
+			...frame.message,
+			content: frame.message.content.map((block) => {
+				if (block.type === "tool_use") used.add(block.name);
+				return mapToolReferences(block, (name) => {
+					used.add(name);
+					return undefined;
+				});
+			}),
+		},
+	}));
 	return {
 		...request,
-		frames: history.map((frame) => ({
-			...frame,
-			message: {
-				...frame.message,
-				content: frame.message.content.map((block) => mapToolReferences(block, () => undefined)),
-			},
-		})),
+		frames,
 		extraBody: {
 			...request.extraBody,
-			tools: request.extraBody.tools.map(({ defer_loading: _deferred, ...tool }) => tool),
+			tools: request.extraBody.tools.flatMap(({ defer_loading, ...tool }) =>
+				!defer_loading || used.has(tool.name) ? [tool] : [],
+			),
 		},
 	};
 }

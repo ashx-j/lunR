@@ -351,7 +351,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		});
 	});
 
-	it("sends every tool undeferred and no tool_reference on a history replayed through stdin", async () => {
+	it("sends loaded deferred tools undeferred, leaves unused ones out and drops tool_reference on a replay", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
 		const result = await streamClaudeCode(
 			model,
@@ -365,7 +365,16 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
 		expect(record.extra.messages).toBeUndefined();
 		// Claude Code strips references from a replayed transcript, so a loaded tool must not depend on one.
-		expect(record.extra.tools.some((entry: { defer_loading?: boolean }) => entry.defer_loading)).toBe(false);
+		expect(
+			record.extra.tools.map((entry: { name: string; defer_loading?: boolean }) => [
+				entry.name,
+				entry.defer_loading,
+			]),
+		).toEqual([
+			["mcp__lunr__read", undefined],
+			["mcp__lunr__load_tools", undefined],
+			["mcp__lunr__cron", undefined],
+		]);
 		expect(JSON.stringify(record.frames)).not.toContain("tool_reference");
 		expect(record.frames.at(-1).message.content).toEqual([
 			{ type: "tool_result", tool_use_id: "toolu_1", is_error: false },
