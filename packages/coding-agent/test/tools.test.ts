@@ -5,7 +5,7 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
-import { BashJobs } from "../src/core/tools/bash-jobs.ts";
+import { BashJobs, stopLiveJobs } from "../src/core/tools/bash-jobs.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
 import { createAllTools } from "../src/core/tools/index.ts";
 import {
@@ -558,21 +558,46 @@ describe("Coding Agent Tools", () => {
 		it("keeps a background job running while processes its shell started with & live, and stops them", async () => {
 			const jobs = new BashJobs();
 			const tools = createAllTools(testDir, { bash: { jobs } });
-			await tools.bash.execute("bg-amp", { command: "sleep 60 & echo started", run_in_background: true });
-			const job = jobs.get("j1");
-			if (!job?.pid) throw new Error("job did not start");
-			await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
+			try {
+				await tools.bash.execute("bg-amp", { command: "sleep 60 & echo started", run_in_background: true });
+				const job = jobs.get("j1");
+				if (!job?.pid) throw new Error("job did not start");
+				await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
 
-			expect(jobs.running()).toEqual([job]);
-			expect(jobs.takeExitNotices()).toContain(
-				"shell exited with code 0, but processes it started are still running",
-			);
-			expect(getTextOutput(await tools.bash_job.execute("bg-amp-stop", { id: "j1", action: "stop" }))).toBe(
-				"Stopped job j1.",
-			);
-			await vi.waitFor(() => expect(() => process.kill(-job.pid!, 0)).toThrow(), { timeout: 10_000 });
-			jobs.stopAll();
+				expect(jobs.running()).toEqual([job]);
+				expect(jobs.takeExitNotices()).toContain(
+					"shell exited with code 0, but processes it started are still running",
+				);
+				expect(getTextOutput(await tools.bash_job.execute("bg-amp-stop", { id: "j1", action: "stop" }))).toBe(
+					"Stopped job j1.",
+				);
+				await vi.waitFor(() => expect(() => process.kill(-job.pid!, 0)).toThrow(), { timeout: 10_000 });
+			} finally {
+				jobs.stopAll();
+			}
 		});
+
+		it.skipIf(process.platform === "win32")(
+			"sends no signal at exit to a job whose shell and & processes have all ended",
+			async () => {
+				const jobs = new BashJobs();
+				const tools = createAllTools(testDir, { bash: { jobs } });
+				const kill = vi.spyOn(process, "kill");
+				try {
+					await tools.bash.execute("bg-gone", { command: "sleep 0.3 & echo started", run_in_background: true });
+					const pid = jobs.get("j1")?.pid;
+					if (!pid) throw new Error("job did not start");
+					// The pid is free once the group is empty, and may belong to another process by exit.
+					await vi.waitFor(() => expect(() => process.kill(-pid, 0)).toThrow(), { timeout: 10_000 });
+					kill.mockClear();
+					stopLiveJobs();
+					expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+				} finally {
+					kill.mockRestore();
+					jobs.stopAll();
+				}
+			},
+		);
 
 		it("runs commands with editors, pagers and git prompts disabled", async () => {
 			const result = await bashTool.execute("test-call-env", {

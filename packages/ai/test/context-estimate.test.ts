@@ -98,6 +98,13 @@ describe("request prefix identity", () => {
 		expect(estimateContextTokens(context).usageTokens).toBe(9500);
 		context.tools = [{ ...context.tools[0], description: "read and list files" }];
 		expect(estimateContextTokens(context).usageTokens).toBe(0);
+		// An SDK caller may reuse its tool objects and edit them in place.
+		assistant.usage.contextFingerprint = getContextFingerprint(context);
+		context.tools[0].description = "read files";
+		expect(estimateContextTokens(context).usageTokens).toBe(0);
+		assistant.usage.contextFingerprint = getContextFingerprint(context);
+		context.tools[0].parameters = { type: "object", properties: { path: { type: "string" } } };
+		expect(estimateContextTokens(context).usageTokens).toBe(0);
 	});
 	it("avoids the ASCII divisor for non-ASCII text", async () => {
 		const { estimateTextTokens } = await import("../src/utils/estimate.ts");

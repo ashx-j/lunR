@@ -8,6 +8,7 @@ import {
 	readdirSync,
 	readSync,
 	rmSync,
+	statSync,
 	writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,20 +37,59 @@ export interface BashJob {
 	exitReported: boolean;
 }
 
-/** Process groups of every running job in this process, stopped when lunR exits. */
-const liveJobPids = new Set<number>();
+/** Every running job in this process, stopped when lunR exits. */
+const liveJobs = new Set<BashJob>();
 /** Log dirs of every session in this process, removed when lunR exits. */
 const liveLogDirs = new Set<string>();
 let exitHookInstalled = false;
 const LOG_DIR_PREFIX = "lunr-jobs-";
+/** Orphaned log dirs changed more recently than this stay, see removeOrphanedLogDirs. */
+const ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
-function stopLiveJobs(): void {
-	for (const pid of liveJobPids) killProcessTree(pid);
-	liveJobPids.clear();
+/**
+ * Kills the job's process group. Once the shell has exited its pid can belong to another process, so only
+ * the group is signalled then, and only while it still has a member (a live member keeps the id reserved).
+ */
+function killJob(job: BashJob): void {
+	if (!job.pid) return;
+	if (!job.exit) {
+		killProcessTree(job.pid);
+		return;
+	}
+	if (!groupAlive(job.pid)) return;
 	try {
-		for (const dir of liveLogDirs) rmSync(dir, { recursive: true, force: true });
+		process.kill(-job.pid, "SIGKILL");
 	} catch {}
+}
+
+/** The exit hook. Exported for tests. */
+export function stopLiveJobs(): void {
+	for (const job of liveJobs) killJob(job);
+	liveJobs.clear();
+	for (const dir of liveLogDirs) {
+		try {
+			rmSync(dir, { recursive: true, force: true });
+		} catch {}
+	}
 	liveLogDirs.clear();
+}
+
+/** How often jobs whose shell exited are checked, so lunR learns soon when their last process ends. */
+const GROUP_CHECK_MS = 2000;
+let groupCheck: NodeJS.Timeout | undefined;
+
+/** Drops jobs whose process group emptied, which ends their entry before the group id can be reused. */
+function watchExitedGroups(): void {
+	if (groupCheck) return;
+	groupCheck = setInterval(() => {
+		let waiting = false;
+		for (const job of liveJobs) if (job.exit && isRunning(job)) waiting = true;
+		if (!waiting) {
+			clearInterval(groupCheck);
+			groupCheck = undefined;
+		}
+	}, GROUP_CHECK_MS);
+	groupCheck.unref();
 }
 
 /**
@@ -75,19 +115,29 @@ function pidAlive(pid: number): boolean {
 
 /**
  * Log dirs carry their lunR pid. A lunR killed with SIGKILL leaves its dir, so the first job of
- * a later lunR removes the dirs whose lunR is gone. Their job processes cannot be stopped safely,
- * because the pids may belong to other processes by now.
+ * a later lunR removes the dirs whose lunR is gone and whose logs sat untouched for a day. Their job
+ * processes cannot be stopped safely, because the pids may belong to other processes by now.
  */
 function removeOrphanedLogDirs(): void {
+	let names: string[];
 	try {
-		for (const name of readdirSync(tmpdir())) {
-			if (!name.startsWith(LOG_DIR_PREFIX)) continue;
-			const pid = Number.parseInt(name.slice(LOG_DIR_PREFIX.length), 10);
-			if (pid > 0 && pid !== process.pid && !pidAlive(pid)) {
-				rmSync(join(tmpdir(), name), { recursive: true, force: true });
-			}
-		}
-	} catch {}
+		names = readdirSync(tmpdir());
+	} catch {
+		return;
+	}
+	const cutoff = Date.now() - ORPHAN_MIN_AGE_MS;
+	for (const name of names) {
+		if (!name.startsWith(LOG_DIR_PREFIX)) continue;
+		const pid = Number.parseInt(name.slice(LOG_DIR_PREFIX.length), 10);
+		if (!(pid > 0) || pid === process.pid || pidAlive(pid)) continue;
+		const dir = join(tmpdir(), name);
+		try {
+			// A lunR in another pid namespace sharing /tmp looks dead, but its jobs keep writing their logs.
+			const changed = [dir, ...readdirSync(dir).map((log) => join(dir, log))].map((path) => statSync(path).mtimeMs);
+			if (Math.max(...changed) > cutoff) continue;
+			rmSync(dir, { recursive: true, force: true });
+		} catch {}
+	}
 }
 let orphanedLogDirsRemoved = false;
 
@@ -148,13 +198,14 @@ export class BashJobs {
 			exitReported: false,
 		};
 		this.jobs.set(id, job);
-		if (child.pid) liveJobPids.add(child.pid);
+		if (child.pid) liveJobs.add(job);
 		const finish = (code: number | null, signal: NodeJS.Signals | null) => {
 			if (job.exit) return;
 			job.exit = { code, signal };
 			// The job runs in its own process group, so `cmd &` children keep it alive and in reach of stop.
 			job.childrenRunning = !job.stopped && job.pid !== undefined && groupAlive(job.pid);
-			if (job.pid && !job.childrenRunning) liveJobPids.delete(job.pid);
+			if (job.childrenRunning) watchExitedGroups();
+			else liveJobs.delete(job);
 			if (!job.stopped) this.unreported.push(job);
 			this.emitChange();
 		};
@@ -207,10 +258,8 @@ export class BashJobs {
 		if (!isRunning(job)) return;
 		job.stopped = true;
 		job.childrenRunning = false;
-		if (job.pid) {
-			killProcessTree(job.pid);
-			liveJobPids.delete(job.pid);
-		}
+		killJob(job);
+		liveJobs.delete(job);
 	}
 
 	/** Called when the session ends: stops every job and removes the logs. */
@@ -261,7 +310,7 @@ function isRunning(job: BashJob): boolean {
 	if (!job.exit) return true;
 	if (job.childrenRunning && job.pid !== undefined && !groupAlive(job.pid)) {
 		job.childrenRunning = false;
-		liveJobPids.delete(job.pid);
+		liveJobs.delete(job);
 	}
 	return job.childrenRunning;
 }
